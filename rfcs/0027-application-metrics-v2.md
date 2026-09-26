@@ -41,10 +41,16 @@ invisible, and tooltips leak pod names.
   `by` defaults to `process`, so the call the dashboard makes today keeps returning what it
   returns today; every new parameter is additive. `process` absent means all process types.
   `agg` applies only to `by=instance`: `none` draws one series per instance, the others
-  collapse them to one.
+  collapse them to one. Passed with `by=process` it is ignored rather than refused, since
+  the aggregation is already implied.
 - Only CPU, memory and network can be broken down by instance. Each chart reports whether
   it can (`instanceCapable`), and the UI disables the instance controls on the charts that
   cannot rather than accepting a parameter it will ignore.
+- Which parameters each chart honours, so that nothing is silently half-applied: `process`,
+  `by` and `agg` apply to CPU, memory and network, which carry a pod and therefore a
+  process; throughput and latency are measured at the edge and ignore all three. `mode`
+  applies to CPU and memory, the only charts expressed as a proportion of an allocation;
+  the rest are always absolute and ignore it.
 - Each chart carries a `reference`: the value and label of the allocation line (for example
   `Allocated 64 MiB`). Where a size also has a CPU limit or burst ceiling, that is a second,
   higher line.
@@ -77,9 +83,9 @@ invisible, and tooltips leak pod names.
   labelled `web.1` may therefore have been a different pod earlier in the window. Making
   ordinals stable was considered and rejected for now: it would change the naming contract
   RFC-0022a's log labels depend on, and touches the four callers that compute names from the
-  live list (the controller, `pkg/api/logs.go`, and two CLI paths). The charts do not
-  pretend otherwise, and short ranges — where outlier hunting actually happens — are
-  unaffected in practice.
+  live list (the controller, `pkg/api/logs.go`, and two CLI paths). Precisely: a name is
+  reliable for an instance that existed for the whole window, and the `replaced` series are
+  what make the churn visible when one did not. The charts do not claim more than that.
 - Throughput and latency come from `nginx_ingress_controller_*`, whose series identify the
   ingress controller's own pod (`controller_pod`) and the backend *service*, never the
   backend pod. Per-instance request rates would need application-side instrumentation,
