@@ -183,3 +183,33 @@ func chartByID(t *testing.T, out MetricsResponse, id string) Chart {
 	t.Fatalf("no chart %q in %+v", id, out.Charts)
 	return Chart{}
 }
+
+func TestMetricsRanges(t *testing.T) {
+	prom, _ := newFakeProm(t)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	// Every documented range is accepted, and the step keeps the number of
+	// points per series in a range a chart can actually draw.
+	for _, tc := range []struct{ rng string; wantStep int }{
+		{"15m", 60},
+		{"1h", 60},
+		{"6h", 360},
+		{"24h", 1440},
+		{"7d", 10080},
+	} {
+		out := getMetrics(t, s, "?range="+tc.rng)
+		if out.Range != tc.rng {
+			t.Errorf("range echoed as %q, want %q", out.Range, tc.rng)
+		}
+		if out.Step != tc.wantStep {
+			t.Errorf("range %s step = %d, want %d", tc.rng, out.Step, tc.wantStep)
+		}
+	}
+	if rec := do(t, s, "GET", "/api/projects/shop/metrics?range=30s", "", true); rec.Code != http.StatusBadRequest {
+		t.Errorf("range=30s: %d, want 400", rec.Code)
+	}
+	if !strings.Contains(do(t, s, "GET", "/api/projects/shop/metrics?range=30s", "", true).Body.String(), "15m") {
+		t.Error("the 400 should name the ranges that are allowed, including 15m")
+	}
+}

@@ -43,7 +43,23 @@ type MetricsResponse struct {
 	Releases []ReleaseMarker `json:"releases"`
 }
 
-var rangeOptions = map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}
+var rangeOptions = map[string]time.Duration{
+	"15m": 15 * time.Minute,
+	"1h":  time.Hour,
+	"6h":  6 * time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+}
+
+// stepFor keeps every range at 60 points: enough shape to read, few enough
+// that a week of per-instance series stays a response a browser can chart.
+func stepFor(d time.Duration) time.Duration {
+	step := d / 60
+	if step < time.Minute {
+		step = time.Minute
+	}
+	return step
+}
 
 // chartQuery describes how to build one chart. Multi-series queries return
 // one series per label value (labelKey); fixed queries produce a series
@@ -76,15 +92,12 @@ func (s *Server) appMetrics(c *gin.Context) {
 	rng := c.DefaultQuery("range", "1h")
 	dur, ok := rangeOptions[rng]
 	if !ok {
-		abort(c, http.StatusBadRequest, errors.New("range must be one of 1h, 6h, 24h, 7d"))
+		abort(c, http.StatusBadRequest, errors.New("range must be one of 15m, 1h, 6h, 24h, 7d"))
 		return
 	}
 	end := time.Now().Truncate(time.Minute)
 	start := end.Add(-dur)
-	step := dur / 60
-	if step < time.Minute {
-		step = time.Minute
-	}
+	step := stepFor(dur)
 
 	queries := chartQueries(app)
 	resp := MetricsResponse{Range: rng, Step: int(step.Seconds()), Charts: make([]Chart, len(queries)), Releases: []ReleaseMarker{}}
