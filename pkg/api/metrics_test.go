@@ -13,7 +13,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -403,6 +402,106 @@ func TestMetricsReplacedInstances(t *testing.T) {
 	}
 }
 
+// A replaced instance is still an instance of a process, and the allocation it
+// was measured against is the one that process has. Its display name ("replaced
+// 1") no longer says which process that was, so reading the process back out of
+// the name lost the reference — and once one series in a chart had none, the
+// agreement rule in aggregateGroup dropped the line for the whole chart.
+// Showing the replaced instances must not erase the allocation line.
+func TestMetricsReplacedInstanceKeepsItsAllocation(t *testing.T) {
+	answer := fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-gone", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		},
+	}
+	// shared-s is 64Mi; both pods are web, so both are measured against it.
+	const shareds = 67108864.0
+
+	prom, _ := newFakeProm(t, answer)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	mem := chartByID(t, getMetrics(t, s, "?range=1h&mode=total&by=instance&replaced=true"), "memory")
+	if names := seriesNames(mem); strings.Join(names, ",") != "web.1,replaced 1" {
+		t.Fatalf("series = %v, want web.1 and replaced 1", names)
+	}
+	for _, sr := range mem.Series {
+		if sr.Reference != shareds {
+			t.Errorf("series %q reference = %v, want %v: it is a web instance whatever its name says",
+				sr.Name, sr.Reference, shareds)
+		}
+	}
+
+	// And the aggregate over them keeps the line, because the group agrees: two
+	// instances of one process, so twice one allocation.
+	prom, _ = newFakeProm(t, answer)
+	s, _ = newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+	mem = chartByID(t, getMetrics(t, s, "?range=1h&mode=total&by=instance&replaced=true&agg=sum"), "memory")
+	if len(mem.Series) != 1 || mem.Series[0].Name != "sum web" {
+		t.Fatalf("series = %v, want one sum web", seriesNames(mem))
+	}
+	if mem.Series[0].Reference != 2*shareds {
+		t.Errorf("reference = %v, want %v (64Mi x 2 instances), not 0",
+			mem.Series[0].Reference, 2*shareds)
+	}
+}
+
+// "replaced 2" has to mean one pod for the whole response, and mean the same
+// pod again on the next poll. The charts are the hard part: cpu and memory
+// filter on container!="" while the network query does not, so they see
+// different pods, and numbering them as each chart's answer arrived made the
+// number depend on which goroutine got there first — the same pod was
+// "replaced 1" on one 30-second poll and "replaced 2" on the next, shuffling
+// the legend and the colours under whoever was watching.
+func TestMetricsReplacedNumberingIsOneNumberingForTheResponse(t *testing.T) {
+	// The dead pod memory knows about is not the one network knows about, which
+	// is what no single chart can number consistently on its own.
+	memSeries := []fakeSeries{
+		{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		{Labels: map[string]string{"pod": "shop-web-dead-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+	}
+	netSeries := []fakeSeries{
+		{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 5}}},
+		{Labels: map[string]string{"pod": "shop-web-dead-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 6}}},
+	}
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_memory_working_set_bytes", Series: memSeries},
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: netSeries},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: netSeries},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	// dead-a sorts before dead-b, so dead-a is 1 on every chart of every
+	// response — including the charts that never saw it.
+	const wantMem = "web.1,replaced 2"
+	const wantNet = "web.1 in,web.1 out,replaced 1 in,replaced 1 out"
+	for i := 0; i < 20; i++ {
+		rec := do(t, s, "GET", "/api/projects/shop/metrics?range=1h&by=instance&replaced=true", "", true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		// The pods now travel with the series all the way to this pass, across
+		// every chart of the response, so check the whole body rather than the
+		// names alone (RFC-0011).
+		if strings.Contains(rec.Body.String(), "shop-web-") {
+			t.Fatalf("a pod name reached the response: %s", rec.Body.String())
+		}
+		var out MetricsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		gotMem := strings.Join(seriesNames(chartByID(t, out, "memory")), ",")
+		gotNet := strings.Join(seriesNames(chartByID(t, out, "network")), ",")
+		if gotMem != wantMem || gotNet != wantNet {
+			t.Fatalf("request %d: memory = %q, network = %q; want %q and %q on every request",
+				i, gotMem, gotNet, wantMem, wantNet)
+		}
+	}
+}
+
 // Review Focus 3: the data carries a process the App no longer declares.
 func TestMetricsUnknownProcessStillAppears(t *testing.T) {
 	prom, _ := newFakeProm(t, fakeAnswer{
@@ -580,18 +679,25 @@ func TestMetricsNetworkByInstanceIgnoresProcessNaming(t *testing.T) {
 	}
 }
 
-// directionOf and processOf are what nameInstances, applyReference and
-// aggregate lean on to read a series name back apart; the new
-// "<process> in"/"<process> out" shape must still parse through both.
-func TestMetricsNetworkProcessNamesParseThroughHelpers(t *testing.T) {
-	if got := directionOf("worker in"); got != "in" {
-		t.Errorf(`directionOf("worker in") = %q, want "in"`, got)
-	}
-	if got := directionOf("worker out"); got != "out" {
-		t.Errorf(`directionOf("worker out") = %q, want "out"`, got)
-	}
-	if got := processOf("worker in"); got != "worker" {
-		t.Errorf(`processOf("worker in") = %q, want "worker"`, got)
+// directionOf is what aggregate leans on to read a direction back off a series
+// name, and the only thing still read back off a name at all — the process now
+// travels with the series instead. Every name shape the handler produces has to
+// parse through it, including a replaced instance's, whose own name contains a
+// space and would otherwise be cut in the wrong place.
+func TestMetricsDirectionParsesOutOfEveryNameShape(t *testing.T) {
+	for name, want := range map[string]string{
+		"worker in":      "in",
+		"worker out":     "out",
+		"web.2 in":       "in",
+		"replaced 3 in":  "in",
+		"replaced 3 out": "out",
+		"replaced 3":     "",
+		"web.2":          "",
+		"worker":         "",
+	} {
+		if got := directionOf(name); got != want {
+			t.Errorf("directionOf(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -929,15 +1035,17 @@ func TestMetricsAggregation(t *testing.T) {
 			{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}, {2000, 50}}},
 		},
 	}
+	// The name carries the process the instances belonged to: "sum" alone
+	// would not say what was summed on a project with more than one.
 	for _, tc := range []struct {
 		agg  string
 		name string
 		at1  float64
 		at2  float64
 	}{
-		{"sum", "sum", 30, 80},
-		{"avg", "avg", 15, 40},
-		{"max", "max", 20, 50},
+		{"sum", "sum web", 30, 80},
+		{"avg", "avg web", 15, 40},
+		{"max", "max web", 20, 50},
 	} {
 		prom, _ := newFakeProm(t, answer)
 		app := metricsApp()
@@ -997,8 +1105,8 @@ func TestMetricsAggregationKeepsDirectionsSeparate(t *testing.T) {
 		t.Fatalf("agg=sum produced %d network series, want 2 (one per direction): %v", len(net.Series), seriesNames(net))
 	}
 	names := seriesNames(net)
-	if names[0] != "sum in" || names[1] != "sum out" {
-		t.Fatalf("network series = %v, want sum in and sum out, not merged across directions", names)
+	if names[0] != "sum web in" || names[1] != "sum web out" {
+		t.Fatalf("network series = %v, want sum web in and sum web out, not merged across directions", names)
 	}
 	if v := net.Series[0].Points[0][1]; v != 30 {
 		t.Errorf("sum in = %v, want 30 (10+20)", v)
@@ -1068,63 +1176,119 @@ func TestMetricsAggregationReference(t *testing.T) {
 		}
 	})
 
-	t.Run("differing allocations drop the reference", func(t *testing.T) {
+	// Two process types at different sizes used to be the case that dropped the
+	// reference: they collapsed into one series whose allocations disagreed.
+	// They are now two series, each measured against its own allocation, which
+	// is the only reading of a sum across sizes that means anything.
+	t.Run("different process types aggregate apart and each keeps its reference", func(t *testing.T) {
 		prom, _ := newFakeProm(t, fakeAnswer{
 			Match: "container_cpu_usage_seconds_total",
 			Series: []fakeSeries{
 				{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
+				{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.2}}},
 				{Labels: map[string]string{"pod": "shop-worker-a", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 0.5}}},
 			},
 		})
 		app := metricsApp()
 		// dedicated-s requests a whole core, genuinely different from web's
-		// shared-s 0.5 — not merely a different burst ceiling on the same
-		// request, which is the other test below.
+		// shared-s 0.5, and caps its limit at the request so it has no burst.
 		app.Spec.Processes["worker"] = shpyrdv1.Process{Size: "dedicated-s"}
 		s, _ := newTestServer(t, prom, []client.Object{app},
-			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "worker", "shop-worker-a", 20))
+			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 15),
+			podFor("shop", "worker", "shop-worker-a", 20))
 
 		out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg=sum")
 		cpu := chartByID(t, out, "cpu")
-		if len(cpu.Series) != 1 {
-			t.Fatalf("series = %d, want 1: %v", len(cpu.Series), seriesNames(cpu))
+		if names := seriesNames(cpu); strings.Join(names, ",") != "sum web,sum worker" {
+			t.Fatalf("series = %v, want sum web and sum worker kept apart", names)
 		}
-		if cpu.Series[0].Reference != 0 || cpu.Series[0].Burst != 0 {
-			t.Errorf("reference = %v, burst = %v, want both 0 when the aggregated instances disagree",
+		// web: two shared-s instances, so 2 x 0.5 cores requested and 2 x 2
+		// cores of burst ceiling.
+		if cpu.Series[0].Reference != 1.0 || cpu.Series[0].Burst != 4.0 {
+			t.Errorf("sum web reference = %v, burst = %v, want 1.0 and 4.0",
 				cpu.Series[0].Reference, cpu.Series[0].Burst)
+		}
+		if v := cpu.Series[0].Points[0][1]; v != 0.30000000000000004 && v != 0.3 {
+			t.Errorf("sum web = %v, want 0.3 (0.1+0.2) and nothing from worker", v)
+		}
+		// worker: one dedicated-s instance, a whole core and no burst.
+		if cpu.Series[1].Reference != 1.0 || cpu.Series[1].Burst != 0 {
+			t.Errorf("sum worker reference = %v, burst = %v, want 1.0 and no burst",
+				cpu.Series[1].Reference, cpu.Series[1].Burst)
+		}
+		if v := cpu.Series[1].Points[0][1]; v != 0.5 {
+			t.Errorf("sum worker = %v, want 0.5, not blended with web", v)
 		}
 	})
 }
 
-// A shared size and a dedicated size can request the same CPU while capping
-// it at a different ceiling. Comparing only the reference would let that
-// slip through and draw a burst line that is wrong for at least one of the
-// aggregated instances.
-func TestMetricsAggregationDropsReferenceWhenBurstDiffers(t *testing.T) {
+// A percentage is where blending process types is most obviously wrong: 90% of
+// one allocation plus 80% of another is not 170% of anything, and the legend
+// that said "sum" no longer said whose. This is the default mode, which is what
+// made it worth a test of its own.
+func TestMetricsAggregationDoesNotBlendProcessTypesInPercentMode(t *testing.T) {
 	prom, _ := newFakeProm(t, fakeAnswer{
-		Match: "container_cpu_usage_seconds_total",
+		Match: "container_memory_working_set_bytes",
 		Series: []fakeSeries{
-			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
-			{Labels: map[string]string{"pod": "shop-worker-a", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 0.1}}},
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 90}}},
+			{Labels: map[string]string{"pod": "shop-worker-a", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 80}}},
 		},
 	})
 	app := metricsApp()
-	// Same 0.5-core request as web's shared-s, but its limit is capped down
-	// to the request instead of the size's usual 4x burst.
-	app.Spec.Processes["worker"] = shpyrdv1.Process{
-		Size:      "shared-s",
-		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")}},
-	}
+	app.Spec.Processes["worker"] = shpyrdv1.Process{Size: "dedicated-s"}
 	s, _ := newTestServer(t, prom, []client.Object{app},
 		podFor("shop", "web", "shop-web-a", 20), podFor("shop", "worker", "shop-worker-a", 20))
 
-	out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg=sum")
-	cpu := chartByID(t, out, "cpu")
-	if len(cpu.Series) != 1 {
-		t.Fatalf("series = %d, want 1: %v", len(cpu.Series), seriesNames(cpu))
+	mem := chartByID(t, getMetrics(t, s, "?range=1h&by=instance&agg=sum"), "memory")
+	if mem.Unit != "%" {
+		t.Fatalf("unit = %q, want %% (percent is the default mode)", mem.Unit)
 	}
-	if cpu.Series[0].Reference != 0 || cpu.Series[0].Burst != 0 {
-		t.Errorf("reference = %v, burst = %v, want both 0: the requests agree but the burst ceilings do not",
-			cpu.Series[0].Reference, cpu.Series[0].Burst)
+	if names := seriesNames(mem); strings.Join(names, ",") != "sum web,sum worker" {
+		t.Fatalf("series = %v, want one per process, never a single blended sum", names)
+	}
+	for i, want := range []float64{90, 80} {
+		if v := mem.Series[i].Points[0][1]; v != want {
+			t.Errorf("%s = %v, want %v", mem.Series[i].Name, v, want)
+		}
+	}
+}
+
+// Grouping by process is what now keeps allocations from being mixed, so the
+// agreement rule inside aggregateGroup no longer has a route in through the
+// handler: every instance of one process shares one allocation. It stays as the
+// guard that makes the reference a property of the series rather than of the
+// grouping key, and is tested where it can still be reached — directly, with a
+// group whose two members disagree only on the burst ceiling, which a check on
+// the reference alone would wave through and draw a ceiling that is wrong for
+// one of them.
+func TestMetricsAggregateGroupDropsReferenceWhenTheGroupDisagrees(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		b    Series
+	}{
+		{"the requests differ", Series{Name: "web.2", process: "web", Reference: 1, Burst: 2, Points: []Point{{1000, 1}}}},
+		{"only the ceilings differ", Series{Name: "web.2", process: "web", Reference: 0.5, Burst: 4, Points: []Point{{1000, 1}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := Series{Name: "web.1", process: "web", Reference: 0.5, Burst: 2, Points: []Point{{1000, 1}}}
+			got := aggregate([]Series{a, tc.b}, "sum")
+			if len(got) != 1 {
+				t.Fatalf("series = %d, want 1: both are the same process", len(got))
+			}
+			if got[0].Reference != 0 || got[0].Burst != 0 {
+				t.Errorf("reference = %v, burst = %v, want both 0 when the group disagrees",
+					got[0].Reference, got[0].Burst)
+			}
+		})
+	}
+
+	// And the agreeing case still multiplies, so the guard above is not simply
+	// refusing to draw a line at all.
+	got := aggregate([]Series{
+		{Name: "web.1", process: "web", Reference: 0.5, Burst: 2, Points: []Point{{1000, 1}}},
+		{Name: "web.2", process: "web", Reference: 0.5, Burst: 2, Points: []Point{{1000, 3}}},
+	}, "sum")
+	if len(got) != 1 || got[0].Name != "sum web" || got[0].Reference != 1 || got[0].Burst != 4 {
+		t.Errorf("agreeing group = %+v, want one sum web at reference 1 and burst 4", got)
 	}
 }

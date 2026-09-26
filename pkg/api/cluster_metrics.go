@@ -164,7 +164,10 @@ func (s *Server) clusterMetrics(c *gin.Context) {
 		cwg.Add(1)
 		go func(i int, q chartQuery) {
 			defer cwg.Done()
-			out.Charts[i] = s.runChart(ctx, q, start, end, step, nil, metricsOptions{}, nil)
+			// Default options: these node charts are neither per instance nor
+			// measured against an allocation, so the finishing pass the app
+			// handler runs after its own goroutines has nothing to do here.
+			out.Charts[i] = s.runChart(ctx, q, start, end, step, metricsOptions{})
 		}(i, q)
 	}
 	cwg.Wait()

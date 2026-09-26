@@ -13,6 +13,12 @@ import (
 // aggregation, percentage or absolute) and the table is worth keeping
 // declarative rather than branching inside the handler.
 
+// processLabel is the kube_pod_labels label the queries join in and the
+// handler reads a series' process off. It is the only place a series' process
+// comes from: the display name is not a source of truth, since a replaced
+// instance's name no longer carries one.
+const processLabel = "label_shpyrd_io_process"
+
 // metricsOptions are the request's shaping parameters. The table reads them so
 // the handler does not have to branch per chart.
 type metricsOptions struct {
@@ -44,15 +50,15 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 	// The process label comes along so a series can be traced back to its
 	// allocation; grouping by pod collapses several containers into one
 	// instance.
-	group := "label_shpyrd_io_process"
-	seriesLabel := "label_shpyrd_io_process"
+	group := processLabel
+	seriesLabel := processLabel
 	if opts.byInstance() {
-		group = "pod, label_shpyrd_io_process"
+		group = "pod, " + processLabel
 		seriesLabel = "pod"
 	}
 	procFilter := ""
 	if opts.Process != "" {
-		procFilter = fmt.Sprintf(`,label_shpyrd_io_process=%q`, opts.Process)
+		procFilter = fmt.Sprintf(`,%s=%q`, processLabel, opts.Process)
 	}
 	podLabels := fmt.Sprintf(`kube_pod_labels{namespace="%s",label_shpyrd_io_app="%s"%s}`, ns, name, procFilter)
 

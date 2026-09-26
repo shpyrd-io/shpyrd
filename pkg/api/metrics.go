@@ -46,6 +46,16 @@ type Series struct {
 	Points    []Point `json:"points"`
 	Reference float64 `json:"reference,omitempty"`
 	Burst     float64 `json:"burst,omitempty"`
+	// pod and process are the series' identity as Prometheus reported it,
+	// carried alongside the display name rather than parsed back out of it.
+	// Reading them off the name was wrong twice over: the name of a replaced
+	// instance is "replaced 1", which no longer says which process it was, and
+	// a pod in the name is a pod name one missed branch away from the response
+	// (RFC-0011). Both stay unexported, so no amount of new marshalling can
+	// put a pod in the JSON. pod is empty for a series that is not one
+	// instance — the by-process default, and the namespace-wide fallback.
+	pod     string
+	process string
 }
 
 // allocation is what one process type was given.
@@ -192,10 +202,10 @@ func (s *Server) appMetrics(c *gin.Context) {
 	if opts.absolute() {
 		allocs = s.allocations(c.Request.Context(), app)
 	}
-	// One namer for the whole request, so "replaced 1" means the same pod on
-	// every chart. Only the instance breakdown needs it, and listing the pods
-	// is a call the by-process default should not pay for on a path every open
-	// Metrics tab repeats every 30 seconds.
+	// One namer for the whole request, because "replaced 2" has to mean the
+	// same pod on every chart of a response. Only the instance breakdown needs
+	// it, and listing the pods is a call the by-process default should not pay
+	// for on a path every open Metrics tab repeats every 30 seconds.
 	var namer *instanceNamer
 	if opts.byInstance() {
 		namer = s.newInstanceNamer(c.Request.Context(), app)
@@ -213,41 +223,49 @@ func (s *Server) appMetrics(c *gin.Context) {
 		wg.Add(1)
 		go func(i int, q chartQuery) {
 			defer wg.Done()
-			resp.Charts[i] = s.runChart(c.Request.Context(), q, start, end, step, allocs, opts, namer)
+			resp.Charts[i] = s.runChart(c.Request.Context(), q, start, end, step, opts)
 		}(i, q)
 	}
 	wg.Wait()
+	// Naming, the reference and the aggregation all run here rather than in
+	// each goroutine: they need the whole response. The instance names do
+	// because the charts do not see the same pods (cpu and memory filter on
+	// container!="", the network query does not), so no single chart knows the
+	// set that has to be numbered consistently; the other two follow it
+	// because they read the names it assigns.
+	finishCharts(resp.Charts, namer, allocs, opts)
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, allocs map[string]allocation, opts metricsOptions, namer *instanceNamer) Chart {
+func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, opts metricsOptions) Chart {
 	ch := q.Chart
 	ch.Series = []Series{}
+	perInstance := ch.InstanceCapable && opts.byInstance()
 	if len(q.Fixed) > 0 {
 		names := make([]string, 0, len(q.Fixed))
 		for n := range q.Fixed {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		perInstance := ch.InstanceCapable && opts.byInstance()
 		for _, n := range names {
 			if perInstance {
 				// Network is the only chart of this shape that splits: its
 				// sub-queries are directions, not pods, so each direction
 				// contributes one series per instance and carries the
-				// direction as a suffix nameInstances keeps.
+				// direction as the suffix the naming pass appends to the
+				// instance name.
 				raw, err := s.prom.QueryRangeSeries(ctx, q.Fixed[n], start, end, step)
 				if err != nil {
-					// Whatever the earlier direction appended is still keyed by
-					// pod and nameInstances is no longer going to run, so the
-					// series go with the error. A chart reporting a failure has
-					// nothing to draw anyway, and this is the one branch where
-					// keeping them would put a pod name in the response.
+					// Whatever the earlier direction appended is keyed by pod
+					// and will never be named now, so the series go with the
+					// error: a chart reporting a failure has nothing to draw,
+					// and half a direction drawn under bare "in" would read as
+					// real data.
 					ch.Series, ch.Error = []Series{}, err.Error()
 					return ch
 				}
 				for _, r := range raw {
-					ch.Series = append(ch.Series, Series{Name: r.Labels["pod"] + " " + n, Points: r.Points})
+					ch.Series = append(ch.Series, Series{Name: n, pod: r.Labels["pod"], process: r.Labels[processLabel], Points: r.Points})
 				}
 				continue
 			}
@@ -256,7 +274,7 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 				ch.Error = err.Error()
 				return ch
 			}
-			name := n
+			name, process := n, ""
 			if ch.ID == "network" && opts.Process != "" {
 				// The query already filters to this one process (it joins the
 				// pod labels in whenever a process is selected), but "in" and
@@ -265,20 +283,9 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 				// and throughput share this Fixed shape but never carry a
 				// process, so the rename is scoped to network by chart ID
 				// rather than to every fixed-query chart.
-				name = opts.Process + " " + n
+				name, process = opts.Process+" "+n, opts.Process
 			}
-			ch.Series = append(ch.Series, Series{Name: name, Points: pts})
-		}
-		nameInstances(&ch, namer, opts)
-		applyReference(&ch, allocs, opts)
-		// Aggregation is an instance-breakdown control, so a chart that never
-		// broke down by instance in the first place has nothing for it to
-		// collapse. Without this, by=instance&agg=sum on latency folded p50,
-		// p95 and p99 into one series named "sum" — blending percentiles,
-		// which is meaningless, on a chart the UI already marks as not
-		// instance capable.
-		if opts.byInstance() && ch.InstanceCapable {
-			ch.Series = aggregate(ch.Series, opts.Agg)
+			ch.Series = append(ch.Series, Series{Name: name, process: process, Points: pts})
 		}
 		return ch
 	}
@@ -294,15 +301,24 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 			return ch
 		}
 		if len(pts) > 0 {
+			// No pod: this is the namespace-wide total the chart falls back to
+			// when nothing carries a request, which the naming pass leaves
+			// alone rather than calling it an instance.
 			ch.Series = append(ch.Series, Series{Name: q.FallbackName, Points: pts})
 			if q.FallbackUnit != "" {
 				ch.Unit = q.FallbackUnit
 			}
 		}
-		applyReference(&ch, allocs, opts)
 		return ch
 	}
 	for _, r := range raw {
+		if perInstance && r.Labels["pod"] != "" {
+			// Named later, once every chart has answered: the name depends on
+			// pods this chart may not have seen. Until then the series is
+			// identified by the labels it came with and nothing else.
+			ch.Series = append(ch.Series, Series{pod: r.Labels["pod"], process: r.Labels[processLabel], Points: r.Points})
+			continue
+		}
 		name := r.Labels[q.LabelKey]
 		if q.nameMap != nil {
 			name = q.nameMap(name)
@@ -310,16 +326,9 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 		if name == "" {
 			name = "all"
 		}
-		ch.Series = append(ch.Series, Series{Name: name, Points: r.Points})
+		ch.Series = append(ch.Series, Series{Name: name, process: r.Labels[processLabel], Points: r.Points})
 	}
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
-	nameInstances(&ch, namer, opts)
-	applyReference(&ch, allocs, opts)
-	// Same guard as the Fixed-query branch above: throughput groups by class,
-	// not by instance, so agg has nothing to collapse there either.
-	if opts.byInstance() && ch.InstanceCapable {
-		ch.Series = aggregate(ch.Series, opts.Agg)
-	}
 	return ch
 }
 
@@ -327,16 +336,83 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 // series: the network chart draws two series for each of them.
 const maxInstances = 40
 
-// nameInstances turns pod-keyed series into instance-named ones, applies the
-// replaced rule and caps how many instances a chart may carry. The cap is what
-// stops a fifty-replica project over a week from returning a response no
-// browser will chart.
+// finishCharts turns the raw answers into what the response promises: instance
+// names, the allocation each series is measured against and the aggregation
+// that was asked for, in that order because each reads what the one before it
+// wrote.
 //
-// A series name is the pod, optionally followed by a word the chart added to
-// tell two series of the same instance apart — the network chart's direction.
-// That suffix survives the renaming, so "web.1 in" and "web.1 out" both count
-// as the one instance when a replaced one is reported.
-func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
+// It runs after every chart has answered, not inside the goroutines, because
+// the instance names are a property of the whole response rather than of one
+// chart. See replacedNames.
+func finishCharts(charts []Chart, namer *instanceNamer, allocs map[string]allocation, opts metricsOptions) {
+	replaced := replacedNames(charts, namer, opts)
+	for i := range charts {
+		ch := &charts[i]
+		nameInstances(ch, namer, replaced, opts)
+		applyReference(ch, allocs, opts)
+		// Aggregation is an instance-breakdown control, so a chart that never
+		// broke down by instance in the first place has nothing for it to
+		// collapse. Without this guard, by=instance&agg=sum on latency folded
+		// p50, p95 and p99 into one series named "sum" — blending percentiles,
+		// which is meaningless, on a chart the UI already marks as not
+		// instance capable — and on throughput it blended status classes.
+		if opts.byInstance() && ch.InstanceCapable {
+			ch.Series = aggregate(ch.Series, opts.Agg)
+		}
+	}
+}
+
+// replacedNames numbers the pods that appear in the metric data but are no
+// longer live, off the union of every chart's pods and a single sorted list of
+// them.
+//
+// What that buys, and it is worth being exact because an earlier version
+// claimed more: within one response "replaced 2" is the same pod on every
+// chart, and two requests over the same data number the same pods the same
+// way. Numbering per chart could not manage even that — cpu and memory filter
+// on container!="" while the network query does not, so the charts see
+// different sets, and whichever goroutine reached a shared counter first
+// decided the number. What it is not: an order anyone can read meaning into
+// (pod names end in a hash), nor stable when the set itself changes, since a
+// replacement sorting earlier renumbers every pod after it.
+func replacedNames(charts []Chart, namer *instanceNamer, opts metricsOptions) map[string]string {
+	if !opts.byInstance() || namer == nil || namer.err != nil {
+		return nil
+	}
+	var dead []string
+	seen := map[string]bool{}
+	for _, ch := range charts {
+		if !ch.InstanceCapable {
+			continue
+		}
+		for _, sr := range ch.Series {
+			if sr.pod == "" || seen[sr.pod] {
+				continue
+			}
+			seen[sr.pod] = true
+			if _, live := namer.live[sr.pod]; !live {
+				dead = append(dead, sr.pod)
+			}
+		}
+	}
+	sort.Strings(dead)
+	out := make(map[string]string, len(dead))
+	for i, pod := range dead {
+		out[pod] = fmt.Sprintf("%s%d", replacedPrefix, i+1)
+	}
+	return out
+}
+
+// nameInstances turns one chart's pod-keyed series into instance-named ones,
+// applies the replaced rule and caps how many instances the chart may carry.
+// The cap is what stops a fifty-replica project over a week from returning a
+// response no browser will chart.
+//
+// A per-instance series holds its pod alongside a name that is so far only the
+// word the chart added to tell two series of the same instance apart — the
+// network chart's direction. That word becomes the suffix, so "web.1 in" and
+// "web.1 out" both count as the one instance when a replaced one is reported.
+func nameInstances(ch *Chart, namer *instanceNamer, replaced map[string]string, opts metricsOptions) {
 	if !opts.byInstance() || !ch.InstanceCapable {
 		return
 	}
@@ -348,10 +424,27 @@ func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 		ch.Series, ch.Error = []Series{}, namer.err.Error()
 		return
 	}
-	// Number the replaced pods off a stable order first: Prometheus promises no
-	// particular order, and every chart's goroutine shares the namer, so
-	// "replaced 1" must not depend on which chart's answer arrived first.
-	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
+	// A series with no pod is not an instance — the namespace-wide fallback is
+	// the one that reaches here — so it keeps the name it was given and is
+	// counted against nothing.
+	var pass, pods []Series
+	for _, sr := range ch.Series {
+		if sr.pod == "" {
+			pass = append(pass, sr)
+			continue
+		}
+		pods = append(pods, sr)
+	}
+	// Prometheus promises no particular order, and the sort below is stable, so
+	// give it a deterministic starting order: by pod, then by the direction
+	// suffix so "in" precedes "out" whatever order the two sub-queries
+	// returned in.
+	sort.Slice(pods, func(i, j int) bool {
+		if pods[i].pod != pods[j].pod {
+			return pods[i].pod < pods[j].pod
+		}
+		return pods[i].Name < pods[j].Name
+	})
 	// A series carries its instance and its ordering key alongside it, because
 	// neither the ordinal nor a live instance's precedence survives in the name
 	// as a plain string sort would read it.
@@ -359,25 +452,27 @@ func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 		Series
 		instance string
 		replaced bool
-		process  string
+		group    string
 		ordinal  int
 	}
-	kept := make([]ordered, 0, len(ch.Series))
+	kept := make([]ordered, 0, len(pods))
 	hidden := map[string]bool{}
-	for _, sr := range ch.Series {
-		pod, suffix := sr.Name, ""
-		if i := strings.IndexByte(pod, ' '); i > 0 {
-			pod, suffix = pod[:i], pod[i:]
+	for _, sr := range pods {
+		name, live := namer.live[sr.pod]
+		if !live {
+			name = replaced[sr.pod]
 		}
-		name := namer.name(pod)
-		replaced := strings.HasPrefix(name, replacedPrefix)
-		if replaced && !opts.Replaced {
+		if !live && !opts.Replaced {
 			hidden[name] = true
 			continue
 		}
-		sr.Name = name + suffix
-		process, ordinal := splitInstance(name)
-		kept = append(kept, ordered{Series: sr, instance: name, replaced: replaced, process: process, ordinal: ordinal})
+		if suffix := sr.Name; suffix != "" {
+			sr.Name = name + " " + suffix
+		} else {
+			sr.Name = name
+		}
+		group, ordinal := splitInstance(name)
+		kept = append(kept, ordered{Series: sr, instance: name, replaced: !live, group: group, ordinal: ordinal})
 	}
 	// Live instances first, so the cap can never drop one in favour of a pod
 	// that no longer exists — asking to see the replaced ones must not cost the
@@ -390,8 +485,8 @@ func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 		switch {
 		case a.replaced != b.replaced:
 			return !a.replaced
-		case a.process != b.process:
-			return a.process < b.process
+		case a.group != b.group:
+			return a.group < b.group
 		case a.ordinal != b.ordinal:
 			return a.ordinal < b.ordinal
 		}
@@ -404,7 +499,7 @@ func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 	// keeps or drops an instance whole.
 	shown := map[string]bool{}
 	dropped := map[string]bool{}
-	ch.Series = make([]Series, 0, len(kept))
+	ch.Series = append(make([]Series, 0, len(pass)+len(kept)), pass...)
 	for _, k := range kept {
 		if !shown[k.instance] {
 			if len(shown) == maxInstances {
@@ -425,9 +520,11 @@ func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 	ch.Note = strings.Join(parts, ", ")
 }
 
-// splitInstance takes an instance name apart for ordering: "web.10" is process
-// web, ordinal 10, and "replaced 3" is ordinal 3 with no process.
-func splitInstance(name string) (process string, ordinal int) {
+// splitInstance takes an instance name apart for ordering: "web.10" sorts
+// under web at ordinal 10, and "replaced 3" at ordinal 3 under no process at
+// all. It reads the display name on purpose — this is the order the legend is
+// drawn in, and nothing downstream depends on what it returns.
+func splitInstance(name string) (group string, ordinal int) {
 	if num, ok := strings.CutPrefix(name, replacedPrefix); ok {
 		n, _ := strconv.Atoi(num)
 		return "", n
@@ -453,19 +550,25 @@ func plural(n int, one, many string) string {
 // rather than a whole name because the pods are numbered.
 const replacedPrefix = "replaced "
 
-// instanceNamer names pods for one request. Exactly one of the fields is set:
-// err records a failure to list the live pods, which is not a detail the charts
+// instanceNamer holds the live pods of one request. Exactly one of the fields
+// is set: err records a failure to list them, which is not a detail the charts
 // can paper over — with no live list every instance looks replaced — so a chart
-// reports the error and never calls name.
+// reports the error and reads live not at all.
+//
+// It is a plain map rather than the memoising function it used to be: every
+// chart's goroutine shared that function, and a counter inside it made
+// "replaced 1" depend on which chart's Prometheus answer came back first. The
+// numbering now happens once, after every chart has answered, in
+// replacedNames.
 type instanceNamer struct {
-	name func(pod string) string
+	live map[string]string
 	err  error
 }
 
-// newInstanceNamer maps a pod to the instance name the Logs tab would show.
-// Pods absent from the live list were replaced during the window; they are
-// numbered in order of first appearance rather than named, because the name they
-// held has since moved to another pod.
+// newInstanceNamer lists the live pods and maps each to the instance name the
+// Logs tab would show. Pods in the metric data but absent from this list were
+// replaced during the window; replacedNames numbers those instead, because the
+// name they held has since moved to another pod.
 //
 // Prometheus cannot do this join: kube-state-metrics exposes no annotations on
 // a default install, so shpyrd.io/instance is invisible to PromQL.
@@ -480,24 +583,7 @@ func (s *Server) newInstanceNamer(ctx context.Context, app *shpyrdv1.App) *insta
 	if err != nil {
 		return &instanceNamer{err: fmt.Errorf("listing the project's instances: %w", err)}
 	}
-	live := InstanceNames(pods.Items)
-	var mu sync.Mutex
-	replaced := map[string]string{}
-	// Shared by every chart's goroutine, so the numbering is consistent across
-	// charts — and therefore needs the lock.
-	return &instanceNamer{name: func(pod string) string {
-		if n, ok := live[pod]; ok {
-			return n
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if n, ok := replaced[pod]; ok {
-			return n
-		}
-		n := fmt.Sprintf("%s%d", replacedPrefix, len(replaced)+1)
-		replaced[pod] = n
-		return n
-	}}
+	return &instanceNamer{live: InstanceNames(pods.Items)}
 }
 
 // applyReference fills in the line a series is measured against. Only the
@@ -508,7 +594,13 @@ func applyReference(ch *Chart, allocs map[string]allocation, opts metricsOptions
 		return
 	}
 	for i := range ch.Series {
-		a, ok := allocs[processOf(ch.Series[i].Name)]
+		// The process comes off the series' own label. Recovering it from the
+		// display name instead cost every replaced instance its reference:
+		// "replaced 1" is not a process anyone allocated, so the lookup missed
+		// and the whole chart then lost its line to the agreement rule in
+		// aggregateGroup — ticking "Replaced: shown" silently erased the
+		// allocation line.
+		a, ok := allocs[ch.Series[i].process]
 		if !ok {
 			continue
 		}
@@ -519,19 +611,6 @@ func applyReference(ch *Chart, allocs map[string]allocation, opts metricsOptions
 			ch.Series[i].Reference = a.MemoryBytes
 		}
 	}
-}
-
-// processOf takes the process type out of a series name: "web" stays "web",
-// "web.2" and "web.2 in" become "web".
-func processOf(series string) string {
-	name := series
-	if i := strings.IndexByte(name, ' '); i > 0 {
-		name = name[:i]
-	}
-	if i := strings.IndexByte(name, '.'); i > 0 {
-		name = name[:i]
-	}
-	return name
 }
 
 // directionOf reads the network chart's direction off the end of a series
@@ -553,41 +632,59 @@ func directionOf(name string) string {
 	return ""
 }
 
-// aggregate collapses a chart's per-instance series into one per direction —
-// cpu and memory have no direction, so they collapse to one series overall,
-// while network's "in" and "out" are aggregated separately so a sum or an
-// average never mixes inbound and outbound traffic into a line that means
-// nothing. It runs here rather than in PromQL: the series have already been
-// named, so the result is the same whichever instances existed, and one query
-// serves every aggregation the UI offers.
+// aggregate collapses a chart's per-instance series into one per process and
+// direction. Both boundaries are there because crossing either produces a
+// number that is not a quantity: network's "in" and "out" summed together
+// measure nothing, and two process types at different sizes summed in percent
+// mode reported 170% — 90% of one allocation plus 80% of another — under a
+// legend that no longer said which processes made it. So instances collapse,
+// and nothing else does: a project with web and worker gets "sum web" and
+// "sum worker", which is also what lets each keep the reference line its own
+// allocation gives it.
+//
+// It runs here rather than in PromQL because one query then serves every
+// aggregation the UI offers, and because the series have already been named,
+// so the result does not depend on which instances happened to exist.
 func aggregate(series []Series, agg string) []Series {
 	if agg == "" || agg == "none" || len(series) == 0 {
 		return series
 	}
-	groups := map[string][]Series{}
-	var directions []string
+	type group struct{ process, direction string }
+	groups := map[group][]Series{}
+	var order []group
 	for _, s := range series {
-		dir := directionOf(s.Name)
-		if _, seen := groups[dir]; !seen {
-			directions = append(directions, dir)
+		g := group{s.process, directionOf(s.Name)}
+		if _, seen := groups[g]; !seen {
+			order = append(order, g)
 		}
-		groups[dir] = append(groups[dir], s)
+		groups[g] = append(groups[g], s)
 	}
-	sort.Strings(directions)
-	out := make([]Series, 0, len(directions))
-	for _, dir := range directions {
-		name := agg
-		if dir != "" {
-			name = agg + " " + dir
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].process != order[j].process {
+			return order[i].process < order[j].process
 		}
-		out = append(out, aggregateGroup(groups[dir], agg, name))
+		return order[i].direction < order[j].direction
+	})
+	out := make([]Series, 0, len(order))
+	for _, g := range order {
+		// A process the metric data does not label — a build pod, which is the
+		// gap RFC-0027 records — has nothing to name, so it stays plain "sum"
+		// rather than "sum ".
+		name := agg
+		if g.process != "" {
+			name += " " + g.process
+		}
+		if g.direction != "" {
+			name += " " + g.direction
+		}
+		out = append(out, aggregateGroup(groups[g], agg, name, g.process))
 	}
 	return out
 }
 
-// aggregateGroup combines the series of one direction (or the whole chart,
-// for cpu and memory) into a single named series.
-func aggregateGroup(series []Series, agg, name string) Series {
+// aggregateGroup combines the series of one process and direction into a single
+// named series.
+func aggregateGroup(series []Series, agg, name, process string) Series {
 	sums := map[float64]float64{}
 	counts := map[float64]int{}
 	maxes := map[float64]float64{}
@@ -617,11 +714,12 @@ func aggregateGroup(series []Series, agg, name string) Series {
 		}
 		out.Points = append(out.Points, Point{ts, v})
 	}
-	// Every instance of a process shares its allocation, so the reference
-	// survives aggregation only when every series agrees on both halves of
-	// it — a shared and a dedicated size can request the same CPU while
-	// capping it at a different burst ceiling, and that disagreement is as
-	// disqualifying as the requests themselves differing.
+	// Every instance of a process shares its allocation, so grouping by process
+	// already guarantees this agreement; the check stays as the thing that
+	// makes that a property of the data rather than of a grouping key chosen
+	// elsewhere. It compares both halves because a shared and a dedicated size
+	// can request the same CPU while capping it at a different burst ceiling,
+	// and that disagreement is as disqualifying as the requests differing.
 	ref, burst := series[0].Reference, series[0].Burst
 	for _, s := range series[1:] {
 		if s.Reference != ref || s.Burst != burst {
@@ -633,6 +731,6 @@ func aggregateGroup(series []Series, agg, name string) Series {
 		// A sum is measured against the sum of the allocations.
 		ref, burst = ref*float64(len(series)), burst*float64(len(series))
 	}
-	out.Reference, out.Burst = ref, burst
+	out.Reference, out.Burst, out.process = ref, burst, process
 	return out
 }
