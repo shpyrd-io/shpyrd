@@ -299,7 +299,14 @@ export type DomainsResult = {
 };
 
 export type Point = [number, number];
-export type Series = { name: string; points: Point[] };
+export type Series = {
+  name: string;
+  points: Point[];
+  /** What this series is measured against in absolute mode (its allocation). */
+  reference?: number;
+  /** The burst ceiling above the allocation, for shared sizes that allow it. */
+  burst?: number;
+};
 export type Chart = {
   id: string;
   title: string;
@@ -307,12 +314,25 @@ export type Chart = {
   kind: "line" | "stacked" | "step";
   series: Series[];
   error?: string;
+  /** Whether `by=instance` grouping applies to this chart. */
+  instanceCapable: boolean;
+  /** Set when the chart hid data, e.g. replaced instances or a capped series. */
+  note?: string;
 };
 export type MetricsResponse = {
   range: string;
   step: number;
   charts: Chart[];
   releases: { number: number; time: number; label: string }[];
+};
+
+export type MetricsQuery = {
+  range: string;
+  process?: string;
+  by?: "process" | "instance";
+  agg?: "none" | "sum" | "avg" | "max";
+  mode?: "percent" | "total";
+  replaced?: boolean;
 };
 
 export type BuildInfo = {
@@ -816,8 +836,15 @@ export const api = {
       `${project(slug)}/secrets`,
       json("PUT", body),
     ),
-  metrics: (slug: string, range: string) =>
-    request<MetricsResponse>(`${project(slug)}/metrics?range=${range}`),
+  metrics: (slug: string, q: MetricsQuery) => {
+    const p = new URLSearchParams({ range: q.range });
+    if (q.process) p.set("process", q.process);
+    if (q.by) p.set("by", q.by);
+    if (q.agg && q.agg !== "none") p.set("agg", q.agg);
+    if (q.mode) p.set("mode", q.mode);
+    if (q.replaced) p.set("replaced", "true");
+    return request<MetricsResponse>(`${project(slug)}/metrics?${p}`);
+  },
   builds: (slug: string) => request<BuildInfo[]>(`${project(slug)}/builds`),
   buildLogsPath: (slug: string, build: string, follow: boolean) =>
     `${project(slug)}/builds/${encodeURIComponent(build)}/logs?follow=${follow}`,

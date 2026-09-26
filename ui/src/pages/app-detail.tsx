@@ -1086,7 +1086,7 @@ function Metrics({ app }: { app: AppDetail }) {
   });
   const m = useQuery({
     queryKey: ["metrics", app.slug, range],
-    queryFn: () => api.metrics(app.slug, range),
+    queryFn: () => api.metrics(app.slug, { range }),
     refetchInterval: 30_000,
     enabled: config.data?.metrics !== false,
   });

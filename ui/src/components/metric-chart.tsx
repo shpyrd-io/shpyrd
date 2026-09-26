@@ -34,8 +34,8 @@ const subtitles: Record<string, string> = {
   throughput: "requests per second by response class",
   latency: "response time percentiles at the edge",
   instances: "running instances per process type",
-  cpu: "of each process allocation; shared sizes can burst above 100%",
-  memory: "of each process allocation",
+  cpu: "per process; shared sizes can burst above their allocation",
+  memory: "per process",
   network: "instance network traffic",
 };
 
@@ -73,6 +73,11 @@ export function MetricChart({
   const stacked = chart.kind === "stacked" || chart.kind === "step";
   const step = chart.kind === "step";
   const percent = chart.unit === "%";
+  // In absolute mode the line is the allocation the series is measured
+  // against, which the API sends per series; every instance of a process
+  // shares it, so the first series that has one speaks for the chart.
+  const allocation = chart.series.find((s) => s.reference)?.reference ?? 0;
+  const burst = chart.series.find((s) => s.burst)?.burst ?? 0;
   const subtitle = subtitleOverride ?? subtitles[chart.id];
   const hot = percent && last.some((l) => (l.v ?? 0) >= 85);
 
@@ -99,9 +104,15 @@ export function MetricChart({
           </div>
           {subtitle && (
             <span className="text-xs font-normal text-muted-foreground">
-              {chart.unit === "cores" || chart.unit === "bytes"
+              {(chart.unit === "cores" || chart.unit === "bytes") &&
+              allocation === 0
                 ? "absolute usage (no allocation set yet)"
                 : subtitle}
+            </span>
+          )}
+          {chart.note && (
+            <span className="text-xs font-normal text-muted-foreground">
+              {chart.note}
             </span>
           )}
         </CardTitle>
@@ -205,6 +216,30 @@ export function MetricChart({
                     y={100}
                     stroke="oklch(0.65 0.22 25)"
                     strokeDasharray="2 4"
+                  />
+                )}
+                {!percent && allocation > 0 && (
+                  <ReferenceLine
+                    y={allocation}
+                    stroke="oklch(0.65 0.22 25)"
+                    strokeDasharray="2 4"
+                    label={{
+                      value: `Allocated ${metricValue(allocation, chart.unit)}`,
+                      position: "insideTopLeft",
+                      fontSize: 10,
+                    }}
+                  />
+                )}
+                {!percent && burst > 0 && (
+                  <ReferenceLine
+                    y={burst}
+                    stroke="oklch(0.80 0.16 85)"
+                    strokeDasharray="1 5"
+                    label={{
+                      value: `Burst ${metricValue(burst, chart.unit)}`,
+                      position: "insideTopLeft",
+                      fontSize: 10,
+                    }}
                   />
                 )}
                 {releases.map((r) => (
