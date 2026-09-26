@@ -131,6 +131,12 @@ Shipped in v0.9.4:
   process receives `SHPYRD_ISSUER`, `SHPYRD_PROJECT` and `SHPYRD_WORKSPACE` so it can verify
   the JWT against `<iss>/.well-known/jwks.json`; `examples/hello` shows how.
 
+Shipped in v0.9.5 — the seams for a platform hosting many workspaces:
+
+- `pkg/server` wires the server for any binary built on the core; `shpyrd-ctl workspaces
+  create|list|plan|suspend|resume` speaks the console routes of a server that reports the
+  `workspaces` capability (the open-source platform does not, and says so).
+
 The rest of the model (OAuth for agents) follows in later releases; the full text is
 published when it settles.
 
