@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 )
 
 func newDeployCmd(g *globalFlags) *cobra.Command {
@@ -69,7 +71,9 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			if err != nil {
 				return err
 			}
-			before, err := ac.getApp(ctx, name)
+			// Everything goes through the API (RFC-0052): the same path for a
+			// login session and for a kubeconfig.
+			before, err := ac.getDetail(ctx, name)
 			if err != nil {
 				return err
 			}
@@ -91,86 +95,60 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			if image == "" && gitURL == "" {
 				project = detectDockerfile(project, subPath)
 			}
-			var mutate func(*shpyrdv1.App) error
-			var note string
+			req, err := project.deployRequest(&before.Spec)
+			if err != nil {
+				return err
+			}
+			req.SubPath = subPath
 			switch {
 			case image != "":
 				fmt.Fprintf(out, "==> Deploying prebuilt image %s to %s\n", image, name)
-				note = "Deploy image " + image
-				mutate = func(a *shpyrdv1.App) error {
-					a.Spec.Image = image
-					return nil
-				}
+				req.Image = image
+				req.Note = "Deploy image " + image
 			case gitURL != "":
 				ref := firstNonEmpty(gitRef, "main")
 				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, ref, name)
-				mutate = func(a *shpyrdv1.App) error {
-					a.Spec.Image = ""
-					a.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: gitURL, Revision: ref}, SubPath: subPath}
-					return nil
-				}
+				req.Git = &shpyrdv1.GitSource{URL: gitURL, Revision: ref}
 			default:
 				archive, ref, err := archiveSource(out, workingTree)
 				if err != nil {
 					return err
 				}
-				if b := project.Build; b != nil && b.Strategy == shpyrdv1.StrategyDockerfile {
+				if b := req.Build; b != nil && b.Strategy == shpyrdv1.StrategyDockerfile {
 					fmt.Fprintf(out, "==> Building with Dockerfile (%s)\n", firstNonEmpty(b.Dockerfile, "Dockerfile"))
 				} else {
 					fmt.Fprintln(out, "==> Building with buildpacks")
 				}
 				fmt.Fprintf(out, "==> Uploading source (%s)\n", humanBytes(len(archive)))
-				info, err := ac.uploadSource(ctx, archive)
+				info, err := ac.uploadSourceAPI(ctx, archive)
 				if err != nil {
 					return err
 				}
 				fmt.Fprintf(out, "    archive %s\n", info.SHA256[:12])
-				mutate = func(a *shpyrdv1.App) error {
-					a.Spec.Image = ""
-					a.Spec.Source = &shpyrdv1.Source{
-						Blob:    &shpyrdv1.BlobSource{URL: info.URL, SHA256: info.SHA256, Ref: ref},
-						SubPath: subPath,
-					}
-					return nil
-				}
+				req.Blob = &shpyrdv1.BlobSource{URL: info.URL, SHA256: info.SHA256, Ref: ref}
 			}
-
-			app, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
-				if err := mutate(a); err != nil {
-					return err
-				}
-				if err := project.applyTo(a); err != nil {
-					return err
-				}
-				if note != "" {
-					if a.Annotations == nil {
-						a.Annotations = map[string]string{}
-					}
-					a.Annotations[shpyrdv1.AnnotationReleaseNote] = note
-				}
-				return nil
-			})
+			body, _ := json.Marshal(req)
+			raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/deploy", body, "application/json")
 			if err != nil {
 				return err
 			}
-			ac.audit(ctx, name, "deploy", name, firstNonEmpty(note, "source deploy"))
+			var after api.AppDetail
+			if err := json.Unmarshal(raw, &after); err != nil {
+				return fmt.Errorf("deploy: %w", err)
+			}
 			if noWait {
 				fmt.Fprintln(out, "Deploy requested. Follow with `shpyrd projects info", name+"`.")
 				return nil
 			}
 
-			specChanged := app.Generation != before.Generation
+			specChanged := after.Status.Generation != before.Status.Generation
 			// A build happens only when what is built changed: the same
 			// archive with new processes or mounts is released as it is.
-			sourceChanged := before.Status.LatestBuild == "" || !sameSource(before.Spec.Source, app.Spec.Source) || before.Spec.Build == nil != (app.Spec.Build == nil) || (before.Spec.Build != nil && app.Spec.Build != nil && !reflect.DeepEqual(*before.Spec.Build, *app.Spec.Build))
+			sourceChanged := before.Status.LatestBuild == "" || !sameSource(before.Spec.Source, after.Spec.Source) || (before.Spec.Build == nil) != (after.Spec.Build == nil) || (before.Spec.Build != nil && after.Spec.Build != nil && !reflect.DeepEqual(*before.Spec.Build, *after.Spec.Build))
 			switch {
-			case app.HasSource() && app.Spec.Image == "" && sourceChanged:
+			case after.Spec.Source != nil && after.Spec.PinnedImage == "" && req.Image == "" && sourceChanged:
 				fmt.Fprintln(out, "==> Building")
-				build, err := ac.waitForBuild(ctx, name, before.Status.LatestBuild, 3*time.Minute)
-				if err != nil {
-					return err
-				}
-				if err := ac.followBuild(ctx, app.Namespace, build); err != nil {
+				if err := ac.followBuildAPI(ctx, name, before.Status.LatestBuild, 3*time.Minute); err != nil {
 					return fmt.Errorf("build failed: %w", err)
 				}
 			case specChanged:
@@ -180,11 +158,17 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			}
 
 			fmt.Fprintln(out, "==> Releasing")
-			final, err := ac.waitRunning(ctx, name, app.Generation, 10*time.Minute)
+			final, err := ac.waitRunningAPI(ctx, name, after.Status.Generation, 10*time.Minute)
 			if err != nil {
 				return err
 			}
-			if rel := final.CurrentRelease(); rel != nil {
+			if n := len(final.Status.Releases); n > 0 {
+				rel := final.Status.Releases[n-1]
+				for _, r := range final.Status.Releases {
+					if r.Number > rel.Number {
+						rel = r
+					}
+				}
 				fmt.Fprintf(out, "\nReleased v%d: %s\n", rel.Number, rel.Description)
 			}
 			if final.Status.URL != "" {

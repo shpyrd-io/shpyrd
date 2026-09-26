@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -257,4 +258,63 @@ func serverRequestDirect(ctx context.Context, wsURL, token, method, path string,
 		return nil, fmt.Errorf("shpyrd-server: %s", truncate(msg, 300))
 	}
 	return raw, nil
+}
+
+// serverStream opens a streaming GET (logs, build output) through whichever
+// transport the caller has: the login session directly, or the kubeconfig
+// proxy. The caller closes the body.
+func serverStream(ctx context.Context, k *kube.Client, path string) (io.ReadCloser, error) {
+	tok := os.Getenv("SHPYRD_TOKEN")
+	wsURL := os.Getenv("SHPYRD_URL")
+	if preferKubeconfig && k != nil {
+		tok, wsURL = "", ""
+	} else if tok == "" || wsURL == "" {
+		if sess := loadSessions().active(); sess != nil {
+			if tok == "" {
+				tok = sess.Token
+			}
+			if wsURL == "" {
+				wsURL = sess.URL
+			}
+		}
+	}
+	if tok != "" && wsURL != "" {
+		full := strings.TrimRight(wsURL, "/") + "/" + strings.TrimPrefix(path, "/")
+		req, err := http.NewRequestWithContext(ctx, "GET", full, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		// No client timeout: the stream lasts as long as the build or the
+		// follow does; the context ends it.
+		resp, err := (&http.Client{}).Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("shpyrd-server: %w", err)
+		}
+		if resp.StatusCode >= 400 {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			return nil, fmt.Errorf("shpyrd-server: %s", truncate(strings.TrimSpace(firstNonEmpty(string(raw), resp.Status)), 300))
+		}
+		return resp.Body, nil
+	}
+	if k == nil {
+		return nil, errors.New("not signed in: run `shpyrd login --url <workspace URL>` or provide --context")
+	}
+	req := k.Kube.CoreV1().RESTClient().Get().
+		Namespace(install.DefaultSystemNamespace).
+		Resource("services").
+		Name("shpyrd-server:http").
+		SubResource("proxy").
+		Suffix(strings.TrimPrefix(path, "/"))
+	if sec, err := k.Kube.CoreV1().Secrets(install.DefaultSystemNamespace).Get(ctx, install.AdminTokenSecretName, metav1.GetOptions{}); err == nil {
+		if t := strings.TrimSpace(string(sec.Data["token"])); t != "" {
+			req = req.SetHeader("X-Shpyrd-Token", t)
+		}
+	}
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("shpyrd-server: %w", err)
+	}
+	return stream, nil
 }

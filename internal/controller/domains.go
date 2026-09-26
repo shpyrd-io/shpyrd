@@ -99,6 +99,11 @@ func (c Config) ingressTLS(app *shpyrdv1.App) []networkingv1.IngressTLS {
 			out = append(out, networkingv1.IngressTLS{Hosts: []string{h}})
 			continue
 		}
+		if c.underWorkspaceDomain(app, h) {
+			// The workspace's wildcard, copied into the namespace (RFC-0033).
+			out = append(out, networkingv1.IngressTLS{Hosts: []string{h}, SecretName: WorkspaceTLSSecretName})
+			continue
+		}
 		out = append(out, networkingv1.IngressTLS{Hosts: []string{h}, SecretName: certificateSecretName(app, h)})
 	}
 	return out
@@ -112,6 +117,9 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 		for _, h := range r.Config.domains(app) {
 			if r.Config.WildcardTLS && r.Config.underClusterDomain(h) {
 				continue
+			}
+			if r.Config.underWorkspaceDomain(app, h) {
+				continue // the workspace wildcard covers it
 			}
 			name := certificateSecretName(app, h)
 			wanted[name] = true
@@ -171,7 +179,7 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 	for _, h := range hosts {
 		st := shpyrdv1.DomainStatus{Host: h, Target: target, Address: address}
 		st.DNS = r.dnsState(ctx, h, target, address)
-		if r.Config.WildcardTLS && r.Config.underClusterDomain(h) {
+		if (r.Config.WildcardTLS && r.Config.underClusterDomain(h)) || r.Config.underWorkspaceDomain(app, h) {
 			st.Certificate = CertWildcard
 		} else {
 			st.Certificate, st.Message = r.certificateState(ctx, app, h)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -167,6 +168,45 @@ type projectBuild struct {
 // applyTo writes the project settings into the App spec. Declared process
 // types are authoritative (undeclared ones are removed); replica counts set
 // on the cluster survive unless the file pins them.
+// deployRequest turns shpyrd.yaml into what the deploy API takes: the same
+// translation applyTo makes, read back from a scratch App so both paths
+// agree, with the current spec as the base for process sizes and replicas.
+func (pc *projectConfig) deployRequest(current *api.AppDetailSpec) (api.DeployRequest, error) {
+	var req api.DeployRequest
+	if pc == nil {
+		return req, nil
+	}
+	scratch := &shpyrdv1.App{}
+	if current != nil {
+		scratch.Spec.Processes = current.Processes
+		scratch.Spec.Build = current.Build
+		scratch.Spec.Domains = current.Domains
+		scratch.Spec.Exposure = current.Exposure
+	}
+	if err := pc.applyTo(scratch); err != nil {
+		return req, err
+	}
+	if len(pc.Processes) > 0 {
+		req.Processes = scratch.Spec.Processes
+	}
+	if pc.Build != nil {
+		req.Build = scratch.Spec.Build
+	}
+	if len(pc.Domains) > 0 {
+		req.Domains = scratch.Spec.Domains
+	}
+	if pc.Globals != nil {
+		req.Globals = scratch.Spec.Globals
+	}
+	if pc.Exposure != "" {
+		req.Exposure = scratch.Spec.Exposure
+	}
+	if pc.Allow != nil {
+		req.Allow = scratch.Spec.Allow
+	}
+	return req, nil
+}
+
 func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 	if pc == nil {
 		return nil
@@ -290,6 +330,135 @@ func (a *appClient) serverRequest(ctx context.Context, method, path string, body
 		return serverRequest(ctx, nil, method, path, body, contentType)
 	}
 	return serverRequest(ctx, a.k, method, path, body, contentType)
+}
+
+// serverStream opens a streaming GET through the same transport.
+func (a *appClient) serverStream(ctx context.Context, path string) (io.ReadCloser, error) {
+	if a.session {
+		return serverStream(ctx, nil, path)
+	}
+	return serverStream(ctx, a.k, path)
+}
+
+// getDetail reads a project through the API: the App's spec and status as
+// the server shows them (RFC-0052).
+func (a *appClient) getDetail(ctx context.Context, slug string) (*api.AppDetail, error) {
+	if !project.ValidSlug(slug) {
+		return nil, fmt.Errorf("invalid project %q: use its slug, the identifier in the PROJECT column of `shpyrd projects list`", slug)
+	}
+	raw, err := a.serverRequest(ctx, "GET", "api/projects/"+slug, nil, "")
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, fmt.Errorf("project %q not found; create it with `shpyrd projects create %s`", slug, slug)
+		}
+		return nil, err
+	}
+	var d api.AppDetail
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return nil, fmt.Errorf("decode project: %w", err)
+	}
+	return &d, nil
+}
+
+// waitRunningAPI polls the project until the controller has acted on the
+// given generation and it runs (or failed), printing phase changes.
+func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation int64, timeout time.Duration) (*api.AppDetail, error) {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for {
+		d, err := a.getDetail(ctx, slug)
+		if err != nil {
+			return nil, err
+		}
+		if d.Status.ObservedGeneration >= generation {
+			line := d.Status.Phase
+			if d.Status.Message != "" {
+				line += ": " + d.Status.Message
+			}
+			if line != last {
+				fmt.Fprintf(a.out, "    %s\n", line)
+				last = line
+			}
+			switch d.Status.Phase {
+			case shpyrdv1.PhaseRunning:
+				return d, nil
+			case shpyrdv1.PhaseFailed:
+				return d, errors.New(d.Status.Message)
+			}
+		}
+		if time.Now().After(deadline) {
+			return d, fmt.Errorf("timed out waiting for %s to be running (%s)", slug, d.Status.Phase)
+		}
+		if err := sleepCtx(ctx, 2*time.Second); err != nil {
+			return d, err
+		}
+	}
+}
+
+// followBuildAPI streams the output of the build that follows a deploy: it
+// waits for a build newer than before, streams its steps, then checks how
+// it ended.
+func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	build := ""
+	for build == "" {
+		d, err := a.getDetail(ctx, slug)
+		if err != nil {
+			return err
+		}
+		if d.Status.LatestBuild != "" && d.Status.LatestBuild != before {
+			build = d.Status.LatestBuild
+			break
+		}
+		if d.Status.Phase == shpyrdv1.PhaseFailed {
+			return errors.New(d.Status.Message)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no build started within %s", timeout)
+		}
+		if err := sleepCtx(ctx, 2*time.Second); err != nil {
+			return err
+		}
+	}
+	stream, err := a.serverStream(ctx, "api/projects/"+slug+"/builds/"+url.PathEscape(build)+"/logs?follow=true")
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(a.out, stream)
+	stream.Close()
+	if copyErr != nil && ctx.Err() == nil {
+		return fmt.Errorf("build output: %w", copyErr)
+	}
+	// The stream ends with the build; its status says how.
+	raw, err := a.serverRequest(ctx, "GET", "api/projects/"+slug+"/builds", nil, "")
+	if err != nil {
+		return err
+	}
+	var builds []api.BuildInfo
+	_ = json.Unmarshal(raw, &builds)
+	for _, b := range builds {
+		if b.Name == build {
+			if b.Status == "Failed" {
+				return fmt.Errorf("build %d failed: %s", b.Number, firstNonEmpty(b.Message, b.Reason))
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// uploadSourceAPI sends an archive to POST /api/sources through the
+// client's transport.
+func (a *appClient) uploadSourceAPI(ctx context.Context, archive []byte) (*api.SourceInfo, error) {
+	raw, err := a.serverRequest(ctx, "POST", "api/sources", archive, "application/gzip")
+	if err != nil {
+		return nil, err
+	}
+	var info api.SourceInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, fmt.Errorf("upload: %w", err)
+	}
+	return &info, nil
 }
 
 func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {

@@ -109,6 +109,7 @@ func (r *AppReconciler) builder(mgr ctrl.Manager) *builder.Builder {
 		Owns(kpackImage).
 		Owns(&batchv1.Job{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToApps)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.workspaceTLSToApps)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.sizesToAllApps)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(runPodToApp), builder.WithPredicates(isRunPod)).
 		Watches(&shpyrdv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.volumeToApps))
@@ -668,6 +669,9 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 	if err := r.reconcileCertificates(ctx, app); err != nil {
+		return nil, err
+	}
+	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
 		return nil, err
 	}
 
