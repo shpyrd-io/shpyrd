@@ -3,7 +3,7 @@ package logfmt_test
 import (
 	"testing"
 
-	"shpyrd/pkg/logfmt"
+	"github.com/shpyrd-io/shpyrd/pkg/logfmt"
 )
 
 func TestParsePlainLine(t *testing.T) {

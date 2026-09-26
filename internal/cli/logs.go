@@ -3,7 +3,7 @@ package cli
 import (
 	"errors"
 
-	"shpyrd/pkg/logfmt"
+	"github.com/shpyrd-io/shpyrd/pkg/logfmt"
 )
 
 // prettyLogs decides whether log lines are rendered or passed through:
