@@ -520,6 +520,11 @@ func processOf(series string) string {
 // space": a replaced instance is itself named "replaced 3", so a network
 // series for one reads "replaced 3 in" and a first-space split would cut it
 // as "replaced" plus "3 in" instead of the instance plus its direction.
+//
+// It knows only "in" and "out" — network's own suffixes — rather than
+// treating any trailing word as a direction. That is a closed set today, but
+// a future chart adding a different per-instance suffix would otherwise fold
+// silently into the unsuffixed group instead of getting its own.
 func directionOf(name string) string {
 	if i := strings.LastIndexByte(name, ' '); i > 0 {
 		if last := name[i+1:]; last == "in" || last == "out" {
@@ -594,10 +599,13 @@ func aggregateGroup(series []Series, agg, name string) Series {
 		out.Points = append(out.Points, Point{ts, v})
 	}
 	// Every instance of a process shares its allocation, so the reference
-	// survives aggregation only when it is the same for all of them.
+	// survives aggregation only when every series agrees on both halves of
+	// it — a shared and a dedicated size can request the same CPU while
+	// capping it at a different burst ceiling, and that disagreement is as
+	// disqualifying as the requests themselves differing.
 	ref, burst := series[0].Reference, series[0].Burst
 	for _, s := range series[1:] {
-		if s.Reference != ref {
+		if s.Reference != ref || s.Burst != burst {
 			ref, burst = 0, 0
 			break
 		}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -822,5 +823,126 @@ func TestMetricsAggregationKeepsDirectionsSeparate(t *testing.T) {
 	}
 	if v := net.Series[1].Points[0][1]; v != 300 {
 		t.Errorf("sum out = %v, want 300 (100+200)", v)
+	}
+}
+
+// The reference line an aggregate is measured against only means something
+// when every instance folded into it shares the same allocation: a sum is
+// measured against the sum of those allocations, an average or a max against
+// the single allocation they share, and a mix of allocations draws no line
+// at all rather than one that is wrong for some of the instances.
+func TestMetricsAggregationReference(t *testing.T) {
+	// shared-s (both web and worker's default size): CPU request 0.5 cores,
+	// burst to 4x = 2 cores.
+	t.Run("sum multiplies the reference and the burst", func(t *testing.T) {
+		prom, _ := newFakeProm(t, fakeAnswer{
+			Match: "container_cpu_usage_seconds_total",
+			Series: []fakeSeries{
+				{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
+				{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.2}}},
+			},
+		})
+		app := metricsApp()
+		s, _ := newTestServer(t, prom, []client.Object{app},
+			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 10))
+
+		out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg=sum")
+		cpu := chartByID(t, out, "cpu")
+		if len(cpu.Series) != 1 {
+			t.Fatalf("series = %d, want 1: %v", len(cpu.Series), seriesNames(cpu))
+		}
+		if cpu.Series[0].Reference != 1.0 {
+			t.Errorf("reference = %v, want 1.0 (0.5 x 2 instances)", cpu.Series[0].Reference)
+		}
+		if cpu.Series[0].Burst != 4.0 {
+			t.Errorf("burst = %v, want 4.0 (2 x 2 instances)", cpu.Series[0].Burst)
+		}
+	})
+
+	t.Run("avg and max keep the single allocation", func(t *testing.T) {
+		for _, agg := range []string{"avg", "max"} {
+			prom, _ := newFakeProm(t, fakeAnswer{
+				Match: "container_cpu_usage_seconds_total",
+				Series: []fakeSeries{
+					{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
+					{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.2}}},
+				},
+			})
+			app := metricsApp()
+			s, _ := newTestServer(t, prom, []client.Object{app},
+				podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 10))
+
+			out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg="+agg)
+			cpu := chartByID(t, out, "cpu")
+			if len(cpu.Series) != 1 {
+				t.Fatalf("agg=%s series = %d, want 1: %v", agg, len(cpu.Series), seriesNames(cpu))
+			}
+			if cpu.Series[0].Reference != 0.5 {
+				t.Errorf("agg=%s reference = %v, want 0.5, unmultiplied", agg, cpu.Series[0].Reference)
+			}
+			if cpu.Series[0].Burst != 2.0 {
+				t.Errorf("agg=%s burst = %v, want 2.0, unmultiplied", agg, cpu.Series[0].Burst)
+			}
+		}
+	})
+
+	t.Run("differing allocations drop the reference", func(t *testing.T) {
+		prom, _ := newFakeProm(t, fakeAnswer{
+			Match: "container_cpu_usage_seconds_total",
+			Series: []fakeSeries{
+				{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
+				{Labels: map[string]string{"pod": "shop-worker-a", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 0.5}}},
+			},
+		})
+		app := metricsApp()
+		// dedicated-s requests a whole core, genuinely different from web's
+		// shared-s 0.5 — not merely a different burst ceiling on the same
+		// request, which is the other test below.
+		app.Spec.Processes["worker"] = shpyrdv1.Process{Size: "dedicated-s"}
+		s, _ := newTestServer(t, prom, []client.Object{app},
+			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "worker", "shop-worker-a", 20))
+
+		out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg=sum")
+		cpu := chartByID(t, out, "cpu")
+		if len(cpu.Series) != 1 {
+			t.Fatalf("series = %d, want 1: %v", len(cpu.Series), seriesNames(cpu))
+		}
+		if cpu.Series[0].Reference != 0 || cpu.Series[0].Burst != 0 {
+			t.Errorf("reference = %v, burst = %v, want both 0 when the aggregated instances disagree",
+				cpu.Series[0].Reference, cpu.Series[0].Burst)
+		}
+	})
+}
+
+// A shared size and a dedicated size can request the same CPU while capping
+// it at a different ceiling. Comparing only the reference would let that
+// slip through and draw a burst line that is wrong for at least one of the
+// aggregated instances.
+func TestMetricsAggregationDropsReferenceWhenBurstDiffers(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_cpu_usage_seconds_total",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.1}}},
+			{Labels: map[string]string{"pod": "shop-worker-a", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 0.1}}},
+		},
+	})
+	app := metricsApp()
+	// Same 0.5-core request as web's shared-s, but its limit is capped down
+	// to the request instead of the size's usual 4x burst.
+	app.Spec.Processes["worker"] = shpyrdv1.Process{
+		Size:      "shared-s",
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")}},
+	}
+	s, _ := newTestServer(t, prom, []client.Object{app},
+		podFor("shop", "web", "shop-web-a", 20), podFor("shop", "worker", "shop-worker-a", 20))
+
+	out := getMetrics(t, s, "?range=1h&mode=total&by=instance&agg=sum")
+	cpu := chartByID(t, out, "cpu")
+	if len(cpu.Series) != 1 {
+		t.Fatalf("series = %d, want 1: %v", len(cpu.Series), seriesNames(cpu))
+	}
+	if cpu.Series[0].Reference != 0 || cpu.Series[0].Burst != 0 {
+		t.Errorf("reference = %v, burst = %v, want both 0: the requests agree but the burst ceilings do not",
+			cpu.Series[0].Reference, cpu.Series[0].Burst)
 	}
 }
