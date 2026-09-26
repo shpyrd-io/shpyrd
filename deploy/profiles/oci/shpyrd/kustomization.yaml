@@ -12,3 +12,8 @@ patches:
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: ocir-pull
+      # The cloud image is rebuilt under the same tag while a release is
+      # being prepared; always ask the registry.
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always

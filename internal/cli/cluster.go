@@ -388,6 +388,22 @@ token never reaches the browser, and the session is attributed to you
 (user@host) in the audit trail. The ticket is valid for 60 seconds and once.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
+			out := cmd.OutOrStdout()
+			// API-first (RFC-0052): with a saved login session and no
+			// cluster named on the command line, open that workspace; the
+			// browser signs in with its own session or the login page.
+			// A ticket needs the cluster, so it is the kubeconfig path.
+			if !preferKubeconfig && g.kubeconfig == "" && g.kubeCtx == "" {
+				if sessions := loadSessions(); len(sessions.Sessions) == 1 {
+					for wsURL := range sessions.Sessions {
+						fmt.Fprintf(out, "Dashboard: %s (from your shpyrd login; use --context to sign in through a cluster)\n", wsURL)
+						if noOpen {
+							return nil
+						}
+						return openBrowser(wsURL)
+					}
+				}
+			}
 			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
 			if err != nil {
 				return err
@@ -402,7 +418,6 @@ token never reaches the browser, and the session is attributed to you
 			}
 			base := install.BaseURL(info.Vars)("shpyrd")
 			login := base + "/api/auth/ticket?code=" + url.QueryEscape(code)
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Dashboard: %s\n", base)
 			if noOpen {
 				fmt.Fprintf(out, "Sign-in:   %s\n           (one-time link, valid for %s)\n", login, api.LoginTicketTTL)
