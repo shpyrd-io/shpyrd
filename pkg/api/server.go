@@ -185,6 +185,13 @@ func New(k *kube.Client, opts Options) (*Server, error) {
 }
 
 // newServer wires everything except Helm initialisation (tests pass nil).
+// NewWithoutHelm builds a server that cannot install Helm releases: for
+// tests of layers built on the core, and tools that only need the API. It
+// accepts a fake Kubernetes clientset.
+func NewWithoutHelm(k *kube.Client, opts Options) (*Server, error) {
+	return newServer(k, opts, nil)
+}
+
 func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Server, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
