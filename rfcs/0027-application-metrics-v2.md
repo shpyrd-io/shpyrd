@@ -1,20 +1,20 @@
 # RFC-0027 Application metrics v2
 
-**Status:** implementable
+**Status:** in progress
 
-**Owner:** unassigned
+**Owner:** Marcelo Paez Sequeira (branch `rfc-0027-app-metrics-v2`)
 
 **Depends on:** RFC-0011
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-09-26
 
 ## Summary
 
 The Metrics tab gains per-instance series, an instance filter, aggregation (none, sum,
-average, max), a percentage/total toggle showing the size's limit, a time range picker and
-per-process views. Instances are named `web.1`, never by pod.
+average, max), a percentage/total toggle showing the process allocation, a time range
+picker and per-process views. Instances are named `web.1`, never by pod.
 
 ## Motivation
 
@@ -29,25 +29,83 @@ invisible, and tooltips leak pod names.
 ### Non-Goals
 
 - Custom application metrics (RFC-0029) and alerting (RFC-0030 events).
+- Per-instance throughput and latency: those are measured at the edge and cannot be
+  attributed to an instance (see Design Details).
+- Workspace-level usage against plan limits (RFC-0033). Those limits are totals for a
+  whole workspace — projects, instances, CPU, memory, storage — not a per-process ceiling,
+  so they are not a reference line on these charts.
 
 ## Proposal
 
-- API `GET /api/projects/{slug}/metrics?range=1h&process=web&by=instance&agg=none|sum|avg|max`
-  returns series keyed by instance name (pod → `web.N` through the controller's annotation
-  or the existing mapping) for CPU, memory, network, throughput, latency percentiles.
-- UI controls as in the reference: Instances (All / one or more), Aggregation, Percentage /
-  Total; the limit line ("Limit 256 MiB") drawn on total charts; release markers stay.
-- Percentage is relative to the process's requests (memory) as today; total shows bytes
-  and cores.
-- Time range: 15m, 1h, 6h, 24h, 7d with step chosen by range.
+- API `GET /api/projects/{slug}/metrics?range=15m|1h|6h|24h|7d&process=web&by=process|instance&agg=none|sum|avg|max&mode=percent|total`.
+  `by` defaults to `process`, so the call the dashboard makes today keeps returning what it
+  returns today; every new parameter is additive. `process` absent means all process types.
+  `agg` applies only to `by=instance`: `none` draws one series per instance, the others
+  collapse them to one.
+- Only CPU, memory and network can be broken down by instance. Each chart reports whether
+  it can (`instanceCapable`), and the UI disables the instance controls on the charts that
+  cannot rather than accepting a parameter it will ignore.
+- Each chart carries a `reference`: the value and label of the allocation line (for example
+  `Allocated 64 MiB`). Where a size also has a CPU limit or burst ceiling, that is a second,
+  higher line.
+- UI controls: Instances (All, or a subset), Aggregation, Percentage / Total. Release
+  markers stay.
+- Percentage is relative to the process's request, which is the allocation the project pays
+  for; shared sizes may legitimately exceed 100%.
+- Time range: 15m, 1h, 6h, 24h, 7d with the step chosen by range.
 
 ## Design Details
 
-- PromQL: `container_memory_working_set_bytes{namespace, pod=~"<deployment>-.*"}` grouped by
-  pod, aggregated server-side with `sum by`, `avg by`, `max by`; instance names resolved via
-  the pod list.
+- PromQL groups by `pod`: `container_memory_working_set_bytes{namespace=…}` joined to
+  `kube_pod_labels` on `(namespace, pod)` to pick up `label_shpyrd_io_app` and
+  `label_shpyrd_io_process`, aggregated with `sum by`, `avg by` or `max by` when `agg` asks
+  for it. Verified against the dev cluster: `kube_pod_labels` does carry both labels
+  together with `pod`, so the join this rests on works rather than being assumed.
+- **Instance names are resolved in Go, not in PromQL.** `kube_pod_annotations` exposes
+  nothing on a default install (kube-state-metrics needs an annotation allowlist), so the
+  `shpyrd.io/instance` annotation cannot be joined in a query. The handler maps `pod` to a
+  name with the same `logs.InstanceNames` the log viewer uses, so the Logs and Metrics tabs
+  cannot disagree.
+- **Instances that no longer exist.** A pod in the metric data but absent from the live pod
+  list was replaced during the window. Each becomes its own series labelled `replaced 1`,
+  `replaced 2`, … in order of first appearance — never a pod name (RFC-0011). They are
+  hidden behind an "Include replaced instances" toggle, off by default, because a week of a
+  frequently deployed project would otherwise bury the live instances.
+- **A known limitation, accepted deliberately.** Instance names are not stable over time:
+  `labelRunningInstances` recomputes them from the live pod list on every reconcile, so when
+  `web.1` goes away the surviving `web.2` is renamed `web.1`. Over a long range a series
+  labelled `web.1` may therefore have been a different pod earlier in the window. Making
+  ordinals stable was considered and rejected for now: it would change the naming contract
+  RFC-0022a's log labels depend on, and touches the four callers that compute names from the
+  live list (the controller, `pkg/api/logs.go`, and two CLI paths). The charts do not
+  pretend otherwise, and short ranges — where outlier hunting actually happens — are
+  unaffected in practice.
+- Throughput and latency come from `nginx_ingress_controller_*`, whose series identify the
+  ingress controller's own pod (`controller_pod`) and the backend *service*, never the
+  backend pod. Per-instance request rates would need application-side instrumentation,
+  which is RFC-0029.
+- The reference line is the request, not a limit. Every size sets
+  `Limits.memory == Requests.memory`, so for memory the two are the same number; but shared
+  sizes set **no** CPU limit unless a burst is configured, so a line labelled "Limit" would
+  be fiction on `shared-s`, the default. Labelling it as the allocation matches both the
+  code and the wording the Metrics tab already uses.
 - Remove pod names from every tooltip and legend (RFC-0011).
+- `metrics.go` splits: the handler and the response types stay, and the chart table with its
+  PromQL builders moves to `metricqueries.go`. `by` × `agg` × `mode` multiplies query
+  variants, and the table is worth keeping declarative rather than branching inside the
+  handler.
+- Metrics have no tests today. `PromClient` is `{BaseURL, HTTP}`, so pointing it at an
+  `httptest.Server` serving canned Prometheus JSON tests query construction, instance
+  naming, the replaced-instance path, aggregation and the percent/total switch without a
+  cluster. This change is mostly query construction, which is what fails silently.
 
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-09-26: picked up. Settled while designing, each grounded against the dev cluster
+  rather than assumed: per-instance cannot cover throughput or latency, because edge metrics
+  carry no backend-pod label; instance naming happens in Go, because `kube_pod_annotations`
+  is empty on a default install; replaced instances get their own labelled series, hidden by
+  default, and instance names are knowingly unstable over long ranges; and the reference
+  line is the allocation rather than the "limit" the first draft named, since the default
+  shared size has no CPU limit at all.
