@@ -55,7 +55,7 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 		t.Fatalf("acme certificate: %v", err)
 	}
 	names, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
-	if len(names) != 1 || names[0] != "acme.shpyrd.test" {
+	if len(names) != 2 || names[0] != "acme.shpyrd.test" || names[1] != "*.acme.shpyrd.test" {
 		t.Errorf("acme certificate names = %v", names)
 	}
 

@@ -129,7 +129,8 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 		"shpyrd.io/workspace-front-door": "true",
 	}
 	wildcard := r.Config.WildcardTLS && r.Config.underClusterDomain(ws.Address)
-	tls := networkingv1.IngressTLS{Hosts: []string{ws.Address}}
+	// The Ingress serves both the workspace host and app subdomains.
+	tls := networkingv1.IngressTLS{Hosts: []string{ws.Address, "*." + ws.Address}}
 	if !wildcard {
 		tls.SecretName = name + "-tls"
 		cert := &unstructured.Unstructured{}
@@ -139,7 +140,10 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
 			cert.SetLabels(mergeMaps(cert.GetLabels(), labels))
 			_ = unstructured.SetNestedField(cert.Object, name+"-tls", "spec", "secretName")
-			_ = unstructured.SetNestedStringSlice(cert.Object, []string{ws.Address}, "spec", "dnsNames")
+			// The cert covers both the workspace dashboard (demo.shpyrd.app)
+			// and its apps one label under it (*.demo.shpyrd.app), so nginx
+			// can serve TLS for any app host with this one certificate.
+			_ = unstructured.SetNestedStringSlice(cert.Object, []string{ws.Address, "*." + ws.Address}, "spec", "dnsNames")
 			issuer := r.Config.WorkspaceCertIssuer
 			if issuer == "" {
 				issuer = r.Config.ClusterIssuer
@@ -167,7 +171,18 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 				Path: "/", PathType: &pathType,
 				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
 			}}}},
-		}}
+		},
+		{
+			// Wildcard rule: app hosts one label under the workspace address.
+			// nginx matches the most specific rule first; unknown hosts hit
+			// the global default backend (shpyrd-server → "no app here").
+			Host: "*." + ws.Address,
+			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+				Path: "/", PathType: &pathType,
+				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
+			}}}},
+		},
+		}
 		return nil
 	})
 	if err != nil {

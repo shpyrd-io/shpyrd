@@ -102,6 +102,8 @@ spec:
             # an explicit address live under (acme.shpyrd.app).
             - name: SHPYRD_WORKSPACES_DOMAIN
               value: "${SHPYRD_WORKSPACES_DOMAIN}"
+            - name: SHPYRD_WORKSPACE_CERT_ISSUER
+              value: "${SHPYRD_WORKSPACE_CERT_ISSUER}"
             - name: SHPYRD_INGRESS_CLASS_EXTERNAL
               value: "${SHPYRD_INGRESS_CLASS_EXTERNAL}"
             - name: SHPYRD_INGRESS_CLASS_INTERNAL

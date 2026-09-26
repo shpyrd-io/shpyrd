@@ -27,7 +27,8 @@ const (
 	VarDashboardURL = "SHPYRD_DASHBOARD_URL" // external dashboard URL
 	VarAuthURL      = "SHPYRD_AUTH_URL"      // external URL of the login issuer (auth.<domain>)
 	VarServerImage        = "SHPYRD_SERVER_IMAGE"        // server image; derived from the version unless set
-	VarWorkspacesDomain   = "SHPYRD_WORKSPACES_DOMAIN"  // domain tenant workspaces live under (cloud layer)
+	VarWorkspacesDomain      = "SHPYRD_WORKSPACES_DOMAIN"       // domain tenant workspaces live under (cloud layer)
+	VarWorkspaceCertIssuer   = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
 	// Cloud profiles (RFC-0034/0035 counterparts).
 	VarClusterIssuer    = "SHPYRD_CLUSTER_ISSUER"    // cert-manager ClusterIssuer for every certificate (shpyrd-ca locally, letsencrypt on cloud)
 	VarACMEEmail        = "SHPYRD_ACME_EMAIL"        // Let's Encrypt account email (cloud profiles)
@@ -197,6 +198,14 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	// Front door of the dashboard, sign-in and Grafana (RFC-0036), and the
 	// controller Service behind it, which the server dials for those
 	// hostnames instead of hairpinning through the load balancer.
+	// Cloud layer: empty string means not in use, which the template
+	// renders as an empty env-var value — safe for the OSS platform.
+	if _, ok := vars[VarWorkspacesDomain]; !ok {
+		out[VarWorkspacesDomain] = ""
+	}
+	if _, ok := vars[VarWorkspaceCertIssuer]; !ok {
+		out[VarWorkspaceCertIssuer] = ""
+	}
 	out[VarPlatformIngressClass] = vars[VarIngressClassExternal]
 	out[VarPlatformIngressSvc] = "ingress-nginx-controller.ingress-nginx.svc:443"
 	if vars[VarPlatformExposure] == "internal" {
