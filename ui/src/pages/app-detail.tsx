@@ -1079,14 +1079,33 @@ function ProcessesCard({
 
 function Metrics({ app }: { app: AppDetail }) {
   const [range, setRange] = useState("1h");
+  const [process, setProcess] = useState("all");
+  const [by, setBy] = useState<"process" | "instance">("process");
+  const [agg, setAgg] = useState<"none" | "sum" | "avg" | "max">("none");
+  const [mode, setMode] = useState<"percent" | "total">("percent");
+  const [replaced, setReplaced] = useState(false);
+  // "all" is a UI-only sentinel: Select can't hold an empty-string value, and
+  // the API takes an omitted process the same way it takes an absent filter.
+  const processFilter = process === "all" ? undefined : process;
+  const processNames = Object.keys(
+    app.processes ?? app.spec.processes ?? {},
+  ).sort();
   const config = useQuery({
     queryKey: ["config"],
     queryFn: api.config,
     staleTime: 60_000,
   });
   const m = useQuery({
-    queryKey: ["metrics", app.slug, range],
-    queryFn: () => api.metrics(app.slug, range),
+    queryKey: ["metrics", app.slug, range, processFilter, by, agg, mode, replaced],
+    queryFn: () =>
+      api.metrics(app.slug, {
+        range,
+        process: processFilter,
+        by,
+        agg,
+        mode,
+        replaced,
+      }),
     refetchInterval: 30_000,
     enabled: config.data?.metrics !== false,
   });
@@ -1103,23 +1122,89 @@ function Metrics({ app }: { app: AppDetail }) {
   }
   return (
     <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
-          Traffic measured at the edge; CPU and memory as a percentage of each
-          process allocation. Orange dashed lines mark releases, the red line is
-          100%.
+          {mode === "percent"
+            ? "Traffic measured at the edge; CPU and memory as a percentage of each process's allocation. Orange dashed lines mark releases, the red line is 100%."
+            : "Traffic measured at the edge; CPU and memory in absolute units. Orange dashed lines mark releases; a red line marks each allocation among the series drawn and an amber one each burst ceiling, labelled by process where they differ."}
         </p>
-        <Select value={range} onValueChange={setRange}>
-          <SelectTrigger className="w-32" size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="1h">Last hour</SelectItem>
-            <SelectItem value="6h">Last 6 hours</SelectItem>
-            <SelectItem value="24h">Last 24 hours</SelectItem>
-            <SelectItem value="7d">Last 7 days</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={process} onValueChange={setProcess}>
+            <SelectTrigger className="w-32" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All processes</SelectItem>
+              {processNames.map((p) => (
+                <SelectItem key={p} value={p}>
+                  {p}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={by}
+            onValueChange={(v) => setBy(v as "process" | "instance")}
+          >
+            <SelectTrigger className="w-32" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="process">By process</SelectItem>
+              <SelectItem value="instance">By instance</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={agg}
+            onValueChange={(v) =>
+              setAgg(v as "none" | "sum" | "avg" | "max")
+            }
+            disabled={by !== "instance"}
+          >
+            <SelectTrigger className="w-28" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No aggregation</SelectItem>
+              <SelectItem value="sum">Sum</SelectItem>
+              <SelectItem value="avg">Average</SelectItem>
+              <SelectItem value="max">Max</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={mode}
+            onValueChange={(v) => setMode(v as "percent" | "total")}
+          >
+            <SelectTrigger className="w-28" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="percent">Percentage</SelectItem>
+              <SelectItem value="total">Total</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant={replaced ? "default" : "outline"}
+            size="sm"
+            disabled={by !== "instance"}
+            onClick={() => setReplaced((r) => !r)}
+            title="Include instances that no longer exist (only applies grouped by instance)"
+          >
+            {replaced ? "Replaced: shown" : "Replaced: hidden"}
+          </Button>
+          <Select value={range} onValueChange={setRange}>
+            <SelectTrigger className="w-32" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="15m">Last 15 minutes</SelectItem>
+              <SelectItem value="1h">Last hour</SelectItem>
+              <SelectItem value="6h">Last 6 hours</SelectItem>
+              <SelectItem value="24h">Last 24 hours</SelectItem>
+              <SelectItem value="7d">Last 7 days</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       {m.error && (
         <Alert variant="destructive">
@@ -1129,6 +1214,10 @@ function Metrics({ app }: { app: AppDetail }) {
       )}
       <div className="grid gap-4 md:grid-cols-2">
         {(m.data?.charts ?? []).map((c) => (
+          // Which charts the controls above do not reach is the API's own
+          // instanceCapable flag, which MetricChart now reads: naming the
+          // charts here instead both duplicated their ids and missed the
+          // instances chart, the case the project's owner reported.
           <MetricChart
             key={c.id}
             chart={c}
