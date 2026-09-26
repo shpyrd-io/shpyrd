@@ -1,0 +1,14 @@
+# OCI profile overlay for the shpyrd component: adds the OCIR pull secret
+# so the cloud server image (gru.ocir.io/…) can be pulled by the nodes.
+resources:
+  - ../../../components/shpyrd/base
+
+patches:
+  - target:
+      kind: Deployment
+      name: shpyrd-server
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ocir-pull
