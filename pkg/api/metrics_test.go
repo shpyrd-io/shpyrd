@@ -737,3 +737,90 @@ func TestMetricsPodWithoutProcessIsNoInstance(t *testing.T) {
 		t.Fatalf("series = %v, want web.1 and the build pod as replaced 1", names)
 	}
 }
+
+func TestMetricsAggregation(t *testing.T) {
+	answer := fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}, {2000, 30}}},
+			{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}, {2000, 50}}},
+		},
+	}
+	for _, tc := range []struct {
+		agg  string
+		name string
+		at1  float64
+		at2  float64
+	}{
+		{"sum", "sum", 30, 80},
+		{"avg", "avg", 15, 40},
+		{"max", "max", 20, 50},
+	} {
+		prom, _ := newFakeProm(t, answer)
+		app := metricsApp()
+		s, _ := newTestServer(t, prom, []client.Object{app},
+			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 10))
+
+		out := getMetrics(t, s, "?range=1h&by=instance&agg="+tc.agg)
+		mem := chartByID(t, out, "memory")
+		if len(mem.Series) != 1 {
+			t.Fatalf("agg=%s produced %d series, want 1: %v", tc.agg, len(mem.Series), seriesNames(mem))
+		}
+		if mem.Series[0].Name != tc.name {
+			t.Errorf("agg=%s series name = %q, want %q", tc.agg, mem.Series[0].Name, tc.name)
+		}
+		pts := mem.Series[0].Points
+		if len(pts) != 2 || pts[0][1] != tc.at1 || pts[1][1] != tc.at2 {
+			t.Errorf("agg=%s points = %v, want %v then %v", tc.agg, pts, tc.at1, tc.at2)
+		}
+	}
+
+	// agg with the default grouping is meaningless, and ignored rather than
+	// refused: the aggregation is already implied.
+	prom, _ := newFakeProm(t, answer)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+	if rec := do(t, s, "GET", "/api/projects/shop/metrics?range=1h&agg=sum", "", true); rec.Code != http.StatusOK {
+		t.Errorf("agg with by=process: %d, want 200 (ignored)", rec.Code)
+	}
+	// An aggregation nobody defined is a client bug worth naming.
+	if rec := do(t, s, "GET", "/api/projects/shop/metrics?range=1h&by=instance&agg=median", "", true); rec.Code != http.StatusBadRequest {
+		t.Errorf("agg=median: %d, want 400", rec.Code)
+	}
+}
+
+// Network's series carry a direction suffix ("web.1 in", "web.1 out"), so
+// collapsing every instance into a single series would sum inbound and
+// outbound traffic together and silently lose which was which. Aggregation
+// must instead run once per direction.
+func TestMetricsAggregationKeepsDirectionsSeparate(t *testing.T) {
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		}},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 100}}},
+			{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 200}}},
+		}},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app},
+		podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 10))
+
+	out := getMetrics(t, s, "?range=1h&by=instance&agg=sum")
+	net := chartByID(t, out, "network")
+	if len(net.Series) != 2 {
+		t.Fatalf("agg=sum produced %d network series, want 2 (one per direction): %v", len(net.Series), seriesNames(net))
+	}
+	names := seriesNames(net)
+	if names[0] != "sum in" || names[1] != "sum out" {
+		t.Fatalf("network series = %v, want sum in and sum out, not merged across directions", names)
+	}
+	if v := net.Series[0].Points[0][1]; v != 30 {
+		t.Errorf("sum in = %v, want 30 (10+20)", v)
+	}
+	if v := net.Series[1].Points[0][1]; v != 300 {
+		t.Errorf("sum out = %v, want 300 (100+200)", v)
+	}
+}

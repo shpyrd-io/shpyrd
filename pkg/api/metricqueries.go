@@ -20,6 +20,7 @@ type metricsOptions struct {
 	By       string // process (default) or instance
 	Process  string // one process type, or "" for all
 	Replaced bool   // include instances that no longer exist
+	Agg      string // none (default), sum, avg or max — collapses by=instance series
 }
 
 // absolute reports whether this chart is expressed in its own units rather

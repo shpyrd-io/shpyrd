@@ -169,6 +169,7 @@ func (s *Server) appMetrics(c *gin.Context) {
 		By:       c.DefaultQuery("by", "process"),
 		Process:  c.Query("process"),
 		Replaced: c.Query("replaced") == "true",
+		Agg:      c.DefaultQuery("agg", "none"),
 	}
 	if opts.Mode != "percent" && opts.Mode != "total" {
 		abort(c, http.StatusBadRequest, errors.New("mode must be percent or total"))
@@ -176,6 +177,12 @@ func (s *Server) appMetrics(c *gin.Context) {
 	}
 	if opts.By != "process" && opts.By != "instance" {
 		abort(c, http.StatusBadRequest, errors.New("by must be process or instance"))
+		return
+	}
+	switch opts.Agg {
+	case "none", "sum", "avg", "max":
+	default:
+		abort(c, http.StatusBadRequest, errors.New("agg must be none, sum, avg or max"))
 		return
 	}
 	// Percent mode never draws a reference line (applyReference discards it
@@ -253,6 +260,9 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 		}
 		nameInstances(&ch, namer, opts)
 		applyReference(&ch, allocs, opts)
+		if opts.byInstance() {
+			ch.Series = aggregate(ch.Series, opts.Agg)
+		}
 		return ch
 	}
 	raw, err := s.prom.QueryRangeSeries(ctx, q.Query, start, end, step)
@@ -288,6 +298,9 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
 	nameInstances(&ch, namer, opts)
 	applyReference(&ch, allocs, opts)
+	if opts.byInstance() {
+		ch.Series = aggregate(ch.Series, opts.Agg)
+	}
 	return ch
 }
 
@@ -500,4 +513,99 @@ func processOf(series string) string {
 		name = name[:i]
 	}
 	return name
+}
+
+// directionOf reads the network chart's direction off the end of a series
+// name, if it carries one. It is deliberately not "whatever follows the first
+// space": a replaced instance is itself named "replaced 3", so a network
+// series for one reads "replaced 3 in" and a first-space split would cut it
+// as "replaced" plus "3 in" instead of the instance plus its direction.
+func directionOf(name string) string {
+	if i := strings.LastIndexByte(name, ' '); i > 0 {
+		if last := name[i+1:]; last == "in" || last == "out" {
+			return last
+		}
+	}
+	return ""
+}
+
+// aggregate collapses a chart's per-instance series into one per direction —
+// cpu and memory have no direction, so they collapse to one series overall,
+// while network's "in" and "out" are aggregated separately so a sum or an
+// average never mixes inbound and outbound traffic into a line that means
+// nothing. It runs here rather than in PromQL: the series have already been
+// named, so the result is the same whichever instances existed, and one query
+// serves every aggregation the UI offers.
+func aggregate(series []Series, agg string) []Series {
+	if agg == "" || agg == "none" || len(series) == 0 {
+		return series
+	}
+	groups := map[string][]Series{}
+	var directions []string
+	for _, s := range series {
+		dir := directionOf(s.Name)
+		if _, seen := groups[dir]; !seen {
+			directions = append(directions, dir)
+		}
+		groups[dir] = append(groups[dir], s)
+	}
+	sort.Strings(directions)
+	out := make([]Series, 0, len(directions))
+	for _, dir := range directions {
+		name := agg
+		if dir != "" {
+			name = agg + " " + dir
+		}
+		out = append(out, aggregateGroup(groups[dir], agg, name))
+	}
+	return out
+}
+
+// aggregateGroup combines the series of one direction (or the whole chart,
+// for cpu and memory) into a single named series.
+func aggregateGroup(series []Series, agg, name string) Series {
+	sums := map[float64]float64{}
+	counts := map[float64]int{}
+	maxes := map[float64]float64{}
+	var order []float64
+	for _, s := range series {
+		for _, p := range s.Points {
+			if _, seen := sums[p[0]]; !seen {
+				order = append(order, p[0])
+				maxes[p[0]] = p[1]
+			}
+			sums[p[0]] += p[1]
+			counts[p[0]]++
+			if p[1] > maxes[p[0]] {
+				maxes[p[0]] = p[1]
+			}
+		}
+	}
+	sort.Float64s(order)
+	out := Series{Name: name, Points: make([]Point, 0, len(order))}
+	for _, ts := range order {
+		v := sums[ts]
+		switch agg {
+		case "avg":
+			v = sums[ts] / float64(counts[ts])
+		case "max":
+			v = maxes[ts]
+		}
+		out.Points = append(out.Points, Point{ts, v})
+	}
+	// Every instance of a process shares its allocation, so the reference
+	// survives aggregation only when it is the same for all of them.
+	ref, burst := series[0].Reference, series[0].Burst
+	for _, s := range series[1:] {
+		if s.Reference != ref {
+			ref, burst = 0, 0
+			break
+		}
+	}
+	if agg == "sum" {
+		// A sum is measured against the sum of the allocations.
+		ref, burst = ref*float64(len(series)), burst*float64(len(series))
+	}
+	out.Reference, out.Burst = ref, burst
+	return out
 }
