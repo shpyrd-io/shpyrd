@@ -1,6 +1,6 @@
 # RFC-0027 Application metrics v2
 
-**Status:** in progress
+**Status:** implemented, gaps — see Implementation status below
 
 **Owner:** Marcelo Paez Sequeira (branch `rfc-0027-app-metrics-v2`)
 
@@ -123,3 +123,43 @@ invisible, and tooltips leak pod names.
   line is the allocation rather than the "limit" the first draft named, since a shared size's
   CPU limit is a 4x burst ceiling, not the allocation, and would mislabel what someone
   actually bought.
+- 2026-09-26: verified on the kind dev cluster (`kind-shpyrd`), against the running project
+  `shelltest` (namespace `app-shelltest`) extended with a second process type, `batch` at
+  `shared-xs`, alongside `worker` at `shared-s` (two instances each, prebuilt image, two
+  genuinely different allocations). After rebuilding and redeploying `shpyrd-server` from
+  this branch: `?range=1h` returns the unchanged chart set with series named `worker` and
+  `batch`; `?range=1h&by=instance` names series `worker.1`/`worker.2`/`batch.1`/`batch.2`,
+  and those names matched the Logs tab exactly for the same pods (checked by writing a line
+  to each pod's stdout and comparing `/api/projects/shelltest/logs?format=json`'s `i`/`p`
+  fields against the metrics series names); `?range=15m` reports `step: 60`; `?mode=total`
+  reports `cores`/`bytes` with `reference` 0.5/67108864 for `worker` and 0.25/33554432 for
+  `batch`, CPU series also carrying `burst` (2 and 1); `?by=instance&agg=sum` returns one
+  series whose values equal the sum of the per-instance series, with `mode=total` scaling
+  `reference` by instance count (1 core / 134217728 bytes for two `worker` instances, 0.5 /
+  67108864 for two `batch`); `?by=instance&process=worker` returned only worker instances
+  while throughput and latency still returned their (empty, this project has no traffic)
+  series rather than an error; deleting a live worker pod and waiting for its replacement
+  showed the dead pod as `replaced N` under `replaced=true` while the live instances kept
+  their names, and the chart's `note` reported the hidden count without it. Every response
+  from all of the above, piped through `grep -c 'shelltest-worker-\|shelltest-batch-'`,
+  returned 0. `go test ./...`, `go vet ./...` and `go build ./...` pass; `cd ui && npm run
+  build && npm run lint` pass. The Metrics tab itself was verified by UI build and lint
+  only, not by rendering it in a browser.
+
+## Implementation status
+
+Audited on 2026-09-26 against the cluster run above. Both gaps below were found or named
+during review, and were deliberately deferred rather than fixed on this branch.
+
+- **Known limitation, not a bug:** instance names are not stable over a long range — see
+  "A known limitation, accepted deliberately" in Design Details, which explains why and what
+  it does and does not claim.
+- **Not fixed:** the CPU and memory PromQL join `container_cpu_usage_seconds_total` /
+  `container_memory_working_set_bytes` to `kube_pod_labels` on `(namespace, pod)` without
+  also requiring `label_shpyrd_io_process` to be non-empty, so a running Dockerfile-build
+  pod in the same namespace (it carries `label_shpyrd_io_app` but no process label of its
+  own process type) contributes its CPU and memory to a project's charts. Found during this
+  branch's cluster verification. Left unfixed because the fix changes the default query
+  text (`by=process`, no filters) that an earlier review certified byte-identical against a
+  hard backward-compatibility constraint; fixing it belongs to whichever task next touches
+  that constraint deliberately.
