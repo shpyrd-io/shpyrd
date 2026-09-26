@@ -189,9 +189,9 @@ func (s *Server) appMetrics(c *gin.Context) {
 	// every chart. Only the instance breakdown needs it, and listing the pods
 	// is a call the by-process default should not pay for on a path every open
 	// Metrics tab repeats every 30 seconds.
-	var namer func(pod string) string
+	var namer *instanceNamer
 	if opts.byInstance() {
-		namer = s.instanceNamer(c.Request.Context(), app)
+		namer = s.newInstanceNamer(c.Request.Context(), app)
 	}
 	queries := chartQueries(app, opts)
 	resp := MetricsResponse{Range: rng, Step: int(step.Seconds()), Charts: make([]Chart, len(queries)), Releases: []ReleaseMarker{}}
@@ -213,7 +213,7 @@ func (s *Server) appMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, allocs map[string]allocation, opts metricsOptions, namer func(pod string) string) Chart {
+func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, allocs map[string]allocation, opts metricsOptions, namer *instanceNamer) Chart {
 	ch := q.Chart
 	ch.Series = []Series{}
 	if len(q.Fixed) > 0 {
@@ -231,7 +231,12 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 				// direction as a suffix nameInstances keeps.
 				raw, err := s.prom.QueryRangeSeries(ctx, q.Fixed[n], start, end, step)
 				if err != nil {
-					ch.Error = err.Error()
+					// Whatever the earlier direction appended is still keyed by
+					// pod and nameInstances is no longer going to run, so the
+					// series go with the error. A chart reporting a failure has
+					// nothing to draw anyway, and this is the one branch where
+					// keeping them would put a pod name in the response.
+					ch.Series, ch.Error = []Series{}, err.Error()
 					return ch
 				}
 				for _, r := range raw {
@@ -286,11 +291,12 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 	return ch
 }
 
-// maxInstanceSeries is the most series one chart may carry.
-const maxInstanceSeries = 40
+// maxInstances is the most instances one chart may carry. Instances, not
+// series: the network chart draws two series for each of them.
+const maxInstances = 40
 
 // nameInstances turns pod-keyed series into instance-named ones, applies the
-// replaced rule and caps how many series a chart may carry. The cap is what
+// replaced rule and caps how many instances a chart may carry. The cap is what
 // stops a fifty-replica project over a week from returning a response no
 // browser will chart.
 //
@@ -298,19 +304,28 @@ const maxInstanceSeries = 40
 // tell two series of the same instance apart — the network chart's direction.
 // That suffix survives the renaming, so "web.1 in" and "web.1 out" both count
 // as the one instance when a replaced one is reported.
-func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions) {
+func nameInstances(ch *Chart, namer *instanceNamer, opts metricsOptions) {
 	if !opts.byInstance() || !ch.InstanceCapable {
+		return
+	}
+	if namer.err != nil {
+		// Without the live pods every instance falls through to "replaced",
+		// which is hidden by default, so the chart would quietly claim the
+		// project churned from end to end instead of admitting the lookup
+		// failed. Say so on the channel the UI already renders.
+		ch.Series, ch.Error = []Series{}, namer.err.Error()
 		return
 	}
 	// Number the replaced pods off a stable order first: Prometheus promises no
 	// particular order, and every chart's goroutine shares the namer, so
 	// "replaced 1" must not depend on which chart's answer arrived first.
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
-	// A series carries its ordering key alongside it, because neither the
-	// ordinal nor a live instance's precedence survives in the name as a plain
-	// string sort would read it.
+	// A series carries its instance and its ordering key alongside it, because
+	// neither the ordinal nor a live instance's precedence survives in the name
+	// as a plain string sort would read it.
 	type ordered struct {
 		Series
+		instance string
 		replaced bool
 		process  string
 		ordinal  int
@@ -322,7 +337,7 @@ func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions
 		if i := strings.IndexByte(pod, ' '); i > 0 {
 			pod, suffix = pod[:i], pod[i:]
 		}
-		name := namer(pod)
+		name := namer.name(pod)
 		replaced := strings.HasPrefix(name, replacedPrefix)
 		if replaced && !opts.Replaced {
 			hidden[name] = true
@@ -330,7 +345,7 @@ func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions
 		}
 		sr.Name = name + suffix
 		process, ordinal := splitInstance(name)
-		kept = append(kept, ordered{Series: sr, replaced: replaced, process: process, ordinal: ordinal})
+		kept = append(kept, ordered{Series: sr, instance: name, replaced: replaced, process: process, ordinal: ordinal})
 	}
 	// Live instances first, so the cap can never drop one in favour of a pod
 	// that no longer exists — asking to see the replaced ones must not cost the
@@ -350,21 +365,30 @@ func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions
 		}
 		return a.Name < b.Name
 	})
-	over := 0
-	if len(kept) > maxInstanceSeries {
-		over = len(kept) - maxInstanceSeries
-		kept = kept[:maxInstanceSeries]
-	}
+	// The cap and both counts are about instances, so a note's number means the
+	// same thing on every chart: counting series would make the cap admit half
+	// as many instances on network as on cpu, and call five missing instances
+	// ten. Every series of one instance is adjacent after the sort, so the cap
+	// keeps or drops an instance whole.
+	shown := map[string]bool{}
+	dropped := map[string]bool{}
 	ch.Series = make([]Series, 0, len(kept))
 	for _, k := range kept {
+		if !shown[k.instance] {
+			if len(shown) == maxInstances {
+				dropped[k.instance] = true
+				continue
+			}
+			shown[k.instance] = true
+		}
 		ch.Series = append(ch.Series, k.Series)
 	}
 	var parts []string
 	if len(hidden) > 0 {
 		parts = append(parts, plural(len(hidden), "replaced instance hidden", "replaced instances hidden"))
 	}
-	if over > 0 {
-		parts = append(parts, plural(over, "more instance not shown", "more instances not shown"))
+	if len(dropped) > 0 {
+		parts = append(parts, plural(len(dropped), "more instance not shown", "more instances not shown"))
 	}
 	ch.Note = strings.Join(parts, ", ")
 }
@@ -397,27 +421,39 @@ func plural(n int, one, many string) string {
 // rather than a whole name because the pods are numbered.
 const replacedPrefix = "replaced "
 
-// instanceNamer maps a pod to the instance name the Logs tab would show. Pods
-// absent from the live list were replaced during the window; they are numbered
-// in order of first appearance rather than named, because the name they held
-// has since moved to another pod.
+// instanceNamer names pods for one request. Exactly one of the fields is set:
+// err records a failure to list the live pods, which is not a detail the charts
+// can paper over — with no live list every instance looks replaced — so a chart
+// reports the error and never calls name.
+type instanceNamer struct {
+	name func(pod string) string
+	err  error
+}
+
+// newInstanceNamer maps a pod to the instance name the Logs tab would show.
+// Pods absent from the live list were replaced during the window; they are
+// numbered in order of first appearance rather than named, because the name they
+// held has since moved to another pod.
 //
 // Prometheus cannot do this join: kube-state-metrics exposes no annotations on
 // a default install, so shpyrd.io/instance is invisible to PromQL.
-func (s *Server) instanceNamer(ctx context.Context, app *shpyrdv1.App) func(pod string) string {
-	live := map[string]string{}
+func (s *Server) newInstanceNamer(ctx context.Context, app *shpyrdv1.App) *instanceNamer {
 	// The typed clientset, not the controller-runtime client: pods are ordinary
-	// core objects here and this is the same call the log viewer makes.
-	if pods, err := s.kube.Kube.CoreV1().Pods(app.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: shpyrdv1.LabelApp + "=" + app.Name,
-	}); err == nil {
-		live = InstanceNames(pods.Items)
+	// core objects here. Selector and all, this is the call the log viewer
+	// makes — a pod with no process label, a build or a one-off, is not an
+	// instance there and must not become one here.
+	pods, err := s.kube.Kube.CoreV1().Pods(app.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: shpyrdv1.LabelApp + "=" + app.Name + "," + shpyrdv1.LabelProcess,
+	})
+	if err != nil {
+		return &instanceNamer{err: fmt.Errorf("listing the project's instances: %w", err)}
 	}
+	live := InstanceNames(pods.Items)
 	var mu sync.Mutex
 	replaced := map[string]string{}
 	// Shared by every chart's goroutine, so the numbering is consistent across
 	// charts — and therefore needs the lock.
-	return func(pod string) string {
+	return &instanceNamer{name: func(pod string) string {
 		if n, ok := live[pod]; ok {
 			return n
 		}
@@ -429,7 +465,7 @@ func (s *Server) instanceNamer(ctx context.Context, app *shpyrdv1.App) func(pod 
 		n := fmt.Sprintf("%s%d", replacedPrefix, len(replaced)+1)
 		replaced[pod] = n
 		return n
-	}
+	}}
 }
 
 // applyReference fills in the line a series is measured against. Only the

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "shpyrd/api/v1alpha1"
@@ -413,13 +417,13 @@ func TestMetricsUnknownProcessStillAppears(t *testing.T) {
 func TestMetricsInstanceSeriesAreCapped(t *testing.T) {
 	var series []fakeSeries
 	var objs []interface{}
-	for i := 0; i < maxInstanceSeries+10; i++ {
+	for i := 0; i < maxInstances+10; i++ {
 		pod := fmt.Sprintf("shop-web-%03d", i)
 		series = append(series, fakeSeries{
 			Labels: map[string]string{"pod": pod, "label_shpyrd_io_process": "web"},
 			Values: []Point{{1000, float64(i)}},
 		})
-		objs = append(objs, podFor("shop", "web", pod, maxInstanceSeries+10-i))
+		objs = append(objs, podFor("shop", "web", pod, maxInstances+10-i))
 	}
 	prom, _ := newFakeProm(t, fakeAnswer{Match: "container_memory_working_set_bytes", Series: series})
 	app := metricsApp()
@@ -427,8 +431,8 @@ func TestMetricsInstanceSeriesAreCapped(t *testing.T) {
 
 	out := getMetrics(t, s, "?range=1h&by=instance")
 	mem := chartByID(t, out, "memory")
-	if len(mem.Series) != maxInstanceSeries {
-		t.Fatalf("series = %d, want the cap of %d", len(mem.Series), maxInstanceSeries)
+	if len(mem.Series) != maxInstances {
+		t.Fatalf("series = %d, want the cap of %d", len(mem.Series), maxInstances)
 	}
 	if !strings.Contains(mem.Note, "more") {
 		t.Errorf("the chart must report what it left out, note = %q", mem.Note)
@@ -436,8 +440,8 @@ func TestMetricsInstanceSeriesAreCapped(t *testing.T) {
 	// The ordinal is a number, not text: the cap keeps web.1 to web.40 rather
 	// than the lexicographic slice that would stop at web.19 and web.2.
 	names := seriesNames(mem)
-	if names[0] != "web.1" || names[1] != "web.2" || names[maxInstanceSeries-1] != fmt.Sprintf("web.%d", maxInstanceSeries) {
-		t.Errorf("series = %v, want web.1, web.2 ... web.%d in numeric order", names, maxInstanceSeries)
+	if names[0] != "web.1" || names[1] != "web.2" || names[maxInstances-1] != fmt.Sprintf("web.%d", maxInstances) {
+		t.Errorf("series = %v, want web.1, web.2 ... web.%d in numeric order", names, maxInstances)
 	}
 }
 
@@ -518,7 +522,7 @@ func TestMetricsNetworkByInstanceKeepsTheDirection(t *testing.T) {
 // a project with a cap's worth of churn would chart nothing but dead pods.
 func TestMetricsReplacedInstancesNeverDisplaceLiveOnes(t *testing.T) {
 	var series []fakeSeries
-	for i := 0; i < maxInstanceSeries; i++ {
+	for i := 0; i < maxInstances; i++ {
 		series = append(series, fakeSeries{
 			Labels: map[string]string{"pod": fmt.Sprintf("shop-web-gone-%03d", i), "label_shpyrd_io_process": "web"},
 			Values: []Point{{1000, float64(i)}},
@@ -536,8 +540,8 @@ func TestMetricsReplacedInstancesNeverDisplaceLiveOnes(t *testing.T) {
 	out := getMetrics(t, s, "?range=1h&by=instance&replaced=true")
 	mem := chartByID(t, out, "memory")
 	names := seriesNames(mem)
-	if len(names) != maxInstanceSeries {
-		t.Fatalf("series = %d, want the cap of %d", len(names), maxInstanceSeries)
+	if len(names) != maxInstances {
+		t.Fatalf("series = %d, want the cap of %d", len(names), maxInstances)
 	}
 	if names[0] != "web.1" {
 		t.Errorf("series[0] = %q, want the live instance ahead of every replaced one", names[0])
@@ -549,10 +553,187 @@ func TestMetricsReplacedInstancesNeverDisplaceLiveOnes(t *testing.T) {
 	}
 	// Replaced instances are ordered by their own number too, so the one the cap
 	// drops is the last of them.
-	if names[1] != "replaced 1" || names[maxInstanceSeries-1] != fmt.Sprintf("replaced %d", maxInstanceSeries-1) {
-		t.Errorf("series = %v, want replaced 1 ... replaced %d", names, maxInstanceSeries-1)
+	if names[1] != "replaced 1" || names[maxInstances-1] != fmt.Sprintf("replaced %d", maxInstances-1) {
+		t.Errorf("series = %v, want replaced 1 ... replaced %d", names, maxInstances-1)
 	}
 	if mem.Note != "1 more instance not shown" {
 		t.Errorf("note = %q, want the singular \"1 more instance not shown\"", mem.Note)
+	}
+}
+
+// The two network sub-queries are two Prometheus calls, so one can fail after
+// the other has already produced pod-keyed series. Nothing the handler returns
+// on that path may carry a pod name.
+func TestMetricsNetworkPartialFailureLeaksNoPodName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		// "in" is queried first and succeeds; "out" times out.
+		if strings.Contains(q, "container_network_transmit_bytes_total") {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "error", "errorType": "timeout", "error": "query timed out",
+			})
+			return
+		}
+		result := []map[string]any{}
+		if strings.Contains(q, "container_network_receive_bytes_total") {
+			result = append(result, map[string]any{
+				"metric": map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"},
+				"values": [][2]any{{1000, "10"}},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data":   map[string]any{"resultType": "matrix", "result": result},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	app := metricsApp()
+	s, _ := newTestServer(t, &PromClient{BaseURL: srv.URL, HTTP: srv.Client()},
+		[]client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	rec := do(t, s, "GET", "/api/projects/shop/metrics?range=1h&by=instance", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	// The whole response, not just the one chart: a pod name anywhere is a leak.
+	if strings.Contains(rec.Body.String(), "shop-web-live") {
+		t.Errorf("a pod name reached the response: %s", rec.Body.String())
+	}
+	var out MetricsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	net := chartByID(t, out, "network")
+	if net.Error == "" {
+		t.Error("the failed direction must be reported, not swallowed")
+	}
+	if len(net.Series) != 0 {
+		t.Errorf("a failed chart drew %d series: %+v", len(net.Series), net.Series)
+	}
+}
+
+// A failed pod list must not read as a project whose every instance was
+// replaced: hidden by default, that would return empty charts and no error.
+func TestMetricsPodListFailureIsReportedNotMislabelled(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+		},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+	s.kube.Kube.(*kubefake.Clientset).PrependReactor("list", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("etcdserver: request timed out")
+	})
+
+	out := getMetrics(t, s, "?range=1h&by=instance")
+	mem := chartByID(t, out, "memory")
+	if mem.Error == "" {
+		t.Errorf("a failed pod list must reach the chart as an error, got note %q and series %+v", mem.Note, mem.Series)
+	}
+	if len(mem.Series) != 0 {
+		t.Errorf("series drawn from names that could not be resolved: %+v", mem.Series)
+	}
+	if strings.Contains(mem.Note, "replaced") {
+		t.Errorf("note = %q; a live instance was labelled replaced because the list failed", mem.Note)
+	}
+	// By process the charts need no pod names at all, so they still render.
+	out = getMetrics(t, s, "?range=1h")
+	if mem = chartByID(t, out, "memory"); mem.Error != "" || len(mem.Series) != 1 {
+		t.Errorf("by process must not depend on the pod list: error %q, series %+v", mem.Error, mem.Series)
+	}
+}
+
+// The cap counts instances, not series, so it admits the same number of
+// instances on the chart that draws two series for each of them.
+func TestMetricsNetworkCapCountsInstancesNotSeries(t *testing.T) {
+	const over = 5
+	var in, outbound []fakeSeries
+	var objs []interface{}
+	for i := 0; i < maxInstances+over; i++ {
+		pod := fmt.Sprintf("shop-web-%03d", i)
+		labels := map[string]string{"pod": pod, "label_shpyrd_io_process": "web"}
+		in = append(in, fakeSeries{Labels: labels, Values: []Point{{1000, float64(i)}}})
+		outbound = append(outbound, fakeSeries{Labels: labels, Values: []Point{{1000, float64(i) * 2}}})
+		objs = append(objs, podFor("shop", "web", pod, maxInstances+over-i))
+	}
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: in},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: outbound},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, objs...)
+
+	got := chartByID(t, getMetrics(t, s, "?range=1h&by=instance"), "network")
+	if len(got.Series) != 2*maxInstances {
+		t.Errorf("series = %d, want %d instances at two series each", len(got.Series), maxInstances)
+	}
+	// Both directions of a kept instance are kept, and the note counts the
+	// instances that are missing rather than their series.
+	names := seriesNames(got)
+	if names[0] != "web.1 in" || names[1] != "web.1 out" {
+		t.Errorf("series = %v, want both directions of web.1 first", names[:2])
+	}
+	if got.Note != fmt.Sprintf("%d more instances not shown", over) {
+		t.Errorf("note = %q, want %d instances missing", got.Note, over)
+	}
+}
+
+// The by-process default must not pay for the pod list, which is the only
+// thing keeping a Kubernetes call off a request that repeats every 30 seconds.
+func TestMetricsByProcessListsNoPods(t *testing.T) {
+	prom, _ := newFakeProm(t)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+	cs := s.kube.Kube.(*kubefake.Clientset)
+
+	getMetrics(t, s, "?range=1h")
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "list" && a.GetResource().Resource == "pods" {
+			t.Fatal("the by-process default listed the pods")
+		}
+	}
+	// And the instance breakdown does, since that is what needs the names.
+	cs.ClearActions()
+	getMetrics(t, s, "?range=1h&by=instance")
+	listed := false
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "list" && a.GetResource().Resource == "pods" {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Error("by=instance must list the pods to name them")
+	}
+}
+
+// The namer selects exactly what the Logs tab selects, so a pod with no process
+// label — a build, a one-off — is an instance on neither tab. Named off the app
+// label alone it would become "app.1", a name the Logs tab never shows.
+func TestMetricsPodWithoutProcessIsNoInstance(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-build-abc"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		},
+	})
+	build := podFor("shop", "web", "shop-build-abc", 20)
+	delete(build.Labels, shpyrdv1.LabelProcess)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, build, podFor("shop", "web", "shop-web-live", 5))
+
+	out := getMetrics(t, s, "?range=1h&by=instance&replaced=true")
+	names := seriesNames(chartByID(t, out, "memory"))
+	for _, n := range names {
+		if strings.HasPrefix(n, "app.") {
+			t.Errorf("series %q names a pod the Logs tab would not call an instance", n)
+		}
+	}
+	if strings.Join(names, ",") != "web.1,replaced 1" {
+		t.Fatalf("series = %v, want web.1 and the build pod as replaced 1", names)
 	}
 }
