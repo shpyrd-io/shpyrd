@@ -153,11 +153,15 @@ func newLoginCmd(g *globalFlags) *cobra.Command {
   shpyrd login --url https://acme.shpyrd.app          # opens the browser for the token
   shpyrd login --url https://shpyrd.oci.shpyrd.io --token <admin token>
 
-After login, every project command (deploy, logs, scale, secrets, access,
-members, drains, volumes, pg, redis, allow, domains, releases, rollback,
-redeploy, open) uses the workspace API and your identity; no kubeconfig
-needed. Cluster commands (cluster init, cluster status, …) keep the
-kubeconfig.
+After login, project commands use the workspace API and your identity; no
+kubeconfig needed: projects (create, list, info, rename, destroy), deploy,
+logs, shell, scale, resize, releases, rollback, redeploy, open, secrets,
+access, allow, exposure, volumes, attach, detach, drains, members, tokens.
+Still cluster-only for now (run them with --context): run, pg, redis,
+domains. Operator commands live in shpyrd-ctl and keep the kubeconfig.
+
+The workspace you sign in to becomes the current one (shpyrd use lists
+and switches; SHPYRD_URL overrides for one shell).
 
 Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

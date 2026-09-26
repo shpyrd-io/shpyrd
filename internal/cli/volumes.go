@@ -85,7 +85,7 @@ func newVolumesCreateCmd(g *globalFlags) *cobra.Command {
 			// Through the server: it knows the profile's storage classes and
 			// minimum size and says when it rounds a request up (RFC-0060).
 			body, _ := json.Marshal(api.CreateVolumeRequest{Name: args[0], Size: qty.String(), StorageClass: class, Shared: shared, FromSnapshot: fromSnapshot})
-			raw, err := serverRequest(ctx, ac.k, "POST", "api/projects/"+name+"/volumes", body, "application/json")
+			raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/volumes", body, "application/json")
 			if err != nil {
 				return err
 			}
@@ -137,7 +137,13 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			var list shpyrdv1.VolumeList
-			if err := ac.c.List(ctx, &list, client.InNamespace(appNamespace(name))); err != nil {
+			if ac.session {
+				items, err := ac.listVolumesAPI(ctx, name)
+				if err != nil {
+					return err
+				}
+				list.Items = items
+			} else if err := ac.c.List(ctx, &list, client.InNamespace(appNamespace(name))); err != nil {
 				return err
 			}
 			if len(list.Items) == 0 {
@@ -208,6 +214,14 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 				return fmt.Errorf("volumes cannot shrink (currently %s)", floor.String())
 			}
 			vol.Spec.Size = qty
+			if ac.session {
+				body, _ := json.Marshal(map[string]string{"size": qty.String()})
+				if _, err := ac.serverRequest(ctx, "PUT", "api/projects/"+name+"/volumes/"+args[0], body, "application/json"); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Resizing volume %s to %s...\n", args[0], qty.String())
+				return nil
+			}
 			if err := ac.c.Update(ctx, vol); err != nil {
 				return err
 			}
@@ -272,6 +286,13 @@ func newVolumesDeleteCmd(g *globalFlags) *cobra.Command {
 			if !yes {
 				return fmt.Errorf("this deletes volume %q and all its data (%s); re-run with --yes to confirm", args[0], vol.Spec.Size.String())
 			}
+			if ac.session {
+				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/volumes/"+args[0], nil, ""); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Deleted volume %s from project %s\n", args[0], name)
+				return nil
+			}
 			if err := ac.c.Delete(ctx, vol); client.IgnoreNotFound(err) != nil {
 				return err
 			}
@@ -287,6 +308,18 @@ func newVolumesDeleteCmd(g *globalFlags) *cobra.Command {
 }
 
 func (a *appClient) getVolume(ctx context.Context, project, name string) (*shpyrdv1.Volume, error) {
+	if a.session {
+		vols, err := a.listVolumesAPI(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		for i := range vols {
+			if vols[i].Name == name {
+				return &vols[i], nil
+			}
+		}
+		return nil, fmt.Errorf("volume %q not found in project %s (see `shpyrd volumes list`)", name, project)
+	}
 	vol := &shpyrdv1.Volume{}
 	if err := a.c.Get(ctx, types.NamespacedName{Namespace: appNamespace(project), Name: name}, vol); err != nil {
 		if apierrors.IsNotFound(err) {

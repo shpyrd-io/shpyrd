@@ -495,6 +495,15 @@ func (a *appClient) getApp(ctx context.Context, name string) (*shpyrdv1.App, err
 	if !project.ValidSlug(name) {
 		return nil, fmt.Errorf("invalid project %q: use its slug, the identifier in the PROJECT column of `shpyrd projects list`", name)
 	}
+	if a.session {
+		// Through the API: the detail carries the spec and status the
+		// read-only commands print.
+		d, err := a.getDetail(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return detailToApp(d), nil
+	}
 	app := &shpyrdv1.App{}
 	err := a.c.Get(ctx, types.NamespacedName{Namespace: appNamespace(name), Name: name}, app)
 	if apierrors.IsNotFound(err) {
@@ -860,4 +869,70 @@ func age(t metav1.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// detailToApp rebuilds an App from the API's detail, for the printers that
+// take one. Only what the detail carries is filled.
+func detailToApp(d *api.AppDetail) *shpyrdv1.App {
+	app := &shpyrdv1.App{}
+	app.Name, app.Namespace = d.Slug, d.Namespace
+	app.CreationTimestamp = metav1.NewTime(d.CreatedAt)
+	app.Generation = d.Status.Generation
+	project.SetDisplayName(app, d.DisplayName)
+	app.Spec = shpyrdv1.AppSpec{
+		Source: d.Spec.Source, Image: d.Spec.PinnedImage, Processes: d.Spec.Processes, Env: d.Spec.Env,
+		Domains: d.Spec.Domains, Build: d.Spec.Build, Bindings: d.Spec.Bindings, Exposure: d.Spec.Exposure, Access: d.Spec.Access,
+	}
+	app.Status = shpyrdv1.AppStatus{
+		Phase: d.Status.Phase, Message: d.Status.Message, Image: d.Status.Digest, URL: d.Status.URL,
+		LatestBuild: d.Status.LatestBuild, ObservedGeneration: d.Status.ObservedGeneration,
+		Conditions: d.Status.Conditions, Domains: d.Status.Domains, Processes: d.Processes,
+	}
+	for _, r := range d.Status.Releases {
+		app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{
+			Number: r.Number, Image: r.Digest, Source: r.Source, Description: r.Description,
+			CreatedAt: metav1.NewTime(r.CreatedAt), Processes: r.Processes,
+		})
+	}
+	return app
+}
+
+// listVolumesAPI reads the project's volumes through the API, as Volume
+// objects for the printers.
+func (a *appClient) listVolumesAPI(ctx context.Context, slug string) ([]shpyrdv1.Volume, error) {
+	raw, err := a.serverRequest(ctx, "GET", "api/projects/"+slug+"/volumes", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var views []api.VolumeView
+	if err := json.Unmarshal(raw, &views); err != nil {
+		return nil, err
+	}
+	out := make([]shpyrdv1.Volume, 0, len(views))
+	for _, v := range views {
+		vol := shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: v.Namespace}}
+		if q, err := resource.ParseQuantity(v.Size); err == nil {
+			vol.Spec.Size = q
+		}
+		if v.Shared {
+			vol.Spec.AccessMode = corev1.ReadWriteMany
+		} else {
+			vol.Spec.AccessMode = corev1.ReadWriteOnce
+		}
+		vol.Spec.StorageClass = v.StorageClass
+		vol.Status.Phase, vol.Status.Message, vol.Status.Capacity, vol.Status.MountedBy = v.Phase, v.Message, v.Capacity, v.MountedBy
+		out = append(out, vol)
+	}
+	return out, nil
+}
+
+// latestRelease is the highest-numbered release of a detail, nil when none.
+func latestRelease(d *api.AppDetail) *api.ReleaseView {
+	var out *api.ReleaseView
+	for i := range d.Status.Releases {
+		if out == nil || d.Status.Releases[i].Number > out.Number {
+			out = &d.Status.Releases[i]
+		}
+	}
+	return out
 }

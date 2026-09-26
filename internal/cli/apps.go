@@ -159,6 +159,14 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			project.SetDisplayName(app, name)
+			if ac.session {
+				body, _ := json.Marshal(map[string]string{"name": name})
+				if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+app.Name, body, "application/json"); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
+				return nil
+			}
 			if err := ac.c.Update(ctx, app); err != nil {
 				return err
 			}
@@ -219,9 +227,15 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			printAppInfo(cmd, app)
-			var vols shpyrdv1.VolumeList
-			_ = ac.c.List(ctx, &vols, client.InNamespace(app.Namespace))
-			printResources(cmd, app, vols.Items)
+			var vols []shpyrdv1.Volume
+			if ac.session {
+				vols, _ = ac.listVolumesAPI(ctx, app.Name)
+			} else {
+				var list shpyrdv1.VolumeList
+				_ = ac.c.List(ctx, &list, client.InNamespace(app.Namespace))
+				vols = list.Items
+			}
+			printResources(cmd, app, vols)
 			return nil
 		},
 	}
@@ -340,7 +354,12 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			var vols shpyrdv1.VolumeList
-			_ = ac.c.List(ctx, &vols, client.InNamespace(appNamespace(name)))
+			if ac.session {
+				items, _ := ac.listVolumesAPI(ctx, name)
+				vols.Items = items
+			} else {
+				_ = ac.c.List(ctx, &vols, client.InNamespace(appNamespace(name)))
+			}
 			if len(vols.Items) > 0 {
 				var names []string
 				for _, v := range vols.Items {
@@ -352,6 +371,13 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 				return fmt.Errorf("aborted")
 			}
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: appNamespace(name)}}
+			if ac.session {
+				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name, nil, ""); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Deleting project %s...\n", name)
+				return nil
+			}
 			if err := ac.c.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}

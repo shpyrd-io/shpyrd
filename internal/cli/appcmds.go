@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -203,6 +205,25 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if ac.session {
+				// Through the API, one call per process: the server checks
+				// single-instance volumes and the plan.
+				procs := make([]string, 0, len(changes))
+				for proc := range changes {
+					procs = append(procs, proc)
+				}
+				sort.Strings(procs)
+				var parts []string
+				for _, proc := range procs {
+					body, _ := json.Marshal(map[string]any{"process": proc, "replicas": changes[proc]})
+					if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/scale", body, "application/json"); err != nil {
+						return err
+					}
+					parts = append(parts, fmt.Sprintf("%s=%d", proc, changes[proc]))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Scaling %s: %s\n", name, strings.Join(parts, " "))
+				return nil
+			}
 			app, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
 				if a.Spec.Processes == nil {
 					a.Spec.Processes = map[string]shpyrdv1.Process{"web": {}}
@@ -285,7 +306,33 @@ what a tool reading the output wants.`,
 				if app.Status.LatestBuild == "" {
 					return errors.New("no build yet")
 				}
+				if ac.session {
+					stream, err := ac.serverStream(ctx, "api/projects/"+name+"/builds/latest/logs?follow="+strconv.FormatBool(follow))
+					if err != nil {
+						return err
+					}
+					defer stream.Close()
+					_, err = io.Copy(cmd.OutOrStdout(), stream)
+					return err
+				}
 				return ac.followBuild(ctx, app.Namespace, app.Status.LatestBuild)
+			}
+			if ac.session {
+				// The server renders the same "<time> <instance> | line" form.
+				q := url.Values{"tail": {strconv.FormatInt(tail, 10)}, "follow": {strconv.FormatBool(follow)}}
+				if process != "" {
+					q.Set("process", process)
+				}
+				stream, err := ac.serverStream(ctx, "api/projects/"+name+"/logs?"+q.Encode())
+				if err != nil {
+					return err
+				}
+				defer stream.Close()
+				_, err = io.Copy(cmd.OutOrStdout(), stream)
+				if err != nil && ctx.Err() != nil {
+					return nil // interrupted while following
+				}
+				return err
 			}
 			// Build pods inherit the app label from the kpack Image; only
 			// workloads carry the process label.
@@ -398,6 +445,26 @@ config vars are restored. The source configuration is kept; the next
 				return fmt.Errorf("a release is still rolling out (%s); wait for it or pass --force", firstNonEmpty(app.Status.Message, app.Status.Phase))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "==> Rolling back %s to v%d (build %s, config as of v%d)\n", name, target.Number, digest(target.Image), target.Number)
+			if ac.session {
+				body, _ := json.Marshal(map[string]any{"release": target.Number})
+				raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/rollback", body, "application/json")
+				if err != nil {
+					return err
+				}
+				if noWait {
+					return nil
+				}
+				var after api.AppSummary
+				_ = json.Unmarshal(raw, &after)
+				final, err := ac.waitRunningAPI(ctx, name, app.Generation+1, 10*time.Minute)
+				if err != nil {
+					return err
+				}
+				if rel := latestRelease(final); rel != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "\nReleased v%d: %s\n", rel.Number, rel.Description)
+				}
+				return nil
+			}
 			ac.audit(ctx, name, "rollback", name, fmt.Sprintf("to v%d", target.Number))
 			img := target.Image
 			note := fmt.Sprintf("Rollback to v%d", target.Number)
@@ -573,6 +640,35 @@ that results is a normal deploy.`,
 				return errors.New("a build is running; wait for it to finish")
 			} else if app.CurrentRelease() == nil {
 				return errors.New("nothing to restart: no release yet")
+			}
+			if ac.session {
+				body, _ := json.Marshal(map[string]any{"action": action})
+				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/redeploy", body, "application/json"); err != nil {
+					return err
+				}
+				if action == "rebuild" {
+					fmt.Fprintf(out, "==> Building %s again from the same source\n", name)
+				} else if cur := app.CurrentRelease(); cur != nil {
+					fmt.Fprintf(out, "==> Restarting the instances of %s v%d\n", name, cur.Number)
+				}
+				if noWait {
+					return nil
+				}
+				if action == "rebuild" {
+					if err := ac.followBuildAPI(ctx, name, app.Status.LatestBuild, 3*time.Minute); err != nil {
+						return err
+					}
+				}
+				// A restart or rebuild changes annotations, not the spec: no
+				// generation to wait for, just the rollout.
+				final, err := ac.waitRunningAPI(ctx, name, app.Generation, 10*time.Minute)
+				if err != nil {
+					return err
+				}
+				if rel := latestRelease(final); rel != nil {
+					fmt.Fprintf(out, "\nReleased v%d: %s\n", rel.Number, rel.Description)
+				}
+				return nil
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
 			updated, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {

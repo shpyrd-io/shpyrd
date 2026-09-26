@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"text/tabwriter"
@@ -15,7 +16,6 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
-	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
 // Teams and project roles (RFC-0008) live in the control-plane store
@@ -44,17 +44,18 @@ first:
 	return cmd
 }
 
-// teamsAPI is the CLI's view of the teams and members routes.
+// teamsAPI is the CLI's view of the teams and members routes, over the
+// login session or the kubeconfig proxy like every other command.
 type teamsAPI struct {
-	k *kube.Client
+	ac *appClient
 }
 
 func newTeamsAPI(g *globalFlags) (*teamsAPI, error) {
-	k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+	ac, err := newAppClient(g, io.Discard)
 	if err != nil {
 		return nil, err
 	}
-	return &teamsAPI{k: k}, nil
+	return &teamsAPI{ac: ac}, nil
 }
 
 func (t *teamsAPI) call(ctx context.Context, method, path string, body any, out any) error {
@@ -67,7 +68,7 @@ func (t *teamsAPI) call(ctx context.Context, method, path string, body any, out 
 		}
 		raw, contentType = b, "application/json"
 	}
-	resp, err := serverRequest(ctx, t.k, method, path, raw, contentType)
+	resp, err := t.ac.serverRequest(ctx, method, path, raw, contentType)
 	if err != nil {
 		return err
 	}

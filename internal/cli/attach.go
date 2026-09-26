@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 )
@@ -57,6 +60,23 @@ detach is a release that can be rolled back.
 			}
 			if _, err := ac.getApp(ctx, name); err != nil {
 				return err
+			}
+			if ac.session {
+				k := kind
+				if k == "" {
+					k, err = ac.resourceKindAPI(ctx, name, args[0])
+					if err != nil {
+						return err
+					}
+				}
+				body, _ := json.Marshal(api.BindingRequest{Kind: k, Name: args[0], Prefix: strings.ToUpper(prefix)})
+				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/bindings", body, "application/json"); err != nil {
+					return err
+				}
+				p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(k)))
+				fmt.Fprintf(cmd.OutOrStdout(), "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", k, args[0], name, p, p)
+				fmt.Fprintln(cmd.OutOrStdout(), "Releasing with the new configuration (the app waits while the resource is still provisioning).")
+				return nil
 			}
 			t, err := ac.findResource(ctx, appNamespace(name), args[0], kind)
 			if err != nil {
@@ -111,6 +131,31 @@ func newDetachCmd(g *globalFlags) *cobra.Command {
 			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
+			}
+			if ac.session {
+				k := kind
+				if k == "" {
+					d, err := ac.getDetail(ctx, name)
+					if err != nil {
+						return err
+					}
+					for _, b := range d.Spec.Bindings {
+						if b.Name == args[0] {
+							if k != "" && k != b.Kind {
+								return fmt.Errorf("several resources are called %q: pass --kind", args[0])
+							}
+							k = b.Kind
+						}
+					}
+					if k == "" {
+						return fmt.Errorf("nothing called %q is attached to %s", args[0], name)
+					}
+				}
+				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/bindings/"+url.PathEscape(k)+"/"+url.PathEscape(args[0]), nil, ""); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Detached %s %s from %s; releasing without its config vars.\n", k, args[0], name)
+				return nil
 			}
 			var removed *shpyrdv1.Binding
 			if _, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
@@ -191,4 +236,34 @@ func defaultPrefix(kind string) string {
 		return "REDIS"
 	}
 	return strings.ToUpper(kind)
+}
+
+// resourceKindAPI finds the kind of a project resource by name through the
+// API, refusing ambiguity.
+func (a *appClient) resourceKindAPI(ctx context.Context, project, name string) (string, error) {
+	raw, err := a.serverRequest(ctx, "GET", "api/projects/"+project+"/resources", nil, "")
+	if err != nil {
+		return "", err
+	}
+	var list []struct {
+		Kind string `json:"kind"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return "", err
+	}
+	kind := ""
+	for _, r := range list {
+		if r.Name != name || r.Kind == "App" || r.Kind == "Volume" {
+			continue
+		}
+		if kind != "" && kind != r.Kind {
+			return "", fmt.Errorf("several resources are called %q (%s, %s): pass --kind", name, kind, r.Kind)
+		}
+		kind = r.Kind
+	}
+	if kind == "" {
+		return "", fmt.Errorf("no attachable resource called %q in project %s (see `shpyrd projects info %s`)", name, project, project)
+	}
+	return kind, nil
 }

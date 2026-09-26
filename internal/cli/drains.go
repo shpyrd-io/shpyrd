@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
@@ -80,6 +82,17 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			if err != nil {
 				return err
 			}
+			if ac.session {
+				if project == "" {
+					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
+				}
+				body, _ := json.Marshal(api.CreateDrainRequest{Name: name, URL: d.Spec.URL, Format: format, Headers: headers, Processes: processes})
+				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+project+"/drains", body, "application/json"); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat())
+				return nil
+			}
 			if project != "" {
 				if _, err := ac.getApp(ctx, project); err != nil {
 					return err
@@ -148,7 +161,28 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 			}
 			var drains shpyrdv1.LogDrainList
-			if err := ac.c.List(ctx, &drains, client.InNamespace(ns)); err != nil {
+			if ac.session {
+				if project == "" {
+					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
+				}
+				raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+project+"/drains", nil, "")
+				if err != nil {
+					return err
+				}
+				var views []api.DrainView
+				if err := json.Unmarshal(raw, &views); err != nil {
+					return err
+				}
+				for _, v := range views {
+					d := shpyrdv1.LogDrain{ObjectMeta: metav1.ObjectMeta{Name: v.Name}, Spec: shpyrdv1.LogDrainSpec{URL: v.URL, Format: v.Format, Processes: v.Processes}}
+					d.Status.Phase, d.Status.Message = v.Phase, v.Message
+					if v.LastDeliveryAt != nil {
+						t := metav1.NewTime(*v.LastDeliveryAt)
+						d.Status.LastDeliveryAt = &t
+					}
+					drains.Items = append(drains.Items, d)
+				}
+			} else if err := ac.c.List(ctx, &drains, client.InNamespace(ns)); err != nil {
 				return err
 			}
 			if len(drains.Items) == 0 {
@@ -190,6 +224,16 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
+			}
+			if ac.session {
+				if project == "" {
+					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
+				}
+				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+project+"/drains/"+url.PathEscape(args[0]), nil, ""); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Removed drain %s\n", args[0])
+				return nil
 			}
 			d := &shpyrdv1.LogDrain{}
 			if err := ac.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: args[0]}, d); err != nil {

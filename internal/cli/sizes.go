@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -232,6 +233,23 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
+			}
+			if ac.session {
+				// Through the API: the server knows the catalog and the plan.
+				var parts []string
+				for _, kv := range args {
+					proc, size, ok := strings.Cut(kv, "=")
+					if !ok {
+						return fmt.Errorf("expected PROCESS=SIZE, got %q", kv)
+					}
+					body, _ := json.Marshal(map[string]string{"process": proc, "size": size})
+					if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/resize", body, "application/json"); err != nil {
+						return err
+					}
+					parts = append(parts, kv)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Resizing %s: %s\n", name, strings.Join(parts, " "))
+				return nil
 			}
 			cat, _, err := loadCatalog(ctx, ac.k)
 			if err != nil {
