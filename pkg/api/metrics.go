@@ -271,7 +271,13 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 		}
 		nameInstances(&ch, namer, opts)
 		applyReference(&ch, allocs, opts)
-		if opts.byInstance() {
+		// Aggregation is an instance-breakdown control, so a chart that never
+		// broke down by instance in the first place has nothing for it to
+		// collapse. Without this, by=instance&agg=sum on latency folded p50,
+		// p95 and p99 into one series named "sum" — blending percentiles,
+		// which is meaningless, on a chart the UI already marks as not
+		// instance capable.
+		if opts.byInstance() && ch.InstanceCapable {
 			ch.Series = aggregate(ch.Series, opts.Agg)
 		}
 		return ch
@@ -309,7 +315,9 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
 	nameInstances(&ch, namer, opts)
 	applyReference(&ch, allocs, opts)
-	if opts.byInstance() {
+	// Same guard as the Fixed-query branch above: throughput groups by class,
+	// not by instance, so agg has nothing to collapse there either.
+	if opts.byInstance() && ch.InstanceCapable {
 		ch.Series = aggregate(ch.Series, opts.Agg)
 	}
 	return ch

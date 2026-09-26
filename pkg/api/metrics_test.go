@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -591,6 +592,64 @@ func TestMetricsNetworkProcessNamesParseThroughHelpers(t *testing.T) {
 	}
 	if got := processOf("worker in"); got != "worker" {
 		t.Errorf(`processOf("worker in") = %q, want "worker"`, got)
+	}
+}
+
+// process is an unvalidated query parameter (Review Focus 3 rules out
+// validating it, since a process still present in the metric data but no
+// longer declared by the App must keep appearing). A raw %s here would let a
+// crafted value close the deployment matcher's string literal and open a
+// second, unrelated series selector with its own namespace filter — reading
+// another project's metrics through a filter meant to scope to one process.
+func TestMetricsInstancesQueryEscapesProcess(t *testing.T) {
+	const inj = `x"} or kube_deployment_status_replicas_available{namespace="other`
+	want := `sum by (deployment) (kube_deployment_status_replicas_available{namespace="app-shop",deployment="shop-x\"} or kube_deployment_status_replicas_available{namespace=\"other"})`
+	if got := instancesQuery("app-shop", "shop", inj); got != want {
+		t.Fatalf("instancesQuery with a crafted process = %q, want %q", got, want)
+	}
+
+	// End to end: the handler must still send exactly one namespace matcher
+	// for the instances chart's query, never a second one smuggled in through
+	// an unescaped process value.
+	prom, rec := newFakeProm(t)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+	getMetrics(t, s, "?range=1h&process="+url.QueryEscape(inj))
+	for _, q := range rec.Queries() {
+		// "by (deployment)" is unique to the instances query; the injected
+		// process value itself contains the metric name, so matching on that
+		// alone would also catch cpu/memory/network's own (correctly
+		// escaped) process filter and report a false positive.
+		if !strings.Contains(q, "by (deployment)") {
+			continue
+		}
+		if n := strings.Count(q, `namespace="`); n != 1 {
+			t.Errorf("instances query has %d namespace matchers, want 1: %s", n, q)
+		}
+	}
+}
+
+// aggregate is an instance-breakdown control: a chart that never breaks down
+// by instance (latency, measured at the edge) has nothing for it to
+// collapse. Before this fix, by=instance&agg=sum folded latency's p50, p95
+// and p99 into one series named "sum" — blending percentiles together,
+// meaningless on its own terms and exactly the class of bug the owner
+// reported: a control acting on a chart it does not apply to.
+func TestMetricsAggregationIgnoredOnInstanceIncapableCharts(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match:  "nginx_ingress_controller_request_duration_seconds_bucket",
+		Series: []fakeSeries{{Labels: map[string]string{"le": "0.5"}, Values: []Point{{1000, 5}}}},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&by=instance&agg=sum")
+	lat := chartByID(t, out, "latency")
+	if names := seriesNames(lat); strings.Join(names, ",") != "p50,p95,p99" {
+		t.Fatalf("latency series = %v, want p50,p95,p99 unaggregated", names)
+	}
+	if lat.InstanceCapable {
+		t.Error("latency is measured at the edge and cannot be per instance")
 	}
 }
 

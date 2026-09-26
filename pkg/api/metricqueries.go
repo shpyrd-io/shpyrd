@@ -146,11 +146,18 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 
 // instancesQuery builds the instances chart's query, constrained to one
 // deployment when a process is selected.
+//
+// process is an unvalidated query parameter (Review Focus 3 rules out
+// validating it against the App's declared processes, since a process still
+// present in the metric data but no longer declared must keep appearing), so
+// it goes through %q exactly like procFilter above rather than a raw %s — a
+// crafted value must stay inside the string literal it is placed in, not
+// close the selector and add a second matcher of its own.
 func instancesQuery(ns, app, process string) string {
 	if process == "" {
 		return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s"})`, ns)
 	}
-	return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s",deployment="%s-%s"})`, ns, app, process)
+	return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s",deployment=%q})`, ns, app+"-"+process)
 }
 
 // hostRegex builds a PromQL regex matching the app's ingress hosts.
