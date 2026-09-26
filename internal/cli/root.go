@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
 )
@@ -62,18 +63,9 @@ func New() *cobra.Command {
 	root.AddCommand(newTeamsCmd(g))
 	root.AddCommand(newMembersCmd(g))
 	// Commands contributed by extensions (they explain themselves when the
-	// extension is not enabled on the cluster).
-	for _, x := range all.All() {
-		for _, c := range x.CLI(g) {
-			// Extensions may share a top-level command (`shpyrd auth`): the
-			// later ones add their subcommands to the first.
-			if existing := findCommand(root, c.Name()); existing != nil {
-				existing.AddCommand(c.Commands()...)
-				continue
-			}
-			root.AddCommand(c)
-		}
-	}
+	// extension is not enabled on the cluster): the developer's here (pg,
+	// redis), the operator's in shpyrd-ctl (users, auth, object-storage).
+	addExtensionCommands(root, g, ext.AudienceDeveloper)
 	root.AddCommand(newLogsCmd(g))
 	root.AddCommand(newShellCmd(g))
 	root.AddCommand(newRunCmd(g))
@@ -84,6 +76,7 @@ func New() *cobra.Command {
 	root.AddCommand(newAllowCmd(g))
 	root.AddCommand(newDomainsCmd(g))
 	root.AddCommand(newLoginCmd(g))
+	root.AddCommand(newUseCmd(g))
 	root.AddCommand(newTokensCmd(g))
 	root.AddCommand(newLogoutCmd(g))
 	root.AddCommand(newWhoAmICmd(g))
@@ -106,4 +99,22 @@ func findCommand(parent *cobra.Command, name string) *cobra.Command {
 		}
 	}
 	return nil
+}
+
+// addExtensionCommands mounts the extension commands of one audience.
+// Extensions may share a top-level command (`shpyrd-ctl auth`): the later
+// ones add their subcommands to the first.
+func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) {
+	for _, x := range all.All() {
+		for _, c := range x.CLI(g) {
+			if ext.Audience(c) != audience {
+				continue
+			}
+			if existing := findCommand(root, c.Name()); existing != nil {
+				existing.AddCommand(c.Commands()...)
+				continue
+			}
+			root.AddCommand(c)
+		}
+	}
 }

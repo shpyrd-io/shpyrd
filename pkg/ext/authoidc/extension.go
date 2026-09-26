@@ -25,7 +25,9 @@ func (extension) Description() string {
 func (extension) Components() []ext.ComponentRef        { return nil }
 func (extension) Register(ctrl.Manager, ext.Deps) error { return nil }
 func (extension) Types() []ext.ResourceType             { return nil }
-func (extension) CLI(g ext.CLIGlobals) []*cobra.Command { return []*cobra.Command{newAuthCmd(g)} }
+func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
+	return []*cobra.Command{ext.ForOperator(newAuthCmd(g))}
+}
 
 // Routes registers every configured provider with the relying party.
 // Discovery needs the network, so it runs in the background with retries

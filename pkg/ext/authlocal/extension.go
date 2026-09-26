@@ -183,7 +183,8 @@ func fail(c *gin.Context, err error) {
 
 // CLI returns `shpyrd users`.
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
-	return []*cobra.Command{newUsersCmd(g), newAuthConnectorCmd(g)}
+	// Accounts and login methods are the operator's.
+	return []*cobra.Command{ext.ForOperator(newUsersCmd(g)), ext.ForOperator(newAuthConnectorCmd(g))}
 }
 
 func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, secret string) error {

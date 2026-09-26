@@ -159,7 +159,8 @@ func summarize(ctx context.Context, deps ext.Deps) (*Summary, error) {
 
 // CLI returns `shpyrd object-storage`.
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
-	cmd := &cobra.Command{
+	// The platform's store: the operator's view.
+	cmd := ext.ForOperator(&cobra.Command{
 		Use:     "object-storage",
 		Aliases: []string{"buckets"},
 		Short:   "The platform's object store: buckets and their usage",
@@ -167,7 +168,7 @@ func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
 cluster. Extensions that need durable storage (Postgres backups, platform
 backups) declare ObjectBucket resources and get a bucket with a credential
 that opens only that bucket. This lists them.`,
-	}
+	})
 	list := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},

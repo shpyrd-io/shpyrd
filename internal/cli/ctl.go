@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
 )
 
@@ -36,16 +36,9 @@ func NewCtl() *cobra.Command {
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newWorkspacesCmd(g)) // RFC-0033 phase 8: servers with the workspaces capability
-	// Extension commands (auth, pg, redis, object-storage …) for operators.
-	for _, x := range all.All() {
-		for _, c := range x.CLI(g) {
-			if existing := findCommand(root, c.Name()); existing != nil {
-				existing.AddCommand(c.Commands()...)
-				continue
-			}
-			root.AddCommand(c)
-		}
-	}
+	// The operator's extension commands (users, auth, object-storage);
+	// project resources (pg, redis) are the developer's, in `shpyrd`.
+	addExtensionCommands(root, g, ext.AudienceOperator)
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",

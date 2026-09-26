@@ -183,12 +183,11 @@ func serverRequest(ctx context.Context, k *kube.Client, method, path string, bod
 	if preferKubeconfig && k != nil {
 		tok, wsURL = "", ""
 	} else if tok == "" || wsURL == "" {
-		sessions := loadSessions()
-		for _, sess := range sessions.Sessions {
-			if sess.Token != "" && tok == "" {
+		if sess := loadSessions().active(); sess != nil {
+			if tok == "" {
 				tok = sess.Token
 			}
-			if sess.URL != "" && wsURL == "" {
+			if wsURL == "" {
 				wsURL = sess.URL
 			}
 		}

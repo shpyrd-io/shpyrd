@@ -395,14 +395,12 @@ token never reaches the browser, and the session is attributed to you
 			// browser signs in with its own session or the login page.
 			// A ticket needs the cluster, so it is the kubeconfig path.
 			if !preferKubeconfig && g.kubeconfig == "" && g.kubeCtx == "" {
-				if sessions := loadSessions(); len(sessions.Sessions) == 1 {
-					for wsURL := range sessions.Sessions {
-						fmt.Fprintf(out, "Dashboard: %s (from your shpyrd login; use --context to sign in through a cluster)\n", wsURL)
-						if noOpen {
-							return nil
-						}
-						return openBrowser(wsURL)
+				if wsURL := loadSessions().activeURL(); wsURL != "" {
+					fmt.Fprintf(out, "Dashboard: %s (your current shpyrd login; use --context to sign in through a cluster)\n", wsURL)
+					if noOpen {
+						return nil
 					}
+					return openBrowser(wsURL)
 				}
 			}
 			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})

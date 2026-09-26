@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -112,13 +113,17 @@ type AppDetailSpec struct {
 }
 
 type AppDetailStatus struct {
-	Phase       string             `json:"phase"`
-	Message     string             `json:"message,omitempty"`
-	Digest      string             `json:"digest,omitempty"`
-	URL         string             `json:"url,omitempty"`
-	LatestBuild string             `json:"latestBuild,omitempty"`
-	Releases    []ReleaseView      `json:"releases"`
-	Conditions  []metav1.Condition `json:"conditions,omitempty"`
+	Phase       string `json:"phase"`
+	Message     string `json:"message,omitempty"`
+	Digest      string `json:"digest,omitempty"`
+	URL         string `json:"url,omitempty"`
+	LatestBuild string `json:"latestBuild,omitempty"`
+	// Generation is the spec's, ObservedGeneration the last one the
+	// controller acted on: equal means the status describes this spec.
+	Generation         int64              `json:"generation"`
+	ObservedGeneration int64              `json:"observedGeneration"`
+	Releases           []ReleaseView      `json:"releases"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 	// Domains is the state of each custom domain (RFC-0034).
 	Domains []shpyrdv1.DomainStatus `json:"domains,omitempty"`
 }
@@ -174,9 +179,10 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Digest:      Digest(a.Status.Image),
 			URL:         a.Status.URL,
 			LatestBuild: a.Status.LatestBuild,
-			Releases:    []ReleaseView{},
-			Conditions:  a.Status.Conditions,
-			Domains:     a.Status.Domains,
+			Generation:  a.Generation, ObservedGeneration: a.Status.ObservedGeneration,
+			Releases:   []ReleaseView{},
+			Conditions: a.Status.Conditions,
+			Domains:    a.Status.Domains,
 		},
 		Processes: a.Status.Processes,
 	}
@@ -424,11 +430,26 @@ type DeployRequest struct {
 	Git     *shpyrdv1.GitSource `json:"git,omitempty"`
 	SubPath string              `json:"subPath,omitempty"`
 	Image   string              `json:"image,omitempty"`
+	// Blob is an archive uploaded to POST /api/sources (the CLI's local
+	// deploy): the third kind of source.
+	Blob *shpyrdv1.BlobSource `json:"blob,omitempty"`
 	// Strategy selects "buildpacks" or "dockerfile" for source deploys;
 	// empty keeps the app's current setting.
 	Strategy string `json:"strategy,omitempty"`
 	// Dockerfile is the path inside the directory (dockerfile strategy).
 	Dockerfile string `json:"dockerfile,omitempty"`
+
+	// What shpyrd.yaml declares travels with the deploy (RFC-0052: the CLI
+	// speaks the API, the server owns the objects). A field left out keeps
+	// the app's current value; Build replaces the build settings whole.
+	Build     *shpyrdv1.Build             `json:"build,omitempty"`
+	Processes map[string]shpyrdv1.Process `json:"processes,omitempty"`
+	Domains   []string                    `json:"domains,omitempty"`
+	Globals   *shpyrdv1.Globals           `json:"globals,omitempty"`
+	Exposure  string                      `json:"exposure,omitempty"`
+	Allow     []shpyrdv1.AllowEntry       `json:"allow,omitempty"`
+	// Note is the release description ("Deploy image x", a commit line).
+	Note string `json:"note,omitempty"`
 }
 
 func (s *Server) deployApp(c *gin.Context) {
@@ -437,20 +458,43 @@ func (s *Server) deployApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if (req.Git == nil || req.Git.URL == "") && req.Image == "" {
-		abort(c, http.StatusBadRequest, errors.New("provide git.url or image"))
+	hasGit := req.Git != nil && req.Git.URL != ""
+	hasBlob := req.Blob != nil && req.Blob.URL != ""
+	sources := 0
+	for _, has := range []bool{hasGit, hasBlob, req.Image != ""} {
+		if has {
+			sources++
+		}
+	}
+	if sources == 0 {
+		abort(c, http.StatusBadRequest, errors.New("provide git.url, blob or image"))
+		return
+	}
+	if sources > 1 {
+		abort(c, http.StatusBadRequest, errors.New("git, blob and image are mutually exclusive"))
+		return
+	}
+	if err := validateDeployRequest(&req); err != nil {
+		abort(c, http.StatusBadRequest, err)
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
-		if req.Image != "" {
+		switch {
+		case req.Image != "":
 			a.Spec.Image = req.Image
-			return nil
+		case hasGit:
+			a.Spec.Image = ""
+			if req.Git.Revision == "" {
+				req.Git.Revision = "main"
+			}
+			a.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
+		case hasBlob:
+			a.Spec.Image = ""
+			a.Spec.Source = &shpyrdv1.Source{Blob: req.Blob, SubPath: req.SubPath}
 		}
-		a.Spec.Image = ""
-		if req.Git.Revision == "" {
-			req.Git.Revision = "main"
+		if req.Build != nil {
+			a.Spec.Build = req.Build
 		}
-		a.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
 		switch req.Strategy {
 		case "":
 		case shpyrdv1.StrategyBuildpacks, shpyrdv1.StrategyDockerfile:
@@ -458,11 +502,45 @@ func (s *Server) deployApp(c *gin.Context) {
 				a.Spec.Build = &shpyrdv1.Build{}
 			}
 			a.Spec.Build.Strategy = req.Strategy
-			if req.Strategy == shpyrdv1.StrategyDockerfile {
+			if req.Strategy == shpyrdv1.StrategyDockerfile && req.Dockerfile != "" {
 				a.Spec.Build.Dockerfile = req.Dockerfile
 			}
-		default:
-			return fmt.Errorf("strategy must be buildpacks or dockerfile")
+		}
+		if req.Processes != nil {
+			// Replicas of processes that already exist survive a redeclared
+			// process list unless the request says otherwise.
+			for name, p := range req.Processes {
+				if p.Replicas == nil {
+					if cur, ok := a.Spec.Processes[name]; ok {
+						p.Replicas = cur.Replicas
+					}
+				}
+				if p.Size == "" {
+					if cur, ok := a.Spec.Processes[name]; ok {
+						p.Size = cur.Size
+					}
+				}
+				req.Processes[name] = p
+			}
+			a.Spec.Processes = req.Processes
+		}
+		if req.Domains != nil {
+			a.Spec.Domains = req.Domains
+		}
+		if req.Globals != nil {
+			a.Spec.Globals = req.Globals
+		}
+		if req.Exposure != "" {
+			a.Spec.Exposure = req.Exposure
+		}
+		if req.Allow != nil {
+			a.Spec.Allow = req.Allow
+		}
+		if req.Note != "" {
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[shpyrdv1.AnnotationReleaseNote] = req.Note
 		}
 		return nil
 	})
@@ -470,8 +548,43 @@ func (s *Server) deployApp(c *gin.Context) {
 		return
 	}
 	s.audit(c, app.Name, "deploy", app.Name, deployDetail(req))
-	c.JSON(http.StatusAccepted, summarize(app))
+	c.JSON(http.StatusAccepted, detail(app, s.buildsByDigest(c.Request.Context(), app)))
 }
+
+// validateDeployRequest checks the declared fields before anything is
+// written, with shpyrd.yaml's wording since that is where they come from.
+func validateDeployRequest(req *DeployRequest) error {
+	switch req.Strategy {
+	case "", shpyrdv1.StrategyBuildpacks, shpyrdv1.StrategyDockerfile:
+	default:
+		return fmt.Errorf("strategy must be buildpacks or dockerfile, got %q", req.Strategy)
+	}
+	if req.Build != nil {
+		switch req.Build.Strategy {
+		case "", shpyrdv1.StrategyBuildpacks, shpyrdv1.StrategyDockerfile:
+		default:
+			return fmt.Errorf("build.strategy must be buildpacks or dockerfile, got %q", req.Build.Strategy)
+		}
+	}
+	switch req.Exposure {
+	case "", "external", "internal":
+	default:
+		return fmt.Errorf("exposure must be external or internal, got %q", req.Exposure)
+	}
+	for name, p := range req.Processes {
+		if !processName.MatchString(name) {
+			return fmt.Errorf("process %q: use lowercase letters, digits and dashes", name)
+		}
+		for _, m := range p.Volumes {
+			if m.Name == "" || m.Path == "" {
+				return fmt.Errorf("process %s: volumes need name and path", name)
+			}
+		}
+	}
+	return nil
+}
+
+var processName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 
 // deleteApp removes the app namespace, which cascades to everything in it.
 func (s *Server) deleteApp(c *gin.Context) {

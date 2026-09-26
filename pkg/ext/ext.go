@@ -127,6 +127,33 @@ type OIDCProvider struct {
 }
 
 // CLIGlobals gives extension commands access to the CLI's connection flags.
+// Audience of an extension's CLI command: which binary carries it
+// (RFC-0052). Developers use `shpyrd` for what lives in a project; the
+// operator uses `shpyrd-ctl` for the platform. Commands without the
+// annotation are the developer's.
+const (
+	AnnotationAudience = "shpyrd.io/audience"
+	AudienceDeveloper  = "developer"
+	AudienceOperator   = "operator"
+)
+
+// ForOperator marks a command as the operator's (`shpyrd-ctl`).
+func ForOperator(c *cobra.Command) *cobra.Command {
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[AnnotationAudience] = AudienceOperator
+	return c
+}
+
+// Audience reports who a command is for.
+func Audience(c *cobra.Command) string {
+	if c.Annotations[AnnotationAudience] == AudienceOperator {
+		return AudienceOperator
+	}
+	return AudienceDeveloper
+}
+
 type CLIGlobals interface {
 	Kubeconfig() string
 	Context() string

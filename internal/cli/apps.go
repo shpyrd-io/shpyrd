@@ -65,31 +65,53 @@ the app receives who they are. --public makes it a site anyone can open;
 			if err != nil {
 				return err
 			}
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-				Name:   appNamespace(slug),
-				Labels: project.NamespaceLabels(project.DefaultWorkspace, slug),
-			}}
-			if err := ac.c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("create namespace: %w", err)
-			}
 			access := shpyrdv1.AccessAuthenticated
 			if public {
 				access = shpyrdv1.AccessPublic
 			}
-			app := &shpyrdv1.App{
-				ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: ns.Name},
-				Spec:       shpyrdv1.AppSpec{Domains: domains, Access: access},
-			}
-			project.SetDisplayName(app, name)
-			if err := ac.c.Create(ctx, app); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("project %q already exists; choose another slug, for example --slug %s-2", slug, slug)
-				}
-				return fmt.Errorf("create project: %w", err)
-			}
-			ac.audit(ctx, slug, "project.create", project.Label(app), "")
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Created project %s\n", project.Label(app))
+			var label string
+			if ac.session {
+				// Signed in through the API (shpyrd login): the server creates
+				// the project in the workspace the session belongs to.
+				body, _ := json.Marshal(api.CreateAppRequest{Name: name, Slug: slug, Domains: domains, Access: access})
+				raw, err := ac.serverRequest(ctx, "POST", "api/projects", body, "application/json")
+				if err != nil {
+					return err
+				}
+				var created struct {
+					Slug        string `json:"slug"`
+					DisplayName string `json:"displayName"`
+				}
+				_ = json.Unmarshal(raw, &created)
+				slug = firstNonEmpty(created.Slug, slug)
+				label = firstNonEmpty(created.DisplayName, name)
+				if label != slug {
+					label += " (" + slug + ")"
+				}
+			} else {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+					Name:   appNamespace(slug),
+					Labels: project.NamespaceLabels(project.DefaultWorkspace, slug),
+				}}
+				if err := ac.c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+					return fmt.Errorf("create namespace: %w", err)
+				}
+				app := &shpyrdv1.App{
+					ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: ns.Name, Labels: project.NamespaceLabels(project.DefaultWorkspace, slug)},
+					Spec:       shpyrdv1.AppSpec{Domains: domains, Access: access},
+				}
+				project.SetDisplayName(app, name)
+				if err := ac.c.Create(ctx, app); err != nil {
+					if apierrors.IsAlreadyExists(err) {
+						return fmt.Errorf("project %q already exists; choose another slug, for example --slug %s-2", slug, slug)
+					}
+					return fmt.Errorf("create project: %w", err)
+				}
+				ac.audit(ctx, slug, "project.create", project.Label(app), "")
+				label = project.Label(app)
+			}
+			fmt.Fprintf(out, "Created project %s\n", label)
 			if public {
 				fmt.Fprintln(out, "Anyone on the internet can open it (public). `shpyrd access set authenticated` closes it.")
 			} else {

@@ -278,6 +278,18 @@ type appClient struct {
 	k   *kube.Client
 	c   client.Client
 	out io.Writer
+	// session says the CLI is signed in through the API (shpyrd login) and
+	// has no cluster: k and c refuse every call with errNoCluster.
+	session bool
+}
+
+// serverRequest sends a request to the workspace API through whichever
+// transport this client has (the login session, or the kubeconfig proxy).
+func (a *appClient) serverRequest(ctx context.Context, method, path string, body []byte, contentType string) ([]byte, error) {
+	if a.session {
+		return serverRequest(ctx, nil, method, path, body, contentType)
+	}
+	return serverRequest(ctx, a.k, method, path, body, contentType)
 }
 
 func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {
@@ -286,16 +298,18 @@ func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {
 	// (controller-runtime client) still need a kubeconfig; they will return
 	// an error explaining what is missing.
 	sessions := loadSessions()
-	hasSession := os.Getenv("SHPYRD_TOKEN") != ""
-	if !hasSession {
-		for _, sess := range sessions.Sessions {
-			if sess.Token != "" {
-				hasSession = true
-			}
+	explicitCluster := g.kubeconfig != "" || g.kubeCtx != ""
+	if !explicitCluster {
+		if os.Getenv("SHPYRD_TOKEN") != "" || sessions.active() != nil {
+			// Signed in through the API: commands that still talk to the
+			// cluster directly get a sentence, not a nil pointer.
+			return &appClient{k: noClusterKube(), c: noCluster{}, session: true, out: out}, nil
 		}
-	}
-	if hasSession && g.kubeconfig == "" && g.kubeCtx == "" {
-		return &appClient{k: nil, c: nil, out: out}, nil
+		if len(sessions.Sessions) > 1 {
+			// Several workspaces, none chosen: do not guess, and do not fall
+			// back to whatever the kubeconfig points at.
+			return nil, errors.New("you are signed in to several workspaces: pick one with `shpyrd use <workspace URL>` (or set SHPYRD_URL), or name a cluster with --context")
+		}
 	}
 	k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
 	if err != nil {

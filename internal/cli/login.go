@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -25,7 +26,39 @@ import (
 const sessionsFileName = "sessions.json"
 
 type loginSessions struct {
+	// Current is the workspace commands talk to when several sessions are
+	// saved: the last `shpyrd login`, or what `shpyrd use` picked.
+	Current  string                   `json:"current,omitempty"`
 	Sessions map[string]*loginSession `json:"sessions"` // keyed by normalised workspace URL
+}
+
+// active is the session commands use: SHPYRD_URL when set (and signed in
+// there), else Current, else the only session there is. Nil when none.
+func (s *loginSessions) active() *loginSession {
+	if env := os.Getenv("SHPYRD_URL"); env != "" {
+		if norm, err := normaliseURL(env); err == nil {
+			if sess, ok := s.Sessions[norm]; ok {
+				return sess
+			}
+		}
+	}
+	if sess, ok := s.Sessions[s.Current]; ok && s.Current != "" {
+		return sess
+	}
+	if len(s.Sessions) == 1 {
+		for _, sess := range s.Sessions {
+			return sess
+		}
+	}
+	return nil
+}
+
+// activeURL is the URL of the active session, "" when none.
+func (s *loginSessions) activeURL() string {
+	if sess := s.active(); sess != nil {
+		return sess.URL
+	}
+	return ""
 }
 
 type loginSession struct {
@@ -142,6 +175,15 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				return err
 			}
 			if token == "" {
+				// Already signed in there: make it the current workspace.
+				if s := loadSessions(); s.Sessions[norm] != nil {
+					s.Current = norm
+					if err := s.save(); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
+					return nil
+				}
 				return errors.New("--token is required; the browser device flow is not yet implemented.\nRun `shpyrd cluster token --context <ctx>` to get the admin token and pass it here.")
 			}
 			// Verify the token works before saving.
@@ -151,6 +193,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			whoAmI := whoAmI(ctx, norm, token)
 			s := loadSessions()
 			s.Sessions[norm] = &loginSession{URL: norm, Token: token, SavedAt: time.Now(), WhoAmI: whoAmI}
+			s.Current = norm
 			if err := s.save(); err != nil {
 				return fmt.Errorf("save session: %w", err)
 			}
@@ -217,18 +260,24 @@ func newLogoutCmd(g *globalFlags) *cobra.Command {
 		Use:   "logout",
 		Short: "Remove saved credentials for a workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			s := loadSessions()
 			if wsURL == "" {
-				return errors.New("--url is required")
+				wsURL = s.activeURL()
+			}
+			if wsURL == "" {
+				return errors.New("--url is required (no current workspace)")
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
 				return err
 			}
-			s := loadSessions()
 			if _, ok := s.Sessions[norm]; !ok {
 				return fmt.Errorf("not signed in to %s", norm)
 			}
 			delete(s.Sessions, norm)
+			if s.Current == norm {
+				s.Current = ""
+			}
 			if err := s.save(); err != nil {
 				return err
 			}
@@ -249,14 +298,17 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 		Short: "Show the current user of a workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
+			s := loadSessions()
 			if wsURL == "" {
-				return errors.New("--url is required")
+				wsURL = s.activeURL()
+			}
+			if wsURL == "" {
+				return errors.New("not signed in: run `shpyrd login --url <workspace URL> --token <token>`")
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
 				return err
 			}
-			s := loadSessions()
 			sess, ok := s.Sessions[norm]
 			if !ok {
 				return fmt.Errorf("not signed in to %s; run `shpyrd login --url %s`", norm, norm)
@@ -318,7 +370,7 @@ pass it to shpyrd login --token.`,
 		sessions := loadSessions()
 		url := os.Getenv("SHPYRD_URL")
 		tok := os.Getenv("SHPYRD_TOKEN")
-		for _, sess := range sessions.Sessions {
+		if sess := sessions.active(); sess != nil {
 			if url == "" {
 				url = sess.URL
 			}
@@ -445,5 +497,59 @@ pass it to shpyrd login --token.`,
 		c.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
 	}
 	cmd.AddCommand(createCmd, listCmd, revokeCmd)
+	return cmd
+}
+
+// newUseCmd is `shpyrd use <url>`: pick which signed-in workspace commands
+// talk to. `shpyrd use` alone lists them.
+func newUseCmd(g *globalFlags) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "use [workspace URL]",
+		Short: "Choose the signed-in workspace commands talk to (no argument: list them)",
+		Long: `The CLI keeps one saved login per workspace. Commands talk to the current
+one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
+
+  shpyrd use                              # list the workspaces you are signed in to
+  shpyrd use https://acme.shpyrd.app      # switch`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			s := loadSessions()
+			if len(args) == 0 {
+				if len(s.Sessions) == 0 {
+					fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL> --token <token>")
+					return nil
+				}
+				active := s.activeURL()
+				urls := make([]string, 0, len(s.Sessions))
+				for u := range s.Sessions {
+					urls = append(urls, u)
+				}
+				sort.Strings(urls)
+				for _, u := range urls {
+					mark := "  "
+					if u == active {
+						mark = "* "
+					}
+					fmt.Fprintf(out, "%s%s  %s\n", mark, u, s.Sessions[u].WhoAmI)
+				}
+				return nil
+			}
+			norm, err := normaliseURL(args[0])
+			if err != nil {
+				return err
+			}
+			if _, ok := s.Sessions[norm]; !ok {
+				return fmt.Errorf("not signed in to %s; run `shpyrd login --url %s --token <token>`", norm, norm)
+			}
+			s.Current = norm
+			if err := s.save(); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
+			return nil
+		},
+	}
+	_ = g
 	return cmd
 }
