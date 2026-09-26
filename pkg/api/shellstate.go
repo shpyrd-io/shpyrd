@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 )
 
 // State behind the web terminal (RFC-0026): one-time tickets that

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 )
 
 func TestExecTicketOneShot(t *testing.T) {

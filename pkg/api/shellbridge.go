@@ -16,10 +16,10 @@ import (
 	"github.com/gorilla/websocket"
 	"k8s.io/client-go/tools/remotecommand"
 
-	"shpyrd/pkg/authz"
-	"shpyrd/pkg/ext"
-	"shpyrd/pkg/kexec"
-	project_ "shpyrd/pkg/project"
+	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/kexec"
+	project_ "github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // The WebSocket half of the web terminal (RFC-0026). Binary frames carry

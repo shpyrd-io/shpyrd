@@ -10,7 +10,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	kexec "k8s.io/client-go/util/exec"
 
-	"shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
 func TestRemoteExit(t *testing.T) {
