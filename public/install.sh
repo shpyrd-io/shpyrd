@@ -59,7 +59,8 @@ else
 fi
 [ "$expected" = "$actual" ] || die "checksum mismatch for $archive (expected $expected, got $actual)"
 
-tar -xzf "$tmp/$archive" -C "$tmp" shpyrd
+# Two binaries since v0.8.0: shpyrd (developers) and shpyrd-ctl (operators).
+tar -xzf "$tmp/$archive" -C "$tmp" shpyrd shpyrd-ctl 2>/dev/null || tar -xzf "$tmp/$archive" -C "$tmp" shpyrd
 
 if [ -z "$INSTALL_DIR" ]; then
   if [ -w /usr/local/bin ]; then
@@ -70,10 +71,15 @@ if [ -z "$INSTALL_DIR" ]; then
 fi
 mkdir -p "$INSTALL_DIR"
 install -m 0755 "$tmp/shpyrd" "$INSTALL_DIR/shpyrd"
-say "Installed $INSTALL_DIR/shpyrd ($("$INSTALL_DIR/shpyrd" version 2>/dev/null || echo "$VERSION"))"
+installed="$INSTALL_DIR/shpyrd"
+if [ -f "$tmp/shpyrd-ctl" ]; then
+  install -m 0755 "$tmp/shpyrd-ctl" "$INSTALL_DIR/shpyrd-ctl"
+  installed="$installed and $INSTALL_DIR/shpyrd-ctl"
+fi
+say "Installed $installed ($("$INSTALL_DIR/shpyrd" version 2>/dev/null || echo "$VERSION"))"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) say "Add $INSTALL_DIR to your PATH, for example: export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
 esac
-say "Next: shpyrd cluster create    (Docker required; https://shpyrd.io/docs/installation)"
+say "Next: shpyrd-ctl cluster create    (Docker required; https://shpyrd.io/docs/installation)"
