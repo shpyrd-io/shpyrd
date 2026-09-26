@@ -200,7 +200,7 @@ func newWorkspacesPlanCmd(g *globalFlags) *cobra.Command {
 	var clear bool
 	cmd := &cobra.Command{
 		Use:   "plan <slug>",
-		Short: "Set (or clear) a workspace's ceilings",
+		Short: "Set a workspace's ceilings (those not given keep their value; --clear removes all)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
