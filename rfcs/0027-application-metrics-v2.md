@@ -80,9 +80,15 @@ invisible, and tooltips leak pod names.
   cannot disagree.
 - **Instances that no longer exist.** A pod in the metric data but absent from the live pod
   list was replaced during the window. Each becomes its own series labelled `replaced 1`,
-  `replaced 2`, … in order of first appearance — never a pod name (RFC-0011). They are
-  hidden behind an "Include replaced instances" toggle, off by default, because a week of a
-  frequently deployed project would otherwise bury the live instances.
+  `replaced 2`, … — never a pod name (RFC-0011). They are hidden behind an "Include replaced
+  instances" toggle, off by default, because a week of a frequently deployed project would
+  otherwise bury the live instances. The numbering is assigned once per request, after every
+  chart has answered, over the union of the pods they returned, in one sorted order. What
+  that guarantees is worth stating exactly, because the first implementation claimed more:
+  within one response `replaced 2` is the same pod on every chart, and the same data numbers
+  the same way on the next poll. What it is not is an order anyone can read meaning into
+  (pod names end in a hash, so this is not "order of first appearance"), nor a number that
+  survives a change to the set — a replacement sorting earlier renumbers the ones after it.
 - **A known limitation, accepted deliberately.** Instance names are not stable over time:
   `labelRunningInstances` recomputes them from the live pod list on every reconcile, so when
   `web.1` goes away the surviving `web.2` is renamed `web.1`. Over a long range a series
@@ -159,14 +165,33 @@ invisible, and tooltips leak pod names.
   regardless, so the chart looked unfiltered on screen; with a single process selected and
   `by=process` its series are now named `"<process> in"`/`"<process> out"` — `directionOf`,
   `processOf` and `aggregate` were each checked against the new names and are unaffected (see
-  `pkg/api/metrics_test.go`). The Proposal's "which parameters each chart honours" bullet is
+  `pkg/api/metrics_test.go`; `processOf` itself was removed by the review pass below, which
+  is what stopped a series' process being read out of its name at all). The Proposal's "which parameters each chart honours" bullet is
   corrected to match: `process` is not limited to the pod-carrying charts the way `by` and
   `agg` are.
 
+- 2026-09-26: whole-branch review. The API half held — the backward-compatibility
+  constraint, no pod name on any path, `-race` clean — and a PromQL injection found earlier
+  in the pass was already fixed. Seven findings were fixed in one wave: three of them
+  (a replaced instance losing its reference, aggregation blending process types, `replaced N`
+  depending on which chart's goroutine reached a shared counter first) came down to reading
+  a series' identity back out of its display name, so the process and the pod now travel
+  with the series and the naming happens once per request after every chart has answered —
+  which is also what the "Instances that no longer exist" bullet above now describes
+  accurately. On the UI half, the allocation and burst lines were not rendering at all in
+  the common case (Recharts discards a `ReferenceLine` outside the Y domain, and the domain
+  was computed from the data alone), a project with two process sizes was told it had no
+  allocation set, and the "these controls do not apply" note was keyed off a list of chart
+  ids that missed the instances chart instead of off the `instanceCapable` the API already
+  sends. The default request's query text and response were diffed against the previous
+  commit and are unchanged.
+
 ## Implementation status
 
-Audited on 2026-09-26 against the cluster run above. Both gaps below were found or named
-during review, and were deliberately deferred rather than fixed on this branch.
+Audited on 2026-09-26 against the cluster run above, and re-audited after the whole-branch
+review. Every gap below was found or named during review and deliberately deferred rather
+than fixed on this branch; the list is meant to be complete, since the Status line claims
+gaps rather than silence about them.
 
 - **Known limitation, not a bug:** instance names are not stable over a long range — see
   "A known limitation, accepted deliberately" in Design Details, which explains why and what
@@ -176,7 +201,27 @@ during review, and were deliberately deferred rather than fixed on this branch.
   also requiring `label_shpyrd_io_process` to be non-empty, so a running Dockerfile-build
   pod in the same namespace (it carries `label_shpyrd_io_app` but no process label of its
   own process type) contributes its CPU and memory to a project's charts. Found during this
-  branch's cluster verification. Left unfixed because the fix changes the default query
-  text (`by=process`, no filters) that an earlier review certified byte-identical against a
-  hard backward-compatibility constraint; fixing it belongs to whichever task next touches
-  that constraint deliberately.
+  branch's cluster verification; two symptoms identified during review are what make it
+  load-bearing rather than cosmetic. In the default view `sum by (label_shpyrd_io_process)`
+  groups the build pod under the empty label value, which the handler renames `all` — a
+  phantom series indistinguishable from the no-requests fallback series of the same name. In
+  by-instance view the same pod is not an instance under the selector the Logs tab uses, so
+  it becomes a `replaced` series and is counted in the note: **every build makes a chart
+  claim "1 replaced instance hidden" when nothing was replaced.** Left unfixed because the
+  fix changes the default query text (`by=process`, no filters) that an earlier review
+  certified byte-identical against a hard backward-compatibility constraint. That
+  constraint is worth naming precisely, because it is what blocks the fix: byte-identical
+  query text is a proxy for an identical default *response*, which is the guarantee anyone
+  actually depends on, and adding `label_shpyrd_io_process!=""` changes the text while
+  changing the response only by removing series that should never have been in it. It is
+  the proxy that blocks this, not the goal. Fixing it belongs to whichever task next takes
+  the constraint itself on deliberately.
+
+- **Not built:** the instance subset. The Summary and the Proposal ask for "Instances (All,
+  or a subset)"; what shipped is a process filter plus a by-process / by-instance toggle,
+  with no way to isolate one instance — or three — out of forty. On a project at the
+  40-instance cap that leaves the charts hardest to read in exactly the case the RFC set out
+  to serve, one hot instance among many. Ruled out for now rather than overlooked, and it is
+  cheap when it comes: the shape that fits is click-to-isolate on the legend, which needs no
+  API change at all, since the API already returns one named series per instance and the
+  filtering would be entirely in the browser.
