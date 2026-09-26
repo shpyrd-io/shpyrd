@@ -98,6 +98,10 @@ spec:
               value: "${SHPYRD_FSS_MOUNT_TARGET}"
             - name: SHPYRD_PROFILE
               value: "${SHPYRD_PROFILE}"
+            # Cloud layer (RFC-0033 phase 8): the domain workspaces without
+            # an explicit address live under (acme.shpyrd.app).
+            - name: SHPYRD_WORKSPACES_DOMAIN
+              value: "${SHPYRD_WORKSPACES_DOMAIN}"
             - name: SHPYRD_INGRESS_CLASS_EXTERNAL
               value: "${SHPYRD_INGRESS_CLASS_EXTERNAL}"
             - name: SHPYRD_INGRESS_CLASS_INTERNAL
