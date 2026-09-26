@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	shpyrdv1 "shpyrd/api/v1alpha1"
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
 
 // The chart table for a project's Metrics tab. Kept apart from the handler
