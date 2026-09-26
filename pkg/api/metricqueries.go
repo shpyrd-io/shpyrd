@@ -96,8 +96,18 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 			},
 		},
 		{
+			// Deployments are named "<app>-<process>", which is what stripApp
+			// relies on to name a series, so the process is already in the
+			// label the query groups by — a filter here just narrows down to
+			// the one deployment rather than needing a join. That is also why
+			// this chart was missed when the process filter was scoped to
+			// "charts which carry a pod": it identifies a process by
+			// deployment name, not by a pod label, so the pod-based test for
+			// what to filter didn't catch it. instanceCapable stays false: a
+			// replica count is a single number, with nothing to break down per
+			// instance.
 			Chart:    Chart{ID: "instances", Title: "Instances", Unit: "count", Kind: "step"},
-			Query:    fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s"})`, ns),
+			Query:    instancesQuery(ns, name, opts.Process),
 			LabelKey: "deployment",
 			nameMap:  stripApp,
 		},
@@ -132,6 +142,15 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 			},
 		},
 	}
+}
+
+// instancesQuery builds the instances chart's query, constrained to one
+// deployment when a process is selected.
+func instancesQuery(ns, app, process string) string {
+	if process == "" {
+		return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s"})`, ns)
+	}
+	return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s",deployment="%s-%s"})`, ns, app, process)
 }
 
 // hostRegex builds a PromQL regex matching the app's ingress hosts.

@@ -256,7 +256,18 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 				ch.Error = err.Error()
 				return ch
 			}
-			ch.Series = append(ch.Series, Series{Name: n, Points: pts})
+			name := n
+			if ch.ID == "network" && opts.Process != "" {
+				// The query already filters to this one process (it joins the
+				// pod labels in whenever a process is selected), but "in" and
+				// "out" say nothing about that, so selecting a process left
+				// this chart looking unfiltered even though it wasn't. Latency
+				// and throughput share this Fixed shape but never carry a
+				// process, so the rename is scoped to network by chart ID
+				// rather than to every fixed-query chart.
+				name = opts.Process + " " + n
+			}
+			ch.Series = append(ch.Series, Series{Name: name, Points: pts})
 		}
 		nameInstances(&ch, namer, opts)
 		applyReference(&ch, allocs, opts)

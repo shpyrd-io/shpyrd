@@ -46,11 +46,15 @@ invisible, and tooltips leak pod names.
 - Only CPU, memory and network can be broken down by instance. Each chart reports whether
   it can (`instanceCapable`), and the UI disables the instance controls on the charts that
   cannot rather than accepting a parameter it will ignore.
-- Which parameters each chart honours, so that nothing is silently half-applied: `process`,
-  `by` and `agg` apply to CPU, memory and network, which carry a pod and therefore a
-  process; throughput and latency are measured at the edge and ignore all three. `mode`
-  applies to CPU and memory, the only charts expressed as a proportion of an allocation;
-  the rest are always absolute and ignore it.
+- Which parameters each chart honours, so that nothing is silently half-applied. `by` and
+  `agg` break a chart down per instance, which only CPU, memory and network can do, because
+  those are the ones that carry a pod; throughput and latency are measured at the edge and
+  ignore both. `process` is broader: CPU, memory and network honour it because they carry a
+  pod and therefore a process label, but so does instances, which identifies a process by
+  deployment name (`<app>-<process>`) instead of a pod label and constrains its query to that
+  one deployment — throughput and latency are still the only charts that ignore it. `mode`
+  applies to CPU and memory, the only charts expressed as a proportion of an allocation; the
+  rest are always absolute and ignore it.
 - Each **series** carries a `reference`: the allocation it is measured against in absolute
   mode (for example 64 MiB for a `shared-s` process), plus a `burst` when the size sets a
   higher CPU ceiling. It cannot live on the chart, because one chart draws several
@@ -145,6 +149,19 @@ invisible, and tooltips leak pod names.
   returned 0. `go test ./...`, `go vet ./...` and `go build ./...` pass; `cd ui && npm run
   build && npm run lint` pass. The Metrics tab itself was verified by UI build and lint
   only, not by rendering it in a browser.
+- 2026-09-26: manual test against the live cluster with `?process=worker` on a two-process
+  project found two gaps the plan's "carries a pod" test for the process filter had missed.
+  The instances chart ignored `process` outright: it groups by `deployment`, and deployments
+  are named `<app>-<process>`, so the process was already in the label the chart names its
+  series from — the fix constrains the query to that one deployment when `process` is set.
+  `instanceCapable` stays false; a replica count has no per-instance breakdown. Separately,
+  the network chart's query already filtered correctly but its series stayed named `in`/`out`
+  regardless, so the chart looked unfiltered on screen; with a single process selected and
+  `by=process` its series are now named `"<process> in"`/`"<process> out"` — `directionOf`,
+  `processOf` and `aggregate` were each checked against the new names and are unaffected (see
+  `pkg/api/metrics_test.go`). The Proposal's "which parameters each chart honours" bullet is
+  corrected to match: `process` is not limited to the pod-carrying charts the way `by` and
+  `agg` are.
 
 ## Implementation status
 

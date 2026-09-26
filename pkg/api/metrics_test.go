@@ -180,6 +180,15 @@ func TestMetricsByProcessIsTheDefault(t *testing.T) {
 	if rec.Queried("by (pod") {
 		t.Error("the default request grouped by pod")
 	}
+	// Task 9 touched the instances query and the network series names with no
+	// process selected; a regression in either would have slipped past this
+	// test if it only ever looked at memory.
+	if rec.Queried(`deployment="`) {
+		t.Error("the default instances query must not filter by deployment")
+	}
+	if net := chartByID(t, out, "network"); strings.Join(seriesNames(net), ",") != "in,out" {
+		t.Errorf("default network series = %v, want in,out unchanged", seriesNames(net))
+	}
 }
 
 func chartByID(t *testing.T, out MetricsResponse, id string) Chart {
@@ -468,6 +477,120 @@ func TestMetricsProcessFilterAndIgnoringCharts(t *testing.T) {
 		if strings.Contains(q, "nginx_ingress_controller_requests") && strings.Contains(q, "by (pod") {
 			t.Error("an edge query was grouped by pod")
 		}
+	}
+}
+
+// The owner's manual test found this: with a process selected, cpu, memory
+// and network series narrowed down but instances kept showing every process
+// type. Deployments are named "<app>-<process>", so the fix is a query
+// filter, not a client-side one — proven here by two answers that only the
+// filtered query text can tell apart.
+func TestMetricsInstancesChartHonoursProcess(t *testing.T) {
+	prom, rec := newFakeProm(t,
+		fakeAnswer{
+			Match: `deployment="shop-worker"`,
+			Series: []fakeSeries{
+				{Labels: map[string]string{"deployment": "shop-worker"}, Values: []Point{{1000, 3}}},
+			},
+		},
+		fakeAnswer{
+			Match: "kube_deployment_status_replicas_available",
+			Series: []fakeSeries{
+				{Labels: map[string]string{"deployment": "shop-web"}, Values: []Point{{1000, 2}}},
+				{Labels: map[string]string{"deployment": "shop-worker"}, Values: []Point{{1000, 3}}},
+			},
+		},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	// No process selected: every deployment still shows, query unfiltered.
+	out := getMetrics(t, s, "?range=1h")
+	inst := chartByID(t, out, "instances")
+	if strings.Join(seriesNames(inst), ",") != "web,worker" {
+		t.Fatalf("instances series = %v, want web,worker with no process filter", seriesNames(inst))
+	}
+	if inst.InstanceCapable {
+		t.Error("instances has no per-instance breakdown; instanceCapable must stay false")
+	}
+	if rec.Queried(`deployment="shop-`) {
+		t.Error("the default instances query must not filter by deployment")
+	}
+
+	// process=worker: the query itself is constrained to that one deployment,
+	// so only the worker series comes back.
+	out = getMetrics(t, s, "?range=1h&process=worker")
+	inst = chartByID(t, out, "instances")
+	if strings.Join(seriesNames(inst), ",") != "worker" {
+		t.Fatalf("instances series = %v, want only worker when process=worker", seriesNames(inst))
+	}
+}
+
+// The network chart already filters correctly when a process is selected —
+// its query joins the process label in — but both series were named "in" and
+// "out" regardless, so the chart looked unfiltered on screen. Selecting one
+// process, with the default by=process grouping, must rename the series.
+func TestMetricsNetworkNamesSeriesByProcess(t *testing.T) {
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{}, Values: []Point{{1000, 10}}},
+		}},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{}, Values: []Point{{1000, 20}}},
+		}},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&process=worker")
+	net := chartByID(t, out, "network")
+	if strings.Join(seriesNames(net), ",") != "worker in,worker out" {
+		t.Fatalf("network series = %v, want worker in and worker out with process=worker", seriesNames(net))
+	}
+
+	// With no process the query genuinely sums across every process, so
+	// naming it after one would be wrong; the series stay in/out.
+	out = getMetrics(t, s, "?range=1h")
+	net = chartByID(t, out, "network")
+	if strings.Join(seriesNames(net), ",") != "in,out" {
+		t.Fatalf("default network series = %v, want in,out", seriesNames(net))
+	}
+}
+
+// by=instance already names network series "<instance> in"/"<instance> out"
+// off the pod, a code path entirely separate from the by=process rename
+// above; selecting a process too must not double up the naming.
+func TestMetricsNetworkByInstanceIgnoresProcessNaming(t *testing.T) {
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-worker-live", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 10}}},
+		}},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-worker-live", "label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 20}}},
+		}},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "worker", "shop-worker-live", 5))
+
+	out := getMetrics(t, s, "?range=1h&by=instance&process=worker")
+	net := chartByID(t, out, "network")
+	if strings.Join(seriesNames(net), ",") != "worker.1 in,worker.1 out" {
+		t.Fatalf("network series = %v, want worker.1 in and worker.1 out, unchanged by the process-naming fix", seriesNames(net))
+	}
+}
+
+// directionOf and processOf are what nameInstances, applyReference and
+// aggregate lean on to read a series name back apart; the new
+// "<process> in"/"<process> out" shape must still parse through both.
+func TestMetricsNetworkProcessNamesParseThroughHelpers(t *testing.T) {
+	if got := directionOf("worker in"); got != "in" {
+		t.Errorf(`directionOf("worker in") = %q, want "in"`, got)
+	}
+	if got := directionOf("worker out"); got != "out" {
+		t.Errorf(`directionOf("worker out") = %q, want "out"`, got)
+	}
+	if got := processOf("worker in"); got != "worker" {
+		t.Errorf(`processOf("worker in") = %q, want "worker"`, got)
 	}
 }
 
