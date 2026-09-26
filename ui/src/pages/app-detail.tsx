@@ -1126,7 +1126,7 @@ function Metrics({ app }: { app: AppDetail }) {
         <p className="text-sm text-muted-foreground">
           {mode === "percent"
             ? "Traffic measured at the edge; CPU and memory as a percentage of each process's allocation. Orange dashed lines mark releases, the red line is 100%."
-            : "Traffic measured at the edge; CPU and memory in absolute units. Orange dashed lines mark releases; the red line marks a process's allocation and the amber line its burst ceiling, each shown only when every instance drawn agrees on one."}
+            : "Traffic measured at the edge; CPU and memory in absolute units. Orange dashed lines mark releases; a red line marks each allocation among the series drawn and an amber one each burst ceiling, labelled by process where they differ."}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={process} onValueChange={setProcess}>
@@ -1214,22 +1214,15 @@ function Metrics({ app }: { app: AppDetail }) {
       )}
       <div className="grid gap-4 md:grid-cols-2">
         {(m.data?.charts ?? []).map((c) => (
+          // Which charts the controls above do not reach is the API's own
+          // instanceCapable flag, which MetricChart now reads: naming the
+          // charts here instead both duplicated their ids and missed the
+          // instances chart, the case the project's owner reported.
           <MetricChart
             key={c.id}
             chart={c}
             range={range}
             releases={m.data?.releases}
-            // The edge charts (nginx-measured) never break down by process or
-            // instance, whatever the controls above are set to — say so here
-            // rather than disabling controls that do apply to every other
-            // chart on the tab.
-            subtitle={
-              c.id === "throughput"
-                ? "requests per second by response class — measured at the edge, so process and instance controls don't apply"
-                : c.id === "latency"
-                  ? "response time percentiles at the edge — process and instance controls don't apply"
-                  : undefined
-            }
           />
         ))}
         {m.isLoading &&
