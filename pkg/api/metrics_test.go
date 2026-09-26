@@ -217,3 +217,87 @@ func TestMetricsRanges(t *testing.T) {
 		t.Error("the 400 should name the ranges that are allowed, including 15m")
 	}
 }
+
+func TestMetricsTotalModeCarriesTheAllocation(t *testing.T) {
+	prom, rec := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"label_shpyrd_io_process": "web"}, Values: []Point{{1000, 33554432}}},
+		},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&mode=total")
+	mem := chartByID(t, out, "memory")
+	if mem.Unit != "bytes" {
+		t.Errorf("memory unit in total mode = %q, want bytes", mem.Unit)
+	}
+	if len(mem.Series) != 1 {
+		t.Fatalf("series = %+v", mem.Series)
+	}
+	// shared-s is 64Mi, so the line the UI draws is 67108864 bytes.
+	if mem.Series[0].Reference != 67108864 {
+		t.Errorf("reference = %v, want 67108864 (64Mi for shared-s)", mem.Series[0].Reference)
+	}
+	// Absolute mode must not divide by the request.
+	if rec.Queried("kube_pod_container_resource_requests") {
+		t.Error("total mode divided by the request")
+	}
+
+	// Percentage stays the default and keeps dividing by the request.
+	out = getMetrics(t, s, "?range=1h")
+	mem = chartByID(t, out, "memory")
+	if mem.Unit != "%" {
+		t.Errorf("default memory unit = %q, want %%", mem.Unit)
+	}
+	if mem.Series[0].Reference != 0 {
+		t.Error("percentage mode needs no reference; 100% is the line")
+	}
+}
+
+func TestMetricsTotalModeIgnoredOnAbsoluteCharts(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match:  "nginx_ingress_controller_requests",
+		Series: []fakeSeries{{Labels: map[string]string{"class": "2xx"}, Values: []Point{{1000, 5}}}},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&mode=total")
+	tp := chartByID(t, out, "throughput")
+	if tp.Unit != "rps" {
+		t.Errorf("throughput unit = %q; mode must not touch charts that are always absolute", tp.Unit)
+	}
+	for _, sr := range tp.Series {
+		if sr.Reference != 0 {
+			t.Errorf("throughput series %q got a reference; it has no allocation", sr.Name)
+		}
+	}
+}
+
+// Review Focus 2: the size was renamed or removed from the catalog after the
+// project was deployed. The series must still render; only the line is lost.
+func TestMetricsUnknownSizeDropsOnlyTheReference(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"label_shpyrd_io_process": "web"}, Values: []Point{{1000, 1024}}},
+		},
+	})
+	app := metricsApp()
+	app.Spec.Processes["web"] = shpyrdv1.Process{Size: "size-that-was-deleted"}
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&mode=total")
+	mem := chartByID(t, out, "memory")
+	if mem.Error != "" {
+		t.Errorf("an unknown size must not fail the chart: %s", mem.Error)
+	}
+	if len(mem.Series) != 1 || len(mem.Series[0].Points) != 1 {
+		t.Fatalf("series lost with an unknown size: %+v", mem.Series)
+	}
+	if mem.Series[0].Reference != 0 {
+		t.Errorf("reference = %v, want 0 when the size is unknown", mem.Series[0].Reference)
+	}
+}

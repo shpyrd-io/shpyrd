@@ -13,16 +13,40 @@ import (
 // aggregation, percentage or absolute) and the table is worth keeping
 // declarative rather than branching inside the handler.
 
+// metricsOptions are the request's shaping parameters. The table reads them so
+// the handler does not have to branch per chart.
+type metricsOptions struct {
+	Mode string // percent (default) or total
+}
+
+// absolute reports whether this chart is expressed in its own units rather
+// than as a proportion of an allocation.
+func (o metricsOptions) absolute() bool { return o.Mode == "total" }
+
 // chartQueries defines the app dashboard, modelled on what Heroku, Fly,
 // Render and Railway show: throughput by status class, response time
 // percentiles, instance count, CPU and memory per process type, network.
-func chartQueries(app *shpyrdv1.App) []chartQuery {
+func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 	hosts := hostRegex(app)
 	ns := app.Namespace
 	name := app.Name
 	podLabels := fmt.Sprintf(`kube_pod_labels{namespace="%s",label_shpyrd_io_app="%s"}`, ns, name)
 	containers := fmt.Sprintf(`namespace="%s",container!="",container!="POD"`, ns)
 	stripApp := func(s string) string { return strings.TrimPrefix(s, name+"-") }
+
+	cpuQuery := fmt.Sprintf(`sum by (label_shpyrd_io_process) (rate(container_cpu_usage_seconds_total{%s}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, containers, podLabels)
+	cpuUnit := "cores"
+	if !opts.absolute() {
+		cpuQuery = fmt.Sprintf(`100 * %s / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, cpuQuery, containers, podLabels)
+		cpuUnit = "%"
+	}
+
+	memQuery := fmt.Sprintf(`sum by (label_shpyrd_io_process) (container_memory_working_set_bytes{%s} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, containers, podLabels)
+	memUnit := "bytes"
+	if !opts.absolute() {
+		memQuery = fmt.Sprintf(`100 * %s / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="memory"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, memQuery, containers, podLabels)
+		memUnit = "%"
+	}
 
 	return []chartQuery{
 		{
@@ -47,22 +71,19 @@ func chartQueries(app *shpyrdv1.App) []chartQuery {
 		{
 			// Usage as a percentage of the process allocation (the CPU
 			// request, i.e. the instance size), averaged over its instances.
-			// Shared sizes may burst above 100%. Falls back to raw cores when
-			// no requests exist.
-			Chart: Chart{ID: "cpu", Title: "CPU", Unit: "%", Kind: "line"},
-			Query: fmt.Sprintf(`100 * sum by (label_shpyrd_io_process) (rate(container_cpu_usage_seconds_total{%s}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`+
-				` / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`,
-				containers, podLabels, containers, podLabels),
+			// Shared sizes may burst above 100%. In total mode it is raw
+			// cores instead, which is also what it falls back to when no
+			// requests exist.
+			Chart:        Chart{ID: "cpu", Title: "CPU", Unit: cpuUnit, Kind: "line"},
+			Query:        cpuQuery,
 			LabelKey:     "label_shpyrd_io_process",
 			Fallback:     fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[2m]))`, containers),
 			FallbackName: "all",
 			FallbackUnit: "cores",
 		},
 		{
-			Chart: Chart{ID: "memory", Title: "Memory", Unit: "%", Kind: "line"},
-			Query: fmt.Sprintf(`100 * sum by (label_shpyrd_io_process) (container_memory_working_set_bytes{%s} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`+
-				` / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="memory"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`,
-				containers, podLabels, containers, podLabels),
+			Chart:        Chart{ID: "memory", Title: "Memory", Unit: memUnit, Kind: "line"},
+			Query:        memQuery,
 			LabelKey:     "label_shpyrd_io_process",
 			Fallback:     fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, containers),
 			FallbackName: "all",

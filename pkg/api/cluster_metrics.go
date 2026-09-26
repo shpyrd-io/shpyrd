@@ -164,7 +164,7 @@ func (s *Server) clusterMetrics(c *gin.Context) {
 		cwg.Add(1)
 		go func(i int, q chartQuery) {
 			defer cwg.Done()
-			out.Charts[i] = s.runChart(ctx, q, start, end, step)
+			out.Charts[i] = s.runChart(ctx, q, start, end, step, nil, metricsOptions{})
 		}(i, q)
 	}
 	cwg.Wait()

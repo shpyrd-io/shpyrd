@@ -51,9 +51,11 @@ invisible, and tooltips leak pod names.
   process; throughput and latency are measured at the edge and ignore all three. `mode`
   applies to CPU and memory, the only charts expressed as a proportion of an allocation;
   the rest are always absolute and ignore it.
-- Each chart carries a `reference`: the value and label of the allocation line (for example
-  `Allocated 64 MiB`). Where a size also has a CPU limit or burst ceiling, that is a second,
-  higher line.
+- Each **series** carries a `reference`: the allocation it is measured against in absolute
+  mode (for example 64 MiB for a `shared-s` process), plus a `burst` when the size sets a
+  higher CPU ceiling. It cannot live on the chart, because one chart draws several
+  processes and they may have different sizes. In percentage mode neither is set: the line
+  is 100%.
 - UI controls: Instances (All, or a subset), Aggregation, Percentage / Total. Release
   markers stay.
 - Percentage is relative to the process's request, which is the allocation the project pays
