@@ -30,6 +30,7 @@ func NewCtl() *cobra.Command {
 	root.AddCommand(newExtensionsCmd(g))
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
+	root.AddCommand(newWorkspacesCmd(g)) // RFC-0033 phase 8: servers with the workspaces capability
 	// Extension commands (auth, pg, redis, object-storage …) for operators.
 	for _, x := range all.All() {
 		for _, c := range x.CLI(g) {

@@ -170,8 +170,10 @@ func run(o runOptions, logger *slog.Logger) error {
 	defer st.Close()
 
 	// The RBAC mirror runs in the controller manager; the API pokes it
-	// after every team or grant write.
+	// after every team or grant write. The workspace reconciler publishes
+	// front doors; the API pokes it when a workspace changes.
 	memberships := &controller.MembershipReconciler{Store: st}
+	workspaces := &controller.WorkspaceReconciler{Store: st}
 
 	// The open-source platform resolves every host to its one workspace.
 	// SHPYRD_DEV_TENANCY=address switches to host-based resolution for
@@ -195,6 +197,11 @@ func run(o runOptions, logger *slog.Logger) error {
 		MembershipChanged: func() {
 			if o.controller {
 				memberships.Notify()
+			}
+		},
+		WorkspacesChanged: func() {
+			if o.controller {
+				workspaces.Notify()
 			}
 		},
 		UI:             ui.Dist(),
@@ -239,7 +246,7 @@ func run(o runOptions, logger *slog.Logger) error {
 
 	if o.controller {
 		runControllers := func() error {
-			mgr, err := newManager(k, o, memberships)
+			mgr, err := newManager(k, o, memberships, workspaces)
 			if err != nil {
 				return err
 			}
@@ -324,7 +331,7 @@ func openStore(logger *slog.Logger, k *kube.Client, domain string) (store.Store,
 	return st, nil
 }
 
-func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler) (ctrl.Manager, error) {
+func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler) (ctrl.Manager, error) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, err
@@ -410,14 +417,14 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	}
 	// Front doors of explicit workspaces (RFC-0033 phase 6); nothing to do
 	// while there is one workspace.
-	workspaces := &controller.WorkspaceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Store: memberships.Store, Config: rec.Config}
+	workspaces.Client, workspaces.Scheme, workspaces.Config = mgr.GetClient(), mgr.GetScheme(), rec.Config
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}
 	if err := mgr.Add(workspaces); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}
-	deps := ext.Deps{Kube: k, Client: mgr.GetClient(), SystemNamespace: k.Namespace, Vars: os.Getenv}
+	deps := ext.Deps{Kube: k, Client: mgr.GetClient(), SystemNamespace: k.Namespace, Vars: os.Getenv, Store: memberships.Store, WorkspacesChanged: workspaces.Notify}
 	for _, x := range enabledExts {
 		if err := x.Register(mgr, deps); err != nil {
 			return nil, fmt.Errorf("extension %s: %w", x.Name(), err)

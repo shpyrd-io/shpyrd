@@ -76,6 +76,10 @@ type Options struct {
 	// RealmProvider). Defaults to every configured method for every
 	// workspace.
 	Realms Realms
+	// WorkspacesChanged is called after a workspace is created or changed
+	// so its front door is published at once; nil when this replica runs
+	// no controllers.
+	WorkspacesChanged func()
 	// Capabilities names what this server offers beyond the core
 	// ("workspaces", "billing", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
@@ -263,7 +267,7 @@ func (s *Server) deps() ext.Deps {
 	if s.kube != nil && s.kube.Namespace != "" {
 		ns = s.kube.Namespace
 	}
-	return ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp}
+	return ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged}
 }
 
 // routeGroups implements ext.Router.

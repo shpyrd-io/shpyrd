@@ -7,6 +7,7 @@ package ext
 
 import (
 	"context"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
@@ -76,6 +77,13 @@ type Deps struct {
 	Vars func(name string) string
 	// Auth registers login providers with the server (RFC-0007).
 	Auth AuthRegistry
+	// Store is the control-plane database (RFC-0033): workspaces, people,
+	// teams, grants. Nil when the extension runs without one (tests).
+	Store store.Store
+	// WorkspacesChanged asks the platform to publish workspaces now (front
+	// doors, RFC-0033 phase 6) instead of at the next timer; nil when this
+	// replica runs no controllers.
+	WorkspacesChanged func()
 }
 
 // Var reads an install variable, "" when none is configured.
