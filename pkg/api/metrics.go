@@ -51,8 +51,11 @@ var rangeOptions = map[string]time.Duration{
 	"7d":  7 * 24 * time.Hour,
 }
 
-// stepFor keeps every range at 60 points: enough shape to read, few enough
-// that a week of per-instance series stays a response a browser can chart.
+// stepFor returns a step duration that targets ~60 points per range, but
+// floors to one minute to avoid sub-minute intervals that don't benefit from
+// higher precision. Ranges shorter than an hour therefore yield fewer points
+// (15m and 1h both use a 60-second step), which is an acceptable trade-off
+// to keep weeks of per-instance series in a response a browser can chart.
 func stepFor(d time.Duration) time.Duration {
 	step := d / 60
 	if step < time.Minute {

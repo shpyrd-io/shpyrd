@@ -191,7 +191,10 @@ func TestMetricsRanges(t *testing.T) {
 
 	// Every documented range is accepted, and the step keeps the number of
 	// points per series in a range a chart can actually draw.
-	for _, tc := range []struct{ rng string; wantStep int }{
+	for _, tc := range []struct {
+		rng      string
+		wantStep int
+	}{
 		{"15m", 60},
 		{"1h", 60},
 		{"6h", 360},
@@ -206,10 +209,11 @@ func TestMetricsRanges(t *testing.T) {
 			t.Errorf("range %s step = %d, want %d", tc.rng, out.Step, tc.wantStep)
 		}
 	}
-	if rec := do(t, s, "GET", "/api/projects/shop/metrics?range=30s", "", true); rec.Code != http.StatusBadRequest {
+	rec := do(t, s, "GET", "/api/projects/shop/metrics?range=30s", "", true)
+	if rec.Code != http.StatusBadRequest {
 		t.Errorf("range=30s: %d, want 400", rec.Code)
 	}
-	if !strings.Contains(do(t, s, "GET", "/api/projects/shop/metrics?range=30s", "", true).Body.String(), "15m") {
+	if !strings.Contains(rec.Body.String(), "15m") {
 		t.Error("the 400 should name the ranges that are allowed, including 15m")
 	}
 }
