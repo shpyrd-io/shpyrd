@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -279,8 +280,8 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 		}
 		ch.Series = append(ch.Series, Series{Name: name, Points: r.Points})
 	}
-	nameInstances(&ch, namer, opts)
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
+	nameInstances(&ch, namer, opts)
 	applyReference(&ch, allocs, opts)
 	return ch
 }
@@ -301,7 +302,20 @@ func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions
 	if !opts.byInstance() || !ch.InstanceCapable {
 		return
 	}
-	kept := make([]Series, 0, len(ch.Series))
+	// Number the replaced pods off a stable order first: Prometheus promises no
+	// particular order, and every chart's goroutine shares the namer, so
+	// "replaced 1" must not depend on which chart's answer arrived first.
+	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
+	// A series carries its ordering key alongside it, because neither the
+	// ordinal nor a live instance's precedence survives in the name as a plain
+	// string sort would read it.
+	type ordered struct {
+		Series
+		replaced bool
+		process  string
+		ordinal  int
+	}
+	kept := make([]ordered, 0, len(ch.Series))
 	hidden := map[string]bool{}
 	for _, sr := range ch.Series {
 		pod, suffix := sr.Name, ""
@@ -309,28 +323,74 @@ func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions
 			pod, suffix = pod[:i], pod[i:]
 		}
 		name := namer(pod)
-		if strings.HasPrefix(name, replacedPrefix) && !opts.Replaced {
+		replaced := strings.HasPrefix(name, replacedPrefix)
+		if replaced && !opts.Replaced {
 			hidden[name] = true
 			continue
 		}
 		sr.Name = name + suffix
-		kept = append(kept, sr)
+		process, ordinal := splitInstance(name)
+		kept = append(kept, ordered{Series: sr, replaced: replaced, process: process, ordinal: ordinal})
 	}
-	sort.Slice(kept, func(i, j int) bool { return kept[i].Name < kept[j].Name })
+	// Live instances first, so the cap can never drop one in favour of a pod
+	// that no longer exists — asking to see the replaced ones must not cost the
+	// series that matter. Then by process, then by ordinal as a number, because
+	// a string sort puts web.10 before web.2 and would make both the legend and
+	// the cap's choice of survivors look arbitrary. The name breaks the last
+	// tie, which is the network chart's two directions.
+	sort.SliceStable(kept, func(i, j int) bool {
+		a, b := kept[i], kept[j]
+		switch {
+		case a.replaced != b.replaced:
+			return !a.replaced
+		case a.process != b.process:
+			return a.process < b.process
+		case a.ordinal != b.ordinal:
+			return a.ordinal < b.ordinal
+		}
+		return a.Name < b.Name
+	})
 	over := 0
 	if len(kept) > maxInstanceSeries {
 		over = len(kept) - maxInstanceSeries
 		kept = kept[:maxInstanceSeries]
 	}
-	ch.Series = kept
-	switch {
-	case len(hidden) > 0 && over > 0:
-		ch.Note = fmt.Sprintf("%d replaced instances hidden, %d more not shown", len(hidden), over)
-	case len(hidden) > 0:
-		ch.Note = fmt.Sprintf("%d replaced instances hidden", len(hidden))
-	case over > 0:
-		ch.Note = fmt.Sprintf("%d more instances not shown", over)
+	ch.Series = make([]Series, 0, len(kept))
+	for _, k := range kept {
+		ch.Series = append(ch.Series, k.Series)
 	}
+	var parts []string
+	if len(hidden) > 0 {
+		parts = append(parts, plural(len(hidden), "replaced instance hidden", "replaced instances hidden"))
+	}
+	if over > 0 {
+		parts = append(parts, plural(over, "more instance not shown", "more instances not shown"))
+	}
+	ch.Note = strings.Join(parts, ", ")
+}
+
+// splitInstance takes an instance name apart for ordering: "web.10" is process
+// web, ordinal 10, and "replaced 3" is ordinal 3 with no process.
+func splitInstance(name string) (process string, ordinal int) {
+	if num, ok := strings.CutPrefix(name, replacedPrefix); ok {
+		n, _ := strconv.Atoi(num)
+		return "", n
+	}
+	if i := strings.LastIndexByte(name, '.'); i > 0 {
+		if n, err := strconv.Atoi(name[i+1:]); err == nil {
+			return name[:i], n
+		}
+	}
+	return name, 0
+}
+
+// plural counts a noun, because "1 replaced instances hidden" reads like a bug
+// in the page rather than a note about the data.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // replacedPrefix names an instance that is no longer live. It is a prefix

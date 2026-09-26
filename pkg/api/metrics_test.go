@@ -371,15 +371,15 @@ func TestMetricsReplacedInstances(t *testing.T) {
 	if strings.Join(seriesNames(mem), ",") != "web.1" {
 		t.Errorf("replaced instances must be hidden by default, got %v", seriesNames(mem))
 	}
-	if !strings.Contains(mem.Note, "replaced") {
-		t.Errorf("the chart should say a replaced instance was hidden, note = %q", mem.Note)
+	if mem.Note != "1 replaced instance hidden" {
+		t.Errorf("note = %q, want the singular \"1 replaced instance hidden\"", mem.Note)
 	}
 
 	out = getMetrics(t, s, "?range=1h&by=instance&replaced=true")
 	mem = chartByID(t, out, "memory")
 	names := seriesNames(mem)
-	if strings.Join(names, ",") != "replaced 1,web.1" {
-		t.Fatalf("series = %v, want replaced 1 and web.1", names)
+	if strings.Join(names, ",") != "web.1,replaced 1" {
+		t.Fatalf("series = %v, want web.1 ahead of replaced 1", names)
 	}
 	for _, n := range names {
 		if strings.Contains(n, "shop-web-gone") {
@@ -428,10 +428,16 @@ func TestMetricsInstanceSeriesAreCapped(t *testing.T) {
 	out := getMetrics(t, s, "?range=1h&by=instance")
 	mem := chartByID(t, out, "memory")
 	if len(mem.Series) != maxInstanceSeries {
-		t.Errorf("series = %d, want the cap of %d", len(mem.Series), maxInstanceSeries)
+		t.Fatalf("series = %d, want the cap of %d", len(mem.Series), maxInstanceSeries)
 	}
 	if !strings.Contains(mem.Note, "more") {
 		t.Errorf("the chart must report what it left out, note = %q", mem.Note)
+	}
+	// The ordinal is a number, not text: the cap keeps web.1 to web.40 rather
+	// than the lexicographic slice that would stop at web.19 and web.2.
+	names := seriesNames(mem)
+	if names[0] != "web.1" || names[1] != "web.2" || names[maxInstanceSeries-1] != fmt.Sprintf("web.%d", maxInstanceSeries) {
+		t.Errorf("series = %v, want web.1, web.2 ... web.%d in numeric order", names, maxInstanceSeries)
 	}
 }
 
@@ -504,5 +510,49 @@ func TestMetricsNetworkByInstanceKeepsTheDirection(t *testing.T) {
 	out = getMetrics(t, s, "?range=1h")
 	if net = chartByID(t, out, "network"); strings.Join(seriesNames(net), ",") != "in,out" {
 		t.Errorf("default network series = %v, want in,out", seriesNames(net))
+	}
+}
+
+// Asking for the replaced instances must never cost the live ones: the cap is
+// applied after an ordering that puts every live instance first. Without that,
+// a project with a cap's worth of churn would chart nothing but dead pods.
+func TestMetricsReplacedInstancesNeverDisplaceLiveOnes(t *testing.T) {
+	var series []fakeSeries
+	for i := 0; i < maxInstanceSeries; i++ {
+		series = append(series, fakeSeries{
+			Labels: map[string]string{"pod": fmt.Sprintf("shop-web-gone-%03d", i), "label_shpyrd_io_process": "web"},
+			Values: []Point{{1000, float64(i)}},
+		})
+	}
+	// Last in the data, so only the ordering can bring it to the front.
+	series = append(series, fakeSeries{
+		Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"},
+		Values: []Point{{1000, 99}},
+	})
+	prom, _ := newFakeProm(t, fakeAnswer{Match: "container_memory_working_set_bytes", Series: series})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	out := getMetrics(t, s, "?range=1h&by=instance&replaced=true")
+	mem := chartByID(t, out, "memory")
+	names := seriesNames(mem)
+	if len(names) != maxInstanceSeries {
+		t.Fatalf("series = %d, want the cap of %d", len(names), maxInstanceSeries)
+	}
+	if names[0] != "web.1" {
+		t.Errorf("series[0] = %q, want the live instance ahead of every replaced one", names[0])
+	}
+	for _, n := range names[1:] {
+		if !strings.HasPrefix(n, "replaced ") {
+			t.Errorf("series %q is live but sorted after a replaced one", n)
+		}
+	}
+	// Replaced instances are ordered by their own number too, so the one the cap
+	// drops is the last of them.
+	if names[1] != "replaced 1" || names[maxInstanceSeries-1] != fmt.Sprintf("replaced %d", maxInstanceSeries-1) {
+		t.Errorf("series = %v, want replaced 1 ... replaced %d", names, maxInstanceSeries-1)
+	}
+	if mem.Note != "1 more instance not shown" {
+		t.Errorf("note = %q, want the singular \"1 more instance not shown\"", mem.Note)
 	}
 }
