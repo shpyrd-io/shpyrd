@@ -74,10 +74,24 @@ export function MetricChart({
   const step = chart.kind === "step";
   const percent = chart.unit === "%";
   // In absolute mode the line is the allocation the series is measured
-  // against, which the API sends per series; every instance of a process
-  // shares it, so the first series that has one speaks for the chart.
-  const allocation = chart.series.find((s) => s.reference)?.reference ?? 0;
-  const burst = chart.series.find((s) => s.burst)?.burst ?? 0;
+  // against, which the API sends per series. That's only one number to draw
+  // when every series carrying a reference agrees on it — e.g. web is
+  // shared-s and worker is dedicated-m, a single line would be correct for
+  // only one of them. So we require agreement rather than picking the
+  // first, mirroring the server's own aggregate-instances rule (sum/avg/max
+  // drop the reference the same way when the underlying allocations differ).
+  const withReference = chart.series.filter((s) => s.reference);
+  const allocation =
+    withReference.length > 0 &&
+    withReference.every((s) => s.reference === withReference[0].reference)
+      ? (withReference[0].reference ?? 0)
+      : 0;
+  const withBurst = chart.series.filter((s) => s.burst);
+  const burst =
+    withBurst.length > 0 &&
+    withBurst.every((s) => s.burst === withBurst[0].burst)
+      ? (withBurst[0].burst ?? 0)
+      : 0;
   const subtitle = subtitleOverride ?? subtitles[chart.id];
   const hot = percent && last.some((l) => (l.v ?? 0) >= 85);
 
