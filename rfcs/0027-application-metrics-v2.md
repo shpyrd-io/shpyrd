@@ -92,11 +92,16 @@ invisible, and tooltips leak pod names.
   ingress controller's own pod (`controller_pod`) and the backend *service*, never the
   backend pod. Per-instance request rates would need application-side instrumentation,
   which is RFC-0029.
-- The reference line is the request, not a limit. Every size sets
-  `Limits.memory == Requests.memory`, so for memory the two are the same number; but shared
-  sizes set **no** CPU limit unless a burst is configured, so a line labelled "Limit" would
-  be fiction on `shared-s`, the default. Labelling it as the allocation matches both the
-  code and the wording the Metrics tab already uses.
+- The reference line is the request, not a limit. For memory every size sets
+  `Limits.memory == Requests.memory`, so there is nothing to choose between the two. For CPU
+  a shared size's limit is `BurstFactor` (4) times its request — every shared size has one,
+  unconditionally — so labelling that line "Limit" would tell someone their ceiling is 2
+  cores when they bought 0.5: it is a burst ceiling, not the allocation. That is why it is
+  drawn separately as `burst` and why the reference stays the request. Dedicated sizes set
+  the CPU limit equal to the request, which is why `burst` is zero for them. A practical
+  consequence worth stating plainly: because every shared size carries that 4x CPU limit, a
+  CPU chart in total mode for a shared-size process always draws a burst line — not an
+  occasional extra one.
 - Remove pod names from every tooltip and legend (RFC-0011).
 - `metrics.go` splits: the handler and the response types stay, and the chart table with its
   PromQL builders moves to `metricqueries.go`. `by` × `agg` × `mode` multiplies query
@@ -115,5 +120,6 @@ invisible, and tooltips leak pod names.
   carry no backend-pod label; instance naming happens in Go, because `kube_pod_annotations`
   is empty on a default install; replaced instances get their own labelled series, hidden by
   default, and instance names are knowingly unstable over long ranges; and the reference
-  line is the allocation rather than the "limit" the first draft named, since the default
-  shared size has no CPU limit at all.
+  line is the allocation rather than the "limit" the first draft named, since a shared size's
+  CPU limit is a 4x burst ceiling, not the allocation, and would mislabel what someone
+  actually bought.

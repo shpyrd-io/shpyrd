@@ -159,8 +159,14 @@ func (s *Server) appMetrics(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("mode must be percent or total"))
 		return
 	}
-	allocs := s.allocations(c.Request.Context(), app)
 	opts := metricsOptions{Mode: mode}
+	// Percent mode never draws a reference line (applyReference discards it
+	// on its first line), so skip the catalog fetch and a Resolve per
+	// process on the path every open Metrics tab repeats every 30 seconds.
+	var allocs map[string]allocation
+	if opts.absolute() {
+		allocs = s.allocations(c.Request.Context(), app)
+	}
 	queries := chartQueries(app, opts)
 	resp := MetricsResponse{Range: rng, Step: int(step.Seconds()), Charts: make([]Chart, len(queries)), Releases: []ReleaseMarker{}}
 	for _, r := range app.Status.Releases {
