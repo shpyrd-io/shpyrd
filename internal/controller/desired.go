@@ -38,6 +38,11 @@ type Config struct {
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
 	DashboardURL string
+	// WorkspaceCertIssuer is the ClusterIssuer for workspace front-door
+	// certificates; defaults to ClusterIssuer when empty. Use a DNS-01
+	// issuer so cert-manager's self-check does not need in-cluster DNS for
+	// the workspace's domain (shpyrd.app, not resolvable inside the cluster).
+	WorkspaceCertIssuer string
 	// HTTPSPort is the port users reach ingress on (443 unless kind maps another).
 	HTTPSPort string
 	// RegistryHost is where built images are pushed (host:port).

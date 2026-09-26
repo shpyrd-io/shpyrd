@@ -24,6 +24,11 @@ func NewCtl() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "path to the kubeconfig file")
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
+	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		// An explicit --context or --kubeconfig wins over a saved login
+		// session (same fix as New() in root.go).
+		preferKubeconfig = cmd.Flags().Changed("context") || cmd.Flags().Changed("kubeconfig")
+	}
 	root.CompletionOptions.HiddenDefaultCmd = true
 
 	root.AddCommand(newClusterCmd(g))

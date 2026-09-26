@@ -140,7 +140,11 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 			cert.SetLabels(mergeMaps(cert.GetLabels(), labels))
 			_ = unstructured.SetNestedField(cert.Object, name+"-tls", "spec", "secretName")
 			_ = unstructured.SetNestedStringSlice(cert.Object, []string{ws.Address}, "spec", "dnsNames")
-			_ = unstructured.SetNestedMap(cert.Object, map[string]interface{}{"kind": "ClusterIssuer", "name": r.Config.ClusterIssuer}, "spec", "issuerRef")
+			issuer := r.Config.WorkspaceCertIssuer
+			if issuer == "" {
+				issuer = r.Config.ClusterIssuer
+			}
+			_ = unstructured.SetNestedMap(cert.Object, map[string]interface{}{"kind": "ClusterIssuer", "name": issuer}, "spec", "issuerRef")
 			return nil
 		}); err != nil {
 			return fmt.Errorf("certificate for workspace %s: %w", ws.Slug, err)

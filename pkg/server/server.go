@@ -378,6 +378,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			HTTPSPort:            os.Getenv("SHPYRD_HTTPS_PORT"),
 			RegistryHost:         os.Getenv("SHPYRD_REGISTRY_HOST"),
 			ClusterIssuer:        os.Getenv("SHPYRD_CLUSTER_ISSUER"),
+			WorkspaceCertIssuer:  os.Getenv("SHPYRD_WORKSPACE_CERT_ISSUER"),
 			IngressClass:         os.Getenv("SHPYRD_INGRESS_CLASS"),
 			SystemNamespace:      k.Namespace,
 			BuildKitImage:        os.Getenv("SHPYRD_BUILDKIT_IMAGE"),
