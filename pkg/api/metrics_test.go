@@ -2,12 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "shpyrd/api/v1alpha1"
@@ -299,5 +303,206 @@ func TestMetricsUnknownSizeDropsOnlyTheReference(t *testing.T) {
 	}
 	if mem.Series[0].Reference != 0 {
 		t.Errorf("reference = %v, want 0 when the size is unknown", mem.Series[0].Reference)
+	}
+}
+
+// podFor builds a live pod of a process, which is what gives an instance its
+// name. Creation order decides the ordinal.
+func podFor(app, process, name string, ageMinutes int) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         "app-" + app,
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Duration(ageMinutes) * time.Minute)),
+			Labels:            map[string]string{shpyrdv1.LabelApp: app, shpyrdv1.LabelProcess: process},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func TestMetricsByInstanceNamesSeriesNotPods(t *testing.T) {
+	prom, rec := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-old", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-new", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app},
+		podFor("shop", "web", "shop-web-old", 30),
+		podFor("shop", "web", "shop-web-new", 10),
+	)
+
+	out := getMetrics(t, s, "?range=1h&by=instance")
+	mem := chartByID(t, out, "memory")
+	names := seriesNames(mem)
+	if strings.Join(names, ",") != "web.1,web.2" {
+		t.Fatalf("series = %v, want web.1,web.2", names)
+	}
+	for _, n := range names {
+		if strings.Contains(n, "shop-web") {
+			t.Errorf("series %q leaks a pod name", n)
+		}
+	}
+	if !rec.Queried("by (pod") {
+		t.Error("by=instance must group the query by pod")
+	}
+	if !mem.InstanceCapable {
+		t.Error("memory must report itself instance capable")
+	}
+}
+
+// Review Focus 5 and the replaced-instance rule: a pod in the data that is no
+// longer live is its own series, hidden unless asked for, and the chart says so.
+func TestMetricsReplacedInstances(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-gone", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{2000, 20}}},
+		},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	out := getMetrics(t, s, "?range=1h&by=instance")
+	mem := chartByID(t, out, "memory")
+	if strings.Join(seriesNames(mem), ",") != "web.1" {
+		t.Errorf("replaced instances must be hidden by default, got %v", seriesNames(mem))
+	}
+	if !strings.Contains(mem.Note, "replaced") {
+		t.Errorf("the chart should say a replaced instance was hidden, note = %q", mem.Note)
+	}
+
+	out = getMetrics(t, s, "?range=1h&by=instance&replaced=true")
+	mem = chartByID(t, out, "memory")
+	names := seriesNames(mem)
+	if strings.Join(names, ",") != "replaced 1,web.1" {
+		t.Fatalf("series = %v, want replaced 1 and web.1", names)
+	}
+	for _, n := range names {
+		if strings.Contains(n, "shop-web-gone") {
+			t.Errorf("series %q leaks a pod name", n)
+		}
+	}
+}
+
+// Review Focus 3: the data carries a process the App no longer declares.
+func TestMetricsUnknownProcessStillAppears(t *testing.T) {
+	prom, _ := newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-frontend-1", "label_shpyrd_io_process": "frontend"}, Values: []Point{{1000, 10}}},
+		},
+	})
+	app := metricsApp() // declares web and worker, not frontend
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&by=instance&replaced=true")
+	mem := chartByID(t, out, "memory")
+	if len(mem.Series) != 1 {
+		t.Fatalf("a process the App no longer declares was dropped: %+v", mem.Series)
+	}
+	if mem.Error != "" {
+		t.Errorf("unexpected chart error: %s", mem.Error)
+	}
+}
+
+// Review Focus 4: a big project must not swamp the response.
+func TestMetricsInstanceSeriesAreCapped(t *testing.T) {
+	var series []fakeSeries
+	var objs []interface{}
+	for i := 0; i < maxInstanceSeries+10; i++ {
+		pod := fmt.Sprintf("shop-web-%03d", i)
+		series = append(series, fakeSeries{
+			Labels: map[string]string{"pod": pod, "label_shpyrd_io_process": "web"},
+			Values: []Point{{1000, float64(i)}},
+		})
+		objs = append(objs, podFor("shop", "web", pod, maxInstanceSeries+10-i))
+	}
+	prom, _ := newFakeProm(t, fakeAnswer{Match: "container_memory_working_set_bytes", Series: series})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, objs...)
+
+	out := getMetrics(t, s, "?range=1h&by=instance")
+	mem := chartByID(t, out, "memory")
+	if len(mem.Series) != maxInstanceSeries {
+		t.Errorf("series = %d, want the cap of %d", len(mem.Series), maxInstanceSeries)
+	}
+	if !strings.Contains(mem.Note, "more") {
+		t.Errorf("the chart must report what it left out, note = %q", mem.Note)
+	}
+}
+
+func TestMetricsProcessFilterAndIgnoringCharts(t *testing.T) {
+	prom, rec := newFakeProm(t, fakeAnswer{
+		Match:  "nginx_ingress_controller_requests",
+		Series: []fakeSeries{{Labels: map[string]string{"class": "2xx"}, Values: []Point{{1000, 5}}}},
+	})
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&by=instance&process=web")
+	// The process reaches the queries that have a process...
+	if !rec.Queried(`label_shpyrd_io_process="web"`) {
+		t.Error("the process filter never reached a query")
+	}
+	// ...and the edge charts say plainly that they cannot honour it.
+	tp := chartByID(t, out, "throughput")
+	if tp.InstanceCapable {
+		t.Error("throughput is measured at the edge and cannot be per instance")
+	}
+	for _, q := range rec.Queries() {
+		if strings.Contains(q, "nginx_ingress_controller_requests") && strings.Contains(q, "by (pod") {
+			t.Error("an edge query was grouped by pod")
+		}
+	}
+}
+
+func seriesNames(ch Chart) []string {
+	out := make([]string, 0, len(ch.Series))
+	for _, s := range ch.Series {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// Network is built from two sub-queries keyed by direction rather than by pod,
+// so its per-instance names are the one set this handler composes itself: one
+// series per instance per direction. Latency has the same shape and must stay
+// untouched, since it is measured at the edge.
+func TestMetricsNetworkByInstanceKeepsTheDirection(t *testing.T) {
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_network_receive_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-gone", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 30}}},
+		}},
+		fakeAnswer{Match: "container_network_transmit_bytes_total", Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-live", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+			{Labels: map[string]string{"pod": "shop-web-gone", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 40}}},
+		}},
+	)
+	app := metricsApp()
+	s, _ := newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-live", 5))
+
+	out := getMetrics(t, s, "?range=1h&by=instance")
+	net := chartByID(t, out, "network")
+	if strings.Join(seriesNames(net), ",") != "web.1 in,web.1 out" {
+		t.Fatalf("network series = %v, want web.1 in and web.1 out", seriesNames(net))
+	}
+	// Both directions of one replaced pod are one hidden instance, not two.
+	if !strings.HasPrefix(net.Note, "1 replaced") {
+		t.Errorf("note = %q, want one hidden instance, not one per direction", net.Note)
+	}
+	if lat := chartByID(t, out, "latency"); lat.InstanceCapable ||
+		strings.Join(seriesNames(lat), ",") != "p50,p95,p99" {
+		t.Errorf("latency is measured at the edge and must keep its percentiles, got %v", seriesNames(lat))
+	}
+
+	// The default keeps the two whole-project series it draws today.
+	out = getMetrics(t, s, "?range=1h")
+	if net = chartByID(t, out, "network"); strings.Join(seriesNames(net), ",") != "in,out" {
+		t.Errorf("default network series = %v, want in,out", seriesNames(net))
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	shpyrdv1 "shpyrd/api/v1alpha1"
 )
@@ -24,6 +25,14 @@ type Chart struct {
 	Kind   string   `json:"kind"`   // line or stacked
 	Series []Series `json:"series"` // one or more named series
 	Error  string   `json:"error,omitempty"`
+	// InstanceCapable says whether this chart can be broken down by instance.
+	// The edge charts cannot: nginx's series name the ingress controller's own
+	// pod and the backend service, never the backend pod. The UI disables the
+	// control rather than sending a parameter that would be ignored.
+	InstanceCapable bool `json:"instanceCapable"`
+	// Note explains a series the chart chose not to draw — instances that were
+	// replaced during the window, or the ones past the cap.
+	Note string `json:"note,omitempty"`
 }
 
 // Series is a named time series. Reference is the allocation the series is
@@ -154,18 +163,34 @@ func (s *Server) appMetrics(c *gin.Context) {
 	start := end.Add(-dur)
 	step := stepFor(dur)
 
-	mode := c.DefaultQuery("mode", "percent")
-	if mode != "percent" && mode != "total" {
+	opts := metricsOptions{
+		Mode:     c.DefaultQuery("mode", "percent"),
+		By:       c.DefaultQuery("by", "process"),
+		Process:  c.Query("process"),
+		Replaced: c.Query("replaced") == "true",
+	}
+	if opts.Mode != "percent" && opts.Mode != "total" {
 		abort(c, http.StatusBadRequest, errors.New("mode must be percent or total"))
 		return
 	}
-	opts := metricsOptions{Mode: mode}
+	if opts.By != "process" && opts.By != "instance" {
+		abort(c, http.StatusBadRequest, errors.New("by must be process or instance"))
+		return
+	}
 	// Percent mode never draws a reference line (applyReference discards it
 	// on its first line), so skip the catalog fetch and a Resolve per
 	// process on the path every open Metrics tab repeats every 30 seconds.
 	var allocs map[string]allocation
 	if opts.absolute() {
 		allocs = s.allocations(c.Request.Context(), app)
+	}
+	// One namer for the whole request, so "replaced 1" means the same pod on
+	// every chart. Only the instance breakdown needs it, and listing the pods
+	// is a call the by-process default should not pay for on a path every open
+	// Metrics tab repeats every 30 seconds.
+	var namer func(pod string) string
+	if opts.byInstance() {
+		namer = s.instanceNamer(c.Request.Context(), app)
 	}
 	queries := chartQueries(app, opts)
 	resp := MetricsResponse{Range: rng, Step: int(step.Seconds()), Charts: make([]Chart, len(queries)), Releases: []ReleaseMarker{}}
@@ -180,14 +205,14 @@ func (s *Server) appMetrics(c *gin.Context) {
 		wg.Add(1)
 		go func(i int, q chartQuery) {
 			defer wg.Done()
-			resp.Charts[i] = s.runChart(c.Request.Context(), q, start, end, step, allocs, opts)
+			resp.Charts[i] = s.runChart(c.Request.Context(), q, start, end, step, allocs, opts, namer)
 		}(i, q)
 	}
 	wg.Wait()
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, allocs map[string]allocation, opts metricsOptions) Chart {
+func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Time, step time.Duration, allocs map[string]allocation, opts metricsOptions, namer func(pod string) string) Chart {
 	ch := q.Chart
 	ch.Series = []Series{}
 	if len(q.Fixed) > 0 {
@@ -196,7 +221,23 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 			names = append(names, n)
 		}
 		sort.Strings(names)
+		perInstance := ch.InstanceCapable && opts.byInstance()
 		for _, n := range names {
+			if perInstance {
+				// Network is the only chart of this shape that splits: its
+				// sub-queries are directions, not pods, so each direction
+				// contributes one series per instance and carries the
+				// direction as a suffix nameInstances keeps.
+				raw, err := s.prom.QueryRangeSeries(ctx, q.Fixed[n], start, end, step)
+				if err != nil {
+					ch.Error = err.Error()
+					return ch
+				}
+				for _, r := range raw {
+					ch.Series = append(ch.Series, Series{Name: r.Labels["pod"] + " " + n, Points: r.Points})
+				}
+				continue
+			}
 			pts, err := s.prom.QueryRange(ctx, q.Fixed[n], start, end, step)
 			if err != nil {
 				ch.Error = err.Error()
@@ -204,6 +245,7 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 			}
 			ch.Series = append(ch.Series, Series{Name: n, Points: pts})
 		}
+		nameInstances(&ch, namer, opts)
 		applyReference(&ch, allocs, opts)
 		return ch
 	}
@@ -237,9 +279,97 @@ func (s *Server) runChart(ctx context.Context, q chartQuery, start, end time.Tim
 		}
 		ch.Series = append(ch.Series, Series{Name: name, Points: r.Points})
 	}
+	nameInstances(&ch, namer, opts)
 	sort.Slice(ch.Series, func(i, j int) bool { return ch.Series[i].Name < ch.Series[j].Name })
 	applyReference(&ch, allocs, opts)
 	return ch
+}
+
+// maxInstanceSeries is the most series one chart may carry.
+const maxInstanceSeries = 40
+
+// nameInstances turns pod-keyed series into instance-named ones, applies the
+// replaced rule and caps how many series a chart may carry. The cap is what
+// stops a fifty-replica project over a week from returning a response no
+// browser will chart.
+//
+// A series name is the pod, optionally followed by a word the chart added to
+// tell two series of the same instance apart — the network chart's direction.
+// That suffix survives the renaming, so "web.1 in" and "web.1 out" both count
+// as the one instance when a replaced one is reported.
+func nameInstances(ch *Chart, namer func(pod string) string, opts metricsOptions) {
+	if !opts.byInstance() || !ch.InstanceCapable {
+		return
+	}
+	kept := make([]Series, 0, len(ch.Series))
+	hidden := map[string]bool{}
+	for _, sr := range ch.Series {
+		pod, suffix := sr.Name, ""
+		if i := strings.IndexByte(pod, ' '); i > 0 {
+			pod, suffix = pod[:i], pod[i:]
+		}
+		name := namer(pod)
+		if strings.HasPrefix(name, replacedPrefix) && !opts.Replaced {
+			hidden[name] = true
+			continue
+		}
+		sr.Name = name + suffix
+		kept = append(kept, sr)
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].Name < kept[j].Name })
+	over := 0
+	if len(kept) > maxInstanceSeries {
+		over = len(kept) - maxInstanceSeries
+		kept = kept[:maxInstanceSeries]
+	}
+	ch.Series = kept
+	switch {
+	case len(hidden) > 0 && over > 0:
+		ch.Note = fmt.Sprintf("%d replaced instances hidden, %d more not shown", len(hidden), over)
+	case len(hidden) > 0:
+		ch.Note = fmt.Sprintf("%d replaced instances hidden", len(hidden))
+	case over > 0:
+		ch.Note = fmt.Sprintf("%d more instances not shown", over)
+	}
+}
+
+// replacedPrefix names an instance that is no longer live. It is a prefix
+// rather than a whole name because the pods are numbered.
+const replacedPrefix = "replaced "
+
+// instanceNamer maps a pod to the instance name the Logs tab would show. Pods
+// absent from the live list were replaced during the window; they are numbered
+// in order of first appearance rather than named, because the name they held
+// has since moved to another pod.
+//
+// Prometheus cannot do this join: kube-state-metrics exposes no annotations on
+// a default install, so shpyrd.io/instance is invisible to PromQL.
+func (s *Server) instanceNamer(ctx context.Context, app *shpyrdv1.App) func(pod string) string {
+	live := map[string]string{}
+	// The typed clientset, not the controller-runtime client: pods are ordinary
+	// core objects here and this is the same call the log viewer makes.
+	if pods, err := s.kube.Kube.CoreV1().Pods(app.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: shpyrdv1.LabelApp + "=" + app.Name,
+	}); err == nil {
+		live = InstanceNames(pods.Items)
+	}
+	var mu sync.Mutex
+	replaced := map[string]string{}
+	// Shared by every chart's goroutine, so the numbering is consistent across
+	// charts — and therefore needs the lock.
+	return func(pod string) string {
+		if n, ok := live[pod]; ok {
+			return n
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if n, ok := replaced[pod]; ok {
+			return n
+		}
+		n := fmt.Sprintf("%s%d", replacedPrefix, len(replaced)+1)
+		replaced[pod] = n
+		return n
+	}
 }
 
 // applyReference fills in the line a series is measured against. Only the

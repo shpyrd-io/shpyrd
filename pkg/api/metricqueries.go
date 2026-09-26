@@ -16,12 +16,19 @@ import (
 // metricsOptions are the request's shaping parameters. The table reads them so
 // the handler does not have to branch per chart.
 type metricsOptions struct {
-	Mode string // percent (default) or total
+	Mode     string // percent (default) or total
+	By       string // process (default) or instance
+	Process  string // one process type, or "" for all
+	Replaced bool   // include instances that no longer exist
 }
 
 // absolute reports whether this chart is expressed in its own units rather
 // than as a proportion of an allocation.
 func (o metricsOptions) absolute() bool { return o.Mode == "total" }
+
+// byInstance reports whether the charts break a process down into its running
+// instances rather than summing them.
+func (o metricsOptions) byInstance() bool { return o.By == "instance" }
 
 // chartQueries defines the app dashboard, modelled on what Heroku, Fly,
 // Render and Railway show: throughput by status class, response time
@@ -30,21 +37,46 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 	hosts := hostRegex(app)
 	ns := app.Namespace
 	name := app.Name
-	podLabels := fmt.Sprintf(`kube_pod_labels{namespace="%s",label_shpyrd_io_app="%s"}`, ns, name)
 	containers := fmt.Sprintf(`namespace="%s",container!="",container!="POD"`, ns)
 	stripApp := func(s string) string { return strings.TrimPrefix(s, name+"-") }
 
-	cpuQuery := fmt.Sprintf(`sum by (label_shpyrd_io_process) (rate(container_cpu_usage_seconds_total{%s}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, containers, podLabels)
+	// The process label comes along so a series can be traced back to its
+	// allocation; grouping by pod collapses several containers into one
+	// instance.
+	group := "label_shpyrd_io_process"
+	seriesLabel := "label_shpyrd_io_process"
+	if opts.byInstance() {
+		group = "pod, label_shpyrd_io_process"
+		seriesLabel = "pod"
+	}
+	procFilter := ""
+	if opts.Process != "" {
+		procFilter = fmt.Sprintf(`,label_shpyrd_io_process=%q`, opts.Process)
+	}
+	podLabels := fmt.Sprintf(`kube_pod_labels{namespace="%s",label_shpyrd_io_app="%s"%s}`, ns, name, procFilter)
+
+	// Network is counted for the whole namespace, which is this project and
+	// nothing else, so the unjoined sum remains the cheapest way to ask the
+	// default question. Naming one process or splitting by instance needs the
+	// pod labels joined in, which is also what narrows the sum.
+	netQuery := func(metric string) string {
+		if !opts.byInstance() && opts.Process == "" {
+			return fmt.Sprintf(`sum(rate(%s{namespace="%s"}[2m]))`, metric, ns)
+		}
+		return fmt.Sprintf(`sum by (%s) (rate(%s{namespace="%s"}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, group, metric, ns, podLabels)
+	}
+
+	cpuQuery := fmt.Sprintf(`sum by (%s) (rate(container_cpu_usage_seconds_total{%s}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, group, containers, podLabels)
 	cpuUnit := "cores"
 	if !opts.absolute() {
-		cpuQuery = fmt.Sprintf(`100 * %s / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, cpuQuery, containers, podLabels)
+		cpuQuery = fmt.Sprintf(`100 * %s / sum by (%s) (kube_pod_container_resource_requests{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, cpuQuery, group, containers, podLabels)
 		cpuUnit = "%"
 	}
 
-	memQuery := fmt.Sprintf(`sum by (label_shpyrd_io_process) (container_memory_working_set_bytes{%s} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, containers, podLabels)
+	memQuery := fmt.Sprintf(`sum by (%s) (container_memory_working_set_bytes{%s} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, group, containers, podLabels)
 	memUnit := "bytes"
 	if !opts.absolute() {
-		memQuery = fmt.Sprintf(`100 * %s / sum by (label_shpyrd_io_process) (kube_pod_container_resource_requests{%s,resource="memory"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, memQuery, containers, podLabels)
+		memQuery = fmt.Sprintf(`100 * %s / sum by (%s) (kube_pod_container_resource_requests{%s,resource="memory"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, memQuery, group, containers, podLabels)
 		memUnit = "%"
 	}
 
@@ -74,26 +106,28 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 			// Shared sizes may burst above 100%. In total mode it is raw
 			// cores instead, which is also what it falls back to when no
 			// requests exist.
-			Chart:        Chart{ID: "cpu", Title: "CPU", Unit: cpuUnit, Kind: "line"},
+			Chart:        Chart{ID: "cpu", Title: "CPU", Unit: cpuUnit, Kind: "line", InstanceCapable: true},
 			Query:        cpuQuery,
-			LabelKey:     "label_shpyrd_io_process",
+			LabelKey:     seriesLabel,
 			Fallback:     fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[2m]))`, containers),
 			FallbackName: "all",
 			FallbackUnit: "cores",
 		},
 		{
-			Chart:        Chart{ID: "memory", Title: "Memory", Unit: memUnit, Kind: "line"},
+			Chart:        Chart{ID: "memory", Title: "Memory", Unit: memUnit, Kind: "line", InstanceCapable: true},
 			Query:        memQuery,
-			LabelKey:     "label_shpyrd_io_process",
+			LabelKey:     seriesLabel,
 			Fallback:     fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, containers),
 			FallbackName: "all",
 			FallbackUnit: "bytes",
 		},
 		{
-			Chart: Chart{ID: "network", Title: "Network", Unit: "bytes/s", Kind: "line"},
+			Chart: Chart{ID: "network", Title: "Network", Unit: "bytes/s", Kind: "line", InstanceCapable: true},
+			// One chart, two directions: with instances the direction rides in
+			// the series name so the chart set stays the same shape.
 			Fixed: map[string]string{
-				"in":  fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace="%s"}[2m]))`, ns),
-				"out": fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace="%s"}[2m]))`, ns),
+				"in":  netQuery("container_network_receive_bytes_total"),
+				"out": netQuery("container_network_transmit_bytes_total"),
 			},
 		},
 	}
