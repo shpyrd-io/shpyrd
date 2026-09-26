@@ -172,16 +172,16 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
 			}}}},
 		},
-		{
-			// Wildcard rule: app hosts one label under the workspace address.
-			// nginx matches the most specific rule first; unknown hosts hit
-			// the global default backend (shpyrd-server → "no app here").
-			Host: "*." + ws.Address,
-			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
-				Path: "/", PathType: &pathType,
-				Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
-			}}}},
-		},
+			{
+				// Wildcard rule: app hosts one label under the workspace address.
+				// nginx matches the most specific rule first; unknown hosts hit
+				// the global default backend (shpyrd-server → "no app here").
+				Host: "*." + ws.Address,
+				IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+					Path: "/", PathType: &pathType,
+					Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
+				}}}},
+			},
 		}
 		return nil
 	})

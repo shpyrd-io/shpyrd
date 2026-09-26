@@ -62,6 +62,11 @@ export function LoginPage() {
                   : `Sign in to shpyrd${config.data?.domain ? ` on ${config.data.domain}` : ""}`}
                 .
               </>
+            ) : !tokenAllowed ? (
+              <>
+                {config.data?.workspace?.name ?? "This workspace"} has no
+                sign-in method yet. Ask the platform operator to add one.
+              </>
             ) : (
               <>
                 Paste the admin token to open the dashboard. Get it with{" "}

@@ -32,13 +32,19 @@ func (allMethods) Methods(_ context.Context, _ *store.Workspace, all AuthConfig)
 }
 
 // authConfigFor is the sign-in configuration the request's workspace shows.
+// The admin token is the operator's break-glass: it is never offered at an
+// explicit workspace's host (it still authenticates there, for the CLI).
 func (s *Server) authConfigFor(c *gin.Context) AuthConfig {
 	all := s.authConfig()
 	ws, err := s.tenant(c)
 	if err != nil {
 		return all
 	}
-	return s.realms.Methods(c.Request.Context(), ws, all)
+	cfg := s.realms.Methods(c.Request.Context(), ws, all)
+	if !ws.Implicit() {
+		cfg.Token = false
+	}
+	return cfg
 }
 
 // offers reports whether a workspace lists a login method ("" means the

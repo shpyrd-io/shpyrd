@@ -144,6 +144,13 @@ func TestTenancyByHost(t *testing.T) {
 	if !view.Implicit || view.URL != "https://shpyrd.example.test" || view.Domain != "example.test" {
 		t.Errorf("default view = %+v", view)
 	}
+	// The admin token is never offered at a workspace host, only at the console.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":false`) {
+		t.Errorf("acme config offers the admin token: %s", rec.Body.String())
+	}
+	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":true`) {
+		t.Errorf("console config must offer the admin token: %s", rec.Body.String())
+	}
 	// Capabilities reach the dashboard.
 	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"capabilities":["workspaces"]`) {
 		t.Errorf("config = %s", rec.Body.String())

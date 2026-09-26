@@ -24,8 +24,9 @@ shpyrd cluster dashboard             # opens https://shpyrd.127.0.0.1.nip.io sig
 
 Releases publish the CLI for macOS and Linux (amd64, arm64) with checksums and
 the server image `ghcr.io/shpyrd-io/shpyrd-server:<version>`; the CLI installs
-the image of its own version. Building from source: `make cli` (Go 1.27), then
-`./bin/shpyrd` with `--set SHPYRD_SERVER_IMAGE=...` to run your own server build
+the image of its own version. Building from source: `make cli` (Go 1.27) builds
+`bin/shpyrd` and `bin/shpyrd-ctl`; run `./bin/shpyrd-ctl cluster create --set
+SHPYRD_SERVER_IMAGE=...` to use your own server build
 (see [Developing](#developing)).
 
 `cluster create` runs [kind](https://kind.sigs.k8s.io) through its Go library

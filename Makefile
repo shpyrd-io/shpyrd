@@ -11,9 +11,12 @@ all: build
 ## Build both binaries into bin/
 build: cli server
 
+## Build both CLI binaries: shpyrd (developers) and shpyrd-ctl (operators).
+## They ship together since v0.8.0 (RFC-0052).
 cli:
 	mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/shpyrd ./cmd/shpyrd
+	go build -ldflags "$(LDFLAGS)" -o bin/shpyrd-ctl ./cmd/shpyrd-ctl
 
 server:
 	mkdir -p bin
@@ -80,6 +83,5 @@ installclint:
 commitlint:
 	commitlint --from=HEAD~1
 
-## Build both CLI binaries
+## Alias kept for scripts that called it; `make cli` builds both now.
 cli-all: cli
-	go build -ldflags "-X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)" -o bin/shpyrd-ctl ./cmd/shpyrd-ctl

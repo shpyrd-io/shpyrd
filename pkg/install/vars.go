@@ -23,12 +23,12 @@ const (
 	VarHTTPPort     = "SHPYRD_HTTP_PORT"     // host port reaching ingress HTTP (URLs only)
 	VarHTTPSPort    = "SHPYRD_HTTPS_PORT"    // host port reaching ingress HTTPS (URLs only)
 	// Derived variables, computed by the engine (see derivedVars).
-	VarExtensions   = "SHPYRD_EXTENSIONS"    // enabled extensions, comma separated
-	VarDashboardURL = "SHPYRD_DASHBOARD_URL" // external dashboard URL
-	VarAuthURL      = "SHPYRD_AUTH_URL"      // external URL of the login issuer (auth.<domain>)
-	VarServerImage        = "SHPYRD_SERVER_IMAGE"        // server image; derived from the version unless set
-	VarWorkspacesDomain      = "SHPYRD_WORKSPACES_DOMAIN"       // domain tenant workspaces live under (cloud layer)
-	VarWorkspaceCertIssuer   = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
+	VarExtensions          = "SHPYRD_EXTENSIONS"            // enabled extensions, comma separated
+	VarDashboardURL        = "SHPYRD_DASHBOARD_URL"         // external dashboard URL
+	VarAuthURL             = "SHPYRD_AUTH_URL"              // external URL of the login issuer (auth.<domain>)
+	VarServerImage         = "SHPYRD_SERVER_IMAGE"          // server image; derived from the version unless set
+	VarWorkspacesDomain    = "SHPYRD_WORKSPACES_DOMAIN"     // domain tenant workspaces live under (cloud layer)
+	VarWorkspaceCertIssuer = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
 	// Cloud profiles (RFC-0034/0035 counterparts).
 	VarClusterIssuer    = "SHPYRD_CLUSTER_ISSUER"    // cert-manager ClusterIssuer for every certificate (shpyrd-ca locally, letsencrypt on cloud)
 	VarACMEEmail        = "SHPYRD_ACME_EMAIL"        // Let's Encrypt account email (cloud profiles)

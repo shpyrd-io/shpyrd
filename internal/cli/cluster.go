@@ -1006,6 +1006,12 @@ func seedFromRecord(ctx context.Context, cmd *cobra.Command, kopts kube.Options,
 	if !f.Changed("local-dns") {
 		flags.localDNS = info.Vars[install.VarLocalDNS] == "true"
 	}
+	// The platform's exposure is a decision, not a default: a re-run
+	// without the flag must not move the dashboard and sign-in from the
+	// internal front door to the public one (or back).
+	if !f.Changed("platform-exposure") && flags.platformExposure == "" && info.Vars[install.VarPlatformExposure] != "" {
+		flags.platformExposure = info.Vars[install.VarPlatformExposure]
+	}
 	// Variables the operator set explicitly (--set, --registry-host) are
 	// kept across runs; profile defaults stay live for everything else.
 	for k, v := range info.Overrides {
