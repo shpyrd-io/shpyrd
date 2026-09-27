@@ -62,23 +62,54 @@ func TokenHash(randHex string) string {
 
 // ---- token middleware ---------------------------------------------------------
 
-// identifyWithToken tries an shp_... token; returns true when it was accepted.
-func (s *Server) identifyWithToken(c *gin.Context) bool {
+// bearerOf is the token a request carries: X-Shpyrd-Token, else the
+// Authorization bearer.
+func bearerOf(c *gin.Context) string {
 	tok := c.GetHeader("X-Shpyrd-Token")
 	if h := c.GetHeader("Authorization"); tok == "" && len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
 		tok = strings.TrimSpace(h[7:])
 	}
-	if !strings.HasPrefix(tok, tokenPrefix) {
+	return tok
+}
+
+// IsAPIToken says a bearer is one of ours (shp_...), whatever its validity.
+func IsAPIToken(tok string) bool { return strings.HasPrefix(tok, tokenPrefix) }
+
+// tokenCaller is what an shp_ token resolves to: the identity requests are
+// made as, the roles the token holds (the intersection of its grants with
+// its owner's current roles), and the owner, whose teams the edge reports.
+type tokenCaller struct {
+	identity ext.Identity
+	roles    authz.Roles
+	owner    ext.Identity
+}
+
+// identifyWithToken tries an shp_... token; returns true when it was accepted.
+func (s *Server) identifyWithToken(c *gin.Context) bool {
+	tc, ok := s.resolveAPIToken(c, bearerOf(c))
+	if !ok {
 		return false
+	}
+	ext.SetIdentity(c, tc.identity)
+	c.Set("shpyrd.roles", tc.roles)
+	return true
+}
+
+// resolveAPIToken looks an shp_ token up in the request's workspace. The
+// API and the edge use the same resolution (RFC-0031, RFC-0033), so a token
+// opens an app exactly as it calls the API: as its owner, within its roles.
+func (s *Server) resolveAPIToken(c *gin.Context, tok string) (*tokenCaller, bool) {
+	if !IsAPIToken(tok) {
+		return nil, false
 	}
 	_, randHex, ok := ParseToken(tok)
 	if !ok {
-		return false
+		return nil, false
 	}
 	hash := TokenHash(randHex)
 	apiTok, err := s.store.LookupToken(c.Request.Context(), hash)
 	if err != nil || apiTok == nil {
-		return false
+		return nil, false
 	}
 	// Intersect with the owner's current roles so a demoted owner cannot
 	// keep power through an old token, and a suspended owner's tokens stop
@@ -87,11 +118,11 @@ func (s *Server) identifyWithToken(c *gin.Context) bool {
 	// workspace has never seen carries nothing.
 	snap, err := s.authz.SnapshotFor(c.Request.Context(), s.workspace(c))
 	if err != nil {
-		return false
+		return nil, false
 	}
-	ownerRoles, ok := s.tokenOwnerRoles(c, snap, apiTok)
+	owner, ownerRoles, ok := s.tokenOwnerRoles(c, snap, apiTok)
 	if !ok {
-		return false
+		return nil, false
 	}
 	// Token roles are the intersection: token cannot exceed what the owner has.
 	platform := minPlatformRole(apiTok.PlatformRole, ownerRoles.Platform)
@@ -104,51 +135,48 @@ func (s *Server) identifyWithToken(c *gin.Context) bool {
 			projects[proj] = ownerRole
 		}
 	}
-	id := ext.Identity{
-		Subject:  "token:" + apiTok.ID,
-		Email:    apiTok.OwnerEmail,
-		Name:     apiTok.Name,
-		Provider: "api-token",
-	}
-	// Build a synthetic authz.Roles from the token's grants.
-	roles := authz.Roles{
-		Platform: platform,
-		Projects: projects,
-		Enforced: ownerRoles.Enforced,
-	}
-	ext.SetIdentity(c, id)
-	c.Set("shpyrd.roles", roles)
-	return true
+	return &tokenCaller{
+		identity: ext.Identity{
+			Subject:  "token:" + apiTok.ID,
+			Email:    apiTok.OwnerEmail,
+			Name:     apiTok.Name,
+			Provider: "api-token",
+		},
+		roles: authz.Roles{Platform: platform, Projects: projects, Enforced: ownerRoles.Enforced},
+		owner: owner,
+	}, true
 }
 
-// tokenOwnerRoles resolves the roles the token's owner holds right now.
-// Admin-token holders (owner email empty) are platform admins by
+// tokenOwnerRoles resolves the token's owner and the roles they hold right
+// now. Admin-token holders (owner email empty) are platform admins by
 // definition; everyone else must be an active person of the workspace.
-func (s *Server) tokenOwnerRoles(c *gin.Context, snap *authz.Snapshot, t *store.APIToken) (authz.Roles, bool) {
+func (s *Server) tokenOwnerRoles(c *gin.Context, snap *authz.Snapshot, t *store.APIToken) (ext.Identity, authz.Roles, bool) {
 	ctx := c.Request.Context()
 	// A token only works at the workspace it was created in.
 	ws, err := s.store.Workspace(ctx, s.workspace(c))
 	if err != nil || ws.ID != t.WorkspaceID {
-		return authz.Roles{}, false
+		return ext.Identity{}, authz.Roles{}, false
 	}
 	if t.OwnerEmail == "" {
-		return snap.RolesFor(ext.Identity{Subject: "admin-token", Provider: "token"}), true
+		admin := ext.Identity{Subject: "admin-token", Provider: "token"}
+		return admin, snap.RolesFor(admin), true
 	}
 	person, err := s.store.GetIdentity(ctx, ws.Slug, t.OwnerEmail)
 	if err != nil || person == nil {
-		return authz.Roles{}, false
+		return ext.Identity{}, authz.Roles{}, false
 	}
-	roles := snap.RolesFor(ext.Identity{
+	owner := ext.Identity{
 		Subject:  person.ID,
 		Email:    person.Email,
 		Name:     person.Name,
 		Provider: person.Provider,
 		Groups:   person.Groups,
-	})
-	if roles.Suspended {
-		return authz.Roles{}, false
 	}
-	return roles, true
+	roles := snap.RolesFor(owner)
+	if roles.Suspended {
+		return ext.Identity{}, authz.Roles{}, false
+	}
+	return owner, roles, true
 }
 
 func minPlatformRole(a, b string) string {

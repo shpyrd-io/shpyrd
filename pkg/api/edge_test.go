@@ -292,3 +292,77 @@ func TestEdgeSigninAndStart(t *testing.T) {
 		t.Errorf("launcher enforced = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// A personal API token opens an app the way its owner would, within the
+// token's roles (RFC-0031 at the edge, RFC-0033 "Machines"); a bearer that
+// is none of ours is anonymous: an authenticated app asks to sign in, an
+// identified app receives the bearer untouched for its own API clients.
+func TestEdgeAcceptsPersonalTokens(t *testing.T) {
+	expenses := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "expenses", Namespace: "app-expenses"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
+	s, _ := newTestServer(t, nil, []client.Object{expenses})
+	s.authz.TTL = 1
+	ctx := context.Background()
+	if _, _, err := s.store.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "finance", Members: []string{"joao@acme.test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.store.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "platform", Members: []string{"ops@acme.test"}, PlatformRole: shpyrdv1.RolePlatformAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "expenses", Role: shpyrdv1.RoleUser, Team: "finance"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, email := range []string{"joao@acme.test", "pedro@acme.test"} {
+		if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: email, Name: strings.Title(strings.Split(email, "@")[0]), Provider: "google"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.authz.Invalidate()
+	mint := func(email, csrfHeaderName string, body string) string {
+		sid, csrf := signIn(t, s, ext.Identity{Email: email, Provider: "google"})
+		req := httptest.NewRequest("POST", "/api/tokens", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(csrfHeaderName, csrf)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("mint token for %s = %d %s", email, rec.Code, rec.Body.String())
+		}
+		var created TokenCreateView
+		_ = json.Unmarshal(rec.Body.Bytes(), &created)
+		return created.Token
+	}
+	joaoTok := mint("joao@acme.test", csrfHeader, `{"name":"script","projectRoles":{"expenses":"user"}}`)
+	pedroTok := mint("pedro@acme.test", csrfHeader, `{"name":"script"}`)
+
+	// João's token: in, as João, team finance, role user; the app learns
+	// the person, not the token's label.
+	rec := edgeRequest(t, s, "expenses", "authenticated", "", joaoTok)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("joao's token = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-Shpyrd-User") != "joao@acme.test" || rec.Header().Get("X-Shpyrd-Teams") != "everyone,finance" || rec.Header().Get("X-Shpyrd-Roles") != "user" || rec.Header().Get("X-Shpyrd-Name") != "Joao" {
+		t.Errorf("headers = user %q teams %q roles %q name %q", rec.Header().Get("X-Shpyrd-User"), rec.Header().Get("X-Shpyrd-Teams"), rec.Header().Get("X-Shpyrd-Roles"), rec.Header().Get("X-Shpyrd-Name"))
+	}
+	var claims edge.Claims
+	if err := s.edgeKeys.Verify(strings.TrimPrefix(rec.Header().Get("Authorization"), "Bearer "), "JWT", &claims); err != nil || claims.Email != "joao@acme.test" || claims.Provider != "api-token" || claims.Audience != "expenses" {
+		t.Errorf("jwt = %+v %v", claims, err)
+	}
+	// Pedro's token: he has no role on expenses, and neither does his token.
+	if rec := edgeRequest(t, s, "expenses", "authenticated", "", pedroTok); rec.Code != http.StatusForbidden {
+		t.Errorf("pedro's token = %d, want 403", rec.Code)
+	}
+	// A revoked or unknown shp_ token is refused, not anonymous.
+	if rec := edgeRequest(t, s, "expenses", "identified", "", "shp_zzzz_0000000000000000000000000000000000000000000000000000000000000000"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unknown shp_ token = %d, want 401", rec.Code)
+	}
+	// Someone else's bearer: anonymous. The closed app asks to sign in; the
+	// identified app receives the bearer as sent, with no identity headers.
+	if rec := edgeRequest(t, s, "expenses", "authenticated", "", "eyJhbGciOiJSUzI1NiJ9.someone-elses.token"); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "sign in") {
+		t.Errorf("foreign bearer on a closed app = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = edgeRequest(t, s, "expenses", "identified", "", "eyJhbGciOiJSUzI1NiJ9.someone-elses.token")
+	if rec.Code != http.StatusOK || rec.Header().Get("Authorization") != "Bearer eyJhbGciOiJSUzI1NiJ9.someone-elses.token" || rec.Header().Get("X-Shpyrd-User") != "" {
+		t.Errorf("foreign bearer on an identified app = %d auth %q user %q", rec.Code, rec.Header().Get("Authorization"), rec.Header().Get("X-Shpyrd-User"))
+	}
+}

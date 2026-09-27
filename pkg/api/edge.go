@@ -176,22 +176,37 @@ type edgeCaller struct {
 	identity ext.Identity
 	session  string
 	preview  *edge.Preview
+	// token is set when a personal API token identified the caller: its
+	// roles are the token's (not the owner's), its teams the owner's.
+	token *tokenCaller
 }
 
-// edgeIdentify resolves the caller of an app request: a platform token, or
-// the app-host cookie whose dashboard session must still exist.
+// ctxForeignAuth holds a client's own Authorization header when it is not
+// one of the platform's tokens: on an identified app it travels through to
+// the app, which may run an API authentication of its own.
+const ctxForeignAuth = "shpyrd.edge.foreignAuth"
+
+// edgeIdentify resolves the caller of an app request: the admin token, a
+// personal API token (RFC-0031: the owner, within the token's roles), or
+// the app-host cookie whose dashboard session must still exist. A bearer
+// that is none of ours is anonymous: an authenticated app asks it to sign
+// in, an identified app receives it untouched.
 func (s *Server) edgeIdentify(c *gin.Context, project string) (*edgeCaller, error) {
-	tok := c.GetHeader("X-Shpyrd-Token")
-	if tok == "" {
-		if h := c.GetHeader("Authorization"); len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
-			tok = strings.TrimSpace(h[7:])
-		}
-	}
-	if tok != "" {
+	if tok := bearerOf(c); tok != "" {
 		if s.opts.Token != "" && !s.opts.TokenDisabled && subtle.ConstantTimeCompare([]byte(tok), []byte(s.opts.Token)) == 1 {
 			return &edgeCaller{identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true}}, nil
 		}
-		return nil, errors.New("invalid token")
+		if IsAPIToken(tok) {
+			tc, ok := s.resolveAPIToken(c, tok)
+			if !ok {
+				return nil, errors.New("invalid token")
+			}
+			return &edgeCaller{identity: tc.identity, token: tc}, nil
+		}
+		if c.GetHeader("X-Shpyrd-Token") == "" {
+			c.Set(ctxForeignAuth, c.GetHeader("Authorization"))
+		}
+		return nil, nil
 	}
 	raw, err := c.Cookie(s.edgeCookieName())
 	if err != nil || raw == "" {
@@ -265,6 +280,11 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	}
 	if caller == nil || (caller.preview != nil && caller.preview.Anonymous) {
 		if mode == shpyrdv1.AccessIdentified {
+			// The app is public and may authenticate its own API clients:
+			// a bearer that is not ours reaches it as sent.
+			if fa, ok := c.Get(ctxForeignAuth); ok && caller == nil {
+				c.Header("Authorization", fa.(string))
+			}
 			c.Status(http.StatusOK)
 			return
 		}
@@ -281,15 +301,24 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		return
 	}
 	roles := snap.RolesFor(caller.identity)
+	teams := snap.TeamNames(caller.identity)
+	if caller.token != nil {
+		// A personal token: the token's roles, the owner's teams.
+		roles = caller.token.roles
+		teams = snap.TeamNames(caller.token.owner)
+	}
 	if roles.Suspended {
 		c.JSON(http.StatusForbidden, gin.H{"error": "your access is suspended"})
 		return
 	}
-	teams := snap.TeamNames(caller.identity)
 	projectRole := roles.ProjectRole(slug)
+	name := caller.identity.Name
+	if caller.token != nil {
+		name = firstNonEmpty(caller.token.owner.Name, name) // the person, not the token's label
+	}
 	claims := edge.Claims{
 		Issuer: s.dashboardURLOf(ws), Subject: caller.identity.Subject, Audience: slug,
-		Email: caller.identity.Email, Name: caller.identity.Name, Workspace: ws.Slug, Project: slug,
+		Email: caller.identity.Email, Name: name, Workspace: ws.Slug, Project: slug,
 		Realm: "workspace", Provider: caller.identity.Provider,
 	}
 	if caller.identity.Provider == "token" {
@@ -333,7 +362,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	user := firstNonEmpty(caller.identity.Email, caller.identity.Subject)
 	c.Header("X-Shpyrd-User", user)
 	c.Header("X-Shpyrd-Email", caller.identity.Email)
-	c.Header("X-Shpyrd-Name", caller.identity.Name)
+	c.Header("X-Shpyrd-Name", name)
 	c.Header("X-Shpyrd-Teams", strings.Join(teams, ","))
 	c.Header("X-Shpyrd-Roles", strings.Join(roleList, ","))
 	c.Header("Authorization", "Bearer "+jwt)
