@@ -103,6 +103,7 @@ declare what they depend on.
 | [0072](0072-app-actions.md) | App actions: declared endpoints the platform runs for a person (MCP tools, launcher buttons) | provisional | 0032, 0033, 0070 |
 | [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
+| [0075](0075-usage-ledger-and-sleep.md) | Usage ledger, cost monitor and sleep: metering into the control-plane store, estimated cost from a rate card, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | provisional | 0003, 0009, 0033, 0038, 0042, 0060 |
 
 ## Phases
 
@@ -121,7 +122,7 @@ declare what they depend on.
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
 | K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
 | L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing |
-| M | 0069, 0070, 0071, 0072, 0073, 0074 | the agents stack and the enterprise: embedded git, internal names, AI gateway, app actions, data in backups, SCIM |
+| M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
 keeps dependencies satisfied.
