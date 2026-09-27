@@ -257,6 +257,23 @@ type Build struct {
 	// Builder is the kpack ClusterBuilder to use. Defaults to "shpyrd".
 	// +optional
 	Builder string `json:"builder,omitempty"`
+	// Buildpacks composes the build (RFC-0065): the catalog entries to run,
+	// in order, all of them — "deb-packages, ruby". When set (or Stack is),
+	// the project gets a builder of its own instead of the platform's
+	// detection.
+	// +optional
+	Buildpacks []string `json:"buildpacks,omitempty"`
+	// Stack is the base images the build and the app run on: "base"
+	// (default, Ubuntu jammy base) or "full" (jammy full, more system
+	// libraries, a larger image).
+	// +optional
+	// +kubebuilder:validation:Enum=base;full
+	Stack string `json:"stack,omitempty"`
+	// SystemPackages says the source carries an Aptfile: the .deb packages
+	// buildpack runs before the language's, whichever detects. The CLI sets
+	// it when it finds the file.
+	// +optional
+	SystemPackages bool `json:"systemPackages,omitempty"`
 	// Dockerfile is the path of the Dockerfile inside the source (after
 	// subPath). Defaults to "Dockerfile".
 	// +optional
@@ -369,6 +386,15 @@ type AppStatus struct {
 	// Processes reports rollout state per process type.
 	// +optional
 	Processes map[string]ProcessStatus `json:"processes,omitempty"`
+	// ProcessTypes are the process types the current image declares (from
+	// its buildpack metadata: web, worker, release, ...). A "release" type
+	// runs before every release, as a Job, and gates the rollout.
+	// +optional
+	ProcessTypes []string `json:"processTypes,omitempty"`
+	// Release reports the last release-phase run: the target it ran for,
+	// its state and message.
+	// +optional
+	Release *ReleasePhaseStatus `json:"release,omitempty"`
 	// Domains reports each custom domain's DNS and certificate state
 	// (RFC-0034).
 	// +optional
@@ -394,6 +420,25 @@ type DomainStatus struct {
 	// Message explains a pending or failed state.
 	Message string `json:"message,omitempty"`
 }
+
+// ReleasePhaseStatus is the state of the release command (the image's
+// "release" process type) for the release being rolled out.
+type ReleasePhaseStatus struct {
+	// Target identifies the image and configuration the run was for.
+	Target string `json:"target"`
+	// State is Running, Succeeded or Failed.
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+	// Job is the Kubernetes Job that ran it (its logs are the command's).
+	Job string `json:"job,omitempty"`
+}
+
+// Release-phase states.
+const (
+	ReleaseRunning   = "Running"
+	ReleaseSucceeded = "Succeeded"
+	ReleaseFailed    = "Failed"
+)
 
 // Release is one entry of the deployment history.
 type Release struct {

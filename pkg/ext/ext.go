@@ -157,6 +157,21 @@ func Audience(c *cobra.Command) string {
 type CLIGlobals interface {
 	Kubeconfig() string
 	Context() string
+	// API is the workspace API through whatever the CLI has: a login
+	// session (no cluster at all) or the kubeconfig proxy. Extension
+	// commands that speak the API work for tenants of a hosted platform;
+	// those that need the cluster (exec into a database) do not.
+	API() APIClient
+}
+
+// APIClient sends requests to the workspace API.
+type APIClient interface {
+	// Request performs one call; body may be nil. Errors carry the
+	// server's message.
+	Request(ctx context.Context, method, path string, body []byte, contentType string) ([]byte, error)
+	// Session says the CLI is signed in through the API and has no cluster:
+	// commands that exec into pods must say so instead of failing.
+	Session() bool
 }
 
 // Names returns the names of extensions, in order.

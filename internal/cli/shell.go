@@ -56,17 +56,14 @@ process type with --process; the default is the first web instance.`,
 				return err
 			}
 			if ac.session {
-				// Over the API: the web terminal's bridge (RFC-0026). It opens
-				// the image's shell; a command to run is not supported there.
-				if len(args) > 0 {
-					return errors.New("running a command through the shell needs cluster access for now (--context); `shpyrd run` is the one-off command")
-				}
+				// Over the API: the web terminal's bridge (RFC-0026), with the
+				// image's shell or the given command.
 				inst, err := ac.pickInstanceAPI(ctx, name, process, instance)
 				if err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s...\n", inst.Name)
-				return ac.shellAPI(ctx, name, inst, cmd.ErrOrStderr())
+				return ac.shellAPI(ctx, name, inst, args, cmd.ErrOrStderr())
 			}
 			app, err := ac.getApp(ctx, name)
 			if err != nil {

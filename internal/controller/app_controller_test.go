@@ -34,11 +34,12 @@ func newTestReconciler(t *testing.T, objs ...client.Object) (*AppReconciler, cli
 		WithStatusSubresource(&shpyrdv1.App{}, &shpyrdv1.Volume{}, &shpyrdv1.Postgres{}, &shpyrdv1.Redis{}, &shpyrdv1.ObjectBucket{}).
 		Build()
 	r := &AppReconciler{
-		Client:    c,
-		APIReader: c,
-		Scheme:    scheme,
-		Recorder:  record.NewFakeRecorder(100),
-		Config:    Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true}.Defaults(),
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c,
+		APIReader:    c,
+		Scheme:       scheme,
+		Recorder:     record.NewFakeRecorder(100),
+		Config:       Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true}.Defaults(),
 	}
 	return r, c
 }

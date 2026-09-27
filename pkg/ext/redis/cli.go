@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -71,28 +70,16 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
-				return err
-			}
-			if err := resources.RequireProject(ctx, c, project); err != nil {
-				return err
-			}
-			rd := &shpyrdv1.Redis{
-				ObjectMeta: metav1.ObjectMeta{Name: args[0], Namespace: resources.Namespace(project), Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: project}},
-				Spec:       shpyrdv1.RedisSpec{Engine: engine, Version: version, Size: size, Persistent: persistent},
-			}
+			spec := shpyrdv1.RedisSpec{Engine: engine, Version: version, Size: size, Persistent: persistent}
 			if persistent {
 				qty, err := resource.ParseQuantity(storage)
 				if err != nil || qty.Sign() <= 0 {
 					return fmt.Errorf("invalid --storage %q (use e.g. 1Gi)", storage)
 				}
-				rd.Spec.Storage = &qty
+				spec.Storage = &qty
 			}
-			if err := c.Create(ctx, rd); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("store %q already exists in project %s", args[0], project)
-				}
+			// Through the API (RFC-0052).
+			if _, err := resources.CreateAPI(ctx, g.API(), project, "Redis", args[0], spec); err != nil {
 				return err
 			}
 			mode := "cache"
@@ -100,7 +87,22 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 				mode = "persistent"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Creating %s %s (%s)...\n", firstNonEmpty(engine, "valkey"), args[0], mode)
-			return waitReady(ctx, cmd, c, rd, 3*time.Minute)
+			v, err := resources.WaitReadyAPI(ctx, g.API(), cmd.OutOrStdout(), project, "Redis", args[0], 3*time.Minute)
+			if err != nil {
+				return err
+			}
+			switch {
+			case v == nil:
+				fmt.Fprintln(cmd.OutOrStdout(), "Still provisioning; check with `shpyrd redis list`.")
+			case v.Phase == shpyrdv1.ResourceFailed:
+				if strings.Contains(v.Message, "extension is not installed") {
+					return errors.New(resources.ExtensionHint(Name))
+				}
+				return errors.New(v.Message)
+			default:
+				fmt.Fprintf(cmd.OutOrStdout(), "Store %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
+			}
+			return nil
 		},
 	}
 	projectFlag(cmd, &project)
@@ -154,33 +156,22 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 		Short:   "List the stores of a project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			list, err := resources.ListAPI(ctx, g.API(), project, "Redis")
 			if err != nil {
 				return err
 			}
-			var list shpyrdv1.RedisList
-			if err := c.List(ctx, &list, client.InNamespace(resources.Namespace(project))); err != nil {
-				return err
-			}
-			if len(list.Items) == 0 {
+			if len(list) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "No stores in project %s. Create one with `shpyrd redis create cache --project %s`.\n", project, project)
 				return nil
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tENGINE\tSIZE\tMODE\tSTATUS\tATTACHED TO")
-			for _, rd := range list.Items {
-				bound, _ := resources.BoundBy(ctx, c, rd.Namespace, "Redis", rd.Name)
+			for _, v := range list {
 				mode := "cache"
-				if rd.Spec.Persistent {
-					mode = "persistent"
-					switch {
-					case rd.Status.Storage != "":
-						mode += " " + rd.Status.Storage
-					case rd.Spec.Storage != nil:
-						mode += " " + rd.Spec.Storage.String()
-					}
+				if v.Details["persistent"] == "true" {
+					mode = "persistent " + firstNonEmpty(v.Details["storage"], "")
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", rd.Name, firstNonEmpty(rd.Spec.Engine, "valkey"), firstNonEmpty(rd.Spec.Size, "default"), mode, firstNonEmpty(rd.Status.Phase, "Pending"), firstNonEmpty(strings.Join(bound, ", "), "-"))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["engine"], "valkey"), firstNonEmpty(v.Details["size"], "default"), strings.TrimSpace(mode), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 			}
 			return tw.Flush()
 		},
@@ -197,20 +188,16 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			v, err := resources.GetAPI(ctx, g.API(), project, "Redis", args[0])
 			if err != nil {
 				return err
 			}
-			rd, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			bound, _ := resources.BoundBy(ctx, c, rd.Namespace, "Redis", rd.Name)
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Store:      %s (project %s)\n", rd.Name, project)
-			fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(rd.Status.Phase, "Pending"), suffix(rd.Status.Message))
-			fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(rd.Status.Endpoint, "-"))
-			fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(bound, ", "), "- (shpyrd attach "+rd.Name+" --project "+project+")"))
+			fmt.Fprintf(out, "Store:      %s (project %s)\n", v.Name, project)
+			fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
+			fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
+			fmt.Fprintf(out, "Engine:     %s %s\n", firstNonEmpty(v.Details["engine"], "valkey"), v.Details["version"])
+			fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
 			fmt.Fprintf(out, "Config vars: REDIS_URL, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (values are never shown)\n")
 			return nil
 		},
@@ -270,24 +257,20 @@ func newDeleteCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			v, err := resources.GetAPI(ctx, g.API(), project, "Redis", args[0])
 			if err != nil {
 				return err
 			}
-			rd, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			if err := resources.CheckDeletable(ctx, c, rd.Namespace, "Redis", rd.Name, force); err != nil {
-				return err
+			if len(v.AttachedTo) > 0 && !force {
+				return fmt.Errorf("store %q is attached to %s: detach it first (shpyrd detach %s --project %s) or pass --force", v.Name, strings.Join(v.AttachedTo, ", "), v.Name, project)
 			}
 			if !yes {
-				return fmt.Errorf("this deletes store %q; re-run with --yes to confirm", rd.Name)
+				return fmt.Errorf("this deletes store %q and its data; re-run with --yes to confirm", v.Name)
 			}
-			if err := c.Delete(ctx, rd); client.IgnoreNotFound(err) != nil {
+			if err := resources.DeleteAPI(ctx, g.API(), project, "Redis", v.Name, force); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s from project %s\n", rd.Name, project)
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted store %s from project %s\n", v.Name, project)
 			return nil
 		},
 	}

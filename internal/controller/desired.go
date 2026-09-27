@@ -175,7 +175,13 @@ func processes(app *shpyrdv1.App) []namedProcess {
 	}
 	out := make([]namedProcess, 0, len(m))
 	for name, p := range m {
+		if name == releaseProcessType {
+			continue // runs once per release as a Job, never as a workload
+		}
 		out = append(out, namedProcess{Name: name, Process: p})
+	}
+	if len(out) == 0 {
+		out = append(out, namedProcess{Name: "web"})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

@@ -152,7 +152,16 @@ func (s *Server) mintShellTicket(c *gin.Context) {
 		abort(c, http.StatusConflict, errors.New("you already have a shell open on this project; close it first"))
 		return
 	}
-	code, err := s.execTickets.mint(execTicket{Identity: id, Project: app.Name, Instance: instance})
+	// ?cmd=... (repeatable) runs a command instead of a shell.
+	var command []string
+	for _, arg := range c.QueryArray("cmd") {
+		command = append(command, arg)
+	}
+	if len(command) > 0 && len(strings.Join(command, " ")) > 4096 {
+		abort(c, http.StatusBadRequest, errors.New("the command is too long"))
+		return
+	}
+	code, err := s.execTickets.mint(execTicket{Identity: id, Project: app.Name, Instance: instance, Command: command})
 	if errors.Is(err, errTicketsFull) {
 		// Not the caller's fault and not permanent: the store drains itself
 		// within a ticket's 30 seconds, so say so rather than reporting a fault.

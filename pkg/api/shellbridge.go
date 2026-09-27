@@ -185,17 +185,29 @@ func (s *Server) appShell(c *gin.Context) {
 	// registry and every other tenant's dashboard, and this route is reachable
 	// by anyone holding project.exec on a single project of their own.
 	conn.SetReadLimit(shellReadLimit)
-	s.runShell(c, conn, app.Namespace, pod, t.Instance, app.Name)
+	s.runShell(c, conn, app.Namespace, pod, t.Instance, app.Name, t.Command)
 }
 
-// runShell resolves the shell, then pipes the socket to the pod until one end
-// stops.
-func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, instance, project string) {
+// runShell resolves the shell (or takes the ticket's command), then pipes
+// the socket to the pod until one end stops.
+func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, instance, project string, given []string) {
 	w := &wsConn{c: conn}
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
-	command, err := s.probe(ctx, namespace, pod)
+	var command []string
+	var err error
+	if len(given) > 0 {
+		// A command from the CLI: through the launcher when the image has
+		// one, so buildpack apps see their environment (the launcher runs
+		// whatever follows "--").
+		command = append([]string{cnbLauncher, "--"}, given...)
+		if _, perr := s.execRun(ctx, namespace, pod, appContainer, []string{"test", "-x", cnbLauncher}); perr != nil {
+			command = given
+		}
+	} else {
+		command, err = s.probe(ctx, namespace, pod)
+	}
 	if err != nil {
 		_ = w.control(shellControl{Type: "error", Message: err.Error()})
 		_ = w.close(websocket.CloseInternalServerErr, err.Error())
@@ -208,6 +220,9 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 		return
 	}
 	shell := command[len(command)-1]
+	if len(given) > 0 {
+		shell = strings.Join(given, " ")
+	}
 	_ = w.control(shellControl{Type: "open", Instance: instance, Shell: shell})
 	s.audit(c, project, "shell.open", instance, shell)
 

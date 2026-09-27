@@ -2,7 +2,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -20,6 +22,39 @@ type globalFlags struct {
 	kubeconfig string
 	kubeCtx    string
 	verbose    bool
+}
+
+// API implements ext.CLIGlobals: the workspace API over the login session
+// or the kubeconfig proxy, decided the same way every core command does.
+func (g *globalFlags) API() ext.APIClient { return &apiTransport{g: g} }
+
+type apiTransport struct {
+	g  *globalFlags
+	ac *appClient
+}
+
+func (t *apiTransport) client() (*appClient, error) {
+	if t.ac == nil {
+		ac, err := newAppClient(t.g, io.Discard)
+		if err != nil {
+			return nil, err
+		}
+		t.ac = ac
+	}
+	return t.ac, nil
+}
+
+func (t *apiTransport) Request(ctx context.Context, method, path string, body []byte, contentType string) ([]byte, error) {
+	ac, err := t.client()
+	if err != nil {
+		return nil, err
+	}
+	return ac.serverRequest(ctx, method, path, body, contentType)
+}
+
+func (t *apiTransport) Session() bool {
+	ac, err := t.client()
+	return err == nil && ac.session
 }
 
 // New builds the root command.

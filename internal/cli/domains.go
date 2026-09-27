@@ -12,7 +12,6 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
-	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
 // shpyrd domains (RFC-0034): custom hostnames for a project. The project is
@@ -43,11 +42,11 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
 			}
-			raw, err := serverRequest(ctx, k, "GET", "api/projects/"+name+"/domains", nil, "")
+			raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+name+"/domains", nil, "")
 			if err != nil {
 				return err
 			}
@@ -71,12 +70,12 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
 			}
 			body, _ := json.Marshal(map[string]string{"host": args[0]})
-			raw, err := serverRequest(ctx, k, "POST", "api/projects/"+name+"/domains", body, "application/json")
+			raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/domains", body, "application/json")
 			if err != nil {
 				return err
 			}
@@ -105,7 +104,7 @@ certificate is issued as soon as DNS resolves here.
 					return nil
 				case <-time.After(10 * time.Second):
 				}
-				raw, err := serverRequest(ctx, k, "GET", "api/projects/"+name+"/domains", nil, "")
+				raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+name+"/domains", nil, "")
 				if err != nil {
 					return err
 				}
@@ -149,11 +148,11 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
 			}
-			if _, err := serverRequest(ctx, k, "DELETE", "api/projects/"+name+"/domains/"+strings.ToLower(args[0]), nil, ""); err != nil {
+			if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/domains/"+strings.ToLower(args[0]), nil, ""); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s from %s (its certificate goes with it).\n", strings.ToLower(args[0]), name)

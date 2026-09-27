@@ -28,7 +28,11 @@ type execTicket struct {
 	Identity ext.Identity
 	Project  string
 	Instance string
-	expires  time.Time
+	// Command, when set, runs instead of the image's shell (the CLI's
+	// `shpyrd shell -- <cmd>`): through the buildpack launcher so the
+	// process sees its environment.
+	Command []string
+	expires time.Time
 }
 
 // maxOpenTickets caps unredeemed tickets. Without a cap the store grows for a

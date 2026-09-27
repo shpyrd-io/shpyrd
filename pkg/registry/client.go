@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -195,4 +197,88 @@ func nextLink(h string) string {
 		return u.RequestURI()
 	}
 	return ""
+}
+
+// ProcessTypes reads the process types a Cloud Native Buildpacks image
+// declares (web, worker, release, ...) from its config's
+// io.buildpacks.build.metadata label. ref is a digest or a tag; an image
+// index resolves to the entry for this platform. Images not built by
+// buildpacks have no label: an empty list, no error.
+func (c *Client) ProcessTypes(ctx context.Context, repo, ref string) ([]string, error) {
+	const accept = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+	resp, err := c.do(ctx, "GET", "/v2/"+repo+"/manifests/"+ref, accept)
+	if err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	var manifest struct {
+		MediaType string `json:"mediaType"`
+		Config    struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+		Manifests []struct {
+			Digest   string `json:"digest"`
+			Platform struct {
+				OS           string `json:"os"`
+				Architecture string `json:"architecture"`
+			} `json:"platform"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
+	if manifest.Config.Digest == "" && len(manifest.Manifests) > 0 {
+		// An index: this platform's image, else the first.
+		pick := manifest.Manifests[0].Digest
+		for _, m := range manifest.Manifests {
+			if m.Platform.OS == "linux" && m.Platform.Architecture == runtime.GOARCH {
+				pick = m.Digest
+				break
+			}
+		}
+		return c.ProcessTypes(ctx, repo, pick)
+	}
+	if manifest.Config.Digest == "" {
+		return nil, errors.New("manifest has no config")
+	}
+	resp, err = c.do(ctx, "GET", "/v2/"+repo+"/blobs/"+manifest.Config.Digest, "")
+	if err != nil {
+		return nil, err
+	}
+	cfgBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(cfgBody, &cfg); err != nil {
+		return nil, fmt.Errorf("image config: %w", err)
+	}
+	raw := cfg.Config.Labels["io.buildpacks.build.metadata"]
+	if raw == "" {
+		return []string{}, nil
+	}
+	var meta struct {
+		Processes []struct {
+			Type string `json:"type"`
+		} `json:"processes"`
+	}
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		return nil, fmt.Errorf("buildpack metadata: %w", err)
+	}
+	out := make([]string, 0, len(meta.Processes))
+	for _, p := range meta.Processes {
+		if p.Type != "" {
+			out = append(out, p.Type)
+		}
+	}
+	return out, nil
 }

@@ -47,6 +47,9 @@ type AppReconciler struct {
 	Scheme    *runtime.Scheme
 	Recorder  record.EventRecorder
 	Config    Config
+	// ProcessTypes reads an image's process types (RFC-0066); nil uses the
+	// platform registry. Tests inject one.
+	ProcessTypes func(ctx context.Context, image string) []string
 	// Now returns the current time; nil means time.Now (tests override it).
 	Now func() time.Time
 	// Resolver checks custom domains' DNS (RFC-0034); nil uses the system's.
@@ -354,6 +357,34 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return requeue(30 * time.Second), nil
 	}
 
+	// 3b. The release phase (RFC-0066): an image with a "release" process
+	// type (a Procfile's release: line) runs it before a new release rolls
+	// out; the rollout waits, and a failure leaves the previous release
+	// serving.
+	if types := r.processTypesOf(ctx, image); types != nil {
+		app.Status.ProcessTypes = types
+	}
+	if releasePending(app, image, hash) {
+		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: app.Spec.Processes[releaseProcessType]}, r.catalog(ctx))
+		proceed, err := r.reconcileReleasePhase(ctx, app, image, hash, res)
+		if err != nil {
+			return outcome{}, err
+		}
+		if !proceed {
+			st := app.Status.Release
+			if st.State == shpyrdv1.ReleaseFailed {
+				app.Status.Phase = shpyrdv1.PhaseFailed
+				app.Status.Message = st.Message
+				setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReleaseFailed", st.Message)
+				return outcome{}, nil
+			}
+			app.Status.Phase = shpyrdv1.PhaseDeploying
+			app.Status.Message = "release phase: " + st.Message
+			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReleasePhase", app.Status.Message)
+			return requeue(5 * time.Second), nil
+		}
+	}
+
 	// 4. Workloads.
 	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash)
 	if err != nil {
@@ -444,14 +475,21 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
 func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+	// The project's own builder when it composes its build (RFC-0065),
+	// else the platform's.
+	builderRef, err := r.reconcileBuilder(ctx, app)
+	if err != nil {
+		return nil, err
+	}
 	desired := r.Config.desiredKpackImage(app)
+	_ = unstructured.SetNestedField(desired.Object, builderRef, "spec", "builder")
 	if err := controllerutil.SetControllerReference(app, desired, r.Scheme); err != nil {
 		return nil, err
 	}
 
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(KpackImageGVK)
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
+	err = r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {

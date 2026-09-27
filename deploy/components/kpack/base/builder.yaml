@@ -26,6 +26,21 @@ spec:
   runImage:
     image: index.docker.io/paketobuildpacks/run-jammy-base:latest
 ---
+# The full stack (RFC-0065): more system libraries in the run image, for
+# projects that ask for it with build.stack: full.
+apiVersion: kpack.io/v1alpha2
+kind: ClusterStack
+metadata:
+  name: jammy-full
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  id: io.buildpacks.stacks.jammy
+  buildImage:
+    image: index.docker.io/paketobuildpacks/build-jammy-full:latest
+  runImage:
+    image: index.docker.io/paketobuildpacks/run-jammy-full:latest
+---
 apiVersion: kpack.io/v1alpha2
 kind: ClusterBuildpack
 metadata:
@@ -113,6 +128,33 @@ spec:
 apiVersion: kpack.io/v1alpha2
 kind: ClusterBuildpack
 metadata:
+  name: paketo-php
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  serviceAccountRef:
+    name: kpack-builder
+    namespace: ${SHPYRD_SYSTEM_NS}
+  image: index.docker.io/paketobuildpacks/php:latest
+---
+# Heroku's .deb packages buildpack (RFC-0065): an Aptfile in the source
+# installs system packages; composed in front of the language by the
+# controller, never part of the platform builder's detection.
+apiVersion: kpack.io/v1alpha2
+kind: ClusterBuildpack
+metadata:
+  name: heroku-deb-packages
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  serviceAccountRef:
+    name: kpack-builder
+    namespace: ${SHPYRD_SYSTEM_NS}
+  image: index.docker.io/heroku/buildpack-deb-packages:1.0.1
+---
+apiVersion: kpack.io/v1alpha2
+kind: ClusterBuildpack
+metadata:
   name: paketo-procfile
   labels:
     app.kubernetes.io/part-of: shpyrd
@@ -153,6 +195,9 @@ spec:
           kind: ClusterBuildpack
     - group:
         - name: paketo-ruby
+          kind: ClusterBuildpack
+    - group:
+        - name: paketo-php
           kind: ClusterBuildpack
     - group:
         - name: paketo-dotnet-core

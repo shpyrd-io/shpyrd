@@ -163,6 +163,12 @@ type projectBuild struct {
 	Dockerfile string `json:"dockerfile,omitempty"`
 	// Target is the multi-stage build target.
 	Target string `json:"target,omitempty"`
+	// Buildpacks composes the build from the platform's catalog, in order
+	// (RFC-0065): [deb-packages, ruby]. Empty keeps the platform's
+	// detection.
+	Buildpacks []string `json:"buildpacks,omitempty"`
+	// Stack is "base" (default) or "full".
+	Stack string `json:"stack,omitempty"`
 }
 
 // applyTo writes the project settings into the App spec. Declared process
@@ -238,7 +244,7 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 		default:
 			return fmt.Errorf("shpyrd.yaml: build.strategy must be buildpacks or dockerfile, got %q", pc.Build.Strategy)
 		}
-		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target}
+		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target, Buildpacks: pc.Build.Buildpacks, Stack: pc.Build.Stack}
 		if b.Strategy == "" && (b.Dockerfile != "" || b.Target != "") {
 			b.Strategy = shpyrdv1.StrategyDockerfile
 		}
@@ -887,6 +893,7 @@ func detailToApp(d *api.AppDetail) *shpyrdv1.App {
 		Phase: d.Status.Phase, Message: d.Status.Message, Image: d.Status.Digest, URL: d.Status.URL,
 		LatestBuild: d.Status.LatestBuild, ObservedGeneration: d.Status.ObservedGeneration,
 		Conditions: d.Status.Conditions, Domains: d.Status.Domains, Processes: d.Processes,
+		ProcessTypes: d.Status.ProcessTypes, Release: d.Status.Release,
 	}
 	for _, r := range d.Status.Releases {
 		app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{

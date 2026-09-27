@@ -50,7 +50,10 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 	if len(procs) == 0 {
 		procs = map[string]shpyrdv1.Process{"web": {}}
 	}
-	for _, p := range procs {
+	for name, p := range procs {
+		if name == "release" {
+			continue // runs once per release as a Job (RFC-0066), not an instance
+		}
 		n := int32(1)
 		if p.Replicas != nil {
 			n = *p.Replicas

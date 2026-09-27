@@ -292,6 +292,18 @@ func printAppInfo(cmd *cobra.Command, app *shpyrdv1.App) {
 			fmt.Fprintf(out, "Path:       %s\n", app.Spec.Source.SubPath)
 		}
 	}
+	if len(app.Status.ProcessTypes) > 0 {
+		types := strings.Join(app.Status.ProcessTypes, ", ")
+		for _, t := range app.Status.ProcessTypes {
+			if t == "release" {
+				types += "   (release runs before every release)"
+			}
+		}
+		fmt.Fprintf(out, "Types:      %s\n", types)
+	}
+	if rel := app.Status.Release; rel != nil && rel.State != shpyrdv1.ReleaseSucceeded {
+		fmt.Fprintf(out, "Release:    %s: %s\n", strings.ToLower(rel.State), rel.Message)
+	}
 	// Health check summary per process (RFC-0019).
 	if len(app.Spec.Processes) > 0 {
 		pnames := make([]string, 0, len(app.Spec.Processes))

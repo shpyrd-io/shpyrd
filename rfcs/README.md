@@ -93,6 +93,8 @@ declare what they depend on.
 | [0062](0062-kubectl-through-platform-sign-in.md) | kubectl through the platform's sign-in (`shpyrd auth kubectl`) | provisional | 0007, 0008, 0058, 0035 |
 | [0063](0063-dashboard-access-zones.md) | Dashboard access zones: public dashboard, intranet-only areas | provisional | 0036, 0008, 0035 |
 | [0064](0064-linux-developer-loop.md) | Linux developer loop: privileged ports, image loading, browser trust | implemented | 0001, 0057 |
+| [0065](0065-build-composition.md) | Build composition: buildpacks, stacks and system packages per project | implemented (v0.9.9); gaps: no `GET /api/buildpacks`, dashboard | 0004, 0045 |
+| [0066](0066-release-phase.md) | Release phase: the image's `release` process type runs before every release | implemented (v0.9.9); gaps: dashboard, output not streamed into deploy | 0004, 0005 |
 
 ## Phases
 

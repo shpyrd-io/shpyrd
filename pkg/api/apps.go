@@ -18,6 +18,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
@@ -126,6 +127,10 @@ type AppDetailStatus struct {
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 	// Domains is the state of each custom domain (RFC-0034).
 	Domains []shpyrdv1.DomainStatus `json:"domains,omitempty"`
+	// ProcessTypes are the image's process types (RFC-0066); Release the
+	// state of the release command for the release rolling out.
+	ProcessTypes []string                     `json:"processTypes,omitempty"`
+	Release      *shpyrdv1.ReleasePhaseStatus `json:"release,omitempty"`
 }
 
 // ReleaseView is a release with the image reduced to its digest and linked
@@ -180,6 +185,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			URL:         a.Status.URL,
 			LatestBuild: a.Status.LatestBuild,
 			Generation:  a.Generation, ObservedGeneration: a.Status.ObservedGeneration,
+			ProcessTypes: a.Status.ProcessTypes, Release: a.Status.Release,
 			Releases:   []ReleaseView{},
 			Conditions: a.Status.Conditions,
 			Domains:    a.Status.Domains,
@@ -564,6 +570,16 @@ func validateDeployRequest(req *DeployRequest) error {
 		case "", shpyrdv1.StrategyBuildpacks, shpyrdv1.StrategyDockerfile:
 		default:
 			return fmt.Errorf("build.strategy must be buildpacks or dockerfile, got %q", req.Build.Strategy)
+		}
+		switch strings.ToLower(req.Build.Stack) {
+		case "", "base", "full":
+		default:
+			return fmt.Errorf("build.stack must be base or full, got %q", req.Build.Stack)
+		}
+		for _, name := range req.Build.Buildpacks {
+			if _, ok := controller.ResolveBuildpack(name); !ok {
+				return fmt.Errorf("unknown buildpack %q in build.buildpacks; the catalog has: %s", name, strings.Join(controller.CatalogNames(), ", "))
+			}
 		}
 	}
 	switch req.Exposure {

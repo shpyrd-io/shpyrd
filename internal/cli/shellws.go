@@ -91,11 +91,16 @@ func instanceNames(list []api.Instance) string {
 	return strings.Join(names, ", ")
 }
 
-// shellAPI runs an interactive shell in an instance over the WebSocket
-// bridge. Commands cannot be passed: the bridge opens the image's shell.
-func (a *appClient) shellAPI(ctx context.Context, slug string, inst api.Instance, stderr io.Writer) error {
-	// 1. A ticket, bound to the project and the instance (30 s, single use).
-	raw, err := a.serverRequest(ctx, "POST", "api/projects/"+slug+"/shell/ticket?instance="+url.QueryEscape(inst.Name), nil, "")
+// shellAPI runs an interactive shell — or a command — in an instance over
+// the WebSocket bridge.
+func (a *appClient) shellAPI(ctx context.Context, slug string, inst api.Instance, command []string, stderr io.Writer) error {
+	// 1. A ticket, bound to the project and the instance (30 s, single use),
+	// carrying the command when there is one.
+	q := url.Values{"instance": {inst.Name}}
+	for _, arg := range command {
+		q.Add("cmd", arg)
+	}
+	raw, err := a.serverRequest(ctx, "POST", "api/projects/"+slug+"/shell/ticket?"+q.Encode(), nil, "")
 	if err != nil {
 		return err
 	}
@@ -201,7 +206,9 @@ func (a *appClient) shellAPI(ctx context.Context, slug string, inst api.Instance
 			}
 			switch f.Type {
 			case "open":
-				fmt.Fprintf(stderr, "Connected to %s (%s). Type exit to leave.\r\n", f.Instance, firstNonEmpty(f.Shell, "shell"))
+				if len(command) == 0 {
+					fmt.Fprintf(stderr, "Connected to %s (%s). Type exit to leave.\r\n", f.Instance, firstNonEmpty(f.Shell, "shell"))
+				}
 			case "exit":
 				if f.Code != nil {
 					exitCode = *f.Code

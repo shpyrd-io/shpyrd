@@ -15,7 +15,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,32 +76,36 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
-				return err
-			}
-			if err := resources.RequireProject(ctx, c, project); err != nil {
-				return err
-			}
 			qty, err := resource.ParseQuantity(storage)
 			if err != nil || qty.Sign() <= 0 {
 				return fmt.Errorf("invalid --storage %q (use e.g. 10Gi)", storage)
 			}
-			pg := &shpyrdv1.Postgres{
-				ObjectMeta: metav1.ObjectMeta{Name: args[0], Namespace: resources.Namespace(project), Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: project}},
-				Spec:       shpyrdv1.PostgresSpec{Version: version, Size: size, Storage: &qty, Instances: ptr.To(instances)},
-			}
+			// Through the API (RFC-0052): the same for a login session and a
+			// kubeconfig; the server validates the spec against the CRD.
+			spec := shpyrdv1.PostgresSpec{Version: version, Size: size, Storage: &qty, Instances: ptr.To(instances)}
 			if backups || retention != "" || schedule != "" {
-				pg.Spec.Backups = &shpyrdv1.PostgresBackups{Retention: retention, Schedule: schedule}
+				spec.Backups = &shpyrdv1.PostgresBackups{Retention: retention, Schedule: schedule}
 			}
-			if err := c.Create(ctx, pg); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("database %q already exists in project %s", args[0], project)
-				}
+			if _, err := resources.CreateAPI(ctx, g.API(), project, "Postgres", args[0], spec); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Creating PostgreSQL %s database %s (%s, %d instance(s))...\n", version, args[0], qty.String(), instances)
-			return waitReady(ctx, cmd, c, pg, 5*time.Minute)
+			v, err := resources.WaitReadyAPI(ctx, g.API(), cmd.OutOrStdout(), project, "Postgres", args[0], 5*time.Minute)
+			if err != nil {
+				return err
+			}
+			switch {
+			case v == nil:
+				fmt.Fprintln(cmd.OutOrStdout(), "Still provisioning; check with `shpyrd pg list`.")
+			case v.Phase == shpyrdv1.ResourceFailed:
+				if strings.Contains(v.Message, "extension is not installed") {
+					return errors.New(resources.ExtensionHint(Name))
+				}
+				return errors.New(v.Message)
+			default:
+				fmt.Fprintf(cmd.OutOrStdout(), "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
+			}
+			return nil
 		},
 	}
 	projectFlag(cmd, &project)
@@ -116,39 +119,6 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	return cmd
 }
 
-// waitReady follows the resource until it is Ready or Failed.
-func waitReady(ctx context.Context, cmd *cobra.Command, c client.Client, pg *shpyrdv1.Postgres, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	last := ""
-	for time.Now().Before(deadline) {
-		cur := &shpyrdv1.Postgres{}
-		if err := c.Get(ctx, client.ObjectKeyFromObject(pg), cur); err != nil {
-			return err
-		}
-		if msg := cur.Status.Phase + " " + cur.Status.Message; msg != last && cur.Status.Phase != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", strings.TrimSpace(msg))
-			last = msg
-		}
-		switch cur.Status.Phase {
-		case shpyrdv1.ResourceReady:
-			fmt.Fprintf(cmd.OutOrStdout(), "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", pg.Name, cur.Status.Endpoint, pg.Name, strings.TrimPrefix(pg.Namespace, "app-"))
-			return nil
-		case shpyrdv1.ResourceFailed:
-			if strings.Contains(cur.Status.Message, "extension is not installed") {
-				return errors.New(resources.ExtensionHint(Name))
-			}
-			return errors.New(cur.Status.Message)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
-	fmt.Fprintln(cmd.OutOrStdout(), "Still provisioning; check with `shpyrd pg list`.")
-	return nil
-}
-
 func newListCmd(g ext.CLIGlobals) *cobra.Command {
 	var project string
 	cmd := &cobra.Command{
@@ -157,34 +127,18 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 		Short:   "List the databases of a project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			list, err := resources.ListAPI(ctx, g.API(), project, "Postgres")
 			if err != nil {
 				return err
 			}
-			var list shpyrdv1.PostgresList
-			if err := c.List(ctx, &list, client.InNamespace(resources.Namespace(project))); err != nil {
-				return err
-			}
-			if len(list.Items) == 0 {
+			if len(list) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "No databases in project %s. Create one with `shpyrd pg create db --project %s`.\n", project, project)
 				return nil
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tVERSION\tSIZE\tSTORAGE\tINSTANCES\tSTATUS\tATTACHED TO")
-			for _, pg := range list.Items {
-				bound, _ := resources.BoundBy(ctx, c, pg.Namespace, "Postgres", pg.Name)
-				storage := "5Gi"
-				if pg.Spec.Storage != nil {
-					storage = pg.Spec.Storage.String()
-				}
-				if pg.Status.Storage != "" && pg.Status.Storage != storage {
-					storage = pg.Status.Storage + " (" + storage + " requested)"
-				}
-				inst := int32(1)
-				if pg.Spec.Instances != nil {
-					inst = *pg.Spec.Instances
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", pg.Name, firstNonEmpty(pg.Spec.Version, "17"), firstNonEmpty(pg.Spec.Size, "default"), storage, inst, firstNonEmpty(pg.Status.Phase, "Pending"), firstNonEmpty(strings.Join(bound, ", "), "-"))
+			for _, v := range list {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), firstNonEmpty(v.Details["size"], "default"), firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 			}
 			return tw.Flush()
 		},
@@ -201,22 +155,31 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			v, err := resources.GetAPI(ctx, g.API(), project, "Postgres", args[0])
 			if err != nil {
 				return err
 			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			bound, _ := resources.BoundBy(ctx, c, pg.Namespace, "Postgres", pg.Name)
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Database:   %s (project %s)\n", pg.Name, project)
-			fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(pg.Status.Phase, "Pending"), suffix(pg.Status.Message))
-			fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(pg.Status.Endpoint, "-"))
-			fmt.Fprintf(out, "Version:    PostgreSQL %s\n", firstNonEmpty(pg.Spec.Version, "17"))
-			fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(bound, ", "), "- (shpyrd attach "+pg.Name+" --project "+project+")"))
-			fmt.Fprintf(out, "Backups:    %s\n", backupsLine(pg))
+			fmt.Fprintf(out, "Database:   %s (project %s)\n", v.Name, project)
+			fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
+			fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
+			fmt.Fprintf(out, "Version:    PostgreSQL %s\n", firstNonEmpty(v.Details["version"], "17"))
+			fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
+			fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
+			backups := "off (create with --backups, or restore from another database's backup)"
+			if b := v.Details["backups"]; b != "" {
+				backups = b
+				if last := v.Details["lastBackup"]; last != "" {
+					backups += "; last " + last
+				}
+				if from := v.Details["recoverableFrom"]; from != "" {
+					backups += "; recoverable from " + from
+				}
+			}
+			fmt.Fprintf(out, "Backups:    %s\n", backups)
+			if from := v.Details["restoredFrom"]; from != "" {
+				fmt.Fprintf(out, "Restored:   from %s\n", from)
+			}
 			fmt.Fprintf(out, "Config vars: DATABASE_URL, DATABASE_HOST, DATABASE_PORT, DATABASE_USER, DATABASE_PASSWORD, DATABASE_NAME (values are never shown)\n")
 			return nil
 		},
@@ -270,24 +233,20 @@ func newDeleteCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
+			v, err := resources.GetAPI(ctx, g.API(), project, "Postgres", args[0])
 			if err != nil {
 				return err
 			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			if err := resources.CheckDeletable(ctx, c, pg.Namespace, "Postgres", pg.Name, force); err != nil {
-				return err
+			if len(v.AttachedTo) > 0 && !force {
+				return fmt.Errorf("database %q is attached to %s: detach it first (shpyrd detach %s --project %s) or pass --force", v.Name, strings.Join(v.AttachedTo, ", "), v.Name, project)
 			}
 			if !yes {
-				return fmt.Errorf("this deletes database %q and all its data; re-run with --yes to confirm", pg.Name)
+				return fmt.Errorf("this deletes database %q and all its data; re-run with --yes to confirm", v.Name)
 			}
-			if err := c.Delete(ctx, pg); client.IgnoreNotFound(err) != nil {
+			if err := resources.DeleteAPI(ctx, g.API(), project, "Postgres", v.Name, force); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted database %s from project %s\n", pg.Name, project)
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted database %s from project %s\n", v.Name, project)
 			return nil
 		},
 	}
@@ -322,4 +281,38 @@ func suffix(msg string) string {
 		return ""
 	}
 	return " (" + msg + ")"
+}
+
+// waitReady follows a Postgres until it is Ready or Failed, through the
+// cluster (restore still runs that way).
+func waitReady(ctx context.Context, cmd *cobra.Command, c client.Client, pg *shpyrdv1.Postgres, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for time.Now().Before(deadline) {
+		cur := &shpyrdv1.Postgres{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(pg), cur); err != nil {
+			return err
+		}
+		if msg := cur.Status.Phase + " " + cur.Status.Message; msg != last && cur.Status.Phase != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", strings.TrimSpace(msg))
+			last = msg
+		}
+		switch cur.Status.Phase {
+		case shpyrdv1.ResourceReady:
+			fmt.Fprintf(cmd.OutOrStdout(), "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", pg.Name, cur.Status.Endpoint, pg.Name, strings.TrimPrefix(pg.Namespace, "app-"))
+			return nil
+		case shpyrdv1.ResourceFailed:
+			if strings.Contains(cur.Status.Message, "extension is not installed") {
+				return errors.New(resources.ExtensionHint(Name))
+			}
+			return errors.New(cur.Status.Message)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Still provisioning; check with `shpyrd pg list`.")
+	return nil
 }

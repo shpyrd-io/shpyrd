@@ -119,6 +119,25 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				} else {
 					fmt.Fprintln(out, "==> Building with buildpacks")
 				}
+				// An Aptfile: system packages through the .deb buildpack
+				// (RFC-0065), translated into the archive's project.toml.
+				if req.Build == nil || req.Build.Strategy != shpyrdv1.StrategyDockerfile {
+					patched, packages, unsupported, err := withSystemPackages(archive)
+					if err != nil {
+						return fmt.Errorf("Aptfile: %w", err)
+					}
+					for _, u := range unsupported {
+						fmt.Fprintf(out, "    Aptfile: %q is not supported (only package names); skipped\n", u)
+					}
+					if len(packages) > 0 {
+						archive = patched
+						if req.Build == nil {
+							req.Build = &shpyrdv1.Build{}
+						}
+						req.Build.SystemPackages = true
+						fmt.Fprintf(out, "==> System packages from Aptfile: %s\n", strings.Join(packages, ", "))
+					}
+				}
 				fmt.Fprintf(out, "==> Uploading source (%s)\n", humanBytes(len(archive)))
 				info, err := ac.uploadSourceAPI(ctx, archive)
 				if err != nil {

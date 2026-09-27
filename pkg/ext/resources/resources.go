@@ -5,8 +5,12 @@ package resources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/url"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -78,4 +82,112 @@ func CheckDeletable(ctx context.Context, c client.Client, namespace, kind, name 
 // ExtensionHint explains a missing controller.
 func ExtensionHint(extension string) string {
 	return fmt.Sprintf("the %s extension is not enabled on this cluster: run `shpyrd extensions enable %s`", extension, extension)
+}
+
+// ---- through the API (RFC-0052) ------------------------------------------------
+//
+// The core's /api/projects/:slug/resources routes create, list and delete
+// resources of any extension kind; the CRD schema validates the spec. Going
+// through them, the data store CLIs work for tenants of a hosted platform
+// who have no kubeconfig, and for operators through the kubeconfig proxy.
+
+// View is a resource as the API lists it (api.ResourceView's fields the
+// CLIs print).
+type View struct {
+	Kind       string            `json:"kind"`
+	Name       string            `json:"name"`
+	Phase      string            `json:"phase"`
+	Message    string            `json:"message,omitempty"`
+	Endpoint   string            `json:"endpoint,omitempty"`
+	Details    map[string]string `json:"details,omitempty"`
+	AttachedTo []string          `json:"attachedTo"`
+	Data       bool              `json:"data"`
+	CreatedAt  time.Time         `json:"createdAt"`
+}
+
+// CreateAPI creates a resource of a kind with a spec, as the CRD spells it.
+func CreateAPI(ctx context.Context, api ext.APIClient, project, kind, name string, spec any) (*View, error) {
+	body, err := json.Marshal(map[string]any{"kind": kind, "name": name, "spec": spec})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := api.Request(ctx, "POST", "api/projects/"+project+"/resources", body, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("unexpected response: %s", raw)
+	}
+	return &v, nil
+}
+
+// ListAPI lists the project's resources of one kind.
+func ListAPI(ctx context.Context, api ext.APIClient, project, kind string) ([]View, error) {
+	raw, err := api.Request(ctx, "GET", "api/projects/"+project+"/resources", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var all []View
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return nil, fmt.Errorf("unexpected response: %s", raw)
+	}
+	out := make([]View, 0, len(all))
+	for _, v := range all {
+		if strings.EqualFold(v.Kind, kind) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// GetAPI finds one resource by kind and name.
+func GetAPI(ctx context.Context, api ext.APIClient, project, kind, name string) (*View, error) {
+	list, err := ListAPI(ctx, api, project, kind)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Name == name {
+			return &list[i], nil
+		}
+	}
+	return nil, fmt.Errorf("%s %q not found in project %s", strings.ToLower(kind), name, project)
+}
+
+// DeleteAPI removes a resource; force detaches it from apps first.
+func DeleteAPI(ctx context.Context, api ext.APIClient, project, kind, name string, force bool) error {
+	path := "api/projects/" + project + "/resources/" + url.PathEscape(kind) + "/" + url.PathEscape(name)
+	if force {
+		path += "?force=true"
+	}
+	_, err := api.Request(ctx, "DELETE", path, nil, "")
+	return err
+}
+
+// WaitReadyAPI follows a resource until it is Ready or Failed, printing
+// phase changes, and returns the final view.
+func WaitReadyAPI(ctx context.Context, api ext.APIClient, out io.Writer, project, kind, name string, timeout time.Duration) (*View, error) {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for time.Now().Before(deadline) {
+		v, err := GetAPI(ctx, api, project, kind, name)
+		if err != nil {
+			return nil, err
+		}
+		if msg := strings.TrimSpace(v.Phase + " " + v.Message); msg != last && v.Phase != "" {
+			fmt.Fprintf(out, "    %s\n", msg)
+			last = msg
+		}
+		switch v.Phase {
+		case shpyrdv1.ResourceReady, shpyrdv1.ResourceFailed:
+			return v, nil
+		}
+		select {
+		case <-ctx.Done():
+			return v, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return nil, nil // still provisioning
 }

@@ -124,6 +124,15 @@ spec:
                     description: Builder is the kpack ClusterBuilder to use. Defaults
                       to "shpyrd".
                     type: string
+                  buildpacks:
+                    description: |-
+                      Buildpacks composes the build (RFC-0065): the catalog entries to run,
+                      in order, all of them — "deb-packages, ruby". When set (or Stack is),
+                      the project gets a builder of its own instead of the platform's
+                      detection.
+                    items:
+                      type: string
+                    type: array
                   dockerfile:
                     description: |-
                       Dockerfile is the path of the Dockerfile inside the source (after
@@ -291,12 +300,27 @@ spec:
                       - name
                       type: object
                     type: array
+                  stack:
+                    description: |-
+                      Stack is the base images the build and the app run on: "base"
+                      (default, Ubuntu jammy base) or "full" (jammy full, more system
+                      libraries, a larger image).
+                    enum:
+                    - base
+                    - full
+                    type: string
                   strategy:
                     description: Strategy is "buildpacks" (default) or "dockerfile".
                     enum:
                     - buildpacks
                     - dockerfile
                     type: string
+                  systemPackages:
+                    description: |-
+                      SystemPackages says the source carries an Aptfile: the .deb packages
+                      buildpack runs before the language's, whichever detects. The CLI sets
+                      it when it finds the file.
+                    type: boolean
                   target:
                     description: Target is the multi-stage build target.
                     type: string
@@ -817,6 +841,14 @@ spec:
                 description: 'Phase is a coarse summary: Pending, Building, Deploying,
                   Running, Failed.'
                 type: string
+              processTypes:
+                description: |-
+                  ProcessTypes are the process types the current image declares (from
+                  its buildpack metadata: web, worker, release, ...). A "release" type
+                  runs before every release, as a Job, and gates the rollout.
+                items:
+                  type: string
+                type: array
               processes:
                 additionalProperties:
                   description: ProcessStatus is the rollout state of one process type.
@@ -858,6 +890,28 @@ spec:
                   - ready
                   type: object
                 description: Processes reports rollout state per process type.
+                type: object
+              release:
+                description: |-
+                  Release reports the last release-phase run: the target it ran for,
+                  its state and message.
+                properties:
+                  job:
+                    description: Job is the Kubernetes Job that ran it (its logs are
+                      the command's).
+                    type: string
+                  message:
+                    type: string
+                  state:
+                    description: State is Running, Succeeded or Failed.
+                    type: string
+                  target:
+                    description: Target identifies the image and configuration the
+                      run was for.
+                    type: string
+                required:
+                - state
+                - target
                 type: object
               releases:
                 description: Releases is the deployment history, oldest first.
