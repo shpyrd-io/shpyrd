@@ -146,12 +146,12 @@ jobs:
           ./bin/shpyrd teams create platform --platform-role platform-admin --member ci@example.com --context kind-ci
           ./bin/shpyrd members add hello-world --user dev@example.com --role developer --context kind-ci
           ./bin/shpyrd members add hello-world --team platform --role user --context kind-ci
-          ./bin/shpyrd members list hello-world --context kind-ci | grep -q "dev@example.com"
-          ./bin/shpyrd teams list --context kind-ci | grep -q platform
+          ./bin/shpyrd members list hello-world --context kind-ci | grep "dev@example.com" >/dev/null
+          ./bin/shpyrd teams list --context kind-ci | grep platform >/dev/null
           # Teams and grants live in the control-plane database and survive a server restart (RFC-0033).
           kubectl --context kind-ci -n shpyrd-system rollout restart deployment/shpyrd-server
           kubectl --context kind-ci -n shpyrd-system rollout status deployment/shpyrd-server --timeout=180s
-          ./bin/shpyrd members list hello-world --context kind-ci | grep -q "dev@example.com"
+          ./bin/shpyrd members list hello-world --context kind-ci | grep "dev@example.com" >/dev/null
           ./bin/shpyrd projects destroy api --yes --context kind-ci
       - name: Diagnostics
         if: failure()
