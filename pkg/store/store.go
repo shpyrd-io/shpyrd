@@ -67,6 +67,9 @@ type WorkspaceSettings struct {
 	// Branding is how the workspace looks to its people: the launcher and
 	// the login page show its logo and use its colour (RFC-0033).
 	Branding *Branding `json:"branding,omitempty"`
+	// MCPName is what an assistant shows for the workspace's MCP server
+	// (RFC-0032); "<name> on shpyrd" when empty.
+	MCPName string `json:"mcpName,omitempty"`
 }
 
 // Branding is a workspace's look.
@@ -264,6 +267,71 @@ type Hosts interface {
 	UpdateWorkspaceAddress(ctx context.Context, slug, address string) (*Workspace, error)
 }
 
+// OAuthClient is an application registered at the workspace's OAuth 2.1
+// server (RFC-0032, RFC 7591 dynamic registration): an MCP client such as
+// Claude. Public clients (no secret) prove themselves with PKCE.
+type OAuthClient struct {
+	ID           string    `json:"id"`
+	WorkspaceID  string    `json:"workspaceId"`
+	ClientID     string    `json:"clientId"`
+	SecretHash   string    `json:"-"`
+	Name         string    `json:"name"`
+	RedirectURIs []string  `json:"redirectUris"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// OAuthCode is an authorization code waiting to be exchanged: one use,
+// minutes of life, bound to the client, the redirect URI and the PKCE
+// challenge.
+type OAuthCode struct {
+	Hash          string    `json:"-"`
+	WorkspaceID   string    `json:"workspaceId"`
+	ClientID      string    `json:"clientId"`
+	Email         string    `json:"email"`
+	Subject       string    `json:"subject"`
+	Scope         string    `json:"scope"`
+	RedirectURI   string    `json:"redirectUri"`
+	CodeChallenge string    `json:"codeChallenge"`
+	Resource      string    `json:"resource,omitempty"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+}
+
+// OAuthToken is a refresh token a person granted a client: what the
+// person's settings list and revoke. Only its hash is stored.
+type OAuthToken struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	ClientID    string     `json:"clientId"`
+	ClientName  string     `json:"clientName,omitempty"`
+	Email       string     `json:"email"`
+	Scope       string     `json:"scope"`
+	Hash        string     `json:"-"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// OAuth is the OAuth 2.1 server's part of the Store (RFC-0032).
+type OAuth interface {
+	CreateOAuthClient(ctx context.Context, ws string, c OAuthClient) (*OAuthClient, error)
+	// OAuthClientByID finds a client of any workspace by its client_id.
+	OAuthClientByID(ctx context.Context, clientID string) (*OAuthClient, error)
+	// PutOAuthCode stores a code by its hash; TakeOAuthCode returns and
+	// removes it (expired ones too, as ErrNotFound).
+	PutOAuthCode(ctx context.Context, code OAuthCode) error
+	TakeOAuthCode(ctx context.Context, hash string) (*OAuthCode, error)
+	// CreateOAuthToken stores a refresh token by its hash.
+	CreateOAuthToken(ctx context.Context, ws string, t OAuthToken) (*OAuthToken, error)
+	// OAuthTokenByHash finds a live refresh token; ErrNotFound when it is
+	// unknown or expired.
+	OAuthTokenByHash(ctx context.Context, hash string) (*OAuthToken, error)
+	// RotateOAuthToken replaces a token's hash (refresh token rotation)
+	// and records the use.
+	RotateOAuthToken(ctx context.Context, id, newHash string, expiresAt time.Time) error
+	ListOAuthTokens(ctx context.Context, ws, email string) ([]OAuthToken, error)
+	DeleteOAuthToken(ctx context.Context, ws, id string) error
+}
+
 // Memberships is the workspace-role part of the Store.
 type Memberships interface {
 	ListMemberships(ctx context.Context, ws string) ([]Membership, error)
@@ -361,6 +429,7 @@ type Store interface {
 	Tokens
 	Memberships
 	Hosts
+	OAuth
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

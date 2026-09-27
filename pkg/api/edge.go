@@ -95,7 +95,10 @@ func (s *Server) dashboardURLOf(ws *store.Workspace) string {
 	if ws != nil && ws.Address != "" {
 		return "https://" + s.dashboardHostOf(ws)
 	}
-	return s.opts.Public.DashboardURL
+	if s.opts.Public.DashboardURL != "" {
+		return strings.TrimSuffix(s.opts.Public.DashboardURL, "/")
+	}
+	return "https://" + s.dashboardHost()
 }
 
 // appsDomainOf is the domain a workspace's apps live one label under, as

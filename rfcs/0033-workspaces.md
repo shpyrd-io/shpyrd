@@ -244,6 +244,12 @@ Also in v0.9.16 — the launcher and the workspace's look:
 - **Branding**: a logo and an accent colour on Workspace › Overview, shown by the launcher,
   the header and the login page instead of the platform's.
 
+- **Every workspace is an MCP server** (RFC-0032, first slice): an assistant such as Claude
+  connects at `https://<workspace>/mcp`, the person consents through the workspace's OAuth
+  2.1 server, and the assistant asks about their projects — status, logs, metrics — within
+  their roles, read-only. Overview › AI assistants names the server and lists what each
+  person connected.
+
 Known gaps (the model promises these; the code does not do them yet): an `identified` app
 sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
 (the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete;

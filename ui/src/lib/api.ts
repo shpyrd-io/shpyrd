@@ -93,6 +93,9 @@ export type WorkspaceInfo = {
   ownMethodsOnly: boolean;
   /** The workspace's look: logo URL and accent colour, when set. */
   branding?: { logoUrl?: string; color?: string };
+  /** The MCP server assistants connect to (RFC-0032). */
+  mcpName: string;
+  mcpUrl: string;
   /** Emails of the workspace's owners. */
   owners: string[];
   createdAt: string;
@@ -198,6 +201,18 @@ export type WorkspaceDomain = {
   primary: boolean;
   records: { type: string; name: string; value: string }[];
   url: string;
+};
+
+/** An assistant a person connected through OAuth (RFC-0032). */
+export type Connection = {
+  id: string;
+  client: string;
+  clientId: string;
+  email: string;
+  scope: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt?: string;
 };
 
 /** The mail extension's status (RFC-0013): never the password. */
@@ -846,7 +861,14 @@ export const api = {
     /** Branding: a logo data URL ("" removes), an accent colour #rrggbb ("" resets). */
     logo?: string;
     color?: string;
+    /** The name assistants show for the MCP server ("" resets). */
+    mcpName?: string;
   }) => request<WorkspaceInfo>("/api/workspace", json("PATCH", body)),
+  connections: () => request<Connection[]>("/api/workspace/connections"),
+  revokeConnection: (id: string) =>
+    request<void>(`/api/workspace/connections/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   workspaceDomains: () => request<WorkspaceDomain[]>("/api/workspace/domains"),
   addWorkspaceDomain: (host: string) =>
     request<WorkspaceDomain>("/api/workspace/domains", json("POST", { host })),

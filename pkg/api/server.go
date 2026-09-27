@@ -433,6 +433,25 @@ func (s *Server) routes() error {
 	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
 	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
 	pub.GET("/workspace/logo", s.workspaceLogo)            // the workspace's logo, for the login page too
+	// The workspace's OAuth 2.1 server and MCP endpoint (RFC-0032). The
+	// well-known documents sit at the root, with and without the resource
+	// path (RFC 8414 §3.1, RFC 9728 §3.1); the endpoints are throttled
+	// like sign-in.
+	for _, p := range []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/mcp"} {
+		s.engine.GET(p, tenant, s.oauthMetadata)
+	}
+	for _, p := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"} {
+		s.engine.GET(p, tenant, s.protectedResourceMetadata)
+	}
+	oauth := s.engine.Group("/oauth", tenant, login)
+	oauth.POST("/register", s.oauthRegister)
+	oauth.GET("/authorize", s.oauthAuthorize)
+	oauth.POST("/authorize", s.oauthDecide)
+	oauth.POST("/token", s.oauthToken)
+	oauth.POST("/revoke", s.oauthRevoke)
+	s.engine.POST("/mcp", tenant, s.mcpAuth(), s.mcpHandle)
+	s.engine.GET("/mcp", tenant, s.mcpOther)
+	s.engine.DELETE("/mcp", tenant, s.mcpOther)
 
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
@@ -469,7 +488,9 @@ func (s *Server) routes() error {
 	api.GET("/workspace/invitations", s.require(authz.ClusterAdmin), s.listInvitations)
 	api.POST("/workspace/invitations", s.require(authz.ClusterAdmin), s.createInvitation)
 	api.DELETE("/workspace/invitations/:id", s.require(authz.ClusterAdmin), s.deleteInvitation)
-	api.POST("/invitations/:token/accept", s.acceptInvitation)                           // any signed-in person: the email must match
+	api.POST("/invitations/:token/accept", s.acceptInvitation) // any signed-in person: the email must match
+	api.GET("/workspace/connections", s.listConnections)       // the caller's connected assistants (RFC-0032)
+	api.DELETE("/workspace/connections/:id", s.deleteConnection)
 	api.GET("/workspace/domains", s.require(authz.ClusterAdmin), s.listWorkspaceDomains) // custom workspace domains (RFC-0033 names)
 	api.POST("/workspace/domains", s.require(authz.ClusterAdmin), s.addWorkspaceDomain)
 	api.POST("/workspace/domains/:host/verify", s.require(authz.ClusterAdmin), s.verifyWorkspaceDomain)
@@ -589,6 +610,14 @@ func (s *Server) auth() gin.HandlerFunc {
 		// has its own identity and roles, so we skip the admin token check.
 		if s.identifyWithToken(c) {
 			c.Next()
+			return
+		}
+		// Then one of our OAuth access tokens (RFC-0032): an assistant
+		// acting for a person, within the token's scope.
+		if s.identifyWithOAuth(c) {
+			if !c.IsAborted() {
+				c.Next()
+			}
 			return
 		}
 		tok := c.GetHeader("X-Shpyrd-Token")

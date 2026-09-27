@@ -38,6 +38,9 @@ type Memory struct {
 	memberships []Membership
 	invitations []invitationEntry
 	hosts       []WorkspaceHost
+	oclients    []OAuthClient
+	ocodes      map[string]*OAuthCode
+	otokens     []OAuthToken
 	now         func() time.Time
 }
 
@@ -1196,4 +1199,164 @@ func (m *Memory) UpdateWorkspaceAddress(_ context.Context, slug, address string)
 	w.Address, w.UpdatedAt = address, m.now()
 	c := *w
 	return &c, nil
+}
+
+// ---- OAuth 2.1 server (RFC-0032) ----------------------------------------------
+
+func (m *Memory) CreateOAuthClient(_ context.Context, ws string, c OAuthClient) (*OAuthClient, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	if c.ClientID == "" {
+		return nil, errors.New("client id is required")
+	}
+	for _, e := range m.oclients {
+		if e.ClientID == c.ClientID {
+			return nil, ErrConflict
+		}
+	}
+	c.ID, c.WorkspaceID, c.CreatedAt = newID(), w.ID, m.now()
+	c.RedirectURIs = append([]string(nil), c.RedirectURIs...)
+	m.oclients = append(m.oclients, c)
+	out := c
+	return &out, nil
+}
+
+func (m *Memory) OAuthClientByID(_ context.Context, clientID string) (*OAuthClient, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.oclients {
+		if e.ClientID == clientID {
+			out := e
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) PutOAuthCode(_ context.Context, code OAuthCode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if code.Hash == "" {
+		return errors.New("code hash is required")
+	}
+	if m.ocodes == nil {
+		m.ocodes = map[string]*OAuthCode{}
+	}
+	now := m.now()
+	for k, c := range m.ocodes {
+		if now.After(c.ExpiresAt) {
+			delete(m.ocodes, k)
+		}
+	}
+	c := code
+	c.Email = strings.ToLower(c.Email)
+	m.ocodes[code.Hash] = &c
+	return nil
+}
+
+func (m *Memory) TakeOAuthCode(_ context.Context, hash string) (*OAuthCode, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.ocodes[hash]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	delete(m.ocodes, hash)
+	if m.now().After(c.ExpiresAt) {
+		return nil, ErrNotFound
+	}
+	out := *c
+	return &out, nil
+}
+
+func (m *Memory) CreateOAuthToken(_ context.Context, ws string, t OAuthToken) (*OAuthToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	if t.Hash == "" {
+		return nil, errors.New("token hash is required")
+	}
+	t.ID, t.WorkspaceID, t.CreatedAt = newID(), w.ID, m.now()
+	t.Email = strings.ToLower(t.Email)
+	m.otokens = append(m.otokens, t)
+	out := t
+	return &out, nil
+}
+
+func (m *Memory) OAuthTokenByHash(_ context.Context, hash string) (*OAuthToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.otokens {
+		if t.Hash == hash {
+			if m.now().After(t.ExpiresAt) {
+				return nil, ErrNotFound
+			}
+			out := t
+			for _, c := range m.oclients {
+				if c.ClientID == t.ClientID {
+					out.ClientName = c.Name
+				}
+			}
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) RotateOAuthToken(_ context.Context, id, newHash string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.otokens {
+		if m.otokens[i].ID == id {
+			now := m.now()
+			m.otokens[i].Hash, m.otokens[i].ExpiresAt, m.otokens[i].LastUsedAt = newHash, expiresAt, &now
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) ListOAuthTokens(_ context.Context, ws, email string) ([]OAuthToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	for _, c := range m.oclients {
+		names[c.ClientID] = c.Name
+	}
+	var out []OAuthToken
+	for _, t := range m.otokens {
+		if t.WorkspaceID == w.ID && (email == "" || strings.EqualFold(t.Email, email)) {
+			t.ClientName = names[t.ClientID]
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *Memory) DeleteOAuthToken(_ context.Context, ws, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return err
+	}
+	for i, t := range m.otokens {
+		if t.WorkspaceID == w.ID && t.ID == id {
+			m.otokens = append(m.otokens[:i], m.otokens[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
 }

@@ -24,6 +24,7 @@ import { UsersPage } from "@/pages/users";
 import { PeopleCard } from "@/components/people-card";
 import { AddressField, DomainsCard } from "@/components/workspace-names";
 import { BrandingCard } from "@/components/branding-card";
+import { MCPCard } from "@/components/mcp-card";
 import { SignInSettings } from "@/components/signin-settings";
 import { TokensCard } from "@/components/tokens-card";
 
@@ -101,6 +102,7 @@ export function WorkspacePage() {
         </TabsList>
         <TabsContent value="overview" className="mt-4 grid gap-6">
           <WorkspaceCard readOnly={!perms.clusterAdmin} />
+          {config.data?.authRequired && <MCPCard />}
           {perms.clusterAdmin && <BrandingCard />}
           {perms.clusterAdmin && <DomainsCard />}
           {ws.data?.limits && <PlanCard ws={ws.data} />}

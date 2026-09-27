@@ -55,6 +55,10 @@ type WorkspaceView struct {
 	OwnMethodsOnly bool `json:"ownMethodsOnly"`
 	// Branding is the workspace's look (logo URL, colour).
 	Branding *BrandingView `json:"branding,omitempty"`
+	// MCPName is the name assistants show for the workspace's MCP server;
+	// MCPURL where it answers (RFC-0032).
+	MCPName string `json:"mcpName"`
+	MCPURL  string `json:"mcpUrl"`
 	// Owners are the emails of the workspace's owners (RFC-0033).
 	Owners    []string  `json:"owners"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -117,6 +121,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
 		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",
 	}
 }
 
@@ -144,6 +149,8 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		// "" to remove it; the colour as #rrggbb, "" to reset.
 		Logo  *string `json:"logo"`
 		Color *string `json:"color"`
+		// MCPName names the workspace's MCP server for assistants; "" resets.
+		MCPName *string `json:"mcpName"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -199,6 +206,19 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 			return
 		}
 		changes = append(changes, fmt.Sprintf("own methods only: %v", *req.OwnMethodsOnly))
+	}
+	if req.MCPName != nil {
+		if err := validMCPName(*req.MCPName); err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		settings := w.Settings
+		settings.MCPName = strings.TrimSpace(*req.MCPName)
+		if w, err = s.store.UpdateWorkspaceSettings(ctx, s.workspace(c), settings); err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+		changes = append(changes, "mcp name: "+firstNonEmpty(settings.MCPName, "(default)"))
 	}
 	if req.Logo != nil || req.Color != nil {
 		settings := w.Settings

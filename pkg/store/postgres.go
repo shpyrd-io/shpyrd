@@ -1291,5 +1291,161 @@ func (p *Postgres) UpdateWorkspaceAddress(ctx context.Context, slug, address str
 	return out, tx.Commit(ctx)
 }
 
+// ---- OAuth 2.1 server (RFC-0032) ----------------------------------------------
+
+const oclientColumns = `id, workspace_id, client_id, secret_hash, name, redirect_uris, created_at`
+
+func scanOAuthClient(row pgx.Row) (*OAuthClient, error) {
+	var c OAuthClient
+	var uris []byte
+	if err := row.Scan(&c.ID, &c.WorkspaceID, &c.ClientID, &c.SecretHash, &c.Name, &uris, &c.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	_ = json.Unmarshal(uris, &c.RedirectURIs)
+	if c.RedirectURIs == nil {
+		c.RedirectURIs = []string{}
+	}
+	return &c, nil
+}
+
+func (p *Postgres) CreateOAuthClient(ctx context.Context, ws string, c OAuthClient) (*OAuthClient, error) {
+	if c.ClientID == "" {
+		return nil, errors.New("client id is required")
+	}
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	uris, _ := json.Marshal(dedupe(c.RedirectURIs))
+	out, err := scanOAuthClient(p.pool.QueryRow(ctx, `INSERT INTO oauth_clients (id, workspace_id, client_id, secret_hash, name, redirect_uris) VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+oclientColumns,
+		newID(), wsID, c.ClientID, c.SecretHash, c.Name, uris))
+	if isUnique(err) {
+		return nil, ErrConflict
+	}
+	return out, err
+}
+
+func (p *Postgres) OAuthClientByID(ctx context.Context, clientID string) (*OAuthClient, error) {
+	return scanOAuthClient(p.pool.QueryRow(ctx, `SELECT `+oclientColumns+` FROM oauth_clients WHERE client_id = $1`, clientID))
+}
+
+func (p *Postgres) PutOAuthCode(ctx context.Context, code OAuthCode) error {
+	if code.Hash == "" {
+		return errors.New("code hash is required")
+	}
+	if _, err := p.pool.Exec(ctx, `DELETE FROM oauth_codes WHERE expires_at < now()`); err != nil {
+		return err
+	}
+	_, err := p.pool.Exec(ctx, `INSERT INTO oauth_codes (hash, workspace_id, client_id, email, subject, scope, redirect_uri, code_challenge, resource, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		code.Hash, code.WorkspaceID, code.ClientID, strings.ToLower(code.Email), code.Subject, code.Scope, code.RedirectURI, code.CodeChallenge, code.Resource, code.ExpiresAt)
+	return err
+}
+
+func (p *Postgres) TakeOAuthCode(ctx context.Context, hash string) (*OAuthCode, error) {
+	var c OAuthCode
+	err := p.pool.QueryRow(ctx, `DELETE FROM oauth_codes WHERE hash = $1 RETURNING hash, workspace_id, client_id, email, subject, scope, redirect_uri, code_challenge, resource, expires_at`, hash).
+		Scan(&c.Hash, &c.WorkspaceID, &c.ClientID, &c.Email, &c.Subject, &c.Scope, &c.RedirectURI, &c.CodeChallenge, &c.Resource, &c.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().After(c.ExpiresAt) {
+		return nil, ErrNotFound
+	}
+	return &c, nil
+}
+
+const otokenSelect = `SELECT t.id, t.workspace_id, t.client_id, COALESCE(c.name, ''), t.email, t.scope, t.hash, t.created_at, t.expires_at, t.last_used_at
+	FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id`
+
+func scanOAuthToken(row pgx.Row) (*OAuthToken, error) {
+	var t OAuthToken
+	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.ClientID, &t.ClientName, &t.Email, &t.Scope, &t.Hash, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (p *Postgres) CreateOAuthToken(ctx context.Context, ws string, t OAuthToken) (*OAuthToken, error) {
+	if t.Hash == "" {
+		return nil, errors.New("token hash is required")
+	}
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	id := newID()
+	if _, err := p.pool.Exec(ctx, `INSERT INTO oauth_tokens (id, workspace_id, client_id, email, scope, hash, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, wsID, t.ClientID, strings.ToLower(t.Email), t.Scope, t.Hash, t.ExpiresAt); err != nil {
+		return nil, err
+	}
+	return scanOAuthToken(p.pool.QueryRow(ctx, otokenSelect+` WHERE t.id = $1`, id))
+}
+
+func (p *Postgres) OAuthTokenByHash(ctx context.Context, hash string) (*OAuthToken, error) {
+	return scanOAuthToken(p.pool.QueryRow(ctx, otokenSelect+` WHERE t.hash = $1 AND t.expires_at > now()`, hash))
+}
+
+func (p *Postgres) RotateOAuthToken(ctx context.Context, id, newHash string, expiresAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE oauth_tokens SET hash = $2, expires_at = $3, last_used_at = now() WHERE id = $1`, id, newHash, expiresAt)
+	if err != nil {
+		return notFoundOnBadID(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) ListOAuthTokens(ctx context.Context, ws, email string) ([]OAuthToken, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	q, args := otokenSelect+` WHERE t.workspace_id = $1`, []any{wsID}
+	if email != "" {
+		q += ` AND t.email = $2`
+		args = append(args, strings.ToLower(email))
+	}
+	rows, err := p.pool.Query(ctx, q+` ORDER BY t.created_at`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OAuthToken
+	for rows.Next() {
+		t, err := scanOAuthToken(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) DeleteOAuthToken(ctx context.Context, ws, id string) error {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return err
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM oauth_tokens WHERE workspace_id = $1 AND id = $2`, wsID, id)
+	if err != nil {
+		return notFoundOnBadID(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 var _ Store = (*Postgres)(nil)
 var _ Store = (*Memory)(nil)

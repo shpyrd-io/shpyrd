@@ -44,6 +44,19 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 	}
 }
 
+// auditActor records an action on behalf of a named person when the
+// request itself carries no identity (the OAuth token endpoint, where the
+// client speaks for the person who consented).
+func (s *Server) auditActor(c *gin.Context, actor, action, target, detail string) {
+	if s.kube == nil || s.kube.Kube == nil {
+		return
+	}
+	entry := audit.Entry{Actor: firstNonEmpty(actor, "anonymous"), Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: "workspace"}
+	if err := audit.Record(c.Request.Context(), s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace), entry); err != nil {
+		s.log.Warn("audit: cannot record", "action", action, "error", err)
+	}
+}
+
 // auditAnonymous records a security event of an unauthenticated client.
 func (s *Server) auditAnonymous(c *gin.Context, action, detail string) {
 	s.auditFailure(c, action, c.ClientIP(), detail)

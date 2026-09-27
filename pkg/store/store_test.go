@@ -39,7 +39,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -408,6 +408,82 @@ func TestWorkspaceHosts(t *testing.T) {
 			}
 			if err := s.DeleteWorkspaceHost(ctx, "acme", "apps.acme.com"); !errors.Is(err, ErrNotFound) {
 				t.Errorf("delete again: %v", err)
+			}
+		})
+	}
+}
+
+// The OAuth 2.1 server's records (RFC-0032): clients, one-use codes,
+// refresh tokens that rotate and expire.
+func TestOAuthRecords(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			ws := DefaultWorkspace
+			w, _ := s.Workspace(ctx, ws)
+			c, err := s.CreateOAuthClient(ctx, ws, OAuthClient{ClientID: "cl_1", Name: "Claude", RedirectURIs: []string{"https://claude.ai/cb"}})
+			if err != nil || c.ID == "" || c.WorkspaceID != w.ID {
+				t.Fatalf("client: %+v %v", c, err)
+			}
+			if _, err := s.CreateOAuthClient(ctx, ws, OAuthClient{ClientID: "cl_1"}); !errors.Is(err, ErrConflict) {
+				t.Errorf("duplicate client: %v", err)
+			}
+			if got, err := s.OAuthClientByID(ctx, "cl_1"); err != nil || got.Name != "Claude" || len(got.RedirectURIs) != 1 {
+				t.Errorf("by id: %+v %v", got, err)
+			}
+			if _, err := s.OAuthClientByID(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown client: %v", err)
+			}
+			// Codes: taken once.
+			if err := s.PutOAuthCode(ctx, OAuthCode{Hash: "h1", WorkspaceID: w.ID, ClientID: "cl_1", Email: "Ada@x.test", RedirectURI: "https://claude.ai/cb", CodeChallenge: "ch", Scope: "projects:read", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			code, err := s.TakeOAuthCode(ctx, "h1")
+			if err != nil || code.Email != "ada@x.test" || code.ClientID != "cl_1" || code.CodeChallenge != "ch" {
+				t.Fatalf("take: %+v %v", code, err)
+			}
+			if _, err := s.TakeOAuthCode(ctx, "h1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("code twice: %v", err)
+			}
+			_ = s.PutOAuthCode(ctx, OAuthCode{Hash: "h2", WorkspaceID: w.ID, ClientID: "cl_1", Email: "a@x.test", RedirectURI: "r", CodeChallenge: "c", ExpiresAt: time.Now().Add(-time.Second)})
+			if _, err := s.TakeOAuthCode(ctx, "h2"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("expired code: %v", err)
+			}
+			// Refresh tokens: found by hash while live, rotated, listed per person, deleted.
+			tok, err := s.CreateOAuthToken(ctx, ws, OAuthToken{ClientID: "cl_1", Email: "Ada@x.test", Scope: "projects:read", Hash: "r1", ExpiresAt: time.Now().Add(time.Hour)})
+			if err != nil || tok.ID == "" || tok.Email != "ada@x.test" {
+				t.Fatalf("token: %+v %v", tok, err)
+			}
+			if got, err := s.OAuthTokenByHash(ctx, "r1"); err != nil || got.ID != tok.ID || got.ClientName != "Claude" {
+				t.Errorf("by hash: %+v %v", got, err)
+			}
+			if err := s.RotateOAuthToken(ctx, tok.ID, "r2", time.Now().Add(2*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.OAuthTokenByHash(ctx, "r1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("old hash after rotation: %v", err)
+			}
+			if got, err := s.OAuthTokenByHash(ctx, "r2"); err != nil || got.LastUsedAt == nil {
+				t.Errorf("rotated: %+v %v", got, err)
+			}
+			if _, err := s.CreateOAuthToken(ctx, ws, OAuthToken{ClientID: "cl_1", Email: "bob@x.test", Hash: "r3", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.OAuthTokenByHash(ctx, "r3"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("expired token: %v", err)
+			}
+			if list, _ := s.ListOAuthTokens(ctx, ws, "ADA@x.test"); len(list) != 1 || list[0].ClientName != "Claude" {
+				t.Errorf("list: %+v", list)
+			}
+			if all, _ := s.ListOAuthTokens(ctx, ws, ""); len(all) != 2 {
+				t.Errorf("list all: %+v", all)
+			}
+			if err := s.DeleteOAuthToken(ctx, ws, tok.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteOAuthToken(ctx, ws, tok.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("delete twice: %v", err)
 			}
 		})
 	}
