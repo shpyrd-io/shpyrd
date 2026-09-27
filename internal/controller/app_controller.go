@@ -474,6 +474,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = summary
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionTrue, "Running", summary)
 	}
+	if r.Config.suspended(app) {
+		app.Status.Message = "workspace suspended: the app runs but is not served; " + app.Status.Message
+	}
 	return out, nil
 }
 
@@ -679,9 +682,12 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 
-	// Ingress for web, and the certificates its hosts need (RFC-0034).
+	// Ingress for web, and the certificates its hosts need (RFC-0034). A
+	// suspended workspace's apps are not served: no Ingress, so the front
+	// door's default backend answers for the host with the suspension page.
+	serving := hasWeb(app) && !r.Config.suspended(app)
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
-	if hasWeb(app) {
+	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 			r.Config.mutateIngress(app, ing)
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
@@ -694,7 +700,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if hasWeb(app) && app.EffectiveAccess() != shpyrdv1.AccessPublic {
+	if serving && app.EffectiveAccess() != shpyrdv1.AccessPublic {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)

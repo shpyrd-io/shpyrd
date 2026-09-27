@@ -34,6 +34,10 @@ type Config struct {
 	// WorkspaceLimits answers a workspace's plan, nil when it has none; the
 	// controller backs it with a ResourceQuota per project namespace.
 	WorkspaceLimits func(slug string) *store.Limits
+	// WorkspaceSuspended says a workspace is suspended: its apps keep
+	// running but are not served (their Ingresses go; the front door
+	// answers with a page saying so). Nil: never.
+	WorkspaceSuspended func(slug string) bool
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
@@ -236,6 +240,15 @@ func workspaceOf(app *shpyrdv1.App) string {
 		return ws
 	}
 	return project.DefaultWorkspace
+}
+
+// suspended says the app's workspace is suspended (RFC-0033).
+func (c Config) suspended(app *shpyrdv1.App) bool {
+	if c.WorkspaceSuspended == nil {
+		return false
+	}
+	ws := workspaceOf(app)
+	return ws != project.DefaultWorkspace && c.WorkspaceSuspended(ws)
 }
 
 // appsDomain is the domain the app's default host sits one label under:

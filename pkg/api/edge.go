@@ -525,6 +525,12 @@ func (s *Server) customError(c *gin.Context) bool {
 	code := c.GetHeader("X-Code")
 	if code == "" {
 		if s.foreignHost(c) {
+			// A suspended workspace's apps have no Ingress: their hosts
+			// land here and say why (RFC-0033).
+			if ws, err := s.tenant(c); err == nil && ws.Status == store.WorkspaceSuspended {
+				s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended; its apps are not available.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
+				return true
+			}
 			s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
 			return true
 		}

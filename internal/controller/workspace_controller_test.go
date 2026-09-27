@@ -2,14 +2,19 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -88,5 +93,45 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-beta"}, ing); err != nil {
 		t.Errorf("beta's front door must stay: %v", err)
+	}
+}
+
+// A suspended workspace's apps keep running but are not served: their
+// Ingresses go (the front door's default backend answers with the
+// suspension page) and come back on resume. The implicit workspace is
+// never suspended.
+func TestSuspendedWorkspaceIsNotServed(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop"), Generation: 1},
+		Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Access: shpyrdv1.AccessAuthenticated},
+	}
+	r, c := newTestReconciler(t, app)
+	suspended := map[string]bool{}
+	r.Config.WorkspaceSuspended = func(slug string) bool { return suspended[slug] }
+	r.Config.WorkspaceDomain = func(slug string) string { return slug + ".shpyrd.test" }
+	got := runReconcile(t, r, app)
+	for _, name := range []string{"shop", edgeName(app)} {
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: name}, &networkingv1.Ingress{}); err != nil {
+			t.Fatalf("active workspace: ingress %s missing: %v", name, err)
+		}
+	}
+	suspended["acme"] = true
+	got = runReconcile(t, r, got)
+	for _, name := range []string{"shop", edgeName(app)} {
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: name}, &networkingv1.Ingress{}); !apierrors.IsNotFound(err) {
+			t.Errorf("suspended workspace: ingress %s still there: %v", name, err)
+		}
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop-web"}, &appsv1.Deployment{}); err != nil {
+		t.Errorf("the app must keep running while suspended: %v", err)
+	}
+	if !strings.Contains(got.Status.Message, "workspace suspended") {
+		t.Errorf("status must say why: %q", got.Status.Message)
+	}
+	delete(suspended, "acme")
+	runReconcile(t, r, got)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop"}, &networkingv1.Ingress{}); err != nil {
+		t.Errorf("resumed workspace: ingress missing: %v", err)
 	}
 }

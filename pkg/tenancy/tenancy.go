@@ -246,6 +246,12 @@ func (a *Addresses) Address(slug string) string {
 	return ""
 }
 
+// Suspended says whether a workspace is suspended; an unknown one is not.
+func (a *Addresses) Suspended(slug string) bool {
+	ws := a.Workspace(slug)
+	return ws != nil && ws.Status == store.WorkspaceSuspended
+}
+
 // Limits is the plan of a workspace, nil when it has none.
 func (a *Addresses) Limits(slug string) *store.Limits {
 	if ws := a.Workspace(slug); ws != nil {

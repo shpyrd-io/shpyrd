@@ -34,10 +34,14 @@ func globalsFor(app *shpyrdv1.App, global *corev1.Secret) map[string][]byte {
 	if global == nil || len(global.Data) == 0 {
 		return nil
 	}
-	g := app.Spec.Globals
-	if g != nil && g.Disabled {
+	// An app that takes no globals (its own choice, or an explicit
+	// workspace's: the operator's values never reach a tenant's namespace,
+	// not even as an unreferenced Secret) gets no mirror and no release
+	// when they change.
+	if globalsDisabled(app) {
 		return nil
 	}
+	g := app.Spec.Globals
 	excluded := map[string]bool{}
 	if g != nil {
 		for _, k := range g.Exclude {

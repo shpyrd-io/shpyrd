@@ -11,6 +11,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 func sampleApp(name string) *shpyrdv1.App {
@@ -123,5 +124,33 @@ func TestGlobalHashAndConfigHashIncludeGlobals(t *testing.T) {
 	}
 	if configHash(app, nil, nil, nil, g1) != configHash(app, nil, nil, nil, g1) {
 		t.Error("configHash must be stable")
+	}
+}
+
+// Global vars are the operator's: an app of an explicit workspace gets no
+// mirror in its namespace (not even unreferenced), no envFrom, and no
+// release when the operator changes them.
+func TestGlobalsNeverReachExplicitWorkspaces(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop"), Generation: 1},
+		Spec:       shpyrdv1.AppSpec{Image: "registry.test/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+	r, c := newTestReconciler(t, app, globalSecret(map[string]string{"OPENAI_API_KEY": "sk-1"}))
+	got := runReconcile(t, r, app)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-shop", Name: shpyrdv1.GlobalEnvSecretName}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the operator's globals were mirrored into a tenant's namespace: %v", err)
+	}
+	if ef := EnvSources(got); len(ef) != 2 || ef[0].SecretRef.Name != "shop-env" {
+		t.Errorf("envFrom for a tenant app = %+v", ef)
+	}
+	// The operator changes a global: nothing happens to the tenant's app.
+	sec := globalSecret(map[string]string{"OPENAI_API_KEY": "sk-2", "REGION": "eu"})
+	if err := c.Update(context.Background(), sec); err != nil {
+		t.Fatal(err)
+	}
+	before := len(got.Status.Releases)
+	got = runReconcile(t, r, got)
+	if len(got.Status.Releases) != before {
+		t.Errorf("a global change released a tenant's app: %+v", got.Status.Releases)
 	}
 }
