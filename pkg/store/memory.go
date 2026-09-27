@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +115,9 @@ func (m *Memory) ListWorkspaces(_ context.Context) ([]Workspace, error) {
 }
 
 func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, error) {
+	if err := project.ValidateWorkspaceSlug(w.Slug); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w.Address = strings.ToLower(strings.TrimSpace(w.Address))

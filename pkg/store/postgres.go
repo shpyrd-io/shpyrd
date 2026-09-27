@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"sort"
 	"strings"
 	"time"
@@ -174,6 +175,11 @@ func (p *Postgres) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 }
 
 func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace, error) {
+	// The slug is a hostname label and a namespace part: the store is the
+	// last line, whoever the caller is (the cloud's API, a restore).
+	if err := project.ValidateWorkspaceSlug(w.Slug); err != nil {
+		return nil, err
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
