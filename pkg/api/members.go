@@ -138,6 +138,16 @@ func (s *Server) tenant(c *gin.Context) (*store.Workspace, error) {
 		return v.(*store.Workspace), nil
 	}
 	ws, err := s.tenancy.Resolve(c.Request.Context(), c.Request.Host)
+	if errors.Is(err, tenancy.ErrUnknownHost) {
+		// A project's custom domain (RFC-0034) is a host the resolver
+		// cannot know: the app that claims it says whose it is, so sign-in
+		// and the edge's callbacks work there too.
+		if app, aerr := s.appByHost(c, c.Request.Host); aerr == nil {
+			if w, werr := s.store.Workspace(c.Request.Context(), workspaceOf(app)); werr == nil {
+				ws, err = w, nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

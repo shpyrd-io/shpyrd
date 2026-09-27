@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -489,5 +490,29 @@ func TestImportExplicitWorkspaceAtConsole(t *testing.T) {
 	s.opts.Public.Capabilities = nil
 	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=delta", strings.Replace(dump, `"beta"`, `"delta"`, 1)); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "one workspace") {
 		t.Errorf("import on a single-workspace platform = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A project's custom domain is a host the tenancy resolver cannot know:
+// the app that claims it says whose it is, so the API, sign-in and the
+// edge's callbacks at that host belong to the app's workspace.
+func TestCustomDomainResolvesToTheAppsWorkspace(t *testing.T) {
+	s, cr, _ := newTenantServer(t)
+	ctx := context.Background()
+	shop := &shpyrdv1.App{}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop"}, shop); err != nil {
+		t.Fatal(err)
+	}
+	shop.Spec.Domains = []string{"shop.acme-corp.example"}
+	if err := cr.Update(ctx, shop); err != nil {
+		t.Fatal(err)
+	}
+	s.hostCache.at = time.Time{} // forget the index
+	rec := at(t, s, "shop.acme-corp.example", "GET", "/api/projects", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"wiki"`) || strings.Contains(rec.Body.String(), "example.test") {
+		t.Errorf("at the custom domain = %d %s, want acme's projects", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "nobody.example.org", "GET", "/api/projects", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("a host nobody claims = %d, want 404", rec.Code)
 	}
 }
