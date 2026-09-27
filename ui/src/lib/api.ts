@@ -193,6 +193,49 @@ export type InvitationPublic = {
   url: string;
 };
 
+/** RFC-0075: one five-minute usage bucket. */
+export type UsageBucket = {
+  workspaceId: string;
+  project: string;
+  component: string;
+  metric: string;
+  periodStart: string;
+  periodEnd: string;
+  quantity: number | null;
+  unit: string;
+  quality: "complete" | "partial" | "missing";
+};
+
+/** RFC-0075: a billing line in the month-to-date preview. */
+export type BillingLine = {
+  component: string;
+  metric: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  grossAmount: number;
+};
+
+/** RFC-0075: the month-to-date invoice preview. */
+export type WorkspaceBillingView = {
+  workspace: string;
+  period: string;
+  plan?: {
+    name: string;
+    currency: string;
+    cpuHour: number;
+    memoryGibHour: number;
+    storageGibMonth: number;
+    egressGib: number;
+    minMonthly: number;
+  };
+  lines: BillingLine[];
+  total: number;
+  currency: string;
+  projection: number;
+  quality: string;
+};
+
 /** A custom domain of the workspace (RFC-0033 names), with the DNS records to publish. */
 export type WorkspaceDomain = {
   host: string;
@@ -213,6 +256,18 @@ export type Connection = {
   createdAt: string;
   expiresAt: string;
   lastUsedAt?: string;
+};
+
+/** RFC-0075: one workspace's economics row. */
+export type EconomicsRow = {
+  workspace?: string;
+  revenue: number;
+  directCogs: number;
+  sharedCogs: number;
+  idleCogs: number;
+  totalCogs: number;
+  grossMargin: number;
+  marginPct: number;
 };
 
 /** The mail extension's status (RFC-0013): never the password. */
@@ -870,6 +925,16 @@ export const api = {
       method: "DELETE",
     }),
   workspaceDomains: () => request<WorkspaceDomain[]>("/api/workspace/domains"),
+  /** Billing (RFC-0075). */
+  billingCurrent: () =>
+    request<WorkspaceBillingView>("/api/workspace/billing/current"),
+  billingUsage: (project?: string, from?: string, to?: string) => {
+    const q = new URLSearchParams();
+    if (project) q.set("project", project);
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    return request<UsageBucket[]>(`/api/workspace/usage?${q}`);
+  },
   addWorkspaceDomain: (host: string) =>
     request<WorkspaceDomain>("/api/workspace/domains", json("POST", { host })),
   verifyWorkspaceDomain: (host: string) =>
@@ -950,6 +1015,15 @@ export const api = {
       "/api/cluster/mail/test",
       json("POST", { to }),
     ),
+  /** Operator economics from OpenCost (RFC-0075): never shown to customers. */
+  economics: (month?: string) => {
+    const q = month ? `?month=${encodeURIComponent(month)}` : "";
+    return request<{
+      month: string;
+      workspaces: EconomicsRow[];
+      totals: EconomicsRow;
+    }>(`/api/cluster/economics${q}`);
+  },
   forgetPerson: (email: string) =>
     request<void>(`/api/workspace/people/${encodeURIComponent(email)}`, {
       method: "DELETE",

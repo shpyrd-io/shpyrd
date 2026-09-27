@@ -1,0 +1,7 @@
+name: pg-gateway
+description: TCP wake-on-connect proxy for sleeping PostgreSQL databases (RFC-0075)
+namespace: shpyrd-system
+kustomize:
+  base: .
+wait:
+  - deployment: shpyrd-system/pg-gateway

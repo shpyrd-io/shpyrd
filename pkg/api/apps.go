@@ -351,7 +351,7 @@ func (s *Server) createApp(c *gin.Context) {
 			abort(c, http.StatusBadGateway, err)
 			return
 		}
-		u, err := s.workspaceUsage(ctx, ws.Slug, cat, nil)
+		u, err := s.workspaceQuotaUsage(ctx, ws.Slug, cat, nil)
 		if err != nil {
 			abort(c, http.StatusBadGateway, err)
 			return

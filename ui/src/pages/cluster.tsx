@@ -10,6 +10,7 @@ import { DrainsCard } from "@/components/drains-card";
 import { RegistryCard } from "@/components/registry-card";
 import { ObjectStorageCard } from "@/components/object-storage-card";
 import { MailCard } from "@/components/mail-card";
+import { EconomicsCard } from "@/components/economics-card";
 import { BackupsCard } from "@/components/backups-card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -218,6 +219,9 @@ export function ClusterPage() {
       {perms.clusterAdmin && <BackupsCard />}
       {perms.clusterAdmin && config.data?.extensions?.includes("mail") && (
         <MailCard />
+      )}
+      {perms.clusterAdmin && (
+        <EconomicsCard />
       )}
       <SizesEditor readOnly={!perms.clusterAdmin} />
       {perms.clusterAdmin && <GlobalsEditor />}

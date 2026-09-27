@@ -96,7 +96,7 @@ func (s *Server) planOf(ctx context.Context, ws string) *store.Limits {
 // workspaceUsage sums a workspace's projects. When replace is not nil it
 // stands in for the stored App of the same name (the state after a
 // change); when add is not nil it is counted as a new project.
-func (s *Server) workspaceUsage(ctx context.Context, ws string, cat *sizes.Catalog, replace *shpyrdv1.App) (usage, error) {
+func (s *Server) workspaceQuotaUsage(ctx context.Context, ws string, cat *sizes.Catalog, replace *shpyrdv1.App) (usage, error) {
 	var u usage
 	var apps shpyrdv1.AppList
 	if err := s.apps.List(ctx, &apps); err != nil {
@@ -193,7 +193,7 @@ func (s *Server) checkPlan(ctx context.Context, ws string, after *shpyrdv1.App) 
 	if err != nil {
 		return err
 	}
-	u, err := s.workspaceUsage(ctx, ws, cat, after)
+	u, err := s.workspaceQuotaUsage(ctx, ws, cat, after)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (s *Server) checkPlanStorage(ctx context.Context, ws string, extra resource
 	if err != nil {
 		return err
 	}
-	u, err := s.workspaceUsage(ctx, ws, cat, nil)
+	u, err := s.workspaceQuotaUsage(ctx, ws, cat, nil)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (s *Server) usageOf(ctx context.Context, ws string) *Usage {
 	if err != nil {
 		return nil
 	}
-	u, err := s.workspaceUsage(ctx, ws, cat, nil)
+	u, err := s.workspaceQuotaUsage(ctx, ws, cat, nil)
 	if err != nil {
 		return nil
 	}

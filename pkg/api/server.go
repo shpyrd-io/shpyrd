@@ -489,7 +489,19 @@ func (s *Server) routes() error {
 	api.POST("/workspace/invitations", s.require(authz.ClusterAdmin), s.createInvitation)
 	api.DELETE("/workspace/invitations/:id", s.require(authz.ClusterAdmin), s.deleteInvitation)
 	api.POST("/invitations/:token/accept", s.acceptInvitation) // any signed-in person: the email must match
-	api.GET("/workspace/connections", s.listConnections)       // the caller's connected assistants (RFC-0032)
+
+	// Billing (RFC-0075): usage and invoice preview (workspace admins).
+	api.GET("/workspace/billing/current", s.billingAdmin, s.workspaceBillingCurrent)
+	api.GET("/workspace/billing/invoices", s.billingAdmin, s.workspaceBillingInvoices)
+	api.GET("/workspace/usage", s.require(authz.ClusterAdmin), s.workspaceUsage)
+	api.GET("/projects/:slug/usage", s.require(authz.ProjectView), s.projectUsage)
+
+	// Operator economics and plan management (cluster admins, console only).
+	api.GET("/cluster/plans", console, s.require(authz.ClusterAdmin), s.listPlans)
+	api.POST("/cluster/plans", console, s.require(authz.ClusterAdmin), s.createPlan)
+	api.POST("/cluster/plans/:name/assign", console, s.require(authz.ClusterAdmin), s.assignPlan)
+	api.GET("/cluster/economics", console, s.require(authz.ClusterAdmin), s.clusterEconomics)
+	api.GET("/workspace/connections", s.listConnections) // the caller's connected assistants (RFC-0032)
 	api.DELETE("/workspace/connections/:id", s.deleteConnection)
 	api.GET("/workspace/domains", s.require(authz.ClusterAdmin), s.listWorkspaceDomains) // custom workspace domains (RFC-0033 names)
 	api.POST("/workspace/domains", s.require(authz.ClusterAdmin), s.addWorkspaceDomain)

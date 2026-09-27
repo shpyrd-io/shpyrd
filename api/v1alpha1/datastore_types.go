@@ -40,6 +40,9 @@ type ResourceStatus struct {
 	LastBackup *metav1.Time `json:"lastBackup,omitempty"`
 	// +optional
 	RecoverableFrom *metav1.Time `json:"recoverableFrom,omitempty"`
+	// Sleep is the current hibernation state (RFC-0075).
+	// +optional
+	Sleep *PostgresSleepStatus `json:"sleep,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -47,6 +50,29 @@ type ResourceStatus struct {
 // ---- Postgres (RFC-0009) ----------------------------------------------------
 
 // PostgresSpec describes a PostgreSQL database run by CloudNativePG.
+// PostgresSleepSpec configures hibernation for a Postgres database
+// (RFC-0075). Only single-instance databases (instances=1) may hibernate.
+type PostgresSleepSpec struct {
+	// After is the idle period before hibernating, e.g. "30m".
+	// "off" or empty disables sleep.
+	// +optional
+	After string `json:"after,omitempty"`
+}
+
+// PostgresSleepStatus records the sleep state of the database (RFC-0075).
+type PostgresSleepStatus struct {
+	// State is awake, sleeping, waking or suspended.
+	State string `json:"state,omitempty"`
+	// LastActivityAt is the timestamp of the last observed session or
+	// transaction on the application database.
+	// +optional
+	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
+	// WakePort is the TCP port on the pg-gateway that wakes this database.
+	// Assigned once and kept for the life of the resource.
+	// +optional
+	WakePort *int32 `json:"wakePort,omitempty"`
+}
+
 type PostgresSpec struct {
 	// Version is the PostgreSQL major version (default "17").
 	// +optional
@@ -71,6 +97,10 @@ type PostgresSpec struct {
 	// point in time (RFC-0038); the source keeps running.
 	// +optional
 	Recovery *PostgresRecovery `json:"recovery,omitempty"`
+	// Sleep configures automatic hibernation (RFC-0075). Only for
+	// single-instance databases.
+	// +optional
+	Sleep *PostgresSleepSpec `json:"sleep,omitempty"`
 }
 
 // PostgresBackups configures backups of a database.

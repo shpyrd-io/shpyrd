@@ -315,6 +315,34 @@ type Build struct {
 }
 
 // Process is one process type of the app.
+// SleepSpec configures scale-to-zero for a process (RFC-0075).
+type SleepSpec struct {
+	// After is the quiet period before scaling to zero, e.g. "15m".
+	// "off" (or empty) disables sleep.
+	// +optional
+	After string `json:"after,omitempty"`
+	// Resuming is "page" (a branded waking screen) or "wait" (hold the
+	// connection silently, default).
+	// +kubebuilder:validation:Enum=page;wait
+	// +optional
+	Resuming string `json:"resuming,omitempty"`
+}
+
+// SleepStatus records the sleep state of a process (RFC-0075).
+type SleepStatus struct {
+	// State is awake, sleeping or waking.
+	State string `json:"state,omitempty"`
+	// LastActivityAt is when the last request arrived.
+	// +optional
+	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
+	// LastWakeAt is when the last wake completed.
+	// +optional
+	LastWakeAt *metav1.Time `json:"lastWakeAt,omitempty"`
+	// LastWakeDuration is the last cold-start time in seconds.
+	// +optional
+	LastWakeDuration *int32 `json:"lastWakeDuration,omitempty"`
+}
+
 type Process struct {
 	// Replicas defaults to 1.
 	// +optional
@@ -348,6 +376,9 @@ type Process struct {
 	// Resources override the size (cpu/memory limits); rarely needed.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// Sleep configures scale-to-zero for this process (web only, RFC-0075).
+	// +optional
+	Sleep *SleepSpec `json:"sleep,omitempty"`
 }
 
 // HealthCheck describes the probe a process uses to report readiness.

@@ -1,0 +1,18 @@
+# OpenCost values for shpyrd. Cost data is operator-only: it is read by
+# the COGS writer in the server and surfaced on the Cluster page only.
+opencost:
+  prometheus:
+    internal:
+      enabled: true
+      serviceName: monitoring-prometheus
+      namespaceName: monitoring
+      port: 9090
+  ui:
+    enabled: false   # no UI: the shpyrd Cluster page shows the economics
+  resources:
+    requests:
+      cpu: 10m
+      memory: 55Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

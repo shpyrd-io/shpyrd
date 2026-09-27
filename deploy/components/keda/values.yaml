@@ -1,0 +1,11 @@
+# Minimal KEDA values — shared between autoscaling and HTTP sleep.
+operator:
+  replicaCount: 2
+resources:
+  operator:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi

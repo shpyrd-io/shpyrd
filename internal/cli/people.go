@@ -316,3 +316,50 @@ func article(word string) string {
 	}
 	return "a"
 }
+
+// ---- shpyrd sleep ----------------------------------------------------------
+
+// newSleepCmd configures or disables HTTP sleep for a project's web process.
+func newSleepCmd(g *globalFlags) *cobra.Command {
+	var after, resuming string
+	cmd := &cobra.Command{
+		Use:   "sleep <project>",
+		Short: "Configure scale-to-zero for a project's web process",
+		Long: `Scale the web process to zero when nobody has used the app for a while;
+the first request wakes it. The person may choose:
+
+  shpyrd sleep shop --after 15m --resuming page   # branded waking screen
+  shpyrd sleep shop --after 30m --resuming wait   # hold the connection
+  shpyrd sleep shop --after off                   # disable`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := signalContext()
+			t, err := newTeamsAPI(g)
+			if err != nil {
+				return err
+			}
+			// Patch via the project config vars API: the App CRD `sleep` field
+			// is set through PATCH /api/projects/:slug/config with the sleep JSON.
+			// For now we use the raw app update which mirrors the CRD field.
+			res := map[string]any{}
+			if after != "" {
+				res["sleep"] = map[string]any{"after": after, "resuming": resuming}
+			}
+			body := map[string]any{"processes": map[string]any{"web": res}}
+			var out any
+			if err := t.call(ctx, "PATCH", "api/projects/"+args[0], body, &out); err != nil {
+				return err
+			}
+			if after == "" || after == "off" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Sleep disabled for %s.\n", args[0])
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Sleep set: %s will scale to zero after %s of inactivity (%s mode).\n", args[0], after, firstNonEmpty(resuming, "wait"))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' disables")
+	cmd.Flags().StringVar(&resuming, "resuming", "wait", "page (branded waking screen) or wait (hold the connection)")
+	_ = cmd.MarkFlagRequired("after")
+	return cmd
+}

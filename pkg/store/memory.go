@@ -41,6 +41,7 @@ type Memory struct {
 	oclients    []OAuthClient
 	ocodes      map[string]*OAuthCode
 	otokens     []OAuthToken
+	bill        *billingMemory
 	now         func() time.Time
 }
 
@@ -1359,4 +1360,260 @@ func (m *Memory) DeleteOAuthToken(_ context.Context, ws, id string) error {
 		}
 	}
 	return ErrNotFound
+}
+
+// ---- billing (RFC-0075) -------------------------------------------------------
+
+type billingMemory struct {
+	plans       []Plan
+	wplans      []WorkspacePlan
+	buckets     []UsageBucket
+	hourly      []UsageBucket
+	invoices    []InvoiceLine
+	cogs        []COGSBucket
+	sleepEvents []SleepEvent
+}
+
+func (m *Memory) billing() *billingMemory {
+	if m.bill == nil {
+		m.bill = &billingMemory{}
+	}
+	return m.bill
+}
+
+func (m *Memory) CreatePlan(_ context.Context, p Plan) (*Plan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.billing().plans {
+		if e.Name == p.Name {
+			return nil, ErrConflict
+		}
+	}
+	p.ID, p.CreatedAt = newID(), m.now()
+	if p.Currency == "" {
+		p.Currency = "USD"
+	}
+	m.billing().plans = append(m.billing().plans, p)
+	out := p
+	return &out, nil
+}
+func (m *Memory) ListPlans(_ context.Context) ([]Plan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Plan(nil), m.billing().plans...), nil
+}
+func (m *Memory) GetPlan(_ context.Context, nameOrID string) (*Plan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.billing().plans {
+		if p.ID == nameOrID || p.Name == nameOrID {
+			out := p
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+func (m *Memory) AssignPlan(ctx context.Context, ws, nameOrID string) (*WorkspacePlan, error) {
+	p, err := m.GetPlan(ctx, nameOrID)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	now := m.now()
+	for i := range m.billing().wplans {
+		if m.billing().wplans[i].WorkspaceID == w.ID && m.billing().wplans[i].EndsAt == nil {
+			m.billing().wplans[i].EndsAt = &now
+		}
+	}
+	wp := WorkspacePlan{ID: newID(), WorkspaceID: w.ID, PlanID: p.ID, PlanName: p.Name, StartsAt: now}
+	m.billing().wplans = append(m.billing().wplans, wp)
+	out := wp
+	return &out, nil
+}
+func (m *Memory) WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	for i := range m.billing().wplans {
+		wp := &m.billing().wplans[i]
+		if wp.WorkspaceID == w.ID && wp.EndsAt == nil {
+			out := *wp
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+func (m *Memory) WorkspacePlanHistory(ctx context.Context, ws string) ([]WorkspacePlan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	var out []WorkspacePlan
+	for _, wp := range m.billing().wplans {
+		if wp.WorkspaceID == w.ID {
+			out = append(out, wp)
+		}
+	}
+	return out, nil
+}
+
+func (m *Memory) WriteBuckets(_ context.Context, buckets []UsageBucket) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range buckets {
+		dup := false
+		for _, e := range m.billing().buckets {
+			if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.Component == b.Component &&
+				e.Metric == b.Metric && e.PeriodStart.Equal(b.PeriodStart) && e.Revision == b.Revision {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			m.billing().buckets = append(m.billing().buckets, b)
+		}
+	}
+	return nil
+}
+func (m *Memory) QueryBuckets(_ context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error) {
+	m.mu.Lock()
+	w, err := m.ws(ws)
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []UsageBucket
+	for _, b := range append(append([]UsageBucket(nil), m.billing().buckets...), m.billing().hourly...) {
+		if b.WorkspaceID != w.ID {
+			continue
+		}
+		if project != "" && b.Project != project {
+			continue
+		}
+		if !b.PeriodStart.Before(to) || !b.PeriodEnd.After(from) {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+func (m *Memory) UpsertInvoiceLine(_ context.Context, line InvoiceLine) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if line.ID == "" {
+		line.ID = newID()
+	}
+	if line.CreatedAt.IsZero() {
+		line.CreatedAt = m.now()
+	}
+	for i, e := range m.billing().invoices {
+		if e.WorkspaceID == line.WorkspaceID && e.PeriodStart.Equal(line.PeriodStart) &&
+			e.Component == line.Component && e.Metric == line.Metric && e.Revision == line.Revision {
+			m.billing().invoices[i] = line
+			return nil
+		}
+	}
+	m.billing().invoices = append(m.billing().invoices, line)
+	return nil
+}
+func (m *Memory) QueryInvoiceLines(_ context.Context, ws string, from, to time.Time, finalized *bool) ([]InvoiceLine, error) {
+	m.mu.Lock()
+	w, err := m.ws(ws)
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []InvoiceLine
+	for _, l := range m.billing().invoices {
+		if l.WorkspaceID != w.ID {
+			continue
+		}
+		if !l.PeriodStart.Before(to) || !l.PeriodEnd.After(from) {
+			continue
+		}
+		if finalized != nil && l.Finalized != *finalized {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+func (m *Memory) WriteCOGSBucket(_ context.Context, b COGSBucket) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, e := range m.billing().cogs {
+		if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.PeriodStart.Equal(b.PeriodStart) {
+			m.billing().cogs[i] = b
+			return nil
+		}
+	}
+	m.billing().cogs = append(m.billing().cogs, b)
+	return nil
+}
+func (m *Memory) QueryCOGSBuckets(_ context.Context, ws string, from, to time.Time) ([]COGSBucket, error) {
+	m.mu.Lock()
+	w, err := m.ws(ws)
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []COGSBucket
+	for _, b := range m.billing().cogs {
+		if b.WorkspaceID == w.ID && b.PeriodStart.Before(to) && b.PeriodEnd.After(from) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+func (m *Memory) WriteSleepEvent(_ context.Context, e SleepEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e.ID == "" {
+		e.ID = newID()
+	}
+	if e.At.IsZero() {
+		e.At = m.now()
+	}
+	m.billing().sleepEvents = append(m.billing().sleepEvents, e)
+	return nil
+}
+func (m *Memory) QuerySleepEvents(_ context.Context, ws, project string, from, to time.Time) ([]SleepEvent, error) {
+	m.mu.Lock()
+	w, err := m.ws(ws)
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []SleepEvent
+	for _, e := range m.billing().sleepEvents {
+		if e.WorkspaceID != w.ID {
+			continue
+		}
+		if project != "" && e.Project != project {
+			continue
+		}
+		if !e.At.Before(to) || e.At.Before(from) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }

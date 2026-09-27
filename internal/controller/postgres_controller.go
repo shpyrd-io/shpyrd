@@ -187,6 +187,11 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		}
 	}
 
+	// Sleep: shpyrd-owned Service and hibernation management (RFC-0075).
+	if err := r.reconcilePostgresSleep(ctx, pg); err != nil {
+		// Non-fatal: log and continue; the database still functions.
+		log.FromContext(ctx).Error(err, "postgres sleep reconcile failed")
+	}
 	// Status from the CNPG cluster and its application Secret.
 	r.backupStatus(ctx, pg, current)
 	pg.Status.Endpoint = fmt.Sprintf("%s-rw.%s.svc:%d", pg.Name, pg.Namespace, PostgresPort)

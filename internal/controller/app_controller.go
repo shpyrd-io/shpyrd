@@ -780,6 +780,10 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
 		return nil, err
 	}
+	// Sleep objects (RFC-0075): KEDA InterceptorRoute, ScaledObject, ExternalName.
+	if err := r.reconcileSleep(ctx, app); err != nil {
+		return nil, err
+	}
 
 	// Garbage collect workloads of removed process types.
 	var deployments appsv1.DeploymentList

@@ -1,0 +1,13 @@
+name: keda-http
+description: KEDA HTTP add-on v0.16 — scale-to-zero for HTTP apps (RFC-0075)
+namespace: keda
+helm:
+  repo: https://kedacore.github.io/charts
+  chart: keda-add-ons-http
+  version: 0.16.0
+  release: keda-add-ons-http
+  values: [values.yaml]
+wait:
+  - deployment: keda/keda-add-ons-http-controller-manager
+  - crd: interceptorroutes.http.keda.sh
+timeout: 8m

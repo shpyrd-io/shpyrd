@@ -36,6 +36,8 @@ func NewCtl() *cobra.Command {
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newWorkspacesCmd(g)) // RFC-0033 phase 8: servers with the workspaces capability
+	root.AddCommand(newPlansCmd(g))      // RFC-0075: billing plans
+	root.AddCommand(newEconomicsCmd(g))  // RFC-0075: revenue and margin
 	// The operator's extension commands (users, auth, object-storage);
 	// project resources (pg, redis) are the developer's, in `shpyrd`.
 	addExtensionCommands(root, g, ext.AudienceOperator)

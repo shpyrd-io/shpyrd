@@ -1,0 +1,12 @@
+# Scale the interceptor to 2 for HA; the controller is the leader.
+interceptor:
+  replicas:
+    min: 2
+    max: 5
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

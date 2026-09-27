@@ -12,6 +12,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext/logsagent"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/mail"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/objectstorage"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/opencost"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/postgres"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/redis"
 )
@@ -26,6 +27,7 @@ func All() []ext.Extension {
 		redis.New(),
 		objectstorage.New(),
 		mail.New(),
+		opencost.New(),
 	}
 }
 

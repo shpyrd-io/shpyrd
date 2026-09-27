@@ -332,6 +332,155 @@ type OAuth interface {
 	DeleteOAuthToken(ctx context.Context, ws, id string) error
 }
 
+// ---- Billing and usage (RFC-0075) -----------------------------------------
+
+// Plan defines the prices a workspace is charged at plan prices.
+type Plan struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	CPUHour         float64   `json:"cpuHour"`         // per core-hour of actual use
+	MemoryGiBHour   float64   `json:"memoryGibHour"`   // per GiB-hour working set
+	StorageGiBMonth float64   `json:"storageGibMonth"` // per GiB-month provisioned
+	EgressGiB       float64   `json:"egressGib"`       // per GiB HTTP egress
+	MinMonthly      float64   `json:"minMonthly"`      // workspace floor
+	Currency        string    `json:"currency"`
+	EffectiveFrom   time.Time `json:"effectiveFrom"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+// WorkspacePlan is a workspace's current or historical plan assignment.
+type WorkspacePlan struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	PlanID      string     `json:"planId"`
+	PlanName    string     `json:"planName,omitempty"`
+	StartsAt    time.Time  `json:"startsAt"`
+	EndsAt      *time.Time `json:"endsAt,omitempty"`
+}
+
+// UsageBucket is one 5-minute (or hourly) usage record for a project
+// component. Quantity is nil when Quality is missing.
+type UsageBucket struct {
+	WorkspaceID string            `json:"workspaceId"`
+	Project     string            `json:"project"`
+	Component   string            `json:"component"`
+	Metric      string            `json:"metric"`
+	PeriodStart time.Time         `json:"periodStart"`
+	PeriodEnd   time.Time         `json:"periodEnd"`
+	Quantity    *float64          `json:"quantity"` // nil when missing
+	Unit        string            `json:"unit"`
+	Quality     string            `json:"quality"` // complete | partial | missing
+	Revision    int               `json:"revision"`
+	Source      string            `json:"source"`
+	Labels      map[string]string `json:"labels,omitempty"`
+}
+
+// Usage metrics.
+const (
+	MetricCPUUsed     = "cpu_used"         // core-seconds
+	MetricCPUReserved = "cpu_reserved"     // core-seconds
+	MetricMemoryUsed  = "memory_used"      // GiB-seconds
+	MetricStorage     = "storage"          // GiB-seconds (provisioned)
+	MetricEgressHTTP  = "egress_http"      // bytes
+	MetricInstanceSec = "instance_seconds" // process-seconds
+	MetricStateSec    = "state_seconds"    // seconds in each state
+
+	UnitCoreSeconds = "core_seconds"
+	UnitGiBSeconds  = "gib_seconds"
+	UnitBytes       = "bytes"
+	UnitSeconds     = "seconds"
+
+	QualityComplete = "complete"
+	QualityPartial  = "partial"
+	QualityMissing  = "missing"
+)
+
+// InvoiceLine is a computed billing line for one (workspace, period, component, metric).
+type InvoiceLine struct {
+	ID          string    `json:"id"`
+	WorkspaceID string    `json:"workspaceId"`
+	PeriodStart time.Time `json:"periodStart"`
+	PeriodEnd   time.Time `json:"periodEnd"`
+	Component   string    `json:"component"`
+	Metric      string    `json:"metric"`
+	Quantity    float64   `json:"quantity"`
+	Unit        string    `json:"unit"`
+	UnitPrice   float64   `json:"unitPrice"`
+	GrossAmount float64   `json:"grossAmount"`
+	PlanID      string    `json:"planId,omitempty"`
+	Quality     string    `json:"quality"`
+	Revision    int       `json:"revision"`
+	Finalized   bool      `json:"finalized"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// COGSBucket is operator economics from OpenCost (never shown to customers).
+type COGSBucket struct {
+	WorkspaceID      string    `json:"workspaceId"`
+	Project          string    `json:"project"` // "" = workspace aggregate
+	PeriodStart      time.Time `json:"periodStart"`
+	PeriodEnd        time.Time `json:"periodEnd"`
+	CPUCost          float64   `json:"cpuCost"`
+	MemoryCost       float64   `json:"memoryCost"`
+	StorageCost      float64   `json:"storageCost"`
+	NetworkCost      float64   `json:"networkCost"`
+	SharedCost       float64   `json:"sharedCost"`
+	IdleCost         float64   `json:"idleCost"`
+	TotalCost        float64   `json:"totalCost"`
+	Currency         string    `json:"currency"`
+	AllocationPolicy string    `json:"allocationPolicy"`
+	Quality          string    `json:"quality"`
+}
+
+// SleepEvent records a sleep or wake of a process or database.
+type SleepEvent struct {
+	ID              string    `json:"id"`
+	WorkspaceID     string    `json:"workspaceId"`
+	Project         string    `json:"project"`
+	Component       string    `json:"component"`
+	Event           string    `json:"event"` // sleep | wake
+	At              time.Time `json:"at"`
+	DurationSeconds *int      `json:"durationSeconds,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+}
+
+// Billing is the metering and economics part of the Store (RFC-0075).
+type Billing interface {
+	// Plans.
+	CreatePlan(ctx context.Context, p Plan) (*Plan, error)
+	ListPlans(ctx context.Context) ([]Plan, error)
+	GetPlan(ctx context.Context, nameOrID string) (*Plan, error)
+	// AssignPlan sets the plan for a workspace (closes the previous assignment).
+	AssignPlan(ctx context.Context, ws, planNameOrID string) (*WorkspacePlan, error)
+	// WorkspacePlan returns the current plan assignment, ErrNotFound when none.
+	WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error)
+	// WorkspacePlanHistory returns all assignments, newest first.
+	WorkspacePlanHistory(ctx context.Context, ws string) ([]WorkspacePlan, error)
+
+	// Usage ledger.
+	// WriteBuckets writes or revises usage buckets; existing (workspace, project,
+	// component, metric, period_start, revision) rows are skipped (idempotent).
+	WriteBuckets(ctx context.Context, buckets []UsageBucket) error
+	// QueryBuckets returns buckets for a workspace and optional project, from
+	// the five-minute table when the range is recent or the hourly table otherwise.
+	QueryBuckets(ctx context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error)
+
+	// Invoice lines.
+	// UpsertInvoiceLine writes or replaces an invoice line (same (ws, period,
+	// component, metric, revision) = replace; new revision = insert).
+	UpsertInvoiceLine(ctx context.Context, line InvoiceLine) error
+	// QueryInvoiceLines returns lines for a workspace and period.
+	QueryInvoiceLines(ctx context.Context, ws string, from, to time.Time, finalized *bool) ([]InvoiceLine, error)
+
+	// COGS buckets (operator only).
+	WriteCOGSBucket(ctx context.Context, b COGSBucket) error
+	QueryCOGSBuckets(ctx context.Context, ws string, from, to time.Time) ([]COGSBucket, error)
+
+	// Sleep events.
+	WriteSleepEvent(ctx context.Context, e SleepEvent) error
+	QuerySleepEvents(ctx context.Context, ws, project string, from, to time.Time) ([]SleepEvent, error)
+}
+
 // Memberships is the workspace-role part of the Store.
 type Memberships interface {
 	ListMemberships(ctx context.Context, ws string) ([]Membership, error)
@@ -430,6 +579,7 @@ type Store interface {
 	Memberships
 	Hosts
 	OAuth
+	Billing
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

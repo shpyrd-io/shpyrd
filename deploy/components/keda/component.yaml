@@ -1,0 +1,13 @@
+name: keda
+description: KEDA (Kubernetes Event-driven Autoscaling) — shared by autoscaling (RFC-0047) and sleep (RFC-0075)
+namespace: keda
+helm:
+  repo: https://kedacore.github.io/charts
+  chart: keda
+  version: 2.21.0
+  release: keda
+  values: [values.yaml]
+wait:
+  - deployment: keda/keda-operator
+  - crd: scaledobjects.keda.sh
+timeout: 10m

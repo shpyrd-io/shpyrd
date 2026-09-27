@@ -1,0 +1,12 @@
+name: opencost
+description: OpenCost — infrastructure cost allocation for the operator economics dashboard (RFC-0075); never shown to customers
+namespace: opencost
+helm:
+  repo: https://opencost.github.io/opencost-helm-chart
+  chart: opencost
+  version: 2.5.32
+  release: opencost
+  values: [values.yaml]
+wait:
+  - deployment: opencost/opencost
+timeout: 8m

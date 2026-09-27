@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -178,15 +177,4 @@ func (s *Server) clusterMetrics(c *gin.Context) {
 	}
 	cwg.Wait()
 	c.JSON(http.StatusOK, out)
-}
-
-// Sample is one instant query result.
-type Sample struct {
-	Labels map[string]string
-	Value  float64
-}
-
-// Query evaluates an instant query.
-func (p *PromClient) Query(ctx context.Context, query string) ([]Sample, error) {
-	return p.instant(ctx, query)
 }

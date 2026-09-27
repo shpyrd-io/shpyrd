@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -39,10 +40,73 @@ func newPgCmd(g ext.CLIGlobals) *cobra.Command {
 Databases run on CloudNativePG; one cluster per database, 1 instance by
 default (2-3 for high availability with --instances).`,
 	}
-	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g))
+	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
 	return cmd
 }
 
+// newPgSleepCmd configures automatic hibernation for a database (RFC-0075).
+func newPgSleepCmd(g ext.CLIGlobals) *cobra.Command {
+	var after, project string
+	cmd := &cobra.Command{
+		Use: "sleep <name>", Short: "Configure automatic hibernation for a database",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cliContext()
+			body, _ := json.Marshal(map[string]any{"sleep": map[string]any{"after": after}})
+			if _, err := g.API().Request(ctx, "PATCH", "api/projects/"+project+"/resources/"+args[0], body, "application/json"); err != nil {
+				return err
+			}
+			if after == "off" || after == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Hibernation disabled for %s.\n", args[0])
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Hibernation set: %s sleeps after %s of inactivity.\n", args[0], after)
+			}
+			return nil
+		},
+	}
+	projectFlag(cmd, &project)
+	cmd.Flags().StringVar(&after, "after", "", "idle window before hibernating, e.g. 30m; 'off' disables (required)")
+	_ = cmd.MarkFlagRequired("after")
+	return cmd
+}
+
+// newPgSuspendCmd suspends a database (explicit, no auto-wake).
+func newPgSuspendCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use: "suspend <name>", Short: "Suspend a database (no automatic wake; data kept)",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cliContext()
+			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/"+args[0]+"/suspend", nil, ""); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s suspended.\n", args[0])
+			return nil
+		},
+	}
+	projectFlag(cmd, &project)
+	return cmd
+}
+
+// newPgResumeCmd resumes a suspended database.
+func newPgResumeCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use: "resume <name>", Short: "Resume a suspended database",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cliContext()
+			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/"+args[0]+"/resume", nil, ""); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s resuming.\n", args[0])
+			return nil
+		},
+	}
+	projectFlag(cmd, &project)
+	return cmd
+}
 func cliContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)

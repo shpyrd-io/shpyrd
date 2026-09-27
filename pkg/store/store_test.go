@@ -39,7 +39,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -484,6 +484,96 @@ func TestOAuthRecords(t *testing.T) {
 			}
 			if err := s.DeleteOAuthToken(ctx, ws, tok.ID); !errors.Is(err, ErrNotFound) {
 				t.Errorf("delete twice: %v", err)
+			}
+		})
+	}
+}
+
+func TestBillingStore(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			// Plans: create, list, get, assign to workspace, history.
+			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreatePlan(ctx, Plan{Name: "starter"}); !errors.Is(err, ErrConflict) {
+				t.Error("duplicate plan: want conflict")
+			}
+			plans, _ := s.ListPlans(ctx)
+			if len(plans) != 1 || plans[0].Name != "starter" {
+				t.Fatalf("list plans: %+v", plans)
+			}
+			pl, err := s.GetPlan(ctx, "starter")
+			if err != nil || pl.CPUHour != 0.02 {
+				t.Fatalf("get plan: %+v %v", pl, err)
+			}
+			wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter")
+			if err != nil || wp.PlanName != "starter" {
+				t.Fatalf("assign plan: %+v %v", wp, err)
+			}
+			cur, err := s.WorkspacePlan(ctx, DefaultWorkspace)
+			if err != nil || cur.PlanName != "starter" {
+				t.Fatalf("current plan: %+v %v", cur, err)
+			}
+			// Assign again replaces.
+			if _, err := s.CreatePlan(ctx, Plan{Name: "grow", CPUHour: 0.015}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.AssignPlan(ctx, DefaultWorkspace, "grow"); err != nil {
+				t.Fatal(err)
+			}
+			hist, _ := s.WorkspacePlanHistory(ctx, DefaultWorkspace)
+			if len(hist) != 2 {
+				t.Errorf("history: %+v", hist)
+			}
+			// Usage buckets: write + query (dedup on conflict).
+			now := time.Now().UTC().Truncate(5 * time.Minute)
+			qty := 300.0
+			buckets := []UsageBucket{
+				{WorkspaceID: "", Project: "shop", Component: "web", Metric: MetricCPUUsed, PeriodStart: now, PeriodEnd: now.Add(5 * time.Minute), Quantity: &qty, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"},
+			}
+			// Fill WorkspaceID from the store.
+			ws, _ := s.Workspace(ctx, DefaultWorkspace)
+			buckets[0].WorkspaceID = ws.ID
+			if err := s.WriteBuckets(ctx, buckets); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteBuckets(ctx, buckets); err != nil {
+				t.Fatal(err)
+			} // idempotent
+			got, err := s.QueryBuckets(ctx, DefaultWorkspace, "", now.Add(-time.Minute), now.Add(10*time.Minute))
+			if err != nil || len(got) != 1 || *got[0].Quantity != 300.0 {
+				t.Errorf("query buckets: %+v %v", got, err)
+			}
+			// Invoice lines: upsert.
+			line := InvoiceLine{WorkspaceID: ws.ID, PeriodStart: now, PeriodEnd: now.Add(time.Hour), Component: "web", Metric: MetricCPUUsed, Quantity: 3600, Unit: UnitCoreSeconds, UnitPrice: 0.02, GrossAmount: 0.02, Quality: QualityComplete, Revision: 1}
+			if err := s.UpsertInvoiceLine(ctx, line); err != nil {
+				t.Fatal(err)
+			}
+			lines, _ := s.QueryInvoiceLines(ctx, DefaultWorkspace, now.Add(-time.Minute), now.Add(2*time.Hour), nil)
+			if len(lines) != 1 || lines[0].GrossAmount != 0.02 {
+				t.Errorf("invoice lines: %+v", lines)
+			}
+			// COGS bucket.
+			cogs := COGSBucket{WorkspaceID: ws.ID, Project: "shop", PeriodStart: now, PeriodEnd: now.Add(time.Hour), CPUCost: 0.005, TotalCost: 0.005, Currency: "USD", Quality: QualityComplete}
+			if err := s.WriteCOGSBucket(ctx, cogs); err != nil {
+				t.Fatal(err)
+			}
+			cb, _ := s.QueryCOGSBuckets(ctx, DefaultWorkspace, now.Add(-time.Minute), now.Add(2*time.Hour))
+			if len(cb) != 1 || cb[0].CPUCost != 0.005 {
+				t.Errorf("cogs: %+v", cb)
+			}
+			// Sleep events.
+			dur := 42
+			ev := SleepEvent{WorkspaceID: ws.ID, Project: "shop", Component: "web", Event: "wake", At: now, DurationSeconds: &dur}
+			if err := s.WriteSleepEvent(ctx, ev); err != nil {
+				t.Fatal(err)
+			}
+			evs, _ := s.QuerySleepEvents(ctx, DefaultWorkspace, "shop", now.Add(-time.Minute), now.Add(time.Minute))
+			if len(evs) != 1 || *evs[0].DurationSeconds != 42 {
+				t.Errorf("sleep events: %+v", evs)
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 # RFC-0075 Usage, billing and sleep: the platform's economics and scale to zero
 
-**Status:** provisional
+**Status:** in progress (v0.9.17 foundation)
 
 **Owner:** Patrick Negri
 
@@ -648,7 +648,14 @@ OpenCost API windows are immutable).
 ## Implementation History
 
 - 2026-09-27: RFC written, extracting billing from RFC-0033 phase 8 and superseding
-  RFC-0048. The usage ledger, the two-sided cost model (customer billing vs operator COGS),
+  RFC-0048.
+- 2026-09-27: foundation implemented in v0.9.17: migration 000011 (usage ledger,
+  plans, invoice lines, COGS, sleep events), metering loop, plans/billing APIs,
+  Billing card UI, shpyrd billing / shpyrd-ctl plans+economics CLIs, HTTP sleep
+  (KEDA HTTP add-on, InterceptorRoute + ScaledObject + ConfigMap, SleepSpec),
+  Postgres sleep (SleepSpec + WakePort, shpyrd-owned Service, hibernation
+  reconciler, pg-gateway TCP wake-proxy), OpenCost extension. Bench phase runs
+  before defaults are switched on. The usage ledger, the two-sided cost model (customer billing vs operator COGS),
   the OpenCost integration and the sleep mechanics (KEDA HTTP add-on + CNPG hibernation)
   are designed together because they share one data source and are incoherent apart.
   Source: internal specification 2026-09-27 (`shpyrd-cloud/docs/research/`); OpenCost
