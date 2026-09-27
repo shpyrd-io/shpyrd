@@ -559,7 +559,9 @@ func TestAllowList(t *testing.T) {
 	var hasExpenses, hasMCP bool
 	for _, p := range peers {
 		if p.NamespaceSelector != nil && p.PodSelector != nil {
-			if lv, ok := p.NamespaceSelector.MatchLabels[shpyrdv1.LabelProject]; ok && lv == "expenses" {
+			// The peer names the project and the workspace: another
+			// workspace's "expenses" must not get in.
+			if lv, ok := p.NamespaceSelector.MatchLabels[shpyrdv1.LabelProject]; ok && lv == "expenses" && p.NamespaceSelector.MatchLabels[shpyrdv1.LabelWorkspace] == "default" {
 				hasExpenses = true
 			}
 			if lv, ok := p.PodSelector.MatchLabels["app.kubernetes.io/name"]; ok && lv == "shpyrd-server" {
@@ -569,6 +571,18 @@ func TestAllowList(t *testing.T) {
 	}
 	if !hasExpenses || !hasMCP {
 		t.Errorf("expenses=%v mcp=%v peers=%+v", hasExpenses, hasMCP, peers)
+	}
+	// The caller's side: egress to the pods of its own workspace's projects
+	// (the callee's ingress decides), so a Service that resolves to a pod
+	// address inside the pod CIDR is not refused by the sender.
+	var egressWS bool
+	for _, p := range np.Spec.Egress[0].To {
+		if p.NamespaceSelector != nil && p.NamespaceSelector.MatchLabels[shpyrdv1.LabelWorkspace] == "default" && p.PodSelector != nil {
+			egressWS = true
+		}
+	}
+	if !egressWS {
+		t.Errorf("egress must admit the workspace's project pods: %+v", np.Spec.Egress[0].To)
 	}
 
 	// Removing all allows collapses back to the base policy.

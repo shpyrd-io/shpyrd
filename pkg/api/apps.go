@@ -487,6 +487,12 @@ func (s *Server) deployApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	if req.Allow != nil {
+		if err := s.validateAllow(c, c.Param("slug"), req.Allow); err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		switch {
 		case req.Image != "":
@@ -561,6 +567,39 @@ func (s *Server) deployApp(c *gin.Context) {
 	}
 	s.audit(c, app.Name, "deploy", app.Name, deployDetail(req))
 	c.JSON(http.StatusAccepted, detail(app, s.buildsByDigest(c.Request.Context(), app)))
+}
+
+// validateAllow checks an allow list: each entry names exactly a project or
+// a platform caller, and a project is one of this workspace's (not the app
+// itself): allows never cross a workspace, and a name that is not there is
+// a typo worth refusing now rather than a policy that admits nothing.
+func (s *Server) validateAllow(c *gin.Context, self string, entries []shpyrdv1.AllowEntry) error {
+	for _, e := range entries {
+		if (e.Project == "" && e.Platform == "") || (e.Project != "" && e.Platform != "") {
+			return fmt.Errorf("each allow entry needs exactly one of project or platform")
+		}
+		if e.Platform != "" && e.Platform != "actions" && e.Platform != "mcp" {
+			return fmt.Errorf("platform must be actions or mcp")
+		}
+		if e.Project == "" {
+			continue
+		}
+		if e.Project == self {
+			return fmt.Errorf("allow: %s is this project; its own instances reach each other already", self)
+		}
+		if !project.ValidSlug(e.Project) {
+			return fmt.Errorf("allow: %q is not a project slug", e.Project)
+		}
+		other := &shpyrdv1.App{}
+		err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: project.NamespaceIn(s.workspace(c), e.Project), Name: e.Project}, other)
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("allow: no project %q in this workspace", e.Project)
+		}
+		if err != nil {
+			return fmt.Errorf("allow: looking up %s: %w", e.Project, err)
+		}
+	}
+	return nil
 }
 
 // validateDeployRequest checks the declared fields before anything is
@@ -951,16 +990,9 @@ func (s *Server) setAllow(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	// Validate: each entry must be exactly a project or a platform caller.
-	for _, e := range req {
-		if (e.Project == "" && e.Platform == "") || (e.Project != "" && e.Platform != "") {
-			abort(c, http.StatusBadRequest, fmt.Errorf("each allow entry needs exactly one of project or platform"))
-			return
-		}
-		if e.Platform != "" && e.Platform != "actions" && e.Platform != "mcp" {
-			abort(c, http.StatusBadRequest, fmt.Errorf("platform must be actions or mcp"))
-			return
-		}
+	if err := s.validateAllow(c, c.Param("slug"), req); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		a.Spec.Allow = req

@@ -47,7 +47,9 @@ func (r *AppReconciler) ensureNamespaceLabels(ctx context.Context, app *shpyrdv1
 	if ns.Labels[shpyrdv1.LabelManagedBy] != "shpyrd" {
 		return nil
 	}
-	want := map[string]string{shpyrdv1.LabelProject: app.Name}
+	// The workspace label too: the allow-list selectors match on it, and a
+	// namespace without it would look like the implicit workspace's.
+	want := map[string]string{shpyrdv1.LabelProject: app.Name, shpyrdv1.LabelWorkspace: workspaceOf(app)}
 	for k, v := range podSecurityLabels {
 		want[k] = v
 	}
@@ -83,15 +85,29 @@ func (r *AppReconciler) reconcileIsolation(ctx context.Context, app *shpyrdv1.Ap
 
 // isolationPolicyFor is the spec applied to app's project namespace; it
 // extends the base policy with the caller entries from spec.allow.
+//
+// The gate is the callee's ingress: only the projects it lists may reach
+// it. For their packets to leave, the caller's egress must admit the
+// callee's pods, and the caller cannot know who lists it, so every project
+// may send to the pods of its own workspace's projects: the ingress side
+// decides, and no packet crosses a workspace. Kubernetes evaluates egress
+// on the pod address a Service resolves to, which is why the internet block
+// (which excludes the pod CIDR) does not cover this.
 func (c Config) isolationPolicyFor(app *shpyrdv1.App) networkingv1.NetworkPolicySpec {
 	spec := c.isolationPolicy()
+	ws := workspaceOf(app)
+	spec.Egress[0].To = append(spec.Egress[0].To, networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{shpyrdv1.LabelWorkspace: ws}},
+		PodSelector:       &metav1.LabelSelector{},
+	})
 	for _, e := range app.EffectiveAllow() {
 		var peer networkingv1.NetworkPolicyPeer
 		switch {
 		case e.Project != "":
-			// Any pod in that project's namespace.
+			// Any pod in that project's namespace, in this workspace: two
+			// workspaces may both have a project of that name.
 			peer = networkingv1.NetworkPolicyPeer{
-				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{shpyrdv1.LabelProject: e.Project}},
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{shpyrdv1.LabelProject: e.Project, shpyrdv1.LabelWorkspace: ws}},
 				PodSelector:       &metav1.LabelSelector{},
 			}
 		case e.Platform == "actions" || e.Platform == "mcp":

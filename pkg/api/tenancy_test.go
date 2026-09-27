@@ -424,3 +424,30 @@ func TestPlanLimits(t *testing.T) {
 		t.Errorf("implicit scale = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// An allow list names projects of the caller's workspace and nothing else:
+// acme's shop may list acme's wiki; the implicit workspace's shop cannot
+// list wiki (there is none there), nor itself, nor a name that is not a
+// project (RFC-0033 "cross-workspace allows do not exist").
+func TestAllowListStaysInTheWorkspace(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/projects/shop/allow", `[{"project":"wiki"}]`); rec.Code != http.StatusOK {
+		t.Fatalf("acme shop allows acme wiki: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "shpyrd.example.test", "PUT", "/api/projects/shop/allow", `[{"project":"wiki"}]`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `in this workspace`) {
+		t.Errorf("default shop allowing acme's wiki = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/projects/shop/allow", `[{"project":"shop"}]`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a project allowing itself = %d, want 400", rec.Code)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/projects/shop/allow", `[{"project":"Not A Slug"}]`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a non-slug = %d, want 400", rec.Code)
+	}
+	// The deploy path carries shpyrd.yaml's allow: the same rule applies.
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/deploy", `{"image":"ghcr.io/acme/shop:2","allow":[{"project":"nope"}]}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("deploy with an unknown allow = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/deploy", `{"image":"ghcr.io/acme/shop:2","allow":[{"project":"wiki"},{"platform":"mcp"}]}`); rec.Code != http.StatusAccepted {
+		t.Errorf("deploy with a good allow = %d %s", rec.Code, rec.Body.String())
+	}
+}
