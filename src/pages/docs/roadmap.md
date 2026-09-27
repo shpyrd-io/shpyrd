@@ -81,6 +81,12 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Email delivery: the `mail` extension, `shpyrd-ctl mail set\|test`, invitations emailed | [RFC-0013](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0013-email-delivery.md) | done (v0.9.13) (SMTP only; HTTP providers and bounce handling still missing) |
 | Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | proposal |
 | Signed-in detection on identified apps: a signed-in person is identified from the first page, however they arrive | [RFC-0068](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0068-signed-in-detection-on-identified-apps.md) | proposal |
+| Embedded git: a repository per project the platform keeps — deploys commit, pushes deploy, agents work on it | [RFC-0069](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0069-embedded-git.md) | proposal |
+| Internal names: `http://crm.internal` between projects, with a service identity | [RFC-0070](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0070-internal-names.md) | proposal |
+| AI gateway: model calls through the platform, metered and budgeted per project | [RFC-0071](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0071-ai-gateway.md) | proposal |
+| App actions: endpoints an app declares that the platform runs for a person (assistants, launcher) | [RFC-0072](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0072-app-actions.md) | proposal |
+| Data in backups: database archives and volumes in the platform backup; workspace data export | [RFC-0073](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0073-data-in-backups.md) | proposal |
+| SCIM provisioning: people and teams from the company directory, immediate deprovisioning | [RFC-0074](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0074-scim-provisioning.md) | proposal |
 | MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
 | Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0; accepted at the edge to open apps in v0.9.11) |
