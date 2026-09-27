@@ -48,6 +48,13 @@ Rules: a hostname is served by one project only - adding one another project has
 
 Let's Encrypt allows 50 certificates per registered domain per week and five failed validations per hostname per hour; cert-manager retries on its own, so a domain whose record arrives an hour late still comes up.
 
+## The workspace's own names
+
+On a hosted platform a workspace answers at an address under the workspaces domain — `demo.shpyrd.app`, apps at `<app>.demo.shpyrd.app` — and can bring names of its own (Workspace › Overview, owners and admins):
+
+- **Address.** Owners change the label: `demo.shpyrd.app` becomes `acme.shpyrd.app` and every app moves with it. The label cannot be another workspace's name, address or domain, or a reserved word (`login`, `api`, …). The old address — dashboard and app hosts alike — redirects permanently for thirty days, and nobody can take it meanwhile. People signed in sign in again at the new address. `shpyrd workspace address acme`.
+- **Custom domains.** A name the company owns, `intranet.acme.com`, in CNAME mode: two CNAME records (`intranet.acme.com` and `*.intranet.acme.com`, both to the workspace address) and one TXT record to prove the domain — the page and `shpyrd workspace domains add intranet.acme.com` print them. After `verify`, the platform issues a certificate for the domain and one per app host, and the dashboard and every app answer there too (`expenses.intranet.acme.com`). Make it **primary** (owners) and the dashboard, the app links and the identity tokens' issuer use it; the address keeps answering. Delegated (NS) mode, where the platform runs the zone and issues a wildcard, comes later.
+
 ## Exposure: external or internal
 
 Cloud profiles can run two front doors: the **external** load balancer with a public address, and an **internal** one, reachable only from inside the network (VPN, peered VCN, bastion). Every project and the platform itself are external by default; a project moves with one setting:
