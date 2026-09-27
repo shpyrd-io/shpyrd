@@ -12,8 +12,16 @@ import (
 // An Aptfile (Heroku's convention: one Debian package per line) is what a
 // developer writes; the .deb packages buildpack reads project.toml. The CLI
 // translates at deploy time (RFC-0065): the archive gets the project.toml
-// section, and the deploy request asks the platform to compose the
+// section (and loses the Aptfile, which the buildpack would otherwise call
+// deprecated), and the deploy request asks the platform to compose the
 // buildpack in front of the language's. Nothing in the repository changes.
+//
+// Every package is installed with force: the buildpack skips a package it
+// finds "already installed", but it looks at the build image, and Paketo's
+// build image carries libraries the run image lacks (glib, libgomp), so a
+// skipped package is missing at run time. The check still applies to the
+// dependencies it pulls in, which is why a library that a listed package
+// needs may have to be listed itself.
 
 // aptfilePackages parses an Aptfile: package names, one per line; comments
 // and blank lines skipped; ":repo:" lines and .deb URLs (Heroku extras the
@@ -33,11 +41,12 @@ func aptfilePackages(content string) (packages, unsupported []string) {
 	return packages, unsupported
 }
 
-// debPackagesSection is the project.toml the heroku/deb-packages buildpack reads.
+// debPackagesSection is the project.toml the heroku/deb-packages buildpack
+// reads; force makes it install what the build image already has.
 func debPackagesSection(packages []string) string {
 	quoted := make([]string, 0, len(packages))
 	for _, p := range packages {
-		quoted = append(quoted, fmt.Sprintf("%q", p))
+		quoted = append(quoted, fmt.Sprintf("{ name = %q, force = true }", p))
 	}
 	return "\n# Written by shpyrd from the Aptfile at deploy time.\n[com.heroku.buildpacks.deb-packages]\ninstall = [" + strings.Join(quoted, ", ") + "]\n"
 }
@@ -100,6 +109,9 @@ func withSystemPackages(archive []byte) ([]byte, []string, []string, error) {
 	tw := tar.NewWriter(zw)
 	wrote := false
 	for _, e := range entries {
+		if strings.TrimPrefix(e.hdr.Name, "./") == "Aptfile" && e.hdr.Typeflag == tar.TypeReg {
+			continue // translated; its presence only draws a deprecation notice
+		}
 		if strings.TrimPrefix(e.hdr.Name, "./") == "project.toml" {
 			e.body = []byte(content)
 			e.hdr.Size = int64(len(e.body))

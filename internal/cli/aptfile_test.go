@@ -64,10 +64,15 @@ func TestAptfile(t *testing.T) {
 	}
 	files := readTarGz(t, out)
 	toml := files["project.toml"]
-	if !strings.Contains(toml, `schema-version = "0.2"`) || !strings.Contains(toml, `[com.heroku.buildpacks.deb-packages]`) || !strings.Contains(toml, `install = ["libglib2.0-0", "libvips42"]`) {
+	if !strings.Contains(toml, `schema-version = "0.2"`) || !strings.Contains(toml, `[com.heroku.buildpacks.deb-packages]`) || !strings.Contains(toml, `install = [{ name = "libglib2.0-0", force = true }, { name = "libvips42", force = true }]`) {
 		t.Errorf("project.toml = %q", toml)
 	}
-	if files["Aptfile"] == "" || files["Gemfile"] != "" {
+	// The Aptfile is translated and dropped (the buildpack calls it
+	// deprecated when it sees one); everything else travels untouched.
+	if _, still := files["Aptfile"]; still {
+		t.Errorf("Aptfile must not travel: %v", files)
+	}
+	if _, ok := files["Gemfile"]; !ok || files["Gemfile"] != "" {
 		t.Errorf("other files disturbed: %v", files)
 	}
 	// An existing project.toml keeps its content and gains the section.
@@ -77,7 +82,7 @@ func TestAptfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	toml = readTarGz(t, out)["project.toml"]
-	if !strings.Contains(toml, `name = "X"`) || !strings.Contains(toml, `install = ["libvips42"]`) || strings.Count(toml, "schema-version") != 1 {
+	if !strings.Contains(toml, `name = "X"`) || !strings.Contains(toml, `install = [{ name = "libvips42", force = true }]`) || strings.Count(toml, "schema-version") != 1 {
 		t.Errorf("merged project.toml = %q", toml)
 	}
 	// A project.toml that already declares the section is left alone.
