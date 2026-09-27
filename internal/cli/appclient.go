@@ -512,16 +512,22 @@ func (a *appClient) followRelease(ctx context.Context, slug, target string) *rel
 func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	build := ""
-	for build == "" {
+	// A project whose last build failed says so until the new build is
+	// registered: that message is old news, not this build's verdict.
+	stale := ""
+	for i := 0; build == ""; i++ {
 		d, err := a.getDetail(ctx, slug)
 		if err != nil {
 			return err
+		}
+		if i == 0 && d.Status.Phase == shpyrdv1.PhaseFailed {
+			stale = d.Status.Message
 		}
 		if d.Status.LatestBuild != "" && d.Status.LatestBuild != before {
 			build = d.Status.LatestBuild
 			break
 		}
-		if d.Status.Phase == shpyrdv1.PhaseFailed {
+		if d.Status.Phase == shpyrdv1.PhaseFailed && d.Status.Message != stale {
 			return errors.New(d.Status.Message)
 		}
 		if time.Now().After(deadline) {
