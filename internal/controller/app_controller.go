@@ -536,6 +536,18 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		}
 	}
 
+	// An archive uploaded before the sources port existed names the API
+	// port; rewriting that in the Image would make kpack rebuild every
+	// app on upgrade. The current URL stays until a build happens anyway:
+	// a new archive, or a rebuild asked for, which takes the new address.
+	if !needsTrigger {
+		curURL, _, _ := unstructured.NestedString(current.Object, "spec", "source", "blob", "url")
+		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
+		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
+			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
+		}
+	}
+
 	// Compare the fields we own.
 	if needsTrigger || !equalJSON(current.Object["spec"], desired.Object["spec"]) || !labelsSubset(current.GetLabels(), desired.GetLabels()) {
 		updated := current.DeepCopy()
