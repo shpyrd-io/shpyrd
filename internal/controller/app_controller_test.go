@@ -305,14 +305,26 @@ func TestReconcileRollbackNote(t *testing.T) {
 			Image:  imgA, // pinned by rollback; source kept
 		},
 		Status: shpyrdv1.AppStatus{Releases: []shpyrdv1.Release{
-			{Number: 1, Image: imgA, Description: "Initial deploy"},
-			{Number: 2, Image: imgB, Description: "Deploy"},
+			{Number: 1, Image: imgA, Description: "Initial deploy", Source: "aaaa11112222"},
+			{Number: 2, Image: imgB, Description: "Deploy", Source: "bbbb33334444"},
 		}},
 	}
 	r, c := newTestReconciler(t, app)
 	got := runReconcile(t, r, app)
 	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Description != "Rollback to v1" || got.Status.Releases[2].Image != imgA {
 		t.Fatalf("releases = %+v", got.Status.Releases)
+	}
+	// The rollback release describes the code of the image it pins, and so
+	// does REVISION in the instances.
+	if got.Status.Releases[2].Source != "aaaa11112222" {
+		t.Errorf("rollback release source = %q, want v1's", got.Status.Releases[2].Source)
+	}
+	web := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-rb", Name: "rb-web"}, web); err != nil {
+		t.Fatal(err)
+	}
+	if env := web.Spec.Template.Spec.Containers[0].Env; !hasEnv(env, "REVISION", "aaaa11112222") || !hasEnv(env, "SHPYRD_REVISION", "aaaa11112222") {
+		t.Errorf("REVISION must follow the rolled-back release, env=%v", env)
 	}
 	if got.Annotations[shpyrdv1.AnnotationReleaseNote] != "" {
 		t.Errorf("release note must be cleared after the status is written")
@@ -322,7 +334,6 @@ func TestReconcileRollbackNote(t *testing.T) {
 	if n := len(got.Status.Releases); n != 3 || got.Status.Releases[2].Description != "Rollback to v1" {
 		t.Fatalf("second pass changed releases: %+v", got.Status.Releases)
 	}
-	_ = c
 }
 
 func TestRollbackRestoresConfigAndDefaultResources(t *testing.T) {

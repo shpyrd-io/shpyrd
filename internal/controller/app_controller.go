@@ -357,6 +357,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return requeue(30 * time.Second), nil
 	}
 
+	// The code the image was built from: the release history records it
+	// and every process learns it through REVISION.
+	source := sourceID(app, kpackBuild)
+	if build.Revision != "" && app.Spec.Source != nil && app.Spec.Source.Git != nil {
+		source = short(build.Revision)
+	}
+	source = sourceOf(app, image, source)
+	revision := revisionValue(source)
+
 	// 3b. The release phase (RFC-0066): an image with a "release" process
 	// type (a Procfile's release: line) runs it before a new release rolls
 	// out; the rollout waits, and a failure leaves the previous release
@@ -366,7 +375,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	}
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: app.Spec.Processes[releaseProcessType]}, r.catalog(ctx))
-		proceed, err := r.reconcileReleasePhase(ctx, app, image, hash, res)
+		proceed, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
 		if err != nil {
 			return outcome{}, err
 		}
@@ -386,7 +395,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	}
 
 	// 4. Workloads.
-	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash)
+	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -411,10 +420,6 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		if (configDesc == "" || configDesc == "Config change") && cur.GlobalHash != ghash {
 			configDesc = "Global config change"
 		}
-	}
-	source := sourceID(app, kpackBuild)
-	if build.Revision != "" && app.Spec.Source != nil && app.Spec.Source.Git != nil {
-		source = short(build.Revision)
 	}
 	if recordRelease(app, image, hash, ghash, source, metav1.Now(), configDesc, sizeByProcess) {
 		out.newRelease = app.CurrentRelease()
@@ -612,7 +617,7 @@ func (r *AppReconciler) getBuild(ctx context.Context, namespace, name string) *u
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the
 // process map and removes workloads of dropped process types.
-func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash string) (map[string]shpyrdv1.ProcessStatus, error) {
+func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
 	status := map[string]shpyrdv1.ProcessStatus{}
 	wanted := map[string]bool{}
 
@@ -632,7 +637,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, res, mounts[p.Name], d)
+			r.Config.mutateDeployment(app, p, image, hash, revision, res, mounts[p.Name], d)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {

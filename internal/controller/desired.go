@@ -296,13 +296,23 @@ func (c Config) issuer(app *shpyrdv1.App) string {
 
 // platformEnv tells a process where it runs, so it can verify what the
 // edge sends (RFC-0033): the project and workspace slugs and the JWT
-// issuer, whose /.well-known/jwks.json holds the signing keys.
-func (c Config) platformEnv(app *shpyrdv1.App) []corev1.EnvVar {
-	return []corev1.EnvVar{
+// issuer, whose /.well-known/jwks.json holds the signing keys. It also
+// tells which code runs: REVISION (and SHPYRD_REVISION) is the git commit
+// the release was built from, or the archive digest when the source was
+// not a git checkout; empty for prebuilt images.
+func (c Config) platformEnv(app *shpyrdv1.App, revision string) []corev1.EnvVar {
+	env := []corev1.EnvVar{
 		{Name: "SHPYRD_PROJECT", Value: app.Name},
 		{Name: "SHPYRD_WORKSPACE", Value: workspaceOf(app)},
 		{Name: "SHPYRD_ISSUER", Value: c.issuer(app)},
 	}
+	if revision != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "SHPYRD_REVISION", Value: revision},
+			corev1.EnvVar{Name: "REVISION", Value: revision},
+		)
+	}
+	return env
 }
 
 // imageTag is the repository kpack pushes builds of this app to.
@@ -377,7 +387,7 @@ func processResources(p namedProcess, catalog sizes.Catalog) (corev1.ResourceReq
 }
 
 // mutateDeployment sets the fields shpyrd owns on a process Deployment.
-func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash string, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment) {
+func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash, revision string, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment) {
 	labels := processLabels(app, p.Name)
 	d.Labels = mergeMaps(d.Labels, labels)
 	if d.Spec.Selector == nil {
@@ -412,7 +422,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port, Protocol: corev1.ProtocolTCP}}
 	}
 	applyProbes(&container, p, port)
-	container.Env = append(container.Env, c.platformEnv(app)...)
+	container.Env = append(container.Env, c.platformEnv(app, revision)...)
 	container.Env = append(container.Env, app.Spec.Env...)
 
 	d.Spec.Template.Labels = mergeMaps(d.Spec.Template.Labels, labels)

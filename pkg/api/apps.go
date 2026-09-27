@@ -450,10 +450,13 @@ type DeployRequest struct {
 	// the app's current value; Build replaces the build settings whole.
 	Build     *shpyrdv1.Build             `json:"build,omitempty"`
 	Processes map[string]shpyrdv1.Process `json:"processes,omitempty"`
-	Domains   []string                    `json:"domains,omitempty"`
-	Globals   *shpyrdv1.Globals           `json:"globals,omitempty"`
-	Exposure  string                      `json:"exposure,omitempty"`
-	Allow     []shpyrdv1.AllowEntry       `json:"allow,omitempty"`
+	// Env are the plain variables shpyrd.yaml declares for every process
+	// (its `env:` key); an empty list clears them, nil keeps them.
+	Env      []corev1.EnvVar       `json:"env,omitempty"`
+	Domains  []string              `json:"domains,omitempty"`
+	Globals  *shpyrdv1.Globals     `json:"globals,omitempty"`
+	Exposure string                `json:"exposure,omitempty"`
+	Allow    []shpyrdv1.AllowEntry `json:"allow,omitempty"`
 	// Note is the release description ("Deploy image x", a commit line).
 	Note string `json:"note,omitempty"`
 }
@@ -530,6 +533,9 @@ func (s *Server) deployApp(c *gin.Context) {
 			}
 			a.Spec.Processes = req.Processes
 		}
+		if req.Env != nil {
+			a.Spec.Env = req.Env
+		}
 		if req.Domains != nil {
 			a.Spec.Domains = req.Domains
 		}
@@ -597,10 +603,37 @@ func validateDeployRequest(req *DeployRequest) error {
 			}
 		}
 	}
+	seen := map[string]bool{}
+	for _, e := range req.Env {
+		if err := ValidateEnvName(e.Name); err != nil {
+			return fmt.Errorf("env: %w", err)
+		}
+		if seen[e.Name] {
+			return fmt.Errorf("env: %s is declared twice", e.Name)
+		}
+		seen[e.Name] = true
+		if e.ValueFrom != nil {
+			return fmt.Errorf("env: %s: only plain values are accepted", e.Name)
+		}
+	}
 	return nil
 }
 
 var processName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidateEnvName accepts a variable name shpyrd.yaml may declare: a POSIX
+// name that is not one the platform sets on every process.
+func ValidateEnvName(name string) error {
+	if !envName.MatchString(name) {
+		return fmt.Errorf("%q is not a variable name (letters, digits and underscores, not starting with a digit)", name)
+	}
+	if name == "PORT" || name == "REVISION" || strings.HasPrefix(name, "SHPYRD_") {
+		return fmt.Errorf("%s is set by the platform and cannot be declared", name)
+	}
+	return nil
+}
 
 // deleteApp removes the app namespace, which cascades to everything in it.
 func (s *Server) deleteApp(c *gin.Context) {

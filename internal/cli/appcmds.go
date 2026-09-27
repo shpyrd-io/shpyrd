@@ -16,15 +16,11 @@ import (
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
-	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
 )
 
@@ -125,6 +121,9 @@ write-only: they are never printed back.`,
 	return cmd
 }
 
+// mutateEnvSecret sets and unsets config vars through the API (PUT
+// /api/projects/:slug/secrets), which validates the names, writes the
+// <app>-env Secret and records the audit entry.
 func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map[string]string, unset []string) error {
 	ctx := signalContext()
 	name, err := resolveAppName(appName)
@@ -139,36 +138,23 @@ func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map
 	if err != nil {
 		return err
 	}
-	key := types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}
-	sec := &corev1.Secret{}
-	create := false
-	if err := ac.c.Get(ctx, key, sec); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-		create = true
-		sec = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{shpyrdv1.LabelApp: name}},
-			Type:       corev1.SecretTypeOpaque,
-		}
-	}
-	if err := configvars.Apply(sec, set, unset, time.Now()); err != nil {
-		return err
-	}
-	if create {
-		err = ac.c.Create(ctx, sec)
-	} else {
-		err = ac.c.Update(ctx, sec)
-	}
+	body, err := json.Marshal(api.ConfigVarsUpdate{Set: set, Unset: unset})
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(sec.Data))
-	for _, v := range configvars.List(sec) {
+	raw, err := ac.serverRequest(ctx, "PUT", "api/projects/"+name+"/secrets", body, "application/json")
+	if err != nil {
+		return err
+	}
+	var resp api.ConfigVarsResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
+	}
+	names := make([]string, 0, len(resp.Vars))
+	for _, v := range resp.Vars {
 		names = append(names, v.Name)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Config vars for %s: %s\n", name, strings.Join(names, ", "))
-	ac.audit(ctx, name, "config.set", name, configDetail(set, unset))
 	if app.Status.Image != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "Restarting processes with the new configuration...")
 	}

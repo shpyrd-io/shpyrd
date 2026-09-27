@@ -336,6 +336,31 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 	if rec := do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"strategy":"magic"}`, true); rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown strategy: %d", rec.Code)
 	}
+	// shpyrd.yaml's env key: plain variables, kept when absent, cleared by
+	// an empty list, platform names refused.
+	rec = do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"env":[{"name":"RAILS_ENV","value":"production"}]}`, true)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy with env: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	if len(got.Spec.Env) != 1 || got.Spec.Env[0].Name != "RAILS_ENV" {
+		t.Errorf("env not applied: %+v", got.Spec.Env)
+	}
+	do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"}}`, true)
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	if len(got.Spec.Env) != 1 {
+		t.Errorf("a deploy without env must keep the variables: %+v", got.Spec.Env)
+	}
+	do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"env":[]}`, true)
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	if len(got.Spec.Env) != 0 {
+		t.Errorf("an empty env list must clear the variables: %+v", got.Spec.Env)
+	}
+	for _, bad := range []string{`{"name":"PORT","value":"80"}`, `{"name":"SHPYRD_ISSUER","value":"x"}`, `{"name":"1A","value":"x"}`, `{"name":"A","value":"1"},{"name":"A","value":"2"}`} {
+		if rec := do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"env":[`+bad+`]}`, true); rec.Code != http.StatusBadRequest {
+			t.Errorf("env %s: %d, want 400", bad, rec.Code)
+		}
+	}
 	ns := &corev1.Namespace{}
 	if err := cr.Get(context.Background(), types.NamespacedName{Name: "app-newapp"}, ns); err != nil {
 		t.Errorf("namespace not created: %v", err)

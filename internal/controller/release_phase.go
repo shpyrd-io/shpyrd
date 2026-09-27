@@ -118,7 +118,7 @@ func releaseJobName(app *shpyrdv1.App, target string) string {
 // its state. proceed is true when the rollout may go on (no command, or it
 // succeeded); otherwise the caller sets the phase from the status and
 // requeues.
-func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash string, res corev1.ResourceRequirements) (proceed bool, err error) {
+func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash, revision string, res corev1.ResourceRequirements) (proceed bool, err error) {
 	command := releaseCommand(app, app.Status.ProcessTypes)
 	if command == nil {
 		app.Status.Release = nil
@@ -132,7 +132,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), job)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := r.createReleaseJob(ctx, app, job, image, command, res, target); err != nil {
+		if err := r.createReleaseJob(ctx, app, job, image, command, revision, res, target); err != nil {
 			return false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
@@ -161,7 +161,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 
 // createReleaseJob renders the one-off Job: the release's image and config
 // vars, the process type's environment, no volumes, one attempt.
-func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, res corev1.ResourceRequirements, target string) error {
+func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, res corev1.ResourceRequirements, target string) error {
 	labels := processLabels(app, releaseProcessType)
 	labels["shpyrd.io/release-target"] = target
 	container := corev1.Container{
@@ -171,7 +171,7 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 		Resources:       res,
 		SecurityContext: hardenedSecurityContext(),
 		EnvFrom:         EnvSources(app),
-		Env:             append(r.Config.platformEnv(app), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
+		Env:             append(r.Config.platformEnv(app, revision), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
 	}
 	container.Env = append(container.Env, app.Spec.Env...)
 	job.Labels = labels

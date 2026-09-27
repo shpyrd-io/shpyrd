@@ -55,6 +55,8 @@ func validateAppName(slug string) error {
 //	build:
 //	  env:
 //	    BP_GO_TARGETS: ./cmd/web:./cmd/worker
+//	env:                      # plain variables for every process; secrets go through `shpyrd secrets set`
+//	  RAILS_ENV: production
 //	domains: [www.my-service.com]        # custom domains, served in addition to <slug>.<cluster domain>
 //	globals: false            # or: globals: { exclude: [OPENAI_API_KEY] }
 type projectConfig struct {
@@ -62,8 +64,13 @@ type projectConfig struct {
 	App       string                    `json:"app"` // deprecated alias of project
 	Processes map[string]projectProcess `json:"processes,omitempty"`
 	Build     *projectBuild             `json:"build,omitempty"`
-	Domains   []string                  `json:"domains,omitempty"`
-	Globals   *projectGlobals           `json:"globals,omitempty"`
+	// Env are plain environment variables every process gets, checked in
+	// with the code (RAILS_ENV, NODE_ENV, feature flags). The key is
+	// authoritative when present: `env: {}` removes them all. Secrets never
+	// go here; `shpyrd secrets set` keeps them out of the repository.
+	Env     map[string]string `json:"env,omitempty"`
+	Domains []string          `json:"domains,omitempty"`
+	Globals *projectGlobals   `json:"globals,omitempty"`
 	// Exposure controls which front door serves this project:
 	// "external" (the public LB, default) or "internal" (RFC-0036).
 	Exposure string `json:"exposure,omitempty"`
@@ -198,6 +205,13 @@ func (pc *projectConfig) deployRequest(current *api.AppDetailSpec) (api.DeployRe
 	if pc.Build != nil {
 		req.Build = scratch.Spec.Build
 	}
+	if pc.Env != nil {
+		// An empty list still travels: it clears the variables.
+		req.Env = scratch.Spec.Env
+		if req.Env == nil {
+			req.Env = []corev1.EnvVar{}
+		}
+	}
 	if len(pc.Domains) > 0 {
 		req.Domains = scratch.Spec.Domains
 	}
@@ -257,6 +271,21 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 			b.Env = append(b.Env, corev1.EnvVar{Name: k, Value: pc.Build.Env[k]})
 		}
 		a.Spec.Build = b
+	}
+	if pc.Env != nil {
+		names := make([]string, 0, len(pc.Env))
+		for k := range pc.Env {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		env := make([]corev1.EnvVar, 0, len(names))
+		for _, k := range names {
+			if err := api.ValidateEnvName(k); err != nil {
+				return fmt.Errorf("shpyrd.yaml: env: %w", err)
+			}
+			env = append(env, corev1.EnvVar{Name: k, Value: pc.Env[k]})
+		}
+		a.Spec.Env = env
 	}
 	if len(pc.Domains) > 0 {
 		a.Spec.Domains = pc.Domains

@@ -157,6 +157,27 @@ func sourceID(app *shpyrdv1.App, build *unstructured.Unstructured) string {
 	return ""
 }
 
+// sourceOf is the source identifier of image: the one recorded when a
+// release first deployed it, else current. A rollback pins an older image
+// while spec.source still names the newest code; the release history and
+// REVISION must describe the image that runs.
+func sourceOf(app *shpyrdv1.App, image, current string) string {
+	for _, r := range app.Status.Releases {
+		if r.Image == image && r.Source != "" {
+			return r.Source
+		}
+	}
+	return current
+}
+
+// revisionValue is what REVISION carries for a release source: the git
+// commit as recorded ("3f2a9c1b8d7e", "3f2a9c1b8d7e-dirty" for a working
+// tree, a branch when a git build has not resolved yet) or the bare
+// archive digest.
+func revisionValue(source string) string {
+	return strings.TrimPrefix(source, "archive ")
+}
+
 func short(s string) string {
 	if strings.HasSuffix(s, "-dirty") {
 		return short(strings.TrimSuffix(s, "-dirty")) + "-dirty"
