@@ -80,7 +80,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
 | Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0) |
-| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0: `shpyrd login`, `shpyrd-ctl`, API transport for the first project commands; the rest of the project commands still go through the kubeconfig) |
+| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; `run`, `pg`, `redis`, `domains` and a browser sign-in for the CLI still missing) |
 | MCP connector for AI agents | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | proposal |
 | Supply chain and encryption at rest | [RFC-0044](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0044-supply-chain.md) | ready to implement |
 
