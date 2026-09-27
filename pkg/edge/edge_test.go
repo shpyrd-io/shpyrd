@@ -106,7 +106,6 @@ func TestCookieAndCodes(t *testing.T) {
 
 func ed25519PublicKey(b []byte) ed25519.PublicKey { return ed25519.PublicKey(b) }
 
-
 // The signing key rotates every RotateEvery: the retired key still
 // verifies what it signed and stays in the JWKS for KeepRetired, then
 // goes; another replica loading the Secret follows; a ring saved before
