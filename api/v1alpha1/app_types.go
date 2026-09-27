@@ -68,6 +68,9 @@ const (
 	AnnotationRebuildAt = "shpyrd.io/rebuild-at"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
+	// DefaultProcessType is the process an App runs when spec.processes
+	// declares none. See App.EffectiveProcesses.
+	DefaultProcessType = "web"
 	// EnvSecretSuffix: the Secret <app>-env holds config vars set with
 	// `shpyrd secrets`.
 	EnvSecretSuffix = "-env"
@@ -171,6 +174,28 @@ func (a *App) EffectiveAllow() []AllowEntry {
 		return nil
 	}
 	return a.Spec.Allow
+}
+
+// EffectiveProcesses is spec.Processes with the default applied: an App that
+// declares no processes runs a single "web" one, which is what the controller
+// reconciles a Deployment for. Read it instead of spec.Processes wherever the
+// question is what the App actually runs — anything iterating the bare map
+// sees nothing at all for such an App, and so reported no allocation to draw
+// the Metrics tab's reference line at (issue #12).
+//
+// The returned map is never the App's own: callers may write to it freely.
+func (a *App) EffectiveProcesses() map[string]Process {
+	if a == nil {
+		return map[string]Process{}
+	}
+	if len(a.Spec.Processes) == 0 {
+		return map[string]Process{DefaultProcessType: {}}
+	}
+	out := make(map[string]Process, len(a.Spec.Processes))
+	for name, p := range a.Spec.Processes {
+		out[name] = p
+	}
+	return out
 }
 
 // Globals is a project's opt-out from cluster-wide config vars.

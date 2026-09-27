@@ -78,7 +78,10 @@ func (s *Server) allocations(ctx context.Context, app *shpyrdv1.App) map[string]
 	if err != nil || cat == nil {
 		return out
 	}
-	for name, p := range app.Spec.Processes {
+	// EffectiveProcesses, not the bare map: a project with no `processes:` in
+	// its shpyrd.yaml still runs one web process, and iterating the bare map
+	// left it with no allocation and so no reference line (issue #12).
+	for name, p := range app.EffectiveProcesses() {
 		res, _, err := cat.Resolve(p.Size, p.Resources)
 		if err != nil {
 			continue

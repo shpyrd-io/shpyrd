@@ -56,7 +56,18 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 		group = "pod, " + processLabel
 		seriesLabel = "pod"
 	}
-	procFilter := ""
+	// A build pod carries shpyrd.io/app but no shpyrd.io/process, so a join
+	// keyed on the app label alone pulls the builder's CPU and memory into the
+	// app's charts, where the empty process label reaches the legend as a
+	// phantom "all" series (issue #12). Requiring the process label to be
+	// there keeps the charts to the app's own processes. Naming one process
+	// requires it too, so that case needs nothing further.
+	//
+	// The label's presence is the only discriminator available: the
+	// kube-state-metrics allowlist exposes shpyrd.io/app and
+	// shpyrd.io/process and nothing else, so shpyrd.io/build never reaches
+	// Prometheus (deploy/components/monitoring/values.yaml).
+	procFilter := `,` + processLabel + `!=""`
 	if opts.Process != "" {
 		procFilter = fmt.Sprintf(`,%s=%q`, processLabel, opts.Process)
 	}

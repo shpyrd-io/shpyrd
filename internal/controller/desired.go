@@ -171,12 +171,12 @@ var (
 )
 
 // processes returns the effective process map (default: one web process),
-// sorted by name for deterministic reconciliation.
+// sorted by name for deterministic reconciliation. The default itself lives on
+// the App, so everything that asks what an App runs gets the same answer: the
+// Metrics tab read the bare map instead and drew no allocation for an App
+// whose processes are implicit (issue #12).
 func processes(app *shpyrdv1.App) []namedProcess {
-	m := app.Spec.Processes
-	if len(m) == 0 {
-		m = map[string]shpyrdv1.Process{"web": {}}
-	}
+	m := app.EffectiveProcesses()
 	out := make([]namedProcess, 0, len(m))
 	for name, p := range m {
 		if name == releaseProcessType {
@@ -185,7 +185,8 @@ func processes(app *shpyrdv1.App) []namedProcess {
 		out = append(out, namedProcess{Name: name, Process: p})
 	}
 	if len(out) == 0 {
-		out = append(out, namedProcess{Name: "web"})
+		// Only a release process was declared, which is not a workload.
+		out = append(out, namedProcess{Name: shpyrdv1.DefaultProcessType})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
