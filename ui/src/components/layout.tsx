@@ -70,11 +70,11 @@ export function Layout() {
           <nav className="flex items-center gap-1 text-sm">
             <NavItem to="/">Apps</NavItem>
             {!userOnly && <NavItem to="/projects">Projects</NavItem>}
-            {perms.clusterView && console && (
-              <NavItem to="/cluster">Cluster</NavItem>
-            )}
             {(perms.clusterAdmin || usersEnabled) && (
               <NavItem to="/workspace">Workspace</NavItem>
+            )}
+            {perms.clusterView && console && (
+              <NavItem to="/cluster">Cluster</NavItem>
             )}
           </nav>
           <div className="ml-auto flex items-center gap-1 text-sm text-muted-foreground">
