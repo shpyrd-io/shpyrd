@@ -89,6 +89,10 @@ export function LoginPage() {
               <AlertDescription>{redirectError}</AlertDescription>
             </Alert>
           )}
+          {auth?.companyDomains && <CompanyForm next={next} />}
+          {auth?.companyDomains && (password || providers.length > 0) && (
+            <Divider label="or" />
+          )}
           {password && <PasswordForm next={next} />}
           {password && providers.length > 0 && <Divider label="or" />}
           {providers.map((p) => (
@@ -126,6 +130,66 @@ export function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The email-first step (RFC-0033): when the workspace claimed email
+ * domains, the person types their work email and goes straight to the
+ * company's sign-in, without choosing a method.
+ */
+function CompanyForm({ next }: { next: string }) {
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.authRoute(email.trim());
+      if (!r.provider) {
+        setError(
+          "That address has no company sign-in here; use one of the methods below.",
+        );
+        setBusy(false);
+        return;
+      }
+      window.location.assign(api.loginUrl(r.provider, next));
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="grid gap-3" onSubmit={submit} noValidate>
+      <div className="grid gap-2">
+        <Label htmlFor="work-email">Work email</Label>
+        <Input
+          id="work-email"
+          type="email"
+          autoComplete="email"
+          autoFocus
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@company.com"
+        />
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <Button type="submit" size="lg" disabled={busy || !email.trim()}>
+        {busy ? (
+          <Loader2 className="animate-spin" data-icon="inline-start" />
+        ) : (
+          <LogIn data-icon="inline-start" />
+        )}
+        Continue with your company account
+      </Button>
+    </form>
   );
 }
 

@@ -13,9 +13,16 @@ export type PublicConfig = {
   auth: {
     token: boolean;
     /** Sign-in buttons (external providers); kind picks the icon. */
-    providers: { id: string; label: string; kind?: string }[];
+    providers: {
+      id: string;
+      label: string;
+      kind?: string;
+      workspace?: string;
+    }[];
     /** Provider behind the email/password form, when one is enabled. */
     password?: { id: string; label: string };
+    /** The workspace claimed email domains that route to a method: ask for the email first. */
+    companyDomains?: boolean;
   };
   extensions: string[];
   /** What this server offers beyond the core ("workspaces", ...); empty on the open-source platform. */
@@ -77,6 +84,8 @@ export type WorkspaceInfo = {
     storage: string;
   };
   joinPolicy: "open" | "company" | "listed";
+  /** Only the workspace's own sign-in methods are offered (not the platform's). */
+  ownMethodsOnly: boolean;
   /** Emails of the workspace's owners. */
   owners: string[];
   createdAt: string;
@@ -96,9 +105,29 @@ export type DomainClaim = {
 /** Login methods: Dex connectors plus the local password method. */
 export type LoginMethods = {
   password: boolean;
-  connectors: { id: string; type: string; name: string; detail?: string }[];
+  connectors: {
+    id: string;
+    type: string;
+    name: string;
+    detail?: string;
+    workspace?: string;
+  }[];
   kinds: string[];
   callback: string;
+  /** The workspace whose own methods these are; absent for the platform's. */
+  workspace?: string;
+};
+
+export type ConnectorRequest = {
+  type: string;
+  id?: string;
+  name?: string;
+  clientId: string;
+  clientSecret: string;
+  org?: string;
+  hostedDomain?: string;
+  tenant?: string;
+  issuer?: string;
 };
 
 /** A person of the workspace: signed in, or holding a role before signing in. */
@@ -776,11 +805,19 @@ export const api = {
     }
     return (await res.json()) as { next: string };
   },
+  /** The sign-in method a claimed email domain routes to ("" when none). */
+  authRoute: (email: string) =>
+    request<{ provider: string; label?: string }>(
+      `/api/auth/route?email=${encodeURIComponent(email)}`,
+    ),
   loginUrl: (provider: string, next: string) =>
     `/api/auth/login?provider=${encodeURIComponent(provider)}&next=${encodeURIComponent(next)}`,
   workspace: () => request<WorkspaceInfo>("/api/workspace"),
-  updateWorkspace: (body: { name?: string; joinPolicy?: string }) =>
-    request<WorkspaceInfo>("/api/workspace", json("PATCH", body)),
+  updateWorkspace: (body: {
+    name?: string;
+    joinPolicy?: string;
+    ownMethodsOnly?: boolean;
+  }) => request<WorkspaceInfo>("/api/workspace", json("PATCH", body)),
   domainClaims: () => request<DomainClaim[]>("/api/workspace/domain-claims"),
   claimDomain: (domain: string, connector: string) =>
     request<DomainClaim>(
@@ -798,19 +835,19 @@ export const api = {
       { method: "DELETE" },
     ),
   loginMethods: () => request<LoginMethods>("/api/auth/connectors"),
-  addConnector: (body: {
-    type: string;
-    id?: string;
-    name?: string;
-    clientId: string;
-    clientSecret: string;
-    org?: string;
-    hostedDomain?: string;
-    tenant?: string;
-    issuer?: string;
-  }) => request<{ id: string }>("/api/auth/connectors", json("POST", body)),
+  addConnector: (body: ConnectorRequest) =>
+    request<{ id: string }>("/api/auth/connectors", json("POST", body)),
   removeConnector: (id: string) =>
     request<void>(`/api/auth/connectors/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** A workspace's own sign-in methods (RFC-0033 per-workspace SSO). */
+  workspaceLoginMethods: () =>
+    request<LoginMethods>("/api/workspace/login-methods"),
+  addWorkspaceConnector: (body: ConnectorRequest) =>
+    request<{ id: string }>("/api/workspace/login-methods", json("POST", body)),
+  removeWorkspaceConnector: (id: string) =>
+    request<void>(`/api/workspace/login-methods/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
   people: () => request<Person[]>("/api/workspace/people"),

@@ -131,7 +131,7 @@ type TeamRequest struct {
 var dnsName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // ctxWorkspace is the gin context key of the resolved workspace.
-const ctxWorkspace = "shpyrd.workspace"
+const ctxWorkspace = ext.WorkspaceContextKey
 
 // tenant is the workspace the request's host belongs to (RFC-0033 phase
 // 6), resolved once per request. The open-source platform resolves every

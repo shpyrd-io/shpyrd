@@ -315,11 +315,12 @@ func (s *Server) deps() ext.Deps {
 }
 
 // routeGroups implements ext.Router.
-type routeGroups struct{ pub, api, admin gin.IRouter }
+type routeGroups struct{ pub, api, wsAdmin, admin gin.IRouter }
 
-func (r routeGroups) Public() gin.IRouter    { return r.pub }
-func (r routeGroups) Protected() gin.IRouter { return r.api }
-func (r routeGroups) Admin() gin.IRouter     { return r.admin }
+func (r routeGroups) Public() gin.IRouter         { return r.pub }
+func (r routeGroups) Protected() gin.IRouter      { return r.api }
+func (r routeGroups) WorkspaceAdmin() gin.IRouter { return r.wsAdmin }
+func (r routeGroups) Admin() gin.IRouter          { return r.admin }
 
 // Handler exposes the router, e.g. for tests.
 func (s *Server) Handler() http.Handler { return s.engine }
@@ -415,6 +416,7 @@ func (s *Server) routes() error {
 	pub.POST("/auth/password", login, s.authPassword)      // RFC-0012
 	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
 	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
+	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
 
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
@@ -535,7 +537,7 @@ func (s *Server) routes() error {
 	for _, x := range s.opts.Extensions {
 		// Extensions manage cluster-level things (accounts, connectors,
 		// storage): the operator's, so the console's.
-		if err := x.Routes(routeGroups{pub: pub, api: api, admin: api.Group("", console, s.require(authz.ClusterAdmin))}, deps); err != nil {
+		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin))}, deps); err != nil {
 			return fmt.Errorf("extension %s: %w", x.Name(), err)
 		}
 	}

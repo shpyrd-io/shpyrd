@@ -46,6 +46,9 @@ type ProviderInfo struct {
 	Label string `json:"label"`
 	// Kind picks the icon: "oidc", "github", "google".
 	Kind string `json:"kind,omitempty"`
+	// Workspace is the slug of the workspace that owns the method
+	// (RFC-0033); empty for the platform's methods.
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // AuthConfig is the auth part of GET /api/config.
@@ -57,6 +60,10 @@ type AuthConfig struct {
 	// Password is the provider behind the email/password form, if any
 	// (RFC-0012); it is not repeated in Providers.
 	Password *ProviderInfo `json:"password,omitempty"`
+	// CompanyDomains says the workspace claimed email domains that route
+	// to a method (RFC-0033): the login page asks for the email first and
+	// sends the person straight to their company's sign-in.
+	CompanyDomains bool `json:"companyDomains,omitempty"`
 }
 
 type oidcProvider struct {
@@ -212,7 +219,7 @@ func (rp *relyingParty) providerList() []ProviderInfo {
 	out := make([]ProviderInfo, 0, len(rp.order))
 	for _, id := range rp.order {
 		if p := rp.providers[id]; !p.Password {
-			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc")})
+			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Workspace: p.Workspace})
 		}
 	}
 	return out
@@ -415,7 +422,7 @@ func (s *Server) authConfig() AuthConfig {
 	if s.rp != nil {
 		cfg.Providers = s.rp.providerList()
 		if p := s.rp.passwordProvider(); p != nil {
-			cfg.Password = &ProviderInfo{ID: p.ID, Label: p.Label}
+			cfg.Password = &ProviderInfo{ID: p.ID, Label: p.Label, Workspace: p.Workspace}
 		}
 	}
 	return cfg

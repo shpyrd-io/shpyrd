@@ -55,10 +55,39 @@ func TestConnectorStore(t *testing.T) {
 	if list[0].ID != "github" || list[0].Detail != "" || list[1].ID != "google" || list[1].Name != "Acme Google" || list[1].Detail != "domain acme.com" {
 		t.Errorf("list = %+v", list)
 	}
-	if err := s.Remove(ctx, "google"); err != nil {
+	// A workspace's own connector (RFC-0033 per-workspace SSO): prefixed
+	// Dex id, labelled, listed in its scope only, removed from its scope
+	// only.
+	if existed, err := s.Add(ctx, ConnectorSpec{Type: "google", Workspace: "acme", ClientID: "g2", ClientSecret: "gs2", HostedDomain: "acme.com"}); err != nil || existed {
+		t.Fatalf("add workspace connector: %v %v", existed, err)
+	}
+	u, err = dyn.Resource(ConnectorGVR).Namespace("shpyrd-system").Get(ctx, "ws-acme-google", metav1.GetOptions{})
+	if err != nil || u.GetLabels()[LabelWorkspace] != "acme" {
+		t.Fatalf("workspace connector object: %v labels=%v", err, u.GetLabels())
+	}
+	if all, _ := s.List(ctx); len(all) != 3 {
+		t.Errorf("list all = %+v", all)
+	}
+	acme, _ := s.ListFor(ctx, "acme")
+	if len(acme) != 1 || acme[0].ID != "google" || acme[0].FullID != "ws-acme-google" || acme[0].Workspace != "acme" || acme[0].Detail != "domain acme.com" {
+		t.Errorf("acme's = %+v", acme)
+	}
+	if platform, _ := s.ListFor(ctx, ""); len(platform) != 2 || platform[0].Workspace != "" {
+		t.Errorf("platform's = %+v", platform)
+	}
+	if err := s.Remove(ctx, "", "ws-acme-google"); err == nil {
+		t.Error("the platform scope must not remove a workspace's connector by its full id")
+	}
+	if err := s.Remove(ctx, "acme", "google"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Remove(ctx, "google"); err == nil {
+	if err := (&ConnectorSpec{Type: "github", ID: "ws-x", ClientID: "a", ClientSecret: "b"}).Validate(); err == nil {
+		t.Error("a platform id with the workspace prefix was accepted")
+	}
+	if err := s.Remove(ctx, "", "google"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(ctx, "", "google"); err == nil {
 		t.Error("removing twice must fail")
 	}
 	if err := (&ConnectorSpec{Type: "okta", ClientID: "a", ClientSecret: "b"}).Validate(); err == nil {

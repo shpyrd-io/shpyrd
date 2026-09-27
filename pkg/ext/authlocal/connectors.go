@@ -32,18 +32,45 @@ var connectorIDRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$`)
 
 // Connector is a Dex connector as shown to people: no secrets.
 type Connector struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name"`
+	// ID is the connector's id within its scope: "google" for the
+	// platform's Google method and for workspace acme's own. FullID is
+	// Dex's connector id and the sign-in provider's id, unique on the
+	// platform: "google", or "ws-acme-google".
+	ID     string `json:"id"`
+	FullID string `json:"-"`
+	Type   string `json:"type"`
+	Name   string `json:"name"`
 	// Detail summarises the configuration (organisation, hosted domain).
 	Detail string `json:"detail,omitempty"`
+	// Workspace is the slug of the workspace that owns the method
+	// (RFC-0033 per-workspace SSO); empty for the platform's.
+	Workspace string `json:"workspace,omitempty"`
+}
+
+// LabelWorkspace marks a connector as a workspace's own.
+const LabelWorkspace = "shpyrd.io/workspace"
+
+// workspacePrefix starts the full id of a workspace's connector.
+const workspacePrefix = "ws-"
+
+// FullConnectorID is Dex's id for a connector: the platform's keep their
+// id, a workspace's is prefixed with the workspace so two workspaces may
+// both have "google".
+func FullConnectorID(workspace, id string) string {
+	if workspace == "" {
+		return id
+	}
+	return workspacePrefix + workspace + "-" + id
 }
 
 // ConnectorSpec is what the CLI collects for a new connector.
 type ConnectorSpec struct {
-	Type         string
-	ID           string
-	Name         string
+	Type string
+	ID   string
+	Name string
+	// Workspace scopes the connector to one workspace's login page; empty
+	// is the platform's, offered everywhere.
+	Workspace    string
 	ClientID     string
 	ClientSecret string
 	// Org limits GitHub sign-in to members of one organisation (and loads
@@ -131,6 +158,12 @@ func (spec *ConnectorSpec) Validate() error {
 	if !connectorIDRe.MatchString(spec.ID) || spec.ID == "local" {
 		return fmt.Errorf("invalid connector id %q: lowercase letters, digits and dashes", spec.ID)
 	}
+	if spec.Workspace == "" && strings.HasPrefix(spec.ID, workspacePrefix) {
+		return fmt.Errorf("connector ids starting with %q belong to workspaces", workspacePrefix)
+	}
+	if len(FullConnectorID(spec.Workspace, spec.ID)) > 63 {
+		return errors.New("connector id too long")
+	}
 	if spec.Name == "" {
 		spec.Name = map[string]string{"github": "GitHub", "google": "Google", "microsoft": "Microsoft", "oidc": "Single sign-on"}[spec.Type]
 	}
@@ -185,14 +218,19 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 	if err != nil {
 		return false, err
 	}
+	full := FullConnectorID(spec.Workspace, spec.ID)
+	labels := map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"}
+	if spec.Workspace != "" {
+		labels[LabelWorkspace] = spec.Workspace
+	}
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": ConnectorGVR.Group + "/" + ConnectorGVR.Version,
 		"kind":       "Connector",
 		"metadata": map[string]interface{}{
-			"name": spec.ID, "namespace": s.Namespace,
-			"labels": map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"},
+			"name": full, "namespace": s.Namespace,
+			"labels": labels,
 		},
-		"id":   spec.ID,
+		"id":   full,
 		"type": spec.Type,
 		"name": spec.Name,
 		// Dex declares config as []byte: base64 of the JSON.
@@ -203,7 +241,7 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 	} else if !apierrors.IsAlreadyExists(err) {
 		return false, wrap(err)
 	}
-	cur, err := s.res().Get(ctx, spec.ID, metav1.GetOptions{})
+	cur, err := s.res().Get(ctx, full, metav1.GetOptions{})
 	if err != nil {
 		return true, wrap(err)
 	}
@@ -212,7 +250,8 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 	return true, wrap(err)
 }
 
-// List returns the connectors sorted by id, without their secrets.
+// List returns every connector sorted by id, without their secrets: the
+// platform's and every workspace's (Workspace says whose).
 func (s *ConnectorStore) List(ctx context.Context) ([]Connector, error) {
 	list, err := s.res().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -226,15 +265,36 @@ func (s *ConnectorStore) List(ctx context.Context) ([]Connector, error) {
 		}
 		out = append(out, c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].FullID < out[j].FullID })
+	return out, nil
+}
+
+// ListFor returns one scope's connectors: the platform's ("") or a
+// workspace's.
+func (s *ConnectorStore) ListFor(ctx context.Context, workspace string) ([]Connector, error) {
+	all, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Connector, 0, len(all))
+	for _, c := range all {
+		if c.Workspace == workspace {
+			out = append(out, c)
+		}
+	}
 	return out, nil
 }
 
 func connectorOf(u unstructured.Unstructured) Connector {
-	id, _, _ := unstructured.NestedString(u.Object, "id")
+	full, _, _ := unstructured.NestedString(u.Object, "id")
 	typ, _, _ := unstructured.NestedString(u.Object, "type")
 	name, _, _ := unstructured.NestedString(u.Object, "name")
-	c := Connector{ID: id, Type: typ, Name: name}
+	ws := u.GetLabels()[LabelWorkspace]
+	id := full
+	if ws != "" {
+		id = strings.TrimPrefix(full, workspacePrefix+ws+"-")
+	}
+	c := Connector{ID: id, FullID: full, Type: typ, Name: name, Workspace: ws}
 	if enc, _, _ := unstructured.NestedString(u.Object, "config"); enc != "" {
 		if raw, err := base64.StdEncoding.DecodeString(enc); err == nil {
 			var cfg struct {
@@ -259,9 +319,13 @@ func connectorOf(u unstructured.Unstructured) Connector {
 	return c
 }
 
-// Remove deletes a connector.
-func (s *ConnectorStore) Remove(ctx context.Context, id string) error {
-	err := s.res().Delete(ctx, id, metav1.DeleteOptions{})
+// Remove deletes a connector of a scope (the platform's when workspace is
+// "").
+func (s *ConnectorStore) Remove(ctx context.Context, workspace, id string) error {
+	if workspace == "" && strings.HasPrefix(id, workspacePrefix) {
+		return fmt.Errorf("connector %q belongs to a workspace; remove it from that workspace's Sign-in page", id)
+	}
+	err := s.res().Delete(ctx, FullConnectorID(workspace, id), metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("no connector %q; see `shpyrd auth connector list`", id)
 	}

@@ -61,11 +61,18 @@ func (extension) Routes(r ext.Router, deps ext.Deps) error {
 	api.POST("/users", h.create)
 	api.PUT("/users/:email/password", h.setPassword)
 	api.DELETE("/users/:email", h.delete)
-	// Login methods (RFC-0058 connectors) managed from the Workspace page.
+	// Login methods (RFC-0058 connectors) managed from the Workspace page:
+	// the platform's at the console, a workspace's own at its host
+	// (RFC-0033 per-workspace SSO).
 	ch := &connectorHandlers{deps: deps, issuer: issuer}
 	api.GET("/auth/connectors", ch.list)
 	api.POST("/auth/connectors", ch.add)
 	api.DELETE("/auth/connectors/:id", ch.remove)
+	wh := &connectorHandlers{deps: deps, issuer: issuer, scoped: true}
+	wa := r.WorkspaceAdmin()
+	wa.GET("/workspace/login-methods", wh.list)
+	wa.POST("/workspace/login-methods", wh.add)
+	wa.DELETE("/workspace/login-methods/:id", wh.remove)
 	return nil
 }
 
@@ -183,8 +190,9 @@ func fail(c *gin.Context, err error) {
 
 // CLI returns `shpyrd users`.
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
-	// Accounts and login methods are the operator's.
-	return []*cobra.Command{ext.ForOperator(newUsersCmd(g)), ext.ForOperator(newAuthConnectorCmd(g))}
+	// Accounts and the platform's login methods are the operator's; a
+	// workspace's own sign-in methods are its admins' (RFC-0033).
+	return []*cobra.Command{ext.ForOperator(newUsersCmd(g)), ext.ForOperator(newAuthConnectorCmd(g)), newSSOCmd(g)}
 }
 
 func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, secret string) error {
@@ -201,10 +209,10 @@ func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, se
 	}
 	for _, c := range list {
 		if err := deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
-			ID: c.ID, Label: c.Name, Kind: c.Type, ConnectorID: c.ID, Issuer: issuer,
-			ClientID: clientID, ClientSecret: secret,
+			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, Issuer: issuer,
+			ClientID: clientID, ClientSecret: secret, Workspace: c.Workspace,
 		}); err != nil {
-			return fmt.Errorf("connector %s: %w", c.ID, err)
+			return fmt.Errorf("connector %s: %w", c.FullID, err)
 		}
 	}
 	return nil

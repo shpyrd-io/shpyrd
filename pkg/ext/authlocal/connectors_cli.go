@@ -151,9 +151,9 @@ func newConnectorListCmd(g ext.CLIGlobals) *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL")
+			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL\tWORKSPACE")
 			for _, c := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail, firstNonEmpty(c.Workspace, "(platform)"))
 			}
 			return tw.Flush()
 		},
@@ -172,7 +172,7 @@ func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := d.store.Remove(ctx, args[0]); err != nil {
+			if err := d.store.Remove(ctx, "", args[0]); err != nil {
 				return err
 			}
 			d.audit(ctx, "auth.connector.remove", args[0], "")
@@ -180,4 +180,13 @@ func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
 			return d.restartServer(ctx)
 		},
 	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

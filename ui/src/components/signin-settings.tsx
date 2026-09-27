@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, ShieldCheck, Trash2 } from "lucide-react";
 
-import { api, type DomainClaim } from "@/lib/api";
+import { api, type ConnectorRequest, type DomainClaim } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -56,15 +56,26 @@ export function SignInSettings({
 }) {
   return (
     <div className="grid gap-6">
-      {!console ? null : authLocal ? (
-        <LoginMethodsCard />
+      {authLocal ? (
+        <LoginMethodsCard scope={console ? "platform" : "workspace"} />
       ) : (
         <Card>
           <CardHeader>
             <CardTitle>Login methods</CardTitle>
             <CardDescription>
-              Enable the <code>auth-local</code> extension to manage sign-in
-              methods here (<code>shpyrd extensions enable auth-local</code>).
+              {console ? (
+                <>
+                  Enable the <code>auth-local</code> extension to manage sign-in
+                  methods here (
+                  <code>shpyrd-ctl extensions enable auth-local</code>).
+                </>
+              ) : (
+                <>
+                  The platform operator has not enabled sign-in methods
+                  management; ask them to enable the <code>auth-local</code>{" "}
+                  extension.
+                </>
+              )}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -82,33 +93,129 @@ const kindLabels: Record<string, string> = {
   oidc: "OpenID Connect (Okta, Keycloak, Auth0…)",
 };
 
-function LoginMethodsCard() {
+/**
+ * The sign-in methods: the platform's at the console (offered to every
+ * workspace), a workspace's own at its host (RFC-0033 per-workspace SSO:
+ * the company's Google, Microsoft, GitHub or OpenID Connect provider, shown
+ * on that workspace's login page only, with a switch to stop offering the
+ * platform's methods once the company's SSO is in place).
+ */
+function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
   const qc = useQueryClient();
+  const workspaceScope = scope === "workspace";
   const methods = useQuery({
-    queryKey: ["login-methods"],
-    queryFn: api.loginMethods,
+    queryKey: ["login-methods", scope],
+    queryFn: workspaceScope ? api.workspaceLoginMethods : api.loginMethods,
     retry: false,
   });
+  const ws = useQuery({
+    queryKey: ["workspace"],
+    queryFn: api.workspace,
+    enabled: workspaceScope,
+  });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: api.config,
+    staleTime: 60_000,
+  });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["login-methods"] });
+    qc.invalidateQueries({ queryKey: ["config"] });
+    qc.invalidateQueries({ queryKey: ["workspace"] });
+  };
   const remove = useMutation({
-    mutationFn: (id: string) => api.removeConnector(id),
+    mutationFn: (id: string) =>
+      workspaceScope
+        ? api.removeWorkspaceConnector(id)
+        : api.removeConnector(id),
     onSuccess: (_, id) => {
       toast.success(`Removed ${id}`);
-      qc.invalidateQueries({ queryKey: ["login-methods"] });
-      qc.invalidateQueries({ queryKey: ["config"] });
+      refresh();
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const platformOnly = useMutation({
+    mutationFn: (ownMethodsOnly: boolean) =>
+      api.updateWorkspace({ ownMethodsOnly }),
+    onSuccess: (w) => {
+      toast.success(
+        w.ownMethodsOnly
+          ? "Only this workspace's methods are offered now"
+          : "The platform's methods are offered again",
+      );
+      refresh();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  // The platform's methods, as the login page of this workspace shows them
+  // (those the workspace did not add itself).
+  const platformMethods = (config.data?.auth?.providers ?? []).filter(
+    (p) => !p.workspace,
+  );
+  const hasOwn = (methods.data?.connectors.length ?? 0) > 0;
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Login methods</CardTitle>
+        <CardTitle>
+          {workspaceScope
+            ? "Sign-in methods of this workspace"
+            : "Login methods"}
+        </CardTitle>
         <CardDescription>
-          The ways people sign in to this workspace — and to every app behind
-          sign-in. Add your company's identity provider so nobody needs another
-          password; groups of the provider map to teams.
+          {workspaceScope ? (
+            <>
+              How people sign in to this workspace and to every app behind
+              sign-in. Add your company's identity provider — Google Workspace,
+              Microsoft Entra, GitHub, or any OpenID Connect provider such as
+              Okta — so nobody needs another password; groups of the provider
+              map to teams. These methods appear on this workspace's login page
+              only.
+            </>
+          ) : (
+            <>
+              The ways people sign in to this workspace — and to every app
+              behind sign-in. Add your company's identity provider so nobody
+              needs another password; groups of the provider map to teams.
+              Methods added here are offered to every workspace.
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {workspaceScope && ws.data && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3">
+            <div className="grid gap-0.5 text-sm">
+              <span className="font-medium">
+                Also offer the platform's methods
+                {platformMethods.length > 0 || config.data?.auth?.password
+                  ? `: ${[
+                      ...(config.data?.auth?.password
+                        ? ["email and password"]
+                        : []),
+                      ...platformMethods.map((p) => p.label),
+                    ].join(", ")}`
+                  : ""}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {ws.data.ownMethodsOnly
+                  ? "Off: only the methods below can sign in here."
+                  : hasOwn
+                    ? "On. Switch it off once your company's method works, so people sign in only through it."
+                    : "On. Add a method of your own before switching it off, or nobody could sign in."}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                platformOnly.isPending || (!ws.data.ownMethodsOnly && !hasOwn)
+              }
+              onClick={() => platformOnly.mutate(!ws.data!.ownMethodsOnly)}
+            >
+              {ws.data.ownMethodsOnly ? "Offer them" : "Stop offering them"}
+            </Button>
+          </div>
+        )}
         {methods.isLoading && <Skeleton className="h-16 w-full" />}
         {methods.error && (
           <p className="text-sm text-destructive">
@@ -181,10 +288,8 @@ function LoginMethodsCard() {
           <AddConnectorDialog
             kinds={methods.data.kinds}
             callback={methods.data.callback}
-            onDone={() => {
-              qc.invalidateQueries({ queryKey: ["login-methods"] });
-              qc.invalidateQueries({ queryKey: ["config"] });
-            }}
+            add={workspaceScope ? api.addWorkspaceConnector : api.addConnector}
+            onDone={refresh}
           />
         )}
       </CardContent>
@@ -195,10 +300,12 @@ function LoginMethodsCard() {
 function AddConnectorDialog({
   kinds,
   callback,
+  add: addConnector,
   onDone,
 }: {
   kinds: string[];
   callback: string;
+  add: (body: ConnectorRequest) => Promise<{ id: string }>;
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -217,7 +324,7 @@ function AddConnectorDialog({
     (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm({ ...form, [k]: e.target.value });
   const add = useMutation({
-    mutationFn: () => api.addConnector({ type, ...form }),
+    mutationFn: () => addConnector({ type, ...form }),
     onSuccess: () => {
       toast.success(
         "Sign-in method added; the button is on the login page now",
@@ -451,10 +558,12 @@ function DomainClaimsCard() {
     queryFn: api.domainClaims,
     retry: false,
   });
-  const methods = useQuery({
-    queryKey: ["login-methods"],
-    queryFn: api.loginMethods,
-    retry: false,
+  // The methods this workspace's login page offers (its own and the
+  // platform's), by provider id: what a claim routes to.
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: api.config,
+    staleTime: 60_000,
   });
   const [domain, setDomain] = useState("");
   const [connector, setConnector] = useState("");
@@ -482,7 +591,12 @@ function DomainClaimsCard() {
     onSuccess: refresh,
     onError: (e: Error) => toast.error(e.message),
   });
-  const connectors = methods.data?.connectors ?? [];
+  const connectors = (config.data?.auth?.providers ?? []).map((p) => ({
+    id: p.id,
+    name: p.label + (p.workspace ? "" : " (platform)"),
+  }));
+  const labelOf = (id: string) =>
+    connectors.find((c) => c.id === id)?.name ?? id;
 
   return (
     <Card>
@@ -516,7 +630,9 @@ function DomainClaimsCard() {
                     {d.domain}
                   </TableCell>
                   <TableCell className="text-xs">
-                    {d.connector || (
+                    {d.connector ? (
+                      labelOf(d.connector)
+                    ) : (
                       <span className="text-muted-foreground">any method</span>
                     )}
                   </TableCell>

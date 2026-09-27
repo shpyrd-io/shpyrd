@@ -517,3 +517,68 @@ func TestCustomDomainResolvesToTheAppsWorkspace(t *testing.T) {
 		t.Errorf("a host nobody claims = %d, want 404", rec.Code)
 	}
 }
+
+// Per-workspace SSO (RFC-0033): a workspace's own login methods show on
+// its login page only; the platform's show everywhere until a workspace
+// hides them, which it may do only once it has a method of its own.
+func TestPerWorkspaceLoginMethods(t *testing.T) {
+	issuer := newFakeIssuer(t)
+	s, _, _ := newTenantServer(t)
+	ctx := context.Background()
+	add := func(id, ws string) {
+		if err := s.rp.AddOIDC(ctx, ext.OIDCProvider{ID: id, Label: id, Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Workspace: ws}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("github", "")
+	add("ws-acme-okta", "acme")
+	add("ws-closed-google", "closed")
+	providers := func(host string) []string {
+		rec := at(t, s, host, "GET", "/api/config", "")
+		var cfg struct {
+			Auth AuthConfig `json:"auth"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+			t.Fatalf("%s config: %d %s", host, rec.Code, rec.Body.String())
+		}
+		var ids []string
+		for _, p := range cfg.Auth.Providers {
+			ids = append(ids, p.ID)
+		}
+		return ids
+	}
+	if got := providers("shpyrd.example.test"); strings.Join(got, ",") != "github,ws-acme-okta,ws-closed-google" {
+		t.Errorf("console shows everything: %v", got)
+	}
+	if got := providers("acme.shpyrd.test"); strings.Join(got, ",") != "github,ws-acme-okta" {
+		t.Errorf("acme shows the platform's and its own: %v", got)
+	}
+	// The console starts a workspace's own method for that workspace, and
+	// refuses another workspace's.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login?provider=ws-acme-okta", ""); rec.Code != http.StatusFound {
+		t.Errorf("acme's own method at acme: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login?provider=ws-closed-google", ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("another workspace's method at acme: %d %s", rec.Code, rec.Body.String())
+	}
+	// Hiding the platform's methods: refused without an own method, then
+	// allowed, then the page shows the own method only.
+	wsToken := func(host, body string) *httptest.ResponseRecorder {
+		return at(t, s, host, "PATCH", "/api/workspace", body)
+	}
+	if rec := wsToken("long.shpyrd.test", `{"ownMethodsOnly":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("hide without own method: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := wsToken("acme.shpyrd.test", `{"ownMethodsOnly":true}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ownMethodsOnly":true`) {
+		t.Fatalf("hide at acme: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := providers("acme.shpyrd.test"); strings.Join(got, ",") != "ws-acme-okta" {
+		t.Errorf("acme with own methods only: %v", got)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login?provider=github", ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("hidden platform method at acme: %d", rec.Code)
+	}
+	if rec := wsToken("shpyrd.example.test", `{"ownMethodsOnly":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("the console cannot hide: %d", rec.Code)
+	}
+}

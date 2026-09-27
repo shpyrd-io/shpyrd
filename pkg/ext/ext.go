@@ -56,12 +56,30 @@ type ResourceType struct {
 }
 
 // Router gives extensions the route groups of the API: public (no
-// session), protected (any signed-in identity) and admin (platform
-// administrators only, the cluster.admin action of RFC-0008).
+// session), protected (any signed-in identity), workspace-admin (the
+// cluster.admin action at any workspace host: owners and admins of the
+// request's workspace, RFC-0033) and admin (the same action at the console
+// only: the operator's).
 type Router interface {
 	Public() gin.IRouter
 	Protected() gin.IRouter
+	WorkspaceAdmin() gin.IRouter
 	Admin() gin.IRouter
+}
+
+// WorkspaceContextKey is where the API keeps the request's workspace
+// (*store.Workspace) on the gin context once the host resolved it.
+const WorkspaceContextKey = "shpyrd.workspace"
+
+// WorkspaceFrom returns the slug of the request's workspace, "" when the
+// request is not scoped to one (or the API has not resolved it).
+func WorkspaceFrom(c *gin.Context) string {
+	if v, ok := c.Get(WorkspaceContextKey); ok {
+		if ws, ok := v.(*store.Workspace); ok && ws != nil {
+			return ws.Slug
+		}
+	}
+	return ""
 }
 
 // Deps is what the server hands to extensions.
@@ -152,6 +170,10 @@ type OIDCProvider struct {
 	// ConnectorID preselects a Dex connector (connector_id in the
 	// authorization request) so Dex's chooser is skipped (RFC-0058).
 	ConnectorID string
+	// Workspace is the slug of the workspace this method belongs to
+	// (RFC-0033): shown on its login page only. Empty means the platform's,
+	// offered to every workspace unless the workspace hides them.
+	Workspace string
 }
 
 // CLIGlobals gives extension commands access to the CLI's connection flags.

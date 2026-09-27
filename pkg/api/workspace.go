@@ -47,6 +47,9 @@ type WorkspaceView struct {
 	// company (through a claimed domain's method) or listed (already named
 	// in a team or a grant, holding a role, or invited).
 	JoinPolicy string `json:"joinPolicy"`
+	// OwnMethodsOnly says the login page offers only the methods this
+	// workspace configured (its company SSO), not the platform's.
+	OwnMethodsOnly bool `json:"ownMethodsOnly"`
 	// Owners are the emails of the workspace's owners (RFC-0033).
 	Owners    []string  `json:"owners"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -108,7 +111,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 	return WorkspaceView{
 		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
-		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 	}
 }
 
@@ -128,8 +131,9 @@ func (s *Server) getWorkspace(c *gin.Context) {
 
 func (s *Server) updateWorkspace(c *gin.Context) {
 	var req struct {
-		Name       *string `json:"name"`
-		JoinPolicy *string `json:"joinPolicy"`
+		Name           *string `json:"name"`
+		JoinPolicy     *string `json:"joinPolicy"`
+		OwnMethodsOnly *bool   `json:"ownMethodsOnly"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -169,10 +173,45 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		}
 		changes = append(changes, "join policy: "+*req.JoinPolicy)
 	}
+	if req.OwnMethodsOnly != nil && *req.OwnMethodsOnly != w.Settings.OwnMethodsOnly {
+		if w.Implicit() {
+			abort(c, http.StatusBadRequest, errors.New("the platform's own workspace offers every method"))
+			return
+		}
+		if *req.OwnMethodsOnly && !s.hasOwnMethod(w) {
+			abort(c, http.StatusBadRequest, errors.New("add a sign-in method of this workspace first, or nobody could sign in"))
+			return
+		}
+		settings := w.Settings
+		settings.OwnMethodsOnly = *req.OwnMethodsOnly
+		if w, err = s.store.UpdateWorkspaceSettings(ctx, s.workspace(c), settings); err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+		changes = append(changes, fmt.Sprintf("own methods only: %v", *req.OwnMethodsOnly))
+	}
 	if len(changes) > 0 {
+		s.forgetTenants()
 		s.audit(c, "", "workspace.update", w.Slug, strings.Join(changes, ", "))
 	}
 	c.JSON(http.StatusOK, s.workspaceView(c, w))
+}
+
+// hasOwnMethod reports whether the workspace configured a login method of
+// its own (RFC-0033 per-workspace SSO).
+func (s *Server) hasOwnMethod(w *store.Workspace) bool {
+	if s.rp == nil {
+		return false
+	}
+	for _, p := range s.rp.providerList() {
+		if p.Workspace == w.Slug {
+			return true
+		}
+	}
+	if p := s.rp.passwordProvider(); p != nil && p.Workspace == w.Slug {
+		return true
+	}
+	return false
 }
 
 // ---- domain claims -----------------------------------------------------------

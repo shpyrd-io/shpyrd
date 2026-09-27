@@ -54,6 +54,11 @@ const (
 // WorkspaceSettings are the knobs of the workspace.
 type WorkspaceSettings struct {
 	JoinPolicy string `json:"joinPolicy,omitempty"` // JoinOpen when empty
+	// OwnMethodsOnly hides the platform's login methods from this
+	// workspace's login page: only the methods the workspace configured
+	// itself (its company SSO) are offered (RFC-0033). Never true for the
+	// implicit workspace.
+	OwnMethodsOnly bool `json:"ownMethodsOnly,omitempty"`
 	// Limits is the workspace's plan (RFC-0033, RFC-0042): ceilings the
 	// API checks before changing anything and the controller backs with a
 	// ResourceQuota per project namespace. Nil means no ceiling, the

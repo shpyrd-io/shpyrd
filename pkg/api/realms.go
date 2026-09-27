@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,21 +16,45 @@ import (
 )
 
 // Realms decides which login methods a workspace offers (RFC-0033's
-// RealmProvider). The open-source platform offers every configured method
-// to its one workspace; the cloud layer narrows them per workspace and
-// adds its console pool.
+// RealmProvider). DefaultRealms serves the open-source platform and the
+// cloud: a workspace shows its own methods and the platform's (unless it
+// hides them); a console pool as a realm of its own comes with
+// collaborators.
 type Realms interface {
 	// Methods filters the platform's login methods for a workspace. The
 	// password form (auth-local) is listed among them by id when enabled.
 	Methods(ctx context.Context, ws *store.Workspace, all AuthConfig) AuthConfig
 }
 
-// allMethods is the open-source Realms: everything, everywhere.
-type allMethods struct{}
+// DefaultRealms is the Realms the core ships and the cloud uses too: a
+// workspace's login page shows the methods the workspace configured
+// itself (RFC-0033 per-workspace SSO) and the platform's, unless the
+// workspace hides the platform's (settings.ownMethodsOnly). The implicit
+// workspace is the platform: it shows everything.
+type DefaultRealms struct{}
 
-func (allMethods) Methods(_ context.Context, _ *store.Workspace, all AuthConfig) AuthConfig {
-	return all
+// Methods implements Realms.
+func (DefaultRealms) Methods(_ context.Context, ws *store.Workspace, all AuthConfig) AuthConfig {
+	if ws == nil || ws.Implicit() {
+		return all
+	}
+	offered := func(owner string) bool {
+		return owner == ws.Slug || (owner == "" && !ws.Settings.OwnMethodsOnly)
+	}
+	out := AuthConfig{Token: all.Token, Providers: []ProviderInfo{}}
+	for _, p := range all.Providers {
+		if offered(p.Workspace) {
+			out.Providers = append(out.Providers, p)
+		}
+	}
+	if all.Password != nil && offered(all.Password.Workspace) {
+		out.Password = all.Password
+	}
+	return out
 }
+
+// allMethods is DefaultRealms under its old name.
+type allMethods = DefaultRealms
 
 // authConfigFor is the sign-in configuration the request's workspace shows.
 // The admin token is the operator's break-glass: it is never offered at an
@@ -44,7 +69,59 @@ func (s *Server) authConfigFor(c *gin.Context) AuthConfig {
 	if !ws.Implicit() {
 		cfg.Token = false
 	}
+	if claims, err := s.store.ListDomainClaims(c.Request.Context(), ws.Slug); err == nil {
+		for _, d := range claims {
+			if d.VerifiedAt != nil && d.Connector != "" && s.offersIn(cfg, d.Connector) {
+				cfg.CompanyDomains = true
+			}
+		}
+	}
 	return cfg
+}
+
+// offersIn reports whether a sign-in configuration lists a method.
+func (s *Server) offersIn(cfg AuthConfig, providerID string) bool {
+	if cfg.Password != nil && cfg.Password.ID == providerID {
+		return true
+	}
+	for _, p := range cfg.Providers {
+		if p.ID == providerID {
+			return true
+		}
+	}
+	return false
+}
+
+// authRoute is GET /api/auth/route?email=: the method a claimed email
+// domain routes to, so the login page skips the chooser (RFC-0033). It
+// answers an empty provider for everything else, and says nothing about
+// whether an account exists.
+func (s *Server) authRoute(c *gin.Context) {
+	email := strings.ToLower(strings.TrimSpace(c.Query("email")))
+	out := gin.H{"provider": ""}
+	i := strings.LastIndex(email, "@")
+	if i <= 0 || i == len(email)-1 {
+		c.JSON(http.StatusOK, out)
+		return
+	}
+	domain := email[i+1:]
+	ws, err := s.tenant(c)
+	if err != nil {
+		c.JSON(http.StatusOK, out)
+		return
+	}
+	cfg := s.authConfigFor(c)
+	if claims, err := s.store.ListDomainClaims(c.Request.Context(), ws.Slug); err == nil {
+		for _, d := range claims {
+			if d.Domain == domain && d.VerifiedAt != nil && d.Connector != "" && s.offersIn(cfg, d.Connector) {
+				out["provider"] = d.Connector
+				if p := s.rp.provider(d.Connector); p != nil {
+					out["label"] = p.Label
+				}
+			}
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // offers reports whether a workspace lists a login method ("" means the
@@ -185,7 +262,16 @@ func (s *Server) hasCapability(name string) bool {
 // workspacesChanged tells the front-door reconciler a workspace appeared
 // or changed, when this replica runs one.
 func (s *Server) workspacesChanged() {
+	s.forgetTenants()
 	if s.opts.WorkspacesChanged != nil {
 		s.opts.WorkspacesChanged()
+	}
+}
+
+// forgetTenants drops the host resolver's memory of workspaces, so a
+// settings change is seen by the next request rather than after the TTL.
+func (s *Server) forgetTenants() {
+	if f, ok := s.tenancy.(interface{ ForgetAll() }); ok {
+		f.ForgetAll()
 	}
 }

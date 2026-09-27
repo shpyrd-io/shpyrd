@@ -111,6 +111,14 @@ type entry struct {
 	expires time.Time
 }
 
+// ForgetAll drops every remembered lookup: a workspace's settings changed
+// and the next request must see them.
+func (r *ByAddress) ForgetAll() {
+	r.mu.Lock()
+	r.cache = nil
+	r.mu.Unlock()
+}
+
 func (r *ByAddress) ttl() time.Duration {
 	if r.TTL <= 0 {
 		return 10 * time.Second
