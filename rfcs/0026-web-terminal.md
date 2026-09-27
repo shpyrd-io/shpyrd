@@ -1,14 +1,14 @@
 # RFC-0026 Web terminal
 
-**Status:** in progress
+**Status:** implemented, gaps — see Implementation status below
 
-**Owner:** Marcelo Paez Sequeira (PR shpyrd-io/shpyrd#6, branch `rfc-0026-web-terminal`)
+**Owner:** Marcelo Paez Sequeira (merged in shpyrd-io/shpyrd#6)
 
 **Depends on:** RFC-0005 (implemented), RFC-0008 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-26
+**Last update:** 2026-09-27
 
 ## Summary
 
@@ -188,3 +188,12 @@ text above promises but the platform does not do yet is listed here.
   propagating, the slot releasing, and `shell.open`/`shell.close` reaching the trail. The
   browser-only checks — xterm rendering, the CSP console, Strict Mode's double mount — and
   the items under Implementation status above are outstanding.
+- 2026-09-27: merged as shpyrd-io/shpyrd#6 and the status set accordingly. It reads
+  "implemented, gaps" rather than plain "implemented" because the four entries under
+  Implementation status are promises this RFC's own text makes and the platform does not keep
+  yet, which is what the index's `gaps` marker points a reader at.
+  Of the browser-only checks, xterm rendering is settled: the owner opened the tab against
+  the dev cluster, got a live `bash` prompt, and the padding around the canvas was adjusted
+  in response to reading it. The CSP console and Strict Mode's double mount were not
+  exercised and remain unverified. Colour was raised and deliberately left alone, which is
+  the `TERM` gap below.

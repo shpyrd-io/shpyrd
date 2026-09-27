@@ -2,7 +2,7 @@
 
 **Status:** implemented
 
-**Owner:** Marcelo Paez Sequeira (shpyrd-io/shpyrd rfc-0021-structured-logs)
+**Owner:** Marcelo Paez Sequeira (merged in shpyrd-io/shpyrd#5)
 
 **Depends on:** none
 
