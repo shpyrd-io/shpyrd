@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-26
+**Last update:** 2026-09-27
 
 ## Summary
 
@@ -188,36 +188,73 @@ invisible, and tooltips leak pod names.
   sends. The default request's query text and response were diffed against the previous
   commit and are unchanged.
 
+- 2026-09-27: issue #12, reported after the merge from a project whose `shpyrd.yaml` declares
+  no `processes:`. Two independent causes behind one screenful of symptoms. The missing
+  reference line was the API and the controller disagreeing about what a project runs:
+  `allocations` read `app.Spec.Processes`, which is empty for such a project, while the
+  controller defaults an empty map to one `web` process and reconciles a Deployment for it;
+  the default moved onto the type as `App.EffectiveProcesses()` so both read the same answer.
+  The phantom `all` series was the build pod this RFC's own status section had already named
+  and deferred, and closing it spends the byte-identical-default-query constraint on purpose
+  — see the two "Fixed on 2026-09-27" entries below for the trade. Verified against the dev
+  cluster with a pod shaped like a build pod (`shpyrd.io/app`, no `shpyrd.io/process`), which
+  is what made the phantom group observable: a completed build pod has no current cAdvisor
+  series, so the defect is invisible unless a build is actually running.
+
 ## Implementation status
 
-Audited on 2026-09-26 against the cluster run above, and re-audited after the whole-branch
-review. Every gap below was found or named during review and deliberately deferred rather
-than fixed on this branch; the list is meant to be complete, since the Status line claims
-gaps rather than silence about them.
+Audited on 2026-09-26 against the cluster run above, re-audited after the whole-branch
+review, and updated on 2026-09-27 when issue #12 closed two of the gaps. The list is meant
+to be complete, since the Status line claims gaps rather than silence about them.
 
 - **Known limitation, not a bug:** instance names are not stable over a long range — see
   "A known limitation, accepted deliberately" in Design Details, which explains why and what
   it does and does not claim.
-- **Not fixed:** the CPU and memory PromQL join `container_cpu_usage_seconds_total` /
-  `container_memory_working_set_bytes` to `kube_pod_labels` on `(namespace, pod)` without
-  also requiring `label_shpyrd_io_process` to be non-empty, so a running Dockerfile-build
-  pod in the same namespace (it carries `label_shpyrd_io_app` but no process label of its
-  own process type) contributes its CPU and memory to a project's charts. Found during this
-  branch's cluster verification; two symptoms identified during review are what make it
-  load-bearing rather than cosmetic. In the default view `sum by (label_shpyrd_io_process)`
-  groups the build pod under the empty label value, which the handler renames `all` — a
-  phantom series indistinguishable from the no-requests fallback series of the same name. In
-  by-instance view the same pod is not an instance under the selector the Logs tab uses, so
-  it becomes a `replaced` series and is counted in the note: **every build makes a chart
-  claim "1 replaced instance hidden" when nothing was replaced.** Left unfixed because the
-  fix changes the default query text (`by=process`, no filters) that an earlier review
-  certified byte-identical against a hard backward-compatibility constraint. That
-  constraint is worth naming precisely, because it is what blocks the fix: byte-identical
-  query text is a proxy for an identical default *response*, which is the guarantee anyone
-  actually depends on, and adding `label_shpyrd_io_process!=""` changes the text while
-  changing the response only by removing series that should never have been in it. It is
-  the proxy that blocks this, not the goal. Fixing it belongs to whichever task next takes
-  the constraint itself on deliberately.
+- **Fixed on 2026-09-27 (issue #12):** the CPU and memory PromQL joined
+  `container_cpu_usage_seconds_total` / `container_memory_working_set_bytes` to
+  `kube_pod_labels` on `(namespace, pod)` without requiring `label_shpyrd_io_process` to be
+  present, so a running Dockerfile-build pod in the same namespace — it carries
+  `label_shpyrd_io_app` but no process label — contributed its CPU and memory to the
+  project's charts. Both symptoms this predicted were real: in the default view
+  `sum by (label_shpyrd_io_process)` grouped the build pod under the empty label value,
+  which the handler renamed `all`, a phantom series indistinguishable from the no-requests
+  fallback series of the same name; in by-instance view the same pod was not an instance
+  under the selector the Logs tab uses, so it became a `replaced` series and made a chart
+  claim "1 replaced instance hidden" when nothing was replaced. The fix adds
+  `label_shpyrd_io_process!=""` to the `kube_pod_labels` selector when no single process is
+  named (naming one already requires the label to equal it). The label's presence is the
+  only discriminator available: the kube-state-metrics allowlist in
+  `deploy/components/monitoring/values.yaml` exposes `shpyrd.io/app` and `shpyrd.io/process`
+  and nothing else, so `shpyrd.io/build` never reaches Prometheus. Verified against the dev
+  cluster with a pod shaped like a build pod: the app-label-only join returned `web`,
+  `worker` **and an empty-label group**; with the requirement it returned `web` and `worker`
+  alone.
+
+  **This deliberately spends the constraint that deferred the fix.** An earlier review
+  certified the default request's query text byte-identical, and this changes that text. The
+  proxy is what changes, not the goal behind it: byte-identical text stood in for an
+  identical default *response*, and the response changes only by dropping series that should
+  never have been in it. Issue #12 is a report of exactly those series, which is what makes
+  spending the constraint the right call rather than a regression.
+
+- **Fixed on 2026-09-27 (issue #12):** `allocations` iterated `app.Spec.Processes`, but a
+  project whose `shpyrd.yaml` declares no `processes:` still runs one web process — the
+  controller's `processes()` defaults to it. Such a project therefore got no allocation for
+  the process it actually runs, and the charts drew no reference line in Total mode: the
+  reported symptom was "no reference for web, and the reference resolves to None". The
+  default now lives on the type as `App.EffectiveProcesses()`, which both the controller and
+  the API read, so the two cannot disagree again about what a project runs. This gap was not
+  found by this branch's review or its cluster verification, because every project verified
+  against declared its processes explicitly.
+
+- **Not fixed, and deliberate:** the network chart's default view
+  (`by=process`, no process named) sums `container_network_*` across the namespace without
+  joining `kube_pod_labels` at all, so a running build pod's network still counts toward the
+  project's. The unjoined sum is the cheapest form of the default question and the namespace
+  holds nothing but this project; unlike the CPU and memory case it produces no phantom
+  series and no false `replaced` note, since there is no per-process grouping for an empty
+  label to land in. Joining it would change what the chart measures, not just which pods it
+  measures, so it waits for someone who wants that.
 
 - **Not built:** the instance subset. The Summary and the Proposal ask for "Instances (All,
   or a subset)"; what shipped is a process filter plus a by-process / by-instance toggle,

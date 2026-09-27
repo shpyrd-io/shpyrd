@@ -1293,3 +1293,90 @@ func TestMetricsAggregateGroupDropsReferenceWhenTheGroupDisagrees(t *testing.T) 
 		t.Errorf("agreeing group = %+v, want one sum web at reference 1 and burst 4", got)
 	}
 }
+
+// Issue #12, first half: a project with no explicit processes in shpyrd.yaml
+// runs one web process all the same — the controller's processes() defaults to
+// it — so the charts must draw its allocation rather than treating "no
+// processes declared" as "nothing allocated".
+func TestMetricsAllocatesTheImplicitWebProcess(t *testing.T) {
+	prom, _ := newFakeProm(t,
+		fakeAnswer{
+			Match: "container_memory_working_set_bytes",
+			Series: []fakeSeries{
+				{Labels: map[string]string{"label_shpyrd_io_process": "web"}, Values: []Point{{1000, 33554432}}},
+			},
+		},
+		fakeAnswer{
+			Match: "container_cpu_usage_seconds_total",
+			Series: []fakeSeries{
+				{Labels: map[string]string{"label_shpyrd_io_process": "web"}, Values: []Point{{1000, 0.25}}},
+			},
+		},
+	)
+	app := metricsApp()
+	app.Spec.Processes = nil // no `processes:` block, as example-go has none
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&mode=total")
+
+	mem := chartByID(t, out, "memory")
+	if len(mem.Series) != 1 {
+		t.Fatalf("memory series = %+v", mem.Series)
+	}
+	// The default size is shared-s: 64Mi of memory, half a core.
+	if mem.Series[0].Reference != 67108864 {
+		t.Errorf("memory reference = %v, want 67108864 (64Mi, the default size)", mem.Series[0].Reference)
+	}
+	cpu := chartByID(t, out, "cpu")
+	if len(cpu.Series) != 1 {
+		t.Fatalf("cpu series = %+v", cpu.Series)
+	}
+	if cpu.Series[0].Reference != 0.5 {
+		t.Errorf("cpu reference = %v, want 0.5 (the default size's CPU)", cpu.Series[0].Reference)
+	}
+}
+
+// Issue #12, second half: a build pod carries shpyrd.io/app but no
+// shpyrd.io/process, so a kube_pod_labels join keyed on the app label alone
+// pulls it into the app's charts, where it groups under an empty process label
+// and reaches the legend as a phantom "all" series. Every join must require
+// the process label to be there.
+//
+// kube-state-metrics only exposes shpyrd.io/app and shpyrd.io/process
+// (deploy/components/monitoring/values.yaml), so shpyrd.io/build is not
+// available to filter on — the process label's presence is the discriminator.
+func TestMetricsChartsLeaveBuildPodsOut(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		// want is the constraint every kube_pod_labels selector must carry for
+		// build pods to be out of the join.
+		want string
+	}{
+		{"?range=1h", `label_shpyrd_io_process!=""`},
+		{"?range=1h&mode=total", `label_shpyrd_io_process!=""`},
+		{"?range=1h&by=instance", `label_shpyrd_io_process!=""`},
+		// Naming one process already requires the label to equal it, which no
+		// build pod can.
+		{"?range=1h&process=web", `label_shpyrd_io_process="web"`},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			prom, rec := newFakeProm(t)
+			s, _ := newTestServer(t, prom, []client.Object{metricsApp()})
+			getMetrics(t, s, tc.query)
+
+			joined := 0
+			for _, q := range rec.Queries() {
+				if !strings.Contains(q, "kube_pod_labels") {
+					continue
+				}
+				joined++
+				if !strings.Contains(q, tc.want) {
+					t.Errorf("join missing %s, so build pods count:\n%s", tc.want, q)
+				}
+			}
+			if joined == 0 {
+				t.Fatal("no query joined kube_pod_labels; the assertion above proved nothing")
+			}
+		})
+	}
+}
