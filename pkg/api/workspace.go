@@ -409,7 +409,10 @@ func (s *Server) exportWorkspace(c *gin.Context) {
 }
 
 // importWorkspace is POST /api/workspace/import[?overwrite=true]: teams,
-// grants and people from a backup (`shpyrd cluster restore`).
+// grants and people from a backup (`shpyrd cluster restore`). At the
+// console, ?workspace=<slug> restores an explicit workspace's dump on a
+// platform that has workspaces, recreating the workspace from the dump
+// when it is gone (a restore onto a fresh cluster).
 func (s *Server) importWorkspace(c *gin.Context) {
 	var dump store.Dump
 	if err := c.ShouldBindJSON(&dump); err != nil {
@@ -420,14 +423,45 @@ func (s *Server) importWorkspace(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("this backup was made by a newer shpyrd; upgrade first"))
 		return
 	}
-	res, err := s.store.Import(c.Request.Context(), s.workspace(c), &dump, c.Query("overwrite") == "true")
+	ctx := c.Request.Context()
+	target := s.workspace(c)
+	if ws := c.Query("workspace"); ws != "" && ws != target {
+		if !s.atConsole(c) {
+			abort(c, http.StatusNotFound, errors.New("another workspace's dump is restored from the console"))
+			return
+		}
+		if !s.hasCapability("workspaces") {
+			abort(c, http.StatusBadRequest, errors.New("this platform has one workspace; the dump names another"))
+			return
+		}
+		if dump.Workspace.Slug != "" && dump.Workspace.Slug != ws {
+			abort(c, http.StatusBadRequest, fmt.Errorf("the dump is of workspace %q, not %q", dump.Workspace.Slug, ws))
+			return
+		}
+		if _, err := s.store.Workspace(ctx, ws); errors.Is(err, store.ErrNotFound) {
+			created, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: ws, Name: firstNonEmpty(dump.Workspace.Name, ws), Address: dump.Workspace.Address, Settings: dump.Workspace.Settings})
+			if err != nil {
+				storeErr(c, err, "workspace")
+				return
+			}
+			if dump.Workspace.Status == store.WorkspaceSuspended {
+				_, _ = s.store.SetWorkspaceStatus(ctx, created.Slug, store.WorkspaceSuspended)
+			}
+			s.workspacesChanged()
+		} else if err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+		target = ws
+	}
+	res, err := s.store.Import(ctx, target, &dump, c.Query("overwrite") == "true")
 	if err != nil {
 		storeErr(c, err, "workspace")
 		return
 	}
 	s.membershipChanged()
-	s.audit(c, "", "workspace.import", "store", "teams "+itoa(res.Teams)+", grants "+itoa(res.Grants)+", people "+itoa(res.Identities))
-	c.JSON(http.StatusOK, gin.H{"teams": res.Teams, "grants": res.Grants, "people": res.Identities, "skipped": res.Skipped})
+	s.audit(c, "", "workspace.import", "store "+target, "teams "+itoa(res.Teams)+", grants "+itoa(res.Grants)+", people "+itoa(res.Identities))
+	c.JSON(http.StatusOK, gin.H{"workspace": target, "teams": res.Teams, "grants": res.Grants, "people": res.Identities, "skipped": res.Skipped})
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

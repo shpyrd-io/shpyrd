@@ -33,9 +33,11 @@ type Restorer struct {
 	// UploadSource stores a source archive on the server (POST
 	// /api/sources); nil skips sources.
 	UploadSource func(ctx context.Context, sha string, data []byte) error
-	// ImportStore puts the control-plane dump back (POST
-	// /api/workspace/import); nil skips teams and grants.
-	ImportStore func(ctx context.Context, dump *store.Dump, overwrite bool) error
+	// ImportStore puts a control-plane dump back (POST
+	// /api/workspace/import): the implicit workspace's when workspace is
+	// "", an explicit workspace's otherwise (recreated when gone); nil
+	// skips teams and grants.
+	ImportStore func(ctx context.Context, workspace string, dump *store.Dump, overwrite bool) error
 	// Log receives one line per step.
 	Log func(format string, args ...any)
 }
@@ -127,14 +129,39 @@ func (r *Restorer) restoreSystem(ctx context.Context, res *Result) error {
 		}
 	}
 	for _, path := range r.Archive.Paths("cluster/") {
-		if path == "cluster/store.json" || path == "cluster/teams.yaml" || path == "cluster/projectmembers.yaml" {
+		if path == "cluster/store.json" || path == "cluster/teams.yaml" || path == "cluster/projectmembers.yaml" || strings.HasPrefix(path, "cluster/workspaces/") {
 			continue // the store, below
 		}
 		if err := r.applyFile(ctx, path, true, res); err != nil {
 			return err
 		}
 	}
-	return r.restoreStore(ctx, res)
+	if err := r.restoreStore(ctx, res); err != nil {
+		return err
+	}
+	return r.restoreWorkspaces(ctx, res)
+}
+
+// restoreWorkspaces puts back every explicit workspace's dump
+// (cluster/workspaces/<slug>.json): the workspace row, its people, teams,
+// grants and domain claims. Their projects are restored like any other,
+// by namespace.
+func (r *Restorer) restoreWorkspaces(ctx context.Context, res *Result) error {
+	if r.ImportStore == nil {
+		return nil
+	}
+	for _, path := range r.Archive.Paths("cluster/workspaces/") {
+		slug := strings.TrimSuffix(strings.TrimPrefix(path, "cluster/workspaces/"), ".json")
+		var dump store.Dump
+		if err := json.Unmarshal(r.Archive.Files[path], &dump); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if err := r.ImportStore(ctx, slug, &dump, r.Overwrite); err != nil {
+			return fmt.Errorf("workspace %s: %w", slug, err)
+		}
+		r.Log("Restored workspace %s: %d teams, %d grants, %d people", slug, len(dump.Teams), len(dump.Grants), len(dump.Identities))
+	}
+	return nil
 }
 
 // restoreStore imports teams and grants: from cluster/store.json, or, for
@@ -171,7 +198,7 @@ func (r *Restorer) restoreStore(ctx context.Context, res *Result) error {
 	if len(dump.Teams) == 0 && len(dump.Grants) == 0 && len(dump.Identities) == 0 {
 		return nil
 	}
-	if err := r.ImportStore(ctx, &dump, r.Overwrite); err != nil {
+	if err := r.ImportStore(ctx, "", &dump, r.Overwrite); err != nil {
 		return fmt.Errorf("teams and grants: %w", err)
 	}
 	res.Created += len(dump.Teams) + len(dump.Grants)

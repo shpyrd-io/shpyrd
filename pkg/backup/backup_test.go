@@ -158,6 +158,8 @@ func TestRestore(t *testing.T) {
 		"projects/app-shop/postgres.yaml":      []byte("---\napiVersion: shpyrd.io/v1alpha1\nkind: Postgres\nmetadata: {name: db, namespace: app-shop}\nspec: {size: small}\n"),
 		"projects/app-shop/apps.yaml":          []byte("---\napiVersion: shpyrd.io/v1alpha1\nkind: App\nmetadata: {name: shop, namespace: app-shop}\nspec: {source: {blob: {sha256: abc123}}}\n"),
 		"sources/abc123.tgz":                   []byte("tarball"),
+		// An explicit workspace's dump (RFC-0033): its row and its teams.
+		"cluster/workspaces/acme.json": []byte(`{"version":1,"workspace":{"slug":"acme","name":"Acme","address":"acme.example.test","status":"active"},"teams":[{"name":"owners","members":["ana@acme.test"],"platformRole":"platform-admin"}]}`),
 	}}
 	profile, vars := a.InstallRecord()
 	if profile != "oci" || vars["SHPYRD_DOMAIN"] != "oci.example.test" {
@@ -171,10 +173,18 @@ func TestRestore(t *testing.T) {
 	var order []string
 	uploaded := map[string]int{}
 	imported := &store.Dump{}
+	byWorkspace := map[string]*store.Dump{}
 	r := &Restorer{Dynamic: dyn, Archive: a, System: true,
 		UploadSource: func(_ context.Context, sha string, data []byte) error { uploaded[sha] += len(data); return nil },
-		ImportStore:  func(_ context.Context, d *store.Dump, _ bool) error { imported = d; return nil },
-		Log:          func(f string, args ...any) { order = append(order, fmt.Sprintf(f, args...)) }}
+		ImportStore: func(_ context.Context, ws string, d *store.Dump, _ bool) error {
+			if ws == "" {
+				imported = d
+			} else {
+				byWorkspace[ws] = d
+			}
+			return nil
+		},
+		Log: func(f string, args ...any) { order = append(order, fmt.Sprintf(f, args...)) }}
 	res, err := r.Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +195,13 @@ func TestRestore(t *testing.T) {
 	// An archive from before the store carries Team objects: they become a dump.
 	if len(imported.Teams) != 1 || imported.Teams[0].Name != "platform" || len(imported.Teams[0].Members) != 1 {
 		t.Errorf("imported = %+v", imported)
+	}
+	// The explicit workspace's dump goes to its own workspace, row included.
+	if d := byWorkspace["acme"]; d == nil || d.Workspace.Slug != "acme" || d.Workspace.Address != "acme.example.test" || len(d.Teams) != 1 {
+		t.Errorf("acme dump = %+v", d)
+	}
+	if res.Created != 6 {
+		t.Errorf("a workspace dump is not a cluster object to apply: created = %d", res.Created)
 	}
 	joined := strings.Join(order, "\n")
 	if strings.Index(joined, "postgres app-shop/db") > strings.Index(joined, "app app-shop/shop") {

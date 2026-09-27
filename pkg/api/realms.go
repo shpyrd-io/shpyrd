@@ -170,3 +170,22 @@ func (s *Server) edgeSession(c *gin.Context) {
 	}
 	c.Redirect(http.StatusFound, safeNext(c.Query("rd")))
 }
+
+// hasCapability says whether this server offers a capability beyond the
+// core ("workspaces" on the cloud).
+func (s *Server) hasCapability(name string) bool {
+	for _, c := range s.opts.Public.Capabilities {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+// workspacesChanged tells the front-door reconciler a workspace appeared
+// or changed, when this replica runs one.
+func (s *Server) workspacesChanged() {
+	if s.opts.WorkspacesChanged != nil {
+		s.opts.WorkspacesChanged()
+	}
+}

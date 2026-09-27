@@ -175,7 +175,10 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			return nil, err
 		}
 	}
-	// The control-plane store: the workspace, its people, teams and grants.
+	// The control-plane store: the workspace, its people, teams and grants
+	// (cluster/store.json), and every explicit workspace's the same way
+	// (cluster/workspaces/<slug>.json), with the workspace row itself so a
+	// restore onto a fresh cluster recreates it (RFC-0033).
 	if e.Store != nil {
 		dump, err := e.Store.Export(ctx, store.DefaultWorkspace)
 		if err != nil {
@@ -189,6 +192,27 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			return nil, err
 		}
 		man.Objects += len(dump.Teams) + len(dump.Grants)
+		workspaces, err := e.Store.ListWorkspaces(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list workspaces: %w", err)
+		}
+		for _, ws := range workspaces {
+			if ws.Slug == store.DefaultWorkspace {
+				continue
+			}
+			dump, err := e.Store.Export(ctx, ws.Slug)
+			if err != nil {
+				return nil, fmt.Errorf("export workspace %s: %w", ws.Slug, err)
+			}
+			raw, err := json.MarshalIndent(dump, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			if err := add("cluster/workspaces/"+ws.Slug+".json", raw); err != nil {
+				return nil, err
+			}
+			man.Objects += 1 + len(dump.Teams) + len(dump.Grants)
+		}
 	}
 
 	// Projects: every namespace carrying the project label.

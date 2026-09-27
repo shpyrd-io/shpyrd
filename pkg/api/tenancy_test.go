@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -449,5 +450,44 @@ func TestAllowListStaysInTheWorkspace(t *testing.T) {
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/deploy", `{"image":"ghcr.io/acme/shop:2","allow":[{"project":"wiki"},{"platform":"mcp"}]}`); rec.Code != http.StatusAccepted {
 		t.Errorf("deploy with a good allow = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A backup carries every explicit workspace's dump; the console restores
+// one into its workspace, recreating the workspace from the dump when it is
+// gone (a fresh cluster), and refuses the dump at the workspace's own host
+// and when the platform has one workspace.
+func TestImportExplicitWorkspaceAtConsole(t *testing.T) {
+	s, _, st := newTenantServer(t)
+	ctx := context.Background()
+	dump := `{"version":1,"workspace":{"slug":"beta","name":"Beta Labs","address":"beta.shpyrd.test","status":"suspended","settings":{"joinPolicy":"listed"}},"teams":[{"name":"owners","members":["bea@beta.test"],"platformRole":"platform-admin"}],"grants":[{"project":"shop","role":"user","team":"owners"}]}`
+	if _, err := st.Workspace(ctx, "beta"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("beta must not exist yet: %v", err)
+	}
+	// From an explicit workspace's host: not there.
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/workspace/import?workspace=beta", dump); rec.Code != http.StatusNotFound {
+		t.Errorf("import of another workspace at a workspace host = %d, want 404", rec.Code)
+	}
+	rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=beta", dump)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import at the console = %d %s", rec.Code, rec.Body.String())
+	}
+	ws, err := st.Workspace(ctx, "beta")
+	if err != nil || ws.Name != "Beta Labs" || ws.Address != "beta.shpyrd.test" || ws.Status != store.WorkspaceSuspended || ws.Settings.JoinPolicy != "listed" {
+		t.Fatalf("recreated workspace = %+v %v", ws, err)
+	}
+	teams, _ := st.ListTeams(ctx, "beta")
+	grants, _ := st.ListGrants(ctx, "beta")
+	if len(teams) < 1 || len(grants) != 1 {
+		t.Errorf("beta teams=%d grants=%d", len(teams), len(grants))
+	}
+	// The dump's slug must be the one named.
+	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=gamma", dump); rec.Code != http.StatusBadRequest {
+		t.Errorf("mismatched slug = %d, want 400", rec.Code)
+	}
+	// Without the workspaces capability the platform has one workspace.
+	s.opts.Public.Capabilities = nil
+	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/workspace/import?workspace=delta", strings.Replace(dump, `"beta"`, `"delta"`, 1)); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "one workspace") {
+		t.Errorf("import on a single-workspace platform = %d %s", rec.Code, rec.Body.String())
 	}
 }

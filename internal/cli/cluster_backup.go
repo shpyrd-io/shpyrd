@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -330,14 +331,21 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 			_, err := serverRequest(ctx, k, "POST", "api/sources", data, "application/gzip")
 			return err
 		},
-		ImportStore: func(ctx context.Context, dump *store.Dump, overwrite bool) error {
+		ImportStore: func(ctx context.Context, workspace string, dump *store.Dump, overwrite bool) error {
 			body, err := json.Marshal(dump)
 			if err != nil {
 				return err
 			}
-			path := "api/workspace/import"
+			q := url.Values{}
 			if overwrite {
-				path += "?overwrite=true"
+				q.Set("overwrite", "true")
+			}
+			if workspace != "" {
+				q.Set("workspace", workspace)
+			}
+			path := "api/workspace/import"
+			if len(q) > 0 {
+				path += "?" + q.Encode()
 			}
 			_, err = serverRequest(ctx, k, "POST", path, body, "application/json")
 			return err
