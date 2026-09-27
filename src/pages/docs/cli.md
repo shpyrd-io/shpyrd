@@ -49,6 +49,7 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd teams create <name>` | Create or update a team: `--member <email>`, `--group <idp group>`, `--platform-role platform-admin\|platform-viewer`, `--description`. |
 | `shpyrd teams list`, `add <team> <email...>`, `remove <team> <email...>`, `delete <team> --yes` | Manage teams (`--group` for identity provider groups). |
 | `shpyrd members add <project> --user <email>\|--team <name> --role reader\|user\|viewer\|developer\|admin` | Grant a role on a project (`reader` opens the app read-only, `user` opens it; see [Sign-in for your app](/docs/app-access)). |
+| `shpyrd projects describe <project> --description "…" [--featured\|--unfeatured]` | What the launcher shows for a project: the line under its name, and whether it is shown first and larger. |
 | `shpyrd workspace` | The workspace you are signed in to: name, address, dashboard, owners. `workspace address <label>` moves it (owners; the old address redirects 30 days); `workspace domains add\|verify\|primary\|alias\|remove <host>` manage custom domains. |
 | `shpyrd sso add google\|microsoft\|github\|oidc --client-id ... --client-secret <secret\|@file> [--hosted-domain] [--tenant] [--org] [--issuer] [--label]` | Add a sign-in method of this workspace (its login page only). `sso list`, `sso remove <id>`, `sso platform-methods on\|off`. |
 | `shpyrd members list [project]`, `remove <project> --user\|--team` | List and remove grants. |
