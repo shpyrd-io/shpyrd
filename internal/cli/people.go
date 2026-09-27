@@ -34,6 +34,8 @@ everything else. A person without a role has what grants give them.
   shpyrd people role ada@example.com admin
   shpyrd people role bob@example.com none
   shpyrd people suspend eve@example.com`,
+		Args: cobra.NoArgs,
+		RunE: newPeopleListCmd(g).RunE, // bare `shpyrd people` lists
 	}
 	cmd.AddCommand(newPeopleListCmd(g), newPeopleRoleCmd(g), newPeopleStatusCmd(g, store.StatusSuspended), newPeopleStatusCmd(g, store.StatusActive), newPeopleForgetCmd(g))
 	return cmd
@@ -232,6 +234,8 @@ func newInvitationsCmd(g *globalFlags) *cobra.Command {
 		Long: `Pending invitations: people invited who have not signed in yet. A new link
 for someone is another ` + "`shpyrd invite`" + `; revoking closes the door until they
 are invited again.`,
+		Args: cobra.NoArgs,
+		RunE: newInvitationsListCmd(g).RunE, // bare `shpyrd invitations` lists
 	}
 	cmd.AddCommand(newInvitationsListCmd(g), newInvitationsRevokeCmd(g))
 	return cmd

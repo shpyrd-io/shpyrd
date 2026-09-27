@@ -158,8 +158,10 @@ export function InvitePage({
                     <AlertTitle>Signed in as someone else</AlertTitle>
                     <AlertDescription>
                       You are signed in as{" "}
-                      <span className="font-mono text-xs">{me.email}</span>;
-                      this invitation is for{" "}
+                      <span className="font-mono text-xs">
+                        {me.email || me.name || "the admin token"}
+                      </span>
+                      ; this invitation is for{" "}
                       <span className="font-mono text-xs">{inv.email}</span>.
                       Sign out, then sign in with that address.
                     </AlertDescription>
