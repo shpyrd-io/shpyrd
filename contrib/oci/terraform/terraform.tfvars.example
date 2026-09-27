@@ -26,3 +26,12 @@ dns_zone = "oci.example.com"
 # shared_storage = true
 
 # backup_bucket = "shpyrd-dev-backups"   # contrib/oci/terraform/backups creates it (RFC-0037)
+
+# Values the vars file must carry that Terraform does not derive: the cloud
+# layer's workspaces domain and server image, a DNS-01 issuer for workspace
+# certificates. Without this, an apply regenerates the file without them.
+# extra_vars = {
+#   SHPYRD_WORKSPACES_DOMAIN     = "example.app"
+#   SHPYRD_WORKSPACE_CERT_ISSUER = "letsencrypt-dns01"
+#   SHPYRD_SERVER_IMAGE          = "registry.example.com/shpyrd/cloud-server:v0.9.9"
+# }

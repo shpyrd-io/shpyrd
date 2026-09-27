@@ -156,3 +156,9 @@ variable "backup_bucket" {
   type        = string
   default     = ""
 }
+
+variable "extra_vars" {
+  description = "More SHPYRD_* values for the vars file (the cloud layer's workspaces domain, the server image, a certificate issuer); kept here so a terraform apply does not drop them."
+  type        = map(string)
+  default     = {}
+}

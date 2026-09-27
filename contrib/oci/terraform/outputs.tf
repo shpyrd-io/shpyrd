@@ -107,6 +107,7 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_ENDPOINT=${var.backup_bucket != "" ? "https://${data.oci_objectstorage_namespace.this.namespace}.compat.objectstorage.${var.region}.oraclecloud.com" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}
+    ${join("\n", [for k in sort(keys(var.extra_vars)) : "${k}=${var.extra_vars[k]}"])}
   EOT
 }
 
