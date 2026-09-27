@@ -63,14 +63,16 @@ export function AppsPage() {
     !perms.enforced &&
     perms.me?.provider !== "token" &&
     (config.data?.auth?.providers?.length ?? 0) > 0;
-  // Someone whose only roles are "user" (or none) is here to open apps, not
-  // to operate projects: the launcher is their page (RFC-0033).
+  // Someone whose only roles open apps ("user", "reader", or none) is here
+  // to open apps, not to operate projects: the launcher is their page
+  // (RFC-0033).
   const projectRoles = Object.values(perms.me?.roles?.projects ?? {});
   const userOnly =
     perms.loaded &&
     perms.enforced &&
     !perms.clusterView &&
-    projectRoles.every((r) => r === "user");
+    !perms.create &&
+    projectRoles.every((r) => r === "user" || r === "reader");
   if (userOnly) return <Launcher />;
 
   return (

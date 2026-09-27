@@ -34,7 +34,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { usePerms } from "@/lib/me";
-import { api, apiStream, openURL, type AppDetail, type BuildInfo } from "@/lib/api";
+import {
+  api,
+  apiStream,
+  openURL,
+  type AppDetail,
+  type BuildInfo,
+} from "@/lib/api";
 import { ago, duration } from "@/lib/format";
 import { PhaseBadge } from "@/components/phase-badge";
 import { ProcessChips } from "@/components/process-chips";
@@ -400,7 +406,8 @@ function ReleasePhaseCard({
     },
     onError: (e: Error) => toast.error(e.message),
   });
-  const command = release.message?.replace(/^running /, "") ?? "release command";
+  const command =
+    release.message?.replace(/^running /, "") ?? "release command";
   return (
     <Card className={running ? "border-amber-500/30" : "border-red-500/40"}>
       <CardHeader>
@@ -801,7 +808,11 @@ function Overview({
               mono
             />
             {app.status.processTypes?.length ? (
-              <Row k="Image types" v={app.status.processTypes.join(", ")} mono />
+              <Row
+                k="Image types"
+                v={app.status.processTypes.join(", ")}
+                mono
+              />
             ) : null}
             {app.status.processTypes?.includes("release") && (
               <Row k="Release phase" v="runs before every rollout" />
@@ -1223,7 +1234,16 @@ function Metrics({ app }: { app: AppDetail }) {
     staleTime: 60_000,
   });
   const m = useQuery({
-    queryKey: ["metrics", app.slug, range, processFilter, by, agg, mode, replaced],
+    queryKey: [
+      "metrics",
+      app.slug,
+      range,
+      processFilter,
+      by,
+      agg,
+      mode,
+      replaced,
+    ],
     queryFn: () =>
       api.metrics(app.slug, {
         range,
@@ -1283,9 +1303,7 @@ function Metrics({ app }: { app: AppDetail }) {
           </Select>
           <Select
             value={agg}
-            onValueChange={(v) =>
-              setAgg(v as "none" | "sum" | "avg" | "max")
-            }
+            onValueChange={(v) => setAgg(v as "none" | "sum" | "avg" | "max")}
             disabled={by !== "instance"}
           >
             <SelectTrigger className="w-28" size="sm">
@@ -2764,9 +2782,9 @@ function MembersCard({ app }: { app: AppDetail }) {
   });
   const [kind, setKind] = useState<"user" | "team">("user");
   const [subject, setSubject] = useState("");
-  const [role, setRole] = useState<"user" | "viewer" | "developer" | "admin">(
-    "developer",
-  );
+  const [role, setRole] = useState<
+    "reader" | "user" | "viewer" | "developer" | "admin"
+  >("developer");
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["members", app.slug] });
     qc.invalidateQueries({ queryKey: ["me"] });
@@ -2899,8 +2917,11 @@ function MembersCard({ app }: { app: AppDetail }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="user">user</SelectItem>
-              <SelectItem value="viewer">viewer</SelectItem>
+              <SelectItem value="reader">
+                reader — opens the app, read-only
+              </SelectItem>
+              <SelectItem value="user">user — opens the app</SelectItem>
+              <SelectItem value="viewer">viewer — reads the project</SelectItem>
               <SelectItem value="developer">developer</SelectItem>
               <SelectItem value="admin">admin</SelectItem>
             </SelectContent>

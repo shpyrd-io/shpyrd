@@ -17,6 +17,7 @@ export type Action =
   | "workspace.owner";
 
 const roleActions: Record<string, Action[]> = {
+  reader: [], // opens the app read-only; nothing in this dashboard
   user: [], // opens the app; nothing in this dashboard
   viewer: ["project.view"],
   developer: [

@@ -37,7 +37,10 @@ export type Identity = {
     /** The person's role in the workspace (RFC-0033); absent without one. */
     workspace?: WorkspaceRole | "";
     platform?: "platform-admin" | "platform-viewer" | "";
-    projects?: Record<string, "user" | "viewer" | "developer" | "admin">;
+    projects?: Record<
+      string,
+      "reader" | "user" | "viewer" | "developer" | "admin"
+    >;
     enforced: boolean;
   };
 };
@@ -174,7 +177,7 @@ export type Team = {
 export type Member = {
   name: string;
   project: string;
-  role: "user" | "viewer" | "developer" | "admin";
+  role: "reader" | "user" | "viewer" | "developer" | "admin";
   user?: string;
   team?: string;
 };

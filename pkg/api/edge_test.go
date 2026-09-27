@@ -444,3 +444,74 @@ func TestEdgeDenialsCounted(t *testing.T) {
 		t.Errorf("anonymous denials = %v, want %v", got, anonBefore+1)
 	}
 }
+
+// A reader opens the app and is told so, but the edge refuses anything
+// that would change things (RFC-0033): the app needs no permission code.
+func TestEdgeReaderIsReadOnly(t *testing.T) {
+	reports := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "reports", Namespace: "app-reports"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
+	s, _ := newTestServer(t, nil, []client.Object{reports})
+	s.authz.TTL = 1
+	ctx := context.Background()
+	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "reports", Role: shpyrdv1.RoleReader, User: "ana@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "reports", Role: shpyrdv1.RoleUser, User: "bob@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	anaSID, _ := signIn(t, s, ext.Identity{Subject: "u-ana", Email: "ana@acme.test", Provider: "google"})
+	bobSID, _ := signIn(t, s, ext.Identity{Subject: "u-bob", Email: "bob@acme.test", Provider: "google"})
+	cookie := func(sid string) string {
+		v, err := s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: sid, Project: "reports"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	ask := func(sid, method string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/edge/auth?project=reports&mode=authenticated", nil)
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("X-Original-Method", method)
+		req.AddCookie(&http.Cookie{Name: s.edgeCookieName(), Value: cookie(sid)})
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	for _, m := range []string{"GET", "HEAD", "OPTIONS"} {
+		if rec := ask(anaSID, m); rec.Code != http.StatusOK || rec.Header().Get("X-Shpyrd-Roles") != "reader" {
+			t.Errorf("reader %s = %d roles %q", m, rec.Code, rec.Header().Get("X-Shpyrd-Roles"))
+		}
+	}
+	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		if rec := ask(anaSID, m); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "read-only") {
+			t.Errorf("reader %s = %d %s", m, rec.Code, rec.Body.String())
+		}
+	}
+	// A user changes things; a reader who is also a user is a user.
+	if rec := ask(bobSID, "POST"); rec.Code != http.StatusOK || rec.Header().Get("X-Shpyrd-Roles") != "user" {
+		t.Errorf("user POST = %d roles %q", rec.Code, rec.Header().Get("X-Shpyrd-Roles"))
+	}
+	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "reports", Role: shpyrdv1.RoleUser, User: "ana@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := ask(anaSID, "POST"); rec.Code != http.StatusOK || rec.Header().Get("X-Shpyrd-Roles") != "user" {
+		t.Errorf("reader+user POST = %d roles %q", rec.Code, rec.Header().Get("X-Shpyrd-Roles"))
+	}
+	// The denied page explains read-only to a reader (rather than naming teams).
+	if err := s.store.DeleteProjectGrants(ctx, store.DefaultWorkspace, "reports"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "reports", Role: shpyrdv1.RoleReader, User: "ana@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/save", nil)
+	req.Host = "reports.example.test"
+	req.Header.Set("X-Code", "403")
+	req.Header.Set("X-Format", "text/html,application/xhtml+xml")
+	req.Header.Set("X-Ingress-Name", "reports")
+	req.AddCookie(&http.Cookie{Name: s.edgeCookieName(), Value: cookie(anaSID)})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "read-only") {
+		t.Errorf("denied page for a reader: %d %s", rec.Code, rec.Body.String()[:min(200, len(rec.Body.String()))])
+	}
+}

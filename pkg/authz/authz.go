@@ -44,7 +44,9 @@ const (
 // roleActions is the static table: what each role may do.
 var roleActions = map[string][]Action{
 	// Every operating role opens the app too: its holders read the app's
-	// logs and configuration already.
+	// logs and configuration already. A reader opens it read-only: the
+	// edge refuses anything but safe methods for them.
+	shpyrdv1.RoleReader:    {ProjectOpen},
 	shpyrdv1.RoleUser:      {ProjectOpen},
 	shpyrdv1.RoleViewer:    {ProjectOpen, ProjectView},
 	shpyrdv1.RoleDeveloper: {ProjectOpen, ProjectView, ProjectDeploy, ProjectScale, ProjectConfig, ProjectExec},
@@ -123,16 +125,21 @@ func allowsIn(table map[string][]Action, role string, action Action) bool {
 func rank(role string) int {
 	switch role {
 	case shpyrdv1.RoleAdmin:
-		return 4
+		return 5
 	case shpyrdv1.RoleDeveloper:
-		return 3
+		return 4
 	case shpyrdv1.RoleViewer:
-		return 2
+		return 3
 	case shpyrdv1.RoleUser:
+		return 2
+	case shpyrdv1.RoleReader:
 		return 1
 	}
 	return 0
 }
+
+// ReadOnly reports whether the role opens the app without changing it.
+func ReadOnly(role string) bool { return role == shpyrdv1.RoleReader }
 
 func platformRank(role string) int {
 	switch role {

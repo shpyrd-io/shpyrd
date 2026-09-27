@@ -437,7 +437,7 @@ pass it to shpyrd login --token.`,
 	}
 	createCmd.Flags().StringVar(&platformRole, "platform-role", "", "platform-viewer or platform-admin")
 	createCmd.Flags().StringVar(&project, "project", "", "project slug for a project-scoped role")
-	createCmd.Flags().StringVar(&projectRole, "role", "", "user, viewer, developer or admin (with --project)")
+	createCmd.Flags().StringVar(&projectRole, "role", "", "reader, user, viewer, developer or admin (with --project)")
 	createCmd.Flags().StringVar(&expiresIn, "expires", "90d", "expiry: 30d, 90d, 365d, etc.")
 	_ = name
 

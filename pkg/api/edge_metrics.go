@@ -31,6 +31,7 @@ const (
 	denialWorkspace  = "workspace" // the workspace is suspended or unknown
 	denialToken      = "bad_token" // a platform token that resolves to nobody
 	denialBadPreview = "anonymous_preview"
+	denialReadOnly   = "read_only" // a reader sent a request that would change things
 )
 
 func init() {

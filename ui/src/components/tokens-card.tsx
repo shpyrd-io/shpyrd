@@ -165,7 +165,13 @@ export function TokensCard() {
   );
 }
 
-const PROJECT_ROLES = ["user", "viewer", "developer", "admin"] as const;
+const PROJECT_ROLES = [
+  "reader",
+  "user",
+  "viewer",
+  "developer",
+  "admin",
+] as const;
 const PLATFORM_ROLES = ["platform-viewer", "platform-admin"] as const;
 
 function rank<T extends readonly string[]>(order: T, role: string | undefined) {

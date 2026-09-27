@@ -7,6 +7,10 @@ import (
 // Roles (RFC-0008). Project roles are granted per project; platform roles
 // apply to the whole cluster.
 const (
+	// RoleReader opens the app read-only (the edge refuses requests that
+	// change things and tells the app "reader"), so an app needs no
+	// permission code of its own to have viewers (RFC-0033).
+	RoleReader = "reader"
 	// RoleUser opens the app (the edge, RFC-0033) and nothing in the
 	// builder dashboard beyond the launcher.
 	RoleUser      = "user"

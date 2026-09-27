@@ -287,7 +287,7 @@ func (s *Server) createToken(c *gin.Context) {
 			return
 		}
 		switch role {
-		case v1alpha1.RoleUser, v1alpha1.RoleViewer, v1alpha1.RoleDeveloper, v1alpha1.RoleAdmin:
+		case v1alpha1.RoleReader, v1alpha1.RoleUser, v1alpha1.RoleViewer, v1alpha1.RoleDeveloper, v1alpha1.RoleAdmin:
 		default:
 			abort(c, http.StatusBadRequest, fmt.Errorf("invalid role %q", role))
 			return

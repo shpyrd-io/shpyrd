@@ -358,6 +358,13 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you may not open this app"})
 		return
 	}
+	// A reader looks and does not touch: the edge refuses the methods that
+	// change things, so the app needs no permission code to have viewers.
+	if authz.ReadOnly(projectRole) && !safeMethod(originalMethod(c)) {
+		countDenial(ws.Slug, slug, denialReadOnly)
+		c.JSON(http.StatusForbidden, gin.H{"error": "your access to this app is read-only", "readOnly": true})
+		return
+	}
 	countAdmission(ws.Slug, slug)
 	var roleList []string
 	if projectRole != "" {
@@ -388,6 +395,24 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	c.Header("X-Shpyrd-Roles", strings.Join(roleList, ","))
 	c.Header("Authorization", "Bearer "+jwt)
 	c.Status(http.StatusOK)
+}
+
+// originalMethod is the method of the request nginx is asking about: the
+// auth subrequest is always a GET, the original method travels in a header.
+func originalMethod(c *gin.Context) string {
+	if m := c.GetHeader("X-Original-Method"); m != "" {
+		return strings.ToUpper(m)
+	}
+	return c.Request.Method
+}
+
+// safeMethod says the method reads and never changes (RFC 9110 §9.2.1).
+func safeMethod(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, "TRACE":
+		return true
+	}
+	return false
 }
 
 // jwks publishes the verification key (GET /.well-known/jwks.json).
@@ -520,10 +545,23 @@ func (s *Server) edgeDenied(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "sign in to open this app: send a personal API token as a bearer, or open it in a browser"})
 			return
 		}
-		// A suspended person gets the reason, not the team list.
+		// A suspended person gets the reason, not the team list; so does a
+		// reader, whose only refusal is a request that would change things.
 		if err == nil && caller != nil {
-			if roles, err := s.authz.RolesIn(c.Request.Context(), s.workspace(c), caller.identity); err == nil && roles.Suspended {
+			roles, rerr := s.authz.RolesIn(c.Request.Context(), s.workspace(c), caller.identity)
+			if caller.token != nil {
+				roles, rerr = caller.token.roles, nil
+			}
+			if rerr == nil && roles.Suspended {
 				s.edgePage(c, http.StatusForbidden, "Your access is suspended", "An administrator switched your access off. Ask them to reactivate it.", map[string]string{"Sign in as someone else": edgePathPrefix + "logout"})
+				return
+			}
+			if rerr == nil && authz.ReadOnly(roles.ProjectRole(app.Name)) {
+				if wantsJSON(c) {
+					c.JSON(http.StatusForbidden, gin.H{"error": "your access to " + name + " is read-only", "readOnly": true})
+					return
+				}
+				s.edgePage(c, http.StatusForbidden, "Your access to "+name+" is read-only", "You may look at everything, but that action would change something. Ask a project admin for the user role if you need it.", map[string]string{"Back": "javascript:history.back()", "Your apps": s.dashboardURLFor(c)})
 				return
 			}
 		}

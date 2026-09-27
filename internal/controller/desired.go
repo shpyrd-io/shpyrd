@@ -706,8 +706,9 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// The decision differs for a browser and an API client with the
 		// same (absent) credentials: a sign-in redirect for one, a JSON 401
 		// for the other. Accept is part of the key so a cached answer is
-		// never handed to the other kind of client.
-		"nginx.ingress.kubernetes.io/auth-cache-key":      "$http_cookie$http_authorization$http_x_shpyrd_token$http_accept",
+		// never handed to the other kind of client; the method too, so a
+		// reader's cached GET never admits their POST.
+		"nginx.ingress.kubernetes.io/auth-cache-key":      "$http_cookie$http_authorization$http_x_shpyrd_token$http_accept$request_method",
 		"nginx.ingress.kubernetes.io/auth-cache-duration": "200 20s, 401 5s, 403 5s",
 		// The 403 goes to the controller's default backend — the server —
 		// which renders the "available to team X" page. (A per-Ingress
