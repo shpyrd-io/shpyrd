@@ -8,13 +8,19 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-09-27
 
 ## Summary
 
 Self-service for local accounts (RFC-0007 step 3.2): invitations, email verification,
 password reset, lockout after repeated failures. Built on Dex's local accounts with flows
 owned by shpyrd; Dex itself offers none of these.
+
+> Note (2026-09-27): "invite by email" shipped as workspace invitations with RFC-0033 in
+> v0.9.13 (`shpyrd invite`, the People tab, `/invite/<token>`, emailed through RFC-0013):
+> the invited person joins with a workspace role through whatever sign-in method gives
+> their address. What remains here is specific to local accounts: setting a password from
+> an invitation, password reset, verification and lockout.
 
 ## Motivation
 

@@ -40,8 +40,8 @@ declare what they depend on.
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
-| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | provisional | 0002 |
-| [0014](0014-account-lifecycle.md) | Account lifecycle (invites, reset, verification, lockout) | provisional | 0012, 0013 |
+| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only, no HTTP providers yet) | 0002 |
+| [0014](0014-account-lifecycle.md) | Account lifecycle (invites, reset, verification, lockout) | provisional (invitations shipped with 0033 in v0.9.13; reset, verification and lockout remain) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |
@@ -61,7 +61,7 @@ declare what they depend on.
 | [0030](0030-notifications.md) | Notifications (webhook, Slack, email) | provisional | 0013 (email) |
 | [0031](0031-api-tokens.md) | Per-user API tokens | implemented (v0.9.0); gaps: CLI minting needs a person session or the admin token | 0008 |
 | [0032](0032-mcp-connector.md) | MCP connector | provisional | 0031 (remote) |
-| [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5; CLI over the API v0.9.8; audit and fixes — allow lists, suspension, backups — v0.9.10; tokens at the edge, key rotation, server NetworkPolicy, denial counters v0.9.11; gaps listed) | 0008, 0016 |
+| [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5; CLI over the API v0.9.8; audit and fixes — allow lists, suspension, backups — v0.9.10; tokens at the edge, key rotation, server NetworkPolicy, denial counters v0.9.11; workspace roles and invitations v0.9.13; gaps listed) | 0008, 0016 |
 | [0034](0034-domains-and-certificates.md) | Custom domains | implemented | 0036, 0061 |
 | [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci`, network policy); AWS provisional | 0045 |
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
@@ -134,6 +134,7 @@ an "Implementation status" section with the details; the short version:
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |
 | 0011 | "pods" in the logs-agent description |
+| 0013 | HTTP provider adapters (SES API, Resend, Postmark); bounce handling; last test result on the card |
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0022a | NetworkPolicy for logs-system; console sink off on cloud |
 | 0023 | `drain.failing` audit event |

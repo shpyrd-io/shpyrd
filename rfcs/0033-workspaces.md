@@ -188,13 +188,32 @@ is a native `uuid`; image repositories are `apps/<workspace id>/<slug>` for ever
 the id rendered in base36, so two workspaces with a project of the same name never share a
 repository (the move rebuilds each buildpack app once; the previous release keeps serving).
 
-Known gaps (the model promises these; the code does not do them yet): workspace roles
-(`owner`/`admin`/`member`), invitations, workspace delete and address change; per-workspace
-login methods and step-up on claimed domains; a way to disable previews; workspace custom
-domains; one signing key ring per platform rather than per workspace; the legacy
-`Team`/`ProjectMember` CRDs still ship; `run`, `globals`, `sizes`, `extensions` still need
-a kubeconfig; `shpyrd login` has no browser flow. OAuth for agents follows in later
-releases; the full text is published when it settles.
+Shipped in v0.9.13 — workspace roles and invitations:
+
+- A person's role in the workspace is a membership by email: `owner`, `admin` or `member`.
+  Owners and admins administer the workspace and every project (they are the workspace's
+  platform admins); only owners name or demote owners, and the last owner stays. Members
+  may create projects and get the admin role on what they create; teams and project grants
+  give everything else. A membership decides over a team's `platformRole`; without one the
+  team's role still counts (the older way, kept for existing installs).
+- Any membership ends bootstrap mode, like the first team did; the first person to define
+  who is who (a role, an invitation, a team, a grant) becomes the owner instead of losing
+  their own access. The operator's admin token holds the owner's actions.
+- Invitations (`shpyrd invite`, the People tab): a link shown once, emailed when the
+  platform sends mail (RFC-0013), valid for seven days. Signing in with the invited address
+  accepts it, link or no link, and an invited address passes every join policy; inviting
+  someone who has signed in before applies the role at once. `/invite/<token>` shows the
+  holder what they were invited to.
+- The cloud names a new workspace's owner with the role; `GET /api/workspace` lists the
+  owners; the People list includes people with a role who have not signed in yet; the
+  platform backup carries memberships (dump version 2).
+
+Known gaps (the model promises these; the code does not do them yet): workspace delete and
+address change; per-workspace login methods and step-up on claimed domains; a way to
+disable previews; workspace custom domains; one signing key ring per platform rather than
+per workspace; the legacy `Team`/`ProjectMember` CRDs still ship; `run`, `globals`,
+`sizes`, `extensions` still need a kubeconfig; `shpyrd login` has no browser flow. OAuth
+for agents follows in later releases; the full text is published when it settles.
 
 ## Implementation History
 
@@ -213,3 +232,5 @@ releases; the full text is published when it settles.
   custom-domain tenancy and globals fixed (v0.9.10); gaps listed above.
 - 2026-09-27: tokens at the edge, sign-out, key rotation, the denied page and API 401s,
   the server's NetworkPolicy, denial counters and audit realm (v0.9.11).
+- 2026-09-27: workspace roles (`owner`/`admin`/`member`), invitations, the mail extension
+  (v0.9.13).
