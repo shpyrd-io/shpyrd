@@ -3,10 +3,28 @@
 //
 // Applications log JSON in production, which reads badly as a wall of
 // {"level":"info","msg":...}. Parse turns such a line into an Entry so
-// `shpyrd logs --pretty` can render it, and leaves anything that is not a
-// JSON object as plain text. The dashboard does the same in
-// ui/src/lib/logs.ts; the two are kept in step deliberately, so a change
-// here belongs there too.
+// `shpyrd logs --pretty` can render it, and leaves anything it cannot read as
+// plain text. The dashboard does the same in ui/src/lib/logs.ts; the two are
+// kept in step deliberately, so a change here belongs there too.
+//
+// Four shapes are recognised, tried in this order because each is more
+// specific than the next:
+//
+//  1. a JSON object that is the whole line;
+//  2. a prefix followed by a JSON object that runs to the end of the line —
+//     what Go's standard log package produces, since log.Printf stamps
+//     "2026/09/27 09:59:43 " in front of whatever it is given;
+//  3. klog/glog, as every Kubernetes component and many Go binaries emit:
+//     "I0927 09:59:43.123456   1 server.go:42] message";
+//  4. logfmt, as logrus' text formatter and Go kit emit:
+//     `level=info msg="request" method=GET`.
+//
+// Shapes 2 and 4 are the two that could mistake prose for a record, so each
+// carries a guard: a prefixed object counts only when the object holds a
+// well-known key, and a logfmt line only when every token is a key=value pair
+// and one of them is a level or a message. Anything else stays text, which is
+// the safe direction to be wrong in — a plain line rendered as plain is merely
+// unhelpful, while prose rendered as a record loses words.
 package logfmt
 
 import (
@@ -16,6 +34,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Level is the severity bucket a line falls into, whatever the logger
@@ -37,7 +56,8 @@ type Field struct {
 
 // Entry is a parsed log line.
 type Entry struct {
-	// Structured is true when the line was a JSON object.
+	// Structured is true when the line was read as a record — any of the
+	// shapes listed in the package comment — rather than kept as text.
 	Structured bool
 	// Level is the severity bucket, from the level field or guessed from
 	// the text.
@@ -68,13 +88,31 @@ var (
 	warnWords  = regexp.MustCompile(`\b(warn|warning)\b`)
 )
 
-// Parse reads a single line. It never fails: a line that is not a JSON
-// object comes back as an unstructured Entry whose Message is the line.
+// Parse reads a single line. It never fails: a line none of the recognised
+// shapes fit comes back as an unstructured Entry whose Message is the line.
 func Parse(line string) Entry {
-	fields, ok := decodeObject(strings.TrimSpace(line))
-	if !ok {
-		return Entry{Level: guessLevel(line), Message: line}
+	body := strings.TrimSpace(line)
+	if fields, ok := decodeObject(body); ok {
+		return entryFrom(fields, "")
 	}
+	if prefix, fields, ok := decodePrefixedObject(body); ok {
+		return entryFrom(fields, prefix)
+	}
+	if e, ok := parseKlog(body); ok {
+		return e
+	}
+	if fields, ok := decodeLogfmt(body); ok {
+		return entryFrom(fields, "")
+	}
+	return Entry{Level: guessLevel(line), Message: line}
+}
+
+// entryFrom maps a record's fields onto an Entry: the well-known keys become
+// the level, message, time and error, and the rest stay in the order the line
+// wrote them. prefix is whatever stood before the record on the line, and is
+// never dropped: the timestamp in it becomes the entry's time when the record
+// carries none of its own, and anything left over becomes a "prefix" field.
+func entryFrom(fields []Field, prefix string) Entry {
 	e := Entry{Structured: true}
 	rest := make([]Field, 0, len(fields))
 	var errValue string
@@ -100,6 +138,19 @@ func Parse(line string) Entry {
 		e.Fields = append(e.Fields, Field{Key: "error", Value: errValue})
 	}
 	e.Fields = append(e.Fields, rest...)
+	if prefix != "" {
+		stamp, remainder := splitLogPrefix(prefix)
+		// The record's own time is the application's and wins; the prefix's
+		// then has nowhere to go but a field, which is better than losing it.
+		if stamp != "" && e.Time == "" {
+			e.Time = stamp
+		} else if stamp != "" {
+			remainder = strings.TrimSpace(prefix)
+		}
+		if remainder != "" {
+			e.Fields = append(e.Fields, Field{Key: "prefix", Value: remainder})
+		}
+	}
 	switch {
 	case e.LevelText == "":
 		e.Level = guessLevel(e.Message)
@@ -291,4 +342,201 @@ func quote(v string) string {
 		return strconv.Quote(v)
 	}
 	return v
+}
+
+// decodePrefixedObject reads a line whose JSON object is preceded by
+// something else: "2026/09/27 09:59:43 {...}", which is what Go's standard
+// log package writes when an application hands it a marshalled record.
+//
+// The object has to run to the end of the line, and has to carry at least one
+// well-known key. That last requirement is the guard against reading prose as
+// a record: `failed to parse config {"a":1}` is a sentence that happens to end
+// in JSON, and belongs on screen as the sentence it is. A line with no prefix
+// at all is decodeObject's business, not this function's.
+func decodePrefixedObject(body string) (prefix string, fields []Field, ok bool) {
+	i := strings.IndexByte(body, '{')
+	if i <= 0 {
+		return "", nil, false
+	}
+	fields, ok = decodeObject(body[i:])
+	if !ok || !hasWellKnownKey(fields) {
+		return "", nil, false
+	}
+	return strings.TrimSpace(body[:i]), fields, true
+}
+
+// hasWellKnownKey reports whether a record names a level, a message, a time or
+// an error — the evidence that it is a log record and not incidental data.
+func hasWellKnownKey(fields []Field) bool {
+	for _, f := range fields {
+		if matches(f.Key, levelKeys) || matches(f.Key, messageKeys) ||
+			matches(f.Key, timeKeys) || matches(f.Key, errorKeys) {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixTimeLayouts are the stamps a prefix may open with, longest first so
+// "2026/09/27 09:59:43" is not read as a bare date with leftovers. The first
+// four are Go's log flags (Ldate, Ltime and Lmicroseconds in their
+// combinations); the last two cover wrappers that stamp RFC3339 instead.
+var prefixTimeLayouts = []string{
+	"2006/01/02 15:04:05.000000",
+	"2006/01/02 15:04:05",
+	"2006/01/02",
+	"15:04:05.000000",
+	"15:04:05",
+	time.RFC3339Nano,
+	time.RFC3339,
+}
+
+// splitLogPrefix separates a leading timestamp from the rest of a prefix, so
+// "2026/09/27 09:59:43 main.go:42:" yields the stamp and "main.go:42:" — the
+// caller log.Lshortfile adds. A prefix that opens with no timestamp at all
+// (log.SetPrefix's own string, say) comes back whole as rest.
+//
+// The candidate is validated by parsing it, the way pkg/api's splitTimestamp
+// validates kubelet's: a regexp that merely looks like a date would promote
+// anything shaped like one, and the cost of being wrong here is a word of the
+// line disappearing into a timestamp column.
+func splitLogPrefix(prefix string) (stamp, rest string) {
+	prefix = strings.TrimSpace(prefix)
+	words := strings.Fields(prefix)
+	// A stamp is one or two words: a date, a time, or a date and a time.
+	for n := 2; n >= 1; n-- {
+		if len(words) < n {
+			continue
+		}
+		candidate := strings.Join(words[:n], " ")
+		for _, layout := range prefixTimeLayouts {
+			if _, err := time.Parse(layout, candidate); err == nil {
+				return candidate, strings.TrimSpace(strings.Join(words[n:], " "))
+			}
+		}
+	}
+	return "", prefix
+}
+
+// klogLine matches klog/glog's header: a severity letter, the month and day
+// with no year, the time, the thread id, and the caller before a bracket.
+var klogLine = regexp.MustCompile(`^([IWEF])(\d{4} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+\d+ ([^\]\s]+)\] (.*)$`)
+
+// klogLevels expands the header's severity letter. The letter is an
+// abbreviation of exactly these words, so LevelText carries the word: a bare
+// "W" would fold to info through NormalizeLevel's default, turning every klog
+// warning into an info line.
+var klogLevels = map[string]string{"I": "info", "W": "warning", "E": "error", "F": "fatal"}
+
+// parseKlog reads a klog/glog line. Its message may itself be a JSON record,
+// but that case never reaches here: decodePrefixedObject runs first and takes
+// it, keeping the klog header as the prefix, because the inner record says
+// more about the line than the header does.
+func parseKlog(body string) (Entry, bool) {
+	m := klogLine.FindStringSubmatch(body)
+	if m == nil {
+		return Entry{}, false
+	}
+	fields := []Field{
+		{Key: "level", Value: klogLevels[m[1]]},
+		{Key: "time", Value: m[2]},
+		{Key: "msg", Value: m[4]},
+		// The caller is worth keeping; the thread id the header also carries
+		// is not, and would otherwise put "thread=1" on every line.
+		{Key: "source", Value: m[3]},
+	}
+	return entryFrom(fields, ""), true
+}
+
+// decodeLogfmt reads a line of key=value pairs, as logrus' text formatter, Go
+// kit and Heroku's router emit. Every token must be a pair and one of them
+// must be a level or a message; a line like "connection to db=primary failed"
+// is prose with an "=" in it, and stays prose.
+//
+// Values are unquoted when quoted, so msg="request served" is one value rather
+// than two tokens. A repeated key keeps its first position and last value,
+// matching decodeObject.
+func decodeLogfmt(body string) ([]Field, bool) {
+	if body == "" {
+		return nil, false
+	}
+	var fields []Field
+	index := map[string]int{}
+	for i := 0; i < len(body); {
+		for i < len(body) && (body[i] == ' ' || body[i] == '\t') {
+			i++
+		}
+		if i >= len(body) {
+			break
+		}
+		start := i
+		for i < len(body) && isKeyByte(body[i]) {
+			i++
+		}
+		// A token that is not "key=" at all means this is not a logfmt line.
+		if i == start || i >= len(body) || body[i] != '=' {
+			return nil, false
+		}
+		key := body[start:i]
+		i++ // the '='
+		var value string
+		if i < len(body) && body[i] == '"' {
+			v, n, ok := scanQuoted(body[i:])
+			if !ok {
+				return nil, false
+			}
+			value, i = v, i+n
+		} else {
+			from := i
+			for i < len(body) && body[i] != ' ' && body[i] != '\t' {
+				i++
+			}
+			value = body[from:i]
+		}
+		// A quoted value has to end the token, so `msg="a"b` is not logfmt.
+		if i < len(body) && body[i] != ' ' && body[i] != '\t' {
+			return nil, false
+		}
+		if at, seen := index[key]; seen {
+			fields[at].Value = value
+			continue
+		}
+		index[key] = len(fields)
+		fields = append(fields, Field{Key: key, Value: value})
+	}
+	if len(fields) == 0 {
+		return nil, false
+	}
+	// The guard: without a level or a message this is data, not a log line.
+	for _, f := range fields {
+		if matches(f.Key, levelKeys) || matches(f.Key, messageKeys) {
+			return fields, true
+		}
+	}
+	return nil, false
+}
+
+// isKeyByte reports whether c may appear in a logfmt key. Deliberately narrow:
+// the wider the key alphabet, the more prose a stray "=" can drag in.
+func isKeyByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '_' || c == '.' || c == '-' || c == '@'
+}
+
+// scanQuoted reads a double-quoted value from the front of s, returning the
+// unquoted text and how many bytes it spanned.
+func scanQuoted(s string) (value string, n int, ok bool) {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++ // an escaped byte cannot close the string
+		case '"':
+			v, err := strconv.Unquote(s[:i+1])
+			if err != nil {
+				return "", 0, false
+			}
+			return v, i + 1, true
+		}
+	}
+	return "", 0, false
 }

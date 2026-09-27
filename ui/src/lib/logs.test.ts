@@ -257,3 +257,142 @@ describe("parseLogLine keeps nested values as data", () => {
     expect(l.fields[0].json).toEqual({ code: 500, why: "eof" });
   });
 });
+
+// The same case table as pkg/logfmt's, so the two parsers cannot drift.
+describe("parseLogLine on a prefix before the object", () => {
+  const line =
+    '2026/09/27 09:59:43 {"level":"info","msg":"request","method":"GET","path":"/","status":200,"duration_ms":0,"remote":"10.0.1.204:37058"}';
+
+  it("reads the record Go's standard log package wrapped", () => {
+    const l = parseLogLine(line);
+    expect(l.structured).toBe(true);
+    expect(l.level).toBe("info");
+    expect(l.levelText).toBe("info");
+    expect(l.message).toBe("request");
+    expect(l.time).toBe("2026/09/27 09:59:43");
+    expect(l.fields).toEqual([
+      { key: "method", value: "GET" },
+      { key: "path", value: "/" },
+      { key: "status", value: "200" },
+      { key: "duration_ms", value: "0" },
+      { key: "remote", value: "10.0.1.204:37058" },
+    ]);
+  });
+
+  it.each([
+    ["date and time", '2026/09/27 09:59:43 {"msg":"hi"}', "2026/09/27 09:59:43", undefined],
+    ["microseconds", '2026/09/27 09:59:43.123456 {"msg":"hi"}', "2026/09/27 09:59:43.123456", undefined],
+    ["time only", '09:59:43 {"msg":"hi"}', "09:59:43", undefined],
+    ["date only", '2026/09/27 {"msg":"hi"}', "2026/09/27", undefined],
+    ["RFC3339", '2026-09-27T09:59:43Z {"msg":"hi"}', "2026-09-27T09:59:43Z", undefined],
+    ["with caller", '2026/09/27 09:59:43 main.go:42: {"msg":"hi"}', "2026/09/27 09:59:43", "main.go:42:"],
+    ["no timestamp", 'myapp {"msg":"hi"}', undefined, "myapp"],
+  ])("handles a %s prefix", (_name, raw, time, prefix) => {
+    const l = parseLogLine(raw as string);
+    expect(l.structured).toBe(true);
+    expect(l.message).toBe("hi");
+    expect(l.time).toBe(time);
+    expect(l.fields.find((f) => f.key === "prefix")?.value).toBe(prefix);
+  });
+
+  it("keeps the prefix as a field when the record has its own time", () => {
+    const l = parseLogLine(
+      '2026/09/27 09:59:43 {"time":"2026-09-27T09:59:43.101Z","msg":"hi"}',
+    );
+    expect(l.time).toBe("2026-09-27T09:59:43.101Z");
+    expect(l.fields).toEqual([
+      { key: "prefix", value: "2026/09/27 09:59:43" },
+    ]);
+  });
+
+  it.each([
+    ['failed to parse config {"a":1,"b":2}'],
+    ['2026/09/27 09:59:43 {"msg":"hi"} extra'],
+    ['2026/09/27 09:59:43 {"msg":"cut off"'],
+    ["2026/09/27 09:59:43 [1,2,3]"],
+    ["connection to db=primary failed"],
+  ])("leaves %s as plain text", (raw) => {
+    const l = parseLogLine(raw);
+    expect(l.structured).toBe(false);
+    expect(l.message).toBe(raw);
+  });
+});
+
+describe("parseLogLine on klog lines", () => {
+  it.each([
+    ["I0927 09:59:43.123456       1 server.go:42] starting up", "info", "info", "0927 09:59:43.123456", "starting up", "server.go:42"],
+    ["W0927 09:59:43.123456       1 cache.go:7] cache miss", "warn", "warning", "0927 09:59:43.123456", "cache miss", "cache.go:7"],
+    ["E0927 09:59:43.123456      17 db.go:113] connect refused", "error", "error", "0927 09:59:43.123456", "connect refused", "db.go:113"],
+    ["F0927 09:59:43.123456       1 main.go:9] out of memory", "error", "fatal", "0927 09:59:43.123456", "out of memory", "main.go:9"],
+    ["I0927 09:59:43       1 server.go:42] up", "info", "info", "0927 09:59:43", "up", "server.go:42"],
+  ])("reads %s", (raw, level, levelText, time, message, source) => {
+    const l = parseLogLine(raw);
+    expect(l.structured).toBe(true);
+    expect(l.level).toBe(level);
+    expect(l.levelText).toBe(levelText);
+    expect(l.time).toBe(time);
+    expect(l.message).toBe(message);
+    expect(l.fields).toEqual([{ key: "source", value: source }]);
+  });
+
+  it("prefers the inner record when a klog line wraps JSON", () => {
+    const l = parseLogLine(
+      'I0927 09:59:43.123456       1 server.go:42] {"level":"warn","msg":"slow"}',
+    );
+    expect(l.structured).toBe(true);
+    expect(l.levelText).toBe("warn");
+    expect(l.message).toBe("slow");
+  });
+
+  it.each([
+    ["X0927 09:59:43.123456 1 server.go:42] bad letter"],
+    ["I09 09:59:43 1 server.go:42] short date"],
+    ["I0927 09:59:43.123456 1 server.go:42 no bracket"],
+    ["Incoming request from 10.0.0.1"],
+  ])("leaves %s as plain text", (raw) => {
+    expect(parseLogLine(raw).structured).toBe(false);
+  });
+});
+
+describe("parseLogLine on logfmt lines", () => {
+  it("reads level, message and the remaining pairs", () => {
+    const l = parseLogLine(
+      'level=info msg="request served" method=GET path=/ status=200',
+    );
+    expect(l.structured).toBe(true);
+    expect(l.level).toBe("info");
+    expect(l.levelText).toBe("info");
+    expect(l.message).toBe("request served");
+    expect(l.fields).toEqual([
+      { key: "method", value: "GET" },
+      { key: "path", value: "/" },
+      { key: "status", value: "200" },
+    ]);
+  });
+
+  it.each([
+    ["logrus", 'time="2026-09-27T09:59:43Z" level=warning msg="disk filling"', "disk filling", "2026-09-27T09:59:43Z"],
+    ["escaped quote", 'level=error msg="say \\"hi\\"" code=5', 'say "hi"', undefined],
+    ["empty value", "level=info msg=done note=", "done", undefined],
+    ["message only", "msg=starting", "starting", undefined],
+    ["level only", "level=debug component=cache", "", undefined],
+  ])("handles %s", (_name, raw, message, time) => {
+    const l = parseLogLine(raw as string);
+    expect(l.structured).toBe(true);
+    expect(l.message).toBe(message);
+    expect(l.time).toBe(time);
+  });
+
+  it.each([
+    ["connection to db=primary failed"],
+    ["method=GET path=/ status=200"],
+    ["GET /healthz 200"],
+    ['msg="unterminated'],
+    ["=novalue msg=hi"],
+    ['level=info msg="a" trailing'],
+  ])("leaves %s as plain text", (raw) => {
+    const l = parseLogLine(raw);
+    expect(l.structured).toBe(false);
+    expect(l.message).toBe(raw);
+  });
+});
