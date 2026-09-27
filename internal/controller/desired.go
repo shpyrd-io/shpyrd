@@ -4,7 +4,9 @@ package controller
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -329,6 +331,30 @@ func (c Config) platformEnv(app *shpyrdv1.App, revision string) []corev1.EnvVar 
 	return env
 }
 
+// SourcesPort is where the server serves source archives to build pods
+// (RFC-0033: the API and the edge are for the front doors only).
+const SourcesPort = 8082
+
+// sourceURL is where a build pod fetches an uploaded archive: the server's
+// sources port. Archives uploaded before that port existed name the API
+// port, which project namespaces can no longer reach; the host is the
+// same, so the port is rewritten.
+func (c Config) sourceURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	host := u.Hostname()
+	if host != "shpyrd-server."+c.SystemNamespace+".svc" && host != "shpyrd-server."+c.SystemNamespace+".svc.cluster.local" {
+		return raw
+	}
+	if p := u.Port(); p != "" && p != "80" {
+		return raw
+	}
+	u.Host = host + ":" + strconv.Itoa(SourcesPort)
+	return u.String()
+}
+
 // imageTag is the repository kpack pushes builds of this app to.
 func (c Config) imageTag(app *shpyrdv1.App) string {
 	return c.RegistryHost + "/apps/" + app.Name
@@ -351,7 +377,7 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) *unstructured.Unstructured 
 		git["revision"] = rev
 		source["git"] = git
 	case app.Spec.Source.Blob != nil:
-		source["blob"] = map[string]interface{}{"url": app.Spec.Source.Blob.URL}
+		source["blob"] = map[string]interface{}{"url": c.sourceURL(app.Spec.Source.Blob.URL)}
 	}
 	if app.Spec.Source.SubPath != "" {
 		source["subPath"] = app.Spec.Source.SubPath

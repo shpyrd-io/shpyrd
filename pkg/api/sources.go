@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"io"
 	"net/http"
 	"os"
@@ -16,6 +17,10 @@ import (
 
 // maxSourceSize bounds uploaded source archives.
 const maxSourceSize = 512 << 20
+
+// SourcesPort is where the server serves source archives to build pods
+// (RFC-0033: the API and the edge are for the front doors only).
+const SourcesPort = controller.SourcesPort
 
 var sourceName = regexp.MustCompile(`^[a-f0-9]{64}\.tgz$`)
 

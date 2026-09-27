@@ -31,6 +31,16 @@ import (
 type Options struct {
 	// Addr is the listen address, e.g. ":8080".
 	Addr string
+	// SourcesAddr is a second listener that serves only the uploaded
+	// source archives (GET /api/sources/:name) to the build pods in
+	// project namespaces, so the NetworkPolicy can keep everything else
+	// (the edge, the API) to the front doors (RFC-0033). Empty: sources
+	// are served on Addr only.
+	SourcesAddr string
+	// TrustedProxies are the CIDRs whose X-Forwarded-For is believed (the
+	// ingress controllers' pod range): behind them every client would
+	// otherwise be the ingress pod, and per-IP throttles one bucket.
+	TrustedProxies []string
 	// UI is the built single page application. Nil disables UI serving.
 	UI fs.FS
 	// Sources stores uploaded application archives. Nil disables deploys
@@ -252,7 +262,9 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders())
-	_ = s.engine.SetTrustedProxies(nil)
+	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
+		return nil, fmt.Errorf("trusted proxies: %w", err)
+	}
 
 	// Sessions and login providers (RFC-0007). Sessions are mirrored into a
 	// Secret when a cluster is available.
@@ -322,14 +334,24 @@ func (s *Server) Run(ctx context.Context) error {
 	// follow each other through the Secret.
 	go s.edgeKeys.Run(ctx)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		s.log.Info("listening", "addr", s.opts.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
-		close(errCh)
 	}()
+	// The source archives on their own port for the build pods.
+	var srcSrv *http.Server
+	if s.opts.SourcesAddr != "" {
+		srcSrv = &http.Server{Addr: s.opts.SourcesAddr, Handler: s.SourcesHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			s.log.Info("serving source archives", "addr", s.opts.SourcesAddr)
+			if err := srcSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:
@@ -340,10 +362,20 @@ func (s *Server) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.log.Info("shutting down")
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return err
+	if srcSrv != nil {
+		_ = srcSrv.Shutdown(shutdownCtx)
 	}
-	return <-errCh
+	return srv.Shutdown(shutdownCtx)
+}
+
+// SourcesHandler serves the uploaded source archives and nothing else: the
+// build pods' view of the server.
+func (s *Server) SourcesHandler() http.Handler {
+	e := gin.New()
+	e.Use(gin.Recovery(), s.requestLogger())
+	e.GET("/api/sources/:name", s.serveSource)
+	e.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	return e
 }
 
 func (s *Server) routes() error {

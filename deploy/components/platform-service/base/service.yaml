@@ -18,3 +18,8 @@ spec:
     - name: webhook
       port: 9443
       targetPort: webhook
+    # Build pods fetch source archives here; the server's NetworkPolicy
+    # opens this port, and only this one, to project namespaces.
+    - name: sources
+      port: 8082
+      targetPort: sources

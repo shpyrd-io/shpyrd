@@ -18,3 +18,4 @@ resources:
   - server.yaml
   - webhook.yaml
   - ingress.yaml
+  - networkpolicy.yaml

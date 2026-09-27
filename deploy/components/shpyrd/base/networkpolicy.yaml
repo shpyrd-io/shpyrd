@@ -1,0 +1,42 @@
+# Who may reach the platform's server (RFC-0033). The API, the dashboard,
+# the edge's authorisation endpoint and the error pages are for the front
+# doors: the ingress controllers, and callers that are not pods (the API
+# server for its proxy and the admission webhook, the nodes for probes). A
+# project's pods reach only the sources port, where builds fetch their
+# archives. Prometheus reads the metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shpyrd-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: shpyrd-server
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx-internal
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["${SHPYRD_POD_CIDR}"]
+      ports:
+        - port: 8080
+        - port: 9443
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: shpyrd.io/project
+                operator: Exists
+      ports:
+        - port: 8082
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8081

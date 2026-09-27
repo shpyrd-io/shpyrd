@@ -120,9 +120,12 @@ func run(o runOptions, logger *slog.Logger) error {
 	}
 	logger.Info("connected", "host", k.Config.Host, "namespace", k.Namespace)
 
+	// Build pods fetch source archives from the sources port, which the
+	// server's NetworkPolicy opens to project namespaces; the API and the
+	// edge stay with the front doors.
 	internalURL := o.internalURL
 	if internalURL == "" {
-		internalURL = fmt.Sprintf("http://shpyrd-server.%s.svc", k.Namespace)
+		internalURL = fmt.Sprintf("http://shpyrd-server.%s.svc:%d", k.Namespace, api.SourcesPort)
 	}
 	domain := envOr("SHPYRD_DOMAIN", "127.0.0.1.nip.io")
 	httpsPort := envOr("SHPYRD_HTTPS_PORT", "443")
@@ -206,6 +209,8 @@ func run(o runOptions, logger *slog.Logger) error {
 		},
 		UI:             ui.Dist(),
 		Sources:        &api.SourceStore{Dir: o.dataDir, BaseURL: internalURL},
+		SourcesAddr:    fmt.Sprintf(":%d", api.SourcesPort),
+		TrustedProxies: trustedProxies(os.Getenv("SHPYRD_POD_CIDR")),
 		Token:          strings.TrimSpace(os.Getenv("SHPYRD_ADMIN_TOKEN")),
 		TokenDisabled:  strings.TrimSpace(os.Getenv("SHPYRD_ADMIN_TOKEN_DISABLED")) == "true",
 		Prometheus:     prom,
@@ -510,4 +515,15 @@ func ByAddress(st store.Store, domain, dashboardURL string) tenancy.Resolver {
 		dashboardHost = u.Host
 	}
 	return &tenancy.ByAddress{Store: st, Domain: domain, DashboardHost: dashboardHost}
+}
+
+// trustedProxies is the pod range the ingress controllers live in: with the
+// server's NetworkPolicy only they reach the API port from inside the
+// cluster, so their X-Forwarded-For is the client. No range: nobody is
+// trusted and every client is the ingress pod.
+func trustedProxies(podCIDR string) []string {
+	if strings.TrimSpace(podCIDR) == "" {
+		return nil
+	}
+	return []string{strings.TrimSpace(podCIDR)}
 }

@@ -364,7 +364,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 					InitContainers: []corev1.Container{{
 						Name:                     fetchContainer,
 						Image:                    c.BuildKitImage,
-						Command:                  []string{"sh", "-ec", fetchScript(app)},
+						Command:                  []string{"sh", "-ec", c.fetchScript(app)},
 						SecurityContext:          &corev1.SecurityContext{RunAsUser: uid, RunAsGroup: uid, AllowPrivilegeEscalation: ptr.To(false)},
 						VolumeMounts:             []corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}},
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -411,7 +411,7 @@ func dockerfilePath(app *shpyrdv1.App) string {
 
 // fetchScript downloads the uploaded archive or clones the git revision
 // into the workspace and records the resolved revision.
-func fetchScript(app *shpyrdv1.App) string {
+func (c Config) fetchScript(app *shpyrdv1.App) string {
 	src := app.Spec.Source
 	dst := workspaceDir + "/src"
 	switch {
@@ -420,7 +420,7 @@ func fetchScript(app *shpyrdv1.App) string {
 wget -qO /tmp/source.tgz %[2]s
 tar xzf /tmp/source.tgz -C %[1]s
 printf '%%s' %[3]s > %[4]s/revision
-echo "source ready"`, dst, shellQuote(src.Blob.URL), shellQuote(src.Blob.Ref), workspaceDir)
+echo "source ready"`, dst, shellQuote(c.sourceURL(src.Blob.URL)), shellQuote(src.Blob.Ref), workspaceDir)
 	case src.Git != nil:
 		rev := firstNonEmpty(src.Git.Revision, "main")
 		return fmt.Sprintf(`url=%[1]s

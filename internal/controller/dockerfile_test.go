@@ -94,7 +94,7 @@ func TestDockerfileBuildJob(t *testing.T) {
 	if job.Spec.Template.Labels[shpyrdv1.LabelBuild] != "dk-build-1" {
 		t.Errorf("build pods must carry %s: %v", shpyrdv1.LabelBuild, job.Spec.Template.Labels)
 	}
-	if len(spec.InitContainers) != 1 || !strings.Contains(spec.InitContainers[0].Command[2], "wget -qO /tmp/source.tgz 'http://shpyrd-server.shpyrd-system.svc/api/sources/abc.tgz'") {
+	if len(spec.InitContainers) != 1 || !strings.Contains(spec.InitContainers[0].Command[2], "wget -qO /tmp/source.tgz 'http://shpyrd-server.shpyrd-system.svc:8082/api/sources/abc.tgz'") {
 		t.Errorf("fetch script: %+v", spec.InitContainers)
 	}
 	args := strings.Join(spec.Containers[0].Args, " ")

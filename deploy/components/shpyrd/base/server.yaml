@@ -147,6 +147,8 @@ spec:
               containerPort: 8080
             - name: metrics
               containerPort: 8081
+            - name: sources
+              containerPort: 8082
             - name: webhook
               containerPort: 9443
           volumeMounts:
