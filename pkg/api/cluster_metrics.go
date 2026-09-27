@@ -41,8 +41,8 @@ type ClusterMetrics struct {
 // hostname is not the node name on cloud providers). Samples scraped before
 // that relabeling existed have no node label and are left out.
 var nodeQueries = map[string]struct{ query, label string }{
-	"cpuUsed":  {`100 * (1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle",node!=""}[2m])))`, "node"},
-	"memUsed":  {`100 * (1 - sum by (node) (node_memory_MemAvailable_bytes{node!=""}) / sum by (node) (node_memory_MemTotal_bytes{node!=""}))`, "node"},
+	"cpuUsed": {`100 * (1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle",node!=""}[2m])))`, "node"},
+	"memUsed": {`100 * (1 - sum by (node) (node_memory_MemAvailable_bytes{node!=""}) / sum by (node) (node_memory_MemTotal_bytes{node!=""}))`, "node"},
 	// Only pods that are running or waiting to hold a node's resources and
 	// count against its pod capacity: finished builds and release commands
 	// stay around as Succeeded pods and must not.
