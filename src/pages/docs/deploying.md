@@ -13,7 +13,7 @@ The CLI talks to your cluster with your kubeconfig; the only call that reaches t
 
 ```shell
 shpyrd projects create "My Service"        # slug my-service: namespace app-my-service + App resource
-shpyrd projects create "My Service" --save # also writes shpyrd.yaml (project: my-service) in the current directory
+shpyrd projects create "My Service" --save # also writes shpyrd.yaml (project: my-service, plus what the directory's build profile implies)
 ```
 
 Names are lowercase letters, digits and dashes (max 40 characters) and become the hostname: `https://my-service.<domain>`.
@@ -69,7 +69,27 @@ Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, .NET
 
 ## Buildpacks: languages, stacks and system packages
 
-The Paketo buildpacks detect the language from the repository and do the right thing for the common case. A few patterns need a hint in [`shpyrd.yaml`](/docs/shpyrd-yaml).
+The Paketo buildpacks detect the language from the repository and do the right thing for the common case. A few patterns need hints they cannot guess; the CLI recognises those patterns in the directory and fills the hints in before the build (**build profiles**, [RFC-0067](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0067-build-profiles.md)), saying what it inferred and why:
+
+```
+==> Detected static site (public/index.html and no language files)
+    build.buildpacks=[web-servers], BP_WEB_SERVER=nginx, BP_WEB_SERVER_ROOT=public
+    (shpyrd.yaml values win; --save writes these there)
+```
+
+| The CLI sees | It infers |
+| --- | --- |
+| `public/index.html` and no language files | the web-servers buildpack on nginx serving `public/` |
+| `vite` in `package.json`, a `build` script, no `start` script | the web-servers buildpack building with Node and serving `dist/` with single-page routing |
+| `next` in `package.json` | `BP_NODE_RUN_SCRIPTS=build`, `NODE_ENV=production` for the build |
+| `config.ru` | `RACK_ENV=production` (Sinatra 4 only permits real hostnames in production) |
+| `config/application.rb` | `RAILS_ENV=production`, `RAILS_LOG_TO_STDOUT=1`, the `/up` health check when the app routes it |
+| `public/index.php` | the PHP buildpack with nginx in front of PHP-FPM serving `public/` |
+| an `Aptfile` with libvips, ImageMagick, ffmpeg, GDAL, OpenCV, Tesseract, Chromium... | `build.stack: full` (their dependency trees need the full run image) |
+
+Anything written in `shpyrd.yaml` wins over an inferred value; a Dockerfile build takes none of the buildpack hints. `shpyrd deploy --save` (or `shpyrd projects create --save`) writes the inferred values into `shpyrd.yaml` — a new file, or the missing keys added to the existing one with its comments kept — so what runs is what is committed. Detection reads the local directory: `--git` and `--image` deploys get none of it.
+
+The sections below are what the profiles write, for when the pattern is not one of these.
 
 ### Static sites
 
@@ -143,7 +163,7 @@ web:     bundle exec puma -C config/puma.rb
 Released v2: Deploy abc123def456
 ```
 
-`shpyrd logs --process release` shows the command's output. `shpyrd projects info` lists the process types, including `release`, and a pending or failed release phase message.
+The command's output streams into the deploy (`release | ...`) and stays in `shpyrd logs --process release`. `shpyrd projects info` lists the process types, including `release`, and a pending or failed release phase; the project page shows the phase while it runs and, when it fails, the reason, the output and a **Run it again** button (`shpyrd redeploy` does the same: with a failed release command, a redeploy runs the command again rather than restarting instances that never rolled out).
 
 For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml`:
 

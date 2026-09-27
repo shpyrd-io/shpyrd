@@ -19,7 +19,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Global config vars for every project | [RFC-0016](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0016-global-config-vars.md) | done |
 | Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | done (v0.9.9) (API plan check and per-project ResourceQuota; quota UI still missing) |
 | Cost visibility | [RFC-0048](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0048-cost-visibility.md) | ready to implement |
-| Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0) |
+| Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace — the gaps it found are listed in the RFC) |
 
 ## Deploying
 
@@ -28,9 +28,9 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Projects and resources, bindings, attach/detach | [RFC-0003](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0003-projects-and-resources.md) | done (unattached resources in `projects info`; attach confirmation; `Deleting` phase still missing) |
 | Dockerfile builds with BuildKit | [RFC-0004](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0004-dockerfile-builds.md) | done (v0.9.9) (a "build" catalog size; TTL on build Jobs still missing) |
 | Shell and one-off commands | [RFC-0005](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0005-shell-and-one-off-commands.md) | done (`shpyrd forward`; `run --process` still missing) |
-| Build profiles: automatic buildpack configuration for static sites, Vite, Rack, Rails | [RFC-0067](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0067-build-profiles.md) | proposal |
+| Build profiles: the CLI infers what the buildpacks cannot guess (static sites, Vite, Next.js, Rack, Rails, PHP, heavy Aptfile packages); `--save` writes it | [RFC-0067](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0067-build-profiles.md) | done (v0.9.10) (no prompt; no detection for `--git`; no root `index.html` or Create React App still missing) |
 | Build composition: buildpacks, stacks and system packages per project (Aptfile) | [RFC-0065](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0065-build-composition.md) | done (v0.9.9) (build profile auto-detection in RFC-0067 still missing) |
-| Release phase: Procfile `release:` runs before every rollout | [RFC-0066](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0066-release-phase.md) | done (v0.9.9) (output not yet streamed into `shpyrd deploy`; dashboard card still missing) |
+| Release phase: Procfile `release:` runs before every rollout | [RFC-0066](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0066-release-phase.md) | done (v0.9.9; dashboard card, output in the deploy and retry by redeploy in v0.9.10) |
 | Persistent volumes (single-instance) | [RFC-0006](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0006-persistent-volumes.md) | done |
 | Shared volumes (`storage-rwx`) | [RFC-0041](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0041-shared-volumes.md) | ready to implement |
 | Private repositories (tokens, deploy keys) | [RFC-0017](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0017-git-credentials.md) | proposal |

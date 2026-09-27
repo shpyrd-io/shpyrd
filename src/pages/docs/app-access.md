@@ -121,6 +121,17 @@ shpyrd members list expenses       # what a team would get
 - A companion Ingress for `/.shpyrd/` on the app's host serves the sign-in bounce, the callback, the sign-out and the "available to team X" page; the path is reserved for the platform.
 - Operators reach apps with the admin token (`Authorization: Bearer <token>`); scripts and CI can too. Pasting the token on the sign-in page opens a browser session the same way accounts do.
 
+## Between projects
+
+Projects are network-isolated by default: nothing else running on the cluster may reach an app, even from the same workspace, except the front door, the platform and monitoring. A project opens itself to another with its allow list — on its page (**Connections**), with `shpyrd allow add project crm --project expenses`, or in `shpyrd.yaml`:
+
+```yaml
+allow:
+  - project: crm       # crm may call expenses through expenses' Service or hostname
+```
+
+The listed project must be one of the workspace's own: allows never cross a workspace, and the platform refuses a name that is not there. Changes apply within seconds and create no release. The caller reaches the callee at `http://<callee>-web.<callee namespace>.svc` inside the cluster (or through its public hostname, which goes through the front door and the callee's access mode).
+
 ## Not yet
 
-Personal API tokens and OAuth for AI agents opening apps as a person, sign-in on custom domains (RFC-0034 domains work for public apps; sign-in on them follows), and disabling previews per project.
+Personal API tokens and OAuth for AI agents opening apps as a person (the admin token works at the edge; `shp_` tokens do not yet), and disabling previews per project.
