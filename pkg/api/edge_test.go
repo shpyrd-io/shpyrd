@@ -260,6 +260,37 @@ func TestEdgeSigninAndStart(t *testing.T) {
 		t.Fatalf("callback = %d %s cookies=%d", rec.Code, rec.Header().Get("Location"), len(rec.Result().Cookies()))
 	}
 
+	// Signing out of the app ends the workspace session behind it: the app
+	// cookie goes, the dashboard's session is gone too (a new visit asks to
+	// sign in), and the browser lands on the dashboard.
+	var appCookie string
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == s.edgeCookieName() {
+			appCookie = ck.Value
+		}
+	}
+	req = httptest.NewRequest("GET", "/.shpyrd/logout", nil)
+	req.Host = "expenses.example.test"
+	req.AddCookie(&http.Cookie{Name: s.edgeCookieName(), Value: appCookie})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://shpyrd.example.test" {
+		t.Fatalf("logout = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if ws, err := s.store.Workspace(context.Background(), store.DefaultWorkspace); err != nil {
+		t.Fatal(err)
+	} else if _, ok := s.rp.sessions.getIn(sid, ws.ID); ok {
+		t.Error("the dashboard session must be gone after signing out of an app")
+	}
+	if rec := doCookie(t, s, "GET", "/api/me", "", sid, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("dashboard after app sign-out = %d, want 401", rec.Code)
+	}
+	if rec := edgeRequest(t, s, "expenses", "authenticated", appCookie, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("app after sign-out = %d, want 401", rec.Code)
+	}
+	// Sign in again for what follows.
+	sid, _ = signIn(t, s, ext.Identity{Subject: "u1", Email: "maria@acme.test", Provider: "local"})
+
 	// JWKS is public.
 	rec = do(t, s, "GET", "/.well-known/jwks.json", "", false)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"crv":"Ed25519"`) {

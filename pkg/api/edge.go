@@ -443,9 +443,27 @@ func (s *Server) edgeCallback(c *gin.Context) {
 
 // edgeLogout is GET /.shpyrd/logout on an app host: forget this app's
 // cookie and go to the dashboard, where signing out ends the session.
+// edgeLogout is /.shpyrd/logout on an app host: signing out of an app
+// signs the person out of the workspace. The dashboard session behind the
+// app cookie is ended (every app and the dashboard check it on each
+// request, so all of them close), the app cookie goes, and the browser
+// lands on the identity provider's sign-out when it has one, else on the
+// dashboard's sign-in page.
 func (s *Server) edgeLogout(c *gin.Context) {
+	redirect := s.dashboardURLFor(c)
+	app, appErr := s.appByHost(c, c.Request.Host)
+	if raw, err := c.Cookie(s.edgeCookieName()); err == nil && raw != "" && s.rp != nil && appErr == nil {
+		if claims, err := s.edgeKeys.VerifyCookie(raw, app.Name); err == nil && claims.SessionID != "" {
+			if sess, ok := s.rp.sessions.getIn(claims.SessionID, s.workspaceID(c)); ok {
+				if u := s.rp.endSessionURL(sess); u != "" {
+					redirect = u
+				}
+				s.rp.sessions.delete(c.Request.Context(), claims.SessionID)
+			}
+		}
+	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: s.edgeCookieName(), Value: "", Path: "/", HttpOnly: true, Secure: s.secureCookies(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
-	c.Redirect(http.StatusFound, s.dashboardURLFor(c))
+	c.Redirect(http.StatusFound, redirect)
 }
 
 // edgeDenied renders the page nginx shows for a 403 from /edge/auth: the
