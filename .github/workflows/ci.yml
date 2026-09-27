@@ -114,13 +114,17 @@ jobs:
           done
           head -c 300 /tmp/hello-world.html; echo
           grep -qi "hello world" /tmp/hello-world.html
-          # The edge: anonymous visitors of api are sent to sign in; the admin token opens it.
+          # The edge: an anonymous browser is sent to sign in, an anonymous API
+          # client gets a JSON 401; the admin token opens it.
           for i in $(seq 1 30); do
-            code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://api.127.0.0.1.nip.io:8443/" || true)
+            code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 -H "Accept: text/html" "https://api.127.0.0.1.nip.io:8443/" || true)
             [ "$code" = "302" ] && break
             sleep 5
           done
-          echo "anonymous api: $code"; [ "$code" = "302" ]
+          echo "anonymous browser: $code"; [ "$code" = "302" ]
+          code=$(curl -sk -o /tmp/api-401.json -w '%{http_code}' --max-time 5 "https://api.127.0.0.1.nip.io:8443/" || true)
+          echo "anonymous api client: $code"; [ "$code" = "401" ]
+          grep -q '"error"' /tmp/api-401.json
           curl -fsk --max-time 10 -H "Authorization: Bearer $TOKEN" "https://api.127.0.0.1.nip.io:8443/" >/tmp/api.html
           head -c 300 /tmp/api.html; echo
           grep -q '"service"' /tmp/api.html
