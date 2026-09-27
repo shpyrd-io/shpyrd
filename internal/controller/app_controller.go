@@ -657,7 +657,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 		ps.Failing, ps.Reason = r.processHealth(ctx, app, p.Name)
 		ps.Size = sizeName
-		ps.CPU = res.Requests.Cpu().String()
+		// The size's CPU is the limit; a shared size requests only a share.
+		ps.CPU = res.Limits.Cpu().String()
+		if res.Limits.Cpu().IsZero() {
+			ps.CPU = res.Requests.Cpu().String()
+		}
 		ps.Memory = res.Requests.Memory().String()
 		ps.Pinned = singleInstanceNote(mounts[p.Name])
 		status[p.Name] = ps

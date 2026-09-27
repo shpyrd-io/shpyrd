@@ -364,9 +364,10 @@ func TestRollbackRestoresConfigAndDefaultResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := d.Spec.Template.Spec.Containers[0].Resources
-	if res.Requests.Cpu().String() != "500m" || res.Limits.Cpu().String() != "2" || res.Limits.Memory().String() != "64Mi" {
+	if res.Requests.Cpu().String() != "62m" || res.Limits.Cpu().String() != "500m" || res.Limits.Memory().String() != "64Mi" {
 		t.Errorf("default (shared-s) resources = %+v", res)
 	}
+	// The status reports the size's CPU (the ceiling), not the share requested.
 	if ps := got.Status.Processes["web"]; ps.Size != "shared-s" || ps.CPU != "500m" || ps.Memory != "64Mi" {
 		t.Errorf("process status size = %+v", ps)
 	}

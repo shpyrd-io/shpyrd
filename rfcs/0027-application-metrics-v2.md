@@ -56,10 +56,11 @@ invisible, and tooltips leak pod names.
   applies to CPU and memory, the only charts expressed as a proportion of an allocation; the
   rest are always absolute and ignore it.
 - Each **series** carries a `reference`: the allocation it is measured against in absolute
-  mode (for example 64 MiB for a `shared-s` process), plus a `burst` when the size sets a
-  higher CPU ceiling. It cannot live on the chart, because one chart draws several
-  processes and they may have different sizes. In percentage mode neither is set: the line
-  is 100%.
+  mode (for example 64 MiB for a `shared-s` process), plus a `burst` when a process has a
+  CPU ceiling above its allocation (none does since sizes made the CPU the ceiling, see the
+  2026-09-27 note; the field stays for compatibility). It cannot live on the chart, because
+  one chart draws several processes and they may have different sizes. In percentage mode
+  neither is set: the line is 100%.
 - UI controls: Instances (All, or a subset), Aggregation, Percentage / Total. Release
   markers stay.
 - Percentage is relative to the process's request, which is the allocation the project pays
@@ -102,16 +103,17 @@ invisible, and tooltips leak pod names.
   ingress controller's own pod (`controller_pod`) and the backend *service*, never the
   backend pod. Per-instance request rates would need application-side instrumentation,
   which is RFC-0029.
-- The reference line is the request, not a limit. For memory every size sets
-  `Limits.memory == Requests.memory`, so there is nothing to choose between the two. For CPU
-  a shared size's limit is `BurstFactor` (4) times its request — every shared size has one,
-  unconditionally — so labelling that line "Limit" would tell someone their ceiling is 2
-  cores when they bought 0.5: it is a burst ceiling, not the allocation. That is why it is
-  drawn separately as `burst` and why the reference stays the request. Dedicated sizes set
-  the CPU limit equal to the request, which is why `burst` is zero for them. A practical
-  consequence worth stating plainly: because every shared size carries that 4x CPU limit, a
-  CPU chart in total mode for a shared-size process always draws a burst line — not an
-  occasional extra one.
+- The reference line is the allocation someone bought: the size's CPU and memory. For
+  memory every size sets `Limits.memory == Requests.memory`, so there is nothing to choose
+  between the two. For CPU the reading changed with the sizes model (2026-09-27): a shared
+  size's CPU is now its **limit** (the ceiling), and the request is the guaranteed
+  `1/ShareFactor` of it (an eighth) — Kubernetes schedules by requests, and requesting the
+  whole size filled two 4-core nodes with fourteen small instances while their CPU sat
+  idle. So the reference is the CPU limit (percent mode divides by
+  `kube_pod_container_resource_limits`), and `burst` is only set when a process has a
+  ceiling above that, which no size produces. Before that change the request was the
+  size and the limit a 4x burst ceiling drawn as `burst`; the paragraphs that follow
+  describe that era.
 - Remove pod names from every tooltip and legend (RFC-0011).
 - `metrics.go` splits: the handler and the response types stay, and the chart table with its
   PromQL builders moves to `metricqueries.go`. `by` × `agg` × `mode` multiplies query

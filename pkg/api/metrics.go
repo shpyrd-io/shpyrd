@@ -58,13 +58,14 @@ type Series struct {
 	process string
 }
 
-// allocation is what one process type was given.
+// allocation is what one process type was given: the CPU of its size
+// (the ceiling a shared process may use, the whole cores of a dedicated
+// one) and its memory.
 type allocation struct {
 	CPUCores    float64
 	MemoryBytes float64
-	// BurstCores is the CPU ceiling when the size sets one. Shared sizes
-	// usually do not, which is why percentages above 100% are normal and why
-	// this is not simply "the limit".
+	// BurstCores is a ceiling above CPUCores when a process has one; sizes
+	// no longer set it (the size's CPU is the ceiling) and it stays 0.
 	BurstCores float64
 }
 
@@ -83,17 +84,15 @@ func (s *Server) allocations(ctx context.Context, app *shpyrdv1.App) map[string]
 			continue
 		}
 		a := allocation{}
-		if q, ok := res.Requests[corev1.ResourceCPU]; ok {
+		// The size's CPU is the limit; the request is the guaranteed share
+		// of it for shared sizes, and only stands in when no limit exists.
+		if q, ok := res.Limits[corev1.ResourceCPU]; ok {
+			a.CPUCores = float64(q.MilliValue()) / 1000
+		} else if q, ok := res.Requests[corev1.ResourceCPU]; ok {
 			a.CPUCores = float64(q.MilliValue()) / 1000
 		}
 		if q, ok := res.Requests[corev1.ResourceMemory]; ok {
 			a.MemoryBytes = float64(q.Value())
-		}
-		if q, ok := res.Limits[corev1.ResourceCPU]; ok {
-			burst := float64(q.MilliValue()) / 1000
-			if burst > a.CPUCores {
-				a.BurstCores = burst
-			}
 		}
 		out[name] = a
 	}

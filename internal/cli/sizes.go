@@ -68,7 +68,8 @@ func newSizesCmd(g *globalFlags) *cobra.Command {
 		Long: `Instance sizes are named cpu/memory allocations a process runs with, like
 Fly machine sizes or Render instance types. The catalog is cluster-wide.
 
-  shared    a guaranteed CPU share that can burst up to 4x (Burstable QoS)
+  shared    cpu is the ceiling; 1/8 of it is guaranteed, the rest is borrowed
+            from idle neighbours (Burstable QoS)
   dedicated requests equal limits, whole cores (Guaranteed QoS)
 
 Processes pick a size in shpyrd.yaml (processes.<type>.size) or with
@@ -94,18 +95,14 @@ func newSizesListCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tCPU\tBURST\tMEMORY\tDESCRIPTION")
+			fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
 			for _, s := range cat.Sorted() {
 				res := s.Resources()
 				name := s.Name
 				if s.Name == cat.Default {
 					name += " (default)"
 				}
-				burst := "-"
-				if s.Kind == sizes.Shared {
-					burst = res.Limits.Cpu().String()
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, burst, s.Memory, s.Description)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
 			}
 			return tw.Flush()
 		},

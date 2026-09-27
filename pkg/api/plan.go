@@ -14,11 +14,11 @@ import (
 
 // Plan limits (RFC-0033 phase 6, RFC-0042). A workspace's plan is a set of
 // ceilings on what its projects may use together: projects, instances,
-// CPU and memory requests, storage. The API checks them before it changes
-// anything, so people read "this would use 5 instances of the plan's 4"
-// rather than finding pods stuck Pending; the controller backs the check
-// with a ResourceQuota per project namespace. The open-source platform
-// sets no plan; the cloud layer does, per workspace.
+// CPU and memory of their instance sizes, storage. The API checks them
+// before it changes anything, so people read "this would use 5 instances
+// of the plan's 4" rather than finding pods stuck Pending; the controller
+// backs the check with a ResourceQuota per project namespace. The
+// open-source platform sets no plan; the cloud layer does, per workspace.
 
 // Usage is what a workspace uses, in the plan's terms.
 type Usage struct {
@@ -38,9 +38,10 @@ func (u usage) view() Usage {
 	return Usage{Projects: u.projects, Instances: u.instances, CPU: u.cpu.String(), Memory: u.memory.String(), Storage: u.storage.String()}
 }
 
-// addApp adds an App's desired instances and their requests. A project
-// with nothing to run yet (no image, no source) is a project and nothing
-// more.
+// addApp adds an App's desired instances and their sizes: the CPU of a
+// size is its limit (a shared size requests only a share of it), its
+// memory the request. A project with nothing to run yet (no image, no
+// source) is a project and nothing more.
 func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 	u.projects++
 	if app.Spec.Image == "" && !app.HasSource() {
@@ -66,7 +67,11 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 		if err != nil {
 			continue // an unknown size is refused elsewhere
 		}
-		if cpu, ok := res.Requests[corev1.ResourceCPU]; ok {
+		cpu, ok := res.Limits[corev1.ResourceCPU]
+		if !ok {
+			cpu, ok = res.Requests[corev1.ResourceCPU]
+		}
+		if ok {
 			for i := int32(0); i < n; i++ {
 				u.cpu.Add(cpu)
 			}

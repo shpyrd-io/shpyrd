@@ -1122,9 +1122,11 @@ func TestMetricsAggregationKeepsDirectionsSeparate(t *testing.T) {
 // the single allocation they share, and a mix of allocations draws no line
 // at all rather than one that is wrong for some of the instances.
 func TestMetricsAggregationReference(t *testing.T) {
-	// shared-s (both web and worker's default size): CPU request 0.5 cores,
-	// burst to 4x = 2 cores.
-	t.Run("sum multiplies the reference and the burst", func(t *testing.T) {
+	// shared-s (both web and worker's default size): 0.5 cores, the size's
+	// CPU and the container's limit; the request is a share of it and is
+	// not what the chart measures against. Sizes set no burst ceiling
+	// above their CPU, so Burst stays 0.
+	t.Run("sum multiplies the reference", func(t *testing.T) {
 		prom, _ := newFakeProm(t, fakeAnswer{
 			Match: "container_cpu_usage_seconds_total",
 			Series: []fakeSeries{
@@ -1144,8 +1146,8 @@ func TestMetricsAggregationReference(t *testing.T) {
 		if cpu.Series[0].Reference != 1.0 {
 			t.Errorf("reference = %v, want 1.0 (0.5 x 2 instances)", cpu.Series[0].Reference)
 		}
-		if cpu.Series[0].Burst != 4.0 {
-			t.Errorf("burst = %v, want 4.0 (2 x 2 instances)", cpu.Series[0].Burst)
+		if cpu.Series[0].Burst != 0 {
+			t.Errorf("burst = %v, want none: the size's CPU is the ceiling", cpu.Series[0].Burst)
 		}
 	})
 
@@ -1170,8 +1172,8 @@ func TestMetricsAggregationReference(t *testing.T) {
 			if cpu.Series[0].Reference != 0.5 {
 				t.Errorf("agg=%s reference = %v, want 0.5, unmultiplied", agg, cpu.Series[0].Reference)
 			}
-			if cpu.Series[0].Burst != 2.0 {
-				t.Errorf("agg=%s burst = %v, want 2.0, unmultiplied", agg, cpu.Series[0].Burst)
+			if cpu.Series[0].Burst != 0 {
+				t.Errorf("agg=%s burst = %v, want none", agg, cpu.Series[0].Burst)
 			}
 		}
 	})
@@ -1190,8 +1192,8 @@ func TestMetricsAggregationReference(t *testing.T) {
 			},
 		})
 		app := metricsApp()
-		// dedicated-s requests a whole core, genuinely different from web's
-		// shared-s 0.5, and caps its limit at the request so it has no burst.
+		// dedicated-s is a whole core, genuinely different from web's
+		// shared-s 0.5.
 		app.Spec.Processes["worker"] = shpyrdv1.Process{Size: "dedicated-s"}
 		s, _ := newTestServer(t, prom, []client.Object{app},
 			podFor("shop", "web", "shop-web-a", 20), podFor("shop", "web", "shop-web-b", 15),
@@ -1202,16 +1204,15 @@ func TestMetricsAggregationReference(t *testing.T) {
 		if names := seriesNames(cpu); strings.Join(names, ",") != "sum web,sum worker" {
 			t.Fatalf("series = %v, want sum web and sum worker kept apart", names)
 		}
-		// web: two shared-s instances, so 2 x 0.5 cores requested and 2 x 2
-		// cores of burst ceiling.
-		if cpu.Series[0].Reference != 1.0 || cpu.Series[0].Burst != 4.0 {
-			t.Errorf("sum web reference = %v, burst = %v, want 1.0 and 4.0",
+		// web: two shared-s instances, so 2 x 0.5 cores.
+		if cpu.Series[0].Reference != 1.0 || cpu.Series[0].Burst != 0 {
+			t.Errorf("sum web reference = %v, burst = %v, want 1.0 and none",
 				cpu.Series[0].Reference, cpu.Series[0].Burst)
 		}
 		if v := cpu.Series[0].Points[0][1]; v != 0.30000000000000004 && v != 0.3 {
 			t.Errorf("sum web = %v, want 0.3 (0.1+0.2) and nothing from worker", v)
 		}
-		// worker: one dedicated-s instance, a whole core and no burst.
+		// worker: one dedicated-s instance, a whole core.
 		if cpu.Series[1].Reference != 1.0 || cpu.Series[1].Burst != 0 {
 			t.Errorf("sum worker reference = %v, burst = %v, want 1.0 and no burst",
 				cpu.Series[1].Reference, cpu.Series[1].Burst)

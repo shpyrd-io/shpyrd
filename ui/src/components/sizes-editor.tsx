@@ -81,10 +81,12 @@ export function SizesEditor({ readOnly = false }: { readOnly?: boolean }) {
         <div>
           <CardTitle>Instance sizes</CardTitle>
           <CardDescription>
-            Named CPU and memory allocations a process runs with.{" "}
-            <strong>Shared</strong> sizes get a guaranteed CPU share that can
-            burst up to 4×; <strong>dedicated</strong> sizes get whole cores
-            with requests equal to limits. Memory is never overcommitted.
+            Named CPU and memory allocations a process runs with. For{" "}
+            <strong>shared</strong> sizes the CPU is a ceiling: an eighth of
+            it is guaranteed and the rest is borrowed from idle neighbours,
+            so many small instances fit on a node. <strong>Dedicated</strong>{" "}
+            sizes get whole cores with requests equal to limits. Memory is
+            never overcommitted.
           </CardDescription>
         </div>
         {!readOnly && (

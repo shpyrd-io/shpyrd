@@ -1126,7 +1126,7 @@ function Metrics({ app }: { app: AppDetail }) {
         <p className="text-sm text-muted-foreground">
           {mode === "percent"
             ? "Traffic measured at the edge; CPU and memory as a percentage of each process's allocation. Orange dashed lines mark releases, the red line is 100%."
-            : "Traffic measured at the edge; CPU and memory in absolute units. Orange dashed lines mark releases; a red line marks each allocation among the series drawn and an amber one each burst ceiling, labelled by process where they differ."}
+            : "Traffic measured at the edge; CPU and memory in absolute units. Orange dashed lines mark releases; a red line marks each allocation among the series drawn, labelled by process where they differ."}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={process} onValueChange={setProcess}>

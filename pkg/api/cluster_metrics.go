@@ -43,13 +43,19 @@ type ClusterMetrics struct {
 var nodeQueries = map[string]struct{ query, label string }{
 	"cpuUsed":  {`100 * (1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle",node!=""}[2m])))`, "node"},
 	"memUsed":  {`100 * (1 - sum by (node) (node_memory_MemAvailable_bytes{node!=""}) / sum by (node) (node_memory_MemTotal_bytes{node!=""}))`, "node"},
-	"cpuReq":   {`100 * sum by (node) (kube_pod_container_resource_requests{resource="cpu"}) / on (node) kube_node_status_allocatable{resource="cpu"}`, "node"},
-	"memReq":   {`100 * sum by (node) (kube_pod_container_resource_requests{resource="memory"}) / on (node) kube_node_status_allocatable{resource="memory"}`, "node"},
+	// Only pods that are running or waiting to hold a node's resources and
+	// count against its pod capacity: finished builds and release commands
+	// stay around as Succeeded pods and must not.
+	"cpuReq":   {`100 * sum by (node) (kube_pod_container_resource_requests{resource="cpu"} and on (namespace, pod) ` + livePods + `) / on (node) kube_node_status_allocatable{resource="cpu"}`, "node"},
+	"memReq":   {`100 * sum by (node) (kube_pod_container_resource_requests{resource="memory"} and on (namespace, pod) ` + livePods + `) / on (node) kube_node_status_allocatable{resource="memory"}`, "node"},
 	"cpuCores": {`kube_node_status_allocatable{resource="cpu"}`, "node"},
 	"memBytes": {`kube_node_status_allocatable{resource="memory"}`, "node"},
-	"pods":     {`count by (node) (kube_pod_info)`, "node"},
+	"pods":     {`count by (node) (kube_pod_info and on (namespace, pod) ` + livePods + `)`, "node"},
 	"podCap":   {`kube_node_status_allocatable{resource="pods"}`, "node"},
 }
+
+// livePods selects pods in a phase that occupies a node.
+const livePods = `(kube_pod_status_phase{phase=~"Running|Pending"} == 1)`
 
 func (s *Server) clusterMetrics(c *gin.Context) {
 	if s.prom == nil {

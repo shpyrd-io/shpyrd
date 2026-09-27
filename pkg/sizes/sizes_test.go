@@ -31,7 +31,8 @@ func TestDefaultsValidAndRoundTrip(t *testing.T) {
 func TestResources(t *testing.T) {
 	s := Size{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi"}
 	r := s.Resources()
-	if r.Requests.Cpu().String() != "500m" || r.Limits.Cpu().String() != "2" || r.Limits.Memory().String() != "64Mi" || r.Requests.Memory().String() != "64Mi" {
+	// A shared size's CPU is its ceiling; it is guaranteed an eighth of it.
+	if r.Requests.Cpu().String() != "62m" || r.Limits.Cpu().String() != "500m" || r.Limits.Memory().String() != "64Mi" || r.Requests.Memory().String() != "64Mi" {
 		t.Errorf("shared resources = %+v", r)
 	}
 	d := Size{Name: "dedicated-m", Kind: Dedicated, CPU: "2", Memory: "4Gi"}
@@ -44,7 +45,7 @@ func TestResources(t *testing.T) {
 func TestResolve(t *testing.T) {
 	c := Defaults()
 	r, name, err := c.Resolve("", corev1.ResourceRequirements{})
-	if err != nil || name != "shared-s" || r.Requests.Cpu().String() != "500m" {
+	if err != nil || name != "shared-s" || r.Requests.Cpu().String() != "62m" || r.Limits.Cpu().String() != "500m" {
 		t.Errorf("default resolve = %v %q %+v", err, name, r)
 	}
 	if _, _, err := c.Resolve("nope", corev1.ResourceRequirements{}); err == nil {
@@ -52,8 +53,13 @@ func TestResolve(t *testing.T) {
 	}
 	// Explicit memory override keeps the size's cpu.
 	r, name, err = c.Resolve("shared-m", corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}})
-	if err != nil || name != "" || r.Limits.Memory().String() != "1Gi" || r.Requests.Memory().String() != "1Gi" || r.Requests.Cpu().String() != "500m" {
+	if err != nil || name != "" || r.Limits.Memory().String() != "1Gi" || r.Requests.Memory().String() != "1Gi" || r.Requests.Cpu().String() != "62m" || r.Limits.Cpu().String() != "500m" {
 		t.Errorf("override resolve = %v %q %+v", err, name, r)
+	}
+	// An explicit cpu on a shared size moves the ceiling and the share with it.
+	r, _, err = c.Resolve("shared-m", corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}})
+	if err != nil || r.Limits.Cpu().String() != "2" || r.Requests.Cpu().String() != "250m" {
+		t.Errorf("cpu override resolve = %v %+v", err, r)
 	}
 }
 

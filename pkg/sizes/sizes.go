@@ -5,8 +5,11 @@
 //
 // Two kinds exist:
 //
-//   - shared: the CPU is a guaranteed share that can burst (Kubernetes
-//     Burstable QoS: cpu request = size, cpu limit = size x BurstFactor).
+//   - shared: cpu is the ceiling the process may use (the Kubernetes
+//     limit); it is guaranteed a ShareFactor-th of it (the request) and
+//     borrows the rest from idle neighbours, the way Fly's shared-cpu
+//     machines and Heroku's standard dynos work. Kubernetes schedules by
+//     requests, so this is what lets a node hold many small instances.
 //   - dedicated: requests equal limits (Guaranteed QoS), whole cores.
 //
 // Memory is never overcommitted: request equals limit for both kinds.
@@ -35,8 +38,10 @@ const (
 	Dedicated = "dedicated"
 )
 
-// BurstFactor is how far a shared size may burst above its CPU allocation.
-const BurstFactor = 4
+// ShareFactor is the share of its CPU a shared size is guaranteed: the
+// request is cpu/ShareFactor. 1/8 of half a core is the slice Fly
+// guarantees a shared-cpu-1x machine.
+const ShareFactor = 8
 
 var nameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$`)
 
@@ -197,21 +202,25 @@ func (c *Catalog) Remove(name string) error {
 	return fmt.Errorf("sizes: %q not found", name)
 }
 
-// Resources turns a size into Kubernetes requests and limits.
+// Resources turns a size into Kubernetes requests and limits: the CPU is
+// the limit for both kinds; a shared size requests a ShareFactor-th of it,
+// a dedicated one all of it.
 func (s Size) Resources() corev1.ResourceRequirements {
 	cpu := resource.MustParse(s.CPU)
 	mem := resource.MustParse(s.Memory)
 	out := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: cpu, corev1.ResourceMemory: mem},
-		Limits:   corev1.ResourceList{corev1.ResourceMemory: mem},
+		Limits:   corev1.ResourceList{corev1.ResourceCPU: cpu, corev1.ResourceMemory: mem},
 	}
-	if s.Kind == Dedicated {
-		out.Limits[corev1.ResourceCPU] = cpu
-		return out
+	if s.Kind != Dedicated {
+		out.Requests[corev1.ResourceCPU] = SharedRequest(cpu)
 	}
-	burst := resource.NewMilliQuantity(cpu.MilliValue()*BurstFactor, resource.DecimalSI)
-	out.Limits[corev1.ResourceCPU] = *burst
 	return out
+}
+
+// SharedRequest is the CPU a shared process is guaranteed for a ceiling.
+func SharedRequest(cpu resource.Quantity) resource.Quantity {
+	return *resource.NewMilliQuantity(cpu.MilliValue()/ShareFactor, resource.DecimalSI)
 }
 
 // Resolve picks the resources for a process: an explicit override wins
@@ -231,15 +240,15 @@ func (c Catalog) Resolve(sizeName string, override corev1.ResourceRequirements) 
 		return base, size.Name, nil
 	}
 	// Explicit cpu/memory limits replace the size's; requests follow the
-	// size's kind (dedicated: equal to limits; shared: kept from the size or
-	// derived when the size has none).
+	// size's kind (dedicated: equal to limits; shared: the guaranteed share
+	// of the new CPU ceiling).
 	merged := base
 	for k, v := range override.Limits {
 		merged.Limits[k] = v
 		if size.Kind == Dedicated || k == corev1.ResourceMemory {
 			merged.Requests[k] = v
-		} else if cur, ok := merged.Requests[k]; ok && cur.Cmp(v) > 0 {
-			merged.Requests[k] = v
+		} else {
+			merged.Requests[k] = SharedRequest(v)
 		}
 	}
 	for k, v := range override.Requests {

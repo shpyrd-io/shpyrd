@@ -73,10 +73,13 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 		return fmt.Sprintf(`sum by (%s) (rate(%s{namespace="%s"}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, group, metric, ns, podLabels)
 	}
 
+	// Percentages are of the instance size: its CPU is the container's
+	// limit (a shared size only requests a share of it), its memory the
+	// request (equal to the limit).
 	cpuQuery := fmt.Sprintf(`sum by (%s) (rate(container_cpu_usage_seconds_total{%s}[2m]) * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, group, containers, podLabels)
 	cpuUnit := "cores"
 	if !opts.absolute() {
-		cpuQuery = fmt.Sprintf(`100 * %s / sum by (%s) (kube_pod_container_resource_requests{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, cpuQuery, group, containers, podLabels)
+		cpuQuery = fmt.Sprintf(`100 * %s / sum by (%s) (kube_pod_container_resource_limits{%s,resource="cpu"} * on (namespace, pod) group_left (label_shpyrd_io_process) %s)`, cpuQuery, group, containers, podLabels)
 		cpuUnit = "%"
 	}
 
@@ -118,11 +121,10 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 			nameMap:  stripApp,
 		},
 		{
-			// Usage as a percentage of the process allocation (the CPU
-			// request, i.e. the instance size), averaged over its instances.
-			// Shared sizes may burst above 100%. In total mode it is raw
-			// cores instead, which is also what it falls back to when no
-			// requests exist.
+			// Usage as a percentage of the process allocation (the CPU of
+			// the instance size, the container's limit), averaged over its
+			// instances. In total mode it is raw cores instead, which is
+			// also what it falls back to when no limits exist.
 			Chart:        Chart{ID: "cpu", Title: "CPU", Unit: cpuUnit, Kind: "line", InstanceCapable: true},
 			Query:        cpuQuery,
 			LabelKey:     seriesLabel,

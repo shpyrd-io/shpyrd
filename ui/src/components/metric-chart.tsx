@@ -34,7 +34,7 @@ const subtitles: Record<string, string> = {
   throughput: "requests per second by response class",
   latency: "response time percentiles",
   instances: "running instances per process type",
-  cpu: "per process; shared sizes can burst above their allocation",
+  cpu: "per process, against the CPU of its instance size",
   memory: "per process",
   network: "instance network traffic",
 };
