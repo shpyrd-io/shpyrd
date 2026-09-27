@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -314,8 +315,11 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 }
 
 // loadProjectConfig reads ./shpyrd.yaml when present.
-func loadProjectConfig() (*projectConfig, error) {
-	b, err := os.ReadFile("shpyrd.yaml")
+func loadProjectConfig() (*projectConfig, error) { return loadProjectConfigAt(".") }
+
+// loadProjectConfigAt reads dir/shpyrd.yaml when present.
+func loadProjectConfigAt(dir string) (*projectConfig, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "shpyrd.yaml"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -118,10 +117,19 @@ the app receives who they are. --public makes it a site anyone can open;
 				fmt.Fprintln(out, "Visitors must sign in; grant a team the user role to let it in (`shpyrd members add`), or `shpyrd access set public` for a site.")
 			}
 			if save {
-				if err := os.WriteFile("shpyrd.yaml", []byte("project: "+slug+"\n"), 0o644); err != nil {
+				// The file starts with the project and whatever the
+				// directory's build profile implies (RFC-0067).
+				_, det := applyProfiles(&projectConfig{Project: slug}, ".")
+				det.report(out)
+				path, created, err := saveInferences(".", slug, det, true)
+				if err != nil {
 					return err
 				}
-				fmt.Fprintln(out, "Wrote shpyrd.yaml")
+				if created {
+					fmt.Fprintf(out, "Wrote %s\n", path)
+				} else {
+					fmt.Fprintf(out, "Added to %s\n", path)
+				}
 				fmt.Fprintln(out, "Next: shpyrd deploy")
 			} else {
 				fmt.Fprintf(out, "Next: shpyrd deploy --project %s   (or add `project: %s` to shpyrd.yaml)\n", slug, slug)

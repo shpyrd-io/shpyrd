@@ -31,6 +31,7 @@ func newDeployCmd(g *globalFlags) *cobra.Command {
 		noWait      bool
 		workingTree bool
 		dockerfile  string
+		save        bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -51,6 +52,13 @@ at https://<app>.<domain>.
 
 The build strategy can be pinned in shpyrd.yaml (build.strategy: buildpacks
 or dockerfile, plus build.dockerfile, build.target and build.env).
+
+Before a local deploy the CLI looks at the directory for patterns the
+buildpacks cannot configure on their own (a static site under public/, a
+Vite app, a Rack or Rails app, PHP under public/, an Aptfile with heavy
+packages) and fills in the shpyrd.yaml values they need, saying what it
+inferred. Values already in shpyrd.yaml win; --save writes the inferred
+ones into the file.
 
 The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,6 +102,22 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			}
 			if image == "" && gitURL == "" {
 				project = detectDockerfile(project, subPath)
+				// Build profiles (RFC-0067): what the directory says the
+				// build needs and shpyrd.yaml does not.
+				var det *detection
+				project, det = applyProfiles(project, firstNonEmpty(subPath, "."))
+				det.report(out)
+				if save && !det.empty() {
+					path, created, err := saveInferences(firstNonEmpty(subPath, "."), name, det, false)
+					if err != nil {
+						return err
+					}
+					if created {
+						fmt.Fprintf(out, "    wrote %s\n", path)
+					} else {
+						fmt.Fprintf(out, "    added to %s\n", path)
+					}
+				}
 			}
 			req, err := project.deployRequest(&before.Spec)
 			if err != nil {
@@ -207,6 +231,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 	cmd.Flags().BoolVar(&workingTree, "working-tree", false, "archive the directory as it is on disk instead of the committed HEAD")
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "build with this Dockerfile (path relative to the deployed directory) instead of buildpacks")
 	cmd.Flags().Lookup("dockerfile").NoOptDefVal = "auto"
+	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile inferred into shpyrd.yaml")
 	return cmd
 }
 
