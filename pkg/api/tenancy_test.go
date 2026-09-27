@@ -261,6 +261,7 @@ func TestTenancyIsolation(t *testing.T) {
 	foreign, _ := s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: mariaSID.ID, Project: "shop"})
 	req2 := httptest.NewRequest("GET", "http://shpyrd-server.shpyrd-system.svc.cluster.local/edge/auth?project=shop&mode=authenticated", nil)
 	req2.Header.Set("X-Original-URL", "https://shop.acme.shpyrd.test/")
+	req2.Header.Set("Accept", "text/html") // a browser: asked to sign in
 	req2.AddCookie(&http.Cookie{Name: s.edgeCookieName(), Value: foreign})
 	rec2 := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec2, req2)

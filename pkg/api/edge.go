@@ -292,6 +292,14 @@ func (s *Server) edgeAuth(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "anonymous visitors are asked to sign in", "preview": true})
 			return
 		}
+		if apiClient(c) {
+			// nginx redirects every 401 to the sign-in page; an API client
+			// cannot follow it. 403 hands the request to our error page,
+			// which answers 401 with a JSON body.
+			c.Header("WWW-Authenticate", `Bearer realm="shpyrd"`)
+			c.JSON(http.StatusForbidden, gin.H{"error": "sign in to open this app"})
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "sign in to open this app"})
 		return
 	}
@@ -478,12 +486,14 @@ func (s *Server) edgeDenied(c *gin.Context) {
 	if err == nil {
 		name = project.DisplayName(app)
 	}
+	// The page names the teams the app is for (those holding the user
+	// role), never people, and not the teams that operate it.
 	var teams []string
 	if app != nil {
 		if grants, err := s.store.ListProjectGrants(c.Request.Context(), s.workspace(c), app.Name); err == nil {
 			seen := map[string]bool{}
 			for _, g := range grants {
-				if g.Team != "" && !seen[g.Team] {
+				if g.Team != "" && g.Role == shpyrdv1.RoleUser && !seen[g.Team] {
 					seen[g.Team] = true
 					teams = append(teams, g.Team)
 				}
@@ -491,9 +501,18 @@ func (s *Server) edgeDenied(c *gin.Context) {
 			sort.Strings(teams)
 		}
 	}
-	// A suspended person gets the reason, not the team list.
 	if app != nil {
-		if caller, err := s.edgeIdentify(c, app.Name); err == nil && caller != nil {
+		caller, err := s.edgeIdentify(c, app.Name)
+		// An API client that is not signed in: the answer is 401 with a
+		// JSON body, not a sign-in page it cannot follow (RFC-0033). The
+		// auth subrequest answered 403 to keep nginx from redirecting.
+		if err == nil && caller == nil && apiClient(c) {
+			c.Header("WWW-Authenticate", `Bearer realm="shpyrd"`)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "sign in to open this app: send a personal API token as a bearer, or open it in a browser"})
+			return
+		}
+		// A suspended person gets the reason, not the team list.
+		if err == nil && caller != nil {
 			if roles, err := s.authz.RolesIn(c.Request.Context(), s.workspace(c), caller.identity); err == nil && roles.Suspended {
 				s.edgePage(c, http.StatusForbidden, "Your access is suspended", "An administrator switched your access off. Ask them to reactivate it.", map[string]string{"Sign in as someone else": edgePathPrefix + "logout"})
 				return
@@ -531,8 +550,24 @@ func (s *Server) foreignHost(c *gin.Context) bool {
 }
 
 func wantsJSON(c *gin.Context) bool {
-	accept := c.GetHeader("Accept")
+	accept := acceptOf(c)
 	return strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/html")
+}
+
+// apiClient says the request did not come from a browser: nothing in its
+// Accept asks for HTML (curl says */*, SDKs say application/json), so a
+// sign-in redirect would be lost on it.
+func apiClient(c *gin.Context) bool {
+	return !strings.Contains(acceptOf(c), "text/html")
+}
+
+// acceptOf is the client's Accept header: on the error backend path
+// ingress-nginx hands it over as X-Format.
+func acceptOf(c *gin.Context) string {
+	if f := c.GetHeader("X-Format"); f != "" && c.GetHeader("X-Code") != "" {
+		return f
+	}
+	return c.GetHeader("Accept")
 }
 
 func joinAnd(items []string) string {

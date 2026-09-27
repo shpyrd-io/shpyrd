@@ -23,6 +23,7 @@ import (
 func edgeRequest(t *testing.T, s *Server, project, mode, cookie, bearer string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/edge/auth?project="+project+"&mode="+mode, nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8") // a browser
 	if cookie != "" {
 		req.AddCookie(&http.Cookie{Name: s.edgeCookieName(), Value: cookie})
 	}
@@ -63,6 +64,25 @@ func TestEdgeAuthDecisions(t *testing.T) {
 	// Anonymous: sign in, please; identified mode lets them through unnamed.
 	if rec := edgeRequest(t, s, "expenses", "authenticated", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous = %d", rec.Code)
+	}
+	// An anonymous API client (nothing asks for HTML): 403 from the auth
+	// subrequest, so nginx serves our error page instead of a sign-in
+	// redirect the client cannot follow; the page answers 401 with JSON.
+	apiReq := httptest.NewRequest("GET", "/edge/auth?project=expenses&mode=authenticated", nil)
+	apiReq.Header.Set("Accept", "*/*")
+	apiRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(apiRec, apiReq)
+	if apiRec.Code != http.StatusForbidden || apiRec.Header().Get("WWW-Authenticate") == "" {
+		t.Errorf("anonymous API client at the auth subrequest = %d %q", apiRec.Code, apiRec.Header().Get("WWW-Authenticate"))
+	}
+	errReq := httptest.NewRequest("GET", "/reports", nil)
+	errReq.Host = "expenses.example.test"
+	errReq.Header.Set("X-Code", "403")
+	errReq.Header.Set("X-Format", "*/*")
+	errRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(errRec, errReq)
+	if errRec.Code != http.StatusUnauthorized || !strings.Contains(errRec.Body.String(), `"error"`) || !strings.Contains(errRec.Header().Get("Content-Type"), "json") {
+		t.Errorf("anonymous API client at the error page = %d %s", errRec.Code, errRec.Body.String())
 	}
 	if rec := edgeRequest(t, s, "expenses", "identified", "", ""); rec.Code != http.StatusOK || rec.Header().Get("X-Shpyrd-User") != "" {
 		t.Errorf("anonymous identified = %d %q", rec.Code, rec.Header().Get("X-Shpyrd-User"))
@@ -297,10 +317,11 @@ func TestEdgeSigninAndStart(t *testing.T) {
 		t.Errorf("jwks = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// The denied page, as nginx's error backend delivers it.
+	// The denied page, as nginx's error backend delivers it to a browser.
 	req = httptest.NewRequest("GET", "/reports", nil)
 	req.Host = "expenses.example.test"
 	req.Header.Set("X-Code", "403")
+	req.Header.Set("X-Format", "text/html,application/xhtml+xml")
 	req.Header.Set("X-Ingress-Name", "expenses")
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
