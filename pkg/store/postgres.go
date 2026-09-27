@@ -70,7 +70,7 @@ func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
 		conn.Release()
 		return err
 	}
-	legacy, err := bridgeLegacyMigrations(ctx, conn)
+	err = bridgeLegacyMigrations(ctx, conn)
 	_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(7245891)`)
 	conn.Release()
 	if err != nil {
@@ -82,11 +82,6 @@ func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
 		return err
 	}
 	defer close()
-	if legacy > 0 {
-		if err := m.Force(legacy); err != nil {
-			return fmt.Errorf("record migrations applied before v0.9.11: %w", err)
-		}
-	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -147,30 +142,31 @@ func (p *Postgres) migrator() (*migrate.Migrate, func(), error) {
 // (0001_init.sql ...).
 var legacyMigration = regexp.MustCompile(`^0*(\d+)_`)
 
-// bridgeLegacyMigrations converts the old runner's record into the version
-// golang-migrate should start from: the highest numbered file it applied.
-// It returns 0 when there is no such record (a fresh database, or one
-// already bridged).
-func bridgeLegacyMigrations(ctx context.Context, conn *pgxpool.Conn) (int, error) {
+// bridgeLegacyMigrations converts the old runner's record (file names)
+// into golang-migrate's (a version and a dirty flag, in a table of the
+// same name): the highest numbered file applied becomes the version, in
+// one transaction, so a crash between the two leaves either record whole.
+// Nothing happens on a fresh database or one already bridged.
+func bridgeLegacyMigrations(ctx context.Context, conn *pgxpool.Conn) error {
 	var hasName bool
 	if err := conn.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'schema_migrations' AND column_name = 'name')`).Scan(&hasName); err != nil {
-		return 0, err
+		return err
 	}
 	if !hasName {
-		return 0, nil
+		return nil
 	}
 	rows, err := conn.Query(ctx, `SELECT name FROM schema_migrations`)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	defer rows.Close()
 	version := 0
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return 0, err
+			rows.Close()
+			return err
 		}
 		if m := legacyMigration.FindStringSubmatch(name); m != nil {
 			if n, err := strconv.Atoi(m[1]); err == nil && n > version {
@@ -178,14 +174,27 @@ func bridgeLegacyMigrations(ctx context.Context, conn *pgxpool.Conn) (int, error
 			}
 		}
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return err
 	}
-	// The tool keeps its own record under the same name.
-	if _, err := conn.Exec(ctx, `DROP TABLE schema_migrations`); err != nil {
-		return 0, err
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return version, nil
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `DROP TABLE schema_migrations`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`); err != nil {
+		return err
+	}
+	if version > 0 {
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, dirty) VALUES ($1, false)`, version); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func isUnique(err error) bool {
