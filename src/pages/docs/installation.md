@@ -166,7 +166,8 @@ Install the new CLI and run `shpyrd cluster init` again with the same context an
 
 - The apps keep serving throughout: the platform's server restarts, the apps do not depend on it at run time.
 - A release that changes what every instance is given (a new platform variable such as `REVISION`, a new resource model) rolls every app's instances once, one at a time; a single-instance app is unavailable for the seconds its new instance takes to start.
-- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so.
+- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so. v0.9.11 moved every image to a repository named after its workspace, which rebuilt every buildpack app once; the old repositories stay in the registry until a prune exists (RFC-0059).
+- A release with a database migration (v0.9.11: identifiers became native `uuid`) migrates at the server's first start; take a backup first (`shpyrd cluster backup`, or `pg_dump` against the `control-plane-db` pod).
 - Re-applying every component (without `--only`) restarts ingress-nginx, which is a real interruption of a few seconds at the front door.
 
 ## Environment profiles
