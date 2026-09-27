@@ -534,6 +534,11 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	if p := s.rp.provider(id.Provider); p == nil || p.endSession == "" {
 		idToken = ""
 	}
+	// The person's id in this workspace is the subject apps see, whatever
+	// login method brought them (RFC-0033: the JWT's sub is the identity).
+	if person := s.recordSignIn(c, id); person != nil && person.ID != "" {
+		id.Subject = person.ID
+	}
 	sess, err := s.rp.sessions.create(c.Request.Context(), s.workspace(c), id, idToken)
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
@@ -542,7 +547,6 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	s.setSessionCookies(c, sess)
 	s.log.Info("user signed in", "email", id.Email, "provider", id.Provider, "how", how)
 	ext.SetIdentity(c, id)
-	s.recordSignIn(c, id)
 	s.audit(c, "", "auth.login", firstNonEmpty(id.Email, id.Name, id.Subject), "provider "+id.Provider+" ("+how+")")
 	return "/", true
 }

@@ -20,16 +20,16 @@ func TestKeysRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	k2, err := LoadOrCreateKeys(context.Background(), kube, "shpyrd-system")
-	if err != nil || k2.KID != k1.KID || !k2.Public.Equal(k1.Public) {
+	if err != nil || k2.KID() != k1.KID() || !k2.Public().Equal(k1.Public()) {
 		t.Fatalf("second load must return the same key: %v", err)
 	}
 	jwks := k1.JWKS()
 	keys := jwks["keys"].([]map[string]any)
-	if len(keys) != 1 || keys[0]["kid"] != k1.KID || keys[0]["crv"] != "Ed25519" {
+	if len(keys) != 1 || keys[0]["kid"] != k1.KID() || keys[0]["crv"] != "Ed25519" {
 		t.Errorf("jwks = %v", jwks)
 	}
 	x, _ := base64.RawURLEncoding.DecodeString(keys[0]["x"].(string))
-	if !k1.Public.Equal(ed25519PublicKey(x)) {
+	if !k1.Public().Equal(ed25519PublicKey(x)) {
 		t.Error("jwks x is not the public key")
 	}
 
@@ -105,3 +105,69 @@ func TestCookieAndCodes(t *testing.T) {
 }
 
 func ed25519PublicKey(b []byte) ed25519.PublicKey { return ed25519.PublicKey(b) }
+
+
+// The signing key rotates every RotateEvery: the retired key still
+// verifies what it signed and stays in the JWKS for KeepRetired, then
+// goes; another replica loading the Secret follows; a ring saved before
+// rotation existed (no created time) is read as created now.
+func TestKeysRotate(t *testing.T) {
+	kube := kubefake.NewSimpleClientset()
+	ctx := context.Background()
+	k, err := LoadOrCreateKeys(ctx, kube, "shpyrd-system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := k.current.Created
+	k.now = func() time.Time { return clock }
+	first := k.KID()
+	tok, err := k.Sign("JWT", Claims{Subject: "u1", Audience: "expenses", ExpiresAt: clock.Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Not due: nothing happens.
+	if rotated, err := k.rotateIfDue(ctx); err != nil || rotated {
+		t.Fatalf("early rotation: %v %v", rotated, err)
+	}
+	// Due: a new key signs, the old one verifies, both are published.
+	clock = clock.Add(RotateEvery + time.Minute)
+	if rotated, err := k.rotateIfDue(ctx); err != nil || !rotated {
+		t.Fatalf("rotation: %v %v", rotated, err)
+	}
+	if k.KID() == first {
+		t.Fatal("the key id did not change")
+	}
+	var back Claims
+	if err := k.Verify(tok, "JWT", &back); err != nil {
+		t.Errorf("a token of the retired key must still verify: %v", err)
+	}
+	keys := k.JWKS()["keys"].([]map[string]any)
+	if len(keys) != 2 || keys[0]["kid"] != k.KID() || keys[1]["kid"] != first {
+		t.Errorf("jwks after rotation = %v", keys)
+	}
+	// Another replica loads the Secret and sees the same ring.
+	other, err := LoadOrCreateKeys(ctx, kube, "shpyrd-system")
+	if err != nil || other.KID() != k.KID() || len(other.JWKS()["keys"].([]map[string]any)) != 2 {
+		t.Fatalf("second replica: %v kid=%s", err, other.KID())
+	}
+	if err := other.Verify(tok, "JWT", &back); err != nil {
+		t.Errorf("the other replica must verify the retired key's token: %v", err)
+	}
+	// After KeepRetired the retired key goes.
+	clock = clock.Add(KeepRetired + time.Minute)
+	if _, err := k.rotateIfDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Verify(tok, "JWT", &back); err == nil {
+		t.Error("a token of a dropped key must not verify")
+	}
+	if keys := k.JWKS()["keys"].([]map[string]any); len(keys) != 1 {
+		t.Errorf("jwks after the retired key expired = %v", keys)
+	}
+	// A generated ring (no cluster) never rotates.
+	g, _ := GenerateKeys()
+	g.now = func() time.Time { return time.Now().Add(2 * RotateEvery) }
+	if rotated, _ := g.rotateIfDue(ctx); rotated {
+		t.Error("a generated ring rotated")
+	}
+}

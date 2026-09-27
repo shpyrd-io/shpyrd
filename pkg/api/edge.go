@@ -316,8 +316,12 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	if caller.token != nil {
 		name = firstNonEmpty(caller.token.owner.Name, name) // the person, not the token's label
 	}
+	subject := caller.identity.Subject
+	if caller.token != nil && caller.token.owner.Email != "" {
+		subject = caller.token.owner.Subject // the person the token acts as
+	}
 	claims := edge.Claims{
-		Issuer: s.dashboardURLOf(ws), Subject: caller.identity.Subject, Audience: slug,
+		Issuer: s.dashboardURLOf(ws), Subject: subject, Audience: slug,
 		Email: caller.identity.Email, Name: name, Workspace: ws.Slug, Project: slug,
 		Realm: "workspace", Provider: caller.identity.Provider,
 	}

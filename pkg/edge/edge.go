@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,7 +28,8 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
-// KeysSecretName holds the signing key pair (RFC-0033).
+// KeysSecretName holds the signing keys (RFC-0033): the current key pair
+// and the public halves of the keys retired lately.
 const KeysSecretName = "shpyrd-edge-keys"
 
 // Lifetimes.
@@ -37,56 +39,276 @@ const (
 	CodeTTL   = 60 * time.Second // the one-time code carrying a session to an app host
 )
 
-// Keys is the platform's Ed25519 key pair with its key id.
-type Keys struct {
+// Rotation: a new signing key every RotateEvery; a retired key still
+// verifies for KeepRetired, so cookies and tokens it signed live out their
+// lifetimes and apps that cached the JWKS catch up.
+const (
+	RotateEvery = 30 * 24 * time.Hour
+	KeepRetired = 7 * 24 * time.Hour
+)
+
+// keyPair is one key: the private half only for the current one.
+type keyPair struct {
 	KID     string
 	Private ed25519.PrivateKey
 	Public  ed25519.PublicKey
+	Created time.Time
+	Retired time.Time // zero for the current key
 }
 
-// LoadOrCreateKeys reads the key pair from the Secret, generating it once.
+// Keys is the platform's signing key ring: the current Ed25519 key pair,
+// which signs, and the retired keys, which only verify. Safe for concurrent
+// use; Run keeps it rotated and in step with the other replicas.
+type Keys struct {
+	mu       sync.RWMutex
+	current  keyPair
+	retired  []keyPair
+	kube     kubernetes.Interface
+	ns       string
+	revision string
+	now      func() time.Time
+}
+
+// KID is the current key's id.
+func (k *Keys) KID() string {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.current.KID
+}
+
+// Public is the current key's public half.
+func (k *Keys) Public() ed25519.PublicKey {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.current.Public
+}
+
+// LoadOrCreateKeys reads the key ring from the Secret, generating the first
+// key once, and rotates it when it is due.
 func LoadOrCreateKeys(ctx context.Context, kube kubernetes.Interface, namespace string) (*Keys, error) {
-	sec, err := kube.CoreV1().Secrets(namespace).Get(ctx, KeysSecretName, metav1.GetOptions{})
-	if err == nil && len(sec.Data["private"]) == ed25519.SeedSize {
-		priv := ed25519.NewKeyFromSeed(sec.Data["private"])
-		return &Keys{KID: string(sec.Data["kid"]), Private: priv, Public: priv.Public().(ed25519.PublicKey)}, nil
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
+	k := &Keys{kube: kube, ns: namespace, now: time.Now}
+	if err := k.load(ctx); err != nil {
 		return nil, err
 	}
-	k, err := GenerateKeys()
-	if err != nil {
-		return nil, err
-	}
-	sec = &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: KeysSecretName, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/managed-by": "shpyrd"}},
-		Data:       map[string][]byte{"private": k.Private.Seed(), "public": k.Public, "kid": []byte(k.KID)},
-	}
-	if _, err := kube.CoreV1().Secrets(namespace).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		if apierrors.IsAlreadyExists(err) { // another replica won
-			return LoadOrCreateKeys(ctx, kube, namespace)
-		}
+	if _, err := k.rotateIfDue(ctx); err != nil {
 		return nil, err
 	}
 	return k, nil
 }
 
-// GenerateKeys makes a fresh key pair (tests, first start).
+// GenerateKeys makes a fresh key ring (tests, clusterless runs).
 func GenerateKeys() (*Keys, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	kp, err := newKeyPair(time.Now())
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(pub)
-	return &Keys{KID: hex.EncodeToString(sum[:8]), Private: priv, Public: pub}, nil
+	return &Keys{current: kp, now: time.Now}, nil
 }
 
-// JWKS is the public key set apps verify against.
+func newKeyPair(now time.Time) (keyPair, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return keyPair{}, err
+	}
+	sum := sha256.Sum256(pub)
+	return keyPair{KID: hex.EncodeToString(sum[:8]), Private: priv, Public: pub, Created: now}, nil
+}
+
+// Run rotates the key when due and picks up what another replica rotated,
+// once a minute, until ctx ends.
+func (k *Keys) Run(ctx context.Context) {
+	if k.kube == nil {
+		return
+	}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = k.load(ctx)
+			_, _ = k.rotateIfDue(ctx)
+		}
+	}
+}
+
+// retiredKey is the persisted form of a retired key.
+type retiredKey struct {
+	KID     string    `json:"kid"`
+	Public  []byte    `json:"public"`
+	Retired time.Time `json:"retired"`
+}
+
+// load reads the Secret; a missing one is created with a first key. A
+// Secret from before rotation existed (no created time) is read as a key
+// created now.
+func (k *Keys) load(ctx context.Context) error {
+	sec, err := k.kube.CoreV1().Secrets(k.ns).Get(ctx, KeysSecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		kp, err := newKeyPair(k.now())
+		if err != nil {
+			return err
+		}
+		k.mu.Lock()
+		k.current, k.retired = kp, nil
+		k.mu.Unlock()
+		if err := k.save(ctx, true); err != nil {
+			if apierrors.IsAlreadyExists(err) { // another replica won
+				return k.load(ctx)
+			}
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(sec.Data["private"]) != ed25519.SeedSize {
+		return errors.New("edge keys secret: no usable private key")
+	}
+	priv := ed25519.NewKeyFromSeed(sec.Data["private"])
+	cur := keyPair{KID: string(sec.Data["kid"]), Private: priv, Public: priv.Public().(ed25519.PublicKey)}
+	if t, err := time.Parse(time.RFC3339, string(sec.Data["created"])); err == nil {
+		cur.Created = t
+	} else {
+		cur.Created = k.now()
+	}
+	var retired []keyPair
+	if raw := sec.Data["retired"]; len(raw) > 0 {
+		var list []retiredKey
+		if err := json.Unmarshal(raw, &list); err == nil {
+			for _, r := range list {
+				if len(r.Public) == ed25519.PublicKeySize {
+					retired = append(retired, keyPair{KID: r.KID, Public: ed25519.PublicKey(r.Public), Retired: r.Retired})
+				}
+			}
+		}
+	}
+	k.mu.Lock()
+	k.current, k.retired, k.revision = cur, retired, sec.ResourceVersion
+	k.mu.Unlock()
+	return nil
+}
+
+// save writes the ring: creates the Secret, or updates the version that
+// was loaded (another replica's rotation in between is a conflict, and the
+// caller reloads).
+func (k *Keys) save(ctx context.Context, create bool) error {
+	k.mu.RLock()
+	revision := k.revision
+	list := make([]retiredKey, 0, len(k.retired))
+	for _, r := range k.retired {
+		list = append(list, retiredKey{KID: r.KID, Public: r.Public, Retired: r.Retired})
+	}
+	retired, _ := json.Marshal(list)
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: KeysSecretName, Namespace: k.ns, Labels: map[string]string{"app.kubernetes.io/managed-by": "shpyrd"}, ResourceVersion: revision},
+		Data: map[string][]byte{
+			"private": k.current.Private.Seed(), "public": k.current.Public, "kid": []byte(k.current.KID),
+			"created": []byte(k.current.Created.UTC().Format(time.RFC3339)), "retired": retired,
+		},
+	}
+	k.mu.RUnlock()
+	var saved *corev1.Secret
+	var err error
+	if create {
+		sec.ResourceVersion = ""
+		saved, err = k.kube.CoreV1().Secrets(k.ns).Create(ctx, sec, metav1.CreateOptions{})
+	} else {
+		saved, err = k.kube.CoreV1().Secrets(k.ns).Update(ctx, sec, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		return err
+	}
+	k.mu.Lock()
+	k.revision = saved.ResourceVersion
+	k.mu.Unlock()
+	return nil
+}
+
+// rotateIfDue retires the current key and signs with a new one when the
+// current key is older than RotateEvery; retired keys older than
+// KeepRetired are dropped. It reports whether it rotated.
+func (k *Keys) rotateIfDue(ctx context.Context) (bool, error) {
+	now := k.now()
+	k.mu.RLock()
+	due := now.Sub(k.current.Created) >= RotateEvery
+	var stale bool
+	for _, r := range k.retired {
+		if now.Sub(r.Retired) > KeepRetired {
+			stale = true
+		}
+	}
+	k.mu.RUnlock()
+	if !due && !stale {
+		return false, nil
+	}
+	if k.kube == nil {
+		return false, nil // a generated ring never rotates
+	}
+	k.mu.Lock()
+	kept := k.retired[:0:0]
+	for _, r := range k.retired {
+		if now.Sub(r.Retired) <= KeepRetired {
+			kept = append(kept, r)
+		}
+	}
+	k.retired = kept
+	if due {
+		fresh, err := newKeyPair(now)
+		if err != nil {
+			k.mu.Unlock()
+			return false, err
+		}
+		old := k.current
+		old.Private, old.Retired = nil, now
+		k.retired = append([]keyPair{old}, k.retired...)
+		k.current = fresh
+	}
+	k.mu.Unlock()
+	if err := k.save(ctx, false); err != nil {
+		if apierrors.IsConflict(err) { // another replica rotated first: take theirs
+			return false, k.load(ctx)
+		}
+		return false, err
+	}
+	return due, nil
+}
+
+// JWKS is the public key set apps verify against: the current key and the
+// retired ones still within KeepRetired.
 func (k *Keys) JWKS() map[string]any {
-	return map[string]any{"keys": []map[string]any{{
-		"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": k.KID,
-		"x": base64.RawURLEncoding.EncodeToString(k.Public),
-	}}}
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	keys := []map[string]any{jwk(k.current)}
+	for _, r := range k.retired {
+		keys = append(keys, jwk(r))
+	}
+	return map[string]any{"keys": keys}
+}
+
+func jwk(kp keyPair) map[string]any {
+	return map[string]any{
+		"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": kp.KID,
+		"x": base64.RawURLEncoding.EncodeToString(kp.Public),
+	}
+}
+
+// publicFor finds the verification key for a key id: the current key or a
+// retired one.
+func (k *Keys) publicFor(kid string) (ed25519.PublicKey, bool) {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	if kid == k.current.KID {
+		return k.current.Public, true
+	}
+	for _, r := range k.retired {
+		if r.KID == kid {
+			return r.Public, true
+		}
+	}
+	return nil, false
 }
 
 // Claims is what an app receives about the caller.
@@ -121,16 +343,20 @@ type header struct {
 	KID string `json:"kid"`
 }
 
-// Sign produces a compact JWT (EdDSA) of any claims value; typ names the
-// token's purpose ("JWT" for apps, "shpyrd-edge" for cookies).
+// Sign produces a compact JWT (EdDSA) of any claims value with the current
+// key; typ names the token's purpose ("JWT" for apps, "shpyrd-edge" for
+// cookies).
 func (k *Keys) Sign(typ string, claims any) (string, error) {
-	h, _ := json.Marshal(header{Alg: "EdDSA", Typ: typ, KID: k.KID})
+	k.mu.RLock()
+	cur := k.current
+	k.mu.RUnlock()
+	h, _ := json.Marshal(header{Alg: "EdDSA", Typ: typ, KID: cur.KID})
 	body, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
 	}
 	signing := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(body)
-	sig := ed25519.Sign(k.Private, []byte(signing))
+	sig := ed25519.Sign(cur.Private, []byte(signing))
 	return signing + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
@@ -148,11 +374,12 @@ func (k *Keys) Verify(token, typ string, into any) error {
 	if err := json.Unmarshal(rawHeader, &h); err != nil || h.Alg != "EdDSA" || h.Typ != typ {
 		return errors.New("unexpected token header")
 	}
-	if h.KID != k.KID {
+	pub, ok := k.publicFor(h.KID)
+	if !ok {
 		return errors.New("unknown key")
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || !ed25519.Verify(k.Public, []byte(parts[0]+"."+parts[1]), sig) {
+	if err != nil || !ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig) {
 		return errors.New("bad signature")
 	}
 	body, err := base64.RawURLEncoding.DecodeString(parts[1])

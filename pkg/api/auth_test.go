@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // fakeIssuer is a minimal OpenID Connect provider: discovery, JWKS, an
@@ -424,6 +425,15 @@ func TestPasswordSignIn(t *testing.T) {
 	me := doCookie(t, s, "GET", "/api/me", "", sid, "")
 	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"email":"ada@example.test"`) || !strings.Contains(me.Body.String(), `"provider":"local"`) {
 		t.Fatalf("me: %d %s", me.Code, me.Body.String())
+	}
+	// The session's subject is the person's id in the workspace, not the
+	// provider's: what apps see as the JWT's sub (RFC-0033).
+	if sess, ok := s.rp.sessions.get(sid); !ok {
+		t.Fatal("session missing")
+	} else if person, err := s.store.GetIdentity(context.Background(), store.DefaultWorkspace, "ada@example.test"); err != nil || person == nil {
+		t.Fatalf("person not recorded: %v", err)
+	} else if sess.Identity.Subject != person.ID || person.ID == "" {
+		t.Errorf("session subject = %q, want the identity id %q", sess.Identity.Subject, person.ID)
 	}
 	// An unsafe next falls back to the root.
 	rec = do(t, s, "POST", "/api/auth/password", `{"email":"ada@example.test","password":"correct-horse","next":"https://evil.test/"}`, false)

@@ -318,6 +318,10 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// The edge's signing key rotates on schedule (RFC-0033); replicas
+	// follow each other through the Secret.
+	go s.edgeKeys.Run(ctx)
+
 	errCh := make(chan error, 1)
 	go func() {
 		s.log.Info("listening", "addr", s.opts.Addr)

@@ -385,16 +385,21 @@ func (s *Server) forgetPerson(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// recordSignIn notes an identity in the workspace's people. Tokens and the
-// admin token are not people. Failures are logged, never surfaced: a sign-in
-// must not depend on the store.
-func (s *Server) recordSignIn(c *gin.Context, id ext.Identity) {
+// recordSignIn notes an identity in the workspace's people and returns the
+// person as the workspace knows them (their id is what apps see as the
+// JWT's subject: stable across login methods, unlike a provider's). Tokens
+// and the admin token are not people. Failures are logged, never surfaced:
+// a sign-in must not depend on the store.
+func (s *Server) recordSignIn(c *gin.Context, id ext.Identity) *store.Identity {
 	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
-		return
+		return nil
 	}
-	if _, err := s.store.TouchIdentity(c.Request.Context(), s.workspace(c), store.Identity{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups}); err != nil {
+	person, err := s.store.TouchIdentity(c.Request.Context(), s.workspace(c), store.Identity{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups})
+	if err != nil {
 		s.log.Warn("could not record sign-in", "email", id.Email, "err", err.Error())
+		return nil
 	}
+	return person
 }
 
 // exportWorkspace is GET /api/workspace/export: the store's content as the
