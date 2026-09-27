@@ -352,7 +352,23 @@ func (s *Server) consentPage(c *gin.Context, p *authorizeParams, id ext.Identity
 	b.WriteString(`<button class="allow" name="decision" value="allow">Allow</button><button name="decision" value="deny">Deny</button></form>`)
 	b.WriteString(`<p style="margin-top:1.25rem"><small>You can revoke this at any time on the Workspace page. Redirects to ` + html.EscapeString(hostOf(p.redirectURI)) + `.</small></p></main></body></html>`)
 	c.Header("Cache-Control", "no-store")
+	// Chrome and Safari hold the redirect that follows a form submission
+	// to the page's form-action; the answer goes to the client's redirect
+	// URI, so that origin is allowed here (and only here).
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' "+originOf(p.redirectURI))
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(b.String()))
+}
+
+// originOf is scheme://host[:port] of a URL, as a CSP source.
+func originOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		return ""
+	}
+	if u.Host == "" {
+		return u.Scheme + ":" // a custom scheme (desktop clients)
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func hostOf(raw string) string {

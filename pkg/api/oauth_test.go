@@ -96,6 +96,9 @@ func TestOAuthAndMCP(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Allow Claude") || !strings.Contains(rec.Body.String(), "See your projects") || !strings.Contains(rec.Body.String(), `name="csrf" value="`+csrf+`"`) {
 		t.Fatalf("consent page: %d %s", rec.Code, rec.Body.String()[:min(300, len(rec.Body.String()))])
 	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self' https://claude.ai") {
+		t.Errorf("consent page must allow the redirect in form-action: %q", csp)
+	}
 	// Without PKCE the client is told at its redirect URI.
 	noPKCE := url.Values{}
 	for k, v := range authz {
