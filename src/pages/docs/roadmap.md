@@ -19,7 +19,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Global config vars for every project | [RFC-0016](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0016-global-config-vars.md) | done |
 | Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | done (v0.9.9) (API plan check and per-project ResourceQuota; quota UI still missing) |
 | Cost visibility | [RFC-0048](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0048-cost-visibility.md) | ready to implement |
-| Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace — the gaps it found are listed in the RFC) |
+| Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace; v0.9.11 keeps the edge's promises: personal tokens open apps, sign-out from an app, key rotation, JSON 401 for API clients, a NetworkPolicy for the server, denial counters — the remaining gaps are listed in the RFC) |
 
 ## Deploying
 
@@ -82,7 +82,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Account lifecycle: invitations, reset, verification, lockout | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | proposal |
 | MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
-| Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0) |
+| Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0; accepted at the edge to open apps in v0.9.11) |
 | API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; v0.9.9 `secrets set/unset` over the API; `run`, `pg`, `redis`, `domains` and a browser sign-in for the CLI still missing) |
 | MCP connector for AI agents | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | proposal |
 | Supply chain and encryption at rest | [RFC-0044](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0044-supply-chain.md) | ready to implement |

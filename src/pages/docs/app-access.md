@@ -13,6 +13,8 @@ New projects ask visitors to sign in. Only people with a role on the project get
 | **Public** (`public`) | Anyone on the internet — a site, a landing page. Projects created before v0.5 are public. | Nothing |
 | **Public, signed-in visitors identified** (`identified`) | Anyone; people who happen to be signed in are identified. A site with a "Hi, Maria" corner. | Identity when there is one |
 
+In `identified` mode nobody is asked to sign in, so a visitor is identified only once their browser holds the app's cookie: the launcher and the project page's **Open** button send people through `https://<app host>/.shpyrd/signin?rd=/` (silent when they are signed in), and your app can link there itself — "Hello, anonymous visitor — [sign in](/.shpyrd/signin?rd=/)". The [examples](https://github.com/shpyrd-io/shpyrd-examples) do exactly that.
+
 ```shell
 shpyrd projects create "Expenses"            # sign-in required
 shpyrd projects create "Landing page" --public
@@ -34,7 +36,17 @@ shpyrd members add expenses --user pedro@example.com --role user
 
 The built-in **everyone** team is every person who has signed in: `shpyrd members add expenses --team everyone --role user` opens the app to the whole company at once.
 
-Someone signed in without a role sees a page saying "Expenses is available to the finance team" — with a link to sign in as someone else — instead of the app. Someone who is not signed in is taken to the platform's sign-in page and back to the app afterwards. People whose only roles are `user` see a **launcher** in the dashboard: tiles for the apps they can open, nothing else.
+Someone signed in without a role sees a page saying "Expenses is available to the finance team" (the teams that hold the `user` role, never people) — with a link to sign in as someone else — instead of the app. Someone who is not signed in is taken to the platform's sign-in page and back to the app afterwards; an API client (nothing in its `Accept` asks for HTML) gets a JSON `401` with `WWW-Authenticate` instead. People whose only roles are `user` see a **launcher** in the dashboard: tiles for the apps they can open, nothing else.
+
+### Scripts, CI and agents
+
+A personal API token (Workspace › API tokens, or `shpyrd tokens create`) opens a closed app the way its owner would, within the token's roles:
+
+```shell
+curl -H "Authorization: Bearer shp_…" https://expenses.acme.shpyrd.app/api/report
+```
+
+The app receives the owner's identity (`X-Shpyrd-User`, the JWT with `sub` = the person's id and `provider: api-token`) and the owner's teams. A token with no role on the project is refused with `403`; a revoked one with `401`. Any other bearer is treated as anonymous: an authenticated app asks it to sign in, an `identified` app receives it as sent — so a public app can run its own API authentication behind the door.
 
 ## What the app receives
 
@@ -117,7 +129,8 @@ shpyrd members list expenses       # what a team would get
 
 - The app's Ingress carries ingress-nginx's `auth_request` annotations: every request is checked with the platform's server first (a subrequest, cached for a few seconds).
 - Signing in happens on the platform's host. The browser is sent there and comes back to the app's host with a one-time code, which becomes a cookie **for that app's host only** (`__Host-shpyrd_edge`). Your app never sees the dashboard's session cookie, and a cookie for one app opens nothing else.
-- Signing out of the dashboard ends every app cookie: each request checks that the session still exists.
+- Signing out of the dashboard ends every app cookie: each request checks that the session still exists. Signing out of an app (`/.shpyrd/logout` on its host) ends the same session, so the dashboard and every other app close too.
+- The keys apps verify the JWT against rotate every 30 days; a retired key stays in the JWKS for a week, so verify by `kid` and refetch the JWKS when you meet one you do not know (the example's verifier does).
 - A companion Ingress for `/.shpyrd/` on the app's host serves the sign-in bounce, the callback, the sign-out and the "available to team X" page; the path is reserved for the platform.
 - Operators reach apps with the admin token (`Authorization: Bearer <token>`); scripts and CI can too. Pasting the token on the sign-in page opens a browser session the same way accounts do.
 
@@ -134,4 +147,4 @@ The listed project must be one of the workspace's own: allows never cross a work
 
 ## Not yet
 
-Personal API tokens and OAuth for AI agents opening apps as a person (the admin token works at the edge; `shp_` tokens do not yet), and disabling previews per project.
+OAuth 2.1 for AI agents (personal tokens work today), and disabling previews per project.

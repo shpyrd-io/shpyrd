@@ -160,6 +160,15 @@ shpyrd cluster init --context my-cluster --profile local --domain apps.example.t
 
 `--yes` is required for contexts that do not look like kind clusters. The `local` profile assumes ingress-nginx can bind host ports on a node labelled `ingress-ready=true` and that the service subnet is `10.96.0.0/16` (the registry uses the fixed ClusterIP `10.96.0.50`). For a managed Kubernetes cluster use a cloud profile: [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws).
 
+## Upgrading
+
+Install the new CLI and run `shpyrd cluster init` again with the same context and profile: the recorded decisions (domain, exposure, extensions) are reused, and `--only shpyrd` limits the run to the platform's own components when nothing else changed. What an upgrade does to running apps:
+
+- The apps keep serving throughout: the platform's server restarts, the apps do not depend on it at run time.
+- A release that changes what every instance is given (a new platform variable such as `REVISION`, a new resource model) rolls every app's instances once, one at a time; a single-instance app is unavailable for the seconds its new instance takes to start.
+- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so.
+- Re-applying every component (without `--only`) restarts ingress-nginx, which is a real interruption of a few seconds at the front door.
+
 ## Environment profiles
 
 A **profile** describes the environment the base stack is built for and therefore how load balancing, DNS, TLS and the registry are provided:
