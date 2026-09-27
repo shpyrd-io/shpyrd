@@ -167,14 +167,25 @@ Shipped in v0.9.9 and v0.9.10 (after an audit of the model against the code):
   (sign-in there was broken).
 - The operator's global config vars no longer leave a Secret in tenant namespaces.
 
-Known gaps (the model promises these; the code does not do them yet): personal tokens at
-the edge (a script cannot call an authenticated app with a `shp_` token); edge key
-rotation (one key pair per platform, no rotation); `/.shpyrd/logout` on an app host does
-not end the dashboard session; the server has no NetworkPolicy (`/edge/auth` reachable
-from any pod, per-IP throttles are platform-wide behind the ingress); denials are not
-counted; audit is Kubernetes Events without the actor's realm; workspace roles
-(`owner`/`admin`/`member`), invitations, workspace delete and address change; per-
-workspace login methods; a way to disable previews; workspace custom domains; the legacy
+Shipped in v0.9.11 — the edge keeps the model's promises:
+
+- Personal API tokens (`shp_…`) open apps at the edge as their owner, within the token's
+  roles: scripts, CI and agents can call a closed app. A bearer that is not the platform's
+  is anonymous, and an `identified` app receives it untouched for its own API clients.
+- Signing out of an app (`/.shpyrd/logout`) ends the whole session.
+- The signing key rotates every 30 days; retired keys verify for a week and stay in the
+  JWKS. The JWT's `sub` is the person's id in the workspace.
+- The "available to the … team" page names only the teams that may open the app; API
+  clients get a JSON 401 instead of a sign-in redirect.
+- The server has a NetworkPolicy: the API and the edge are for the front doors; build pods
+  reach only a sources port; per-IP throttles see the real client.
+- Denials are counted per project (`shpyrd_edge_denials_total`); audit entries carry the
+  actor's realm.
+
+Known gaps (the model promises these; the code does not do them yet): workspace roles
+(`owner`/`admin`/`member`), invitations, workspace delete and address change; per-workspace
+login methods and step-up on claimed domains; a way to disable previews; workspace custom
+domains; one signing key ring per platform rather than per workspace; the legacy
 `Team`/`ProjectMember` CRDs still ship; `run`, `globals`, `sizes`, `extensions` still need
 a kubeconfig; `shpyrd login` has no browser flow. OAuth for agents follows in later
 releases; the full text is published when it settles.
@@ -194,3 +205,5 @@ releases; the full text is published when it settles.
   v0.9.3; the CLI over the API for every developer command in v0.9.8.
 - 2026-09-27: audit of the model against the code; allow lists, suspension, backups,
   custom-domain tenancy and globals fixed (v0.9.10); gaps listed above.
+- 2026-09-27: tokens at the edge, sign-out, key rotation, the denied page and API 401s,
+  the server's NetworkPolicy, denial counters and audit realm (v0.9.11).
