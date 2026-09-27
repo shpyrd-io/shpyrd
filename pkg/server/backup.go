@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"io"
 	"log/slog"
 	"os"
@@ -50,7 +51,9 @@ func runBackup(logger *slog.Logger) error {
 	}
 	exp := &backup.Exporter{
 		Kube: k.Kube, Dynamic: k.Dynamic, SystemNamespace: systemNS,
-		SourceBase: envOr("SHPYRD_INTERNAL_URL", "http://shpyrd-server."+systemNS+".svc"),
+		// The archives are served on the sources port, the one the
+		// server's NetworkPolicy opens to the platform's own pods.
+		SourceBase: envOr("SHPYRD_INTERNAL_URL", fmt.Sprintf("http://shpyrd-server.%s.svc:%d", systemNS, api.SourcesPort)),
 		Domain:     domain, Cluster: firstNonEmptyStr(cluster, "shpyrd"), Profile: profile, Version: version.Version,
 		Store: st,
 	}

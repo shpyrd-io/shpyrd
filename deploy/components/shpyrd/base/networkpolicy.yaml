@@ -32,6 +32,8 @@ spec:
             matchExpressions:
               - key: shpyrd.io/project
                 operator: Exists
+        # The platform's own jobs (the backup exports the archives).
+        - podSelector: {}
       ports:
         - port: 8082
     - from:
