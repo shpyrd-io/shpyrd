@@ -24,7 +24,7 @@ func TestReleasePhase(t *testing.T) {
 	image := "ghcr.io/example/rails@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: "rails", Namespace: "app-rails", Generation: 1},
-		Spec:       shpyrdv1.AppSpec{Image: image, Processes: map[string]shpyrdv1.Process{"web": {}}},
+		Spec:       shpyrdv1.AppSpec{Image: image, Processes: map[string]shpyrdv1.Process{"web": {Size: "shared-m"}}},
 	}
 	r, c := newTestReconciler(t, app)
 	r.ProcessTypes = func(context.Context, string) []string { return []string{"web", "release"} }
@@ -51,6 +51,11 @@ func TestReleasePhase(t *testing.T) {
 	}
 	if !hasEnv(ct.Env, "SHPYRD_RELEASE_PHASE", "1") {
 		t.Errorf("release env = %v", ct.Env)
+	}
+	// The command runs at the web process's size when no release process
+	// is declared: the app's own runtime, not the catalog default.
+	if ct.Resources.Limits.Memory().String() != "256Mi" {
+		t.Errorf("release job memory = %s, want the web process's shared-m (256Mi)", ct.Resources.Limits.Memory().String())
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-rails", Name: "rails-web"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the web Deployment exists before the release command finished: %v", err)

@@ -64,6 +64,8 @@ Procfile buildpack turns `release: ...` into a process type of the image
 - Process types are cached per image digest in the controller; a registry the platform
   cannot read (a pinned image elsewhere) yields no types and no phase.
 - A declared `processes.release` never becomes a workload; its `size` sizes the Job.
+  Without one the Job runs at the web process's size (the app's own runtime; the catalog
+  default is sized for a static site and `rails db:prepare` was OOM-killed at 64Mi).
 - Superseded release Jobs are pruned when a new target's Job starts.
 
 ## Implementation status

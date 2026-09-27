@@ -380,7 +380,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.ProcessTypes = types
 	}
 	if releasePending(app, image, hash) {
-		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: app.Spec.Processes[releaseProcessType]}, r.catalog(ctx))
+		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
 		proceed, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
 		if err != nil {
 			return outcome{}, err
@@ -589,6 +589,20 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		return updated, nil
 	}
 	return current, nil
+}
+
+// releaseProcess is the process the release command runs as: the declared
+// release process, else the web process's settings (its size in
+// particular: rails db:prepare needs what rails server needs, and the
+// catalog default is sized for a static site), else nothing declared.
+func releaseProcess(app *shpyrdv1.App) shpyrdv1.Process {
+	if p, ok := app.Spec.Processes[releaseProcessType]; ok {
+		return p
+	}
+	if web, ok := app.Spec.Processes["web"]; ok {
+		return shpyrdv1.Process{Size: web.Size, Resources: web.Resources}
+	}
+	return shpyrdv1.Process{}
 }
 
 // errImageMoving says the kpack Image is between repositories: the old one
