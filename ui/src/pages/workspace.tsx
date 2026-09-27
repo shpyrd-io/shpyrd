@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Building2, Trash2 } from "lucide-react";
+import { Building2 } from "lucide-react";
 
-import { api, type Person, type WorkspaceInfo } from "@/lib/api";
+import { api, type WorkspaceInfo } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { usePerms } from "@/lib/me";
 import { Button } from "@/components/ui/button";
@@ -18,18 +18,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TeamsPage } from "@/pages/teams";
 import { UsersPage } from "@/pages/users";
+import { PeopleCard } from "@/components/people-card";
 import { SignInSettings } from "@/components/signin-settings";
 import { TokensCard } from "@/components/tokens-card";
 
@@ -213,129 +205,6 @@ function WorkspaceCard({ readOnly }: { readOnly: boolean }) {
               </div>
             </dl>
           </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function PeopleCard() {
-  const qc = useQueryClient();
-  const people = useQuery({
-    queryKey: ["people"],
-    queryFn: api.people,
-    retry: false,
-  });
-  const forget = useMutation({
-    mutationFn: (p: Person) => api.forgetPerson(p.email),
-    onSuccess: (_, p) => {
-      toast.success(`Forgot ${p.email}`);
-      qc.invalidateQueries({ queryKey: ["people"] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-  const status = useMutation({
-    mutationFn: (p: Person) =>
-      api.setPersonStatus(
-        p.email,
-        p.status === "suspended" ? "active" : "suspended",
-      ),
-    onSuccess: (r) => {
-      toast.success(
-        r.status === "suspended"
-          ? `Suspended ${r.email}`
-          : `Reactivated ${r.email}`,
-      );
-      qc.invalidateQueries({ queryKey: ["people"] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>People</CardTitle>
-        <CardDescription>
-          Everyone who has signed in to this workspace, with the login method
-          they used last. Roles come from teams and project grants, not from
-          this list. Suspending someone switches their access off at once —
-          every app, every page — until reactivated; forgetting someone removes
-          the record, and the next sign-in creates it again.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {people.isLoading && <Skeleton className="h-24 w-full" />}
-        {people.error && (
-          <p className="text-sm text-destructive">
-            {(people.error as Error).message}
-          </p>
-        )}
-        {people.data && people.data.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            Nobody has signed in through an account yet (the admin token is not
-            a person).
-          </p>
-        )}
-        {people.data && people.data.length > 0 && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Signed in with</TableHead>
-                <TableHead>Groups</TableHead>
-                <TableHead className="text-right">Last seen</TableHead>
-                <TableHead className="w-48" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {people.data.map((p) => (
-                <TableRow key={p.realm + p.email}>
-                  <TableCell className="font-mono text-xs">{p.email}</TableCell>
-                  <TableCell>
-                    {p.name || <span className="text-muted-foreground">—</span>}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{p.provider || "—"}</Badge>
-                    {p.realm !== "workspace" && (
-                      <Badge variant="outline" className="ml-1">
-                        {p.realm}
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {p.groups.length ? p.groups.join(", ") : "—"}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
-                    {ago(p.lastSeenAt)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {p.status === "suspended" && (
-                        <Badge variant="destructive">suspended</Badge>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        disabled={status.isPending}
-                        onClick={() => status.mutate(p)}
-                      >
-                        {p.status === "suspended" ? "Reactivate" : "Suspend"}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Forget ${p.email}`}
-                        onClick={() => forget.mutate(p)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
         )}
       </CardContent>
     </Card>

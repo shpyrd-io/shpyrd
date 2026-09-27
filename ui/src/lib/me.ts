@@ -13,7 +13,8 @@ export type Action =
   | "project.destroy"
   | "cluster.view"
   | "cluster.admin"
-  | "cluster.create";
+  | "cluster.create"
+  | "workspace.owner";
 
 const roleActions: Record<string, Action[]> = {
   user: [], // opens the app; nothing in this dashboard
@@ -51,6 +52,15 @@ const roleActions: Record<string, Action[]> = {
   ],
 };
 
+// What a workspace role adds (RFC-0033): owners and admins are platform
+// admins already (roles.platform says so); owners alone name owners;
+// members create projects.
+const workspaceActions: Record<string, Action[]> = {
+  owner: ["workspace.owner"],
+  admin: [],
+  member: ["cluster.create"],
+};
+
 export function can(
   me: Identity | undefined,
   action: Action,
@@ -60,6 +70,8 @@ export function can(
   if (!me) return true;
   const platform = me.roles?.platform;
   if (platform && roleActions[platform]?.includes(action)) return true;
+  const workspace = me.roles?.workspace;
+  if (workspace && workspaceActions[workspace]?.includes(action)) return true;
   if (!project) return false;
   const role = me.roles?.projects?.[project];
   return !!role && (roleActions[role] ?? []).includes(action);
@@ -92,6 +104,8 @@ export function usePerms(project?: string) {
     clusterView: check("cluster.view"),
     clusterAdmin: check("cluster.admin"),
     create: check("cluster.create"),
+    owner: check("workspace.owner"),
+    workspaceRole: me.data?.roles?.workspace || undefined,
     role:
       me.data?.roles?.platform === "platform-admin"
         ? "admin"

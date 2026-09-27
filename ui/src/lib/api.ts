@@ -34,11 +34,17 @@ export type Identity = {
   provider: string;
   admin: boolean;
   roles?: {
+    /** The person's role in the workspace (RFC-0033); absent without one. */
+    workspace?: WorkspaceRole | "";
     platform?: "platform-admin" | "platform-viewer" | "";
     projects?: Record<string, "user" | "viewer" | "developer" | "admin">;
     enforced: boolean;
   };
 };
+
+/** Workspace roles (RFC-0033): owners name owners; admins administer; members create projects. */
+export type WorkspaceRole = "owner" | "admin" | "member";
+export const WORKSPACE_ROLES: WorkspaceRole[] = ["owner", "admin", "member"];
 
 /** The workspace (RFC-0033): the tenant every project belongs to. */
 export type WorkspaceInfo = {
@@ -68,6 +74,8 @@ export type WorkspaceInfo = {
     storage: string;
   };
   joinPolicy: "open" | "company" | "listed";
+  /** Emails of the workspace's owners. */
+  owners: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -90,16 +98,67 @@ export type LoginMethods = {
   callback: string;
 };
 
-/** Someone the workspace has seen sign in. */
+/** A person of the workspace: signed in, or holding a role before signing in. */
 export type Person = {
   email: string;
   name?: string;
   provider?: string;
   groups: string[];
-  realm: string;
+  realm?: string;
   status: "active" | "suspended";
-  firstSeenAt: string;
-  lastSeenAt: string;
+  /** Workspace role (RFC-0033); absent without one. */
+  role?: WorkspaceRole;
+  /** What a team gives them when they have no workspace role (the older way). */
+  platformRole?: string;
+  /** Absent until the person signs in for the first time. */
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+};
+
+/** A pending invitation (RFC-0033); the link is never listed. */
+export type Invitation = {
+  id: string;
+  email: string;
+  role: WorkspaceRole;
+  team?: string;
+  invitedBy?: string;
+  createdAt: string;
+  expiresAt: string;
+  expired: boolean;
+};
+
+/** What inviting produced: a link (shown once), or the role applied to someone known. */
+export type InviteResult = {
+  email: string;
+  role: WorkspaceRole;
+  team?: string;
+  applied: boolean;
+  invitation?: Invitation;
+  link?: string;
+  emailed: boolean;
+  mailError?: string;
+};
+
+/** What the holder of an invitation link sees (public). */
+export type InvitationPublic = {
+  workspace: { slug: string; name: string; implicit: boolean };
+  email: string;
+  role: WorkspaceRole;
+  team?: string;
+  invitedBy?: string;
+  expiresAt: string;
+  expired: boolean;
+  url: string;
+};
+
+/** The mail extension's status (RFC-0013): never the password. */
+export type MailStatus = {
+  configured: boolean;
+  host?: string;
+  port?: number;
+  from?: string;
+  security?: string;
+  auth: boolean;
 };
 
 export type Team = {
@@ -757,6 +816,32 @@ export const api = {
       `/api/workspace/people/${encodeURIComponent(email)}`,
       json("PATCH", { status }),
     ),
+  setPersonRole: (email: string, role: WorkspaceRole | "") =>
+    request<Person>(
+      `/api/workspace/people/${encodeURIComponent(email)}`,
+      json("PATCH", { role }),
+    ),
+  invitations: () => request<Invitation[]>("/api/workspace/invitations"),
+  invite: (body: { email: string; role: WorkspaceRole; team?: string }) =>
+    request<InviteResult>("/api/workspace/invitations", json("POST", body)),
+  revokeInvitation: (id: string) =>
+    request<void>(`/api/workspace/invitations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  /** Public: what a link holder was invited to. */
+  invitation: (token: string) =>
+    request<InvitationPublic>(`/api/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string) =>
+    request<{ workspace: string; role: WorkspaceRole; next: string }>(
+      `/api/invitations/${encodeURIComponent(token)}/accept`,
+      json("POST", {}),
+    ),
+  mailStatus: () => request<MailStatus>("/api/cluster/mail"),
+  mailTest: (to: string) =>
+    request<{ ok: boolean; to: string; took: string }>(
+      "/api/cluster/mail/test",
+      json("POST", { to }),
+    ),
   forgetPerson: (email: string) =>
     request<void>(`/api/workspace/people/${encodeURIComponent(email)}`, {
       method: "DELETE",
@@ -1010,7 +1095,8 @@ export const api = {
   registryGC: () =>
     request<{ status: string }>("/api/cluster/registry/gc", { method: "POST" }),
   helmReleases: () => request<HelmRelease[]>("/api/helm/releases"),
-  instances: (slug: string) => request<Instance[]>(`${project(slug)}/instances`),
+  instances: (slug: string) =>
+    request<Instance[]>(`${project(slug)}/instances`),
   /** A one-time code for a shell socket: browsers cannot set headers on a
    * WebSocket, so the ticket is what authenticates it. */
   shellTicket: (slug: string, instance: string) =>
@@ -1026,7 +1112,10 @@ export const api = {
  * which is silent for a signed-in person and lets the app know who is
  * there (a plain visit to an identified app would arrive anonymous).
  */
-export function openURL(url: string | undefined, access: string | undefined): string {
+export function openURL(
+  url: string | undefined,
+  access: string | undefined,
+): string {
   if (!url) return "#";
   if (!access || access === "public") return url;
   return url.replace(/\/$/, "") + "/.shpyrd/signin?rd=%2F";

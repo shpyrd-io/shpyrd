@@ -8,6 +8,15 @@ import { AppsPage } from "@/pages/apps";
 import { AppDetailPage } from "@/pages/app-detail";
 import { ClusterPage } from "@/pages/cluster";
 import { WorkspacePage } from "@/pages/workspace";
+import { InvitePage } from "@/pages/invite";
+
+// inviteToken is the token of an invitation link (/invite/<token>), or
+// "". The page is reachable signed out, so it is handled before the
+// sign-in gate (RFC-0033).
+function inviteToken(): string {
+  const m = /^\/invite\/([^/?#]+)/.exec(window.location.pathname);
+  return m ? decodeURIComponent(m[1]) : "";
+}
 
 export default function App() {
   const token = useToken();
@@ -28,10 +37,13 @@ export default function App() {
   // Until we know whether the server wants a token, render nothing to
   // avoid flashing the login screen.
   if (config.isLoading) return null;
+  const invite = inviteToken();
   if (config.data?.authRequired && !token) {
     if (me.isLoading) return null;
+    if (invite) return <InvitePage token={invite} me={me.data ?? undefined} />;
     if (!me.data) return <LoginPage />;
   }
+  if (invite) return <InvitePage token={invite} me={me.data ?? undefined} />;
 
   return (
     <BrowserRouter>

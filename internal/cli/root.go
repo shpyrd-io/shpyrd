@@ -97,6 +97,9 @@ func New() *cobra.Command {
 	root.AddCommand(newExtensionsCmd(g))
 	root.AddCommand(newTeamsCmd(g))
 	root.AddCommand(newMembersCmd(g))
+	root.AddCommand(newPeopleCmd(g))
+	root.AddCommand(newInviteCmd(g))
+	root.AddCommand(newInvitationsCmd(g))
 	// Commands contributed by extensions (they explain themselves when the
 	// extension is not enabled on the cluster): the developer's here (pg,
 	// redis), the operator's in shpyrd-ctl (users, auth, object-storage).
