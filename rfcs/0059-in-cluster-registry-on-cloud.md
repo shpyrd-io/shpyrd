@@ -191,3 +191,21 @@ Audited on 2026-09-25 against the code. What the text promises but the platform 
 - **Fixed:** 2026-09-25: the registry restarts when cert-manager renews its certificate (it read the key pair once, at start).
 - **Not implemented:** A NetworkPolicy admitting only build pods, the server and the nodes to the registry.
 - **Not implemented:** `SHPYRD_REGISTRY_KEEP`; `--local-build` with the CA in Docker's `certs.d`; allocating the ClusterIP on first install (profiles hard-code it).
+- **Not implemented (2026-09-27):** pruning repositories no App claims. Repositories are
+  `apps/<workspace id>/<slug>` since v0.9.11 (RFC-0033: keyed by the workspace's id in
+  base36); every app moved there once, and a destroyed project leaves its repository
+  behind too. Their tagged manifests keep blobs alive forever: the collector only reclaims
+  untagged blobs, and release pruning deletes by digest within a repository. Wanted: a
+  `shpyrd-ctl cluster registry prune` (and a step of the scheduled collection) that lists
+  the registry's repositories, keeps those an App references (by the App's current tag and
+  the images of its releases), and deletes the tags of the rest before the collector runs.
+- **Not implemented (2026-09-27):** per-workspace registry credentials. One platform
+  credential (`shpyrd:<random>`, htpasswd) is mirrored into every project namespace for
+  the build pods and the kubelet. Tenant code never holds it — kpack mounts it in the
+  `prepare` and `export` phases and not in `build`, where buildpacks run the app's
+  dependency scripts; BuildKit's `RUN` steps are sandboxed away from `buildctl`'s
+  environment — and the registry admits only build pods, the server and the nodes once the
+  registry NetworkPolicy above exists. Still, one credential for all tenants is the wrong
+  shape for a multi-tenant cloud: a token-auth server in front of the registry (the
+  Distribution registry has no per-repository ACL of its own) issuing per-workspace tokens
+  scoped to `apps/<workspace id>/*` is the design to pick up, with the NetworkPolicy first.
