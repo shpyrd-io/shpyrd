@@ -80,8 +80,9 @@ first and the stdio `shpyrd mcp` is still to do.
 `run_command`) behind `projects:write` and a consent that says so; `releases`,
 `resources`, `audit`; MCP resources and prompts (the "how do I read the user" snippet of
 RFC-0033); the stdio `shpyrd mcp` for local agents; `via: mcp` on audit entries of tool
-calls (they are audited as the person, via api); a client-side test with Claude Desktop
-and Cursor; the app-to-app promise of RFC-0033 (talking to other apps) is out of scope.
+calls (they are audited as the person, via api); a test with Cursor (Claude's connector
+was verified against the first cloud on 2026-09-27); the app-to-app promise of RFC-0033
+(talking to other apps) is out of scope.
 
 ## Open questions
 
@@ -93,4 +94,5 @@ and Cursor; the app-to-app promise of RFC-0033 (talking to other apps) is out of
 
 - 2026-09-22: RFC written.
 - 2026-09-27: first slice implemented (v0.9.16): the remote server at every workspace,
-  OAuth 2.1 with PKCE and dynamic registration, four read tools.
+  OAuth 2.1 with PKCE and dynamic registration, four read tools; Claude connected to the
+  first cloud and answered.
