@@ -34,7 +34,11 @@ const (
 
 	ClusterView   Action = "cluster.view"   // cluster page, list projects
 	ClusterAdmin  Action = "cluster.admin"  // size catalog, extensions, users, teams, create projects
-	ClusterCreate Action = "cluster.create" // create a project (platform admins)
+	ClusterCreate Action = "cluster.create" // create a project (platform admins, workspace members)
+
+	// WorkspaceOwner is what only the workspace's owners do (RFC-0033):
+	// name owners, demote them, hand the workspace over.
+	WorkspaceOwner Action = "workspace.owner"
 )
 
 // roleActions is the static table: what each role may do.
@@ -51,10 +55,24 @@ var roleActions = map[string][]Action{
 		ProjectOpen, ProjectView, ProjectDeploy, ProjectScale, ProjectConfig, ProjectExec, ProjectResource, ProjectMembers, ProjectDestroy},
 }
 
-// Roles of an identity: a platform role (or "") and a role per project.
+// workspaceActions is what a workspace role adds (RFC-0033). Owners and
+// admins are platform admins of their workspace (Roles.Platform says so);
+// owners alone hold WorkspaceOwner; members may create projects, and get
+// the admin role on what they create.
+var workspaceActions = map[string][]Action{
+	store.WorkspaceRoleOwner:  {WorkspaceOwner},
+	store.WorkspaceRoleAdmin:  {},
+	store.WorkspaceRoleMember: {ClusterCreate},
+}
+
+// Roles of an identity: a workspace role (or ""), a platform role (or "")
+// and a role per project.
 type Roles struct {
-	Platform string            `json:"platform,omitempty"`
-	Projects map[string]string `json:"projects,omitempty"`
+	// Workspace is the person's role in the workspace: owner, admin,
+	// member or "" (RFC-0033). Owners and admins are Platform admins too.
+	Workspace string            `json:"workspace,omitempty"`
+	Platform  string            `json:"platform,omitempty"`
+	Projects  map[string]string `json:"projects,omitempty"`
 	// Enforced is false while the cluster has no Team or ProjectMember:
 	// then every signed-in user is a platform admin (bootstrap).
 	Enforced bool `json:"enforced"`
@@ -65,7 +83,7 @@ type Roles struct {
 // Can reports whether the roles allow an action; project is "" for cluster
 // actions.
 func (r Roles) Can(action Action, project string) bool {
-	if allows(r.Platform, action) {
+	if allows(r.Platform, action) || allowsIn(workspaceActions, r.Workspace, action) {
 		return true
 	}
 	if project == "" {
@@ -90,8 +108,10 @@ func (r Roles) ProjectRole(project string) string {
 	return ""
 }
 
-func allows(role string, action Action) bool {
-	for _, a := range roleActions[role] {
+func allows(role string, action Action) bool { return allowsIn(roleActions, role, action) }
+
+func allowsIn(table map[string][]Action, role string, action Action) bool {
+	for _, a := range table[role] {
 		if a == action {
 			return true
 		}
@@ -128,6 +148,8 @@ func platformRank(role string) int {
 type Snapshot struct {
 	Teams  []store.Team
 	Grants []store.Grant
+	// Memberships are the workspace roles by email (RFC-0033).
+	Memberships []store.Membership
 	// Suspended lists the emails of people whose access is switched off.
 	Suspended map[string]bool
 	// Explicit marks a workspace other than the implicit one (RFC-0033
@@ -138,9 +160,9 @@ type Snapshot struct {
 	Explicit bool
 }
 
-// Enforced reports whether any team (other than the built-in one) or any
-// grant exists: until then a fresh cluster is in bootstrap mode. Explicit
-// workspaces are always enforced.
+// Enforced reports whether any team (other than the built-in one), any
+// grant or any workspace role exists: until then a fresh cluster is in
+// bootstrap mode. Explicit workspaces are always enforced.
 func (s *Snapshot) Enforced() bool {
 	if s.Explicit {
 		return true
@@ -150,7 +172,33 @@ func (s *Snapshot) Enforced() bool {
 			return true
 		}
 	}
-	return len(s.Grants) > 0
+	return len(s.Grants) > 0 || len(s.Memberships) > 0
+}
+
+// WorkspaceRole is the workspace role held by an email, "" when none.
+func (s *Snapshot) WorkspaceRole(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return ""
+	}
+	for _, m := range s.Memberships {
+		if m.Email == email {
+			return m.Role
+		}
+	}
+	return ""
+}
+
+// Owners lists the emails of the workspace's owners, sorted.
+func (s *Snapshot) Owners() []string {
+	var out []string
+	for _, m := range s.Memberships {
+		if m.Role == store.WorkspaceRoleOwner {
+			out = append(out, m.Email)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // teamsOf returns the teams an identity belongs to (by email or group).
@@ -182,13 +230,17 @@ func (s *Snapshot) teamsOf(id ext.Identity) map[string]*store.Team {
 }
 
 // RolesFor resolves an identity's roles. The admin token is always a
-// platform admin; without any membership objects everyone is (bootstrap).
+// platform admin (and holds the owner's actions: the operator owns the
+// platform); without any membership objects everyone is (bootstrap). A
+// workspace role, when the person has one, decides the platform role:
+// owners and admins are platform admins, members are not, whatever a team
+// would give them; without one, a team's platform role still counts.
 func (s *Snapshot) RolesFor(id ext.Identity) Roles {
 	r := Roles{Projects: map[string]string{}, Enforced: s.Enforced()}
 	// The admin token, and sessions opened from the CLI with cluster access
 	// (login tickets), are platform admins: their holders already are.
 	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
-		r.Platform = shpyrdv1.RolePlatformAdmin
+		r.Platform, r.Workspace = shpyrdv1.RolePlatformAdmin, store.WorkspaceRoleOwner
 		return r
 	}
 	// A suspended person has nothing, bootstrap or not.
@@ -201,9 +253,15 @@ func (s *Snapshot) RolesFor(id ext.Identity) Roles {
 		return r
 	}
 	teams := s.teamsOf(id)
-	for _, t := range teams {
-		if platformRank(t.PlatformRole) > platformRank(r.Platform) {
-			r.Platform = t.PlatformRole
+	switch r.Workspace = s.WorkspaceRole(id.Email); r.Workspace {
+	case store.WorkspaceRoleOwner, store.WorkspaceRoleAdmin:
+		r.Platform = shpyrdv1.RolePlatformAdmin
+	case store.WorkspaceRoleMember:
+	default:
+		for _, t := range teams {
+			if platformRank(t.PlatformRole) > platformRank(r.Platform) {
+				r.Platform = t.PlatformRole
+			}
 		}
 	}
 	email := strings.ToLower(id.Email)
@@ -263,7 +321,11 @@ func Load(ctx context.Context, st store.Store, workspace string) (*Snapshot, err
 	if err != nil {
 		return nil, err
 	}
-	snap := &Snapshot{Teams: teams, Grants: grants, Suspended: map[string]bool{}, Explicit: workspace != "" && workspace != store.DefaultWorkspace}
+	memberships, err := st.ListMemberships(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+	snap := &Snapshot{Teams: teams, Grants: grants, Memberships: memberships, Suspended: map[string]bool{}, Explicit: workspace != "" && workspace != store.DefaultWorkspace}
 	if people, err := st.ListIdentities(ctx, workspace); err == nil {
 		for _, p := range people {
 			if p.Status == store.StatusSuspended {
@@ -275,7 +337,7 @@ func Load(ctx context.Context, st store.Store, workspace string) (*Snapshot, err
 }
 
 // Resolver caches snapshots briefly, one per workspace: a request costs
-// three queries at most every TTL.
+// four queries at most every TTL.
 type Resolver struct {
 	Store     store.Store
 	Workspace string // slug Snapshot and Roles use; empty means the implicit workspace

@@ -154,6 +154,79 @@ const (
 
 var ErrBuiltIn = errors.New("built-in")
 
+// Workspace roles (RFC-0033): what a person is in the workspace, apart
+// from what grants give them on projects. Owners and admins administer
+// the workspace (people, teams, settings, every project); only owners name
+// owners. Members may create projects (and administer the ones they
+// create). A person without a membership has what grants give them.
+const (
+	WorkspaceRoleOwner  = "owner"
+	WorkspaceRoleAdmin  = "admin"
+	WorkspaceRoleMember = "member"
+)
+
+// ValidWorkspaceRole reports whether role is one of the workspace roles.
+func ValidWorkspaceRole(role string) bool {
+	switch role {
+	case WorkspaceRoleOwner, WorkspaceRoleAdmin, WorkspaceRoleMember:
+		return true
+	}
+	return false
+}
+
+// Membership is a person's workspace role, by email: it exists before the
+// person has signed in (an invitation accepted, an owner named at
+// creation) and stays when their sign-in record is forgotten.
+type Membership struct {
+	ID          string    `json:"id"`
+	WorkspaceID string    `json:"workspaceId"`
+	Email       string    `json:"email"` // lower case
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// Invitation asks a person, by email, to join the workspace with a role
+// (and, optionally, a team). The link carries a random token shown once;
+// TokenHash is its SHA-256. Signing in with the invited email accepts it:
+// the membership is written and the invitation goes.
+type Invitation struct {
+	ID          string    `json:"id"`
+	WorkspaceID string    `json:"workspaceId"`
+	Email       string    `json:"email"`
+	Role        string    `json:"role"`
+	Team        string    `json:"team,omitempty"` // team name
+	InvitedBy   string    `json:"invitedBy,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+}
+
+// Expired reports whether the invitation can no longer be accepted.
+func (i *Invitation) Expired(now time.Time) bool { return !now.Before(i.ExpiresAt) }
+
+// Memberships is the workspace-role part of the Store.
+type Memberships interface {
+	ListMemberships(ctx context.Context, ws string) ([]Membership, error)
+	// PutMembership sets a person's workspace role, creating the
+	// membership when there is none; role must be a workspace role.
+	PutMembership(ctx context.Context, ws, email, role string) (*Membership, error)
+	// DeleteMembership removes a person's workspace role; ErrNotFound when
+	// they had none.
+	DeleteMembership(ctx context.Context, ws, email string) error
+
+	// ListInvitations lists the workspace's invitations, expired ones
+	// included (the caller says so), oldest first.
+	ListInvitations(ctx context.Context, ws string) ([]Invitation, error)
+	// CreateInvitation stores an invitation with the hash of its token,
+	// replacing a pending one for the same email (a re-invite is a new
+	// link); ErrNotFound when the team named does not exist.
+	CreateInvitation(ctx context.Context, ws string, inv Invitation, tokenHash string) (*Invitation, error)
+	// InvitationByToken finds an invitation by its token's hash, expired or
+	// not; ErrNotFound otherwise.
+	InvitationByToken(ctx context.Context, tokenHash string) (*Invitation, error)
+	DeleteInvitation(ctx context.Context, ws, id string) error
+}
+
 // Grant gives a role on a project to a user (email) or to a team; exactly
 // one of the two is set.
 type Grant struct {
@@ -226,6 +299,7 @@ type Store interface {
 
 	Sessions
 	Tokens
+	Memberships
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).
@@ -271,21 +345,25 @@ type Sessions interface {
 	TakeCode(ctx context.Context, code string) (*Code, error)
 }
 
-// Dump is a workspace's content as the backup carries it.
+// Dump is a workspace's content as the backup carries it. Invitations are
+// not in it: their tokens live in the emails sent, and they expire.
 type Dump struct {
-	Version    int           `json:"version"`
-	Workspace  Workspace     `json:"workspace"`
-	Identities []Identity    `json:"identities"`
-	Teams      []Team        `json:"teams"`
-	Grants     []Grant       `json:"grants"`
-	Domains    []DomainClaim `json:"domains,omitempty"`
+	Version     int           `json:"version"`
+	Workspace   Workspace     `json:"workspace"`
+	Identities  []Identity    `json:"identities"`
+	Teams       []Team        `json:"teams"`
+	Grants      []Grant       `json:"grants"`
+	Domains     []DomainClaim `json:"domains,omitempty"`
+	Memberships []Membership  `json:"memberships,omitempty"`
 }
 
 // ImportResult counts what Import did.
 type ImportResult struct {
-	Teams, Grants, Identities int
-	Skipped                   int
+	Teams, Grants, Identities, Memberships int
+	Skipped                                int
 }
 
-// DumpVersion is the format of Dump.
-const DumpVersion = 1
+// DumpVersion is the format of Dump: 2 added memberships (v0.9.13); a
+// server that knows only 1 refuses a version 2 dump instead of dropping
+// the roles in it.
+const DumpVersion = 2

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"sort"
 	"strings"
@@ -18,17 +20,24 @@ type tokenEntry struct {
 	lastUpdated time.Time
 }
 
+type invitationEntry struct {
+	inv  Invitation
+	hash string
+}
+
 type Memory struct {
-	mu         sync.Mutex
-	workspaces map[string]*Workspace // by slug
-	identities []Identity
-	teams      []Team
-	grants     []Grant
-	sessions   map[string]*Session
-	codes      map[string]*Code
-	domains    []DomainClaim
-	tokens     []tokenEntry
-	now        func() time.Time
+	mu          sync.Mutex
+	workspaces  map[string]*Workspace // by slug
+	identities  []Identity
+	teams       []Team
+	grants      []Grant
+	sessions    map[string]*Session
+	codes       map[string]*Code
+	domains     []DomainClaim
+	tokens      []tokenEntry
+	memberships []Membership
+	invitations []invitationEntry
+	now         func() time.Time
 }
 
 // NewMemory returns an empty store with the implicit workspace.
@@ -435,6 +444,12 @@ func (m *Memory) DeleteTeam(_ context.Context, ws, name string) error {
 				}
 			}
 			m.grants = kept
+			// Invitations into the team stay, without the team (SET NULL).
+			for j := range m.invitations {
+				if e := &m.invitations[j]; e.inv.WorkspaceID == w.ID && e.inv.Team == name {
+					e.inv.Team = ""
+				}
+			}
 			return nil
 		}
 	}
@@ -544,7 +559,8 @@ func (m *Memory) Export(ctx context.Context, ws string) (*Dump, error) {
 	teams, _ := m.ListTeams(ctx, ws)
 	grants, _ := m.ListGrants(ctx, ws)
 	domains, _ := m.ListDomainClaims(ctx, ws)
-	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains}, nil
+	memberships, _ := m.ListMemberships(ctx, ws)
+	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships}, nil
 }
 
 func (m *Memory) Import(ctx context.Context, ws string, d *Dump, overwrite bool) (*ImportResult, error) {
@@ -607,6 +623,29 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 			_, _ = s.SetIdentityStatus(ctx, ws, id.Email, StatusSuspended)
 		}
 		res.Identities++
+	}
+	// Roles: a person's role is replaced only when overwriting; a role
+	// unknown to this version is skipped rather than refused.
+	existing := map[string]bool{}
+	if !overwrite {
+		have, err := s.ListMemberships(ctx, ws)
+		if err != nil {
+			return res, err
+		}
+		for _, mb := range have {
+			existing[mb.Email] = true
+		}
+	}
+	for _, mb := range d.Memberships {
+		email := strings.ToLower(strings.TrimSpace(mb.Email))
+		if !ValidWorkspaceRole(mb.Role) || existing[email] {
+			res.Skipped++
+			continue
+		}
+		if _, err := s.PutMembership(ctx, ws, email, mb.Role); err != nil {
+			return res, err
+		}
+		res.Memberships++
 	}
 	return res, nil
 }
@@ -833,6 +872,164 @@ func (m *Memory) DeleteToken(_ context.Context, ws, id string) error {
 	for i, e := range m.tokens {
 		if e.token.WorkspaceID == w.ID && e.token.ID == id {
 			m.tokens = append(m.tokens[:i], m.tokens[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+// ---- workspace roles and invitations (RFC-0033) ------------------------------
+
+func (m *Memory) ListMemberships(_ context.Context, ws string) ([]Membership, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	var out []Membership
+	for _, mb := range m.memberships {
+		if mb.WorkspaceID == w.ID {
+			out = append(out, mb)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out, nil
+}
+
+func (m *Memory) PutMembership(_ context.Context, ws, email, role string) (*Membership, error) {
+	if !ValidWorkspaceRole(role) {
+		return nil, fmt.Errorf("role %q is not a workspace role", role)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, errors.New("email is required")
+	}
+	now := m.now()
+	for i := range m.memberships {
+		mb := &m.memberships[i]
+		if mb.WorkspaceID == w.ID && mb.Email == email {
+			if mb.Role != role {
+				mb.Role, mb.UpdatedAt = role, now
+			}
+			c := *mb
+			return &c, nil
+		}
+	}
+	mb := Membership{ID: newID(), WorkspaceID: w.ID, Email: email, Role: role, CreatedAt: now, UpdatedAt: now}
+	m.memberships = append(m.memberships, mb)
+	return &mb, nil
+}
+
+func (m *Memory) DeleteMembership(_ context.Context, ws, email string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return err
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	for i, mb := range m.memberships {
+		if mb.WorkspaceID == w.ID && mb.Email == email {
+			m.memberships = append(m.memberships[:i], m.memberships[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) ListInvitations(_ context.Context, ws string) ([]Invitation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	var out []Invitation
+	for _, e := range m.invitations {
+		if e.inv.WorkspaceID == w.ID {
+			out = append(out, e.inv)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].Email < out[j].Email
+	})
+	return out, nil
+}
+
+func (m *Memory) CreateInvitation(_ context.Context, ws string, inv Invitation, tokenHash string) (*Invitation, error) {
+	if !ValidWorkspaceRole(inv.Role) {
+		return nil, fmt.Errorf("role %q is not a workspace role", inv.Role)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	inv.Email = strings.ToLower(strings.TrimSpace(inv.Email))
+	if inv.Email == "" || tokenHash == "" {
+		return nil, errors.New("email and token are required")
+	}
+	if inv.Team != "" {
+		found := false
+		for _, t := range m.teams {
+			if t.WorkspaceID == w.ID && t.Name == inv.Team {
+				found = true
+			}
+		}
+		if !found {
+			return nil, ErrNotFound
+		}
+	}
+	kept := m.invitations[:0]
+	for _, e := range m.invitations {
+		if !(e.inv.WorkspaceID == w.ID && e.inv.Email == inv.Email) {
+			kept = append(kept, e)
+		}
+	}
+	m.invitations = kept
+	now := m.now()
+	inv.ID, inv.WorkspaceID, inv.CreatedAt = newID(), w.ID, now
+	if inv.ExpiresAt.IsZero() {
+		inv.ExpiresAt = now.Add(7 * 24 * time.Hour)
+	}
+	m.invitations = append(m.invitations, invitationEntry{inv: inv, hash: tokenHash})
+	c := inv
+	return &c, nil
+}
+
+func (m *Memory) InvitationByToken(_ context.Context, tokenHash string) (*Invitation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.invitations {
+		if tokenHash != "" && e.hash == tokenHash {
+			c := e.inv
+			return &c, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) DeleteInvitation(_ context.Context, ws, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return err
+	}
+	for i, e := range m.invitations {
+		if e.inv.WorkspaceID == w.ID && e.inv.ID == id {
+			m.invitations = append(m.invitations[:i], m.invitations[i+1:]...)
 			return nil
 		}
 	}

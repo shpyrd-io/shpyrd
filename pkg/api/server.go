@@ -151,6 +151,8 @@ type Server struct {
 	store   store.Store
 	tenancy tenancy.Resolver
 	realms  Realms
+	// mailer sends invitations (RFC-0013); nil without the mail extension.
+	mailer ext.Mailer
 	// The edge (RFC-0033): signing keys, one-time codes, host index.
 	edgeKeys  *edge.Keys
 	edgeCodes *edge.Codes
@@ -309,7 +311,7 @@ func (s *Server) deps() ext.Deps {
 	if s.kube != nil && s.kube.Namespace != "" {
 		ns = s.kube.Namespace
 	}
-	return ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged}
+	return ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged, Mail: s.mailer}
 }
 
 // routeGroups implements ext.Router.
@@ -410,8 +412,9 @@ func (s *Server) routes() error {
 	pub.GET("/auth/login", login, s.authLogin)
 	pub.GET("/auth/callback", login, s.authCallback)
 	pub.GET("/auth/ticket", login, s.authTicket)
-	pub.POST("/auth/password", login, s.authPassword) // RFC-0012
-	pub.POST("/auth/token", login, s.authToken)       // the admin token as a session (RFC-0033)
+	pub.POST("/auth/password", login, s.authPassword)      // RFC-0012
+	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
+	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
 
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
@@ -444,7 +447,11 @@ func (s *Server) routes() error {
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)
-	api.PATCH("/workspace/people/:email", s.require(authz.ClusterAdmin), s.setPersonStatus)
+	api.PATCH("/workspace/people/:email", s.require(authz.ClusterAdmin), s.updatePerson)
+	api.GET("/workspace/invitations", s.require(authz.ClusterAdmin), s.listInvitations)
+	api.POST("/workspace/invitations", s.require(authz.ClusterAdmin), s.createInvitation)
+	api.DELETE("/workspace/invitations/:id", s.require(authz.ClusterAdmin), s.deleteInvitation)
+	api.POST("/invitations/:token/accept", s.acceptInvitation) // any signed-in person: the email must match
 	api.GET("/workspace/domain-claims", s.require(authz.ClusterAdmin), s.listDomainClaims)
 	api.POST("/workspace/domain-claims", s.require(authz.ClusterAdmin), s.putDomainClaim)
 	api.POST("/workspace/domain-claims/:domain/verify", s.require(authz.ClusterAdmin), s.verifyDomainClaim)
@@ -516,7 +523,14 @@ func (s *Server) routes() error {
 	api.POST("/projects/:slug/members", s.require(authz.ProjectMembers), s.addMember)
 	api.DELETE("/projects/:slug/members/:name", s.require(authz.ProjectMembers), s.removeMember)
 
-	// Extensions mount their routes and register login providers.
+	// Extensions mount their routes and register login providers. The one
+	// that sends mail (RFC-0013) is asked first, so the others find it in
+	// their deps.
+	for _, x := range s.opts.Extensions {
+		if mp, ok := x.(ext.MailProvider); ok && s.mailer == nil {
+			s.mailer = mp.Mailer(s.deps())
+		}
+	}
 	deps := s.deps()
 	for _, x := range s.opts.Extensions {
 		// Extensions manage cluster-level things (accounts, connectors,

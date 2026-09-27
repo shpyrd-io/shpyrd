@@ -102,9 +102,15 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 				return
 			}
 			now := time.Now()
+			// The token names the account that signed in; Ada is the one
+			// with a profile (the tests of the profile use her).
+			email, name, sub := "Ada@Example.test", "Ada Lovelace", "user-1"
+			if user != "ada@example.test" {
+				email, name, sub = user, "", "user-"+user
+			}
 			claims := map[string]any{
-				"iss": fi.srv.URL, "sub": "user-1", "aud": "shpyrd", "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(),
-				"nonce": r.Form.Get("nonce"), "email": "Ada@Example.test", "name": "Ada Lovelace", "groups": []string{"dev"},
+				"iss": fi.srv.URL, "sub": sub, "aud": "shpyrd", "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(),
+				"nonce": r.Form.Get("nonce"), "email": email, "name": name, "groups": []string{"dev"},
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "id_token": fi.sign(t, claims)})
 			return

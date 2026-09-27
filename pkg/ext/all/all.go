@@ -10,6 +10,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext/authlocal"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/authoidc"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/logsagent"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/mail"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/objectstorage"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/postgres"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/redis"
@@ -24,6 +25,7 @@ func All() []ext.Extension {
 		postgres.New(),
 		redis.New(),
 		objectstorage.New(),
+		mail.New(),
 	}
 }
 

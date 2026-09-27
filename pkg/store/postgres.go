@@ -202,6 +202,16 @@ func isUnique(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// notFoundOnBadID turns Postgres' complaint about a malformed uuid (an id
+// taken from a URL) into ErrNotFound: no row can have that id.
+func notFoundOnBadID(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (p *Postgres) wsID(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, slug string) (string, error) {
@@ -684,7 +694,7 @@ func (p *Postgres) DeleteGrant(ctx context.Context, ws, id string) error {
 	}
 	tag, err := p.pool.Exec(ctx, `DELETE FROM grants WHERE workspace_id = $1 AND id = $2`, wsID, id)
 	if err != nil {
-		return err
+		return notFoundOnBadID(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -722,7 +732,11 @@ func (p *Postgres) Export(ctx context.Context, ws string) (*Dump, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains}, nil
+	memberships, err := p.ListMemberships(ctx, ws)
+	if err != nil {
+		return nil, err
+	}
+	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships}, nil
 }
 
 func (p *Postgres) Import(ctx context.Context, ws string, d *Dump, overwrite bool) (*ImportResult, error) {
@@ -919,7 +933,185 @@ func (p *Postgres) DeleteToken(ctx context.Context, ws, id string) error {
 	}
 	tag, err := p.pool.Exec(ctx, `DELETE FROM api_tokens WHERE workspace_id = $1 AND id = $2`, wsID, id)
 	if err != nil {
+		return notFoundOnBadID(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ---- workspace roles and invitations (RFC-0033) ------------------------------
+
+const membershipColumns = `id, workspace_id, email, role, created_at, updated_at`
+
+func scanMembership(row pgx.Row) (*Membership, error) {
+	var mb Membership
+	if err := row.Scan(&mb.ID, &mb.WorkspaceID, &mb.Email, &mb.Role, &mb.CreatedAt, &mb.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &mb, nil
+}
+
+func (p *Postgres) ListMemberships(ctx context.Context, ws string) ([]Membership, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := p.pool.Query(ctx, `SELECT `+membershipColumns+` FROM memberships WHERE workspace_id = $1 ORDER BY email`, wsID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Membership
+	for rows.Next() {
+		mb, err := scanMembership(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *mb)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) PutMembership(ctx context.Context, ws, email, role string) (*Membership, error) {
+	if !ValidWorkspaceRole(role) {
+		return nil, fmt.Errorf("role %q is not a workspace role", role)
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, errors.New("email is required")
+	}
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	return scanMembership(p.pool.QueryRow(ctx, `INSERT INTO memberships (id, workspace_id, email, role) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (workspace_id, email) DO UPDATE SET role = EXCLUDED.role,
+			updated_at = CASE WHEN memberships.role <> EXCLUDED.role THEN now() ELSE memberships.updated_at END
+		RETURNING `+membershipColumns, newID(), wsID, email, role))
+}
+
+func (p *Postgres) DeleteMembership(ctx context.Context, ws, email string) error {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
 		return err
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM memberships WHERE workspace_id = $1 AND email = $2`, wsID, strings.ToLower(strings.TrimSpace(email)))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+const invitationSelect = `SELECT i.id, i.workspace_id, i.email, i.role, COALESCE(t.name, ''), i.invited_by, i.created_at, i.expires_at
+	FROM invitations i LEFT JOIN teams t ON t.id = i.team_id`
+
+func scanInvitation(row pgx.Row) (*Invitation, error) {
+	var inv Invitation
+	if err := row.Scan(&inv.ID, &inv.WorkspaceID, &inv.Email, &inv.Role, &inv.Team, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (p *Postgres) ListInvitations(ctx context.Context, ws string) ([]Invitation, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := p.pool.Query(ctx, invitationSelect+` WHERE i.workspace_id = $1 ORDER BY i.created_at, i.email`, wsID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Invitation
+	for rows.Next() {
+		inv, err := scanInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *inv)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) CreateInvitation(ctx context.Context, ws string, inv Invitation, tokenHash string) (*Invitation, error) {
+	if !ValidWorkspaceRole(inv.Role) {
+		return nil, fmt.Errorf("role %q is not a workspace role", inv.Role)
+	}
+	inv.Email = strings.ToLower(strings.TrimSpace(inv.Email))
+	if inv.Email == "" || tokenHash == "" {
+		return nil, errors.New("email and token are required")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	wsID, err := p.wsID(ctx, tx, ws)
+	if err != nil {
+		return nil, err
+	}
+	var teamID *string
+	if inv.Team != "" {
+		var id string
+		err := tx.QueryRow(ctx, `SELECT id FROM teams WHERE workspace_id = $1 AND name = $2`, wsID, inv.Team).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		teamID = &id
+	}
+	expires := inv.ExpiresAt
+	if expires.IsZero() {
+		expires = time.Now().Add(7 * 24 * time.Hour)
+	}
+	// A re-invite replaces the pending invitation: one link per person.
+	if _, err := tx.Exec(ctx, `DELETE FROM invitations WHERE workspace_id = $1 AND email = $2`, wsID, inv.Email); err != nil {
+		return nil, err
+	}
+	id := newID()
+	if _, err := tx.Exec(ctx, `INSERT INTO invitations (id, workspace_id, email, role, team_id, token_hash, invited_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, wsID, inv.Email, inv.Role, teamID, tokenHash, inv.InvitedBy, expires); err != nil {
+		if isUnique(err) {
+			return nil, ErrConflict
+		}
+		return nil, err
+	}
+	out, err := scanInvitation(tx.QueryRow(ctx, invitationSelect+` WHERE i.id = $1`, id))
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+func (p *Postgres) InvitationByToken(ctx context.Context, tokenHash string) (*Invitation, error) {
+	if tokenHash == "" {
+		return nil, ErrNotFound
+	}
+	return scanInvitation(p.pool.QueryRow(ctx, invitationSelect+` WHERE i.token_hash = $1`, tokenHash))
+}
+
+func (p *Postgres) DeleteInvitation(ctx context.Context, ws, id string) error {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return err
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM invitations WHERE workspace_id = $1 AND id = $2`, wsID, id)
+	if err != nil {
+		return notFoundOnBadID(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

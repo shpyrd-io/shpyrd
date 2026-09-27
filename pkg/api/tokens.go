@@ -126,6 +126,13 @@ func (s *Server) resolveAPIToken(c *gin.Context, tok string) (*tokenCaller, bool
 	}
 	// Token roles are the intersection: token cannot exceed what the owner has.
 	platform := minPlatformRole(apiTok.PlatformRole, ownerRoles.Platform)
+	// A token with the owner's full platform role acts in the workspace as
+	// the owner does (an owner's token names owners); a narrower one does
+	// not, and one whose owner is a member may create projects like them.
+	workspace := ""
+	if platform == ownerRoles.Platform && (platform == v1alpha1.RolePlatformAdmin || ownerRoles.Workspace == store.WorkspaceRoleMember) {
+		workspace = ownerRoles.Workspace
+	}
 	projects := map[string]string{}
 	for proj, role := range apiTok.ProjectRoles {
 		ownerRole := ownerRoles.Projects[proj]
@@ -142,7 +149,7 @@ func (s *Server) resolveAPIToken(c *gin.Context, tok string) (*tokenCaller, bool
 			Name:     apiTok.Name,
 			Provider: "api-token",
 		},
-		roles: authz.Roles{Platform: platform, Projects: projects, Enforced: ownerRoles.Enforced},
+		roles: authz.Roles{Workspace: workspace, Platform: platform, Projects: projects, Enforced: ownerRoles.Enforced},
 		owner: owner,
 	}, true
 }

@@ -84,6 +84,9 @@ type Deps struct {
 	// doors, RFC-0033 phase 6) instead of at the next timer; nil when this
 	// replica runs no controllers.
 	WorkspacesChanged func()
+	// Mail sends email on the platform's behalf (RFC-0013): the mail
+	// extension provides it; nil when none is enabled.
+	Mail Mailer
 }
 
 // Var reads an install variable, "" when none is configured.
@@ -92,6 +95,31 @@ func (d Deps) Var(name string) string {
 		return ""
 	}
 	return d.Vars(name)
+}
+
+// Mailer sends email (RFC-0013). Invitations and notifications use it;
+// the mail extension implements it over SMTP.
+type Mailer interface {
+	// Send delivers one message; the error carries what the operator
+	// needs (never the credentials).
+	Send(ctx context.Context, m Message) error
+	// Configured reports whether a sender is set up: the extension can be
+	// enabled before the operator runs `shpyrd-ctl mail set`.
+	Configured(ctx context.Context) bool
+}
+
+// Message is one email: text always, HTML when the sender has a template.
+type Message struct {
+	To      []string
+	Subject string
+	Text    string
+	HTML    string
+}
+
+// MailProvider is implemented by the extension that supplies the Mailer;
+// the server asks the enabled extensions for one before mounting routes.
+type MailProvider interface {
+	Mailer(deps Deps) Mailer
 }
 
 // AuthRegistry is implemented by the server's relying party.

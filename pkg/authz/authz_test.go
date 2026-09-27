@@ -109,3 +109,66 @@ func TestEveryoneAndSuspended(t *testing.T) {
 		t.Errorf("token teams = %v", got)
 	}
 }
+
+func TestWorkspaceRoles(t *testing.T) {
+	membership := func(email, role string) store.Membership { return store.Membership{Email: email, Role: role} }
+	person := func(email string) ext.Identity { return ext.Identity{Email: email, Provider: "local"} }
+
+	// A workspace role alone ends bootstrap.
+	snap := &Snapshot{Memberships: []store.Membership{membership("owner@example.test", store.WorkspaceRoleOwner)}}
+	if !snap.Enforced() {
+		t.Fatal("a membership must end bootstrap mode")
+	}
+	owner := snap.RolesFor(person("Owner@example.test"))
+	if owner.Workspace != store.WorkspaceRoleOwner || owner.Platform != shpyrdv1.RolePlatformAdmin || !owner.Can(WorkspaceOwner, "") || !owner.Can(ClusterAdmin, "") || !owner.Can(ProjectDestroy, "any") {
+		t.Errorf("owner: %+v", owner)
+	}
+	nobody := snap.RolesFor(person("new@example.test"))
+	if nobody.Workspace != "" || nobody.Can(ClusterCreate, "") || nobody.Can(WorkspaceOwner, "") {
+		t.Errorf("a person without a role has nothing: %+v", nobody)
+	}
+
+	snap.Memberships = append(snap.Memberships,
+		membership("admin@example.test", store.WorkspaceRoleAdmin),
+		membership("dev@example.test", store.WorkspaceRoleMember),
+		membership("legacy@example.test", store.WorkspaceRoleMember),
+	)
+	snap.Teams = []store.Team{team("ops", []string{"legacy@example.test", "teamadmin@example.test"}, nil, shpyrdv1.RolePlatformAdmin)}
+	snap.Grants = []store.Grant{member("blog", shpyrdv1.RoleAdmin, "dev@example.test", "")}
+
+	admin := snap.RolesFor(person("admin@example.test"))
+	if admin.Workspace != store.WorkspaceRoleAdmin || admin.Platform != shpyrdv1.RolePlatformAdmin || admin.Can(WorkspaceOwner, "") || !admin.Can(ClusterAdmin, "") {
+		t.Errorf("admin administers but does not own: %+v", admin)
+	}
+	dev := snap.RolesFor(person("dev@example.test"))
+	if dev.Workspace != store.WorkspaceRoleMember || dev.Platform != "" || !dev.Can(ClusterCreate, "") || dev.Can(ClusterAdmin, "") || dev.Can(ClusterView, "") ||
+		!dev.Can(ProjectDestroy, "blog") || dev.Can(ProjectView, "other") || dev.ProjectRole("blog") != shpyrdv1.RoleAdmin {
+		t.Errorf("member creates projects and keeps their grants: %+v", dev)
+	}
+	// A membership decides: the team's platform role no longer applies.
+	legacy := snap.RolesFor(person("legacy@example.test"))
+	if legacy.Platform != "" || legacy.Workspace != store.WorkspaceRoleMember || legacy.Can(ClusterAdmin, "") {
+		t.Errorf("membership must override the team's platform role: %+v", legacy)
+	}
+	// Without one, the team's platform role still counts.
+	viaTeam := snap.RolesFor(person("teamadmin@example.test"))
+	if viaTeam.Platform != shpyrdv1.RolePlatformAdmin || viaTeam.Workspace != "" || viaTeam.Can(WorkspaceOwner, "") {
+		t.Errorf("team platform role without membership: %+v", viaTeam)
+	}
+	// The operator holds the owner's actions.
+	op := snap.RolesFor(ext.Identity{Subject: "admin-token", Provider: "token"})
+	if !op.Can(WorkspaceOwner, "") || op.Workspace != store.WorkspaceRoleOwner {
+		t.Errorf("operator: %+v", op)
+	}
+	// Suspension beats everything.
+	snap.Suspended = map[string]bool{"owner@example.test": true}
+	if r := snap.RolesFor(person("owner@example.test")); !r.Suspended || r.Can(WorkspaceOwner, "") || r.Can(ProjectView, "blog") {
+		t.Errorf("suspended owner: %+v", r)
+	}
+	if got := snap.Owners(); len(got) != 1 || got[0] != "owner@example.test" {
+		t.Errorf("owners = %v", got)
+	}
+	if snap.WorkspaceRole(" ADMIN@example.test ") != store.WorkspaceRoleAdmin || snap.WorkspaceRole("") != "" {
+		t.Error("WorkspaceRole must normalise the email")
+	}
+}

@@ -23,12 +23,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// A clean slate per test.
-			for _, stmt := range []string{"DROP TABLE IF EXISTS api_tokens", "DROP TABLE IF EXISTS domain_claims", "DROP TABLE IF EXISTS edge_codes", "DROP TABLE IF EXISTS sessions", "DROP TABLE IF EXISTS grants", "DROP TABLE IF EXISTS teams", "DROP TABLE IF EXISTS identities", "DROP TABLE IF EXISTS workspaces", "DROP TABLE IF EXISTS schema_migrations"} {
-				if _, err := p.pool.Exec(ctx, stmt); err != nil {
-					t.Fatal(err)
-				}
-			}
+			dropAll(t, p) // a clean slate per test
 			if err := p.Migrate(ctx, "test platform"); err != nil {
 				t.Fatal(err)
 			}
@@ -37,6 +32,18 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 		}
 	}
 	return impls
+}
+
+// dropAll empties the test database: every table the migrations create,
+// dependents first.
+func dropAll(t *testing.T, p *Postgres) {
+	t.Helper()
+	ctx := context.Background()
+	for _, table := range []string{"invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestStoreConformance(t *testing.T) {
@@ -194,24 +201,121 @@ func TestStoreConformance(t *testing.T) {
 			if _, err := s.AddGrant(ctx, DefaultWorkspace, Grant{Project: "blog", Role: "user", Team: "finance"}); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := s.PutMembership(ctx, DefaultWorkspace, "Owner@example.test", WorkspaceRoleOwner); err != nil {
+				t.Fatal(err)
+			}
 			dump, err := s.Export(ctx, DefaultWorkspace)
-			if err != nil || dump.Version != DumpVersion || len(dump.Teams) != 3 || len(dump.Grants) != 1 || len(dump.Identities) != 1 || len(dump.Domains) != 1 {
+			if err != nil || dump.Version != DumpVersion || len(dump.Teams) != 3 || len(dump.Grants) != 1 || len(dump.Identities) != 1 || len(dump.Domains) != 1 || len(dump.Memberships) != 1 {
 				t.Fatalf("export: %+v %v", dump, err)
 			}
 			fresh := NewMemory()
 			res, err := fresh.Import(ctx, DefaultWorkspace, dump, false)
-			if err != nil || res.Teams != 2 || res.Grants != 1 || res.Identities != 1 {
+			if err != nil || res.Teams != 2 || res.Grants != 1 || res.Identities != 1 || res.Memberships != 1 {
 				t.Fatalf("import: %+v %v", res, err)
 			}
 			if claims, _ := fresh.ListDomainClaims(ctx, DefaultWorkspace); len(claims) != 1 || claims[0].VerifiedAt == nil {
 				t.Errorf("imported claims = %+v", claims)
 			}
+			if roles, _ := fresh.ListMemberships(ctx, DefaultWorkspace); len(roles) != 1 || roles[0].Email != "owner@example.test" || roles[0].Role != WorkspaceRoleOwner {
+				t.Errorf("imported memberships = %+v", roles)
+			}
 			res, err = fresh.Import(ctx, DefaultWorkspace, dump, false)
-			if err != nil || res.Teams != 0 || res.Skipped != 3 {
+			if err != nil || res.Teams != 0 || res.Memberships != 0 || res.Skipped != 4 {
 				t.Errorf("import again without overwrite: %+v %v", res, err)
 			}
 			if err := s.DeleteIdentity(ctx, DefaultWorkspace, "maria@example.test"); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestMembershipsAndInvitations(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			ws := DefaultWorkspace
+
+			// Roles: upsert by email, case-insensitive, validated.
+			if _, err := s.PutMembership(ctx, ws, "ada@example.test", "king"); err == nil {
+				t.Error("an unknown role was accepted")
+			}
+			if _, err := s.PutMembership(ctx, "nope", "ada@example.test", WorkspaceRoleOwner); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown workspace: %v", err)
+			}
+			mb, err := s.PutMembership(ctx, ws, " Ada@Example.test ", WorkspaceRoleOwner)
+			if err != nil || mb.Email != "ada@example.test" || mb.Role != WorkspaceRoleOwner || mb.ID == "" {
+				t.Fatalf("put: %+v %v", mb, err)
+			}
+			again, err := s.PutMembership(ctx, ws, "ada@example.test", WorkspaceRoleMember)
+			if err != nil || again.ID != mb.ID || again.Role != WorkspaceRoleMember {
+				t.Fatalf("update: %+v %v", again, err)
+			}
+			if _, err := s.PutMembership(ctx, ws, "bob@example.test", WorkspaceRoleAdmin); err != nil {
+				t.Fatal(err)
+			}
+			roles, err := s.ListMemberships(ctx, ws)
+			if err != nil || len(roles) != 2 || roles[0].Email != "ada@example.test" || roles[1].Role != WorkspaceRoleAdmin {
+				t.Fatalf("list: %+v %v", roles, err)
+			}
+			if err := s.DeleteMembership(ctx, ws, "ADA@example.test"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteMembership(ctx, ws, "ada@example.test"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("delete again: %v", err)
+			}
+			if roles, _ := s.ListMemberships(ctx, ws); len(roles) != 1 {
+				t.Errorf("after delete: %+v", roles)
+			}
+
+			// Invitations: one per email, replaced by a re-invite, found by
+			// the token's hash, team optional and checked.
+			if _, err := s.CreateInvitation(ctx, ws, Invitation{Email: "eve@example.test", Role: WorkspaceRoleMember, Team: "ghosts"}, "h1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown team: %v", err)
+			}
+			if _, _, err := s.PutTeam(ctx, ws, Team{Name: "dev"}); err != nil {
+				t.Fatal(err)
+			}
+			inv, err := s.CreateInvitation(ctx, ws, Invitation{Email: "Eve@example.test", Role: WorkspaceRoleMember, Team: "dev", InvitedBy: "bob@example.test"}, "h1")
+			if err != nil || inv.Email != "eve@example.test" || inv.Team != "dev" || inv.ID == "" || inv.ExpiresAt.IsZero() || inv.Expired(time.Now()) {
+				t.Fatalf("create: %+v %v", inv, err)
+			}
+			if got, err := s.InvitationByToken(ctx, "h1"); err != nil || got.ID != inv.ID || got.InvitedBy != "bob@example.test" {
+				t.Fatalf("by token: %+v %v", got, err)
+			}
+			if _, err := s.InvitationByToken(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown token: %v", err)
+			}
+			replaced, err := s.CreateInvitation(ctx, ws, Invitation{Email: "eve@example.test", Role: WorkspaceRoleAdmin, ExpiresAt: time.Now().Add(-time.Hour)}, "h2")
+			if err != nil || replaced.ID == inv.ID || replaced.Role != WorkspaceRoleAdmin || !replaced.Expired(time.Now()) {
+				t.Fatalf("re-invite: %+v %v", replaced, err)
+			}
+			if _, err := s.InvitationByToken(ctx, "h1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("old token still works: %v", err)
+			}
+			if _, err := s.CreateInvitation(ctx, ws, Invitation{Email: "fin@example.test", Role: WorkspaceRoleMember, Team: "dev"}, "h3"); err != nil {
+				t.Fatal(err)
+			}
+			list, err := s.ListInvitations(ctx, ws)
+			if err != nil || len(list) != 2 || list[0].Email != "eve@example.test" || list[1].Team != "dev" {
+				t.Fatalf("list: %+v %v", list, err)
+			}
+			// Deleting the team leaves the invitation, without the team.
+			if err := s.DeleteTeam(ctx, ws, "dev"); err != nil {
+				t.Fatal(err)
+			}
+			if list, _ := s.ListInvitations(ctx, ws); len(list) != 2 || list[1].Team != "" {
+				t.Errorf("after team delete: %+v", list)
+			}
+			if err := s.DeleteInvitation(ctx, ws, replaced.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteInvitation(ctx, ws, replaced.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("delete again: %v", err)
+			}
+			if list, _ := s.ListInvitations(ctx, ws); len(list) != 1 {
+				t.Errorf("after delete: %+v", list)
 			}
 		})
 	}
@@ -434,11 +538,7 @@ func TestMigrateBridgesLegacyRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
-	for _, stmt := range []string{"DROP TABLE IF EXISTS api_tokens", "DROP TABLE IF EXISTS domain_claims", "DROP TABLE IF EXISTS edge_codes", "DROP TABLE IF EXISTS sessions", "DROP TABLE IF EXISTS grants", "DROP TABLE IF EXISTS teams", "DROP TABLE IF EXISTS identities", "DROP TABLE IF EXISTS workspaces", "DROP TABLE IF EXISTS schema_migrations"} {
-		if _, err := p.pool.Exec(ctx, stmt); err != nil {
-			t.Fatal(err)
-		}
-	}
+	dropAll(t, p)
 	// The world before: the six files applied by hand, recorded by name.
 	if _, err := p.pool.Exec(ctx, `CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		t.Fatal(err)

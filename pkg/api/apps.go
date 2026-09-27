@@ -19,7 +19,10 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // AppSummary is the list view of a project. Image references are reduced
@@ -382,7 +385,30 @@ func (s *Server) createApp(c *gin.Context) {
 		return
 	}
 	s.audit(c, app.Name, "project.create", project.Label(app), "")
+	s.grantCreator(c, slug)
 	c.JSON(http.StatusCreated, summarize(app))
+}
+
+// grantCreator makes a workspace member the admin of the project they
+// created (RFC-0033): they may create projects but administer none
+// otherwise. Platform admins administer every project already, and in
+// bootstrap mode a grant would end bootstrap, so neither gets one.
+func (s *Server) grantCreator(c *gin.Context, slug string) {
+	roles, err := s.rolesOf(c)
+	if err != nil || !roles.Enforced || roles.Can(authz.ClusterAdmin, "") {
+		return
+	}
+	me, ok := ext.IdentityFrom(c)
+	if !ok || me.Email == "" {
+		return
+	}
+	email := strings.ToLower(me.Email)
+	if _, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{Project: slug, Role: shpyrdv1.RoleAdmin, User: email}); err != nil && !errors.Is(err, store.ErrConflict) {
+		s.log.Warn("could not grant the creator", "project", slug, "email", email, "err", err.Error())
+		return
+	}
+	s.membershipChanged()
+	s.audit(c, slug, "member.add", email, shpyrdv1.RoleAdmin+" (creator)")
 }
 
 // UpdateAppRequest changes project metadata; only the display name so far.

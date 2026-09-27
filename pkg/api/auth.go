@@ -539,6 +539,8 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	if person := s.recordSignIn(c, id); person != nil && person.ID != "" {
 		id.Subject = person.ID
 	}
+	// An invitation for this address is accepted by signing in (RFC-0033).
+	s.acceptPendingInvitation(c, id)
 	sess, err := s.rp.sessions.create(c.Request.Context(), s.workspace(c), id, idToken)
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)

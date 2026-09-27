@@ -75,7 +75,11 @@ func denial(roles authz.Roles, action authz.Action, project string) error {
 		authz.ProjectConfig: "change config vars of", authz.ProjectExec: "run commands in", authz.ProjectResource: "manage resources of",
 		authz.ProjectMembers: "manage members of", authz.ProjectDestroy: "destroy",
 		authz.ClusterView: "view the cluster", authz.ClusterAdmin: "administer the cluster", authz.ClusterCreate: "create projects",
+		authz.WorkspaceOwner: "name or demote owners",
 	}[action]
+	if strings.HasPrefix(string(action), "workspace.") {
+		return fmt.Errorf("only the workspace's owners can %s", verb)
+	}
 	if project == "" || strings.HasPrefix(string(action), "cluster.") {
 		return fmt.Errorf("your role cannot %s (needs a platform role)", verb)
 	}
@@ -263,6 +267,7 @@ func (s *Server) putTeam(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	s.claimOwnershipInBootstrap(c) // the first team ends bootstrap: its author stays in charge
 	team, created, err := s.store.PutTeam(c.Request.Context(), s.workspace(c), store.Team{Name: name, Description: req.Description, Members: members, Groups: compact(req.Groups), PlatformRole: req.PlatformRole})
 	if err != nil {
 		storeErr(c, err, "team")
@@ -380,6 +385,7 @@ func (s *Server) addMember(c *gin.Context) {
 		}
 		req.User = emails[0]
 	}
+	s.claimOwnershipInBootstrap(c) // the first grant ends bootstrap: its author stays in charge
 	g, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{Project: project, Role: req.Role, User: req.User, Team: req.Team})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

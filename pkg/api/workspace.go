@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/mail"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -42,22 +45,31 @@ type WorkspaceView struct {
 	Usage  *Usage        `json:"usage,omitempty"`
 	// JoinPolicy says who becomes a person on first sign-in: open,
 	// company (through a claimed domain's method) or listed (already named
-	// in a team or a grant).
-	JoinPolicy string    `json:"joinPolicy"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	// in a team or a grant, holding a role, or invited).
+	JoinPolicy string `json:"joinPolicy"`
+	// Owners are the emails of the workspace's owners (RFC-0033).
+	Owners    []string  `json:"owners"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// PersonView is one identity the workspace has seen.
+// PersonView is one person of the workspace: someone who has signed in,
+// or holds a workspace role and has not yet (then the seen times are
+// absent).
 type PersonView struct {
-	Email       string    `json:"email"`
-	Name        string    `json:"name,omitempty"`
-	Provider    string    `json:"provider,omitempty"`
-	Groups      []string  `json:"groups"`
-	Realm       string    `json:"realm"`
-	Status      string    `json:"status"` // active, suspended
-	FirstSeenAt time.Time `json:"firstSeenAt"`
-	LastSeenAt  time.Time `json:"lastSeenAt"`
+	Email    string   `json:"email"`
+	Name     string   `json:"name,omitempty"`
+	Provider string   `json:"provider,omitempty"`
+	Groups   []string `json:"groups"`
+	Realm    string   `json:"realm,omitempty"`
+	Status   string   `json:"status"` // active, suspended
+	// Role is the person's workspace role: owner, admin, member or ""
+	// (RFC-0033). PlatformRole is what a team gives them when they have
+	// no workspace role (the older way; a role replaces it).
+	Role         string     `json:"role,omitempty"`
+	PlatformRole string     `json:"platformRole,omitempty"`
+	FirstSeenAt  *time.Time `json:"firstSeenAt,omitempty"`
+	LastSeenAt   *time.Time `json:"lastSeenAt,omitempty"`
 }
 
 func personView(id store.Identity) PersonView {
@@ -65,14 +77,38 @@ func personView(id store.Identity) PersonView {
 	if groups == nil {
 		groups = []string{}
 	}
-	return PersonView{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: groups, Realm: id.Realm, Status: firstNonEmpty(id.Status, store.StatusActive), FirstSeenAt: id.FirstSeenAt, LastSeenAt: id.LastSeenAt}
+	first, last := id.FirstSeenAt, id.LastSeenAt
+	return PersonView{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: groups, Realm: id.Realm, Status: firstNonEmpty(id.Status, store.StatusActive), FirstSeenAt: &first, LastSeenAt: &last}
 }
 
-func (s *Server) workspaceView(w *store.Workspace) WorkspaceView {
+// withRoles fills the workspace role (and the team-given platform role)
+// of a person from the membership snapshot.
+func (s *Server) withRoles(snap *authz.Snapshot, p PersonView) PersonView {
+	if snap == nil {
+		return p
+	}
+	p.Role = snap.WorkspaceRole(p.Email)
+	if p.Role == "" {
+		roles := snap.RolesFor(ext.Identity{Email: p.Email, Provider: "person"})
+		if roles.Enforced && !roles.Suspended {
+			p.PlatformRole = roles.Platform
+		}
+	}
+	return p
+}
+
+func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView {
+	owners := []string{}
+	if snap, err := s.authz.SnapshotFor(c.Request.Context(), w.Slug); err == nil {
+		owners = snap.Owners()
+		if owners == nil {
+			owners = []string{}
+		}
+	}
 	return WorkspaceView{
 		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
-		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 	}
 }
 
@@ -82,7 +118,7 @@ func (s *Server) getWorkspace(c *gin.Context) {
 		storeErr(c, err, "workspace")
 		return
 	}
-	view := s.workspaceView(w)
+	view := s.workspaceView(c, w)
 	if w.Settings.Limits != nil {
 		view.Limits = w.Settings.Limits
 		view.Usage = s.usageOf(c.Request.Context(), w.Slug)
@@ -136,7 +172,7 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 	if len(changes) > 0 {
 		s.audit(c, "", "workspace.update", w.Slug, strings.Join(changes, ", "))
 	}
-	c.JSON(http.StatusOK, s.workspaceView(w))
+	c.JSON(http.StatusOK, s.workspaceView(c, w))
 }
 
 // ---- domain claims -----------------------------------------------------------
@@ -253,8 +289,9 @@ func (s *Server) deleteDomainClaim(c *gin.Context) {
 // admitSignIn decides whether a person may sign in (RFC-0033 phase 3):
 // suspended people may not; accounts of a verified domain claim with a
 // connector must arrive through that connector; someone signing in for the
-// first time must satisfy the workspace's join policy. Operators (token,
-// kubeconfig) are not people and always pass.
+// first time must satisfy the workspace's join policy, unless they were
+// invited or already hold a role. Operators (token, kubeconfig) are not
+// people and always pass.
 func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) error {
 	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" {
 		return nil
@@ -303,14 +340,22 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	if err != nil {
 		return nil
 	}
+	// An invitation, or a role given ahead of the first sign-in, is the
+	// explicit act every join policy asks for.
+	if inv := s.pendingInvitation(ctx, ws, email); inv != nil {
+		return nil
+	}
+	snap, err := s.authz.SnapshotFor(ctx, ws)
+	if err == nil && snap.WorkspaceRole(email) != "" {
+		return nil
+	}
 	switch w.Settings.JoinPolicy {
 	case store.JoinCompany:
 		if claimed == nil {
-			return fmt.Errorf("only accounts of the company's domain can join; ask an administrator to add you")
+			return fmt.Errorf("only accounts of the company's domain can join; ask an administrator to invite you")
 		}
 	case store.JoinListed:
-		snap, err := s.authz.SnapshotFor(ctx, ws)
-		if err != nil {
+		if snap == nil {
 			return nil
 		}
 		for _, t := range snap.Teams {
@@ -325,51 +370,165 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 				return nil
 			}
 		}
-		return errors.New("only people already added to a team may join; ask an administrator to add you")
+		return errors.New("only people who were invited or added to a team may join; ask an administrator to invite you")
 	}
 	return nil
 }
 
+// listPeople is GET /api/workspace/people: everyone who has signed in,
+// plus those who hold a role and have not yet.
 func (s *Server) listPeople(c *gin.Context) {
-	ids, err := s.store.ListIdentities(c.Request.Context(), s.workspace(c))
+	ctx := c.Request.Context()
+	ids, err := s.store.ListIdentities(ctx, s.workspace(c))
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	snap, _ := s.authz.SnapshotFor(ctx, s.workspace(c))
 	out := make([]PersonView, 0, len(ids))
+	seen := map[string]bool{}
 	for _, id := range ids {
-		out = append(out, personView(id))
+		seen[id.Email] = true
+		out = append(out, s.withRoles(snap, personView(id)))
 	}
+	if snap != nil {
+		for _, m := range snap.Memberships {
+			if !seen[m.Email] {
+				out = append(out, s.withRoles(snap, PersonView{Email: m.Email, Groups: []string{}, Status: store.StatusActive}))
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
 	c.JSON(http.StatusOK, out)
 }
 
-// setPersonStatus is PATCH /api/workspace/people/:email {status}: suspend
-// a person (no role anywhere, no app opens, at once) or reactivate them.
-func (s *Server) setPersonStatus(c *gin.Context) {
+// updatePerson is PATCH /api/workspace/people/:email {status?, role?}:
+// suspend a person (no role anywhere, no app opens, at once) or
+// reactivate them; set or remove their workspace role (RFC-0033). Naming
+// or demoting an owner takes an owner, and the last owner stays.
+func (s *Server) updatePerson(c *gin.Context) {
 	var req struct {
-		Status string `json:"status" binding:"required"`
+		Status *string `json:"status"`
+		Role   *string `json:"role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.Status != store.StatusActive && req.Status != store.StatusSuspended {
-		abort(c, http.StatusBadRequest, errors.New("status must be active or suspended"))
+	if req.Status == nil && req.Role == nil {
+		abort(c, http.StatusBadRequest, errors.New("nothing to change: give status or role"))
 		return
 	}
+	ctx := c.Request.Context()
 	email := strings.ToLower(c.Param("email"))
-	if me, ok := ext.IdentityFrom(c); ok && strings.EqualFold(me.Email, email) && req.Status == store.StatusSuspended {
-		abort(c, http.StatusBadRequest, errors.New("you cannot suspend yourself"))
+	me, _ := ext.IdentityFrom(c)
+	var person *PersonView
+	if req.Status != nil {
+		if *req.Status != store.StatusActive && *req.Status != store.StatusSuspended {
+			abort(c, http.StatusBadRequest, errors.New("status must be active or suspended"))
+			return
+		}
+		if strings.EqualFold(me.Email, email) && *req.Status == store.StatusSuspended {
+			abort(c, http.StatusBadRequest, errors.New("you cannot suspend yourself"))
+			return
+		}
+		id, err := s.store.SetIdentityStatus(ctx, s.workspace(c), email, *req.Status)
+		if err != nil {
+			storeErr(c, err, "person")
+			return
+		}
+		s.membershipChanged()
+		s.audit(c, "", "workspace.person."+*req.Status, email, "")
+		v := personView(*id)
+		person = &v
+	}
+	if req.Role != nil {
+		role := strings.TrimSpace(*req.Role)
+		if role != "" && !store.ValidWorkspaceRole(role) {
+			abort(c, http.StatusBadRequest, errors.New("role must be owner, admin, member or empty (no role)"))
+			return
+		}
+		if !validEmail(email) {
+			abort(c, http.StatusBadRequest, errors.New("that is not an email address"))
+			return
+		}
+		s.claimOwnershipInBootstrap(c)
+		snap, err := s.authz.SnapshotFor(ctx, s.workspace(c))
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		current := snap.WorkspaceRole(email)
+		if current == store.WorkspaceRoleOwner || role == store.WorkspaceRoleOwner {
+			roles, _ := s.rolesOf(c)
+			if !roles.Can(authz.WorkspaceOwner, "") {
+				abort(c, http.StatusForbidden, denial(roles, authz.WorkspaceOwner, ""))
+				return
+			}
+		}
+		if current == store.WorkspaceRoleOwner && role != store.WorkspaceRoleOwner && len(snap.Owners()) == 1 {
+			abort(c, http.StatusConflict, errors.New("the workspace needs an owner: name another owner first"))
+			return
+		}
+		if role != current {
+			if role == "" {
+				err = s.store.DeleteMembership(ctx, s.workspace(c), email)
+			} else {
+				_, err = s.store.PutMembership(ctx, s.workspace(c), email, role)
+			}
+			if err != nil {
+				storeErr(c, err, "person")
+				return
+			}
+			s.membershipChanged()
+			s.audit(c, "", "workspace.role", email, firstNonEmpty(current, "none")+" -> "+firstNonEmpty(role, "none"))
+		}
+		if person == nil {
+			v := PersonView{Email: email, Groups: []string{}, Status: store.StatusActive}
+			if id, err := s.store.GetIdentity(ctx, s.workspace(c), email); err == nil {
+				v = personView(*id)
+			}
+			person = &v
+		}
+	}
+	snap, _ := s.authz.SnapshotFor(ctx, s.workspace(c))
+	c.JSON(http.StatusOK, s.withRoles(snap, *person))
+}
+
+// claimOwnershipInBootstrap makes the acting person the workspace's owner
+// when they are the first to define who is who (a role, an invitation, a
+// team, a grant) in a workspace still in bootstrap mode: the change ends
+// bootstrap, and without this it would take the actor's own access with
+// it. Operators (the admin token) are not people and claim nothing.
+func (s *Server) claimOwnershipInBootstrap(c *gin.Context) {
+	roles, err := s.rolesOf(c)
+	if err != nil || roles.Enforced {
 		return
 	}
-	id, err := s.store.SetIdentityStatus(c.Request.Context(), s.workspace(c), email, req.Status)
-	if err != nil {
-		storeErr(c, err, "person")
+	me, ok := ext.IdentityFrom(c)
+	if !ok || me.Email == "" || me.Provider == "token" || me.Provider == "kubeconfig" || me.Subject == "admin-token" {
+		return
+	}
+	ctx := c.Request.Context()
+	if _, err := s.store.PutMembership(ctx, s.workspace(c), me.Email, store.WorkspaceRoleOwner); err != nil {
+		s.log.Warn("could not claim ownership", "email", me.Email, "err", err.Error())
 		return
 	}
 	s.membershipChanged()
-	s.audit(c, "", "workspace.person."+req.Status, email, "")
-	c.JSON(http.StatusOK, personView(*id))
+	s.audit(c, "", "workspace.role", strings.ToLower(me.Email), "none -> owner (first to define roles)")
+	if fresh, err := s.authz.RolesIn(ctx, s.workspace(c), me); err == nil {
+		c.Set(rolesKey, fresh) // the request goes on as the owner
+	}
+}
+
+// validEmail says the string is one address (no display name, no list).
+func validEmail(email string) bool {
+	email = strings.TrimSpace(email)
+	if email == "" || len(email) > 254 || strings.ContainsAny(email, " <>,;\n\t") {
+		return false
+	}
+	addr, err := mail.ParseAddress(email)
+	return err == nil && strings.EqualFold(addr.Address, email)
 }
 
 // forgetPerson removes the record of a person; grants and team memberships
