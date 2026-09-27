@@ -2,7 +2,7 @@
 
 **Status:** implemented, gaps — see Implementation status below
 
-**Owner:** Marcelo Paez Sequeira (PR shpyrd-io/shpyrd#7, branch `rfc-0027-app-metrics-v2`)
+**Owner:** Marcelo Paez Sequeira (merged in shpyrd-io/shpyrd#7)
 
 **Depends on:** RFC-0011
 
