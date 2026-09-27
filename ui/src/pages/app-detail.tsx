@@ -797,16 +797,11 @@ function Overview({
               mono
             />
             {app.status.processTypes?.length ? (
-              <Row
-                k="Image types"
-                v={
-                  app.status.processTypes.join(", ") +
-                  (app.status.processTypes.includes("release")
-                    ? " (release runs before every rollout)"
-                    : "")
-                }
-              />
+              <Row k="Image types" v={app.status.processTypes.join(", ")} mono />
             ) : null}
+            {app.status.processTypes?.includes("release") && (
+              <Row k="Release phase" v="runs before every rollout" />
+            )}
           </CardContent>
         </Card>
         <ProcessesCard app={app} processes={processes} onChanged={onChanged} />

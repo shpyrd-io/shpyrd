@@ -94,7 +94,7 @@ declare what they depend on.
 | [0063](0063-dashboard-access-zones.md) | Dashboard access zones: public dashboard, intranet-only areas | provisional | 0036, 0008, 0035 |
 | [0064](0064-linux-developer-loop.md) | Linux developer loop: privileged ports, image loading, browser trust | implemented | 0001, 0057 |
 | [0065](0065-build-composition.md) | Build composition: buildpacks, stacks and system packages per project | implemented (v0.9.9); gaps: no `GET /api/buildpacks`, dashboard | 0004, 0045 |
-| [0066](0066-release-phase.md) | Release phase: the image's `release` process type runs before every release | implemented (v0.9.9); gaps: dashboard, output not streamed into deploy | 0004, 0005 |
+| [0066](0066-release-phase.md) | Release phase: the image's `release` process type runs before every release | implemented (v0.9.9; dashboard, deploy output and retry in v0.9.10); gap: no phase for images from other registries without a declared command | 0004, 0005 |
 | [0067](0067-build-profiles.md) | Build profiles: the CLI infers what the buildpacks cannot guess (static sites, Vite, Next.js, Rack, Rails, PHP, heavy Aptfile packages) | implemented (v0.9.10); gaps: no prompt, no --git detection, no root index.html/CRA | 0004, 0065 |
 
 ## Phases

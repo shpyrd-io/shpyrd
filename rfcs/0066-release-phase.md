@@ -68,10 +68,13 @@ Procfile buildpack turns `release: ...` into a process type of the image
 
 ## Implementation status
 
-Implemented in v0.9.9. Known gaps: the dashboard does not show the release phase yet
-(the phase message does); the release command's output is not streamed into `shpyrd
-deploy` (it is in `shpyrd logs -p release`); images from registries other than the
-platform's get no phase unless `processes.release.command` is declared.
+Implemented in v0.9.9; v0.9.10 closed the first gaps: the project page shows the phase
+while it runs (its output tailed live) and when it fails (the reason, the output, a "Run it
+again" button), the Release card lists the image's process types, `shpyrd deploy` streams
+the command's output (`release | ...`) while the phase runs, and a redeploy after a failure
+runs the command again (the failed Job is replaced by one carrying the request, so one
+request retries once). Known gap: images from registries other than the platform's get no
+phase unless `processes.release.command` is declared.
 
 ## Open questions
 
@@ -81,3 +84,4 @@ platform's get no phase unless `processes.release.command` is declared.
 ## Implementation History
 
 - 2026-09-27: RFC written and implemented (v0.9.9).
+- 2026-09-27: dashboard card, output in the deploy, retry by redeploy (v0.9.10).
