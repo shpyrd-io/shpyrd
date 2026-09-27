@@ -249,7 +249,7 @@ func printResources(cmd *cobra.Command, app *shpyrdv1.App, vols []shpyrdv1.Volum
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", "App", app.Name, firstNonEmpty(app.Status.Phase, "Pending"), firstNonEmpty(app.Status.URL, "-"))
 	for _, b := range app.Spec.Bindings {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", b.Kind, b.Name, "attached", "config vars "+strings.ToUpper(firstNonEmpty(b.Prefix, "<default>"))+"_*")
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", b.Kind, b.Name, "attached", "config vars "+strings.ToUpper(firstNonEmpty(b.Prefix, defaultPrefix(b.Kind)))+"_*")
 	}
 	for _, v := range vols {
 		mode := "single-instance"
