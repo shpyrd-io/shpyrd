@@ -32,6 +32,7 @@ const (
 	AnnotationDetail = "shpyrd.io/detail"
 	AnnotationFrom   = "shpyrd.io/from"
 	AnnotationVia    = "shpyrd.io/via"
+	AnnotationRealm  = "shpyrd.io/realm"
 )
 
 // Entry is one audited action.
@@ -43,6 +44,10 @@ type Entry struct {
 	Detail string    `json:"detail,omitempty"`
 	From   string    `json:"from,omitempty"`
 	Via    string    `json:"via"` // api, cli
+	// Realm says where the actor's identity lives (RFC-0033): workspace (a
+	// person of the workspace, or their token), operator (the admin token,
+	// a kubeconfig), later console:<name> for collaborators and partners.
+	Realm string `json:"realm,omitempty"`
 }
 
 // Ref is the object an entry is attached to.
@@ -83,6 +88,9 @@ func Record(ctx context.Context, k kubernetes.Interface, ref Ref, e Entry) error
 		msg += ": " + e.Detail
 	}
 	msg += " by " + e.Actor
+	if e.Realm != "" && e.Realm != "workspace" {
+		msg += " (" + e.Realm + ")"
+	}
 	if e.From != "" {
 		msg += " from " + e.From
 	}
@@ -95,7 +103,7 @@ func Record(ctx context.Context, k kubernetes.Interface, ref Ref, e Entry) error
 			Namespace: ref.Namespace,
 			Annotations: map[string]string{
 				AnnotationActor: e.Actor, AnnotationAction: e.Action, AnnotationTarget: e.Target,
-				AnnotationDetail: e.Detail, AnnotationFrom: e.From, AnnotationVia: e.Via,
+				AnnotationDetail: e.Detail, AnnotationFrom: e.From, AnnotationVia: e.Via, AnnotationRealm: e.Realm,
 			},
 		},
 		InvolvedObject:      corev1.ObjectReference{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name, APIVersion: apiVersionFor(ref.Kind)},
@@ -138,7 +146,7 @@ func List(ctx context.Context, k kubernetes.Interface, ref Ref, limit int) ([]En
 		}
 		out = append(out, Entry{
 			Time: t, Actor: a[AnnotationActor], Action: a[AnnotationAction], Target: a[AnnotationTarget],
-			Detail: a[AnnotationDetail], From: a[AnnotationFrom], Via: a[AnnotationVia],
+			Detail: a[AnnotationDetail], From: a[AnnotationFrom], Via: a[AnnotationVia], Realm: a[AnnotationRealm],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })

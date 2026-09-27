@@ -1,0 +1,15 @@
+# The server's own metrics (the controller's, and the edge's admission and
+# denial counters per project, RFC-0033) for the monitoring stack.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shpyrd-server
+  labels:
+    app.kubernetes.io/name: shpyrd-server
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shpyrd-server
+  endpoints:
+    - port: metrics
+      interval: 30s

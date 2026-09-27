@@ -23,3 +23,6 @@ spec:
     - name: sources
       port: 8082
       targetPort: sources
+    - name: metrics
+      port: 8081
+      targetPort: metrics

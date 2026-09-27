@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, openURL } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { usePerms } from "@/lib/me";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -432,7 +432,7 @@ function Launcher() {
         {apps.data?.map((a) => (
           <a
             key={a.slug}
-            href={a.url || "#"}
+            href={openURL(a.url, a.access)}
             target="_blank"
             rel="noopener"
             className="group rounded-lg border bg-card p-4 transition-colors hover:border-primary"

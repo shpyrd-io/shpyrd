@@ -34,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { usePerms } from "@/lib/me";
-import { api, apiStream, type AppDetail, type BuildInfo } from "@/lib/api";
+import { api, apiStream, openURL, type AppDetail, type BuildInfo } from "@/lib/api";
 import { ago, duration } from "@/lib/format";
 import { PhaseBadge } from "@/components/phase-badge";
 import { ProcessChips } from "@/components/process-chips";
@@ -165,7 +165,11 @@ export function AppDetailPage() {
         <div className="flex items-center gap-2">
           {a.status.url && (
             <Button asChild variant="outline" size="sm">
-              <a href={a.status.url} target="_blank" rel="noreferrer">
+              <a
+                href={openURL(a.status.url, a.spec.access)}
+                target="_blank"
+                rel="noreferrer"
+              >
                 Open <ExternalLink data-icon="inline-end" />
               </a>
             </Button>
@@ -2947,6 +2951,11 @@ function AuditCard({ app }: { app: AppDetail }) {
                   {ago(e.time)}
                 </span>
                 <span className="font-medium">{e.actor}</span>
+                {e.realm && e.realm !== "workspace" && (
+                  <Badge variant="outline" className="text-[10px]">
+                    {e.realm}
+                  </Badge>
+                )}
                 <span className="text-muted-foreground">
                   {e.action}
                   {e.target && e.target !== app.slug ? ` ${e.target}` : ""}

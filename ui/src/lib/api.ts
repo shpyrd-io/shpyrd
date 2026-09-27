@@ -128,6 +128,8 @@ export type AuditEntry = {
   detail?: string;
   from?: string;
   via: string;
+  /** Where the actor's identity lives: workspace, operator (RFC-0033). */
+  realm?: string;
 };
 
 export type LocalUser = { email: string; name?: string; createdAt: string };
@@ -1017,3 +1019,15 @@ export const api = {
       { method: "POST" },
     ),
 };
+
+/**
+ * openURL is where to send a person to open an app: a public app at its
+ * address; an identified or authenticated app through its sign-in bounce,
+ * which is silent for a signed-in person and lets the app know who is
+ * there (a plain visit to an identified app would arrive anonymous).
+ */
+export function openURL(url: string | undefined, access: string | undefined): string {
+  if (!url) return "#";
+  if (!access || access === "public") return url;
+  return url.replace(/\/$/, "") + "/.shpyrd/signin?rd=%2F";
+}

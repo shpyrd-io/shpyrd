@@ -19,22 +19,26 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 	if s.kube == nil || s.kube.Kube == nil {
 		return
 	}
-	actor := "anonymous"
+	actor, realm := "anonymous", ""
 	if id, ok := ext.IdentityFrom(c); ok {
 		actor = firstNonEmpty(id.Email, id.Name, id.Subject)
+		realm = realmOf(id)
 		switch id.Provider {
 		case "token":
 			actor = "admin token"
 		case "api-token":
 			// joao@acme.test (token ci): who, and which credential acted.
 			actor = fmt.Sprintf("%s (token %s)", id.Email, id.Name)
+			if id.Email == "" {
+				actor = fmt.Sprintf("admin token (token %s)", id.Name)
+			}
 		}
 	}
 	ref := audit.ClusterRef(s.deps().SystemNamespace)
 	if project != "" {
 		ref = audit.AppRefIn(projectpkg.NamespaceIn(s.workspace(c), project), project)
 	}
-	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api"}
+	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: realm}
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, ref, entry); err != nil {
 		s.log.Warn("audit: cannot record", "action", action, "error", err)
 	}
@@ -67,4 +71,14 @@ func (s *Server) appAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, entries)
+}
+
+// realmOf says where an identity lives (RFC-0033): the operator realm for
+// the admin token and kubeconfig sessions (and tokens the admin token
+// minted), the workspace for everyone else.
+func realmOf(id ext.Identity) string {
+	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" || (id.Provider == "api-token" && id.Email == "") {
+		return "operator"
+	}
+	return "workspace"
 }

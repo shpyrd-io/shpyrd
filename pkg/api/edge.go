@@ -260,16 +260,19 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	}
 	ws, err := s.edgeWorkspace(c)
 	if err != nil {
+		countDenial("", slug, denialWorkspace)
 		c.JSON(http.StatusForbidden, gin.H{"error": "no workspace answers at this address"})
 		return
 	}
 	if ws.Status == store.WorkspaceSuspended {
+		countDenial(ws.Slug, slug, denialWorkspace)
 		c.JSON(http.StatusForbidden, gin.H{"error": "this workspace is suspended"})
 		return
 	}
 	mode := c.DefaultQuery("mode", shpyrdv1.AccessAuthenticated)
 	caller, err := s.edgeIdentify(c, slug)
 	if err != nil {
+		countDenial(ws.Slug, slug, denialToken)
 		c.Header("WWW-Authenticate", `Bearer realm="shpyrd"`)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
@@ -289,9 +292,11 @@ func (s *Server) edgeAuth(c *gin.Context) {
 			return
 		}
 		if caller != nil { // an anonymous preview of a closed app
+			countDenial(ws.Slug, slug, denialBadPreview)
 			c.JSON(http.StatusForbidden, gin.H{"error": "anonymous visitors are asked to sign in", "preview": true})
 			return
 		}
+		countDenial(ws.Slug, slug, denialAnonymous)
 		if apiClient(c) {
 			// nginx redirects every 401 to the sign-in page; an API client
 			// cannot follow it. 403 hands the request to our error page,
@@ -316,6 +321,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		teams = snap.TeamNames(caller.token.owner)
 	}
 	if roles.Suspended {
+		countDenial(ws.Slug, slug, denialSuspended)
 		c.JSON(http.StatusForbidden, gin.H{"error": "your access is suspended"})
 		return
 	}
@@ -343,13 +349,16 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		claims.Preview = true
 		claims.Actor = &edge.Actor{Subject: caller.identity.Subject, Email: caller.identity.Email}
 		if projectRole == "" && mode != shpyrdv1.AccessIdentified {
+			countDenial(ws.Slug, slug, denialPreview)
 			c.JSON(http.StatusForbidden, gin.H{"error": "these teams may not open this app", "preview": true})
 			return
 		}
 	} else if !roles.Can(authz.ProjectOpen, slug) && mode != shpyrdv1.AccessIdentified {
+		countDenial(ws.Slug, slug, denialNoRole)
 		c.JSON(http.StatusForbidden, gin.H{"error": "you may not open this app"})
 		return
 	}
+	countAdmission(ws.Slug, slug)
 	var roleList []string
 	if projectRole != "" {
 		roleList = append(roleList, projectRole)

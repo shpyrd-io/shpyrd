@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -416,5 +417,30 @@ func TestEdgeAcceptsPersonalTokens(t *testing.T) {
 	rec = edgeRequest(t, s, "expenses", "identified", "", "eyJhbGciOiJSUzI1NiJ9.someone-elses.token")
 	if rec.Code != http.StatusOK || rec.Header().Get("Authorization") != "Bearer eyJhbGciOiJSUzI1NiJ9.someone-elses.token" || rec.Header().Get("X-Shpyrd-User") != "" {
 		t.Errorf("foreign bearer on an identified app = %d auth %q user %q", rec.Code, rec.Header().Get("Authorization"), rec.Header().Get("X-Shpyrd-User"))
+	}
+}
+
+// Edge decisions are counted per project and reason, not logged per
+// request (RFC-0033 "Audit").
+func TestEdgeDenialsCounted(t *testing.T) {
+	expenses := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "expenses", Namespace: "app-expenses"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
+	s, _ := newTestServer(t, nil, []client.Object{expenses})
+	s.authz.TTL = 1
+	ctx := context.Background()
+	if _, _, err := s.store.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "platform", Members: []string{"ops@acme.test"}, PlatformRole: shpyrdv1.RolePlatformAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	pedroSID, _ := signIn(t, s, ext.Identity{Subject: "u-pedro", Email: "pedro@acme.test", Provider: "google"})
+	cookie, _ := s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: pedroSID, Project: "expenses"})
+	before := testutil.ToFloat64(edgeDenials.WithLabelValues("default", "expenses", denialNoRole))
+	anonBefore := testutil.ToFloat64(edgeDenials.WithLabelValues("default", "expenses", denialAnonymous))
+	edgeRequest(t, s, "expenses", "authenticated", cookie, "")
+	edgeRequest(t, s, "expenses", "authenticated", cookie, "")
+	edgeRequest(t, s, "expenses", "authenticated", "", "")
+	if got := testutil.ToFloat64(edgeDenials.WithLabelValues("default", "expenses", denialNoRole)); got != before+2 {
+		t.Errorf("no_role denials = %v, want %v", got, before+2)
+	}
+	if got := testutil.ToFloat64(edgeDenials.WithLabelValues("default", "expenses", denialAnonymous)); got != anonBefore+1 {
+		t.Errorf("anonymous denials = %v, want %v", got, anonBefore+1)
 	}
 }

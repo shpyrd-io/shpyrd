@@ -19,3 +19,4 @@ resources:
   - webhook.yaml
   - ingress.yaml
   - networkpolicy.yaml
+  - servicemonitor.yaml
