@@ -38,7 +38,7 @@ func TestBuildComposition(t *testing.T) {
 	stack, _, _ := unstructured.NestedString(b.Object, "spec", "stack", "name")
 	tag, _, _ := unstructured.NestedString(b.Object, "spec", "tag")
 	order, _, _ := unstructured.NestedSlice(b.Object, "spec", "order")
-	if stack != "jammy-full" || tag != "10.96.0.50:5000/apps/shop/builder" || len(order) != 1 {
+	if stack != "jammy-full" || tag != "10.96.0.50:5000/apps/default/shop/builder" || len(order) != 1 {
 		t.Errorf("builder spec: stack=%s tag=%s groups=%d", stack, tag, len(order))
 	}
 	group, _ := order[0].(map[string]interface{})["group"].([]interface{})

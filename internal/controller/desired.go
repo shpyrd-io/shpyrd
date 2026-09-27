@@ -4,6 +4,7 @@ package controller
 
 import (
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"net/url"
 	"sort"
 	"strconv"
@@ -40,6 +41,10 @@ type Config struct {
 	// running but are not served (their Ingresses go; the front door
 	// answers with a page saying so). Nil: never.
 	WorkspaceSuspended func(slug string) bool
+	// WorkspaceID answers a workspace's id (the store's UUID), "" when it
+	// is not known yet: image repositories are keyed by it. Nil: no store,
+	// as in tests, and repositories fall back to the slug.
+	WorkspaceID func(slug string) string
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
@@ -355,21 +360,44 @@ func (c Config) sourceURL(raw string) string {
 	return u.String()
 }
 
-// imageTag is the repository builds of this app are pushed to: apps/<slug>
-// for the implicit workspace (as it always was), apps/<workspace>/<slug>
-// for an explicit one — two workspaces may both have a shop, and a shared
-// repository would share tags, the BuildKit cache and the builder between
-// tenants (RFC-0033). kpack's spec.tag is immutable: an app whose
-// repository changes gets its Image recreated and rebuilt once.
-func (c Config) imageTag(app *shpyrdv1.App) string {
-	if ws := workspaceOf(app); ws != project.DefaultWorkspace {
-		return c.RegistryHost + "/apps/" + ws + "/" + app.Name
+// imageTag is the repository builds of this app are pushed to:
+// apps/<workspace id>/<slug>, the id rendered in base58 (22 characters,
+// RFC-0033). Two workspaces may both have a shop, and a repository shared
+// between them would share tags, the BuildKit cache and the builder; the
+// id rather than the slug because ids never change. The implicit workspace
+// has an id too, so one rule covers every install. kpack's spec.tag is
+// immutable: an app whose repository changes gets its Image recreated and
+// rebuilt once. Without a store (tests) the slug stands in; a workspace
+// the store does not know yet is an error, retried, never a guess that
+// would move the repository later.
+func (c Config) imageTag(app *shpyrdv1.App) (string, error) {
+	ws := workspaceOf(app)
+	if c.WorkspaceID == nil {
+		return c.RegistryHost + "/apps/" + ws + "/" + app.Name, nil
 	}
-	return c.RegistryHost + "/apps/" + app.Name
+	id := c.WorkspaceID(ws)
+	if id == "" {
+		return "", fmt.Errorf("workspace %s is not known to the store yet", ws)
+	}
+	return c.RegistryHost + "/apps/" + ids.Short(id) + "/" + app.Name, nil
+}
+
+// kpackImageKey names the kpack Image of an app (for lookups and deletes
+// that need no spec).
+func kpackImageKey(app *shpyrdv1.App) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(KpackImageGVK)
+	u.SetName(app.Name)
+	u.SetNamespace(app.Namespace)
+	return u
 }
 
 // desiredKpackImage renders the kpack Image that builds the App's source.
-func (c Config) desiredKpackImage(app *shpyrdv1.App) *unstructured.Unstructured {
+func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+	tag, err := c.imageTag(app)
+	if err != nil {
+		return nil, err
+	}
 	builder := c.DefaultBuilder
 	if app.Spec.Build != nil && app.Spec.Build.Builder != "" {
 		builder = app.Spec.Build.Builder
@@ -392,7 +420,7 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) *unstructured.Unstructured 
 	}
 
 	spec := map[string]interface{}{
-		"tag":                      c.imageTag(app),
+		"tag":                      tag,
 		"serviceAccountName":       c.buildServiceAccountName(),
 		"builder":                  map[string]interface{}{"name": builder, "kind": "ClusterBuilder"},
 		"source":                   source,
@@ -411,13 +439,10 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) *unstructured.Unstructured 
 		spec["build"] = map[string]interface{}{"env": env}
 	}
 
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(KpackImageGVK)
-	u.SetName(app.Name)
-	u.SetNamespace(app.Namespace)
+	u := kpackImageKey(app)
 	u.SetLabels(commonLabels(app))
 	u.Object["spec"] = spec
-	return u
+	return u, nil
 }
 
 // processResources resolves the instance size of a process against the

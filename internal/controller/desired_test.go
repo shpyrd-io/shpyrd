@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
 // Build pods fetch archives from the server's sources port; archives
@@ -44,7 +45,10 @@ func TestSourcePortMoveDoesNotRebuild(t *testing.T) {
 	r, c := newTestReconciler(t, app)
 	r.Config.SystemNamespace = "shpyrd-system"
 	// The Image as an older platform left it.
-	img := r.Config.desiredKpackImage(app)
+	img, err := r.Config.desiredKpackImage(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = unstructured.SetNestedField(img.Object, old, "spec", "source", "blob", "url")
 	if err := c.Create(context.Background(), img); err != nil {
 		t.Fatal(err)
@@ -84,16 +88,30 @@ func TestSourcePortMoveDoesNotRebuild(t *testing.T) {
 	}
 }
 
-// Two workspaces may both have a shop: their images live in repositories
-// of their own; the implicit workspace keeps apps/<slug>.
+// Image repositories are keyed by the workspace's id in base58, every
+// workspace included, so two workspaces with a shop never share one; an
+// unknown workspace is an error to retry, not a guess; without a store the
+// slug stands in.
 func TestImageTagPerWorkspace(t *testing.T) {
-	c := Config{RegistryHost: "10.96.0.50:5000"}
 	implicit := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
 	acme := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}}}
-	if got := c.imageTag(implicit); got != "10.96.0.50:5000/apps/shop" {
-		t.Errorf("implicit = %s", got)
+	ids := map[string]string{"default": "3f2a9c1b-8d7e-4a1b-9c2d-0e1f2a3b4c5d", "acme": "9e8d7c6b-5a43-4f21-8e0d-1c2b3a495867"}
+	c := Config{RegistryHost: "10.96.0.50:5000", WorkspaceID: func(slug string) string { return ids[slug] }}
+	got, err := c.imageTag(implicit)
+	if err != nil || got != "10.96.0.50:5000/apps/"+ids58(ids["default"])+"/shop" {
+		t.Errorf("implicit = %s %v", got, err)
 	}
-	if got := c.imageTag(acme); got != "10.96.0.50:5000/apps/acme/shop" {
-		t.Errorf("acme = %s", got)
+	got2, err := c.imageTag(acme)
+	if err != nil || got2 != "10.96.0.50:5000/apps/"+ids58(ids["acme"])+"/shop" || got2 == got {
+		t.Errorf("acme = %s %v", got2, err)
+	}
+	if _, err := c.imageTag(&shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "x", Labels: map[string]string{shpyrdv1.LabelWorkspace: "ghost"}}}); err == nil {
+		t.Error("an unknown workspace must be an error, never a guessed repository")
+	}
+	bare := Config{RegistryHost: "10.96.0.50:5000"}
+	if got, err := bare.imageTag(implicit); err != nil || got != "10.96.0.50:5000/apps/default/shop" {
+		t.Errorf("without a store = %s %v", got, err)
 	}
 }
+
+func ids58(id string) string { return ids.Short(id) }

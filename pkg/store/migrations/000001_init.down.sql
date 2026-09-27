@@ -1,0 +1,6 @@
+DROP INDEX IF EXISTS grants_project;
+DROP INDEX IF EXISTS grants_unique;
+DROP TABLE IF EXISTS grants;
+DROP TABLE IF EXISTS teams;
+DROP TABLE IF EXISTS identities;
+DROP TABLE IF EXISTS workspaces;

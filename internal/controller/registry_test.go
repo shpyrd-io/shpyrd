@@ -63,17 +63,17 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 	// kpack Images build as the credentialed ServiceAccount.
 	src := sampleApp("gitapp")
 	src.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r.git"}}
-	img := r.Config.desiredKpackImage(src)
+	img, _ := r.Config.desiredKpackImage(src)
 	if sa, _, _ := unstructured.NestedString(img.Object, "spec", "serviceAccountName"); sa != BuildServiceAccount {
 		t.Errorf("kpack serviceAccountName = %q", sa)
 	}
-	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "gru.ocir.io/ns/apps/gitapp" {
+	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "gru.ocir.io/ns/apps/default/gitapp" {
 		t.Errorf("kpack tag = %q", tag)
 	}
 
 	// BuildKit: TLS (no registry.insecure), docker config mounted, pull secret.
 	dk := dockerfileApp()
-	job := r.Config.desiredBuildJob(dk, 1, "key")
+	job, _ := r.Config.desiredBuildJob(dk, 1, "key")
 	spec := job.Spec.Template.Spec
 	args := strings.Join(spec.Containers[0].Args, " ")
 	if strings.Contains(args, "registry.insecure") {

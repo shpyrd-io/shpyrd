@@ -103,8 +103,8 @@ func TestDockerfileBuildJob(t *testing.T) {
 		"--opt filename=deploy/Dockerfile",
 		"--opt target=runtime",
 		"--opt build-arg:NODE_ENV=production",
-		"type=image,name=10.96.0.50:5000/apps/dk:b1,push=true,registry.insecure=true",
-		"ref=10.96.0.50:5000/apps/dk:cache",
+		"type=image,name=10.96.0.50:5000/apps/default/dk:b1,push=true,registry.insecure=true",
+		"ref=10.96.0.50:5000/apps/default/dk:cache",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("buildctl args miss %q: %s", want, args)

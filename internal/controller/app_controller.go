@@ -302,7 +302,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			}
 			build = st
 			// A strategy switch leaves a kpack Image behind; drop it.
-			stale := r.Config.desiredKpackImage(app)
+			stale := kpackImageKey(app)
 			if err := r.Get(ctx, client.ObjectKeyFromObject(stale), stale); err == nil {
 				if err := r.deleteIfExists(ctx, stale); err != nil {
 					return outcome{}, err
@@ -489,7 +489,10 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	if err != nil {
 		return nil, err
 	}
-	desired := r.Config.desiredKpackImage(app)
+	desired, err := r.Config.desiredKpackImage(app)
+	if err != nil {
+		return nil, err
+	}
 	_ = unstructured.SetNestedField(desired.Object, builderRef, "spec", "builder")
 	if err := controllerutil.SetControllerReference(app, desired, r.Scheme); err != nil {
 		return nil, err

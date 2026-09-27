@@ -418,3 +418,92 @@ func TestWorkspaces(t *testing.T) {
 		})
 	}
 }
+
+// A database migrated by the runner shpyrd had before v0.9.11 (a
+// schema_migrations table of file names) is bridged: golang-migrate takes
+// over at the version those files reached, the uuid migration runs, the
+// rows survive with their ids, and a second Migrate is a no-op.
+func TestMigrateBridgesLegacyRunner(t *testing.T) {
+	url := os.Getenv("SHPYRD_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("SHPYRD_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	p, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	for _, stmt := range []string{"DROP TABLE IF EXISTS api_tokens", "DROP TABLE IF EXISTS domain_claims", "DROP TABLE IF EXISTS edge_codes", "DROP TABLE IF EXISTS sessions", "DROP TABLE IF EXISTS grants", "DROP TABLE IF EXISTS teams", "DROP TABLE IF EXISTS identities", "DROP TABLE IF EXISTS workspaces", "DROP TABLE IF EXISTS schema_migrations"} {
+		if _, err := p.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The world before: the six files applied by hand, recorded by name.
+	if _, err := p.pool.Exec(ctx, `CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"000001_init", "000002_sessions", "000003_everyone_status", "000004_domains_settings", "000005_tokens", "000006_workspace_address"} {
+		sql, err := migrationFiles.ReadFile("migrations/" + f + ".up.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		legacyName := "0" + strings.TrimPrefix(strings.Split(f, "_")[0], "000") + "_" + strings.SplitN(f, "_", 2)[1] + ".sql"
+		if _, err := p.pool.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, legacyName); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wsID, teamID := newID(), newID()
+	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, 'acme', 'Acme')`, wsID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, members) VALUES ($1, $2, 'ops', '["ana@acme.test"]')`, teamID, wsID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO grants (id, workspace_id, project, role, team_id) VALUES ($1, $2, 'shop', 'user', $3)`, newID(), wsID, teamID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.Migrate(ctx, "platform"); err != nil {
+		t.Fatalf("bridge + migrate: %v", err)
+	}
+	version, dirty, err := p.SchemaVersion()
+	if err != nil || dirty || version < 7 {
+		t.Fatalf("schema version = %d dirty=%v err=%v, want >= 7", version, dirty, err)
+	}
+	var typ string
+	if err := p.pool.QueryRow(ctx, `SELECT data_type FROM information_schema.columns WHERE table_name = 'workspaces' AND column_name = 'id'`).Scan(&typ); err != nil || typ != "uuid" {
+		t.Errorf("workspaces.id type = %q %v, want uuid", typ, err)
+	}
+	if err := p.pool.QueryRow(ctx, `SELECT data_type FROM information_schema.columns WHERE table_name = 'grants' AND column_name = 'team_id'`).Scan(&typ); err != nil || typ != "uuid" {
+		t.Errorf("grants.team_id type = %q %v, want uuid", typ, err)
+	}
+	ws, err := p.Workspace(ctx, "acme")
+	if err != nil || ws.ID != wsID {
+		t.Fatalf("acme after the bridge: %+v %v (want id %s)", ws, err, wsID)
+	}
+	grants, err := p.ListGrants(ctx, "acme")
+	if err != nil || len(grants) != 1 || grants[0].Team != "ops" {
+		t.Errorf("grants after the bridge: %+v %v", grants, err)
+	}
+	// The default workspace was seeded; a second run changes nothing.
+	if _, err := p.Workspace(ctx, DefaultWorkspace); err != nil {
+		t.Errorf("default workspace: %v", err)
+	}
+	if err := p.Migrate(ctx, "platform"); err != nil {
+		t.Errorf("second migrate: %v", err)
+	}
+	// The store keeps working on uuid columns: ids in, ids out.
+	if _, _, err := p.PutTeam(ctx, "acme", Team{Name: "finance", Members: []string{"joao@acme.test"}}); err != nil {
+		t.Errorf("put team on uuid columns: %v", err)
+	}
+	if _, err := p.AddGrant(ctx, "acme", Grant{Project: "shop", Role: "user", Team: "finance"}); err != nil {
+		t.Errorf("grant with a uuid team id: %v", err)
+	}
+	if _, err := p.AddGrant(ctx, "acme", Grant{Project: "shop", Role: "user", Team: "finance"}); !errors.Is(err, ErrConflict) {
+		t.Errorf("the grants uniqueness index must still hold: %v", err)
+	}
+}

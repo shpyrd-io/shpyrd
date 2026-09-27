@@ -97,6 +97,10 @@ func (c Config) desiredBuilder(app *shpyrdv1.App) (*unstructured.Unstructured, e
 	if !ok {
 		return nil, fmt.Errorf("build.stack must be base or full, got %q", app.Spec.Build.Stack)
 	}
+	tag, err := c.imageTag(app)
+	if err != nil {
+		return nil, err
+	}
 	entry := func(cluster string) map[string]interface{} {
 		return map[string]interface{}{"name": cluster, "kind": "ClusterBuildpack"}
 	}
@@ -134,7 +138,7 @@ func (c Config) desiredBuilder(app *shpyrdv1.App) (*unstructured.Unstructured, e
 	u.SetNamespace(app.Namespace)
 	u.SetLabels(commonLabels(app))
 	u.Object["spec"] = map[string]interface{}{
-		"tag":                c.imageTag(app) + "/builder",
+		"tag":                tag + "/builder",
 		"stack":              map[string]interface{}{"name": stack, "kind": "ClusterStack"},
 		"serviceAccountName": c.buildServiceAccountName(),
 		"order":              group,

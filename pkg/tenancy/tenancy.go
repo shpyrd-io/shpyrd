@@ -246,6 +246,14 @@ func (a *Addresses) Address(slug string) string {
 	return ""
 }
 
+// ID is a workspace's id, "" for one the store does not know.
+func (a *Addresses) ID(slug string) string {
+	if ws := a.Workspace(slug); ws != nil {
+		return ws.ID
+	}
+	return ""
+}
+
 // Suspended says whether a workspace is suspended; an unknown one is not.
 func (a *Addresses) Suspended(slug string) bool {
 	ws := a.Workspace(slug)

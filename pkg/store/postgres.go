@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/golang-migrate/migrate/v4"
+	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
-	"sort"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,68 +54,138 @@ func Open(ctx context.Context, url string) (*Postgres, error) {
 
 func (p *Postgres) Close() { p.pool.Close() }
 
-// Migrate applies the embedded migrations in order, each once, under an
-// advisory lock so two servers starting together do not race.
+// Migrate brings the schema to the current version with golang-migrate:
+// versioned up/down files embedded from migrations/, applied under the
+// tool's advisory lock so two servers starting together do not race. An
+// install migrated by the runner shpyrd had before v0.9.11 (a
+// schema_migrations table of file names) is bridged once: its applied
+// files are counted and the tool is told that version. The implicit
+// workspace and its built-in team are seeded afterwards.
 func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Release()
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(7245891)`); err != nil {
+		conn.Release()
 		return err
 	}
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(7245891)`) //nolint:errcheck
-	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
-		return err
-	}
-	entries, err := migrationFiles.ReadDir("migrations")
+	legacy, err := bridgeLegacyMigrations(ctx, conn)
+	_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(7245891)`)
+	conn.Release()
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
+
+	m, close, err := p.migrator()
+	if err != nil {
+		return err
+	}
+	defer close()
+	if legacy > 0 {
+		if err := m.Force(legacy); err != nil {
+			return fmt.Errorf("record migrations applied before v0.9.11: %w", err)
 		}
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		var applied bool
-		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&applied); err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
-		sql, err := migrationFiles.ReadFile("migrations/" + name)
-		if err != nil {
-			return err
-		}
-		tx, err := conn.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, string(sql)); err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("migration %s: %w", name, err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
-			_ = tx.Rollback(ctx)
-			return err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return err
-		}
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("migrate: %w", err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`, newID(), DefaultWorkspace, defaultName); err != nil {
+
+	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`, newID(), DefaultWorkspace, defaultName); err != nil {
 		return err
 	}
 	// The built-in team of the implicit workspace.
-	_, err = conn.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind)
+	_, err = p.pool.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind)
 		SELECT $1, id, $2, 'Everyone who has signed in', 'everyone' FROM workspaces WHERE slug = $3
 		ON CONFLICT (workspace_id, name) DO UPDATE SET kind = 'everyone'`, newID(), TeamEveryone, DefaultWorkspace)
 	return err
+}
+
+// SchemaVersion is the migration version the database is at and whether
+// a migration was interrupted (dirty), for the operator.
+func (p *Postgres) SchemaVersion() (version uint, dirty bool, err error) {
+	m, close, err := p.migrator()
+	if err != nil {
+		return 0, false, err
+	}
+	defer close()
+	version, dirty, err = m.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return 0, false, nil
+	}
+	return version, dirty, err
+}
+
+// migrator builds the golang-migrate instance over the embedded files and
+// a database/sql handle on the pool. The driver keeps one connection of
+// the pool for itself; the returned close gives it back (leaving it out
+// would drain the pool a connection per call).
+func (p *Postgres) migrator() (*migrate.Migrate, func(), error) {
+	src, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		return nil, nil, err
+	}
+	db := stdlib.OpenDBFromPool(p.pool)
+	driver, err := pgxmigrate.WithInstance(db, &pgxmigrate.Config{})
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	m, err := migrate.NewWithInstance("iofs", src, "pgx5", driver)
+	if err != nil {
+		_ = driver.Close()
+		db.Close()
+		return nil, nil, err
+	}
+	return m, func() {
+		_, _ = m.Close() // closes the source and the driver's connection
+		db.Close()
+	}, nil
+}
+
+// legacyMigration matches the file names the old runner recorded
+// (0001_init.sql ...).
+var legacyMigration = regexp.MustCompile(`^0*(\d+)_`)
+
+// bridgeLegacyMigrations converts the old runner's record into the version
+// golang-migrate should start from: the highest numbered file it applied.
+// It returns 0 when there is no such record (a fresh database, or one
+// already bridged).
+func bridgeLegacyMigrations(ctx context.Context, conn *pgxpool.Conn) (int, error) {
+	var hasName bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations' AND column_name = 'name')`).Scan(&hasName); err != nil {
+		return 0, err
+	}
+	if !hasName {
+		return 0, nil
+	}
+	rows, err := conn.Query(ctx, `SELECT name FROM schema_migrations`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	version := 0
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return 0, err
+		}
+		if m := legacyMigration.FindStringSubmatch(name); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > version {
+				version = n
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	// The tool keeps its own record under the same name.
+	if _, err := conn.Exec(ctx, `DROP TABLE schema_migrations`); err != nil {
+		return 0, err
+	}
+	return version, nil
 }
 
 func isUnique(err error) bool {

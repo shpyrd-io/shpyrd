@@ -214,7 +214,7 @@ func TestReconcileSourceBuild(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-src", Name: "src"}, img); err != nil {
 		t.Fatalf("kpack image: %v", err)
 	}
-	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "10.96.0.50:5000/apps/src" {
+	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "10.96.0.50:5000/apps/default/src" {
 		t.Errorf("tag = %q", tag)
 	}
 	if sub, _, _ := unstructured.NestedString(img.Object, "spec", "source", "subPath"); sub != "svc" {
@@ -442,7 +442,7 @@ func TestKpackImageRecreatedWhenRegistryChanges(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-mig", Name: "mig"}, img); err != nil {
 		t.Fatal(err)
 	}
-	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "gru.ocir.io/ns/apps/mig" {
+	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "gru.ocir.io/ns/apps/default/mig" {
 		t.Fatalf("tag = %q", tag)
 	}
 	firstUID := img.GetUID()
@@ -452,7 +452,7 @@ func TestKpackImageRecreatedWhenRegistryChanges(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-mig", Name: "mig"}, img); err != nil {
 		t.Fatal(err)
 	}
-	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "10.96.0.50:5000/apps/mig" {
+	if tag, _, _ := unstructured.NestedString(img.Object, "spec", "tag"); tag != "10.96.0.50:5000/apps/default/mig" {
 		t.Errorf("tag after registry change = %q", tag)
 	}
 	if img.GetUID() == firstUID && firstUID != "" {

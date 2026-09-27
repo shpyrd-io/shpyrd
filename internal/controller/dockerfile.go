@@ -66,7 +66,10 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		if latest != nil {
 			n = buildNumber(latest) + 1
 		}
-		job := r.Config.desiredBuildJob(app, n, key)
+		job, err := r.Config.desiredBuildJob(app, n, key)
+		if err != nil {
+			return buildState{}, err
+		}
 		if err := controllerutil.SetControllerReference(app, job, r.Scheme); err != nil {
 			return buildState{}, err
 		}
@@ -289,7 +292,7 @@ func (r *AppReconciler) pruneBuildJobs(ctx context.Context, builds []batchv1.Job
 func buildJobName(app *shpyrdv1.App, n int) string { return fmt.Sprintf("%s-build-%d", app.Name, n) }
 
 // desiredBuildJob builds the Job for build number n.
-func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string) *batchv1.Job {
+func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string) (*batchv1.Job, error) {
 	name := buildJobName(app, n)
 	labels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuildNumber: strconv.Itoa(n)})
 	podLabels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuild: name})
@@ -308,7 +311,10 @@ func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string) *batchv1.J
 	if sub := path.Clean("/" + app.Spec.Source.SubPath); sub != "/" {
 		contextDir += sub
 	}
-	repo := c.imageTag(app)
+	repo, err := c.imageTag(app)
+	if err != nil {
+		return nil, err
+	}
 	// Only an external registry without TLS is pushed to over plain HTTP;
 	// the in-cluster registry's certificate is trusted through the bundle.
 	insecure := ""
@@ -398,7 +404,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 			},
 		},
 	}
-	return job
+	return job, nil
 }
 
 // dockerfilePath is the Dockerfile location relative to the context.
