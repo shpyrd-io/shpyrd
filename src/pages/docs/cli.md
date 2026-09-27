@@ -48,7 +48,8 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd invitations`, `invitations revoke <email>` | Pending invitations; revoke one. Inviting again makes a new link. |
 | `shpyrd teams create <name>` | Create or update a team: `--member <email>`, `--group <idp group>`, `--platform-role platform-admin\|platform-viewer`, `--description`. |
 | `shpyrd teams list`, `add <team> <email...>`, `remove <team> <email...>`, `delete <team> --yes` | Manage teams (`--group` for identity provider groups). |
-| `shpyrd members add <project> --user <email>\|--team <name> --role user\|viewer\|developer\|admin` | Grant a role on a project (`user` opens the app, see [Sign-in for your app](/docs/app-access)). |
+| `shpyrd members add <project> --user <email>\|--team <name> --role reader\|user\|viewer\|developer\|admin` | Grant a role on a project (`reader` opens the app read-only, `user` opens it; see [Sign-in for your app](/docs/app-access)). |
+| `shpyrd sso add google\|microsoft\|github\|oidc --client-id ... --client-secret <secret\|@file> [--hosted-domain] [--tenant] [--org] [--issuer] [--label]` | Add a sign-in method of this workspace (its login page only). `sso list`, `sso remove <id>`, `sso platform-methods on\|off`. |
 | `shpyrd members list [project]`, `remove <project> --user\|--team` | List and remove grants. |
 
 ## Log drains

@@ -31,6 +31,7 @@ An invitation is a link, shown once, that works for seven days — and, when the
 
 | Role | Sees | Does |
 | --- | --- | --- |
+| `reader` | the app itself (through the edge), read-only; the launcher | opens the app; the edge refuses every request that changes things (anything but GET, HEAD, OPTIONS) and the app receives `X-Shpyrd-Roles: reader`, so apps have viewers without permission code of their own |
 | `user` | the app itself (through the edge), the launcher | opens the app; nothing in the builder dashboard — see [Sign-in for your app](/docs/app-access) |
 | `viewer` | overview, releases, builds, logs, metrics, config var **names**; opens the app | nothing |
 | `developer` | everything a viewer sees | deploy, roll back, scale, resize, set and unset config vars, shell and one-off commands |
@@ -38,7 +39,20 @@ An invitation is a link, shown once, that works for seven days — and, when the
 | `platform-admin` | everything, cluster page, extensions, teams, users | everything (what a workspace owner or admin holds) |
 | `platform-viewer` | everything, read-only | nothing |
 
-The first four are granted **per project**, to a user (by email) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
+The first five are granted **per project**, to a user (by email) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
+
+## Your company's sign-in
+
+Every workspace can bring its own sign-in: on **Workspace › Sign-in**, owners and admins add Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider (Okta, Keycloak, Auth0…) with the callback URL the page shows. The method appears on **this workspace's** login page only; groups of the provider map to teams. The platform's methods stay offered until you switch them off — do that once your company's method works, and only it can sign in here. Claim your email domain (same tab) and route it to the method: the login page then asks for the work email first and sends people straight to your company's sign-in, no chooser.
+
+```shell
+shpyrd sso add google --client-id ... --client-secret @secret.txt --hosted-domain acme.com
+shpyrd sso add oidc --issuer https://acme.okta.com --client-id ... --client-secret @secret.txt --label Okta
+shpyrd sso list
+shpyrd sso platform-methods off
+```
+
+On a self-hosted install the platform's own methods are managed by the operator at the console (`shpyrd-ctl auth connector add`), and offered to every workspace.
 
 ## Teams and members
 
