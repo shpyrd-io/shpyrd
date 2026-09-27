@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -201,12 +202,20 @@ func serverRequest(ctx context.Context, k *kube.Client, method, path string, bod
 		return nil, fmt.Errorf("not signed in: run `shpyrd login --url <workspace URL>` or provide --context")
 	}
 	rc := k.Kube.CoreV1().RESTClient()
+	p, query, _ := strings.Cut(strings.TrimPrefix(path, "/"), "?")
 	var req = rc.Verb(method).
 		Namespace(install.DefaultSystemNamespace).
 		Resource("services").
 		Name("shpyrd-server:http").
 		SubResource("proxy").
-		Suffix(strings.TrimPrefix(path, "/"))
+		Suffix(p)
+	if values, err := url.ParseQuery(query); err == nil {
+		for key, vals := range values {
+			for _, v := range vals {
+				req = req.Param(key, v)
+			}
+		}
+	}
 	if body != nil {
 		req = req.Body(body)
 		if contentType != "" {
@@ -301,12 +310,22 @@ func serverStream(ctx context.Context, k *kube.Client, path string) (io.ReadClos
 	if k == nil {
 		return nil, errors.New("not signed in: run `shpyrd login --url <workspace URL>` or provide --context")
 	}
+	// The query string goes through Param: inside Suffix the "?" would be
+	// escaped into the path.
+	p, query, _ := strings.Cut(strings.TrimPrefix(path, "/"), "?")
 	req := k.Kube.CoreV1().RESTClient().Get().
 		Namespace(install.DefaultSystemNamespace).
 		Resource("services").
 		Name("shpyrd-server:http").
 		SubResource("proxy").
-		Suffix(strings.TrimPrefix(path, "/"))
+		Suffix(p)
+	if values, err := url.ParseQuery(query); err == nil {
+		for key, vals := range values {
+			for _, v := range vals {
+				req = req.Param(key, v)
+			}
+		}
+	}
 	if sec, err := k.Kube.CoreV1().Secrets(install.DefaultSystemNamespace).Get(ctx, install.AdminTokenSecretName, metav1.GetOptions{}); err == nil {
 		if t := strings.TrimSpace(string(sec.Data["token"])); t != "" {
 			req = req.SetHeader("X-Shpyrd-Token", t)
