@@ -1,8 +1,9 @@
 // Package ids renders the platform's identifiers for places where a UUID's
-// 36 characters and dashes do not fit or do not read: image repositories,
-// hostnames, file names. The rendering is base58 (Bitcoin's alphabet: no
-// 0/O/I/l, no dashes or underscores), 22 characters for a UUID, and
-// reversible.
+// 36 characters and dashes do not fit: image repositories, hostnames, file
+// names. The rendering is base36 — digits and lowercase letters, 25
+// characters for a UUID, reversible. Lowercase because OCI repository
+// names, DNS labels and most file systems demand or fold case (base58,
+// the first choice, has uppercase letters and is refused by registries).
 package ids
 
 import (
@@ -13,12 +14,15 @@ import (
 	"github.com/google/uuid"
 )
 
-const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+// shortLen is the width of a rendered UUID: 36^25 > 2^128 > 36^24.
+const shortLen = 25
 
 var base = big.NewInt(int64(len(alphabet)))
 
-// Short is the base58 rendering of a UUID (its 16 bytes), padded so it is
-// always 22 characters and sorts like the bytes. It panics on a string that
+// Short is the base36 rendering of a UUID (its 16 bytes), padded so it is
+// always 25 characters and sorts like the bytes. It panics on a string that
 // is not a UUID: identifiers come from the store, never from users.
 func Short(id string) string {
 	u, err := uuid.Parse(id)
@@ -28,7 +32,7 @@ func Short(id string) string {
 	return Encode(u[:])
 }
 
-// Encode renders bytes in base58.
+// Encode renders bytes in base36.
 func Encode(b []byte) string {
 	n := new(big.Int).SetBytes(b)
 	var out []byte
@@ -37,15 +41,8 @@ func Encode(b []byte) string {
 		n.DivMod(n, base, mod)
 		out = append(out, alphabet[mod.Int64()])
 	}
-	// Leading zero bytes are '1's, as in every base58 in use; a UUID is
-	// then padded to a fixed width so renderings line up and sort.
-	for _, c := range b {
-		if c != 0 {
-			break
-		}
-		out = append(out, alphabet[0])
-	}
-	for len(out) < 22 && len(b) == 16 {
+	// A UUID is padded to a fixed width so renderings line up and sort.
+	for len(out) < shortLen && len(b) == 16 {
 		out = append(out, alphabet[0])
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
@@ -56,7 +53,7 @@ func Encode(b []byte) string {
 
 // Decode is the inverse of Short: the UUID a rendering stands for.
 func Decode(s string) (string, error) {
-	if len(s) != 22 {
+	if len(s) != shortLen {
 		return "", errors.New("not a short id")
 	}
 	n := new(big.Int)

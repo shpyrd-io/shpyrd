@@ -361,7 +361,7 @@ func (c Config) sourceURL(raw string) string {
 }
 
 // imageTag is the repository builds of this app are pushed to:
-// apps/<workspace id>/<slug>, the id rendered in base58 (22 characters,
+// apps/<workspace id>/<slug>, the id rendered in base36 (25 characters,
 // RFC-0033). Two workspaces may both have a shop, and a repository shared
 // between them would share tags, the BuildKit cache and the builder; the
 // id rather than the slug because ids never change. The implicit workspace
