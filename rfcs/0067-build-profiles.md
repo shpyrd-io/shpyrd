@@ -1,8 +1,8 @@
 # RFC-0067 Build profiles: automatic buildpack configuration
 
-**Status:** provisional
+**Status:** implemented
 
-**Owner:** unassigned
+**Owner:** Patrick Negri
 
 **Depends on:** RFC-0004 (implemented), RFC-0065 (implemented)
 
@@ -171,6 +171,29 @@ the deploy request. The API does not know about profiles.
 - **Profile for the `revision` example**: already works without a profile (the Go
   buildpack detects `go.mod`). Not a profile candidate.
 
+## Implementation status
+
+Implemented in v0.9.10 (`internal/cli/profiles.go`, `projectconfig_save.go`). Profiles:
+static site (`public/index.html`, no language files), Vite single-page app (`vite` in
+`package.json`, a `build` script, no `start`), Next.js, Rack (`config.ru`), Rails
+(`config/application.rb`; the `/up` health check only when `config/routes.rb` routes
+`rails/health#show`; `RAILS_ENV` rather than `RACK_ENV`, which is what Rails reads), PHP
+(`public/index.php`), and an Aptfile add-on that picks the `full` stack for packages with
+deep dependency trees (libvips, ImageMagick, ffmpeg, GDAL, OpenCV, Tesseract, Chromium,
+wkhtmltopdf, LibreOffice, Poppler, Graphviz). A Dockerfile build takes the runtime
+variables but no buildpack hints. `shpyrd deploy --save` and `shpyrd projects create
+--save` write the inferred values with the file's comments and order kept
+(`sigs.k8s.io/yaml/goyaml.v3` nodes). Verified against the examples repository: the
+static, React, Sinatra, Rails, PHP, Next.js and Aptfile examples deploy from a
+`shpyrd.yaml` that carries only the project and a size.
+
+Known gaps, deliberately: no interactive "save these?" prompt on `shpyrd deploy` (the
+`--save` flag is explicit; a prompt in a deploy that people also run from scripts felt
+wrong — open question 6 answered "flag only"); `--git` deploys inspect nothing (no clone
+just to detect); a root `index.html` without `public/` and Create React App (`build/`)
+are not recognised; the `static-httpd` variant is only the explicit `BP_WEB_SERVER=httpd`
+winning over the inferred nginx, as designed.
+
 ## Open questions
 
 1. **What to do when `--save` is given but `shpyrd.yaml` already has every field the
@@ -195,3 +218,4 @@ the deploy request. The API does not know about profiles.
 ## Implementation History
 
 - 2026-09-27: RFC written.
+- 2026-09-27: implemented (v0.9.10); the examples repository leans on it.
