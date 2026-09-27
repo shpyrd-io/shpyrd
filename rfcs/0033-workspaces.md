@@ -182,6 +182,12 @@ Shipped in v0.9.11 — the edge keeps the model's promises:
 - Denials are counted per project (`shpyrd_edge_denials_total`); audit entries carry the
   actor's realm.
 
+Shipped in v0.9.11/v0.9.12 as well: the control-plane database migrates with golang-migrate
+(versioned up/down files; the previous runner's record is bridged once); every identifier
+is a native `uuid`; image repositories are `apps/<workspace id>/<slug>` for every workspace,
+the id rendered in base36, so two workspaces with a project of the same name never share a
+repository (the move rebuilds each buildpack app once; the previous release keeps serving).
+
 Known gaps (the model promises these; the code does not do them yet): workspace roles
 (`owner`/`admin`/`member`), invitations, workspace delete and address change; per-workspace
 login methods and step-up on claimed domains; a way to disable previews; workspace custom
