@@ -208,10 +208,21 @@ Shipped in v0.9.13 — workspace roles and invitations:
   owners; the People list includes people with a role who have not signed in yet; the
   platform backup carries memberships (dump version 2).
 
+Shipped in v0.9.15 — a workspace's own sign-in, and readers:
+
+- **Per-workspace SSO.** Owners and admins add their company's Google, Microsoft, GitHub or
+  OpenID Connect provider on the workspace's Sign-in tab (or `shpyrd sso add`); it appears
+  on that workspace's login page only. The platform's methods stay offered until the
+  workspace switches them off, which it may do once it has a method of its own. A claimed
+  email domain with a method skips the chooser: the login page asks for the work email and
+  sends the person straight to their company's sign-in.
+- **The `reader` role** opens an app read-only: the edge refuses requests that change
+  things and tells the app `reader`, so apps have viewers without permission code.
+
 Known gaps (the model promises these; the code does not do them yet): an `identified` app
 sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
 (the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete and
-address change; per-workspace login methods and step-up on claimed domains; a way to
+address change; SAML methods and step-up on claimed domains; a way to
 disable previews; workspace custom domains; one signing key ring per platform rather than
 per workspace; the legacy `Team`/`ProjectMember` CRDs still ship; `run`, `globals`,
 `sizes`, `extensions` still need a kubeconfig; `shpyrd login` has no browser flow. OAuth
@@ -236,3 +247,5 @@ for agents follows in later releases; the full text is published when it settles
   the server's NetworkPolicy, denial counters and audit realm (v0.9.11).
 - 2026-09-27: workspace roles (`owner`/`admin`/`member`), invitations, the mail extension
   (v0.9.13).
+- 2026-09-27: per-workspace SSO, the email-first login step for claimed domains, the
+  `reader` role (v0.9.15).

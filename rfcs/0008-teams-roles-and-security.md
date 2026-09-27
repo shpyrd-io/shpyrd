@@ -144,6 +144,10 @@ Audited on 2026-09-25 against the code. What the text promises but the platform 
 - **Changed (v0.5.0):** a fourth project role, `user`, opens the app through the edge
   (action `project.open`) and nothing in the builder dashboard beyond the launcher; every
   operating role opens the app too. See RFC-0033.
+- **Changed (v0.9.15):** a fifth project role, `reader`, opens the app read-only: the edge
+  refuses every method but GET, HEAD, OPTIONS and TRACE with a read-only page (or JSON),
+  and the app receives `X-Shpyrd-Roles: reader`, so apps have viewers without permission
+  code of their own. Ranked below `user`; grantable to people and teams like the others.
 - **Changed (v0.6.0):** the built-in team `everyone` holds every person who signed in
   (grantable, not editable; the kubectl mirror skips it); people can be suspended (no
   role anywhere, sign-in refused) from the Workspace page; a join policy and company
