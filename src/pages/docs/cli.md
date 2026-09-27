@@ -41,6 +41,11 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd extensions disable <name>` | Remove the component (`--yes`); refused while resources of the extension exist. |
 | `shpyrd users add <email>` | Create a local account (extension `auth-local`); `--name`, `--password` (prompted when omitted). |
 | `shpyrd users list`, `passwd <email>`, `rm <email>` | Manage local accounts. |
+| `shpyrd people` | The workspace's people: everyone who has signed in or holds a role, with their role, login method and last sign-in. |
+| `shpyrd people role <email> owner\|admin\|member\|none` | Set or remove someone's workspace role (they need not have signed in yet). Naming or demoting an owner takes an owner; the last owner stays. |
+| `shpyrd people suspend\|reactivate\|forget <email>` | Switch someone's access off everywhere at once, back on, or remove their sign-in record (role and grants stay). |
+| `shpyrd invite <email>` | Invite someone: `--role member\|admin\|owner` (member by default), `--team <name>`. Prints the link once (emailed too when `shpyrd-ctl mail set` was run); signing in with that address accepts it. |
+| `shpyrd invitations`, `invitations revoke <email>` | Pending invitations; revoke one. Inviting again makes a new link. |
 | `shpyrd teams create <name>` | Create or update a team: `--member <email>`, `--group <idp group>`, `--platform-role platform-admin\|platform-viewer`, `--description`. |
 | `shpyrd teams list`, `add <team> <email...>`, `remove <team> <email...>`, `delete <team> --yes` | Manage teams (`--group` for identity provider groups). |
 | `shpyrd members add <project> --user <email>\|--team <name> --role user\|viewer\|developer\|admin` | Grant a role on a project (`user` opens the app, see [Sign-in for your app](/docs/app-access)). |
@@ -71,6 +76,13 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd auth oidc check <id\|issuer-url>` | Fetch the issuer's discovery document: endpoints, PKCE, scopes, claims, sign-out support. |
 | `shpyrd auth connector add github\|google\|microsoft\|oidc --client-id ... --client-secret ... [--org] [--hosted-domain] [--tenant] [--issuer]` | A sign-in method through the bundled issuer (extension `auth-local`): GitHub, Google, Microsoft or any OpenID Connect provider; the button appears at once. Also on the dashboard's Workspace › Sign-in tab. |
 | `shpyrd auth connector list` / `remove <id>` | List or remove connectors. |
+
+## Email
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd-ctl mail set --host <smtp> --from "<name> <addr>" [--port N] [--user U --password <secret\|@file>] [--tls\|--plain]` | The SMTP sender the platform uses for invitations (extension `mail`); STARTTLS on 587 by default. The password is stored in the cluster and never printed. |
+| `shpyrd-ctl mail status`, `test <address>`, `unset` | Show the settings (without the password), send a test message from the server, remove the settings. |
 
 ## Projects
 

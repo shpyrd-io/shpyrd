@@ -55,7 +55,7 @@ The **Cluster** page shows the environment profile, the running server version, 
 
 ## Workspace
 
-Every project, team and person belongs to the workspace — the open-source platform has one. The **Workspace** page (platform admins) shows its name (editable), the **People** who have signed in with the login method they used last, the **Teams** projects grant roles to, and, with `auth-local`, the **Accounts** it manages. The **Sign-in** tab manages the login methods (Google, Microsoft, GitHub, any OpenID Connect provider), who may join on first sign-in, and the company's claimed email domains; the People tab can suspend someone. The old `/teams` and `/users` links land on the matching tab.
+Every project, team and person belongs to the workspace — the open-source platform has one. The **Workspace** page (owners and admins) shows its name (editable) and owners, the **People** of the workspace with their workspace role (owner, admin, member — set from the list; only owners name owners), the login method they used last and an **Invite** dialog whose link is shown once and emailed when the platform sends mail, with the pending invitations below; the **Teams** projects grant roles to; and, with `auth-local`, the **Accounts** it manages. The **Sign-in** tab manages the login methods (Google, Microsoft, GitHub, any OpenID Connect provider), who may join on first sign-in, and the company's claimed email domains; the People tab can suspend someone. The old `/teams` and `/users` links land on the matching tab. See [People, teams, roles and security](/docs/access).
 
 ## Access and the launcher
 

@@ -20,6 +20,7 @@ auth-oidc   enabled  -          Sign in with a company identity provider: Okta o
 postgres        enabled  cnpg            PostgreSQL databases for projects (CloudNativePG), attached to apps as DATABASE_URL (shpyrd pg create)
 redis           enabled  -               Redis-compatible caches and queues for projects (Valkey or Redis), attached to apps as REDIS_URL (shpyrd redis create)
 object-storage  enabled  object-storage  S3-compatible object store in the cluster (Garage) with a key per consumer: the backing store for Postgres backups and platform backups
+mail            enabled  -               Send email from the platform: invitations and notifications over SMTP (shpyrd-ctl mail set)
 ```
 
 Enabling installs the extension's component with the same runlevel installer as the base stack (ordering, readiness waits, install record) and restarts the server with the extension; the choice is recorded in the cluster, so `shpyrd cluster init` and `shpyrd cluster status` keep it. Disabling removes the component and is refused while resources of the extension still exist. The **Cluster** page lists every extension with its state.
@@ -33,6 +34,20 @@ Extensions contribute an installer component, resource types with controllers, A
 Every consumer gets a bucket **and a key that opens only that bucket**: an `ObjectBucket` resource in its namespace produces the bucket `shpyrd-<namespace>-<name>` and a Secret `<name>-object-storage` next to it (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `BUCKET`). A key from one project cannot list or read another project's bucket. Optional retention (`retentionDays`) expires old objects; `deletionPolicy: Retain` keeps the bucket's contents when the resource goes.
 
 The **Cluster** page shows the store's volume and every bucket with its size and object count; `shpyrd object-storage list` prints the same. The store speaks plain HTTP inside the cluster; it is never exposed outside it. Copies that must survive the cluster — the platform's own backups — go to the provider's object storage ([RFC-0037](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0037-platform-backup-and-restore.md)).
+
+## Email
+
+The `mail` extension gives the platform one SMTP sender, used for [invitations](/docs/access#inviting-people) and, later, notifications. It has no component of its own: the settings live in the Secret `shpyrd-mail` of the system namespace, written by the operator and read again every thirty seconds, so a change needs no restart.
+
+```shell
+shpyrd-ctl extensions enable mail
+shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
+    --password @/path/to/password --from "shpyrd <noreply@example.com>"
+shpyrd-ctl mail status
+shpyrd-ctl mail test you@example.com
+```
+
+STARTTLS on port 587 is the default; `--tls` speaks TLS from the first byte (port 465); `--plain` is for a relay on a private network only — credentials are never sent unencrypted anywhere else. PLAIN and LOGIN authentication are supported. The test message is sent by the server from inside the cluster, so it proves the settings, the network path and the sender address at once; the **Cluster** page's Email card shows the status and sends the same test. Deliveries to one address are rate limited (five in ten minutes), and every test and failure is in the audit trail. Without a sender, invitations show their link to whoever invites, to pass along ([RFC-0013](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0013-email-delivery.md)).
 
 ## Signing in with an account
 
@@ -108,7 +123,7 @@ The kind cluster serves `auth.127.0.0.1.nip.io` with the development CA, so run 
 
 Two workspace settings decide what happens when someone signs in (dashboard: **Workspace › Sign-in**):
 
-- **Who may join** — *anyone who can sign in* (the default: whoever passes one of the methods becomes a person of the workspace, with no roles until granted), *only accounts of a claimed domain* (new people join only through a verified company domain), or *only people already in a team* (an administrator lists their email in a team or grants them a role first). People who already signed in keep their access whatever the policy.
+- **Who may join** — *anyone who can sign in* (the default: whoever passes one of the methods becomes a person of the workspace, with no roles until granted), *only accounts of a claimed domain* (new people join only through a verified company domain), or *only people already listed* (an administrator invited them, gave them a workspace role, or listed their email in a team or a grant first). An [invitation](/docs/access#inviting-people) lets someone in under every policy. People who already signed in keep their access whatever the policy.
 - **Company domains** — claim `acme.com` by publishing the DNS TXT record the page shows (`_shpyrd-verify.acme.com`) and pressing *Verify*. Accounts of a verified domain count as the company's people; choose a sign-in method for the domain and `@acme.com` accounts can only come through it — nobody signs in as `ceo@acme.com` with a password they made up elsewhere.
 
 Every person who signs in belongs to the built-in **everyone** team (`shpyrd members add intranet --team everyone --role user` opens an app to the whole company), and the People tab of the Workspace page can **suspend** someone: their access ends at once, everywhere, until reactivated.

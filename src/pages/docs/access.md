@@ -1,11 +1,33 @@
 ---
-title: Teams, roles and security
-description: Who can do what on a project, how it maps to Kubernetes RBAC, and the isolation and audit that come with every project.
+title: People, teams, roles and security
+description: Who is in the workspace and what they may do, how roles map to Kubernetes RBAC, and the isolation and audit that come with every project.
 ---
 
-Identity says who you are; roles say what you may do. Projects grant roles to users and teams, the API enforces them, the dashboard hides what a role cannot do, and a controller mirrors the grants into Kubernetes RBAC. {% .lead %}
+Identity says who you are; roles say what you may do. A person holds a **workspace role** (owner, admin or member), projects grant **project roles** to people and teams, the API enforces them, the dashboard hides what a role cannot do, and a controller mirrors the grants into Kubernetes RBAC. {% .lead %}
 
-## Roles
+## Workspace roles
+
+| Role | May |
+| --- | --- |
+| `owner` | everything an admin may, and name or demote owners |
+| `admin` | administer the workspace — people, invitations, teams, sign-in settings, every project — and the cluster pages on a self-hosted install |
+| `member` | create projects, and administer the ones they create; on other projects, what grants give them |
+| *(none)* | what grants give them |
+
+Roles are set on the **People** tab of the Workspace page or with `shpyrd people role <email> <role>`; the person need not have signed in yet, the role waits for them. The last owner cannot step down: name another owner first. Owners and admins are the workspace's *platform admins*; the older way of making someone a platform admin — a team with a `platformRole` — still works for people without a workspace role, and the People tab says so ("platform-admin through a team"). A workspace role, once set, decides.
+
+## Inviting people
+
+```shell
+shpyrd invite ada@example.com                        # a member
+shpyrd invite bob@example.com --role admin --team web
+shpyrd invitations                                   # pending
+shpyrd invitations revoke bob@example.com
+```
+
+An invitation is a link, shown once, that works for seven days — and, when the platform [sends email](#email), it is emailed too. Signing in with the invited address **accepts it, link or no link**: the person gets the role (and the team) the moment they sign in, through whatever sign-in method gives that address, whatever the workspace's join policy. Inviting someone who has signed in before applies the role at once; inviting the same address again makes a new link. The People tab has the same dialog and a list of pending invitations; `/invite/<token>` shows the holder what they were invited to.
+
+## Project roles
 
 | Role | Sees | Does |
 | --- | --- | --- |
@@ -13,10 +35,10 @@ Identity says who you are; roles say what you may do. Projects grant roles to us
 | `viewer` | overview, releases, builds, logs, metrics, config var **names**; opens the app | nothing |
 | `developer` | everything a viewer sees | deploy, roll back, scale, resize, set and unset config vars, shell and one-off commands |
 | `admin` | + members, resources | attach and detach resources, create volumes, manage members, destroy the project |
-| `platform-admin` | everything, cluster page, extensions, teams, users | everything |
+| `platform-admin` | everything, cluster page, extensions, teams, users | everything (what a workspace owner or admin holds) |
 | `platform-viewer` | everything, read-only | nothing |
 
-The first four are granted **per project**, to a user (by email) or to a **team**; every operating role opens the app too. The platform roles are carried by teams. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
+The first four are granted **per project**, to a user (by email) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
 
 ## Teams and members
 
@@ -36,13 +58,26 @@ Team `groups` are names from your identity provider's groups claim: a company di
 
 Teams and grants live in the platform's **control-plane database** (a small PostgreSQL the base stack runs as `control-plane-db`, or the managed database named by `SHPYRD_DATABASE_URL`), together with the workspace's record of who has signed in (the Workspace page, People tab). Installs made before v0.4 kept them as Kubernetes objects (`Team`, `ProjectMember`); the first server start after the upgrade copies them into the database and marks the objects migrated — nothing to do by hand. The platform backup carries the database's content (`shpyrd cluster backups`).
 
-{% callout title="Before the first team" %}
-A fresh cluster has no teams or members, and every signed-in user is a platform admin so nothing is locked. Creating the first team or member switches enforcement on; the CLI says so, and the dashboard shows a notice until then. Put yourself in a `platform-admin` team first. The admin token is always a platform admin.
+{% callout title="Before the first role" %}
+A fresh cluster has no roles, teams or members, and every signed-in user is a platform admin so nothing is locked. The first role, invitation, team or grant switches enforcement on — and the person who writes it becomes the workspace's **owner** at the same moment, so defining who is who never locks you out. The admin token is always a platform admin and holds the owner's actions.
 {% /callout %}
 
 ## Suspending someone
 
-The People tab of the Workspace page (or `PATCH /api/workspace/people/<email>` with `{"status":"suspended"}`) switches a person off at once: no role anywhere, no app opens, sign-in refused — until reactivated. Removing them from the identity provider does the same at the session's end; suspension is for right now.
+The People tab of the Workspace page (or `shpyrd people suspend <email>`) switches a person off at once: no role anywhere, no app opens, sign-in refused — until reactivated. Removing them from the identity provider does the same at the session's end; suspension is for right now. `shpyrd people forget` removes the sign-in record; the role and grants stay.
+
+## Email
+
+Invitations carry their link by email once the platform has a sender. Enable the `mail` extension and point it at your SMTP server (STARTTLS by default; `--tls` for port 465):
+
+```shell
+shpyrd-ctl extensions enable mail
+shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
+    --password @/path/to/password --from "shpyrd <noreply@example.com>"
+shpyrd-ctl mail test you@example.com
+```
+
+The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along.
 
 ## Kubernetes RBAC mirror
 
