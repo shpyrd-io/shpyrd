@@ -83,3 +83,17 @@ func TestSourcePortMoveDoesNotRebuild(t *testing.T) {
 		t.Errorf("new archive url = %s", u)
 	}
 }
+
+// Two workspaces may both have a shop: their images live in repositories
+// of their own; the implicit workspace keeps apps/<slug>.
+func TestImageTagPerWorkspace(t *testing.T) {
+	c := Config{RegistryHost: "10.96.0.50:5000"}
+	implicit := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	acme := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}}}
+	if got := c.imageTag(implicit); got != "10.96.0.50:5000/apps/shop" {
+		t.Errorf("implicit = %s", got)
+	}
+	if got := c.imageTag(acme); got != "10.96.0.50:5000/apps/acme/shop" {
+		t.Errorf("acme = %s", got)
+	}
+}

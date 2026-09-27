@@ -355,8 +355,16 @@ func (c Config) sourceURL(raw string) string {
 	return u.String()
 }
 
-// imageTag is the repository kpack pushes builds of this app to.
+// imageTag is the repository builds of this app are pushed to: apps/<slug>
+// for the implicit workspace (as it always was), apps/<workspace>/<slug>
+// for an explicit one — two workspaces may both have a shop, and a shared
+// repository would share tags, the BuildKit cache and the builder between
+// tenants (RFC-0033). kpack's spec.tag is immutable: an app whose
+// repository changes gets its Image recreated and rebuilt once.
 func (c Config) imageTag(app *shpyrdv1.App) string {
+	if ws := workspaceOf(app); ws != project.DefaultWorkspace {
+		return c.RegistryHost + "/apps/" + ws + "/" + app.Name
+	}
 	return c.RegistryHost + "/apps/" + app.Name
 }
 

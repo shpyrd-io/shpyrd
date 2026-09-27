@@ -509,19 +509,20 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		return nil, fmt.Errorf("get kpack image: %w", err)
 	}
 
-	// spec.tag is immutable in kpack: when the registry changed (an external
-	// registry replaced by the in-cluster one, RFC-0059) the Image is
-	// recreated. Its build history goes; releases live on the App.
+	// spec.tag is immutable in kpack: when the repository changed (an
+	// external registry replaced by the in-cluster one, RFC-0059; the
+	// workspace's own repository, RFC-0033) the Image is recreated and
+	// built once more. Its build history goes; releases live on the App.
 	curTag, _, _ := unstructured.NestedString(current.Object, "spec", "tag")
 	newTag, _, _ := unstructured.NestedString(desired.Object, "spec", "tag")
 	if curTag != "" && curTag != newTag {
 		if err := r.Delete(ctx, current); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("delete kpack image for the new registry: %w", err)
+			return nil, fmt.Errorf("delete kpack image for the new repository: %w", err)
 		}
 		if err := r.Create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("recreate kpack image: %w", err)
 		}
-		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "registry changed (%s -> %s): kpack Image recreated", registryOf(curTag), registryOf(newTag))
+		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "image repository changed (%s -> %s): kpack Image recreated", curTag, newTag)
 		return desired, nil
 	}
 
