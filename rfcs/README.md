@@ -76,7 +76,7 @@ declare what they depend on.
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
 | [0047](0047-autoscaling.md) | Autoscaling (min/max mode, HPA, KEDA) | implementable | 0019, 0042 |
-| [0048](0048-cost-visibility.md) | Cost visibility | implementable | 0042 |
+| [0048](0048-cost-visibility.md) | Cost visibility | superseded by RFC-0075 | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
@@ -103,7 +103,7 @@ declare what they depend on.
 | [0072](0072-app-actions.md) | App actions: declared endpoints the platform runs for a person (MCP tools, launcher buttons) | provisional | 0032, 0033, 0070 |
 | [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
-| [0075](0075-usage-ledger-and-sleep.md) | Usage ledger, cost monitor and sleep: metering into the control-plane store, estimated cost from a rate card, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | provisional | 0003, 0009, 0033, 0038, 0042, 0060 |
+| [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | provisional | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
 
 ## Phases
 
