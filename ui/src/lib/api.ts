@@ -277,8 +277,19 @@ export type AppDetail = {
     conditions?: Condition[];
     /** Custom domains' DNS and certificate state (RFC-0034). */
     domains?: DomainStatus[];
+    /** The image's process types (RFC-0066); "release" runs before every rollout. */
+    processTypes?: string[];
+    /** The release command's run for the release rolling out (RFC-0066). */
+    release?: ReleasePhaseStatus;
   };
   processes?: Record<string, ProcessStatus>;
+};
+
+export type ReleasePhaseStatus = {
+  target: string;
+  state: "Running" | "Succeeded" | "Failed";
+  message?: string;
+  job?: string;
 };
 
 export type DomainStatus = {

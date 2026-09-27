@@ -305,6 +305,13 @@ function ActivityPanel({
       </Alert>
     );
   }
+  const release = app.status.release;
+  if (release && release.state === "Running" && phase === "Deploying") {
+    return <ReleasePhaseCard app={app} onChanged={onChanged} />;
+  }
+  if (release && release.state === "Failed" && phase === "Failed") {
+    return <ReleasePhaseCard app={app} onChanged={onChanged} />;
+  }
   if (phase === "Deploying") {
     return (
       <Card className="border-amber-500/30">
@@ -366,6 +373,116 @@ function ActivityPanel({
     );
   }
   return null;
+}
+
+// The release phase (RFC-0066): the image's release command runs before a
+// new release rolls out. While it runs, and when it fails, this is the
+// project's activity; the command's output is right here.
+function ReleasePhaseCard({
+  app,
+  onChanged,
+}: {
+  app: AppDetail;
+  onChanged: () => void;
+}) {
+  const perms = usePerms(app.slug);
+  const release = app.status.release!;
+  const running = release.state === "Running";
+  const retry = useMutation({
+    mutationFn: () => api.redeploy(app.slug, "restart"),
+    onSuccess: (r) => {
+      toast.success(r.message);
+      onChanged();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const command = release.message?.replace(/^running /, "") ?? "release command";
+  return (
+    <Card className={running ? "border-amber-500/30" : "border-red-500/40"}>
+      <CardHeader>
+        <CardTitle
+          className={cn(
+            "flex items-center gap-2 text-sm",
+            !running && "text-red-500",
+          )}
+        >
+          {running ? (
+            <Loader2 className="size-4 animate-spin text-amber-500" />
+          ) : (
+            <AlertTriangle className="size-4" />
+          )}
+          {running ? "Release phase" : "Release command failed"}
+          {running && (
+            <span className="font-mono text-xs font-normal text-muted-foreground">
+              {command}
+            </span>
+          )}
+        </CardTitle>
+        <CardDescription className="break-words">
+          {running
+            ? "The image's release command runs before the new release rolls out; the current release keeps serving meanwhile."
+            : release.message}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <ReleaseOutput slug={app.slug} follow={running} />
+        {!running && perms.deploy && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={retry.isPending}
+              onClick={() => retry.mutate()}
+            >
+              <RotateCcw data-icon="inline-start" /> Run it again
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              or fix the command and deploy again
+            </span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ReleaseOutput tails the release command's output (the Job's pod carries
+// the release process label), following it while the command runs.
+function ReleaseOutput({ slug, follow }: { slug: string; follow: boolean }) {
+  const [lines, setLines] = useState<string[]>([]);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLines([]);
+    apiStream(
+      `/api/projects/${encodeURIComponent(slug)}/logs?process=release&tail=60&format=json&follow=${follow}`,
+      ctrl.signal,
+      (line) => {
+        try {
+          const l = JSON.parse(line) as { m?: string };
+          if (l.m !== undefined) {
+            setLines((prev) => [...prev.slice(-199), l.m as string]);
+          }
+        } catch {
+          // a partial line; ignore
+        }
+      },
+    ).catch(() => {
+      // no output yet (the Job's pod has not started) or the stream ended
+    });
+    return () => ctrl.abort();
+  }, [slug, follow]);
+  if (lines.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {follow ? "Waiting for output..." : "No output was captured."}
+      </p>
+    );
+  }
+  return (
+    <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-5">
+      {lines.join("\n")}
+    </pre>
+  );
 }
 
 // Exposure badge with a toggle for project admins (RFC-0036).
@@ -679,6 +796,17 @@ function Overview({
               v={app.status.url?.replace(/^https:\/\//, "") ?? "-"}
               mono
             />
+            {app.status.processTypes?.length ? (
+              <Row
+                k="Image types"
+                v={
+                  app.status.processTypes.join(", ") +
+                  (app.status.processTypes.includes("release")
+                    ? " (release runs before every rollout)"
+                    : "")
+                }
+              />
+            ) : null}
           </CardContent>
         </Card>
         <ProcessesCard app={app} processes={processes} onChanged={onChanged} />

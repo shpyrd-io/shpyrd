@@ -404,6 +404,12 @@ func (a *appClient) getDetail(ctx context.Context, slug string) (*api.AppDetail,
 func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation int64, timeout time.Duration) (*api.AppDetail, error) {
 	deadline := time.Now().Add(timeout)
 	last := ""
+	var release *releaseFollow
+	defer func() {
+		if release != nil {
+			release.stop()
+		}
+	}()
 	for {
 		d, err := a.getDetail(ctx, slug)
 		if err != nil {
@@ -417,6 +423,15 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 			if line != last {
 				fmt.Fprintf(a.out, "    %s\n", line)
 				last = line
+			}
+			// The release phase (RFC-0066): its output belongs in the
+			// deploy's, as the build's does.
+			if st := d.Status.Release; st != nil && st.State == shpyrdv1.ReleaseRunning && release == nil {
+				release = a.followRelease(ctx, slug, st.Target)
+			}
+			if st := d.Status.Release; release != nil && (st == nil || st.State != shpyrdv1.ReleaseRunning || st.Target != release.target) {
+				release.stop()
+				release = nil
 			}
 			switch d.Status.Phase {
 			case shpyrdv1.PhaseRunning:
@@ -432,6 +447,63 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 			return d, err
 		}
 	}
+}
+
+// releaseFollow streams a release command's output into the deploy's
+// output while the phase runs.
+type releaseFollow struct {
+	target string
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func (f *releaseFollow) stop() {
+	f.cancel()
+	<-f.done
+}
+
+// followRelease tails the release process's logs (the Job's pod carries
+// the process label) until stopped, retrying while the pod is not up yet.
+func (a *appClient) followRelease(ctx context.Context, slug, target string) *releaseFollow {
+	ctx, cancel := context.WithCancel(ctx)
+	f := &releaseFollow{target: target, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(f.done)
+		// Pods whose output was streamed to the end: a later look must
+		// not print them again.
+		seen := map[string]bool{}
+		for ctx.Err() == nil {
+			stream, err := a.serverStream(ctx, "api/projects/"+slug+"/logs?process=release&follow=true&format=json")
+			if err != nil {
+				// The Job's pod is not there yet: try again shortly.
+				if sleepCtx(ctx, 2*time.Second) != nil {
+					return
+				}
+				continue
+			}
+			streamed := map[string]bool{}
+			sc := bufio.NewScanner(stream)
+			sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for sc.Scan() {
+				var l api.LogLine
+				if json.Unmarshal(sc.Bytes(), &l) != nil || l.Message == "" || seen[l.Pod] {
+					continue
+				}
+				streamed[l.Pod] = true
+				fmt.Fprintf(a.out, "    release | %s\n", l.Message)
+			}
+			stream.Close()
+			for p := range streamed {
+				seen[p] = true
+			}
+			// The stream ends with the pod; if the phase is still on, a
+			// new pod may follow (a retry), so look again.
+			if sleepCtx(ctx, 2*time.Second) != nil {
+				return
+			}
+		}
+	}()
+	return f
 }
 
 // followBuildAPI streams the output of the build that follows a deploy: it

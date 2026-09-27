@@ -831,7 +831,8 @@ func (s *Server) redeployApp(c *gin.Context) {
 		if action == "rebuild" && (!a.HasSource() || a.Spec.Image != "") {
 			return fmt.Errorf("nothing to build: the project runs a pinned image")
 		}
-		if action == "restart" && a.CurrentRelease() == nil {
+		releaseFailed := a.Status.Release != nil && a.Status.Release.State == shpyrdv1.ReleaseFailed
+		if action == "restart" && a.CurrentRelease() == nil && !releaseFailed {
 			return fmt.Errorf("nothing to restart: no release yet")
 		}
 		if action == "restart" && a.Status.Phase == shpyrdv1.PhaseBuilding {
@@ -853,6 +854,11 @@ func (s *Server) redeployApp(c *gin.Context) {
 	msg := "Restarting the instances of the current release"
 	if cur := app.CurrentRelease(); cur != nil && action == "restart" {
 		msg = fmt.Sprintf("Restarting the instances of v%d", cur.Number)
+	}
+	if action == "restart" && app.Status.Release != nil && app.Status.Release.State == shpyrdv1.ReleaseFailed {
+		// The release command failed before anything rolled out: the
+		// retry is the command itself (RFC-0066).
+		msg = "Running the release command again"
 	}
 	if action == "rebuild" {
 		msg = "Building the same source again"

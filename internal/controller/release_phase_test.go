@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -66,6 +67,34 @@ func TestReleasePhase(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-rails", Name: "rails-web"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
 		t.Error("a failed release command must not roll out")
+	}
+
+	// 2b. A redeploy after the failure runs the command again: the failed
+	// Job goes and a fresh one takes its name on the next pass.
+	if got.Annotations == nil {
+		got.Annotations = map[string]string{}
+	}
+	got.Annotations[shpyrdv1.AnnotationRestartedAt] = time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	if err := c.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if got.Status.Release == nil || got.Status.Release.State != shpyrdv1.ReleaseRunning || !strings.Contains(got.Status.Release.Message, "again") {
+		t.Fatalf("after a redeploy of a failed release: %+v", got.Status.Release)
+	}
+	got = runReconcile(t, r, got)
+	if err := c.List(ctx, jobs); err != nil || len(jobs.Items) != 1 || len(jobs.Items[0].Status.Conditions) != 0 {
+		t.Fatalf("after the retry: jobs = %v (want one fresh %s without the failure)", names(jobs), job.Name)
+	}
+	job = jobs.Items[0]
+	// It fails again without a newer redeploy: Failed stays.
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if got.Status.Phase != shpyrdv1.PhaseFailed {
+		t.Fatalf("second failure: %q %q", got.Status.Phase, got.Status.Message)
 	}
 
 	// 3. A new deploy (another image) gets a new Job; the old one is pruned.

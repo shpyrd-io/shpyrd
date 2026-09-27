@@ -148,8 +148,20 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		app.Status.Release = st
 		return true, nil
 	case jobFailed(job):
+		// A redeploy asked after the failure runs the command again: the
+		// failed Job goes, the next pass creates a fresh one carrying the
+		// request, so the same request does not retry forever.
+		if restart := app.Annotations[shpyrdv1.AnnotationRestartedAt]; restart != "" && restart != job.Annotations[shpyrdv1.AnnotationRestartedAt] {
+			if err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
+				return false, fmt.Errorf("remove failed release job: %w", err)
+			}
+			r.Recorder.Event(app, corev1.EventTypeNormal, "ReleasePhase", "running the release command again")
+			st.State, st.Message = shpyrdv1.ReleaseRunning, "running "+strings.Join(command, " ")+" again"
+			app.Status.Release = st
+			return false, nil
+		}
 		st.State = shpyrdv1.ReleaseFailed
-		st.Message = fmt.Sprintf("release command failed (%s): fix it and deploy again; its output is in `shpyrd logs -p release`", jobFailureReason(job))
+		st.Message = fmt.Sprintf("release command failed (%s): fix it and deploy again, or redeploy to run it again; its output is in `shpyrd logs -p release`", jobFailureReason(job))
 		app.Status.Release = st
 		return false, nil
 	default:
@@ -164,6 +176,9 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, res corev1.ResourceRequirements, target string) error {
 	labels := processLabels(app, releaseProcessType)
 	labels["shpyrd.io/release-target"] = target
+	if restart := app.Annotations[shpyrdv1.AnnotationRestartedAt]; restart != "" {
+		job.Annotations = mergeMaps(job.Annotations, map[string]string{shpyrdv1.AnnotationRestartedAt: restart})
+	}
 	container := corev1.Container{
 		Name:            "app",
 		Image:           image,
