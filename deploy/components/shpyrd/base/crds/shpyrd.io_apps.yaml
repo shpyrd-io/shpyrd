@@ -526,7 +526,6 @@ spec:
                 type: string
               processes:
                 additionalProperties:
-                  description: Process is one process type of the app.
                   properties:
                     args:
                       description: Args are appended to the command.
@@ -662,6 +661,24 @@ spec:
                         Size names an instance size from the cluster catalog (shared-s,
                         dedicated-m, ...). Empty means the catalog default.
                       type: string
+                    sleep:
+                      description: Sleep configures scale-to-zero for this process
+                        (web only, RFC-0075).
+                      properties:
+                        after:
+                          description: |-
+                            After is the quiet period before scaling to zero, e.g. "15m".
+                            "off" (or empty) disables sleep.
+                          type: string
+                        resuming:
+                          description: |-
+                            Resuming is "page" (a branded waking screen) or "wait" (hold the
+                            connection silently, default).
+                          enum:
+                          - page
+                          - wait
+                          type: string
+                      type: object
                     volumes:
                       description: |-
                         Volumes mounts Volume resources of the project. A ReadWriteOnce

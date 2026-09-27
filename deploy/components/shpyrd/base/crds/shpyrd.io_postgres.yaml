@@ -55,7 +55,6 @@ spec:
           metadata:
             type: object
           spec:
-            description: PostgresSpec describes a PostgreSQL database run by CloudNativePG.
             properties:
               backups:
                 description: |-
@@ -103,6 +102,17 @@ spec:
                 description: 'Size is an instance size from the cluster catalog (default:
                   catalog default).'
                 type: string
+              sleep:
+                description: |-
+                  Sleep configures automatic hibernation (RFC-0075). Only for
+                  single-instance databases.
+                properties:
+                  after:
+                    description: |-
+                      After is the idle period before hibernating, e.g. "30m".
+                      "off" or empty disables sleep.
+                    type: string
+                type: object
               storage:
                 anyOf:
                 - type: integer
@@ -200,6 +210,25 @@ spec:
               recoverableFrom:
                 format: date-time
                 type: string
+              sleep:
+                description: Sleep is the current hibernation state (RFC-0075).
+                properties:
+                  lastActivityAt:
+                    description: |-
+                      LastActivityAt is the timestamp of the last observed session or
+                      transaction on the application database.
+                    format: date-time
+                    type: string
+                  state:
+                    description: State is awake, sleeping, waking or suspended.
+                    type: string
+                  wakePort:
+                    description: |-
+                      WakePort is the TCP port on the pg-gateway that wakes this database.
+                      Assigned once and kept for the life of the resource.
+                    format: int32
+                    type: integer
+                type: object
               storage:
                 description: |-
                   Storage is the effective data volume size when it differs from the
