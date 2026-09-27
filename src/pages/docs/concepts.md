@@ -34,7 +34,14 @@ Projects without a `web` process (workers, agents, schedulers) work the same way
 
 ## Processes
 
-A **process type** is a way of running the build: `web` serves HTTP and receives `PORT`; anything else (`worker`, `scheduler`, `agent`) runs the command of the same name that the buildpacks recorded in the image. Each process type becomes a Deployment with its own **instance** count (`shpyrd scale web=3 worker=1`) and **instance size** (`shpyrd resize web=shared-m`): a named cpu/memory allocation from the cluster catalog, `shared` (burstable CPU share) or `dedicated` (whole cores). The default size is `shared-s` (0.5 CPU, 64 MiB).
+A **process type** is a way of running the build: `web` serves HTTP and receives `PORT`; anything else (`worker`, `scheduler`, `agent`) runs the command of the same name that the buildpacks recorded in the image. Each process type becomes a Deployment with its own **instance** count (`shpyrd scale web=3 worker=1`) and **instance size** (`shpyrd resize web=shared-m`): a named cpu/memory allocation from the cluster catalog.
+
+Two size kinds exist:
+
+- **shared**: the `cpu` value is a ceiling the process may use; it is guaranteed a 1/8 share of it and borrows the rest from idle neighbours (Kubernetes burstable QoS). Many small shared instances fit on one node.
+- **dedicated**: requests equal limits — whole cores, Guaranteed QoS.
+
+Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-s` (up to 0.5 CPU, 64 MiB). `shpyrd sizes list` shows the full catalog.
 
 Instances are named the way Heroku names dynos: `web.1`, `web.2`, `worker.1`, in creation order. Logs and the dashboard use these names.
 
@@ -54,15 +61,24 @@ A **release** is a build plus the config vars in effect, numbered `v1`, `v2`, ..
 | config | `Set GREETING config var`, `Resize web to shared-m` | no, reuses the current build |
 | rollback | `Rollback to v7` | no, reuses v7's build |
 
-Each release records its build, its config snapshot (a Secret `<app>-release-vN`), its process types and their sizes, and the resources attached to the app. **Rollback** re-releases an earlier release exactly: its build is pinned and its config vars, sizes and attachments are restored. Rolling back to a release whose build predates a process type (say, before `worker` existed) cannot start that process; the dashboard warns before and the failure is reported plainly after.
+Each release records its build (identified by `REVISION`, the git commit or archive digest), its config snapshot (a Secret `<app>-release-vN`), its process types and their sizes, and the resources attached to the app. **Rollback** re-releases an earlier release exactly: its build is pinned and its config vars, sizes and attachments are restored. `REVISION` follows the image that runs, so a rollback reports the older commit, not the newest one. Rolling back to a release whose build predates a process type (say, before `worker` existed) cannot start that process; the dashboard warns before and the failure is reported plainly after.
 
 The next `shpyrd deploy` unpins the build and continues from the new source.
 
+### Release phase
+
+When an image has a `release` process type (a `Procfile` line `release: bundle exec rails db:prepare`, or `processes.release.command` in `shpyrd.yaml` for Dockerfile images), the platform runs it as a one-off Job before the new release rolls out. The rollout waits; a failure leaves the previous release serving and marks the project Failed. Every kind of release — a new build, a config change, a rollback — triggers the phase. See [Deploying › Release phase](/docs/deploying#release-phase).
+
 ## Config vars
 
-Config vars are environment variables for every process, stored in Secret `<app>-env`. They are **write-only** in the product: `shpyrd secrets set/unset/list` and the dashboard show names and when each was last changed, never values. Changing them creates a `config` release and rolls the processes.
+Config vars are environment variables for every process. Three sources, in increasing priority:
 
-`PORT` is injected for processes with a port; plain, non-secret variables can also be declared in the App spec (`env`). Resources attached to the app add their own variables (`DATABASE_URL`, ...), shown read-only with the resource that provides them; they win over a config var of the same name.
+1. **Global vars** — set once by a platform admin with `shpyrd globals set`; every project receives them.
+2. **`env:` in `shpyrd.yaml`** — plain, non-secret vars committed with the code (`RACK_ENV`, `NODE_ENV`). Travels with the deploy; wins over globals.
+3. **Secrets** — written with `shpyrd secrets set`, stored in Secret `<app>-env`. Write-only: names and timestamps are shown, values never. Wins over `env:`.
+4. **Bound vars** — injected by attached resources (`DATABASE_URL`, `REDIS_URL`); win over secrets of the same name.
+
+Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `SHPYRD_PROJECT`, `SHPYRD_WORKSPACE`, `SHPYRD_ISSUER`) that cannot be overridden from `shpyrd.yaml`.
 
 ## Domains and TLS
 

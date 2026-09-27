@@ -17,7 +17,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Local names and front door: `*.shpyrd.test` via dnsmasq, an existing Caddy on 443 as the front door | [RFC-0057](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0057-local-names-and-front-door.md) | done |
 | Project identity: display names, `/projects/<slug>` URLs, no "pod" wording | [RFC-0011](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0011-project-identity-and-product-language.md) | done ("pods" in the logs-agent description still missing) |
 | Global config vars for every project | [RFC-0016](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0016-global-config-vars.md) | done |
-| Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | ready to implement |
+| Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | done (v0.9.9) (API plan check and per-project ResourceQuota; quota UI still missing) |
 | Cost visibility | [RFC-0048](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0048-cost-visibility.md) | ready to implement |
 | Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0) |
 
@@ -26,8 +26,11 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Item | RFC | Status |
 | --- | --- | --- |
 | Projects and resources, bindings, attach/detach | [RFC-0003](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0003-projects-and-resources.md) | done (unattached resources in `projects info`; attach confirmation; `Deleting` phase still missing) |
-| Dockerfile builds with BuildKit | [RFC-0004](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0004-dockerfile-builds.md) | done (a "build" catalog size; TTL on build Jobs still missing) |
+| Dockerfile builds with BuildKit | [RFC-0004](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0004-dockerfile-builds.md) | done (v0.9.9) (a "build" catalog size; TTL on build Jobs still missing) |
 | Shell and one-off commands | [RFC-0005](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0005-shell-and-one-off-commands.md) | done (`shpyrd forward`; `run --process` still missing) |
+| Build profiles: automatic buildpack configuration for static sites, Vite, Rack, Rails | [RFC-0067](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0067-build-profiles.md) | proposal |
+| Build composition: buildpacks, stacks and system packages per project (Aptfile) | [RFC-0065](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0065-build-composition.md) | done (v0.9.9) (build profile auto-detection in RFC-0067 still missing) |
+| Release phase: Procfile `release:` runs before every rollout | [RFC-0066](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0066-release-phase.md) | done (v0.9.9) (output not yet streamed into `shpyrd deploy`; dashboard card still missing) |
 | Persistent volumes (single-instance) | [RFC-0006](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0006-persistent-volumes.md) | done |
 | Shared volumes (`storage-rwx`) | [RFC-0041](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0041-shared-volumes.md) | ready to implement |
 | Private repositories (tokens, deploy keys) | [RFC-0017](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0017-git-credentials.md) | proposal |
@@ -80,7 +83,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
 | Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0) |
-| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; `run`, `pg`, `redis`, `domains` and a browser sign-in for the CLI still missing) |
+| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; v0.9.9 `secrets set/unset` over the API; `run`, `pg`, `redis`, `domains` and a browser sign-in for the CLI still missing) |
 | MCP connector for AI agents | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | proposal |
 | Supply chain and encryption at rest | [RFC-0044](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0044-supply-chain.md) | ready to implement |
 

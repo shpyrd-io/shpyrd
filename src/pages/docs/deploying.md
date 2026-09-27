@@ -5,6 +5,10 @@ description: Create a project, deploy it from a checkout or a Git URL, configure
 
 The CLI talks to your cluster with your kubeconfig; the only call that reaches the shpyrd server is the upload of your source archive. {% .lead %}
 
+{% callout title="Examples" %}
+[shpyrd-io/shpyrd-examples](https://github.com/shpyrd-io/shpyrd-examples) has fifteen small projects deployed to the demo workspace, one per language or pattern: Go, Node.js, Express, Python, Ruby, Sinatra, Rails, Java, .NET, PHP, static nginx, static httpd, React (Vite), Next.js, a multi-stage Dockerfile (Sinatra + React) and a Ruby app with system packages from an Aptfile.
+{% /callout %}
+
 ## Create a project
 
 ```shell
@@ -60,8 +64,94 @@ shpyrd deploy --no-wait                                                         
 Deploying from Git is also available in the dashboard (**Deploy** button, or when creating the project).
 
 {% callout title="Which languages?" %}
-Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, .NET Core and static sites served by nginx/httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
+Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
 {% /callout %}
+
+## Buildpacks: languages, stacks and system packages
+
+The Paketo buildpacks detect the language from the repository and do the right thing for the common case. A few patterns need a hint in [`shpyrd.yaml`](/docs/shpyrd-yaml).
+
+### Static sites
+
+A directory with only static files (HTML, CSS, JS) needs `BP_WEB_SERVER` or the web-servers buildpack cannot detect it:
+
+```yaml
+# shpyrd.yaml
+build:
+  env:
+    BP_WEB_SERVER: nginx          # or httpd
+    BP_WEB_SERVER_ROOT: public    # directory that holds index.html
+```
+
+### Single-page apps (React, Vite)
+
+A Vite project with no `start` script in `package.json` is served as a static site after `npm run build`. The Node buildpack would win detection (there is a `package.json`) and produce an image with no process to start. Use `build.buildpacks` to compose explicitly:
+
+```yaml
+build:
+  buildpacks: [web-servers]       # Paketo web-servers: builds with Node, serves with nginx
+  env:
+    BP_NODE_RUN_SCRIPTS: build
+    BP_WEB_SERVER: nginx
+    BP_WEB_SERVER_ROOT: dist
+    BP_WEB_SERVER_ENABLE_PUSH_STATE: "true"   # HTML5 routing
+```
+
+### Buildpacks and stacks
+
+`build.buildpacks` pins the buildpack group the project uses (names from `shpyrd sizes list`); `build.stack` chooses the base image. The full stack (`jammy-full`) carries more system libraries than the base (`jammy`, default) and is useful when a language extension needs a C library that is present on Ubuntu but not in Paketo's minimal base image:
+
+```yaml
+build:
+  stack: full    # base (default) or full
+```
+
+### System packages (Aptfile)
+
+An `Aptfile` in the repository root lists Ubuntu packages to install into the image, one per line:
+
+```
+# Aptfile
+libvips42
+```
+
+The CLI translates it to the format the `heroku/deb-packages` buildpack reads and composes it in front of the language's buildpack. No `project.toml` or explicit `build.buildpacks` needed.
+
+```shell
+# shpyrd.yaml not required for an Aptfile — the CLI detects it
+shpyrd deploy
+```
+
+{% callout title="Stack for deep dependencies" %}
+Some packages (libvips, ImageMagick) pull in glib, libcurl and other libraries that exist on the build image but not on the minimal run image. Use `build.stack: full` when the app crashes at start with a missing shared library that is not in your Aptfile.
+{% /callout %}
+
+## Release phase
+
+When the image has a `release` process type — the Procfile line `release: bundle exec rails db:prepare` — the platform runs it before every new release rolls out. The rollout waits; a failure leaves the previous release serving and marks the project Failed with the reason.
+
+```
+# Procfile
+release: bundle exec rails db:prepare
+web:     bundle exec puma -C config/puma.rb
+```
+
+```
+==> Releasing
+    Deploying: release phase: running /cnb/process/release
+    Running: web 1/1
+Released v2: Deploy abc123def456
+```
+
+`shpyrd logs --process release` shows the command's output. `shpyrd projects info` lists the process types, including `release`, and a pending or failed release phase message.
+
+For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml`:
+
+```yaml
+processes:
+  release:
+    command: ["python", "manage.py", "migrate"]
+```
 
 ## Dockerfile builds
 
@@ -135,6 +225,16 @@ shpyrd secrets list            # names and when each was last set; values are ne
 ```
 
 Every change is a release (`Set DATABASE_URL config var`) and restarts the processes with the new environment. The dashboard's **Config** tab does the same, including pasting `.env` files.
+
+Plain, non-secret variables can also live in `shpyrd.yaml` under `env:` and travel with the code — useful for things like `RACK_ENV`, `RAILS_ENV` or `NODE_ENV` that belong in the repository rather than in the cluster's secret store:
+
+```yaml
+env:
+  RACK_ENV: production
+  RAILS_LOG_TO_STDOUT: "1"
+```
+
+`env:` is authoritative when present: an empty map (`env: {}`) removes every previously declared plain variable. Secret values — API keys, database passwords — always go through `shpyrd secrets set`, never here.
 
 ### Global config vars
 
