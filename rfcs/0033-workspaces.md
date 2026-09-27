@@ -137,6 +137,20 @@ Shipped in v0.9.5 — the seams for a platform hosting many workspaces:
   create|list|plan|suspend|resume` speaks the console routes of a server that reports the
   `workspaces` capability (the open-source platform does not, and says so).
 
+Shipped in v0.9.7 and v0.9.8:
+
+- Apps of an explicit workspace are served with the workspace's own wildcard certificate,
+  copied into their namespaces by the controller; the workspace's front door answers "No
+  app here" for unknown hosts under its address.
+- After `shpyrd login`, every developer command speaks the workspace API: deploy (with the
+  build output streamed back), logs, shell (through the web terminal's bridge), scale,
+  resize, releases, rollback, redeploy, open, projects, volumes, attach, detach, drains,
+  members. The CLI keeps a current workspace (`shpyrd use`). `run`, `pg`, `redis` and
+  `domains` still need a kubeconfig. Extension commands split by audience: `pg`/`redis` in
+  `shpyrd`, `users`/`auth`/`object-storage` in `shpyrd-ctl`.
+- The platform's exposure survives `cluster init` re-runs; the admin token is not offered
+  at a workspace's login page.
+
 The rest of the model (OAuth for agents) follows in later releases; the full text is
 published when it settles.
 
@@ -152,4 +166,4 @@ published when it settles.
 - 2026-09-26: phase 5 (allow lists) shipped in v0.7.0; phase 4 (CLIs) in v0.8.0; phase 6's
   first slice (the workspace resolved from the host) in v0.9.1, its second (sign-in at the
   workspace host through the platform's dashboard) in v0.9.2, its third (plan limits) in
-  v0.9.3.
+  v0.9.3; the CLI over the API for every developer command in v0.9.8.

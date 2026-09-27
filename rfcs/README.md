@@ -61,7 +61,7 @@ declare what they depend on.
 | [0030](0030-notifications.md) | Notifications (webhook, Slack, email) | provisional | 0013 (email) |
 | [0031](0031-api-tokens.md) | Per-user API tokens | implemented (v0.9.0); gaps: CLI minting needs a person session or the admin token | 0008 |
 | [0032](0032-mcp-connector.md) | MCP connector | provisional | 0031 (remote) |
-| [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5) | 0008, 0016 |
+| [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5; CLI over the API v0.9.8) | 0008, 0016 |
 | [0034](0034-domains-and-certificates.md) | Custom domains | implemented | 0036, 0061 |
 | [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci`, network policy); AWS provisional | 0045 |
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
@@ -80,7 +80,7 @@ declare what they depend on.
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
-| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implementable | 0031, 0026 |
+| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API); gaps: run, pg, redis, domains; browser device flow | 0031, 0026 |
 | [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | implementable | 0012, 0014 |
 | [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
