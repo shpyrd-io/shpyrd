@@ -97,6 +97,12 @@ declare what they depend on.
 | [0066](0066-release-phase.md) | Release phase: the image's `release` process type runs before every release | implemented (v0.9.9; dashboard, deploy output and retry in v0.9.10); gap: no phase for images from other registries without a declared command | 0004, 0005 |
 | [0067](0067-build-profiles.md) | Build profiles: the CLI infers what the buildpacks cannot guess (static sites, Vite, Next.js, Rack, Rails, PHP, heavy Aptfile packages) | implemented (v0.9.10); gaps: no prompt, no --git detection, no root index.html/CRA | 0004, 0065 |
 | [0068](0068-signed-in-detection-on-identified-apps.md) | Signed-in detection on identified apps: a credential-free hint cookie lets the edge identify signed-in people from the first page | provisional | 0033, 0034 |
+| [0069](0069-embedded-git.md) | Embedded git: a repository per project the platform keeps; deploys commit, pushes deploy, agents work on it | provisional | 0004, 0031, 0032, 0033, 0046 |
+| [0070](0070-internal-names.md) | Internal names: `http://crm.internal` between projects, with a service identity from the caller's origin | provisional | 0033, 0036 |
+| [0071](0071-ai-gateway.md) | AI gateway: model calls through the platform, metered and budgeted per project (`ai-gateway` extension) | provisional | 0002, 0033, 0042, 0048 |
+| [0072](0072-app-actions.md) | App actions: declared endpoints the platform runs for a person (MCP tools, launcher buttons) | provisional | 0032, 0033, 0070 |
+| [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
+| [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
 
 ## Phases
 
@@ -115,6 +121,7 @@ declare what they depend on.
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
 | K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
 | L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing |
+| M | 0069, 0070, 0071, 0072, 0073, 0074 | the agents stack and the enterprise: embedded git, internal names, AI gateway, app actions, data in backups, SCIM |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
 keeps dependencies satisfied.
