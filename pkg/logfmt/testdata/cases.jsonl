@@ -1,0 +1,45 @@
+{"line": "2026/09/27 09:59:43 {\"level\":\"info\",\"msg\":\"request\",\"method\":\"GET\",\"path\":\"/\",\"status\":200,\"duration_ms\":0,\"remote\":\"10.0.1.204:37058\"}", "structured": true, "level": "info", "levelText": "info", "message": "request", "time": "2026/09/27 09:59:43", "fields": [["method", "GET"], ["path", "/"], ["status", "200"], ["duration_ms", "0"], ["remote", "10.0.1.204:37058"]]}
+{"line": "{\"level\":\"info\",\"msg\":\"request\",\"method\":\"GET\"}", "structured": true, "level": "info", "levelText": "info", "message": "request", "time": "", "fields": [["method", "GET"]]}
+{"line": "2026/09/27 09:59:43.123456 {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "2026/09/27 09:59:43.123456", "fields": []}
+{"line": "09:59:43 {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "09:59:43", "fields": []}
+{"line": "2026/09/27 {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "2026/09/27", "fields": []}
+{"line": "2026-09-27T09:59:43Z {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "2026-09-27T09:59:43Z", "fields": []}
+{"line": "2026/09/27 09:59:43 main.go:42: {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "2026/09/27 09:59:43", "fields": [["prefix", "main.go:42:"]]}
+{"line": "myapp {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "", "fields": [["prefix", "myapp"]]}
+{"line": "2026/09/27 09:59:43 {\"time\":\"2026-09-27T09:59:43.101Z\",\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "2026-09-27T09:59:43.101Z", "fields": [["prefix", "2026/09/27 09:59:43"]]}
+{"line": "2026/02/30 09:59:43 {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "", "fields": [["prefix", "2026/02/30 09:59:43"]]}
+{"line": "2026/13/01 09:59:43 {\"msg\":\"hi\"}", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "", "fields": [["prefix", "2026/13/01 09:59:43"]]}
+{"line": "failed to parse config {\"a\":1,\"b\":2}", "structured": false, "level": "error", "levelText": "", "message": "failed to parse config {\"a\":1,\"b\":2}", "time": "", "fields": []}
+{"line": "2026/09/27 09:59:43 {\"msg\":\"hi\"} extra", "structured": false, "level": "info", "levelText": "", "message": "2026/09/27 09:59:43 {\"msg\":\"hi\"} extra", "time": "", "fields": []}
+{"line": "2026/09/27 09:59:43 {\"msg\":\"cut off\"", "structured": false, "level": "info", "levelText": "", "message": "2026/09/27 09:59:43 {\"msg\":\"cut off\"", "time": "", "fields": []}
+{"line": "2026/09/27 09:59:43 [1,2,3]", "structured": false, "level": "info", "levelText": "", "message": "2026/09/27 09:59:43 [1,2,3]", "time": "", "fields": []}
+{"line": "connection to db=primary failed", "structured": false, "level": "error", "levelText": "", "message": "connection to db=primary failed", "time": "", "fields": []}
+{"line": "I0927 09:59:43.123456       1 server.go:42] starting up", "structured": true, "level": "info", "levelText": "info", "message": "starting up", "time": "0927 09:59:43.123456", "fields": [["source", "server.go:42"]]}
+{"line": "W0927 09:59:43.123456       1 cache.go:7] cache miss", "structured": true, "level": "warn", "levelText": "warning", "message": "cache miss", "time": "0927 09:59:43.123456", "fields": [["source", "cache.go:7"]]}
+{"line": "E0927 09:59:43.123456      17 db.go:113] connect refused", "structured": true, "level": "error", "levelText": "error", "message": "connect refused", "time": "0927 09:59:43.123456", "fields": [["source", "db.go:113"]]}
+{"line": "F0927 09:59:43.123456       1 main.go:9] out of memory", "structured": true, "level": "error", "levelText": "fatal", "message": "out of memory", "time": "0927 09:59:43.123456", "fields": [["source", "main.go:9"]]}
+{"line": "I0927 09:59:43       1 server.go:42] up", "structured": true, "level": "info", "levelText": "info", "message": "up", "time": "0927 09:59:43", "fields": [["source", "server.go:42"]]}
+{"line": "I0927 09:59:43.123456       1 server.go:42] {\"level\":\"warn\",\"msg\":\"slow\"}", "structured": true, "level": "warn", "levelText": "warn", "message": "slow", "time": "", "fields": [["prefix", "I0927 09:59:43.123456       1 server.go:42]"]]}
+{"line": "X0927 09:59:43.123456 1 server.go:42] bad letter", "structured": false, "level": "info", "levelText": "", "message": "X0927 09:59:43.123456 1 server.go:42] bad letter", "time": "", "fields": []}
+{"line": "I09 09:59:43 1 server.go:42] short date", "structured": false, "level": "info", "levelText": "", "message": "I09 09:59:43 1 server.go:42] short date", "time": "", "fields": []}
+{"line": "Incoming request from 10.0.0.1", "structured": false, "level": "info", "levelText": "", "message": "Incoming request from 10.0.0.1", "time": "", "fields": []}
+{"line": "level=info msg=\"request served\" method=GET path=/ status=200", "structured": true, "level": "info", "levelText": "info", "message": "request served", "time": "", "fields": [["method", "GET"], ["path", "/"], ["status", "200"]]}
+{"line": "time=\"2026-09-27T09:59:43Z\" level=warning msg=\"disk filling\"", "structured": true, "level": "warn", "levelText": "warning", "message": "disk filling", "time": "2026-09-27T09:59:43Z", "fields": []}
+{"line": "level=error msg=\"say \\\"hi\\\"\" code=5", "structured": true, "level": "error", "levelText": "error", "message": "say \"hi\"", "time": "", "fields": [["code", "5"]]}
+{"line": "level=info msg=done note=", "structured": true, "level": "info", "levelText": "info", "message": "done", "time": "", "fields": [["note", ""]]}
+{"line": "msg=starting", "structured": true, "level": "info", "levelText": "", "message": "starting", "time": "", "fields": []}
+{"line": "level=debug component=cache", "structured": true, "level": "debug", "levelText": "debug", "message": "", "time": "", "fields": [["component", "cache"]]}
+{"line": "method=GET path=/ status=200", "structured": false, "level": "info", "levelText": "", "message": "method=GET path=/ status=200", "time": "", "fields": []}
+{"line": "GET /healthz 200", "structured": false, "level": "info", "levelText": "", "message": "GET /healthz 200", "time": "", "fields": []}
+{"line": "msg=\"unterminated", "structured": false, "level": "info", "levelText": "", "message": "msg=\"unterminated", "time": "", "fields": []}
+{"line": "=novalue msg=hi", "structured": false, "level": "info", "levelText": "", "message": "=novalue msg=hi", "time": "", "fields": []}
+{"line": "level=info msg=\"a\" trailing", "structured": false, "level": "info", "levelText": "", "message": "level=info msg=\"a\" trailing", "time": "", "fields": []}
+{"line": "{\"a\":1} trailing", "structured": false, "level": "info", "levelText": "", "message": "{\"a\":1} trailing", "time": "", "fields": []}
+{"line": "{}{}", "structured": false, "level": "info", "levelText": "", "message": "{}{}", "time": "", "fields": []}
+{"line": "[1,2,3]", "structured": false, "level": "info", "levelText": "", "message": "[1,2,3]", "time": "", "fields": []}
+{"line": "\"hello\"", "structured": false, "level": "info", "levelText": "", "message": "\"hello\"", "time": "", "fields": []}
+{"line": "   {\"msg\":\"hi\"}  ", "structured": true, "level": "info", "levelText": "", "message": "hi", "time": "", "fields": []}
+{"line": "{\"level\":\"warn\",\"msg\":\"m\",\"error\":\"boom\",\"extra\":{\"k\":[1,2]}}", "structured": true, "level": "warn", "levelText": "warn", "message": "m", "time": "", "fields": [["error", "boom"], ["extra", "{\"k\":[1,2]}"]]}
+{"line": "level=info msg=hi a=1 a=2", "structured": true, "level": "info", "levelText": "info", "message": "hi", "time": "", "fields": [["a", "2"]]}
+{"line": "plain old log line", "structured": false, "level": "info", "levelText": "", "message": "plain old log line", "time": "", "fields": []}
+{"line": "ERROR something exploded", "structured": false, "level": "error", "levelText": "", "message": "ERROR something exploded", "time": "", "fields": []}

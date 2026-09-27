@@ -24,8 +24,8 @@ func prettyLogs(pretty, asJSON, terminal bool) (bool, error) {
 }
 
 // renderLogLine turns one container log line into what the user sees.
-// Lines that are not JSON objects come back untouched, colour codes and
-// all.
+// A line none of pkg/logfmt's shapes fit comes back untouched, colour codes
+// and all.
 func renderLogLine(line string, pretty bool) string {
 	if !pretty {
 		return line

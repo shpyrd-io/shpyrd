@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-26
+**Last update:** 2026-09-27
 
 ## Summary
 
@@ -32,9 +32,21 @@ read and the viewer's level highlighting misses it.
 
 ## Proposal
 
-- Parser: a line whose trimmed body starts with `{` and parses as an object is structured;
-  well-known keys map to level (`level|severity|lvl|log.level`), message
-  (`msg|message|event`), time (`time|ts|timestamp|@timestamp`), error (`error|err`).
+- Parser: a line is structured when it fits one of four shapes, tried most specific first —
+  a JSON object that is the whole line; a prefix followed by a JSON object running to the end
+  of the line (Go's standard `log` package stamps `2026/09/27 09:59:43 ` in front of whatever
+  it is given); klog/glog (`I0927 09:59:43.123456   1 server.go:42] message`); and logfmt
+  (`level=info msg="request" method=GET`). Whichever shape matched, well-known keys map to
+  level (`level|severity|lvl|log.level`), message (`msg|message|event`), time
+  (`time|ts|timestamp|@timestamp`), error (`error|err`).
+- The two shapes that could mistake prose for a record each carry a guard: a prefixed object
+  counts only when the object holds a well-known key, and a logfmt line only when every token
+  is a `key=value` pair and one of them is a level or a message. Anything else stays text,
+  which is the safe direction to be wrong in — a plain line rendered as plain is merely
+  unhelpful, while prose rendered as a record loses words off the screen.
+- A prefix is never discarded: a leading timestamp becomes the line's time when the record
+  carries none of its own, and whatever is left (the caller `log.Lshortfile` adds, a
+  `log.SetPrefix` string) becomes a `prefix` field.
 - Dashboard: structured lines render `LEVEL message` with a chevron revealing the remaining
   fields as key/value; a "raw" toggle per view; the filter box matches field values too.
 - CLI: `--pretty` renders `time level message key=value...`; `--json` passes lines through
@@ -46,6 +58,15 @@ read and the viewer's level highlighting misses it.
 
 - UI: `parseLogLine` in `ui/src/lib/logs.ts` with tests; CLI: `pkg/logfmt`.
 - Multi-line JSON is not reassembled (lines are units).
+- The two parsers are held to one golden table, `pkg/logfmt/testdata/cases.jsonl`, read by
+  `pkg/logfmt`'s `TestGoldenCases` and by `ui/src/lib/logs.golden.test.ts`. Mirroring two
+  hand-written test tables kept them in step only as long as someone remembered to mirror;
+  one table of answers makes a one-sided change fail in one of the two suites.
+- Prefix timestamps are validated by parsing, not by shape: `pkg/logfmt` runs the candidate
+  through `time.Parse` against Go's `log` flag layouts and RFC3339, the same way
+  `pkg/api`'s `splitTimestamp` validates kubelet's prefix. The browser has no layout parser,
+  so it range-checks each field and rejects an unreal calendar date through the `Date`
+  constructor — which is what keeps it from accepting `2026/02/30` where Go does not.
 
 ## Implementation History
 
@@ -106,3 +127,28 @@ read and the viewer's level highlighting misses it.
   - Considered and dropped: ANSI colour in `shpyrd logs`. It was built and reverted; the
     owner did not want it. A large record is read with `--json | jq`, and the terminal
     keeps one line per log line.
+
+- 2026-09-27: three more shapes, after a report that
+  `2026/09/27 09:59:43 {"level":"info","msg":"request",...}` rendered as a wall of JSON. The
+  cause was the same in both parsers and was a gap in this RFC rather than a coding mistake:
+  the Proposal said "starts with `{`", and the note above about trailing content had never
+  considered content *before* the object. Go's standard `log` package puts a timestamp there
+  whenever an application hands it a marshalled record, which is common enough to be worth
+  reading.
+  - Prefixed JSON, klog/glog and logfmt are now read, in that order of specificity ahead of
+    plain text, with the guards described in the Proposal. A klog line whose message is
+    itself JSON reads as the inner record, since it says more about the line than the header
+    does, and the header is kept as the `prefix` field.
+  - Deliberately still plain text: access logs (nothing structured to extract, and they read
+    fine as text) and level-leading formats like `INFO 2026-09-27 ... message`, whose
+    spellings vary too widely to detect without guessing. Heroku's router logs parse as
+    logfmt but carry `at=info` rather than a level key, so they reach the guard and stay
+    text; adding `at` to the level keys would have meant reading it as a level inside JSON
+    records too, which is too eager.
+  - klog's thread id is dropped rather than kept as a field: it would otherwise put
+    `thread=1` on every line. The caller is kept as `source`.
+  - Verified by running one line of each shape through `Entry.Pretty`, and by the golden
+    table: 45 cases, both parsers byte-identical on all of them, including the calendar edges
+    (`2026/02/30`, `2026/13/01`) where the Go and browser timestamp checks are implemented
+    differently. The table was also checked to *fail* on a one-sided change, so it is known
+    to detect drift rather than assumed to.
