@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -446,9 +447,27 @@ func TestKpackImageRecreatedWhenRegistryChanges(t *testing.T) {
 		t.Fatalf("tag = %q", tag)
 	}
 	firstUID := img.GetUID()
+	// kpack's build cache claim, named after the Image and gone with it.
+	cache := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "mig-cache", Namespace: "app-mig"}}
+	if err := c.Create(context.Background(), cache); err != nil {
+		t.Fatal(err)
+	}
 
+	// The move takes two passes: the old Image and its cache claim go
+	// first (the project says so), the new Image comes once they are gone,
+	// so its first build never mounts a claim about to disappear.
 	r.Config.RegistryHost = "10.96.0.50:5000"
-	runReconcile(t, r, app)
+	got := runReconcile(t, r, app)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-mig", Name: "mig"}, img); !apierrors.IsNotFound(err) {
+		t.Fatalf("the old Image must be gone before the new one is created: %v", err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-mig", Name: "mig-cache"}, cache); !apierrors.IsNotFound(err) {
+		t.Fatalf("the old cache claim must go with the Image: %v", err)
+	}
+	if got.Status.Phase != shpyrdv1.PhaseBuilding || !strings.Contains(got.Status.Message, "moving") {
+		t.Errorf("status during the move = %q %q", got.Status.Phase, got.Status.Message)
+	}
+	runReconcile(t, r, got)
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-mig", Name: "mig"}, img); err != nil {
 		t.Fatal(err)
 	}

@@ -310,6 +310,12 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			}
 		} else {
 			img, err := r.reconcileKpackImage(ctx, app)
+			if errors.Is(err, errImageMoving) {
+				app.Status.Phase = shpyrdv1.PhaseBuilding
+				app.Status.Message = "moving the build to its new image repository"
+				setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, "Moving", app.Status.Message)
+				return requeue(5 * time.Second), nil
+			}
 			if err != nil {
 				return outcome{}, err
 			}
@@ -503,6 +509,12 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	err = r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	switch {
 	case apierrors.IsNotFound(err):
+		// A move in progress (above) also waits for the old cache claim.
+		if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name + "-cache"}, &corev1.PersistentVolumeClaim{}); err == nil {
+			return nil, errImageMoving
+		} else if !apierrors.IsNotFound(err) {
+			return nil, err
+		}
 		if err := r.Create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("create kpack image: %w", err)
 		}
@@ -519,14 +531,21 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	curTag, _, _ := unstructured.NestedString(current.Object, "spec", "tag")
 	newTag, _, _ := unstructured.NestedString(desired.Object, "spec", "tag")
 	if curTag != "" && curTag != newTag {
-		if err := r.Delete(ctx, current); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("delete kpack image for the new repository: %w", err)
+		// The old Image and its build cache claim (which kpack names after
+		// the Image and garbage-collects with it) must be gone before the
+		// new Image takes the name: created any sooner, its first build
+		// mounts a claim that is about to disappear and waits forever.
+		if current.GetDeletionTimestamp() == nil {
+			if err := r.Delete(ctx, current); err != nil && !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("delete kpack image for the new repository: %w", err)
+			}
+			r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "image repository changed (%s -> %s): the build moves there", curTag, newTag)
 		}
-		if err := r.Create(ctx, desired); err != nil {
-			return nil, fmt.Errorf("recreate kpack image: %w", err)
+		cache := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: app.Name + "-cache", Namespace: app.Namespace}}
+		if err := r.Delete(ctx, cache); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("delete the old build cache: %w", err)
 		}
-		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "image repository changed (%s -> %s): kpack Image recreated", curTag, newTag)
-		return desired, nil
+		return nil, errImageMoving
 	}
 
 	// A redeploy of the same source: kpack builds again when its latest
@@ -571,6 +590,10 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	}
 	return current, nil
 }
+
+// errImageMoving says the kpack Image is between repositories: the old one
+// (and its cache claim) is going, the new one is created once they are gone.
+var errImageMoving = errors.New("kpack image moving to a new repository")
 
 // kpackBuildNeededAnnotation on an Image's latest Build makes kpack schedule
 // another build of the same source (build reason TRIGGER).
