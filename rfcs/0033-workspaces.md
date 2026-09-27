@@ -208,7 +208,9 @@ Shipped in v0.9.13 — workspace roles and invitations:
   owners; the People list includes people with a role who have not signed in yet; the
   platform backup carries memberships (dump version 2).
 
-Known gaps (the model promises these; the code does not do them yet): workspace delete and
+Known gaps (the model promises these; the code does not do them yet): an `identified` app
+sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
+(the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete and
 address change; per-workspace login methods and step-up on claimed domains; a way to
 disable previews; workspace custom domains; one signing key ring per platform rather than
 per workspace; the legacy `Team`/`ProjectMember` CRDs still ship; `run`, `globals`,

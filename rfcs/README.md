@@ -96,6 +96,7 @@ declare what they depend on.
 | [0065](0065-build-composition.md) | Build composition: buildpacks, stacks and system packages per project | implemented (v0.9.9); gaps: no `GET /api/buildpacks`, dashboard | 0004, 0045 |
 | [0066](0066-release-phase.md) | Release phase: the image's `release` process type runs before every release | implemented (v0.9.9; dashboard, deploy output and retry in v0.9.10); gap: no phase for images from other registries without a declared command | 0004, 0005 |
 | [0067](0067-build-profiles.md) | Build profiles: the CLI infers what the buildpacks cannot guess (static sites, Vite, Next.js, Rack, Rails, PHP, heavy Aptfile packages) | implemented (v0.9.10); gaps: no prompt, no --git detection, no root index.html/CRA | 0004, 0065 |
+| [0068](0068-signed-in-detection-on-identified-apps.md) | Signed-in detection on identified apps: a credential-free hint cookie lets the edge identify signed-in people from the first page | provisional | 0033, 0034 |
 
 ## Phases
 
@@ -112,7 +113,7 @@ declare what they depend on.
 | H | 0027, 0028, 0015, 0029, 0030 | observability and notifications |
 | I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime |
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
-| K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033 | data stores, security, workspaces |
+| K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
 | L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
