@@ -284,9 +284,19 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 	if status == "" {
 		status = WorkspaceActive
 	}
+	address := strings.ToLower(strings.TrimSpace(w.Address))
+	if address != "" {
+		var taken bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workspace_hosts WHERE host = $1)`, address).Scan(&taken); err != nil {
+			return nil, err
+		}
+		if taken {
+			return nil, ErrConflict // a custom domain or a moved address of another workspace
+		}
+	}
 	id := newID()
 	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings) VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, w.Slug, w.Name, strings.ToLower(strings.TrimSpace(w.Address)), status, settings); err != nil {
+		id, w.Slug, w.Name, address, status, settings); err != nil {
 		if isUnique(err) {
 			return nil, ErrConflict
 		}
@@ -736,7 +746,11 @@ func (p *Postgres) Export(ctx context.Context, ws string) (*Dump, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships}, nil
+	hosts, err := p.ListWorkspaceHosts(ctx, ws)
+	if err != nil {
+		return nil, err
+	}
+	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships, Hosts: hosts}, nil
 }
 
 func (p *Postgres) Import(ctx context.Context, ws string, d *Dump, overwrite bool) (*ImportResult, error) {
@@ -1117,6 +1131,164 @@ func (p *Postgres) DeleteInvitation(ctx context.Context, ws, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ---- workspace hosts (RFC-0033 names) -------------------------------------------
+
+const hostColumns = `id, workspace_id, host, kind, is_primary, token, verified_at, expires_at, created_at`
+
+func scanHost(row pgx.Row) (*WorkspaceHost, error) {
+	var h WorkspaceHost
+	if err := row.Scan(&h.ID, &h.WorkspaceID, &h.Host, &h.Kind, &h.Primary, &h.Token, &h.VerifiedAt, &h.ExpiresAt, &h.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &h, nil
+}
+
+func (p *Postgres) ListWorkspaceHosts(ctx context.Context, ws string) ([]WorkspaceHost, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := p.pool.Query(ctx, `SELECT `+hostColumns+` FROM workspace_hosts WHERE workspace_id = $1 ORDER BY host`, wsID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WorkspaceHost
+	for rows.Next() {
+		h, err := scanHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *h)
+	}
+	return out, rows.Err()
+}
+
+// addressTaken says a host is some workspace's address, other than ws.
+func (p *Postgres) addressTaken(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, host, exceptWorkspaceID string) (bool, error) {
+	var taken bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE address = $1 AND id <> $2)`, host, exceptWorkspaceID).Scan(&taken)
+	return taken, err
+}
+
+func (p *Postgres) PutWorkspaceHost(ctx context.Context, ws string, h WorkspaceHost) (*WorkspaceHost, error) {
+	h.Host = normalizeHost(h.Host)
+	if h.Host == "" {
+		return nil, errors.New("host is required")
+	}
+	if h.Kind != HostCustom && h.Kind != HostMoved {
+		return nil, fmt.Errorf("host kind %q is not custom or moved", h.Kind)
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	wsID, err := p.wsID(ctx, tx, ws)
+	if err != nil {
+		return nil, err
+	}
+	var ownAddress string
+	if err := tx.QueryRow(ctx, `SELECT address FROM workspaces WHERE id = $1`, wsID).Scan(&ownAddress); err != nil {
+		return nil, err
+	}
+	if ownAddress == h.Host {
+		return nil, ErrConflict
+	}
+	if taken, err := p.addressTaken(ctx, tx, h.Host, wsID); err != nil {
+		return nil, err
+	} else if taken {
+		return nil, ErrConflict
+	}
+	if h.Primary {
+		if _, err := tx.Exec(ctx, `UPDATE workspace_hosts SET is_primary = false WHERE workspace_id = $1`, wsID); err != nil {
+			return nil, err
+		}
+	}
+	token := h.Token
+	if token == "" && h.Kind == HostCustom {
+		token = newID()
+	}
+	out, err := scanHost(tx.QueryRow(ctx, `INSERT INTO workspace_hosts (id, workspace_id, host, kind, is_primary, token, verified_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (host) DO UPDATE SET is_primary = EXCLUDED.is_primary, verified_at = EXCLUDED.verified_at, expires_at = EXCLUDED.expires_at
+		WHERE workspace_hosts.workspace_id = EXCLUDED.workspace_id
+		RETURNING `+hostColumns, newID(), wsID, h.Host, h.Kind, h.Primary, token, h.VerifiedAt, h.ExpiresAt))
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrConflict // the host belongs to another workspace
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+func (p *Postgres) DeleteWorkspaceHost(ctx context.Context, ws, host string) error {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return err
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM workspace_hosts WHERE workspace_id = $1 AND host = $2`, wsID, normalizeHost(host))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) WorkspaceByHost(ctx context.Context, host string) (*Workspace, *WorkspaceHost, error) {
+	h, err := scanHost(p.pool.QueryRow(ctx, `SELECT `+hostColumns+` FROM workspace_hosts WHERE host = $1`, normalizeHost(host)))
+	if err != nil {
+		return nil, nil, err
+	}
+	w, err := scanWorkspace(p.pool.QueryRow(ctx, `SELECT `+workspaceColumns+` FROM workspaces WHERE id = $1`, h.WorkspaceID))
+	if err != nil {
+		return nil, nil, err
+	}
+	return w, h, nil
+}
+
+func (p *Postgres) UpdateWorkspaceAddress(ctx context.Context, slug, address string) (*Workspace, error) {
+	address = normalizeHost(address)
+	if address == "" {
+		return nil, errors.New("address is required")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	wsID, err := p.wsID(ctx, tx, slug)
+	if err != nil {
+		return nil, err
+	}
+	var hostTaken bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workspace_hosts WHERE host = $1)`, address).Scan(&hostTaken); err != nil {
+		return nil, err
+	}
+	if hostTaken {
+		return nil, ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workspaces SET address = $2, updated_at = now() WHERE id = $1`, wsID, address); err != nil {
+		if isUnique(err) {
+			return nil, ErrConflict
+		}
+		return nil, err
+	}
+	out, err := scanWorkspace(tx.QueryRow(ctx, `SELECT `+workspaceColumns+` FROM workspaces WHERE id = $1`, wsID))
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit(ctx)
 }
 
 var _ Store = (*Postgres)(nil)

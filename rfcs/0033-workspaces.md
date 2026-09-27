@@ -219,11 +219,26 @@ Shipped in v0.9.15 — a workspace's own sign-in, and readers:
 - **The `reader` role** opens an app read-only: the edge refuses requests that change
   things and tells the app `reader`, so apps have viewers without permission code.
 
+Shipped in v0.9.16 — the workspace's names:
+
+- **Address change.** Owners move the workspace to another label under the same parent
+  (`demo.shpyrd.app` → `acme.shpyrd.app`; Overview page or `shpyrd workspace address`). The
+  label may not be another workspace's name, address or domain, or a reserved word. Apps
+  move with it; the old address — dashboard and app hosts — redirects permanently for
+  thirty days and cannot be taken meanwhile. (The internal identifier, the namespace's
+  name, does not change: Kubernetes namespaces cannot be renamed.)
+- **Custom domains** in CNAME mode: `intranet.acme.com` and `*.intranet.acme.com` point at
+  the address, a TXT record (or the CNAME itself) proves the domain, the platform issues a
+  certificate for the domain and one per app host, and the dashboard and every app answer
+  there. A verified domain may be made **primary**: the dashboard and app URLs (and the
+  JWT's issuer) use it; the address keeps answering. Delegated (NS) mode and per-app
+  custom domains on it come later.
+
 Known gaps (the model promises these; the code does not do them yet): an `identified` app
 sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
-(the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete and
-address change; SAML methods and step-up on claimed domains; a way to
-disable previews; workspace custom domains; one signing key ring per platform rather than
+(the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete;
+delegated (NS) custom domains and PSL submission; SAML methods and step-up on claimed
+domains; a way to disable previews; one signing key ring per platform rather than
 per workspace; the legacy `Team`/`ProjectMember` CRDs still ship; `run`, `globals`,
 `sizes`, `extensions` still need a kubeconfig; `shpyrd login` has no browser flow. OAuth
 for agents follows in later releases; the full text is published when it settles.
@@ -249,3 +264,5 @@ for agents follows in later releases; the full text is published when it settles
   (v0.9.13).
 - 2026-09-27: per-workspace SSO, the email-first login step for claimed domains, the
   `reader` role (v0.9.15).
+- 2026-09-27: address change with redirects, custom workspace domains in CNAME mode with a
+  primary (v0.9.16).

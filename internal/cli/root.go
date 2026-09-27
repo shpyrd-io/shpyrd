@@ -98,6 +98,7 @@ func New() *cobra.Command {
 	root.AddCommand(newTeamsCmd(g))
 	root.AddCommand(newMembersCmd(g))
 	root.AddCommand(newPeopleCmd(g))
+	root.AddCommand(newWorkspaceCmd(g))
 	root.AddCommand(newInviteCmd(g))
 	root.AddCommand(newInvitationsCmd(g))
 	// Commands contributed by extensions (they explain themselves when the

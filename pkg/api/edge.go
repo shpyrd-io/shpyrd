@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -79,10 +80,12 @@ func (s *Server) withPort(host string) string {
 // at the platform's names (shpyrd.<domain>, <app>.<domain>); an explicit
 // one at its address (<address>, <app>.<address>).
 
-// dashboardHostOf is the host (with port) of a workspace's dashboard.
+// dashboardHostOf is the host (with port) of a workspace's dashboard: its
+// primary domain (a verified custom domain made primary, else the
+// address).
 func (s *Server) dashboardHostOf(ws *store.Workspace) string {
 	if ws != nil && ws.Address != "" {
-		return s.withPort(ws.Address)
+		return s.withPort(s.primaryDomainOf(context.Background(), ws))
 	}
 	return s.dashboardHost()
 }
@@ -90,15 +93,16 @@ func (s *Server) dashboardHostOf(ws *store.Workspace) string {
 // dashboardURLOf is the URL of a workspace's dashboard.
 func (s *Server) dashboardURLOf(ws *store.Workspace) string {
 	if ws != nil && ws.Address != "" {
-		return "https://" + s.withPort(ws.Address)
+		return "https://" + s.dashboardHostOf(ws)
 	}
 	return s.opts.Public.DashboardURL
 }
 
-// appsDomainOf is the domain a workspace's apps live one label under.
+// appsDomainOf is the domain a workspace's apps live one label under, as
+// their URLs show it (the primary domain).
 func (s *Server) appsDomainOf(ws *store.Workspace) string {
 	if ws != nil && ws.Address != "" {
-		return ws.Address
+		return s.primaryDomainOf(context.Background(), ws)
 	}
 	return s.opts.Public.Domain
 }
@@ -137,21 +141,24 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 	if err := s.apps.List(c.Request.Context(), &list); err != nil {
 		return nil, err
 	}
-	// Each app answers one label under its workspace's apps domain.
-	domains := map[string]string{store.DefaultWorkspace: s.opts.Public.Domain}
+	// Each app answers one label under every domain of its workspace: the
+	// primary, the address, verified custom domains.
+	domains := map[string][]string{store.DefaultWorkspace: {s.opts.Public.Domain}}
 	if all, err := s.store.ListWorkspaces(c.Request.Context()); err == nil {
 		for i := range all {
-			domains[all[i].Slug] = s.appsDomainOf(&all[i])
+			domains[all[i].Slug] = s.appsDomainsOf(c.Request.Context(), &all[i])
 		}
 	}
 	index := map[string]*shpyrdv1.App{}
 	for i := range list.Items {
 		app := &list.Items[i]
-		domain, ok := domains[workspaceOf(app)]
+		wsDomains, ok := domains[workspaceOf(app)]
 		if !ok {
 			continue // an app of a workspace this server does not know
 		}
-		index[strings.ToLower(app.Name+"."+domain)] = app
+		for _, domain := range wsDomains {
+			index[strings.ToLower(app.Name+"."+domain)] = app
+		}
 		for _, d := range app.Spec.Domains {
 			index[hostOnly(d)] = app
 		}

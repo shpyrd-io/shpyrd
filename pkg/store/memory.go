@@ -37,6 +37,7 @@ type Memory struct {
 	tokens      []tokenEntry
 	memberships []Membership
 	invitations []invitationEntry
+	hosts       []WorkspaceHost
 	now         func() time.Time
 }
 
@@ -136,6 +137,11 @@ func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, er
 	for _, have := range m.workspaces {
 		if w.Address != "" && have.Address == w.Address {
 			return nil, ErrConflict
+		}
+	}
+	for _, h := range m.hosts {
+		if w.Address != "" && h.Host == w.Address {
+			return nil, ErrConflict // a custom domain or a moved address of another workspace
 		}
 	}
 	t := m.now()
@@ -560,7 +566,8 @@ func (m *Memory) Export(ctx context.Context, ws string) (*Dump, error) {
 	grants, _ := m.ListGrants(ctx, ws)
 	domains, _ := m.ListDomainClaims(ctx, ws)
 	memberships, _ := m.ListMemberships(ctx, ws)
-	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships}, nil
+	hosts, _ := m.ListWorkspaceHosts(ctx, ws)
+	return &Dump{Version: DumpVersion, Workspace: *w, Identities: ids, Teams: teams, Grants: grants, Domains: domains, Memberships: memberships, Hosts: hosts}, nil
 }
 
 func (m *Memory) Import(ctx context.Context, ws string, d *Dump, overwrite bool) (*ImportResult, error) {
@@ -646,6 +653,23 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 			return res, err
 		}
 		res.Memberships++
+	}
+	// Hosts: custom domains come back verified as they were; a host taken
+	// by another workspace on this platform is skipped.
+	for _, h := range d.Hosts {
+		if h.Kind != HostCustom {
+			continue // moved addresses are not carried over
+		}
+		put, err := s.PutWorkspaceHost(ctx, ws, WorkspaceHost{Host: h.Host, Kind: h.Kind, Primary: h.Primary, VerifiedAt: h.VerifiedAt})
+		switch {
+		case err == nil:
+			res.Hosts++
+			_ = put
+		case errors.Is(err, ErrConflict):
+			res.Skipped++
+		default:
+			return res, err
+		}
 	}
 	return res, nil
 }
@@ -1034,4 +1058,142 @@ func (m *Memory) DeleteInvitation(_ context.Context, ws, id string) error {
 		}
 	}
 	return ErrNotFound
+}
+
+// ---- workspace hosts (RFC-0033 names) -------------------------------------------
+
+func normalizeHost(h string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+}
+
+func (m *Memory) ListWorkspaceHosts(_ context.Context, ws string) ([]WorkspaceHost, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	var out []WorkspaceHost
+	for _, h := range m.hosts {
+		if h.WorkspaceID == w.ID {
+			out = append(out, h)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out, nil
+}
+
+// hostTaken says a host equals some workspace's address or a host record
+// of a workspace other than exceptID.
+func (m *Memory) hostTaken(host, exceptWorkspaceID string) bool {
+	for _, w := range m.workspaces {
+		if w.Address != "" && w.Address == host && w.ID != exceptWorkspaceID {
+			return true
+		}
+	}
+	for _, h := range m.hosts {
+		if h.Host == host && h.WorkspaceID != exceptWorkspaceID {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Memory) PutWorkspaceHost(_ context.Context, ws string, h WorkspaceHost) (*WorkspaceHost, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return nil, err
+	}
+	h.Host = normalizeHost(h.Host)
+	if h.Host == "" {
+		return nil, errors.New("host is required")
+	}
+	if h.Kind != HostCustom && h.Kind != HostMoved {
+		return nil, fmt.Errorf("host kind %q is not custom or moved", h.Kind)
+	}
+	if m.hostTaken(h.Host, w.ID) || (w.Address != "" && w.Address == h.Host) {
+		return nil, ErrConflict
+	}
+	if h.Primary {
+		for i := range m.hosts {
+			if m.hosts[i].WorkspaceID == w.ID {
+				m.hosts[i].Primary = false
+			}
+		}
+	}
+	for i := range m.hosts {
+		e := &m.hosts[i]
+		if e.WorkspaceID == w.ID && e.Host == h.Host {
+			e.Primary, e.VerifiedAt, e.ExpiresAt = h.Primary, h.VerifiedAt, h.ExpiresAt
+			c := *e
+			return &c, nil
+		}
+	}
+	h.ID, h.WorkspaceID, h.CreatedAt = newID(), w.ID, m.now()
+	if h.Kind == HostCustom && h.Token == "" {
+		h.Token = newID()
+	}
+	m.hosts = append(m.hosts, h)
+	c := h
+	return &c, nil
+}
+
+func (m *Memory) DeleteWorkspaceHost(_ context.Context, ws, host string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(ws)
+	if err != nil {
+		return err
+	}
+	host = normalizeHost(host)
+	for i, h := range m.hosts {
+		if h.WorkspaceID == w.ID && h.Host == host {
+			m.hosts = append(m.hosts[:i], m.hosts[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) WorkspaceByHost(_ context.Context, host string) (*Workspace, *WorkspaceHost, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	host = normalizeHost(host)
+	for _, h := range m.hosts {
+		if h.Host == host {
+			for _, w := range m.workspaces {
+				if w.ID == h.WorkspaceID {
+					cw, ch := *w, h
+					return &cw, &ch, nil
+				}
+			}
+		}
+	}
+	return nil, nil, ErrNotFound
+}
+
+func (m *Memory) UpdateWorkspaceAddress(_ context.Context, slug, address string) (*Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(slug)
+	if err != nil {
+		return nil, err
+	}
+	address = normalizeHost(address)
+	if address == "" {
+		return nil, errors.New("address is required")
+	}
+	if m.hostTaken(address, w.ID) {
+		return nil, ErrConflict
+	}
+	for _, h := range m.hosts {
+		if h.WorkspaceID == w.ID && h.Host == address {
+			return nil, ErrConflict // one of its own hosts
+		}
+	}
+	w.Address, w.UpdatedAt = address, m.now()
+	c := *w
+	return &c, nil
 }

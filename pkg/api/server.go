@@ -160,6 +160,12 @@ type Server struct {
 	// lookupTXT resolves TXT records for domain claims; nil uses the system
 	// resolver (tests inject one).
 	lookupTXT func(ctx context.Context, name string) ([]string, error)
+	// lookupCNAME resolves a CNAME for custom workspace domains; nil uses
+	// the system resolver.
+	lookupCNAME func(ctx context.Context, host string) (string, error)
+	// hosts caches workspaces' host records (custom domains, moved
+	// addresses; RFC-0033 names).
+	hosts hostsCache
 	// tokenFailures throttles clients presenting wrong admin tokens.
 	tokenFailures *rateLimiter
 	// passwordFailures throttles wrong passwords per account (RFC-0012).
@@ -263,7 +269,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
 	s.engine = gin.New()
-	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders())
+	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}
@@ -453,7 +459,12 @@ func (s *Server) routes() error {
 	api.GET("/workspace/invitations", s.require(authz.ClusterAdmin), s.listInvitations)
 	api.POST("/workspace/invitations", s.require(authz.ClusterAdmin), s.createInvitation)
 	api.DELETE("/workspace/invitations/:id", s.require(authz.ClusterAdmin), s.deleteInvitation)
-	api.POST("/invitations/:token/accept", s.acceptInvitation) // any signed-in person: the email must match
+	api.POST("/invitations/:token/accept", s.acceptInvitation)                           // any signed-in person: the email must match
+	api.GET("/workspace/domains", s.require(authz.ClusterAdmin), s.listWorkspaceDomains) // custom workspace domains (RFC-0033 names)
+	api.POST("/workspace/domains", s.require(authz.ClusterAdmin), s.addWorkspaceDomain)
+	api.POST("/workspace/domains/:host/verify", s.require(authz.ClusterAdmin), s.verifyWorkspaceDomain)
+	api.PATCH("/workspace/domains/:host", s.require(authz.ClusterAdmin), s.updateWorkspaceDomain)
+	api.DELETE("/workspace/domains/:host", s.require(authz.ClusterAdmin), s.deleteWorkspaceDomain)
 	api.GET("/workspace/domain-claims", s.require(authz.ClusterAdmin), s.listDomainClaims)
 	api.POST("/workspace/domain-claims", s.require(authz.ClusterAdmin), s.putDomainClaim)
 	api.POST("/workspace/domain-claims/:domain/verify", s.require(authz.ClusterAdmin), s.verifyDomainClaim)

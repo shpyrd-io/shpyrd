@@ -28,16 +28,23 @@ const WorkspaceTLSSecretName = "workspace-tls"
 func workspaceTLSSource(slug string) string { return workspaceFrontDoorName(slug) + "-tls" }
 
 // underWorkspaceDomain says the host is one label under the app's explicit
-// workspace's address: covered by the workspace wildcard.
+// workspace's address: covered by the workspace wildcard. (A custom
+// domain, primary or not, has certificates per host.)
 func (c Config) underWorkspaceDomain(app *shpyrdv1.App, host string) bool {
-	if workspaceOf(app) == project.DefaultWorkspace {
+	ws := workspaceOf(app)
+	if ws == project.DefaultWorkspace {
 		return false
 	}
-	domain := c.appsDomain(app)
-	if domain == "" || domain == c.Domain {
+	address := ""
+	if c.WorkspaceAddress != nil {
+		address = c.WorkspaceAddress(ws)
+	} else {
+		address = c.appsDomain(app)
+	}
+	if address == "" || address == c.Domain {
 		return false
 	}
-	return oneLabelUnder(host, domain)
+	return oneLabelUnder(host, address)
 }
 
 func oneLabelUnder(host, domain string) bool {

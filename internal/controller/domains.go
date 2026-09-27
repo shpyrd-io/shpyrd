@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // Custom domains (RFC-0034). A project is always served at
@@ -51,18 +52,28 @@ func (c Config) defaultHost(app *shpyrdv1.App) string {
 }
 
 // customDomains are the hosts the project added, normalised and without the
-// default host (which is always served anyway).
+// default host (which is always served anyway), plus the app's host under
+// each of its workspace's other domains (RFC-0033 names: the address when a
+// custom domain is primary, other verified custom domains).
 func (c Config) customDomains(app *shpyrdv1.App) []string {
 	def := c.defaultHost(app)
 	seen := map[string]bool{def: true}
 	var out []string
-	for _, d := range app.Spec.Domains {
-		h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+	add := func(h string) {
+		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 		if h == "" || seen[h] {
-			continue
+			return
 		}
 		seen[h] = true
 		out = append(out, h)
+	}
+	if ws := workspaceOf(app); ws != project.DefaultWorkspace && c.WorkspaceExtraDomains != nil {
+		for _, d := range c.WorkspaceExtraDomains(ws) {
+			add(app.Name + "." + d)
+		}
+	}
+	for _, d := range app.Spec.Domains {
+		add(d)
 	}
 	return out
 }

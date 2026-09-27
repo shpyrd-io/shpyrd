@@ -582,3 +582,113 @@ func TestPerWorkspaceLoginMethods(t *testing.T) {
 		t.Errorf("the console cannot hide: %d", rec.Code)
 	}
 }
+
+// Names of a workspace (RFC-0033): the address changes under the same
+// parent (old one redirects), a custom domain is added, proven and made
+// primary, and every host resolves to the workspace.
+func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
+	s, _, st := newTenantServer(t)
+	ctx := context.Background()
+	records := map[string][]string{}
+	s.lookupTXT = func(_ context.Context, name string) ([]string, error) { return records[name], nil }
+	s.lookupCNAME = func(_ context.Context, host string) (string, error) { return "", errors.New("no cname") }
+	patch := func(host, body string) *httptest.ResponseRecorder {
+		return at(t, s, host, "PATCH", "/api/workspace", body)
+	}
+
+	// Refusals: another parent, a reserved label, another workspace's slug, a taken address.
+	for body, want := range map[string]int{
+		`{"address":"acme.example.com"}`:       http.StatusBadRequest,
+		`{"address":"login"}`:                  http.StatusBadRequest,
+		`{"address":"closed"}`:                 http.StatusConflict,
+		`{"address":"closed.shpyrd.test"}`:     http.StatusConflict,
+		`{"address":"Has Spaces.shpyrd.test"}`: http.StatusBadRequest,
+	} {
+		if rec := patch("acme.shpyrd.test", body); rec.Code != want {
+			t.Errorf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	// The move: label or full host, same result.
+	rec := patch("acme.shpyrd.test", `{"address":"Acme-Corp"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"address":"acme-corp.shpyrd.test"`) || !strings.Contains(rec.Body.String(), `"url":"https://acme-corp.shpyrd.test"`) {
+		t.Fatalf("move: %d %s", rec.Code, rec.Body.String())
+	}
+	if ws, _ := st.Workspace(ctx, "acme"); ws.Address != "acme-corp.shpyrd.test" {
+		t.Fatalf("address not stored: %+v", ws)
+	}
+	// The old address, dashboard and app hosts alike, redirects permanently.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://acme-corp.shpyrd.test/api/config" {
+		t.Errorf("old dashboard host: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := at(t, s, "shop.acme.shpyrd.test", "GET", "/orders?x=1", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://shop.acme-corp.shpyrd.test/orders?x=1" {
+		t.Errorf("old app host: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := at(t, s, "acme-corp.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"Acme"`) {
+		t.Errorf("new address: %d %s", rec.Code, rec.Body.String())
+	}
+	// Nobody else can take the old address while it redirects.
+	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "squat", Name: "S", Address: "acme.shpyrd.test"}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("old address reusable: %v", err)
+	}
+
+	// Custom domains: not the platform's names, not a workspace address.
+	const host = "acme-corp.shpyrd.test"
+	for body, want := range map[string]int{
+		`{"host":"not a host"}`:              http.StatusBadRequest,
+		`{"host":"x.acme-corp.shpyrd.test"}`: http.StatusBadRequest,
+		`{"host":"other.shpyrd.test"}`:       http.StatusBadRequest,
+		`{"host":"shop.example.test"}`:       http.StatusBadRequest,
+	} {
+		if rec := at(t, s, host, "POST", "/api/workspace/domains", body); rec.Code != want {
+			t.Errorf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	rec = at(t, s, host, "POST", "/api/workspace/domains", `{"host":"Intranet.Acme.com"}`)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"host":"intranet.acme.com"`) || !strings.Contains(rec.Body.String(), `"verified":false`) || !strings.Contains(rec.Body.String(), `"name":"*.intranet.acme.com"`) || !strings.Contains(rec.Body.String(), `_shpyrd-verify.intranet.acme.com`) {
+		t.Fatalf("add domain: %d %s", rec.Code, rec.Body.String())
+	}
+	var view DomainView
+	_ = json.Unmarshal(rec.Body.Bytes(), &view)
+	token := strings.TrimPrefix(view.Records[2].Value, "shpyrd-verify=")
+	// Unverified: not served, not primary-able.
+	if rec := at(t, s, "intranet.acme.com", "GET", "/api/config", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unverified domain served: %d", rec.Code)
+	}
+	if rec := at(t, s, host, "PATCH", "/api/workspace/domains/intranet.acme.com", `{"primary":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("primary before verify: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, host, "POST", "/api/workspace/domains/intranet.acme.com/verify", ""); rec.Code != http.StatusConflict {
+		t.Errorf("verify without records: %d %s", rec.Code, rec.Body.String())
+	}
+	records["_shpyrd-verify.intranet.acme.com"] = []string{"shpyrd-verify=" + token}
+	if rec := at(t, s, host, "POST", "/api/workspace/domains/intranet.acme.com/verify", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"verified":true`) {
+		t.Fatalf("verify: %d %s", rec.Code, rec.Body.String())
+	}
+	// Verified: the dashboard answers there, an app host too, and the
+	// workspace's URLs still use the address until it is primary.
+	if rec := at(t, s, "intranet.acme.com", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"Acme"`) {
+		t.Errorf("custom domain dashboard: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "shop.intranet.acme.com", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://acme-corp.shpyrd.test/.shpyrd/start") {
+		t.Errorf("app at the custom domain: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := at(t, s, host, "PATCH", "/api/workspace/domains/intranet.acme.com", `{"primary":true}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"primary":true`) {
+		t.Fatalf("primary: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, host, "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"url":"https://intranet.acme.com"`) || !strings.Contains(rec.Body.String(), `"domain":"intranet.acme.com"`) {
+		t.Errorf("workspace with a primary domain: %s", rec.Body.String())
+	}
+	// Sign-in from an app under the primary domain goes to the primary host.
+	if rec := at(t, s, "shop.acme-corp.shpyrd.test", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://intranet.acme.com/.shpyrd/start") {
+		t.Errorf("sign-in goes to the primary: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := at(t, s, host, "GET", "/api/workspace/domains", ""); !strings.Contains(rec.Body.String(), `"primary":true`) {
+		t.Errorf("list: %s", rec.Body.String())
+	}
+	if rec := at(t, s, host, "DELETE", "/api/workspace/domains/intranet.acme.com", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, host, "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"url":"https://acme-corp.shpyrd.test"`) {
+		t.Errorf("after delete: %s", rec.Body.String())
+	}
+}

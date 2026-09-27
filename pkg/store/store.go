@@ -209,6 +209,48 @@ type Invitation struct {
 // Expired reports whether the invitation can no longer be accepted.
 func (i *Invitation) Expired(now time.Time) bool { return !now.Before(i.ExpiresAt) }
 
+// WorkspaceHost is a host of a workspace besides its address (RFC-0033
+// names): a custom domain the company owns (kind "custom", CNAME mode:
+// the host and *.host point at the address; verified through a TXT
+// record or the CNAME itself; primary when the dashboard and app URLs
+// use it), or a previous address (kind "moved", redirecting to the
+// current one until ExpiresAt).
+type WorkspaceHost struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	Host        string     `json:"host"`
+	Kind        string     `json:"kind"`
+	Primary     bool       `json:"primary,omitempty"`
+	Token       string     `json:"token,omitempty"`
+	VerifiedAt  *time.Time `json:"verifiedAt,omitempty"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+}
+
+// Kinds of WorkspaceHost.
+const (
+	HostCustom = "custom"
+	HostMoved  = "moved"
+)
+
+// Hosts is the workspace-hosts part of the Store.
+type Hosts interface {
+	ListWorkspaceHosts(ctx context.Context, ws string) ([]WorkspaceHost, error)
+	// PutWorkspaceHost creates a host (with a fresh token for a custom
+	// one) or updates its Primary, VerifiedAt and ExpiresAt; ErrConflict
+	// when another workspace has the host or an address equal to it.
+	// Setting Primary clears it on the workspace's other hosts.
+	PutWorkspaceHost(ctx context.Context, ws string, h WorkspaceHost) (*WorkspaceHost, error)
+	DeleteWorkspaceHost(ctx context.Context, ws, host string) error
+	// WorkspaceByHost finds the workspace owning a host record (exact
+	// match, case-insensitive), returning the record too; ErrNotFound
+	// otherwise.
+	WorkspaceByHost(ctx context.Context, host string) (*Workspace, *WorkspaceHost, error)
+	// UpdateWorkspaceAddress moves the workspace to a new address;
+	// ErrConflict when a workspace has that address or a host equal to it.
+	UpdateWorkspaceAddress(ctx context.Context, slug, address string) (*Workspace, error)
+}
+
 // Memberships is the workspace-role part of the Store.
 type Memberships interface {
 	ListMemberships(ctx context.Context, ws string) ([]Membership, error)
@@ -305,6 +347,7 @@ type Store interface {
 	Sessions
 	Tokens
 	Memberships
+	Hosts
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).
@@ -353,22 +396,23 @@ type Sessions interface {
 // Dump is a workspace's content as the backup carries it. Invitations are
 // not in it: their tokens live in the emails sent, and they expire.
 type Dump struct {
-	Version     int           `json:"version"`
-	Workspace   Workspace     `json:"workspace"`
-	Identities  []Identity    `json:"identities"`
-	Teams       []Team        `json:"teams"`
-	Grants      []Grant       `json:"grants"`
-	Domains     []DomainClaim `json:"domains,omitempty"`
-	Memberships []Membership  `json:"memberships,omitempty"`
+	Version     int             `json:"version"`
+	Workspace   Workspace       `json:"workspace"`
+	Identities  []Identity      `json:"identities"`
+	Teams       []Team          `json:"teams"`
+	Grants      []Grant         `json:"grants"`
+	Domains     []DomainClaim   `json:"domains,omitempty"`
+	Memberships []Membership    `json:"memberships,omitempty"`
+	Hosts       []WorkspaceHost `json:"hosts,omitempty"`
 }
 
 // ImportResult counts what Import did.
 type ImportResult struct {
-	Teams, Grants, Identities, Memberships int
-	Skipped                                int
+	Teams, Grants, Identities, Memberships, Hosts int
+	Skipped                                       int
 }
 
-// DumpVersion is the format of Dump: 2 added memberships (v0.9.13); a
-// server that knows only 1 refuses a version 2 dump instead of dropping
-// the roles in it.
-const DumpVersion = 2
+// DumpVersion is the format of Dump: 2 added memberships (v0.9.13), 3 the
+// workspace's hosts (v0.9.16); a server that knows only an older version
+// refuses a newer dump instead of dropping what it does not know.
+const DumpVersion = 3

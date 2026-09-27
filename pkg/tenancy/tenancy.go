@@ -168,6 +168,21 @@ func (r *ByAddress) lookup(ctx context.Context, host string) (*store.Workspace, 
 			return nil, err
 		}
 	}
+	// A workspace's other hosts (RFC-0033 names): a custom domain once
+	// verified, or a previous address still redirecting; and one label
+	// under either, where its apps answer.
+	for _, candidate := range hostAndParent(host) {
+		ws, rec, err := r.Store.WorkspaceByHost(ctx, candidate)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if HostServes(rec) {
+			return ws, nil
+		}
+	}
 	domain := strings.ToLower(r.Domain)
 	dashboard := strings.ToLower(Host(r.DashboardHost))
 	platform := Internal(host) ||
@@ -177,6 +192,30 @@ func (r *ByAddress) lookup(ctx context.Context, host string) (*store.Workspace, 
 		return nil, ErrUnknownHost
 	}
 	return r.Store.Workspace(ctx, store.DefaultWorkspace)
+}
+
+// hostAndParent lists a host and, when it has one, its parent.
+func hostAndParent(host string) []string {
+	out := []string{host}
+	if _, parent, ok := strings.Cut(host, "."); ok && parent != "" && strings.Contains(parent, ".") {
+		out = append(out, parent)
+	}
+	return out
+}
+
+// HostServes says a workspace host record answers today: a verified custom
+// domain, or a moved address whose redirect has not expired.
+func HostServes(h *store.WorkspaceHost) bool {
+	if h == nil {
+		return false
+	}
+	switch h.Kind {
+	case store.HostCustom:
+		return h.VerifiedAt != nil
+	case store.HostMoved:
+		return h.ExpiresAt == nil || time.Now().Before(*h.ExpiresAt)
+	}
+	return false
 }
 
 // Forget drops a cached host, for callers that just changed an address.
@@ -203,10 +242,16 @@ type Addresses struct {
 
 	mu    sync.Mutex
 	cache map[string]wsEntry
+	hosts map[string]hostsEntry
 }
 
 type wsEntry struct {
 	ws      *store.Workspace // nil: unknown slug
+	expires time.Time
+}
+
+type hostsEntry struct {
+	hosts   []store.WorkspaceHost
 	expires time.Time
 }
 
@@ -252,6 +297,73 @@ func (a *Addresses) Address(slug string) string {
 		return ws.Address
 	}
 	return ""
+}
+
+// Hosts lists a workspace's host records, cached like the workspace.
+func (a *Addresses) Hosts(slug string) []store.WorkspaceHost {
+	if slug == "" || slug == store.DefaultWorkspace {
+		return nil
+	}
+	ttl := a.TTL
+	if ttl <= 0 {
+		ttl = 10 * time.Second
+	}
+	now := time.Now()
+	a.mu.Lock()
+	if e, ok := a.hosts[slug]; ok && now.Before(e.expires) {
+		a.mu.Unlock()
+		return e.hosts
+	}
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hosts, err := a.Store.ListWorkspaceHosts(ctx, slug)
+	if err != nil {
+		return nil
+	}
+	a.mu.Lock()
+	if a.hosts == nil {
+		a.hosts = map[string]hostsEntry{}
+	}
+	a.hosts[slug] = hostsEntry{hosts: hosts, expires: now.Add(ttl)}
+	a.mu.Unlock()
+	return hosts
+}
+
+// Domain is the domain a workspace's apps live one label under, as their
+// URLs show it: the primary custom domain when one is verified and
+// primary, the address otherwise; "" for the implicit workspace.
+func (a *Addresses) Domain(slug string) string {
+	if slug == "" || slug == store.DefaultWorkspace {
+		return ""
+	}
+	for _, h := range a.Hosts(slug) {
+		if h.Kind == store.HostCustom && h.Primary && h.VerifiedAt != nil {
+			return h.Host
+		}
+	}
+	return a.Address(slug)
+}
+
+// ExtraDomains are the other domains a workspace's apps also answer under
+// (one label under each): the address when a custom domain is primary,
+// and every other verified custom domain. Moved addresses are not among
+// them: they redirect.
+func (a *Addresses) ExtraDomains(slug string) []string {
+	if slug == "" || slug == store.DefaultWorkspace {
+		return nil
+	}
+	primary := a.Domain(slug)
+	var out []string
+	if address := a.Address(slug); address != "" && address != primary {
+		out = append(out, address)
+	}
+	for _, h := range a.Hosts(slug) {
+		if h.Kind == store.HostCustom && h.VerifiedAt != nil && h.Host != primary {
+			out = append(out, h.Host)
+		}
+	}
+	return out
 }
 
 // ID is a workspace's id, "" for one the store does not know.

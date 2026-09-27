@@ -134,6 +134,7 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		Name           *string `json:"name"`
 		JoinPolicy     *string `json:"joinPolicy"`
 		OwnMethodsOnly *bool   `json:"ownMethodsOnly"`
+		Address        *string `json:"address"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -189,6 +190,19 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 			return
 		}
 		changes = append(changes, fmt.Sprintf("own methods only: %v", *req.OwnMethodsOnly))
+	}
+	if req.Address != nil {
+		moved, err := s.changeAddress(c, w, *req.Address)
+		if err != nil {
+			var ae *apiError
+			if errors.As(err, &ae) {
+				abort(c, ae.status, ae)
+				return
+			}
+			storeErr(c, err, "workspace")
+			return
+		}
+		w = moved
 	}
 	if len(changes) > 0 {
 		s.forgetTenants()

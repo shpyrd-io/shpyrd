@@ -183,6 +183,16 @@ export type InvitationPublic = {
   url: string;
 };
 
+/** A custom domain of the workspace (RFC-0033 names), with the DNS records to publish. */
+export type WorkspaceDomain = {
+  host: string;
+  verified: boolean;
+  verifiedAt?: string;
+  primary: boolean;
+  records: { type: string; name: string; value: string }[];
+  url: string;
+};
+
 /** The mail extension's status (RFC-0013): never the password. */
 export type MailStatus = {
   configured: boolean;
@@ -817,7 +827,26 @@ export const api = {
     name?: string;
     joinPolicy?: string;
     ownMethodsOnly?: boolean;
+    /** A new address label (or host under the same parent); owners only. */
+    address?: string;
   }) => request<WorkspaceInfo>("/api/workspace", json("PATCH", body)),
+  workspaceDomains: () => request<WorkspaceDomain[]>("/api/workspace/domains"),
+  addWorkspaceDomain: (host: string) =>
+    request<WorkspaceDomain>("/api/workspace/domains", json("POST", { host })),
+  verifyWorkspaceDomain: (host: string) =>
+    request<WorkspaceDomain>(
+      `/api/workspace/domains/${encodeURIComponent(host)}/verify`,
+      json("POST", {}),
+    ),
+  setWorkspaceDomainPrimary: (host: string, primary: boolean) =>
+    request<WorkspaceDomain>(
+      `/api/workspace/domains/${encodeURIComponent(host)}`,
+      json("PATCH", { primary }),
+    ),
+  removeWorkspaceDomain: (host: string) =>
+    request<void>(`/api/workspace/domains/${encodeURIComponent(host)}`, {
+      method: "DELETE",
+    }),
   domainClaims: () => request<DomainClaim[]>("/api/workspace/domain-claims"),
   claimDomain: (domain: string, connector: string) =>
     request<DomainClaim>(

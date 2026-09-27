@@ -31,9 +31,18 @@ type Config struct {
 	// published under.
 	Domain string
 	// WorkspaceDomain answers the domain the apps of an explicit workspace
-	// live one label under (its address, RFC-0033 phase 6); "" when the
-	// workspace is unknown, which falls back to Domain. Nil: one workspace.
+	// live one label under as their URLs show it (the primary domain: a
+	// verified custom domain made primary, else the address; RFC-0033
+	// names); "" when the workspace is unknown, which falls back to
+	// Domain. Nil: one workspace.
 	WorkspaceDomain func(slug string) string
+	// WorkspaceAddress answers the workspace's address: the domain its
+	// wildcard certificate covers. Nil: the same as WorkspaceDomain.
+	WorkspaceAddress func(slug string) string
+	// WorkspaceExtraDomains answers the other domains the apps also answer
+	// under, one label under each (the address when a custom domain is
+	// primary; other verified custom domains). Nil: none.
+	WorkspaceExtraDomains func(slug string) []string
 	// WorkspaceLimits answers a workspace's plan, nil when it has none; the
 	// controller backs it with a ResourceQuota per project namespace.
 	WorkspaceLimits func(slug string) *store.Limits

@@ -22,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TeamsPage } from "@/pages/teams";
 import { UsersPage } from "@/pages/users";
 import { PeopleCard } from "@/components/people-card";
+import { AddressField, DomainsCard } from "@/components/workspace-names";
 import { SignInSettings } from "@/components/signin-settings";
 import { TokensCard } from "@/components/tokens-card";
 
@@ -99,6 +100,7 @@ export function WorkspacePage() {
         </TabsList>
         <TabsContent value="overview" className="mt-4 grid gap-6">
           <WorkspaceCard readOnly={!perms.clusterAdmin} />
+          {perms.clusterAdmin && <DomainsCard />}
           {ws.data?.limits && <PlanCard ws={ws.data} />}
         </TabsContent>
         <TabsContent value="people" className="mt-4">
@@ -185,6 +187,7 @@ function WorkspaceCard({ readOnly }: { readOnly: boolean }) {
                 )}
               </div>
             </div>
+            {!readOnly && <AddressField ws={ws.data} />}
             <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
               <div>
                 <dt className="text-xs text-muted-foreground">Identifier</dt>

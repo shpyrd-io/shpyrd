@@ -39,7 +39,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -316,6 +316,98 @@ func TestMembershipsAndInvitations(t *testing.T) {
 			}
 			if list, _ := s.ListInvitations(ctx, ws); len(list) != 1 {
 				t.Errorf("after delete: %+v", list)
+			}
+		})
+	}
+}
+
+// Workspace hosts (RFC-0033 names): custom domains and moved addresses,
+// unique across the platform, one primary at most; the address changes.
+func TestWorkspaceHosts(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			acme, err := s.CreateWorkspace(ctx, Workspace{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "beta", Name: "Beta", Address: "beta.shpyrd.test"}); err != nil {
+				t.Fatal(err)
+			}
+			h, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "Intranet.Acme.com.", Kind: HostCustom})
+			if err != nil || h.Host != "intranet.acme.com" || h.Token == "" || h.VerifiedAt != nil || h.Primary || h.WorkspaceID != acme.ID {
+				t.Fatalf("put: %+v %v", h, err)
+			}
+			if _, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "x", Kind: "weird"}); err == nil {
+				t.Error("bad kind accepted")
+			}
+			// Another workspace's address, or a host of another workspace, is taken.
+			if _, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "beta.shpyrd.test", Kind: HostCustom}); !errors.Is(err, ErrConflict) {
+				t.Errorf("another address: %v", err)
+			}
+			if _, err := s.PutWorkspaceHost(ctx, "beta", WorkspaceHost{Host: "intranet.acme.com", Kind: HostCustom}); !errors.Is(err, ErrConflict) {
+				t.Errorf("another's host: %v", err)
+			}
+			if _, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "acme.shpyrd.test", Kind: HostCustom}); !errors.Is(err, ErrConflict) {
+				t.Errorf("own address as host: %v", err)
+			}
+			// Verify and make primary; the token stays; a second primary clears the first.
+			now := time.Now().Truncate(time.Second)
+			v, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "intranet.acme.com", Kind: HostCustom, Primary: true, VerifiedAt: &now})
+			if err != nil || v.ID != h.ID || v.Token != h.Token || v.VerifiedAt == nil || !v.Primary {
+				t.Fatalf("update: %+v %v", v, err)
+			}
+			if _, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "apps.acme.com", Kind: HostCustom, Primary: true, VerifiedAt: &now}); err != nil {
+				t.Fatal(err)
+			}
+			list, _ := s.ListWorkspaceHosts(ctx, "acme")
+			if len(list) != 2 || list[0].Host != "apps.acme.com" || !list[0].Primary || list[1].Primary {
+				t.Errorf("list: %+v", list)
+			}
+			w, rec, err := s.WorkspaceByHost(ctx, "INTRANET.acme.com")
+			if err != nil || w.Slug != "acme" || rec.Host != "intranet.acme.com" {
+				t.Errorf("by host: %+v %+v %v", w, rec, err)
+			}
+			if _, _, err := s.WorkspaceByHost(ctx, "nobody.example"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown host: %v", err)
+			}
+			// The address changes; the old one may become a moved host; taken ones are refused.
+			if _, err := s.UpdateWorkspaceAddress(ctx, "acme", "beta.shpyrd.test"); !errors.Is(err, ErrConflict) {
+				t.Errorf("address of another: %v", err)
+			}
+			if _, err := s.UpdateWorkspaceAddress(ctx, "acme", "apps.acme.com"); !errors.Is(err, ErrConflict) {
+				t.Errorf("address equal to a host: %v", err)
+			}
+			moved, err := s.UpdateWorkspaceAddress(ctx, "acme", "Acme-Corp.shpyrd.test")
+			if err != nil || moved.Address != "acme-corp.shpyrd.test" {
+				t.Fatalf("move: %+v %v", moved, err)
+			}
+			exp := now.Add(30 * 24 * time.Hour)
+			if _, err := s.PutWorkspaceHost(ctx, "acme", WorkspaceHost{Host: "acme.shpyrd.test", Kind: HostMoved, ExpiresAt: &exp}); err != nil {
+				t.Fatalf("moved host: %v", err)
+			}
+			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "gamma", Name: "G", Address: "acme.shpyrd.test"}); err == nil {
+				t.Error("a moved host must not become another workspace's address")
+			}
+			// Export carries the hosts; import restores custom ones, skips moved.
+			dump, _ := s.Export(ctx, "acme")
+			if len(dump.Hosts) != 3 || dump.Version != DumpVersion {
+				t.Errorf("export hosts: %+v", dump.Hosts)
+			}
+			fresh := NewMemory()
+			if _, err := fresh.CreateWorkspace(ctx, Workspace{Slug: "acme", Name: "Acme", Address: "acme-corp.shpyrd.test"}); err != nil {
+				t.Fatal(err)
+			}
+			res, err := fresh.Import(ctx, "acme", dump, false)
+			if err != nil || res.Hosts != 2 {
+				t.Errorf("import hosts: %+v %v", res, err)
+			}
+			if err := s.DeleteWorkspaceHost(ctx, "acme", "apps.acme.com"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteWorkspaceHost(ctx, "acme", "apps.acme.com"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("delete again: %v", err)
 			}
 		})
 	}
