@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-26
+**Last update:** 2026-09-27
 
 ## Summary
 
@@ -151,8 +151,33 @@ Shipped in v0.9.7 and v0.9.8:
 - The platform's exposure survives `cluster init` re-runs; the admin token is not offered
   at a workspace's login page.
 
-The rest of the model (OAuth for agents) follows in later releases; the full text is
-published when it settles.
+Shipped in v0.9.9 and v0.9.10 (after an audit of the model against the code):
+
+- `pg`, `redis` and `domains` speak the API; `secrets set` too.
+- Allow lists work end to end: an entry opened the callee's ingress but the caller's own
+  egress refused the packets on every profile with a pod CIDR; projects may now send to
+  the pods of their own workspace's projects and the callee's ingress decides. The peer
+  names project and workspace (two workspaces may both have `shop`), and the API refuses
+  an entry naming a project outside the caller's workspace.
+- A suspended workspace's apps are not served (their Ingresses go, the front door says
+  why); before, public apps kept serving.
+- The platform backup carries every explicit workspace's people, teams, grants and domain
+  claims, and `cluster restore` puts them back, recreating a workspace that is gone.
+- A project's custom domain resolves to the app's workspace under host-based tenancy
+  (sign-in there was broken).
+- The operator's global config vars no longer leave a Secret in tenant namespaces.
+
+Known gaps (the model promises these; the code does not do them yet): personal tokens at
+the edge (a script cannot call an authenticated app with a `shp_` token); edge key
+rotation (one key pair per platform, no rotation); `/.shpyrd/logout` on an app host does
+not end the dashboard session; the server has no NetworkPolicy (`/edge/auth` reachable
+from any pod, per-IP throttles are platform-wide behind the ingress); denials are not
+counted; audit is Kubernetes Events without the actor's realm; workspace roles
+(`owner`/`admin`/`member`), invitations, workspace delete and address change; per-
+workspace login methods; a way to disable previews; workspace custom domains; the legacy
+`Team`/`ProjectMember` CRDs still ship; `run`, `globals`, `sizes`, `extensions` still need
+a kubeconfig; `shpyrd login` has no browser flow. OAuth for agents follows in later
+releases; the full text is published when it settles.
 
 ## Implementation History
 
@@ -167,3 +192,5 @@ published when it settles.
   first slice (the workspace resolved from the host) in v0.9.1, its second (sign-in at the
   workspace host through the platform's dashboard) in v0.9.2, its third (plan limits) in
   v0.9.3; the CLI over the API for every developer command in v0.9.8.
+- 2026-09-27: audit of the model against the code; allow lists, suspension, backups,
+  custom-domain tenancy and globals fixed (v0.9.10); gaps listed above.
