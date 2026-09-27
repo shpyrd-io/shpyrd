@@ -64,23 +64,36 @@ func Internal(host string) bool {
 type Single struct {
 	Store store.Store
 
-	mu sync.Mutex
-	ws *store.Workspace
+	mu      sync.Mutex
+	ws      *store.Workspace
+	fetched time.Time
 }
 
-// Resolve returns the implicit workspace whatever the host.
+// Resolve returns the implicit workspace whatever the host, re-read every
+// ten seconds so its settings (branding, join policy) are seen.
 func (r *Single) Resolve(ctx context.Context, _ string) (*store.Workspace, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.ws != nil {
+	if r.ws != nil && time.Since(r.fetched) < 10*time.Second {
 		return r.ws, nil
 	}
 	ws, err := r.Store.Workspace(ctx, store.DefaultWorkspace)
 	if err != nil {
+		if r.ws != nil {
+			return r.ws, nil // stale beats down
+		}
 		return nil, err
 	}
-	r.ws = ws
+	r.ws, r.fetched = ws, time.Now()
 	return ws, nil
+}
+
+// ForgetAll drops the remembered workspace: a settings change must be
+// seen by the next request.
+func (r *Single) ForgetAll() {
+	r.mu.Lock()
+	r.ws = nil
+	r.mu.Unlock()
 }
 
 // ByAddress resolves hosts against workspace addresses: a host equal to a

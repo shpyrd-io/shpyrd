@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -113,5 +115,44 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	}
 	if rec := adminJSON(t, s, "DELETE", "/api/workspace/domain-claims/acme.com", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("unclaim = %d", rec.Code)
+	}
+}
+
+// Branding (RFC-0033): a logo and a colour on the workspace, shown by the
+// login page and the launcher; the logo is served on its own, cacheable.
+func TestWorkspaceBranding(t *testing.T) {
+	s, _ := newTestServer(t, nil, nil)
+	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nfake"))
+	for body, want := range map[string]int{
+		`{"color":"orange"}`:                    http.StatusBadRequest,
+		`{"logo":"not a data url"}`:             http.StatusBadRequest,
+		`{"logo":"data:text/html;base64,PGI+"}`: http.StatusBadRequest,
+		`{"logo":"data:image/png;base64,` + base64.StdEncoding.EncodeToString(make([]byte, 300*1024)) + `"}`: http.StatusBadRequest,
+	} {
+		if rec := adminJSON(t, s, "PATCH", "/api/workspace", body); rec.Code != want {
+			t.Errorf("%.60s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	rec := adminJSON(t, s, "PATCH", "/api/workspace", `{"logo":"`+png+`","color":"#FF4F00"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"color":"#ff4f00"`) || !strings.Contains(rec.Body.String(), `"logoUrl":"/api/workspace/logo?v=`) {
+		t.Fatalf("branding: %d %s", rec.Code, rec.Body.String())
+	}
+	var view WorkspaceView
+	_ = json.Unmarshal(rec.Body.Bytes(), &view)
+	logo := do(t, s, "GET", view.Branding.LogoURL, "", false)
+	if logo.Code != http.StatusOK || logo.Header().Get("Content-Type") != "image/png" || !strings.HasPrefix(logo.Body.String(), "\x89PNG") || !strings.Contains(logo.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Errorf("logo: %d %s %q", logo.Code, logo.Header().Get("Content-Type"), logo.Body.String()[:4])
+	}
+	// The public config carries it for the login page.
+	if rec := do(t, s, "GET", "/api/config", "", false); !strings.Contains(rec.Body.String(), `"branding":{"logoUrl":"/api/workspace/logo?v=`) || !strings.Contains(rec.Body.String(), `"color":"#ff4f00"`) {
+		t.Errorf("config: %s", rec.Body.String())
+	}
+	// Removing both clears the branding.
+	rec = adminJSON(t, s, "PATCH", "/api/workspace", `{"logo":"","color":""}`)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"branding"`) {
+		t.Errorf("cleared: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, s, "GET", "/api/workspace/logo", "", false); rec.Code != http.StatusNotFound {
+		t.Errorf("logo after clearing: %d", rec.Code)
 	}
 }

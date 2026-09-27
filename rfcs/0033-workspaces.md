@@ -234,6 +234,16 @@ Shipped in v0.9.16 — the workspace's names:
   JWT's issuer) use it; the address keeps answering. Delegated (NS) mode and per-app
   custom domains on it come later.
 
+Also in v0.9.16 — the launcher and the workspace's look:
+
+- **The launcher is where everyone lands** after signing in (`/`): the workspace's apps as
+  tiles — every app the person may open and every public one — with a search, the
+  **featured** apps first and larger, and a one-line **description** under each name
+  (both set on the project page or with `shpyrd projects describe`). People who build have
+  a Projects page (`/projects`) a link away; people who only use apps see nothing else.
+- **Branding**: a logo and an accent colour on Workspace › Overview, shown by the launcher,
+  the header and the login page instead of the platform's.
+
 Known gaps (the model promises these; the code does not do them yet): an `identified` app
 sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
 (the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete;
@@ -265,4 +275,5 @@ for agents follows in later releases; the full text is published when it settles
 - 2026-09-27: per-workspace SSO, the email-first login step for claimed domains, the
   `reader` role (v0.9.15).
 - 2026-09-27: address change with redirects, custom workspace domains in CNAME mode with a
-  primary (v0.9.16).
+  primary; the launcher for everyone with search, featured apps and descriptions; workspace
+  branding (v0.9.16).

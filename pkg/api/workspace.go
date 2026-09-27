@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -50,6 +53,8 @@ type WorkspaceView struct {
 	// OwnMethodsOnly says the login page offers only the methods this
 	// workspace configured (its company SSO), not the platform's.
 	OwnMethodsOnly bool `json:"ownMethodsOnly"`
+	// Branding is the workspace's look (logo URL, colour).
+	Branding *BrandingView `json:"branding,omitempty"`
 	// Owners are the emails of the workspace's owners (RFC-0033).
 	Owners    []string  `json:"owners"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -111,7 +116,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 	return WorkspaceView{
 		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
-		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 	}
 }
 
@@ -135,6 +140,10 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		JoinPolicy     *string `json:"joinPolicy"`
 		OwnMethodsOnly *bool   `json:"ownMethodsOnly"`
 		Address        *string `json:"address"`
+		// Branding: the logo as a data URL (data:image/png;base64,...),
+		// "" to remove it; the colour as #rrggbb, "" to reset.
+		Logo  *string `json:"logo"`
+		Color *string `json:"color"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -191,6 +200,40 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		}
 		changes = append(changes, fmt.Sprintf("own methods only: %v", *req.OwnMethodsOnly))
 	}
+	if req.Logo != nil || req.Color != nil {
+		settings := w.Settings
+		b := store.Branding{}
+		if settings.Branding != nil {
+			b = *settings.Branding
+		}
+		if req.Logo != nil {
+			logo, typ, err := parseLogo(*req.Logo)
+			if err != nil {
+				abort(c, http.StatusBadRequest, err)
+				return
+			}
+			b.Logo, b.LogoType = logo, typ
+			changes = append(changes, "logo")
+		}
+		if req.Color != nil {
+			color := strings.ToLower(strings.TrimSpace(*req.Color))
+			if color != "" && !colorRe.MatchString(color) {
+				abort(c, http.StatusBadRequest, errors.New("color is #rrggbb"))
+				return
+			}
+			b.Color = color
+			changes = append(changes, "color")
+		}
+		if b == (store.Branding{}) {
+			settings.Branding = nil
+		} else {
+			settings.Branding = &b
+		}
+		if w, err = s.store.UpdateWorkspaceSettings(ctx, s.workspace(c), settings); err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+	}
 	if req.Address != nil {
 		moved, err := s.changeAddress(c, w, *req.Address)
 		if err != nil {
@@ -209,6 +252,74 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		s.audit(c, "", "workspace.update", w.Slug, strings.Join(changes, ", "))
 	}
 	c.JSON(http.StatusOK, s.workspaceView(c, w))
+}
+
+var colorRe = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+
+// logoTypes are the image types a logo may be.
+var logoTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/svg+xml": true, "image/webp": true, "image/gif": true}
+
+// parseLogo takes a data URL and returns the base64 payload and its type;
+// "" removes the logo. At most 256 KB decoded.
+func parseLogo(dataURL string) (logo, typ string, err error) {
+	dataURL = strings.TrimSpace(dataURL)
+	if dataURL == "" {
+		return "", "", nil
+	}
+	rest, ok := strings.CutPrefix(dataURL, "data:")
+	if !ok {
+		return "", "", errors.New("logo must be a data URL (data:image/png;base64,...)")
+	}
+	meta, payload, ok := strings.Cut(rest, ",")
+	if !ok || !strings.HasSuffix(meta, ";base64") {
+		return "", "", errors.New("logo must be a base64 data URL")
+	}
+	typ = strings.TrimSuffix(meta, ";base64")
+	if !logoTypes[typ] {
+		return "", "", errors.New("logo must be a PNG, JPEG, SVG, WebP or GIF image")
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", "", errors.New("logo is not valid base64")
+	}
+	if len(raw) > 256*1024 {
+		return "", "", errors.New("logo must be at most 256 KB")
+	}
+	return base64.StdEncoding.EncodeToString(raw), typ, nil
+}
+
+// brandingView is the look of a workspace as pages use it.
+func brandingView(w *store.Workspace) *BrandingView {
+	if w == nil || w.Settings.Branding == nil {
+		return nil
+	}
+	b := w.Settings.Branding
+	out := &BrandingView{Color: b.Color}
+	if b.Logo != "" {
+		sum := sha256.Sum256([]byte(b.Logo))
+		out.LogoURL = "/api/workspace/logo?v=" + hex.EncodeToString(sum[:6])
+	}
+	return out
+}
+
+// workspaceLogo is GET /api/workspace/logo (public): the image itself,
+// cacheable by its version.
+func (s *Server) workspaceLogo(c *gin.Context) {
+	w, err := s.tenant(c)
+	if err != nil || w.Settings.Branding == nil || w.Settings.Branding.Logo == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(w.Settings.Branding.Logo)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.Header("X-Content-Type-Options", "nosniff")
+	// An SVG opened as a document must not run scripts on this origin.
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	c.Data(http.StatusOK, w.Settings.Branding.LogoType, raw)
 }
 
 // hasOwnMethod reports whether the workspace configured a login method of

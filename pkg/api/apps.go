@@ -31,7 +31,10 @@ type AppSummary struct {
 	// Slug identifies the project in URLs, the CLI and hostnames.
 	Slug string `json:"slug"`
 	// DisplayName is the human name; the slug when none was given.
-	DisplayName string                            `json:"displayName"`
+	DisplayName string `json:"displayName"`
+	// Description and Featured are the launcher's (RFC-0033).
+	Description string                            `json:"description,omitempty"`
+	Featured    bool                              `json:"featured,omitempty"`
 	Namespace   string                            `json:"namespace"`
 	Phase       string                            `json:"phase"`
 	Message     string                            `json:"message,omitempty"`
@@ -55,6 +58,8 @@ func summarize(a *shpyrdv1.App) AppSummary {
 		Access:      a.EffectiveAccess(),
 		Slug:        a.Name,
 		DisplayName: project.DisplayName(a),
+		Description: project.Description(a),
+		Featured:    project.Featured(a),
 		Namespace:   a.Namespace,
 		Phase:       a.Status.Phase,
 		Message:     a.Status.Message,
@@ -97,6 +102,8 @@ func Digest(image string) string {
 type AppDetail struct {
 	Slug        string                            `json:"slug"`
 	DisplayName string                            `json:"displayName"`
+	Description string                            `json:"description,omitempty"`
+	Featured    bool                              `json:"featured,omitempty"`
 	Namespace   string                            `json:"namespace"`
 	CreatedAt   time.Time                         `json:"createdAt"`
 	Spec        AppDetailSpec                     `json:"spec"`
@@ -168,6 +175,8 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 	d := AppDetail{
 		Slug:        a.Name,
 		DisplayName: project.DisplayName(a),
+		Description: project.Description(a),
+		Featured:    project.Featured(a),
 		Namespace:   a.Namespace,
 		CreatedAt:   a.CreationTimestamp.Time,
 		Spec: AppDetailSpec{
@@ -414,31 +423,53 @@ func (s *Server) grantCreator(c *gin.Context, slug string) {
 // UpdateAppRequest changes project metadata; only the display name so far.
 type UpdateAppRequest struct {
 	Name *string `json:"name,omitempty"`
+	// Description is the launcher's one line under the name; Featured
+	// shows the app first and larger there (RFC-0033).
+	Description *string `json:"description,omitempty"`
+	Featured    *bool   `json:"featured,omitempty"`
 }
 
-// updateApp renames a project (its display name; the slug never changes).
+// updateApp changes a project's display name, description or featured
+// flag (the slug never changes).
 func (s *Server) updateApp(c *gin.Context) {
 	var req UpdateAppRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.Name == nil {
-		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name"))
+	if req.Name == nil && req.Description == nil && req.Featured == nil {
+		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description or featured"))
 		return
 	}
-	if strings.TrimSpace(*req.Name) == "" {
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
 		abort(c, http.StatusBadRequest, errors.New("name must not be empty"))
 		return
 	}
+	var changes []string
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
-		project.SetDisplayName(a, *req.Name)
+		changes = changes[:0]
+		if req.Name != nil {
+			project.SetDisplayName(a, *req.Name)
+			changes = append(changes, "name")
+		}
+		if req.Description != nil {
+			project.SetDescription(a, *req.Description)
+			changes = append(changes, "description")
+		}
+		if req.Featured != nil {
+			project.SetFeatured(a, *req.Featured)
+			changes = append(changes, fmt.Sprintf("featured %v", *req.Featured))
+		}
 		return nil
 	})
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "project.rename", project.Label(app), "")
+	action := "project.update"
+	if req.Name != nil && req.Description == nil && req.Featured == nil {
+		action = "project.rename"
+	}
+	s.audit(c, app.Name, action, project.Label(app), strings.Join(changes, ", "))
 	c.JSON(http.StatusOK, detail(app, s.buildsByDigest(c.Request.Context(), app)))
 }
 

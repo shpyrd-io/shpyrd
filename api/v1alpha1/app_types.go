@@ -28,6 +28,12 @@ const (
 	// AnnotationDisplayName on an App holds the human name of the project
 	// when it differs from the slug (RFC-0011).
 	AnnotationDisplayName = "shpyrd.io/display-name"
+	// AnnotationDescription on an App is the one-line description the
+	// launcher shows under the app's name (RFC-0033).
+	AnnotationDescription = "shpyrd.io/description"
+	// AnnotationFeatured on an App ("true") shows it first, and larger, in
+	// the launcher: the company's own app (RFC-0033).
+	AnnotationFeatured = "shpyrd.io/featured"
 	// AnnotationConfigHash is put on pod templates so config changes roll out.
 	AnnotationConfigHash = "shpyrd.io/config-hash"
 	// AnnotationInstance on a running pod holds the human name of the

@@ -26,7 +26,7 @@ func newAppsCmd(g *globalFlags) *cobra.Command {
 		Short:   "Create, list and inspect projects",
 		Aliases: []string{"project", "apps", "app"},
 	}
-	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsDestroyCmd(g))
+	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsDescribeCmd(g), newAppsDestroyCmd(g))
 	return cmd
 }
 
@@ -183,6 +183,51 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newAppsDescribeCmd sets what the launcher shows for a project (RFC-0033):
+// the one-line description and whether it is featured.
+func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
+	var description string
+	var featured, unfeatured bool
+	cmd := &cobra.Command{
+		Use:   "describe <project> [--description text] [--featured|--unfeatured]",
+		Short: "Set the launcher's description of a project, and whether it is featured",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateAppName(args[0]); err != nil {
+				return err
+			}
+			if !cmd.Flags().Changed("description") && !featured && !unfeatured {
+				return errors.New("give --description, --featured or --unfeatured")
+			}
+			if featured && unfeatured {
+				return errors.New("--featured and --unfeatured exclude each other")
+			}
+			body := map[string]any{}
+			if cmd.Flags().Changed("description") {
+				body["description"] = strings.TrimSpace(description)
+			}
+			if featured || unfeatured {
+				body["featured"] = featured
+			}
+			ctx := signalContext()
+			ac, err := newAppClient(g, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			raw, _ := json.Marshal(body)
+			if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+args[0], raw, "application/json"); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Updated what the launcher shows for %s.\n", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&description, "description", "", "one line under the name in the launcher (empty removes it)")
+	cmd.Flags().BoolVar(&featured, "featured", false, "show the app first, and larger, in the launcher")
+	cmd.Flags().BoolVar(&unfeatured, "unfeatured", false, "stop featuring the app")
+	return cmd
 }
 
 func newAppsListCmd(g *globalFlags) *cobra.Command {

@@ -135,6 +135,15 @@ type WorkspaceRef struct {
 	Slug     string `json:"slug"`
 	Name     string `json:"name"`
 	Implicit bool   `json:"implicit"`
+	// Branding is the workspace's look, for the login page and the
+	// launcher (RFC-0033): the logo's URL when one is set, the colour.
+	Branding *BrandingView `json:"branding,omitempty"`
+}
+
+// BrandingView is a workspace's look as pages use it.
+type BrandingView struct {
+	LogoURL string `json:"logoUrl,omitempty"`
+	Color   string `json:"color,omitempty"`
 }
 
 type Server struct {
@@ -423,6 +432,7 @@ func (s *Server) routes() error {
 	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
 	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
 	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
+	pub.GET("/workspace/logo", s.workspaceLogo)            // the workspace's logo, for the login page too
 
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
@@ -630,7 +640,7 @@ func (s *Server) config(c *gin.Context) {
 	pub := s.opts.Public
 	pub.Auth = s.authConfigFor(c)
 	if ws, err := s.tenant(c); err == nil {
-		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Implicit: ws.Implicit()}
+		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Implicit: ws.Implicit(), Branding: brandingView(ws)}
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
 	}

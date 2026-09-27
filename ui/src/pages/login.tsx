@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Wordmark } from "@/components/brand";
+import { useBrandColor } from "@/lib/branding";
 
 /**
  * The sign-in page (RFC-0012). Renders in place of the app whenever the
@@ -31,6 +32,8 @@ export function LoginPage() {
   const accounts = !!password || providers.length > 0;
   const [showToken, setShowToken] = useState(false);
   const tokenForm = tokenAllowed && (showToken || !accounts);
+  const brand = config.data?.workspace?.branding;
+  useBrandColor(brand?.color);
 
   const params = new URLSearchParams(window.location.search);
   const redirectError = params.get("login_error");
@@ -52,7 +55,20 @@ export function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>
-            <Wordmark className="h-8" />
+            {brand?.logoUrl ? (
+              <span className="flex items-center gap-3">
+                <img
+                  src={brand.logoUrl}
+                  alt=""
+                  className="h-10 max-w-40 object-contain"
+                />
+                <span className="text-lg font-semibold">
+                  {config.data?.workspace?.name}
+                </span>
+              </span>
+            ) : (
+              <Wordmark className="h-8" />
+            )}
           </CardTitle>
           <CardDescription>
             {accounts ? (

@@ -136,7 +136,7 @@ export function AppDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1">
           <Link
-            to="/"
+            to="/projects"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
           >
             <ArrowLeft className="size-3" /> Projects
@@ -2107,7 +2107,7 @@ function DestroyDialog({ app }: { app: AppDetail }) {
     onSuccess: () => {
       toast.success(`Deleting ${app.displayName}`);
       qc.invalidateQueries({ queryKey: ["apps"] });
-      navigate("/");
+      navigate("/projects");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -3322,26 +3322,46 @@ function ResourceDialog({
 }
 
 /** Renames the project: the display name changes, the slug never does. */
+/**
+ * Name, launcher description and the featured flag (RFC-0033): what people
+ * see on the launcher's tile. The slug never changes.
+ */
 function RenameButton({ app, onDone }: { app: AppDetail; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(app.displayName);
+  const [description, setDescription] = useState(app.description ?? "");
+  const [featured, setFeatured] = useState(!!app.featured);
   const qc = useQueryClient();
-  const rename = useMutation({
-    mutationFn: () => api.renameApp(app.slug, name.trim()),
+  const save = useMutation({
+    mutationFn: () =>
+      api.updateApp(app.slug, {
+        name: name.trim(),
+        description: description.trim(),
+        featured,
+      }),
     onSuccess: () => {
-      toast.success(`Renamed to ${name.trim()}`);
+      toast.success("Saved");
       qc.invalidateQueries({ queryKey: ["apps"] });
+      qc.invalidateQueries({ queryKey: ["launcher"] });
       onDone();
       setOpen(false);
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const dirty =
+    name.trim() !== app.displayName ||
+    description.trim() !== (app.description ?? "") ||
+    featured !== !!app.featured;
   return (
     <Dialog
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (o) setName(app.displayName);
+        if (o) {
+          setName(app.displayName);
+          setDescription(app.description ?? "");
+          setFeatured(!!app.featured);
+        }
       }}
     >
       <DialogTrigger asChild>
@@ -3349,16 +3369,16 @@ function RenameButton({ app, onDone }: { app: AppDetail; onDone: () => void }) {
           variant="ghost"
           size="icon"
           className="size-7 text-muted-foreground"
-          aria-label="Rename project"
+          aria-label="Name and description"
         >
           <Pencil className="size-3.5" />
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Rename project</DialogTitle>
+          <DialogTitle>Name and description</DialogTitle>
           <DialogDescription>
-            The name is what people see. The slug{" "}
+            What people see on the launcher. The slug{" "}
             <code className="font-mono">{app.slug}</code> stays: it is the URL,
             the hostname and what the CLI uses.
           </DialogDescription>
@@ -3367,7 +3387,7 @@ function RenameButton({ app, onDone }: { app: AppDetail; onDone: () => void }) {
           className="grid gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) rename.mutate();
+            if (name.trim() && dirty) save.mutate();
           }}
         >
           <div className="grid gap-1.5">
@@ -3379,6 +3399,25 @@ function RenameButton({ app, onDone }: { app: AppDetail; onDone: () => void }) {
               autoFocus
             />
           </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="rename-description">Description</Label>
+            <Input
+              id="rename-description"
+              placeholder="One line under the name in the launcher"
+              maxLength={200}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={featured}
+              onChange={(e) => setFeatured(e.target.checked)}
+            />
+            Featured: show it first, and larger, in the launcher
+          </label>
           <DialogFooter>
             <Button
               type="button"
@@ -3389,13 +3428,9 @@ function RenameButton({ app, onDone }: { app: AppDetail; onDone: () => void }) {
             </Button>
             <Button
               type="submit"
-              disabled={
-                !name.trim() ||
-                name.trim() === app.displayName ||
-                rename.isPending
-              }
+              disabled={!name.trim() || !dirty || save.isPending}
             >
-              {rename.isPending && (
+              {save.isPending && (
                 <Loader2 className="animate-spin" data-icon="inline-start" />
               )}
               Save

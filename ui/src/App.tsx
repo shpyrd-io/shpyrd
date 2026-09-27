@@ -5,6 +5,7 @@ import { useToken } from "@/lib/auth";
 import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { AppsPage } from "@/pages/apps";
+import { LauncherPage } from "@/pages/launcher";
 import { AppDetailPage } from "@/pages/app-detail";
 import { ClusterPage } from "@/pages/cluster";
 import { WorkspacePage } from "@/pages/workspace";
@@ -49,7 +50,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<AppsPage />} />
+          <Route path="/" element={<LauncherPage />} />
+          <Route path="/projects" element={<AppsPage />} />
           <Route path="/projects/:slug" element={<AppDetailPage />} />
           <Route path="/cluster" element={<ClusterPage />} />
           <Route path="/workspace" element={<WorkspacePage />} />
@@ -62,7 +64,7 @@ export default function App() {
             path="/teams"
             element={<Navigate to="/workspace/teams" replace />}
           />
-          <Route path="*" element={<AppsPage />} />
+          <Route path="*" element={<LauncherPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -176,6 +176,48 @@ func SetDisplayName(a *shpyrdv1.App, name string) {
 	a.Annotations[shpyrdv1.AnnotationDisplayName] = name
 }
 
+// Description of an App: the launcher's one line under the name.
+func Description(a *shpyrdv1.App) string {
+	if a == nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Annotations[shpyrdv1.AnnotationDescription])
+}
+
+// SetDescription records the description (at most 200 characters, one
+// line), dropping the annotation when empty.
+func SetDescription(a *shpyrdv1.App, d string) {
+	d = strings.Join(strings.Fields(d), " ")
+	if len(d) > 200 {
+		d = d[:200]
+	}
+	if d == "" {
+		delete(a.Annotations, shpyrdv1.AnnotationDescription)
+		return
+	}
+	if a.Annotations == nil {
+		a.Annotations = map[string]string{}
+	}
+	a.Annotations[shpyrdv1.AnnotationDescription] = d
+}
+
+// Featured says the launcher shows the app first, and larger.
+func Featured(a *shpyrdv1.App) bool {
+	return a != nil && a.Annotations[shpyrdv1.AnnotationFeatured] == "true"
+}
+
+// SetFeatured marks or unmarks the app as featured.
+func SetFeatured(a *shpyrdv1.App, on bool) {
+	if !on {
+		delete(a.Annotations, shpyrdv1.AnnotationFeatured)
+		return
+	}
+	if a.Annotations == nil {
+		a.Annotations = map[string]string{}
+	}
+	a.Annotations[shpyrdv1.AnnotationFeatured] = "true"
+}
+
 // Label formats a project for people: "My Shop (my-shop)", or just the
 // slug when the two coincide.
 func Label(a *shpyrdv1.App) string {

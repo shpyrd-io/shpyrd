@@ -27,8 +27,13 @@ export type PublicConfig = {
   extensions: string[];
   /** What this server offers beyond the core ("workspaces", ...); empty on the open-source platform. */
   capabilities?: string[];
-  /** The workspace answering at this host. */
-  workspace?: { slug: string; name: string; implicit: boolean };
+  /** The workspace answering at this host, with its look (RFC-0033). */
+  workspace?: {
+    slug: string;
+    name: string;
+    implicit: boolean;
+    branding?: { logoUrl?: string; color?: string };
+  };
   /** Storage rules of this cluster's profile (RFC-0060). */
   volumes?: { minSize?: string; snapshots: boolean };
 };
@@ -86,6 +91,8 @@ export type WorkspaceInfo = {
   joinPolicy: "open" | "company" | "listed";
   /** Only the workspace's own sign-in methods are offered (not the platform's). */
   ownMethodsOnly: boolean;
+  /** The workspace's look: logo URL and accent colour, when set. */
+  branding?: { logoUrl?: string; color?: string };
   /** Emails of the workspace's owners. */
   owners: string[];
   createdAt: string;
@@ -300,6 +307,9 @@ export type AppSummary = {
   slug: string;
   /** Human name; equals the slug when none was given. */
   displayName: string;
+  /** The launcher's one line under the name, and whether it is shown first. */
+  description?: string;
+  featured?: boolean;
   namespace: string;
   phase: string;
   message?: string;
@@ -347,6 +357,8 @@ export type ProcessSpec = {
 export type AppDetail = {
   slug: string;
   displayName: string;
+  description?: string;
+  featured?: boolean;
   namespace: string;
   createdAt: string;
   spec: {
@@ -576,6 +588,8 @@ export type APIToken = {
 export type LauncherApp = {
   slug: string;
   displayName: string;
+  description?: string;
+  featured?: boolean;
   url?: string;
   access: "public" | "authenticated" | "identified";
   phase: string;
@@ -829,6 +843,9 @@ export const api = {
     ownMethodsOnly?: boolean;
     /** A new address label (or host under the same parent); owners only. */
     address?: string;
+    /** Branding: a logo data URL ("" removes), an accent colour #rrggbb ("" resets). */
+    logo?: string;
+    color?: string;
   }) => request<WorkspaceInfo>("/api/workspace", json("PATCH", body)),
   workspaceDomains: () => request<WorkspaceDomain[]>("/api/workspace/domains"),
   addWorkspaceDomain: (host: string) =>
@@ -957,6 +974,11 @@ export const api = {
   app: (slug: string) => request<AppDetail>(project(slug)),
   renameApp: (slug: string, name: string) =>
     request<AppDetail>(project(slug), json("PATCH", { name })),
+  /** Name, launcher description and featured flag (RFC-0033). */
+  updateApp: (
+    slug: string,
+    body: { name?: string; description?: string; featured?: boolean },
+  ) => request<AppDetail>(project(slug), json("PATCH", body)),
   deleteApp: (slug: string) =>
     request<{ status: string }>(project(slug), { method: "DELETE" }),
   deploy: (

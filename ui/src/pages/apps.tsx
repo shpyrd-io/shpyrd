@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { api, openURL } from "@/lib/api";
+import { api } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { usePerms } from "@/lib/me";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -39,6 +39,18 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
+/** True when the person's roles only open apps: nothing to operate. */
+export function useUserOnly(perms: ReturnType<typeof usePerms>): boolean {
+  const projectRoles = Object.values(perms.me?.roles?.projects ?? {});
+  return (
+    perms.loaded &&
+    perms.enforced &&
+    !perms.clusterView &&
+    !perms.create &&
+    projectRoles.every((r) => r === "user" || r === "reader")
+  );
+}
+
 export function AppsPage() {
   const apps = useQuery({
     queryKey: ["apps"],
@@ -63,17 +75,9 @@ export function AppsPage() {
     !perms.enforced &&
     perms.me?.provider !== "token" &&
     (config.data?.auth?.providers?.length ?? 0) > 0;
-  // Someone whose only roles open apps ("user", "reader", or none) is here
-  // to open apps, not to operate projects: the launcher is their page
-  // (RFC-0033).
-  const projectRoles = Object.values(perms.me?.roles?.projects ?? {});
-  const userOnly =
-    perms.loaded &&
-    perms.enforced &&
-    !perms.clusterView &&
-    !perms.create &&
-    projectRoles.every((r) => r === "user" || r === "reader");
-  if (userOnly) return <Launcher />;
+  // Someone whose only roles open apps ("user", "reader", or none) has no
+  // projects to operate: the launcher is their page (RFC-0033).
+  if (useUserOnly(perms)) return <Navigate to="/" replace />;
 
   return (
     <div className="grid gap-6">
@@ -412,59 +416,3 @@ function slugify(name: string): string {
 }
 
 /** The apps the signed-in person may open, as tiles (RFC-0033). */
-function Launcher() {
-  const apps = useQuery({
-    queryKey: ["launcher"],
-    queryFn: api.launcher,
-    refetchInterval: 30_000,
-  });
-  return (
-    <div className="grid gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Your apps</h1>
-        <p className="text-sm text-muted-foreground">
-          The apps you can open. Ask a project admin if one you need is missing.
-        </p>
-      </div>
-      {apps.isLoading && <Skeleton className="h-24 w-full" />}
-      {apps.data && apps.data.length === 0 && (
-        <p className="text-sm text-muted-foreground">No apps yet.</p>
-      )}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {apps.data?.map((a) => (
-          <a
-            key={a.slug}
-            href={openURL(a.url, a.access)}
-            target="_blank"
-            rel="noopener"
-            className="group rounded-lg border bg-card p-4 transition-colors hover:border-primary"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="font-medium">{a.displayName}</div>
-              {a.access === "public" ? (
-                <Globe2
-                  className="size-4 text-muted-foreground"
-                  aria-label="public"
-                />
-              ) : (
-                <Lock
-                  className="size-4 text-muted-foreground"
-                  aria-label="sign-in required"
-                />
-              )}
-            </div>
-            <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
-              {a.url?.replace(/^https?:\/\//, "") ?? "not published yet"}
-            </div>
-            <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-              <PhaseBadge phase={a.phase} />
-              <span className="inline-flex items-center gap-1 group-hover:text-foreground">
-                Open <ExternalLink className="size-3" />
-              </span>
-            </div>
-          </a>
-        ))}
-      </div>
-    </div>
-  );
-}

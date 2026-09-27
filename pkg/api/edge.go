@@ -745,6 +745,8 @@ func (s *Server) previewApp(c *gin.Context) {
 type LauncherApp struct {
 	Slug        string `json:"slug"`
 	DisplayName string `json:"displayName"`
+	Description string `json:"description,omitempty"`
+	Featured    bool   `json:"featured,omitempty"`
 	URL         string `json:"url,omitempty"`
 	Access      string `json:"access"`
 	Phase       string `json:"phase"`
@@ -775,9 +777,15 @@ func (s *Server) launcher(c *gin.Context) {
 		if access == shpyrdv1.AccessAuthenticated && !roles.Can(authz.ProjectOpen, a.Name) {
 			continue
 		}
-		out = append(out, LauncherApp{Slug: a.Name, DisplayName: project.DisplayName(a), URL: a.Status.URL, Access: access, Phase: firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending), Role: roles.ProjectRole(a.Name)})
+		out = append(out, LauncherApp{Slug: a.Name, DisplayName: project.DisplayName(a), Description: project.Description(a), Featured: project.Featured(a), URL: a.Status.URL, Access: access, Phase: firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending), Role: roles.ProjectRole(a.Name)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].DisplayName < out[j].DisplayName })
+	// Featured apps first, then by name.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Featured != out[j].Featured {
+			return out[i].Featured
+		}
+		return strings.ToLower(out[i].DisplayName) < strings.ToLower(out[j].DisplayName)
+	})
 	c.JSON(http.StatusOK, out)
 }
 

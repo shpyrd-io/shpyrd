@@ -64,6 +64,19 @@ type WorkspaceSettings struct {
 	// ResourceQuota per project namespace. Nil means no ceiling, the
 	// open-source default.
 	Limits *Limits `json:"limits,omitempty"`
+	// Branding is how the workspace looks to its people: the launcher and
+	// the login page show its logo and use its colour (RFC-0033).
+	Branding *Branding `json:"branding,omitempty"`
+}
+
+// Branding is a workspace's look.
+type Branding struct {
+	// Logo is the image, base64; LogoType its media type (image/png,
+	// image/svg+xml, ...). At most 256 KB.
+	Logo     string `json:"logo,omitempty"`
+	LogoType string `json:"logoType,omitempty"`
+	// Color is the accent colour, #rrggbb.
+	Color string `json:"color,omitempty"`
 }
 
 // Limits are the ceilings of a workspace plan. Zero values mean no ceiling

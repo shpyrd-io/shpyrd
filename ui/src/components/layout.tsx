@@ -13,6 +13,8 @@ import { getToken, setToken } from "@/lib/auth";
 import { usePerms } from "@/lib/me";
 import { useTheme, type Theme } from "@/lib/theme";
 import { LogoMark, Wordmark } from "@/components/brand";
+import { useUserOnly } from "@/pages/apps";
+import { useBrandColor } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -33,6 +35,9 @@ export function Layout() {
     staleTime: 60_000,
   });
   const perms = usePerms();
+  const userOnly = useUserOnly(perms);
+  const brand = config.data?.workspace?.branding;
+  useBrandColor(brand?.color);
   // The cluster is the operator's: only the console (the implicit
   // workspace's dashboard) shows it (RFC-0033 phase 6).
   const console = config.data?.workspace?.implicit !== false;
@@ -43,12 +48,28 @@ export function Layout() {
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b bg-card/40">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
-          <Link to="/" className="flex items-center" aria-label="shpyrd">
-            <Wordmark className="hidden sm:block" />
-            <LogoMark className="size-7 sm:hidden" />
+          <Link to="/" className="flex items-center gap-2" aria-label="home">
+            {brand?.logoUrl ? (
+              <>
+                <img
+                  src={brand.logoUrl}
+                  alt=""
+                  className="h-7 max-w-32 object-contain"
+                />
+                <span className="hidden text-sm font-semibold sm:block">
+                  {config.data?.workspace?.name}
+                </span>
+              </>
+            ) : (
+              <>
+                <Wordmark className="hidden sm:block" />
+                <LogoMark className="size-7 sm:hidden" />
+              </>
+            )}
           </Link>
           <nav className="flex items-center gap-1 text-sm">
-            <NavItem to="/">Projects</NavItem>
+            <NavItem to="/">Apps</NavItem>
+            {!userOnly && <NavItem to="/projects">Projects</NavItem>}
             {perms.clusterView && console && (
               <NavItem to="/cluster">Cluster</NavItem>
             )}
