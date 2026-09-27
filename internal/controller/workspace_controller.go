@@ -162,7 +162,13 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Config.SystemNamespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 		ing.Labels = mergeMaps(ing.Labels, labels)
-		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{"nginx.ingress.kubernetes.io/ssl-redirect": "true"})
+		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
+			"nginx.ingress.kubernetes.io/ssl-redirect": "true",
+			// Streams (build logs, log follow, the terminal) may stay
+			// silent longer than nginx's 60s default.
+			"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+		})
 		ing.Spec.IngressClassName = &class
 		ing.Spec.TLS = []networkingv1.IngressTLS{tls}
 		ing.Spec.Rules = []networkingv1.IngressRule{{

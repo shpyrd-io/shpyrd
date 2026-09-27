@@ -348,7 +348,11 @@ func (s *Server) buildLogs(c *gin.Context) {
 	steps := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
 	for _, ic := range steps {
 		if follow {
-			// Block until the step starts (or the pod fails before it).
+			// Block until the step starts (or the pod fails before it). A
+			// step can take a while to start (the builder image is pulled
+			// first); saying so now and then also keeps the connection
+			// alive through proxies that drop a silent response.
+			waiting := time.Now()
 			for {
 				p, err := pods.Get(ctx, podName, metav1.GetOptions{})
 				if err != nil {
@@ -361,6 +365,10 @@ func (s *Server) buildLogs(c *gin.Context) {
 				if p.Status.Phase == corev1.PodFailed {
 					w.line("===> build failed before step " + ic.Name)
 					return
+				}
+				if time.Since(waiting) >= 25*time.Second {
+					w.line("    (waiting for step " + ic.Name + " to start)")
+					waiting = time.Now()
 				}
 				select {
 				case <-ctx.Done():

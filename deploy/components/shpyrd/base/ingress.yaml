@@ -16,6 +16,11 @@ metadata:
   name: shpyrd-server
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Build logs, `shpyrd logs -f` and the web terminal are long-lived
+    # responses that can stay silent for minutes; nginx's default (60s)
+    # would cut them.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
   ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
   tls:
