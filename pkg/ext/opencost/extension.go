@@ -6,13 +6,15 @@
 package opencost
 
 import (
-	"log/slog"
-	"strings"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,10 +28,24 @@ import (
 // Name of the extension.
 const Name = "opencost"
 
-// allocationURL is the OpenCost service address; the default is the Helm
-// chart's default in the opencost namespace. OpenCost 1.121+ exposes the
-// allocation endpoint at /allocation/compute (not /model/allocation).
+// allocationURL is the OpenCost service address.
+// OpenCost 1.121+ uses /allocation/compute (not /model/allocation).
 const allocationURL = "http://opencost.opencost.svc:9003/allocation/compute"
+
+// metricsURL is the OpenCost Prometheus metrics endpoint. The COGS writer
+// uses it to derive the true node cost (and therefore idle cost) rather than
+// relying on the Allocation API's shareIdle parameter, which does not
+// distribute idle in v1.121.3 with namespace-level aggregation.
+const metricsURL = "http://opencost.opencost.svc:9003/metrics"
+
+// sharedNamespaces are infrastructure namespaces whose costs are split
+// proportionally across workspaces (they serve every workspace equally).
+var sharedNamespaces = map[string]bool{
+	"kube-system": true, "keda": true, "monitoring": true, "kpack": true,
+	"ingress-nginx": true, "ingress-nginx-internal": true,
+	"cert-manager": true, "cnpg-system": true, "opencost": true,
+	"shpyrd-system": true,
+}
 
 type extension struct{}
 
@@ -103,40 +119,37 @@ func (w *cogsWriter) run(ctx context.Context) {
 // Costs are summed per workspace and stored as a single COGS bucket
 // (project = "" = workspace total; project-level breakdown requires
 // per-project namespace queries or label configuration changes in OpenCost).
+// writeHour fetches the Allocation API for the given hour and writes one
+// COGSBucket per workspace. Idle and shared costs are computed explicitly:
+// OpenCost 1.121.3 does not distribute them via shareIdle/shareNamespaces
+// when aggregating by namespace.
+//
+//	Direct  = costs of pods in the workspace's own namespaces.
+//	Shared  = costs of platform infrastructure (kube-system, monitoring,
+//	          ingress, etc.), split proportionally by direct cost share.
+//	Idle    = unused node capacity (node total − all allocated), split
+//	          proportionally by direct cost share.
+//	Total   = Direct + Shared + Idle.
 func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	end := hour.Add(time.Hour)
 	window := fmt.Sprintf("%s,%s", hour.Format(time.RFC3339), end.Format(time.RFC3339))
 
-	// Build namespace → workspace slug mapping from the store.
 	workspaces, err := w.store.ListWorkspaces(ctx)
 	if err != nil {
 		return
 	}
-	// project namespace convention: app-<ws>-<proj> or app-<proj> (single ws)
-	// We match by reading the shpyrd.io/workspace label off the namespace,
-	// but OpenCost only knows namespace names. Use a prefix heuristic: every
-	// project namespace starts with "app-"; workspace slug is in the label.
-	// Since we can't read k8s here, aggregate per workspace by listing all
-	// their namespaces' costs.
-	// Strategy: query by namespace, then match namespace name against the
-	// workspace by asking the store for each workspace's slug (app-<ws>-<proj>
-	// or app-<proj> in single-workspace mode).
-	// Simpler: collect all namespace costs, group by the workspace slug encoded
-	// in the namespace prefix pattern, and fall back to the entire workspace.
+
+	// ---- Allocation API: per-namespace costs ----------------------------
 	q := url.Values{}
 	q.Set("window", window)
 	q.Set("aggregate", "namespace")
-	q.Set("includeIdle", "true")
-	q.Set("shareIdle", "proportional")
-	q.Set("shareNamespaces", "shpyrd-system,monitoring,keda,cnpg-system,opencost")
-	q.Set("shareSplit", "weighted")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allocationURL+"?"+q.Encode(), nil)
 	if err != nil {
 		return
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		slog.Error("opencost allocation request failed", "err", err)
+		slog.Error("opencost: allocation request failed", "err", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -144,97 +157,154 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 		Data []map[string]allocationItem `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		slog.Error("opencost allocation decode failed", "err", err)
+		slog.Error("opencost: allocation decode failed", "err", err)
 		return
 	}
-
-
-	type wsAgg struct {
-		cpu, mem, storage, net, shared, idle, total float64
-		direct                                       float64
+	if len(body.Data) == 0 {
+		return
 	}
-	// Build a namespace → workspace mapping.
-	// Convention: project namespaces are "app-<ws>-<proj>" when multiple
-	// workspaces exist, and "app-<proj>" for the implicit single workspace.
-	// Match by trying each workspace slug as the second path segment; anything
-	// that starts with "app-" but doesn't match a known workspace slug-prefix
-	// belongs to the implicit workspace (the first workspace with no explicit
-	// slug match).
-	nsToWS := map[string]string{} // namespace prefix "app-<slug>" → ws.ID
-	var implicitWS string          // fallback for "app-<proj>" namespaces
+	batch := body.Data[0]
+
+	// ---- Node total cost: cpu + ram ----------------------------------------
+	// Pull from OpenCost's own Prometheus metrics so we get the actual OCI
+	// price (not just what is allocated to pods).
+	nodeTotal := w.nodeHourlyCost(ctx)
+
+	// ---- Build namespace → workspace mapping --------------------------------
+	nsToWS := map[string]string{}
+	var implicitWS string
 	for _, ws := range workspaces {
 		nsToWS["app-"+ws.Slug] = ws.ID
 		if implicitWS == "" {
 			implicitWS = ws.ID
 		}
 	}
+
+	type wsAgg struct{ cpu, mem, storage, net, direct float64 }
 	wsCosts := map[string]*wsAgg{}
 	for _, ws := range workspaces {
 		wsCosts[ws.ID] = &wsAgg{}
 	}
-	for _, batch := range body.Data {
-		for ns, item := range batch {
-			if !strings.HasPrefix(ns, "app-") {
-				continue
-			}
-			var wsID string
-			for prefix, id := range nsToWS {
-				if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
-					wsID = id
-					break
-				}
-			}
-			// app-<proj> (no workspace slug in the name): implicit workspace.
-			if wsID == "" && implicitWS != "" {
-				wsID = implicitWS
-			}
-			if wsID == "" {
-				continue
-			}
-			a := wsCosts[wsID]
-			a.cpu += item.CPUCost
-			a.mem += item.RAMCost
-			a.storage += item.PVCost
-			a.net += item.NetworkCost
-			a.shared += item.SharedCost
-			a.idle += item.IdleCost
-			a.total += item.TotalCost
-		}
-	}
-	for _, ws := range workspaces {
-		a := wsCosts[ws.ID]
-		if a.total == 0 {
+	var sharedTotal, allocatedTotal float64
+
+	for ns, item := range batch {
+		total := item.TotalCost
+		allocatedTotal += total
+		if sharedNamespaces[ns] {
+			sharedTotal += total
 			continue
 		}
+		if !strings.HasPrefix(ns, "app-") {
+			continue
+		}
+		wsID := ""
+		for prefix, id := range nsToWS {
+			if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
+				wsID = id
+				break
+			}
+		}
+		if wsID == "" {
+			wsID = implicitWS
+		}
+		if wsID == "" {
+			continue
+		}
+		a := wsCosts[wsID]
+		a.cpu += item.CPUCost
+		a.mem += item.RAMCost
+		a.storage += item.PVCost
+		a.net += item.NetworkCost
+		a.direct += total
+	}
+
+	// Sum of workspace direct costs — used as the weight for splits.
+	totalDirect := 0.0
+	for _, a := range wsCosts {
+		totalDirect += a.direct
+	}
+	idleTotal := 0.0
+	if nodeTotal > allocatedTotal {
+		idleTotal = nodeTotal - allocatedTotal
+	}
+
+	for _, ws := range workspaces {
+		a := wsCosts[ws.ID]
+		if a.direct == 0 {
+			continue
+		}
+		weight := 0.0
+		if totalDirect > 0 {
+			weight = a.direct / totalDirect
+		}
+		shared := sharedTotal * weight
+		idle := idleTotal * weight
+		total := a.direct + shared + idle
 		b := store.COGSBucket{
 			WorkspaceID: ws.ID, Project: "",
 			PeriodStart: hour, PeriodEnd: end,
 			CPUCost: a.cpu, MemoryCost: a.mem,
 			StorageCost: a.storage, NetworkCost: a.net,
-			SharedCost: a.shared, IdleCost: a.idle,
-			TotalCost: a.total, Currency: "USD",
-			AllocationPolicy: "namespace;shareIdle=proportional",
+			SharedCost: shared, IdleCost: idle,
+			TotalCost: total, Currency: "USD",
+			AllocationPolicy: "namespace;idle=node_metrics;shared=proportional",
 			Quality:          store.QualityComplete,
 		}
 		if err := w.store.WriteCOGSBucket(ctx, b); err != nil {
 			slog.Error("opencost: write cogs bucket failed", "workspace", ws.Slug, "err", err)
 		} else {
-			slog.Info("opencost: wrote cogs bucket", "workspace", ws.Slug, "total", a.total)
+			slog.Info("opencost: wrote cogs bucket", "workspace", ws.Slug,
+				"direct", a.direct, "shared", shared, "idle", idle, "total", total)
 		}
 	}
+}
+
+// nodeHourlyCost returns the total hourly cost of all cluster nodes by
+// reading OpenCost's own Prometheus metrics (node_cpu_hourly_cost,
+// node_ram_hourly_cost). This is independent of what the Allocation API
+// distributes and gives us the ground truth for idle cost computation.
+func (w *cogsWriter) nodeHourlyCost(ctx context.Context) float64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0
+	}
+	var total float64
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "node_cpu_hourly_cost{") || strings.HasPrefix(line, "node_ram_hourly_cost{") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				if v, err := strconv.ParseFloat(parts[len(parts)-1], 64); err == nil {
+					total += v
+				}
+			}
+		}
+	}
+	return total
 }
 
 type allocationItem struct {
 	// Properties contains cluster, namespace, node etc. and a nested
 	// "labels" map. We only need namespace for workspace attribution.
-	Properties  allocationProperties  `json:"properties"`
-	CPUCost     float64               `json:"cpuCost"`
-	RAMCost     float64               `json:"ramCost"`
-	PVCost      float64               `json:"pvCost"`
-	NetworkCost float64               `json:"networkCost"`
-	SharedCost  float64               `json:"sharedCost"`
-	IdleCost    float64               `json:"idleCost"`
-	TotalCost   float64               `json:"totalCost"`
+	Properties  allocationProperties `json:"properties"`
+	CPUCost     float64              `json:"cpuCost"`
+	RAMCost     float64              `json:"ramCost"`
+	PVCost      float64              `json:"pvCost"`
+	NetworkCost float64              `json:"networkCost"`
+	SharedCost  float64              `json:"sharedCost"`
+	IdleCost    float64              `json:"idleCost"`
+	TotalCost   float64              `json:"totalCost"`
 }
 
 type allocationProperties struct {
