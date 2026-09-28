@@ -30,6 +30,10 @@ const (
 	// VarAuthHost is the hostname part of SHPYRD_AUTH_URL (for the Dex
 	// Ingress/Certificate that cannot parse a full URL). Derived.
 	VarAuthHost = "SHPYRD_AUTH_HOST"
+	// VarConsoleHost is the hostname part of SHPYRD_DASHBOARD_URL (for the
+	// console Ingress/Certificate): shpyrd.<domain>, or the domain itself
+	// when SHPYRD_CONSOLE_NAME is "apex" (RFC-0078). Derived.
+	VarConsoleHost = "SHPYRD_CONSOLE_HOST"
 	// VarConsoleName is the subdomain of the platform domain the console
 	// answers at (RFC-0078): "shpyrd" → shpyrd.<domain>; "" → the apex.
 	// Default "shpyrd" keeps existing installs unchanged.
@@ -210,10 +214,15 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if u, err := url.Parse(authURL); err == nil && u.Host != "" {
 		authHost = u.Host
 	}
+	consoleHost := dashboardURL
+	if u, err := url.Parse(dashboardURL); err == nil && u.Host != "" {
+		consoleHost = u.Hostname() // no port: certificates and Ingress hosts carry none
+	}
 	out := map[string]string{
 		VarDashboardURL: dashboardURL,
 		VarAuthURL:      authURL,
 		VarAuthHost:     authHost,
+		VarConsoleHost:  consoleHost,
 		VarExtensions:       strings.Join(names, ","),
 		VarURLPort:          URLPort(vars),
 		VarForwardedHeaders: "false",

@@ -5,7 +5,7 @@ metadata:
 spec:
   secretName: shpyrd-tls
   dnsNames:
-    - shpyrd.${SHPYRD_DOMAIN}
+    - ${SHPYRD_CONSOLE_HOST}
   issuerRef:
     kind: ClusterIssuer
     name: ${SHPYRD_PLATFORM_ISSUER}
@@ -25,10 +25,10 @@ spec:
   ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
   tls:
     - hosts:
-        - shpyrd.${SHPYRD_DOMAIN}
+        - ${SHPYRD_CONSOLE_HOST}
       secretName: shpyrd-tls
   rules:
-    - host: shpyrd.${SHPYRD_DOMAIN}
+    - host: ${SHPYRD_CONSOLE_HOST}
       http:
         paths:
           - path: /
