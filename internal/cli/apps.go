@@ -28,7 +28,7 @@ func newAppsCmd(g *globalFlags) *cobra.Command {
 		Short:   "Create, list and inspect projects",
 		Aliases: []string{"project", "apps", "app"},
 	}
-	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsMigrateCmd(g), newAppsDescribeCmd(g), newAppsDestroyCmd(g))
+	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsDescribeCmd(g), newAppsDestroyCmd(g))
 	return cmd
 }
 
@@ -223,58 +223,6 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// newAppsMigrateCmd is `shpyrd projects migrate <slug>`: recreates a legacy
-// project (app-<slug> namespace) under its stable id (p-<id> namespace),
-// so it can be renamed. The API does the heavy lifting.
-func newAppsMigrateCmd(g *globalFlags) *cobra.Command {
-	var yes bool
-	return &cobra.Command{
-		Use:   "migrate <project>",
-		Short: "Move a legacy project to a stable-id namespace (RFC-0076); required before renaming",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateAppName(args[0]); err != nil {
-				return err
-			}
-			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
-			if err != nil {
-				return err
-			}
-			if !ac.session {
-				return errors.New("migrate requires a session (shpyrd login)")
-			}
-			app, err := ac.getApp(ctx, args[0])
-			if err != nil {
-				return err
-			}
-			if project.IDNamed(app) {
-				fmt.Fprintf(cmd.OutOrStdout(), "Project %s is already on stable IDs (namespace %s); nothing to do.\n", args[0], app.Namespace)
-				return nil
-			}
-			if !yes {
-				slug := project.SlugOf(app)
-				fmt.Fprintf(cmd.OutOrStdout(), `Migrating project %s will:
-  - create a new namespace p-<id> and recreate all workloads there
-  - move volumes and databases via snapshot/restore (brief downtime per volume/database)
-  - switch the hostname to the new namespace and delete the old namespace
-
-`, slug)
-				if !confirm(cmd, false, "Proceed?", false) {
-					return fmt.Errorf("aborted")
-				}
-			}
-			if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+args[0]+"/migrate", nil, ""); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Migration started. Watch with `shpyrd projects info %s`.\n", args[0])
-			return nil
-		},
-	}
-}
-
-// newAppsDescribeCmd sets what the launcher shows for a project (RFC-0033):
-// the one-line description and whether it is featured.
 func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
 	var description string
 	var featured, unfeatured bool

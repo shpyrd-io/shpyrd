@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
 	"strings"
-	"encoding/json"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -1225,92 +1225,4 @@ func (s *Server) renameApp(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, detail(fresh, nil))
-}
-
-// migrateApp is POST /api/projects/:slug/migrate (RFC-0076 part B): moves
-// a legacy project (app-<slug> namespace) to a stable-id namespace (p-<id>).
-// Projects without volumes or databases migrate in seconds (workloads are
-// restarted, not moved). Projects with volumes or databases require snapshot/
-// restore and take as long as the volume/database is large; the controller
-// handles the workload switchover once the namespace is ready.
-func (s *Server) migrateApp(c *gin.Context) {
-	app, ok := s.loadApp(c)
-	if !ok {
-		return
-	}
-	if project.IDNamed(app) {
-		c.JSON(http.StatusOK, gin.H{"message": "project is already on a stable-id namespace", "namespace": app.Namespace})
-		return
-	}
-	ctx := c.Request.Context()
-	ws := s.workspace(c)
-	slug := project.SlugOf(app)
-
-	// Check for volumes and databases — full orchestration is part B's gap.
-	var vols shpyrdv1.VolumeList
-	_ = s.apps.List(ctx, &vols, client.InNamespace(app.Namespace))
-	var pgs shpyrdv1.PostgresList
-	_ = s.apps.List(ctx, &pgs, client.InNamespace(app.Namespace))
-	if len(vols.Items) > 0 || len(pgs.Items) > 0 {
-		abort(c, http.StatusUnprocessableEntity, fmt.Errorf(
-			"project %q has %d volume(s) and %d database(s); snapshot/restore migration is not yet automated — "+
-				"use `shpyrd volumes snapshot`, delete and recreate the project, then restore. "+
-				"See the RFC-0076 known gaps.", slug, len(vols.Items), len(pgs.Items)))
-		return
-	}
-
-	// No stateful resources: create the new namespace + App, copy config,
-	// delete the old namespace (workloads reschedule naturally).
-	id := app.Spec.ID
-	if id == "" {
-		abort(c, http.StatusInternalServerError, fmt.Errorf("project has no id yet; wait for the controller to assign one"))
-		return
-	}
-	wsObj, err := s.store.Workspace(ctx, ws)
-	if err != nil {
-		abort(c, http.StatusBadGateway, err)
-		return
-	}
-	short := ids.Short(id)
-	labels := project.NamespaceLabelsFor(wsObj.Slug, wsObj.ID, id, slug, short)
-	newNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: project.IDNamespace(id), Labels: labels}}
-	if err := s.apps.Create(ctx, newNS); err != nil && !apierrors.IsAlreadyExists(err) {
-		abort(c, http.StatusBadGateway, fmt.Errorf("create namespace: %w", err))
-		return
-	}
-
-	// Copy the env Secret to the new namespace.
-	oldEnv := &corev1.Secret{}
-	if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}, oldEnv); err == nil {
-		newEnv := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: short + shpyrdv1.EnvSecretSuffix, Namespace: newNS.Name, Labels: labels},
-			Data:       oldEnv.Data,
-		}
-		_ = s.apps.Create(ctx, newEnv)
-	}
-
-	// Create the new App, named by the short id.
-	newApp := &shpyrdv1.App{
-		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: newNS.Name, Labels: labels, Annotations: app.Annotations},
-		Spec:       app.Spec,
-	}
-	newApp.Spec.ID = id
-	newApp.Spec.Slug = slug
-	if err := s.apps.Create(ctx, newApp); err != nil && !apierrors.IsAlreadyExists(err) {
-		abort(c, http.StatusBadGateway, fmt.Errorf("create app: %w", err))
-		return
-	}
-
-	// Delete the old namespace (takes everything with it).
-	oldNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: app.Namespace}}
-	_ = s.apps.Delete(ctx, oldNS)
-
-	s.audit(c, slug, "project.migrate", app.Namespace+" → "+newNS.Name, "")
-	c.JSON(http.StatusOK, gin.H{
-		"message":      "migration complete",
-		"oldNamespace": app.Namespace,
-		"newNamespace": newNS.Name,
-		"slug":         slug,
-		"id":           id,
-	})
 }
