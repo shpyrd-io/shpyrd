@@ -45,3 +45,5 @@ terraform.tfvars
 # terraform (contrib/*/terraform/backups): S3 credentials (RFC-0037)
 *-backups.env
 shpyrd-ctl
+contrib/oci/terraform/backups/shpyrd-dev-registry.env
+contrib/oci/terraform/backups/tfplan

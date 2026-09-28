@@ -86,6 +86,10 @@ vars:
   SHPYRD_NODE_POOL_ID: ""
   SHPYRD_NODE_MIN_COUNT: "1"
   SHPYRD_NODE_MAX_COUNT: "5"
+  # kpack build cache stored in the registry instead of a 50 Gi block disk
+  # per app (RFC-0075). Set to the registry host when SHPYRD_REGISTRY_BUCKET
+  # is configured; empty keeps the old PVC behaviour.
+  SHPYRD_BUILD_CACHE_REGISTRY: ""
   SHPYRD_LOCAL_DNS: "false"
   SHPYRD_HTTP_PORT: "80"
   SHPYRD_HTTPS_PORT: "443"
