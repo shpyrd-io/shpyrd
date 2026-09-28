@@ -45,6 +45,11 @@ rules:
   - apiGroups: [""]
     resources: [services, configmaps, secrets, serviceaccounts]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Postgres sleep (RFC-0075): the reconciler and the pg-gateway read the
+  # CNPG "-rw" Endpoints to know when a woken primary accepts connections.
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list, watch]
   - apiGroups: [apps]
     # daemonsets: the LogDrain controller patches Vector's envFrom (RFC-0023)
     resources: [deployments, statefulsets, replicasets, daemonsets]

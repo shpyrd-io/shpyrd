@@ -25,10 +25,16 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
       -ldflags "-s -w -X github.com/shpyrd-io/shpyrd/pkg/version.Version=${VERSION}" \
-      -o /out/shpyrd-server ./cmd/shpyrd-server
+      -o /out/shpyrd-server ./cmd/shpyrd-server && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
+      -ldflags "-s -w -X github.com/shpyrd-io/shpyrd/pkg/version.Version=${VERSION}" \
+      -o /out/pg-gateway ./cmd/pg-gateway
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/shpyrd-server /shpyrd-server
+# The PostgreSQL wake-on-connect proxy (RFC-0075) rides in the same image;
+# the pg-gateway component runs it with args [/pg-gateway].
+COPY --from=build /out/pg-gateway /pg-gateway
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/shpyrd-server"]

@@ -169,11 +169,22 @@ spec:
               sleep:
                 description: Sleep is the current hibernation state (RFC-0075).
                 properties:
+                  activityCheckedAt:
+                    description: |-
+                      ActivityCheckedAt is when the activity signal (client backends seen
+                      in Prometheus) was last evaluated. Hibernation waits for a fresh check:
+                      with the signal stale, a busy database is never put to sleep.
+                    format: date-time
+                    type: string
                   lastActivityAt:
                     description: |-
                       LastActivityAt is the timestamp of the last observed session or
                       transaction on the application database.
                     format: date-time
+                    type: string
+                  message:
+                    description: Message explains the state (why not sleeping, wake
+                      progress).
                     type: string
                   state:
                     description: State is awake, sleeping, waking or suspended.

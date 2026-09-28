@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -108,6 +109,11 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 				logger.Error(err, "bucket write failed", "start", start)
 			} else {
 				logger.V(1).Info("bucket closed", "start", start, "buckets", n)
+			}
+			// Postgres sleep (RFC-0075): the activity signal for every
+			// database with a policy, on the same cadence.
+			if err := m.postgresActivity(ctx, end); err != nil {
+				logger.Error(err, "postgres activity check failed")
 			}
 			next = next.Add(bucketInterval)
 		}
@@ -212,6 +218,75 @@ func (m *MeteringLoop) writeBuckets(ctx context.Context, start, end time.Time) (
 		return 0, err
 	}
 	return len(buckets), nil
+}
+
+// postgresActivity is the sleep activity signal (RFC-0075, section 5):
+// for every Postgres with a sleep policy it asks Prometheus how many client
+// backends the database has (cnpg_backends_total, excluding CNPG's own
+// postgres and streaming_replica sessions — idle application connections
+// count, by design: a connection pool keeps its database awake) and records
+// the check time plus, when clients were seen, the activity time. The
+// reconciler hibernates only when the check is fresh and the activity old.
+func (m *MeteringLoop) postgresActivity(ctx context.Context, at time.Time) error {
+	if m.Client == nil {
+		return nil
+	}
+	var list shpyrdv1.PostgresList
+	if err := m.Client.List(ctx, &list); err != nil {
+		return err
+	}
+	var withPolicy []shpyrdv1.Postgres
+	for _, pg := range list.Items {
+		if pg.Spec.Sleep != nil && pg.Spec.Sleep.After != "" && pg.Spec.Sleep.After != "off" {
+			withPolicy = append(withPolicy, pg)
+		}
+	}
+	if len(withPolicy) == 0 {
+		return nil
+	}
+	// One query for all of them: backends per (namespace, cluster) over the
+	// last window, so a short burst between scrapes still counts.
+	series, err := m.Prom.QueryInstantSeriesAt(ctx,
+		`max by (namespace, cluster) (max_over_time(cnpg_backends_total{usename!~"postgres|streaming_replica"}[5m]))`, at)
+	if err != nil {
+		return fmt.Errorf("cnpg backends: %w", err)
+	}
+	seen := map[string]bool{} // namespace/cluster with ≥1 client backend
+	answered := map[string]bool{}
+	for _, s := range series {
+		key := s.Labels["namespace"] + "/" + s.Labels["cluster"]
+		answered[key] = true
+		if s.Value > 0 {
+			seen[key] = true
+		}
+	}
+	now := metav1.NewTime(at)
+	for i := range withPolicy {
+		pg := &withPolicy[i]
+		key := pg.Namespace + "/" + pg.Name
+		if pg.Status.Sleep == nil {
+			pg.Status.Sleep = &shpyrdv1.PostgresSleepStatus{}
+		}
+		// Only awake databases have backends to count; a sleeping one has
+		// no pods and no series. Its check is not stale — it is asleep.
+		if pg.Status.Sleep.State != "" && pg.Status.Sleep.State != "awake" {
+			continue
+		}
+		if !answered[key] {
+			// No series at all: the PodMonitor is not scraped yet (a new
+			// database, or metrics still propagating). Not a fresh check.
+			continue
+		}
+		patch := client.MergeFrom(pg.DeepCopy())
+		pg.Status.Sleep.ActivityCheckedAt = &now
+		if seen[key] {
+			pg.Status.Sleep.LastActivityAt = &now
+		}
+		if err := m.Client.Status().Patch(ctx, pg, patch); err != nil {
+			log.FromContext(ctx).Error(err, "postgres activity patch failed", "postgres", key)
+		}
+	}
+	return nil
 }
 
 // Component attribution (RFC-0075). Every metered thing is named after what

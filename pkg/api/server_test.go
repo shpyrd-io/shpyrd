@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"time"
@@ -1093,5 +1094,64 @@ func TestDomains(t *testing.T) {
 	}
 	if rec := do(t, s, "DELETE", "/api/projects/shop/domains/www.myprod.com", "", true); rec.Code != http.StatusBadRequest {
 		t.Errorf("remove twice: %d", rec.Code)
+	}
+}
+
+// Postgres sleep routes (RFC-0075, section 5): policy validation, HA
+// refusal, suspend and resume.
+func TestPostgresSleepAPI(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Image: "x"}}
+	storage := resource.MustParse("10Gi")
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &storage}}
+	ha := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "ha", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &storage, Instances: ptr.To[int32](3)}}
+	s, cr := newTestServer(t, nil, []client.Object{app, db, ha})
+
+	for _, bad := range []string{`{}`, `{"sleep":{"after":"1m"}}`, `{"sleep":{"after":"48h"}}`, `{"sleep":{"after":"later"}}`} {
+		if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", bad, true); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", bad, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/ha/sleep", `{"sleep":{"after":"30m"}}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "high availability") {
+		t.Errorf("HA must refuse: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/nope/sleep", `{"sleep":{"after":"30m"}}`, true); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown database: %d", rec.Code)
+	}
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"30m"}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("set policy: %d %s", rec.Code, rec.Body.String())
+	}
+	got := &shpyrdv1.Postgres{}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Sleep == nil || got.Spec.Sleep.After != "30m0s" {
+		t.Fatalf("policy not applied: %+v", got.Spec.Sleep)
+	}
+	// Suspend keeps the policy and sets the flag; resume clears the flag only.
+	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/suspend", "", true); rec.Code != http.StatusOK {
+		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep == nil || !got.Spec.Sleep.Suspended || got.Spec.Sleep.After != "30m0s" {
+		t.Fatalf("suspend: %+v", got.Spec.Sleep)
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/resume", "", true); rec.Code != http.StatusOK {
+		t.Fatalf("resume: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep == nil || got.Spec.Sleep.Suspended || got.Spec.Sleep.After != "30m0s" {
+		t.Fatalf("resume: %+v", got.Spec.Sleep)
+	}
+	// Off removes the policy entirely.
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"off"}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("off: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep != nil {
+		t.Errorf("off should clear the policy: %+v", got.Spec.Sleep)
+	}
+	// Suspending an HA database is refused too.
+	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/ha/suspend", "", true); rec.Code != http.StatusBadRequest {
+		t.Errorf("HA suspend must refuse: %d", rec.Code)
 	}
 }

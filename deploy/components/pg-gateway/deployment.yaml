@@ -19,11 +19,11 @@ spec:
       serviceAccountName: shpyrd-server   # reuse: reads Postgres CRDs
       containers:
         - name: pg-gateway
-          image: SHPYRD_SERVER_IMAGE       # replaced by cluster init; same image as the server
-          args: [/pg-gateway]
+          image: "${SHPYRD_SERVER_IMAGE}"   # the server image ships /pg-gateway
+          command: [/pg-gateway]
           env:
             - name: SHPYRD_SYSTEM_NAMESPACE
-              value: shpyrd-system
+              value: "${SHPYRD_SYSTEM_NS}"
           ports:
             - containerPort: 15000
               name: wake-start

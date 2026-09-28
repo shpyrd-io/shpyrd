@@ -18,6 +18,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -197,7 +199,9 @@ func (g *gateway) handleConn(ctx context.Context, conn net.Conn, ns, name string
 		g.log.Warn("wake request failed", "database", key, "err", err)
 	}
 
-	// Wait for the primary to be reachable.
+	// Wait for the primary to be reachable. CNPG's "<name>-rw" Service holds
+	// the primary once it passes readiness — never this gateway, which the
+	// shpyrd-owned "<name>" Service points at while the database sleeps.
 	deadline := time.Now().Add(maxWakeWait)
 	var backend string
 	for {
@@ -205,7 +209,7 @@ func (g *gateway) handleConn(ctx context.Context, conn net.Conn, ns, name string
 			g.log.Warn("wake timeout", "database", key)
 			return
 		}
-		ep, err := g.cs.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+		ep, err := g.cs.CoreV1().Endpoints(ns).Get(ctx, name+"-rw", metav1.GetOptions{})
 		if err == nil {
 			for _, sub := range ep.Subsets {
 				if len(sub.Addresses) > 0 && len(sub.Ports) > 0 {
@@ -242,8 +246,11 @@ func (g *gateway) handleConn(ctx context.Context, conn net.Conn, ns, name string
 	<-done
 }
 
-// wake patches the CNPG Cluster's hibernation annotation off so the
-// reconciler starts the pods.
+// wake starts a sleeping database: it removes CNPG's hibernation
+// annotation itself (the time-critical part — CNPG starts the pods within
+// seconds) and marks the status waking so the reconciler, which watches
+// status, moves the Service back to the primary once it is ready. A
+// suspended database is left alone: its Service never points here.
 func (g *gateway) wake(ctx context.Context, ns, name string) error {
 	cl, err := client.New(g.cfg, client.Options{Scheme: g.scheme})
 	if err != nil {
@@ -254,15 +261,23 @@ func (g *gateway) wake(ctx context.Context, ns, name string) error {
 		return err
 	}
 	if pg.Status.Sleep == nil || pg.Status.Sleep.State != "sleeping" {
-		return nil // already awake or waking
+		return nil // awake, waking or suspended
 	}
-	// Patch the status to "waking" and remove the CNPG annotation.
-	// The full reconciliation runs in the controller; we just trigger it.
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"})
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, cluster); err == nil {
+		if ann := cluster.GetAnnotations(); ann["cnpg.io/hibernation"] != "" {
+			cp := cluster.DeepCopy()
+			delete(ann, "cnpg.io/hibernation")
+			cluster.SetAnnotations(ann)
+			if err := cl.Patch(ctx, cluster, client.MergeFrom(cp)); err != nil {
+				return fmt.Errorf("un-hibernate: %w", err)
+			}
+		}
+	}
 	patch := client.MergeFrom(pg.DeepCopy())
-	if pg.Status.Sleep == nil {
-		pg.Status.Sleep = &shpyrdv1.PostgresSleepStatus{}
-	}
 	pg.Status.Sleep.State = "waking"
+	pg.Status.Sleep.Message = "waking: a client connected"
 	return cl.Status().Patch(ctx, pg, patch)
 }
 

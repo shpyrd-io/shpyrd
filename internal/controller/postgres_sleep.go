@@ -51,60 +51,184 @@ func sleepAfterDuration(spec *shpyrdv1.PostgresSleepSpec) time.Duration {
 	return parseSleepDuration(spec.After)
 }
 
+// activityStaleAfter is how old the activity check may be before the
+// reconciler refuses to hibernate: without a fresh signal (Prometheus down,
+// metering loop not leader) a busy database must never be put to sleep.
+const activityStaleAfter = 15 * time.Minute
+
+// Sleep states of a database (status.sleep.state).
+const (
+	pgAwake     = "awake"
+	pgSleeping  = "sleeping"
+	pgWaking    = "waking"
+	pgSuspended = "suspended"
+)
+
 // reconcilePostgresSleep manages the shpyrd-owned Service and the
-// hibernation state for a Postgres resource. It is called by the Postgres
-// reconciler after the CNPG Cluster is reconciled.
+// hibernation state machine for a Postgres resource (RFC-0075, section 5).
+// It is called by the Postgres reconciler after the CNPG Cluster is
+// reconciled; the reconciler requeues every minute while a policy exists.
+//
+//	awake ──(idle ≥ after, fresh signal, gateway ready)──▶ sleeping
+//	sleeping ──(gateway sees a connection: status=waking)──▶ waking
+//	waking ──(CNPG primary ready)──▶ awake
+//	any ──(spec.sleep.suspended)──▶ suspended ──(resume)──▶ waking
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
 	after := sleepAfterDuration(pg.Spec.Sleep)
+	suspended := pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended
 
 	// No policy, or an HA database (never sleeps): make sure it is awake
 	// and carry no Service of ours.
-	if after == 0 || instances(pg) > 1 {
+	if (after == 0 && !suspended) || instances(pg) > 1 {
 		if err := r.ensurePostgresAwake(ctx, pg); err != nil {
 			return err
+		}
+		if pg.Status.Sleep != nil && pg.Status.Sleep.State != pgAwake && pg.Status.Sleep.State != "" {
+			pg.Status.Sleep.State, pg.Status.Sleep.Message = pgAwake, ""
 		}
 		return r.deletePostgresService(ctx, pg)
 	}
 
-	if err := r.ensurePostgresService(ctx, pg); err != nil {
-		return err
-	}
-
-	// Assign a wake port if not yet done.
 	if pg.Status.Sleep == nil {
 		pg.Status.Sleep = &shpyrdv1.PostgresSleepStatus{}
 	}
-	if pg.Status.Sleep.WakePort == nil {
+	sleep := pg.Status.Sleep
+	if sleep.WakePort == nil {
 		port, err := r.allocateWakePort(ctx, pg)
 		if err != nil {
 			return fmt.Errorf("allocate wake port: %w", err)
 		}
 		p := int32(port)
-		pg.Status.Sleep.WakePort = &p
+		sleep.WakePort = &p
+	}
+	if sleep.State == "" {
+		sleep.State = pgAwake
 	}
 
-	// Evaluate whether to hibernate.
-	if pg.Status.Sleep.State == "" {
-		pg.Status.Sleep.State = "awake"
+	// Explicit suspend wins over everything: down now, no wake on connect.
+	if suspended {
+		if sleep.State != pgSuspended {
+			if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
+				return err
+			}
+			sleep.State = pgSuspended
+			sleep.Message = "suspended by request; shpyrd pg resume brings it back"
+		}
+		return r.ensurePostgresService(ctx, pg)
 	}
-	switch pg.Status.Sleep.State {
-	case "awake":
-		ready, err := r.gatewayReady(ctx)
-		if err != nil {
+
+	switch sleep.State {
+	case pgSuspended:
+		// Resumed: leave suspension through the normal wake path.
+		if err := r.setCNPGHibernation(ctx, pg, false); err != nil {
 			return err
 		}
-		if !ready {
-			log.FromContext(ctx).V(1).Info("sleep policy set but pg-gateway is not running; staying awake", "postgres", pg.Name)
-			return nil
+		sleep.State, sleep.Message = pgWaking, "resuming"
+		return r.ensurePostgresService(ctx, pg)
+
+	case pgAwake:
+		if err := r.ensurePostgresService(ctx, pg); err != nil {
+			return err
 		}
 		return r.maybeHibernate(ctx, pg, after)
-	case "sleeping", "waking":
-		// The gateway is responsible for waking on connect; we just watch.
-		return r.syncServiceSelector(ctx, pg)
-	case "suspended":
-		return nil
+
+	case pgSleeping:
+		// The gateway flips the state to waking when a connection arrives;
+		// nothing to do but keep the Service pointing at the gateway.
+		return r.ensurePostgresService(ctx, pg)
+
+	case pgWaking:
+		// The gateway (or a resume) asked for a wake: the annotation must be
+		// off; when CNPG reports the primary ready the Service goes back to
+		// it and a fresh idle window starts.
+		if err := r.setCNPGHibernation(ctx, pg, false); err != nil {
+			return err
+		}
+		if r.primaryReady(ctx, pg) {
+			now := metav1.Now()
+			sleep.State, sleep.Message = pgAwake, ""
+			sleep.LastActivityAt = &now
+			sleep.ActivityCheckedAt = &now
+		}
+		return r.ensurePostgresService(ctx, pg)
 	}
 	return nil
+}
+
+// maybeHibernate hibernates the database when the idle window has elapsed,
+// the activity signal is fresh and the wake proxy is running to bring it
+// back. Otherwise it records why not in the status message.
+func (r *PostgresReconciler) maybeHibernate(ctx context.Context, pg *shpyrdv1.Postgres, after time.Duration) error {
+	sleep := pg.Status.Sleep
+	now := time.Now()
+	if sleep.LastActivityAt == nil {
+		t := metav1.NewTime(now)
+		sleep.LastActivityAt = &t
+		sleep.Message = "idle window started"
+		return nil
+	}
+	if sleep.ActivityCheckedAt == nil || now.Sub(sleep.ActivityCheckedAt.Time) > activityStaleAfter {
+		sleep.Message = "awake: waiting for a fresh activity signal (Prometheus/metering)"
+		return nil
+	}
+	idle := now.Sub(sleep.LastActivityAt.Time)
+	if idle < after {
+		sleep.Message = fmt.Sprintf("awake: idle for %s of %s", idle.Truncate(time.Second), after)
+		return nil
+	}
+	ready, err := r.gatewayReady(ctx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		sleep.Message = "awake: idle, but the pg-gateway is not running (nothing could wake it)"
+		return nil
+	}
+	// Hibernate via the CNPG annotation; the Service goes to the gateway.
+	if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
+		return err
+	}
+	sleep.State = pgSleeping
+	sleep.Message = fmt.Sprintf("sleeping since %s (idle %s)", now.UTC().Format(time.RFC3339), idle.Truncate(time.Second))
+	log.FromContext(ctx).Info("database hibernated", "postgres", pg.Name, "idle", idle.Truncate(time.Second))
+	return r.ensurePostgresService(ctx, pg)
+}
+
+// ensurePostgresAwake removes the hibernation annotation when the database
+// is asleep and no policy asks for it (policy removed, HA enabled).
+func (r *PostgresReconciler) ensurePostgresAwake(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	if pg.Status.Sleep == nil {
+		return nil
+	}
+	switch pg.Status.Sleep.State {
+	case pgSleeping, pgSuspended, pgWaking:
+		return r.setCNPGHibernation(ctx, pg, false)
+	}
+	return nil
+}
+
+// primaryReady reports whether CNPG's "<name>-rw" Service has an endpoint:
+// CNPG adds the primary only once it passes readiness, so this is "accepting
+// connections", not just "pod running".
+func (r *PostgresReconciler) primaryReady(ctx context.Context, pg *shpyrdv1.Postgres) bool {
+	ep := &corev1.Endpoints{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pg.Name + "-rw", Namespace: pg.Namespace}, ep); err != nil {
+		return false
+	}
+	for _, s := range ep.Subsets {
+		if len(s.Addresses) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// postgresIsHibernated: the Service points at the gateway in these states.
+func (r *PostgresReconciler) postgresIsHibernated(_ context.Context, pg *shpyrdv1.Postgres) bool {
+	if pg.Status.Sleep == nil {
+		return false
+	}
+	return pg.Status.Sleep.State == pgSleeping || pg.Status.Sleep.State == pgWaking
 }
 
 // ensurePostgresService creates or updates the shpyrd-owned "<name>" Service
@@ -122,7 +246,11 @@ func (r *PostgresReconciler) ensurePostgresService(ctx context.Context, pg *shpy
 		// cnpg.io/instanceRole). Sleeping or waking: the gateway pods, on
 		// this database's wake port.
 		svc.Spec.Selector = map[string]string{"cnpg.io/cluster": pg.Name, "cnpg.io/instanceRole": "primary"}
-		if r.postgresIsHibernated(ctx, pg) {
+		switch {
+		case pg.Status.Sleep != nil && pg.Status.Sleep.State == pgSuspended:
+			// Nothing matches: clients are refused at once instead of hanging.
+			svc.Spec.Selector = map[string]string{"shpyrd.io/suspended-postgres": pg.Name}
+		case r.postgresIsHibernated(ctx, pg):
 			if wp := pg.Status.Sleep.WakePort; wp != nil {
 				svc.Spec.Selector = map[string]string{"app.kubernetes.io/name": pgGatewayName}
 				port.TargetPort = intstr.FromInt32(*wp)
@@ -167,56 +295,6 @@ func (r *PostgresReconciler) gatewayReady(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return dep.Status.ReadyReplicas > 0, nil
-}
-
-// syncServiceSelector flips the Service selector to match the sleep state.
-func (r *PostgresReconciler) syncServiceSelector(ctx context.Context, pg *shpyrdv1.Postgres) error {
-	return r.ensurePostgresService(ctx, pg)
-}
-
-// postgresIsHibernated checks the CNPG annotation on the Cluster object.
-func (r *PostgresReconciler) postgresIsHibernated(ctx context.Context, pg *shpyrdv1.Postgres) bool {
-	if pg.Status.Sleep == nil {
-		return false
-	}
-	return pg.Status.Sleep.State == "sleeping" || pg.Status.Sleep.State == "waking"
-}
-
-// maybeHibernate hibernates the database when the idle window has elapsed.
-func (r *PostgresReconciler) maybeHibernate(ctx context.Context, pg *shpyrdv1.Postgres, after time.Duration) error {
-	sleep := pg.Status.Sleep
-	if sleep == nil {
-		return nil
-	}
-	if sleep.LastActivityAt == nil {
-		now := metav1.Now()
-		sleep.LastActivityAt = &now
-		return nil
-	}
-	if time.Since(sleep.LastActivityAt.Time) < after {
-		return nil // still within the idle window
-	}
-	// Hibernate via the CNPG annotation.
-	if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
-		return err
-	}
-	sleep.State = "sleeping"
-	if err := r.syncServiceSelector(ctx, pg); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ensurePostgresAwake removes the hibernation annotation if set.
-func (r *PostgresReconciler) ensurePostgresAwake(ctx context.Context, pg *shpyrdv1.Postgres) error {
-	if pg.Status.Sleep != nil && pg.Status.Sleep.State == "sleeping" {
-		if err := r.setCNPGHibernation(ctx, pg, false); err != nil {
-			return err
-		}
-		pg.Status.Sleep.State = "waking"
-		return r.syncServiceSelector(ctx, pg)
-	}
-	return nil
 }
 
 // setCNPGHibernation sets or removes the cnpg.io/hibernation annotation on
@@ -306,11 +384,11 @@ func pgSleepDescription(pg *shpyrdv1.Postgres) string {
 		return ""
 	}
 	switch pg.Status.Sleep.State {
-	case "sleeping":
-		return "sleeping (volumes kept, data safe)"
-	case "waking":
+	case pgSleeping:
+		return "sleeping (volumes kept, data safe; wakes on the first connection)"
+	case pgWaking:
 		return "waking up — connections will succeed shortly"
-	case "suspended":
+	case pgSuspended:
 		return "suspended — resume with shpyrd pg resume"
 	}
 	return ""

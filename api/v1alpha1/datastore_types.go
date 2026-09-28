@@ -57,6 +57,10 @@ type PostgresSleepSpec struct {
 	// "off" or empty disables sleep.
 	// +optional
 	After string `json:"after,omitempty"`
+	// Suspended hibernates the database now and keeps it down: no wake on
+	// connect (clients are refused), data kept. `shpyrd pg suspend|resume`.
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 // PostgresSleepStatus records the sleep state of the database (RFC-0075).
@@ -71,6 +75,14 @@ type PostgresSleepStatus struct {
 	// Assigned once and kept for the life of the resource.
 	// +optional
 	WakePort *int32 `json:"wakePort,omitempty"`
+	// ActivityCheckedAt is when the activity signal (client backends seen
+	// in Prometheus) was last evaluated. Hibernation waits for a fresh check:
+	// with the signal stale, a busy database is never put to sleep.
+	// +optional
+	ActivityCheckedAt *metav1.Time `json:"activityCheckedAt,omitempty"`
+	// Message explains the state (why not sleeping, wake progress).
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 type PostgresSpec struct {

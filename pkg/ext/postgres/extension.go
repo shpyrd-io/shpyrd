@@ -26,7 +26,7 @@ func (extension) Description() string {
 	return "PostgreSQL databases for projects (CloudNativePG), attached to apps as DATABASE_URL (shpyrd pg create)"
 }
 func (extension) Components() []ext.ComponentRef {
-	return []ext.ComponentRef{{Name: "cnpg", Runlevel: "rc2"}, {Name: "barman-cloud", Runlevel: "rc3"}}
+	return []ext.ComponentRef{{Name: "cnpg", Runlevel: "rc2"}, {Name: "barman-cloud", Runlevel: "rc3"}, {Name: "pg-gateway", Runlevel: "rc4"}}
 }
 
 // Register runs the Postgres controller and makes the kind attachable.

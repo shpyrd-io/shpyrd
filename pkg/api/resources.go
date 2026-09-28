@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -363,3 +364,139 @@ func appendCSV(list, item string) string {
 	}
 	return list + ", " + item
 }
+
+// ---- Postgres sleep (RFC-0075, section 5) ---------------------------------
+
+// postgresSleepRequest is PATCH /api/projects/:slug/resources/postgres/:name.
+type postgresSleepRequest struct {
+	Sleep *struct {
+		After string `json:"after"`
+	} `json:"sleep"`
+}
+
+// patchPostgresSleep sets or clears the automatic hibernation policy of a
+// database. Only single-instance databases sleep: an HA database exists to
+// be available. Apps attached to the database get a config release when
+// the policy appears or disappears (the host moves between "<name>-rw" and
+// the shpyrd Service "<name>"); the CLI says so.
+func (s *Server) patchPostgresSleep(c *gin.Context) {
+	var req postgresSleepRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Sleep == nil {
+		abort(c, http.StatusBadRequest, errors.New(`body must be {"sleep":{"after":"30m"}} ("off" disables)`))
+		return
+	}
+	after := strings.ToLower(strings.TrimSpace(req.Sleep.After))
+	switch after {
+	case "", "off", "false":
+		after = ""
+	default:
+		d, err := time.ParseDuration(after)
+		if err != nil {
+			abort(c, http.StatusBadRequest, fmt.Errorf("sleep after: %q is not a duration (try 30m, 2h)", req.Sleep.After))
+			return
+		}
+		if d < 5*time.Minute || d > 24*time.Hour {
+			abort(c, http.StatusBadRequest, errors.New("sleep after must be between 5m and 24h"))
+			return
+		}
+		after = d.String()
+	}
+	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if after != "" && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
+			return fmt.Errorf("%s runs %d instances (high availability) and never sleeps", pg.Name, *pg.Spec.Instances)
+		}
+		if after == "" {
+			if pg.Spec.Sleep != nil {
+				pg.Spec.Sleep.After = ""
+				if !pg.Spec.Sleep.Suspended {
+					pg.Spec.Sleep = nil
+				}
+			}
+			return nil
+		}
+		if pg.Spec.Sleep == nil {
+			pg.Spec.Sleep = &shpyrdv1.PostgresSleepSpec{}
+		}
+		pg.Spec.Sleep.After = after
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	detail := "off"
+	if after != "" {
+		detail = "after " + after
+	}
+	s.audit(c, c.Param("slug"), "postgres.sleep", pg.Name, detail)
+	c.JSON(http.StatusOK, gin.H{"name": pg.Name, "sleep": pg.Spec.Sleep})
+}
+
+// suspendPostgres hibernates a database now with no wake on connect;
+// resumePostgres brings it back. Both are POSTs without a body.
+func (s *Server) suspendPostgres(c *gin.Context) { s.setPostgresSuspended(c, true) }
+func (s *Server) resumePostgres(c *gin.Context)  { s.setPostgresSuspended(c, false) }
+
+func (s *Server) setPostgresSuspended(c *gin.Context, suspended bool) {
+	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if suspended && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
+			return fmt.Errorf("%s runs %d instances (high availability); scale it to 1 before suspending", pg.Name, *pg.Spec.Instances)
+		}
+		if pg.Spec.Sleep == nil {
+			if !suspended {
+				return nil
+			}
+			pg.Spec.Sleep = &shpyrdv1.PostgresSleepSpec{}
+		}
+		pg.Spec.Sleep.Suspended = suspended
+		if !suspended && pg.Spec.Sleep.After == "" {
+			pg.Spec.Sleep = nil // resumed with no policy: back to plain -rw
+		}
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	action := "postgres.resume"
+	if suspended {
+		action = "postgres.suspend"
+	}
+	s.audit(c, c.Param("slug"), action, pg.Name, "")
+	c.JSON(http.StatusOK, gin.H{"name": pg.Name, "suspended": suspended})
+}
+
+// mutatePostgres loads a Postgres of the project, applies mutate and updates
+// it; conflicts are retried like mutateApp. Errors are already written.
+func (s *Server) mutatePostgres(c *gin.Context, mutate func(*shpyrdv1.Postgres) error) (*shpyrdv1.Postgres, error) {
+	ns, name := s.projectNamespace(c), c.Param("name")
+	var out *shpyrdv1.Postgres
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		pg := &shpyrdv1.Postgres{}
+		if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: ns, Name: name}, pg); err != nil {
+			return err
+		}
+		if err := mutate(pg); err != nil {
+			return &userError{err}
+		}
+		if err := s.apps.Update(c.Request.Context(), pg); err != nil {
+			return err
+		}
+		out = pg
+		return nil
+	})
+	if err != nil {
+		var ue *userError
+		switch {
+		case errors.As(err, &ue):
+			abort(c, http.StatusBadRequest, ue.error)
+		case apierrors.IsNotFound(err):
+			abort(c, http.StatusNotFound, fmt.Errorf("no database %q in this project", name))
+		default:
+			abort(c, http.StatusBadGateway, err)
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// userError marks a mutate error as the caller's (400, not 502).
+type userError struct{ error }

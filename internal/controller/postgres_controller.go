@@ -216,6 +216,9 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		if ready < int64(instances(pg)) {
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
+		if pg.Spec.Sleep != nil {
+			return ctrl.Result{RequeueAfter: time.Minute}, nil // the idle clock (RFC-0075)
+		}
 		if pg.Spec.Backups != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil // follow the backups
 		}
@@ -266,6 +269,10 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 	wantRes, _, _ := unstructured.NestedMap(desired.Object, "spec", "resources")
 	if curRes, _, _ := unstructured.NestedMap(current.Object, "spec", "resources"); !equalJSON(curRes, wantRes) {
 		_ = unstructured.SetNestedMap(current.Object, wantRes, "spec", "resources")
+		changed = true
+	}
+	if pm, _, _ := unstructured.NestedBool(current.Object, "spec", "monitoring", "enablePodMonitor"); !pm {
+		_ = unstructured.SetNestedField(current.Object, true, "spec", "monitoring", "enablePodMonitor")
 		changed = true
 	}
 	if !changed {
@@ -333,6 +340,9 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		"resources":             map[string]interface{}{"requests": toMap(res.Requests), "limits": toMap(res.Limits)},
 		"bootstrap":             map[string]interface{}{"initdb": map[string]interface{}{"database": PostgresDatabase, "owner": PostgresUser}},
 		"enableSuperuserAccess": false,
+		// Metrics (cnpg_backends_total, ...) scraped by the platform's
+		// Prometheus: the sleep activity signal reads them (RFC-0075).
+		"monitoring": map[string]interface{}{"enablePodMonitor": true},
 	}
 	// Backups and recovery (RFC-0038).
 	if pg.Spec.Backups != nil {
@@ -387,7 +397,13 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 		return nil, err
 	}
 	get := func(k string) string { return string(sec.Data[k]) }
+	// With a sleep policy apps connect through the shpyrd-owned Service
+	// "<name>": it points at the primary while awake and at the wake proxy
+	// while asleep (RFC-0075). Without one, CNPG's "-rw" as always.
 	host := firstNonEmpty(get("host"), name+"-rw")
+	if sleepAfterDuration(pg.Spec.Sleep) > 0 || (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended) {
+		host = name
+	}
 	port := firstNonEmpty(get("port"), fmt.Sprint(PostgresPort))
 	db := firstNonEmpty(get("dbname"), PostgresDatabase)
 	user := firstNonEmpty(get("username"), PostgresUser)

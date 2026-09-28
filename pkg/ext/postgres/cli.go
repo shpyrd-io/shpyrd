@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -43,43 +44,87 @@ default (2-3 for high availability with --instances).`,
 	return cmd
 }
 
-// Database sleep (RFC-0075 section 5) is not complete yet: bindings still
-// point apps at "<name>-rw", no activity signal keeps a busy database
-// awake, and the wake proxy image is not shipped. The commands exist so the
-// shape is settled, but they are hidden and refuse until then.
-const pgSleepNotYet = "database sleep is not available in this release yet (RFC-0075 section 5 is in progress); HTTP sleep for apps is: shpyrd sleep <project> --after 15m"
+// Database sleep (RFC-0075, section 5).
 
-func pgSleepPlaceholder(use, short string) *cobra.Command {
-	return &cobra.Command{
-		Use: use, Short: short, Hidden: true,
+// newPgSleepCmd sets or clears the automatic hibernation policy.
+func newPgSleepCmd(g ext.CLIGlobals) *cobra.Command {
+	var after, project string
+	cmd := &cobra.Command{
+		Use:   "sleep <name>",
+		Short: "Hibernate a database after a quiet period; it wakes on the first connection",
+		Long: `Hibernate a database when no client has been connected for a while and
+wake it on the first connection. While asleep the database's pods are gone
+(no compute is billed); its volume and data stay. The first connection after
+sleep takes a few seconds while PostgreSQL starts; the platform holds it open
+until the database answers.
+
+Only single-instance databases sleep. Apps attached to the database are
+re-released once when the policy is set or removed (their database host
+moves to the platform's wake-capable address).
+
+  shpyrd pg sleep db --project shop --after 30m
+  shpyrd pg sleep db --project shop --after off`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New(pgSleepNotYet)
+			ctx := cliContext()
+			body, _ := json.Marshal(map[string]any{"sleep": map[string]any{"after": after}})
+			if _, err := g.API().Request(ctx, "PATCH", "api/projects/"+project+"/resources/postgres/"+args[0]+"/sleep", body, "application/json"); err != nil {
+				return err
+			}
+			if after == "off" || after == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Sleep disabled for %s; attached apps are being re-released.\n", args[0])
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s sleeps after %s without client connections; attached apps are being re-released.\n", args[0], after)
+			}
+			return nil
 		},
 	}
-}
-
-// newPgSleepCmd configures automatic hibernation for a database (RFC-0075).
-func newPgSleepCmd(ext.CLIGlobals) *cobra.Command {
-	cmd := pgSleepPlaceholder("sleep <name>", "Configure automatic hibernation for a database")
-	cmd.Flags().String("after", "", "idle window before hibernating, e.g. 30m; 'off' disables")
-	cmd.Flags().String("project", "", "project slug")
+	projectFlag(cmd, &project)
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' disables")
+	_ = cmd.MarkFlagRequired("after")
 	return cmd
 }
 
-// newPgSuspendCmd suspends a database (explicit, no auto-wake).
-func newPgSuspendCmd(ext.CLIGlobals) *cobra.Command {
-	cmd := pgSleepPlaceholder("suspend <name>", "Suspend a database (no automatic wake; data kept)")
-	cmd.Flags().String("project", "", "project slug")
+// newPgSuspendCmd hibernates a database now, with no wake on connect.
+func newPgSuspendCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "suspend <name>",
+		Short: "Stop a database now and keep it stopped (data kept; clients refused)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cliContext()
+			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/postgres/"+args[0]+"/suspend", nil, ""); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is suspending: connections are refused until `shpyrd pg resume %s`.\n", args[0], args[0])
+			return nil
+		},
+	}
+	projectFlag(cmd, &project)
 	return cmd
 }
 
-// newPgResumeCmd resumes a suspended database.
-func newPgResumeCmd(ext.CLIGlobals) *cobra.Command {
-	cmd := pgSleepPlaceholder("resume <name>", "Resume a suspended database")
-	cmd.Flags().String("project", "", "project slug")
+// newPgResumeCmd brings a suspended database back.
+func newPgResumeCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "resume <name>",
+		Short: "Start a suspended database",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cliContext()
+			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/postgres/"+args[0]+"/resume", nil, ""); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is resuming; connections succeed once PostgreSQL is up.\n", args[0])
+			return nil
+		},
+	}
+	projectFlag(cmd, &project)
 	return cmd
 }
+
 func cliContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)
