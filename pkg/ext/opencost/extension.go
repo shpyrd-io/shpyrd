@@ -168,7 +168,8 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	// ---- Node total cost: cpu + ram ----------------------------------------
 	// Pull from OpenCost's own Prometheus metrics so we get the actual OCI
 	// price (not just what is allocated to pods).
-	nodeTotal := w.nodeHourlyCost(ctx)
+	nodeTotal, idleFromMetrics := w.nodeMetrics(ctx)
+	_ = nodeTotal // used for reference; idle comes directly
 
 	// ---- Build namespace → workspace mapping --------------------------------
 	nsToWS := map[string]string{}
@@ -223,10 +224,7 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	for _, a := range wsCosts {
 		totalDirect += a.direct
 	}
-	idleTotal := 0.0
-	if nodeTotal > allocatedTotal {
-		idleTotal = nodeTotal - allocatedTotal
-	}
+	idleTotal := idleFromMetrics
 
 	for _, ws := range workspaces {
 		a := wsCosts[ws.ID]
@@ -259,45 +257,61 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	}
 }
 
-// nodeHourlyCost returns the total hourly cost of all cluster nodes by
-// reading OpenCost's own Prometheus metrics (node_cpu_hourly_cost,
-// node_ram_hourly_cost). This is independent of what the Allocation API
-// distributes and gives us the ground truth for idle cost computation.
-func (w *cogsWriter) nodeHourlyCost(ctx context.Context) float64 {
+// nodeMetrics reads OpenCost's Prometheus metrics endpoint and returns:
+//
+//	nodeCost  = sum of node_cpu_hourly_cost + node_ram_hourly_cost ($/hr)
+//	idleCost  = nodeCost × (1 − cpuAllocated / cpuCapacity)
+//
+// cpuAllocated comes from container_cpu_allocation (request-based allocation
+// in fractional CPUs). cpuCapacity = sum of node_cpu_capacity{} in cores.
+// This gives the true idle fraction without relying on the Allocation API's
+// shareIdle parameter (which does not work in v1.121.3 namespace aggregation).
+func (w *cogsWriter) nodeMetrics(ctx context.Context) (nodeCost, idleCost float64) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
 	if err != nil {
-		return 0
+		return
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		slog.Error("opencost: node metrics request failed", "err", err)
-		return 0
+		return
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		slog.Error("opencost: node metrics read failed", "err", err)
-		return 0
+		return
 	}
-	var total float64
-	matched := 0
+	var cpuAllocated, cpuCapacity float64
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "node_cpu_hourly_cost{") || strings.HasPrefix(line, "node_ram_hourly_cost{") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				if v, err := strconv.ParseFloat(parts[len(parts)-1], 64); err == nil {
-					total += v
-					matched++
-				}
-			}
+		parts := strings.Fields(line)
+		v := 0.0
+		if len(parts) >= 2 {
+			v, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
+		}
+		switch {
+		case strings.HasPrefix(line, "node_cpu_hourly_cost{") ||
+			strings.HasPrefix(line, "node_ram_hourly_cost{"):
+			nodeCost += v
+		case strings.HasPrefix(line, "container_cpu_allocation{"):
+			cpuAllocated += v
+		case strings.HasPrefix(line, "kube_node_status_capacity{resource=\"cpu\""):
+			cpuCapacity += v
 		}
 	}
-	slog.Info("opencost: node metrics", "body_len", len(body), "matched_lines", matched, "total_cost_hr", total)
-	return total
+	if cpuCapacity > 0 && nodeCost > 0 {
+		idleFraction := 1 - cpuAllocated/cpuCapacity
+		if idleFraction < 0 {
+			idleFraction = 0
+		}
+		idleCost = nodeCost * idleFraction
+	}
+	slog.Info("opencost: node metrics", "node_cost_hr", nodeCost,
+		"cpu_allocated", cpuAllocated, "cpu_capacity", cpuCapacity, "idle_cost_hr", idleCost)
+	return
 }
 
 type allocationItem struct {
