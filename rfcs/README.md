@@ -41,7 +41,7 @@ declare what they depend on.
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
 | [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only, no HTTP providers yet) | 0002 |
-| [0014](0014-account-lifecycle.md) | Account lifecycle (invites, reset, verification, lockout) | provisional (invitations shipped with 0033 in v0.9.13; reset, verification and lockout remain) | 0012, 0013 |
+| [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |

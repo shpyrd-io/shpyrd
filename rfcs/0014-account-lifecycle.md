@@ -1,6 +1,6 @@
 # RFC-0014 Account lifecycle
 
-**Status:** provisional
+**Status:** implemented (v0.9.45)
 
 **Owner:** unassigned
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-27
+**Last update:** 2026-09-28 (implemented)
 
 ## Summary
 
@@ -69,3 +69,31 @@ Admins set passwords by hand today and pass them along. Teams need "invite by em
 ## Implementation History
 
 - 2026-09-22: RFC written.
+
+## Implementation status
+
+v0.9.45:
+
+| Part | Status |
+| --- | --- |
+| `authlocal.Store`: `CreatePending` (unusable hash, `invited` annotation), `ActivateFromInvite`, `SetPasswordAndVerify` (unlocks), `IsLocked`, `Lock`, `MarkVerified`; `User.Status` (active/pending/locked) and `Verified` | done |
+| `tokens.go`: `MintAccountToken`/`RedeemAccountToken`; `TokenKindReset` (1 h), `TokenKindInvite` (24 h); revoke-on-re-mint | done |
+| `ext.LocalAccountStore` interface; extension wires the store into the server via `SetLocalAccounts` | done |
+| `POST /api/auth/reset`: public, rate-limited (3/min per IP), always 200; `GET`+`POST /account/reset`: inline HTML reset form; `GET`+`POST /account/set-password`: inline HTML invite activation form | done |
+| `authPassword` lockout: checks `IsLocked` before the rate limiter; after 10 in-memory failures calls `Lock` for 15 min; successful sign-in clears the lock; `user.locked` audit event | done |
+| `shpyrd invite` hook: also calls `inviteUser` when auth-local is enabled, creating a pending account and sending the set-password link alongside the workspace invitation | done |
+| `shpyrd-ctl users add --invite`: creates a pending account; `shpyrd-ctl users list` shows STATUS and VERIFIED columns | done |
+| Deployed on OKE (v0.9.45): reset endpoint and pages verified | applied |
+
+Known gaps (not started):
+
+- **Email templates** are plain text + minimal HTML; branded templates are a follow-up.
+- **`/account/reset` link in the sign-in UI**: the login page shows no "Forgot password" link yet — a UI change deferred until the React app is touched.
+- **Verified email enforcement**: accounts marked `invited` (pending) can try to sign in but will fail (unusable hash); the lockout message and the "resend invite" flow are not surfaced in the dashboard.
+- **MFA/TOTP**: explicitly out of scope (RFC-0014 §Non-Goals); follow-up RFC.
+- **Rate limit persists only in memory**: a restart clears in-memory failure counts; the durable `Lock` annotation survives restarts.
+
+## History
+
+- 2026-09-22: RFC written.
+- 2026-09-28 (v0.9.45): implemented.
