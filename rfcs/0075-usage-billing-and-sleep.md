@@ -699,6 +699,14 @@ Updated 2026-09-28 (v0.9.21).
   database's Service selected gateway pods in another namespace, which a selector cannot
   do — it is now an ExternalName to a per-database `pgwake-<port>` Service in the system
   namespace (v0.9.39). Cold wake measured at 36.2 s; hibernation at exactly 5 min idle.
+- 2026-09-28 (v0.9.42): the node-pool rollout (RFC-0077) restarted every app and showed
+  the first URL-reading app against a sleeping database: `example-rails` got `connection
+  refused` and the database never woke. The binding set `DATABASE_HOST` to the
+  sleep-aware Service but kept CNPG's ready-made `uri` for `DATABASE_URL`, which names
+  the operator's own `-rw` Service — dead while hibernated. Rails, Django, Prisma and
+  node-pg all read the URL; the wake had only ever been tested with `psql` on the host.
+  The URL is now composed from the same host; the bindings hash changes, so attached
+  apps are re-released with the corrected URL on upgrade.
 - 2026-09-28 (v0.9.36): Postgres sleep end to end — state machine, activity signal in the
   metering loop, gateway waits on `-rw` (it used to wait on the Service that points at
   itself), gateway un-hibernates directly, binding host follows the policy, CNPG

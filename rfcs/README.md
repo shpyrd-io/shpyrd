@@ -105,7 +105,7 @@ declare what they depend on.
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
 | [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep scaffolding) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
 | [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — namespaces, App names, workload names, labels, registry paths and ledger keys use a base36 ID; slugs, names and addresses become mutable labels so workspaces and projects rename with a field change; retires the RFC-0033 slug/address split as identity | provisional, on hold | 0003, 0033, 0059, 0075 |
-| [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | in progress (v0.9.41) | 0035, 0060, 0075 |
+| [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 
 ## Phases
 
@@ -159,6 +159,7 @@ an "Implementation status" section with the details; the short version:
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
 | 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |
+| 0077 | autoscaler log noise for platform nodes (`node pool not found for instance`); unpinned platform Deployments may ride apps nodes; apps pool minimum 0 untested end to end; `data` pool not started |
 
 Fixed in the same audit: the users API required no role (0007/0008), the RBAC mirror was
 not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did nothing (0036),

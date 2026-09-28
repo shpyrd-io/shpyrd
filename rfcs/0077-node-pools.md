@@ -1,18 +1,18 @@
 # RFC-0077 Node pools: a fixed platform pool and an autoscaled apps pool
 
-**Status:** in progress
+**Status:** implemented (v0.9.41)
 
 **Owner:** Patrick Negri
 
 **Depends on:** RFC-0035 (implemented: cloud profiles), RFC-0060 (implemented: volumes),
-RFC-0075 (in progress: sleep, economics, cluster autoscaler)
+RFC-0075 (implemented: sleep, economics, cluster autoscaler)
 
 **Relates to:** RFC-0047 (implementable: autoscaling) — this RFC is the node side of
 scaling; RFC-0047 is the pod side.
 
 **Creation date:** 2026-09-28
 
-**Last update:** 2026-09-28
+**Last update:** 2026-09-28 (implemented)
 
 ---
 
@@ -48,15 +48,19 @@ demand.
 | `platform` (the existing `workers` pool) | fixed, `node_count` | as today | platform components; Postgres, Redis and any stateful extension resource; anything without a pool selector |
 | `apps` | autoscaled `apps_min_count..apps_max_count` | smaller flexible shape, e.g. 2 OCPU / 8 GB | web/worker processes, release and one-off Jobs, kpack build pods |
 
-The apps pool's nodes carry the label `shpyrd.io/pool=apps` and the taint
-`shpyrd.io/pool=apps:NoSchedule`. The taint keeps platform and stateful pods off the pool
-without touching their manifests; app pods get the matching toleration and a node
-selector. Smaller nodes let the autoscaler scale in finer steps and pack sleeping apps'
+Both pools are told apart by one node label, `shpyrd.io/pool`, set by the node pool
+(`apps` and `platform`). The label works on both sides: app pods carry a hard node
+selector for `apps`; the platform's stateful pods (databases, stores, Prometheus, the
+control-plane database) carry a selector or a preferred affinity for `platform`. OKE's node
+pool API has no taint field, so the design does not lean on taints: a pod with no selector
+at all can still land on an apps node and be evicted with it — acceptable for platform
+Deployments that are replicated or stateless, which is why only the stateful ones are
+pinned. Smaller apps nodes let the autoscaler scale in finer steps and pack sleeping apps'
 neighbours tighter.
 
-The platform pool is untainted and unlabelled, so everything that does not opt into the
-apps pool lands there — including databases, whose eviction a customer would notice as a
-30-second outage, and whose volumes (RFC-0060) attach to whatever node the pod lands on.
+Databases stay on the platform pool because their eviction is a 30-second outage a
+customer notices, and because their volumes (RFC-0060) attach to whatever node the pod
+lands on.
 
 ### What the controller schedules where
 
@@ -67,16 +71,13 @@ kpack Image build pod template:
 ```yaml
 nodeSelector:
   shpyrd.io/pool: apps
-tolerations:
-  - key: shpyrd.io/pool
-    operator: Equal
-    value: apps
-    effect: NoSchedule
 ```
 
-Postgres and Redis reconcilers add nothing: CNPG clusters and Redis StatefulSets stay on
-the platform pool. A future `data` pool would be the same mechanism with a different label
-on the datastore reconcilers.
+The Postgres and Redis reconcilers pin CNPG clusters and Redis StatefulSets to the platform
+pool (`Config.PlatformPool`, from `SHPYRD_PLATFORM_POOL`) with the same kind of selector;
+Prometheus and the control-plane database prefer it through the profile's values. A future
+`data` pool would be the same mechanism with a different label on the datastore
+reconcilers.
 
 ### Autoscaler
 
@@ -94,13 +95,20 @@ variable decides.
 
 ### Migration
 
-Adding the pool is additive: Terraform creates it, the installer sets `SHPYRD_APPS_POOL`,
-the controller's next reconcile of every App adds the selector and toleration, and the
-rolling update moves app pods to the new pool as nodes join. Nothing is drained by hand;
-the platform pool's `node_count` is then lowered by Terraform to what the platform and the
-databases need, and the autoscaler removes the now-empty apps capacity from the old pool's
-former share by never having to — the old nodes simply carry fewer pods until the count is
-reduced.
+Adding the pool is additive: Terraform creates it and labels the existing pool `platform`,
+the installer sets `SHPYRD_APPS_POOL`/`SHPYRD_PLATFORM_POOL` and rebinds the autoscaler,
+the controller's next reconcile of every App adds the selector, and the rolling update
+moves app pods to the new pool as the autoscaler adds nodes for the Pending replacements
+(old pods keep serving until the new ones are Ready). Nothing is drained by hand; the
+platform pool's `node_count` is then lowered by Terraform to what the platform and the
+databases need.
+
+The order matters: **rebind the autoscaler before the apps node joins.** Until it is told
+about the apps pool it still manages the platform pool, and the first free node there is
+the one it drains — with the StatefulSets on it (Prometheus, the control-plane database).
+On the first cloud that is exactly what happened (see History); the move itself was clean
+because both are single-replica StatefulSets with volumes that reattach, but a customer
+database on that node would have been a 30-second outage.
 
 ## Economics
 
@@ -125,12 +133,33 @@ on committed pricing, and the two can differ in shape.
 
 ## Implementation status
 
-v0.9.41: Terraform `apps` node pool (label, taint, shape, bounds; outputs and vars file);
-`Config.AppsPool` with selector and toleration on process Deployments, release and run
-Jobs and kpack build pods; `SHPYRD_APPS_POOL` installer variable; cluster autoscaler bound
-to the apps pool. Applied on the first cloud. Gaps: none known; the dev cloud's platform
-pool is left at its size until the apps have moved.
+| Part | Status |
+| --- | --- |
+| Terraform `apps` node pool: `apps_min_count`/`apps_max_count`/`apps_node_ocpus`/`apps_node_memory_gb`, label `shpyrd.io/pool=apps`, `ignore_changes size` (the autoscaler owns it); `workers` pool labelled `platform`; vars file emits `SHPYRD_APPS_POOL`, `SHPYRD_PLATFORM_POOL` and `SHPYRD_NODE_POOL_ID` = the apps pool | v0.9.41 |
+| `Config.AppsPool`: node selector on process Deployments, release Jobs, Dockerfile build Jobs, kpack `spec.build.nodeSelector`; `shpyrd run` pods read the pool from the install record | v0.9.41 |
+| `Config.PlatformPool`: CNPG `spec.affinity.nodeSelector`, Redis StatefulSet selector; Prometheus and the control-plane database prefer the platform pool (OCI profile values) | v0.9.41 |
+| Cluster autoscaler bound to the apps pool alone (`--nodes=<min>:<max>:<apps pool>`) | v0.9.41 |
+| `cluster init`: a value in `--vars-file` beats a `--set` recorded by an earlier run (a remembered pool OCID had pinned the autoscaler to the platform pool) | v0.9.42 |
+| First cloud: platform pool 2 × 4 OCPU, apps pool 1–3 × 1 OCPU / 8 GB; apps moved, apps pool scaled 1 → 2 on the Pending replacements | applied |
+
+Known gaps:
+
+- The autoscaler logs `node pool not found for instance` for every platform node each loop:
+  harmless (it only knows the apps pool) but noisy. A filter or an upstream flag later.
+- Platform Deployments without a selector (ingress, KEDA, cert-manager, kpack, operators)
+  may land on apps nodes and be evicted with them; they are replicated or stateless, so a
+  scale-down is a restart, not an outage. Pin them if it shows up in the wake numbers.
+- Apps pool minimum is 1 on the first cloud; 0 is untested end to end (node boot inside the
+  wake path, RFC-0075's resuming page would need to cover ~2 min).
+- `data` pool (open question 1) not started.
 
 ## History
 
 - 2026-09-28: written the day the autoscaler first ran and could remove nothing.
+- 2026-09-28: implemented and applied on the first cloud (v0.9.41). Taints dropped from
+  the design: OKE node pools cannot set them, so both pools are told apart by the
+  `shpyrd.io/pool` label alone, with selectors on both sides. The rollout ran the migration
+  in the wrong order: the apps node joined while the autoscaler was still bound to the
+  platform pool (a `--set` recorded from the first install beat the new vars file), and it
+  drained `10.0.1.204` — Prometheus and the control-plane database moved cleanly, the
+  platform pool went 3 → 2 on its own. Fixed in the CLI; the RFC now says rebind first.
