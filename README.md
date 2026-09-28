@@ -324,6 +324,7 @@ pkg/authz             roles and actions (RFC-0008); pkg/audit the audit trail
 pkg/api               HTTP API, OIDC relying party and sessions, dashboard serving
 deploy/               components and profiles embedded in the binary (incl. extension components such as dex)
 ui/                   dashboard (Vite + React 19 + Tailwind 4 + shadcn/ui)
+website/              shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see website/LICENSE
 examples/             sample projects: shop (Go, web + worker, Postgres + Redis), blog (Node, volume), api (Python Dockerfile), hello, hello-docker
 rfcs/                 design documents
 ```
@@ -339,8 +340,16 @@ make test vet
 The UI can be developed against a local server: `go run ./cmd/shpyrd-server`
 in one terminal, `cd ui && npm run dev` in another (Vite proxies `/api`).
 
+The website is a separate Next.js project: `make website-dev` serves
+[shpyrd.io](https://shpyrd.io) on http://localhost:3000. Documentation pages are
+Markdown under `website/src/pages/docs/`; see
+[website/README.md](website/README.md).
+
 CI runs `go vet`, `go test`, the dashboard lint, tests and build, and an
-end-to-end job on a kind cluster (`.github/workflows/ci.yml`). A tag `vX.Y.Z` releases:
+end-to-end job on a kind cluster (`.github/workflows/ci.yml`); the website
+builds separately (`.github/workflows/website.yml`). Each workflow is filtered
+to its own paths, so a documentation change does not run the end-to-end job.
+A tag `vX.Y.Z` releases:
 GoReleaser builds the CLI archives, checksums, release notes and the Homebrew
 cask in [shpyrd-io/homebrew-tap](https://github.com/shpyrd-io/homebrew-tap);
 buildx pushes the multi-arch server image to GHCR (`release.yml`).
