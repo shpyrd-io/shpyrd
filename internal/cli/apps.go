@@ -382,6 +382,11 @@ func printAppInfo(cmd *cobra.Command, app *shpyrdv1.App) {
 		for _, n := range names {
 			p := app.Status.Processes[n]
 			part := fmt.Sprintf("%s %d/%d", n, p.Ready, p.Desired)
+			if p.Sleep != nil && p.Sleep.State == "sleeping" {
+				part = n + " sleeping"
+			} else if p.Sleep != nil && p.Sleep.State == "unavailable" {
+				part += " (sleep " + p.Sleep.Message + ")"
+			}
 			if p.Failing > 0 {
 				part += fmt.Sprintf(" (%d failing: %s)", p.Failing, p.Reason)
 			}

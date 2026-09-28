@@ -330,7 +330,9 @@ the first request wakes it. The person may choose:
 
   shpyrd sleep shop --after 15m --resuming page   # branded waking screen
   shpyrd sleep shop --after 30m --resuming wait   # hold the connection
-  shpyrd sleep shop --after off                   # disable`,
+  shpyrd sleep shop --after off                   # disable
+
+Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()

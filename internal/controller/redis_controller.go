@@ -177,7 +177,9 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 			sts.Spec.ServiceName = rd.Name
 			if rd.Spec.Persistent {
 				claim := corev1.PersistentVolumeClaim{
-					ObjectMeta: metav1.ObjectMeta{Name: "data"},
+					// Labelled like the pods so usage metering can name the
+					// store's storage redis/<name> (RFC-0075).
+					ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: redisLabels(rd)},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: storage}},

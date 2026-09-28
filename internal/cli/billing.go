@@ -71,10 +71,27 @@ func printBillingView(cmd *cobra.Command, v api.WorkspaceBillingView) {
 	}
 	fmt.Fprintf(out, "Workspace:  %s\nPeriod:     %s\nPlan:       %s\nQuality:    %s\n\n", v.Workspace, v.Period, planName, v.Quality)
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "COMPONENT\tMETRIC\tQUANTITY\tUNIT PRICE\tESTIMATED")
-	for _, l := range v.Lines {
-		fmt.Fprintf(tw, "%s\t%s\t%.4f\t%.6f\t%.4f %s\n", l.Component, l.Metric, l.Quantity, l.UnitPrice, l.GrossAmount, v.Currency)
+	fmt.Fprintln(tw, "PROJECT\tCOMPONENT\tMETRIC\tQUANTITY\tUNIT\tUNIT PRICE\tESTIMATED")
+	// Lines arrive sorted by project; a subtotal closes each project.
+	project, subtotal := "", 0.0
+	flush := func() {
+		if project != "" {
+			fmt.Fprintf(tw, "\t\t\t\t\t%s\t%.4f %s\n", project, subtotal, v.Currency)
+		}
 	}
+	for _, l := range v.Lines {
+		if l.Project != project {
+			flush()
+			project, subtotal = l.Project, 0
+		}
+		name := l.Project
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%.4f\t%s\t%.6f\t%.4f %s\n", name, l.Component, l.Metric, l.Quantity, l.Unit, l.UnitPrice, l.GrossAmount, v.Currency)
+		subtotal += l.GrossAmount
+	}
+	flush()
 	_ = tw.Flush()
 	fmt.Fprintf(out, "\nEstimated this month:  %.4f %s\n", v.Total, v.Currency)
 	fmt.Fprintf(out, "Projected month total: %.4f %s\n", v.Projection, v.Currency)

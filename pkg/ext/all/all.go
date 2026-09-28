@@ -15,6 +15,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext/opencost"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/postgres"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/redis"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/sleep"
 )
 
 // All lists every extension the binaries know about, in display order.
@@ -28,6 +29,7 @@ func All() []ext.Extension {
 		objectstorage.New(),
 		mail.New(),
 		opencost.New(),
+		sleep.New(),
 	}
 }
 

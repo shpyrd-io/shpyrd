@@ -1059,7 +1059,10 @@ function ProcessesCard({
           const spec = app.spec.processes?.[p];
           const v = value(p);
           const cur = current(p);
-          const ok = st ? st.ready >= st.desired && st.desired > 0 : false;
+          const sleeping = st?.sleep?.state === "sleeping";
+          const ok = st
+            ? sleeping || (st.ready >= st.desired && st.desired > 0)
+            : false;
           const changed =
             draft[p] !== undefined &&
             (v.size !== cur.size || v.replicas !== cur.replicas);
@@ -1090,9 +1093,14 @@ function ProcessesCard({
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {st
-                      ? `${st.ready} of ${st.desired} running`
-                      : "not deployed"}
+                    {!st
+                      ? "not deployed"
+                      : sleeping
+                        ? "sleeping — wakes on the first request"
+                        : `${st.ready} of ${st.desired} running`}
+                    {st?.sleep?.state === "unavailable" && st.sleep.message
+                      ? ` · ${st.sleep.message}`
+                      : ""}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">

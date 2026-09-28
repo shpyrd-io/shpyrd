@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -73,13 +74,23 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 	srv := fakeProm(t, map[string][]map[string]any{
 		"container_cpu_usage_seconds_total": {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "12.5"),
-			sample(map[string]string{"namespace": "app-shop"}, "3"), // a pod without the label: component default
+			sample(map[string]string{"namespace": "app-shop", "label_cnpg_io_cluster": "db"}, "3"), // the database's pod
+			sample(map[string]string{"namespace": "app-shop", "label_kpack_io_build": "shop-build-1"}, "2"),
+			sample(map[string]string{"namespace": "app-shop"}, "1"), // an unlabelled pod
 			sample(map[string]string{"namespace": "app-other", "label_shpyrd_io_process": "web"}, "99"),
 		},
 		"container_memory_working_set_bytes": {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "0.25"),
 		},
-		"kube_persistentvolumeclaim_resource_requests_storage_bytes": {},
+		"kube_persistentvolumeclaim_resource_requests_storage_bytes": {
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "shop-cache"}, "50"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1"}, "20"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "uploads"}, "5"),
+		},
+		"kube_persistentvolumeclaim_labels": {
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1", "label_cnpg_io_cluster": "db"}, "1"),
+			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "uploads", "label_shpyrd_io_volume": "uploads"}, "1"),
+		},
 		"nginx_ingress_controller_response_size_sum": {
 			sample(map[string]string{"exported_namespace": "app-shop"}, "4096"),
 		},
@@ -95,9 +106,10 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// cpu web + cpu default + memory web + storage zero + egress = 5
-	if n != 5 {
-		t.Fatalf("buckets written = %d, want 5", n)
+	// cpu: web, postgres/db, build, other (4); memory: web (1);
+	// storage: build-cache, postgres/db, volume/uploads (3); egress (1).
+	if n != 9 {
+		t.Fatalf("buckets written = %d, want 9", n)
 	}
 
 	got, err := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "shop", start.Add(-time.Second), end.Add(time.Second))
@@ -113,19 +125,56 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 	if byKey["web/"+store.MetricCPUUsed] != 12.5 {
 		t.Errorf("web cpu = %v, want 12.5 (%v)", byKey["web/"+store.MetricCPUUsed], byKey)
 	}
-	if byKey["default/"+store.MetricCPUUsed] != 3 {
-		t.Errorf("default cpu = %v, want 3", byKey["default/"+store.MetricCPUUsed])
+	want := map[string]float64{
+		"postgres/db/" + store.MetricCPUUsed:    3,
+		"build/" + store.MetricCPUUsed:          2,
+		"other/" + store.MetricCPUUsed:          1,
+		"web/" + store.MetricEgressHTTP:         4096,
+		"build-cache/" + store.MetricStorage:    50,
+		"postgres/db/" + store.MetricStorage:    20,
+		"volume/uploads/" + store.MetricStorage: 5,
 	}
-	if byKey["web/"+store.MetricEgressHTTP] != 4096 {
-		t.Errorf("egress = %v, want 4096", byKey["web/"+store.MetricEgressHTTP])
-	}
-	if q, ok := byKey["default/"+store.MetricStorage]; !ok || q != 0 {
-		t.Errorf("storage zero bucket missing or non-zero: %v %v", q, ok)
+	for k, v := range want {
+		if byKey[k] != v {
+			t.Errorf("%s = %v, want %v (all: %v)", k, byKey[k], v, byKey)
+		}
 	}
 	// Nothing for the unmapped namespace.
 	other, _ := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "other", start.Add(-time.Second), end.Add(time.Second))
 	if len(other) != 0 {
 		t.Errorf("unmapped namespace produced buckets: %+v", other)
+	}
+}
+
+// TestMeteringStorageZeroFill: a project without any Bound claim gets an
+// explicit zero storage bucket, so "no storage" is a number, not a gap.
+func TestMeteringStorageZeroFill(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "app-blog",
+		Labels: map[string]string{shpyrdv1.LabelWorkspace: store.DefaultWorkspace, shpyrdv1.LabelProject: "blog"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
+	srv := fakeProm(t, nil)
+	defer srv.Close()
+	st := store.NewMemory()
+	m := &MeteringLoop{Store: st, Prom: prom.NewClient(srv.URL), Client: c}
+	end := time.Now().UTC().Truncate(bucketInterval)
+	if _, err := m.writeBuckets(context.Background(), end.Add(-bucketInterval), end); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "blog", end.Add(-bucketInterval-time.Second), end.Add(time.Second))
+	var storage *store.UsageBucket
+	for i := range got {
+		if got[i].Metric == store.MetricStorage {
+			storage = &got[i]
+		}
+	}
+	if storage == nil || storage.Quantity == nil || *storage.Quantity != 0 || storage.Quality != store.QualityComplete {
+		t.Fatalf("zero storage bucket: %+v", storage)
 	}
 }
 
@@ -183,6 +232,13 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		if got := ing.Annotations["nginx.ingress.kubernetes.io/auth-cache-duration"]; got != "200 20s, 401 5s, 403 5s" {
 			t.Errorf("auth cache = %q", got)
 		}
+		got := &shpyrdv1.App{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, got); err != nil {
+			t.Fatal(err)
+		}
+		if st := got.Status.Processes["web"]; st.Sleep == nil || st.Sleep.State != "unavailable" || st.Sleep.Message == "" {
+			t.Errorf("web sleep status = %+v, want unavailable with a message", st.Sleep)
+		}
 	})
 
 	t.Run("with keda-http", func(t *testing.T) {
@@ -236,6 +292,28 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 			t.Errorf("resuming page configmap: %v", err)
 		}
 
+		// KEDA scales the web Deployment to zero: the next reconcile must
+		// leave it there (not fight the scaler) and report the process as
+		// sleeping rather than failing.
+		dep := &appsv1.Deployment{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep); err != nil {
+			t.Fatal(err)
+		}
+		dep.Spec.Replicas = ptr.To[int32](0)
+		if err := c.Update(context.Background(), dep); err != nil {
+			t.Fatal(err)
+		}
+		got := runReconcile(t, r, app)
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep); err != nil {
+			t.Fatal(err)
+		}
+		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 0 {
+			t.Errorf("reconcile reset replicas to %v; KEDA owns them while sleep is active", dep.Spec.Replicas)
+		}
+		if st := got.Status.Processes["web"]; st.Sleep == nil || st.Sleep.State != "sleeping" || st.Desired != 0 {
+			t.Errorf("web status = %+v, want sleeping with desired 0", st)
+		}
+
 		// Turning the policy off removes the objects and restores the backend.
 		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, app); err != nil {
 			t.Fatal(err)
@@ -249,6 +327,13 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		runReconcile(t, r, app)
 		if got := ingressOf(t, c).Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != "shop-web" {
 			t.Errorf("backend after off = %q", got)
+		}
+		// Without the policy the controller owns replicas again.
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep); err != nil {
+			t.Fatal(err)
+		}
+		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 1 {
+			t.Errorf("replicas after off = %v, want 1", dep.Spec.Replicas)
 		}
 		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, ir); !apierrors.IsNotFound(err) {
 			t.Errorf("interceptorroute still there: %v", err)

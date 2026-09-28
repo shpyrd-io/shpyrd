@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ReceiptText } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { api, type BillingLine } from "@/lib/api";
 import { ErrorBoundary } from "@/components/error-boundary";
 import {
   Card,
@@ -36,6 +36,21 @@ export function BillingCard() {
 /** num guards amounts that may be missing from an older server. */
 function num(n: number | undefined | null): number {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
+}
+
+/** groupByProject keeps the server's order (project, component, metric). */
+function groupByProject(lines: BillingLine[]) {
+  const out: { project?: string; lines: BillingLine[]; total: number }[] = [];
+  for (const l of lines) {
+    const last = out[out.length - 1];
+    if (last && last.project === l.project) {
+      last.lines.push(l);
+      last.total += num(l.grossAmount);
+    } else {
+      out.push({ project: l.project, lines: [l], total: num(l.grossAmount) });
+    }
+  }
+  return out;
 }
 
 function BillingCardInner() {
@@ -77,6 +92,7 @@ function BillingCardInner() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Project</TableHead>
                 <TableHead>Component</TableHead>
                 <TableHead>Metric</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
@@ -85,27 +101,53 @@ function BillingCardInner() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(b.lines ?? []).map((l) => (
-                <TableRow key={l.component + l.metric}>
-                  <TableCell className="font-mono text-xs">
-                    {l.component}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {l.metric.replace(/_/g, " ")}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    {num(l.quantity).toFixed(4)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    {num(l.unitPrice) > 0 ? num(l.unitPrice).toFixed(6) : "—"}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    {l.grossAmount > 0
-                      ? `${currency} ${num(l.grossAmount).toFixed(4)}`
-                      : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {groupByProject(b.lines ?? []).map((g) => [
+                ...g.lines.map((l, i) => (
+                  <TableRow key={(l.project ?? "") + l.component + l.metric}>
+                    <TableCell className="font-mono text-xs">
+                      {i === 0 ? (l.project ?? "—") : ""}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {l.component}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {l.metric.replace(/_/g, " ")}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {num(l.quantity).toFixed(4)}
+                      {l.unit ? (
+                        <span className="ml-1 text-muted-foreground">
+                          {l.unit}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {num(l.unitPrice) > 0 ? num(l.unitPrice).toFixed(6) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {l.grossAmount > 0
+                        ? `${currency} ${num(l.grossAmount).toFixed(4)}`
+                        : "—"}
+                    </TableCell>
+                  </TableRow>
+                )),
+                g.lines.length > 1 ? (
+                  <TableRow
+                    key={(g.project ?? "") + "-subtotal"}
+                    className="bg-muted/40"
+                  >
+                    <TableCell
+                      colSpan={5}
+                      className="text-right text-xs text-muted-foreground"
+                    >
+                      {g.project ?? "minimum"} subtotal
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs font-medium">
+                      {currency} {g.total.toFixed(4)}
+                    </TableCell>
+                  </TableRow>
+                ) : null,
+              ])}
             </TableBody>
           </Table>
         )}

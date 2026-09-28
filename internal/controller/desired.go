@@ -469,14 +469,21 @@ func processResources(p namedProcess, catalog sizes.Catalog) (corev1.ResourceReq
 }
 
 // mutateDeployment sets the fields shpyrd owns on a process Deployment.
-func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash, revision string, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment) {
+// mutateDeployment renders a process's Deployment. With scaledExternally
+// (RFC-0075: KEDA drives the web Deployment between 0 and the process's
+// instance count) the replica count is left to the scaler once the
+// Deployment exists; setting it on every reconcile would wake a sleeping
+// app and fight the scaler forever.
+func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash, revision string, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment, scaledExternally bool) {
 	labels := processLabels(app, p.Name)
 	d.Labels = mergeMaps(d.Labels, labels)
 	if d.Spec.Selector == nil {
 		// The selector is immutable; only set it on creation.
 		d.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(app, p.Name)}
 	}
-	d.Spec.Replicas = ptr.To(p.replicas())
+	if !scaledExternally || d.Spec.Replicas == nil {
+		d.Spec.Replicas = ptr.To(p.replicas())
+	}
 	d.Spec.RevisionHistoryLimit = ptr.To[int32](3)
 	d.Spec.Strategy = rolloutStrategy(p, mounts)
 

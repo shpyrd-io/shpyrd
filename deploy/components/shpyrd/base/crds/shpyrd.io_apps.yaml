@@ -899,6 +899,33 @@ spec:
                       description: Size is the instance size in effect ("custom" when
                         overridden).
                       type: string
+                    sleep:
+                      description: |-
+                        Sleep is the scale-to-zero state of the web process when a sleep
+                        policy is set (RFC-0075); absent otherwise.
+                      properties:
+                        lastActivityAt:
+                          description: LastActivityAt is when the last request arrived.
+                          format: date-time
+                          type: string
+                        lastWakeAt:
+                          description: LastWakeAt is when the last wake completed.
+                          format: date-time
+                          type: string
+                        lastWakeDuration:
+                          description: LastWakeDuration is the last cold-start time
+                            in seconds.
+                          format: int32
+                          type: integer
+                        message:
+                          description: Message explains an unavailable state.
+                          type: string
+                        state:
+                          description: |-
+                            State is awake, sleeping or waking; "unavailable" when a policy is
+                            set but the cluster cannot honour it (Message says why).
+                          type: string
+                      type: object
                     updated:
                       format: int32
                       type: integer

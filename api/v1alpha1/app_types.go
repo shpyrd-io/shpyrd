@@ -330,8 +330,12 @@ type SleepSpec struct {
 
 // SleepStatus records the sleep state of a process (RFC-0075).
 type SleepStatus struct {
-	// State is awake, sleeping or waking.
+	// State is awake, sleeping or waking; "unavailable" when a policy is
+	// set but the cluster cannot honour it (Message says why).
 	State string `json:"state,omitempty"`
+	// Message explains an unavailable state.
+	// +optional
+	Message string `json:"message,omitempty"`
 	// LastActivityAt is when the last request arrived.
 	// +optional
 	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
@@ -556,6 +560,10 @@ type ProcessStatus struct {
 	// Pinned explains a fixed instance count ("single-instance volume data").
 	// +optional
 	Pinned string `json:"pinned,omitempty"`
+	// Sleep is the scale-to-zero state of the web process when a sleep
+	// policy is set (RFC-0075); absent otherwise.
+	// +optional
+	Sleep *SleepStatus `json:"sleep,omitempty"`
 }
 
 // App is an application managed by shpyrd. It lives in the namespace that

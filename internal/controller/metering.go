@@ -181,49 +181,111 @@ func (m *MeteringLoop) writeBuckets(ctx context.Context, start, end time.Time) (
 	return len(buckets), nil
 }
 
-// podJoin attaches the process label to container metrics. It joins every
-// pod (kube_pod_labels carries shpyrd.io/process through the KSM
-// allowlist); pods without the label — databases, one-off runs — land in
-// component "default" for their namespace instead of being dropped.
-const podJoin = `* on (namespace, pod) group_left (label_shpyrd_io_process) kube_pod_labels{}`
+// Component attribution (RFC-0075). Every metered thing is named after what
+// the customer created: a process type (web, worker, release), a database
+// (postgres/<name>), a store (redis/<name>), a volume (volume/<name>), or the
+// build machinery (build for the build pods, build-cache for the buildpack
+// cache claim). The labels come through kube-state-metrics' allowlist
+// (deploy/components/monitoring/values.yaml); anything unlabelled is "other".
+//
+// componentOfPod names the component of a pod from its (KSM-exported) labels.
+func componentOfPod(labels map[string]string, _ string) string {
+	switch {
+	case labels["label_shpyrd_io_process"] != "":
+		return labels["label_shpyrd_io_process"]
+	case labels["label_cnpg_io_cluster"] != "":
+		return "postgres/" + labels["label_cnpg_io_cluster"]
+	case labels["label_shpyrd_io_redis"] != "":
+		return "redis/" + labels["label_shpyrd_io_redis"]
+	case labels["label_kpack_io_build"] != "":
+		return "build"
+	}
+	return "other"
+}
 
-// cpuBuckets writes cpu_used (core-seconds) per (namespace, process).
+// componentOfClaim names the component of a PersistentVolumeClaim. The
+// buildpack cache is recognised by kpack's naming (<image>-cache, the Image
+// being named after the project) because kpack creates that claim itself.
+func componentOfClaim(labels map[string]string, project string) string {
+	switch {
+	case labels["label_cnpg_io_cluster"] != "":
+		return "postgres/" + labels["label_cnpg_io_cluster"]
+	case labels["label_shpyrd_io_volume"] != "":
+		return "volume/" + labels["label_shpyrd_io_volume"]
+	case labels["label_shpyrd_io_redis"] != "":
+		return "redis/" + labels["label_shpyrd_io_redis"]
+	case labels["persistentvolumeclaim"] == project+"-cache":
+		return "build-cache"
+	case labels["persistentvolumeclaim"] != "":
+		return "other/" + labels["persistentvolumeclaim"]
+	}
+	return "other"
+}
+
+// podLabels are the pod labels the queries group by; podJoin attaches them
+// to container metrics. Every pod is joined (kube_pod_labels exists for all
+// of them), so unlabelled pods stay in the sum instead of being dropped.
+const (
+	podLabels = "label_shpyrd_io_process, label_cnpg_io_cluster, label_shpyrd_io_redis, label_kpack_io_build"
+	podJoin   = "* on (namespace, pod) group_left (" + podLabels + ") kube_pod_labels{}"
+)
+
+// cpuBuckets writes cpu_used (core-seconds) per (namespace, component).
 func (m *MeteringLoop) cpuBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
-		`sum by (namespace, label_shpyrd_io_process) (`+
+		`sum by (namespace, `+podLabels+`) (`+
 			`increase(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~"app-.*"}[%ds]) `+
 			podJoin+`)`,
 		int(dur)+30,
 	)
-	return m.queryBuckets(ctx, start, end, q, "namespace", "label_shpyrd_io_process",
-		store.MetricCPUUsed, store.UnitCoreSeconds, nsMap)
+	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricCPUUsed, store.UnitCoreSeconds, nsMap, false)
 }
 
-// memoryBuckets writes memory_used (GiB-seconds) per (namespace, process).
+// memoryBuckets writes memory_used (GiB-seconds) per (namespace, component).
 func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
-		`sum by (namespace, label_shpyrd_io_process) (`+
+		`sum by (namespace, `+podLabels+`) (`+
 			`avg_over_time(container_memory_working_set_bytes{container!="",container!="POD",namespace=~"app-.*"}[%ds]) `+
 			podJoin+`) * %.6f / (1024*1024*1024)`,
 		int(dur)+30, dur, // avg × duration = GiB-seconds
 	)
-	return m.queryBuckets(ctx, start, end, q, "namespace", "label_shpyrd_io_process",
-		store.MetricMemoryUsed, store.UnitGiBSeconds, nsMap)
+	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricMemoryUsed, store.UnitGiBSeconds, nsMap, false)
 }
 
-// storageBuckets writes storage (GiB-seconds) per (namespace, PVC component).
+// storageBuckets writes storage (GiB-seconds) per (namespace, claim
+// component). Only Bound claims count: a claim that never got a volume
+// costs nothing. Capacity is what the claim requests (provisioned), which
+// on cloud profiles is the provider's minimum when that is larger.
+//
+// Claim labels come from a second query and are merged here: KSM emits
+// kube_persistentvolumeclaim_labels only when claims are on its allowlist,
+// and a multiplicative join would silently drop every claim on a cluster
+// whose monitoring predates that.
 func (m *MeteringLoop) storageBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
-	// PVC requests in bytes; component from annotations label_shpyrd_io_component or "volume".
 	q := fmt.Sprintf(
-		`sum by (namespace) (`+
-			`kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=~"app-.*"} * %.6f / (1024*1024*1024))`,
+		`sum by (namespace, persistentvolumeclaim) (`+
+			`kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=~"app-.*"} `+
+			`and on (namespace, persistentvolumeclaim) (kube_persistentvolumeclaim_status_phase{phase="Bound"} == 1)`+
+			`) * %.6f / (1024*1024*1024)`,
 		dur,
 	)
-	return m.queryBuckets(ctx, start, end, q, "namespace", "",
-		store.MetricStorage, store.UnitGiBSeconds, nsMap)
+	claimLabels := map[string]map[string]string{}
+	if series, err := m.Prom.QueryInstantSeriesAt(ctx, `kube_persistentvolumeclaim_labels{namespace=~"app-.*"}`, end); err == nil {
+		for _, s := range series {
+			claimLabels[s.Labels["namespace"]+"/"+s.Labels["persistentvolumeclaim"]] = s.Labels
+		}
+	}
+	component := func(labels map[string]string, project string) string {
+		merged := map[string]string{"persistentvolumeclaim": labels["persistentvolumeclaim"]}
+		for k, v := range claimLabels[labels["namespace"]+"/"+labels["persistentvolumeclaim"]] {
+			merged[k] = v
+		}
+		return componentOfClaim(merged, project)
+	}
+	return m.queryBuckets(ctx, start, end, q, component, store.MetricStorage, store.UnitGiBSeconds, nsMap, true)
 }
 
 // egressBuckets writes egress_http (bytes) per namespace from the front door.
@@ -257,47 +319,47 @@ func (m *MeteringLoop) egressBuckets(ctx context.Context, start, end time.Time, 
 }
 
 // queryBuckets runs an instant query at the bucket's end time and maps
-// results to buckets keyed by namespace label. nsLabel is the Prometheus
-// label that contains the namespace; compLabel the one that contains the
-// component (process type), empty string = use "default".
+// each series to a bucket: the namespace label names the project, component
+// names the component from the series' labels and the project. With
+// zeroFill, projects without a series get an explicit zero bucket
+// (complete, not missing) so a month with no storage reads as zero rather
+// than as a gap.
 func (m *MeteringLoop) queryBuckets(ctx context.Context, start, end time.Time,
-	q, nsLabel, compLabel, metric, unit string, nsMap map[string][2]string) []store.UsageBucket {
+	q string, component func(labels map[string]string, project string) string, metric, unit string, nsMap map[string][2]string, zeroFill bool) []store.UsageBucket {
 	series, err := m.Prom.QueryInstantSeriesAt(ctx, q, end)
 	if err != nil {
 		return m.missingBuckets(start, end, nsMap, metric, unit)
 	}
-	seen := map[string]bool{}
-	var out []store.UsageBucket
+	type key struct{ ws, project, comp string }
+	sums := map[key]float64{}
 	for _, s := range series {
-		ns := s.Labels[nsLabel]
-		meta, ok := nsMap[ns]
+		meta, ok := nsMap[s.Labels["namespace"]]
 		if !ok || s.Value <= 0 {
 			continue
 		}
-		comp := "default"
-		if compLabel != "" {
-			if c := s.Labels[compLabel]; c != "" {
-				comp = c
-			}
-		}
-		qty := s.Value
-		key := meta[0] + "/" + meta[1] + "/" + comp + "/" + metric
-		seen[key] = true
+		sums[key{meta[0], meta[1], component(s.Labels, meta[1])}] += s.Value
+	}
+	var out []store.UsageBucket
+	for k, v := range sums {
+		qty := v
 		out = append(out, store.UsageBucket{
-			WorkspaceID: meta[0], Project: meta[1], Component: comp,
+			WorkspaceID: k.ws, Project: k.project, Component: k.comp,
 			Metric: metric, PeriodStart: start, PeriodEnd: end,
 			Quantity: &qty, Unit: unit, Quality: store.QualityComplete, Revision: 1, Source: "prom_v1",
 		})
 	}
-	// Projects that had no pods write a zero (complete, not missing).
-	for ns, meta := range nsMap {
-		_ = ns
-		comp := "default"
-		key := meta[0] + "/" + meta[1] + "/" + comp + "/" + metric
-		if !seen[key] && compLabel == "" {
+	if zeroFill {
+		seen := map[string]bool{}
+		for k := range sums {
+			seen[k.ws+"/"+k.project] = true
+		}
+		for _, meta := range nsMap {
+			if seen[meta[0]+"/"+meta[1]] {
+				continue
+			}
 			zero := 0.0
 			out = append(out, store.UsageBucket{
-				WorkspaceID: meta[0], Project: meta[1], Component: comp,
+				WorkspaceID: meta[0], Project: meta[1], Component: "other",
 				Metric: metric, PeriodStart: start, PeriodEnd: end,
 				Quantity: &zero, Unit: unit, Quality: store.QualityComplete, Revision: 1, Source: "prom_v1",
 			})

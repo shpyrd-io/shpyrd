@@ -131,6 +131,8 @@ type WorkspaceBillingView struct {
 }
 
 type BillingLineView struct {
+	// Project is the slug the usage belongs to; "minimum" lines have none.
+	Project     string  `json:"project,omitempty"`
 	Component   string  `json:"component"`
 	Metric      string  `json:"metric"`
 	Quantity    float64 `json:"quantity"`
@@ -276,12 +278,29 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 	}
 	rows := []wsEcon{}
 	var totRevenue, totCOGS, totDirect, totShared, totIdle float64
+	now := time.Now().UTC()
 	for _, ws := range workspaces {
 		lines, _ := s.store.QueryInvoiceLines(ctx, ws.Slug, from, to, nil)
 		cogs, _ := s.store.QueryCOGSBuckets(ctx, ws.Slug, from, to)
 		rev := 0.0
 		for _, l := range lines {
 			rev += l.GrossAmount
+		}
+		if len(lines) == 0 {
+			// No finalised invoice lines for the month (the finalisation
+			// job is not written yet): revenue is the same preview the
+			// workspace's Billing card shows, from the ledger at plan prices.
+			end := to
+			if now.Before(end) {
+				end = now
+			}
+			var plan *store.Plan
+			if wp, err := s.store.WorkspacePlan(ctx, ws.Slug); err == nil && wp != nil {
+				plan, _ = s.store.GetPlan(ctx, wp.PlanID)
+			}
+			if buckets, err := s.store.QueryBuckets(ctx, ws.Slug, "", from, end); err == nil {
+				_, rev, _ = computeInvoicePreview(buckets, plan, from, end)
+			}
 		}
 		direct, shared, idle, total := 0.0, 0.0, 0.0, 0.0
 		for _, b := range cogs {
@@ -321,88 +340,113 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 // ---- computeInvoicePreview -----------------------------------------------
 
 // computeInvoicePreview sums usage buckets at plan prices for a month-to-date
-// preview. When there is no plan, amounts are zero and unit prices are zero.
+// preview, one line per (project, component, metric) — the shape a customer
+// reads: their project, then what in it (web, postgres/db, build-cache, …).
+// Zero-quantity lines are dropped; a missing bucket still lowers the
+// quality. When there is no plan, amounts and unit prices are zero.
 func computeInvoicePreview(buckets []store.UsageBucket, plan *store.Plan, from, to time.Time) ([]BillingLineView, float64, string) {
-	// Aggregate by (component, metric).
-	type key struct{ component, metric string }
+	type key struct{ project, component, metric string }
 	totals := map[key]float64{}
 	qualities := map[key]string{}
 	for _, b := range buckets {
+		k := key{b.Project, b.Component, b.Metric}
 		if b.Quantity == nil {
-			qualities[key{b.Component, b.Metric}] = store.QualityMissing
+			qualities[k] = store.QualityMissing
 			continue
 		}
-		totals[key{b.Component, b.Metric}] += *b.Quantity
-		if qualities[key{b.Component, b.Metric}] != store.QualityMissing {
-			qualities[key{b.Component, b.Metric}] = b.Quality
+		totals[k] += *b.Quantity
+		if qualities[k] != store.QualityMissing {
+			qualities[k] = b.Quality
 		}
 	}
 
-	// Compute amounts.
 	var lines []BillingLineView
 	totalAmount := 0.0
 	worstQuality := store.QualityComplete
-	for k, qty := range totals {
-		up, unit := unitPriceFor(k.metric, plan)
-		// Convert raw units to billing units.
-		qty = convertUnits(qty, k.metric)
-		amount := qty * up
-		lines = append(lines, BillingLineView{Component: k.component, Metric: k.metric, Quantity: qty, Unit: unit, UnitPrice: up, GrossAmount: amount})
-		totalAmount += amount
-		q := qualities[k]
+	for _, q := range qualities {
 		if q == store.QualityMissing || (q == store.QualityPartial && worstQuality == store.QualityComplete) {
 			worstQuality = q
 		}
 	}
-	// Apply minimum monthly.
+	for k, qty := range totals {
+		if qty <= 0 {
+			continue
+		}
+		up, unit := unitPriceFor(k.metric, plan)
+		qty = convertUnits(qty, k.metric)
+		amount := qty * up
+		lines = append(lines, BillingLineView{Project: k.project, Component: k.component, Metric: k.metric, Quantity: qty, Unit: unit, UnitPrice: up, GrossAmount: amount})
+		totalAmount += amount
+	}
+	// Apply the plan's minimum monthly (workspace level, RFC-0075 open question 3).
 	if plan != nil && plan.MinMonthly > 0 && totalAmount < plan.MinMonthly {
 		diff := plan.MinMonthly - totalAmount
 		lines = append(lines, BillingLineView{Component: "minimum", Metric: "min_monthly", Quantity: 1, Unit: "month", UnitPrice: diff, GrossAmount: diff})
 		totalAmount = plan.MinMonthly
 	}
-	sort.Slice(lines, func(i, j int) bool { return lines[i].Component+lines[i].Metric < lines[j].Component+lines[j].Metric })
+	sort.Slice(lines, func(i, j int) bool {
+		if lines[i].Project != lines[j].Project {
+			return lines[i].Project < lines[j].Project
+		}
+		if lines[i].Component != lines[j].Component {
+			return lines[i].Component < lines[j].Component
+		}
+		return lines[i].Metric < lines[j].Metric
+	})
 	return lines, totalAmount, worstQuality
 }
 
-// unitPriceFor returns the price per billing unit and the billing unit name.
-func unitPriceFor(metric string, plan *store.Plan) (float64, string) {
-	if plan == nil {
-		return 0, ""
-	}
-	switch metric {
-	case store.MetricCPUUsed:
-		return plan.CPUHour, "core-hours"
-	case store.MetricMemoryUsed:
-		return plan.MemoryGiBHour, "GiB-hours"
-	case store.MetricStorage:
-		return plan.StorageGiBMonth / (30 * 24), "GiB-hours" // per-hour storage
-	case store.MetricEgressHTTP:
-		return plan.EgressGiB / (1024 * 1024 * 1024), "bytes"
-	}
-	return 0, ""
-}
+// hoursPerMonth is the billing month used to turn a GiB-month price into
+// the metered GiB-seconds (30-day month, the industry convention).
+const hoursPerMonth = 30 * 24
 
-// convertUnits converts from the ledger unit to the billing unit.
-func convertUnits(qty float64, metric string) float64 {
+// unitPriceFor returns the price per billing unit and the billing unit's
+// name. The unit is named even without a plan, so a preview reads well.
+func unitPriceFor(metric string, plan *store.Plan) (float64, string) {
+	var price float64
+	unit := ""
 	switch metric {
 	case store.MetricCPUUsed, store.MetricCPUReserved:
-		return qty / 3600 // core-seconds → core-hours
-	case store.MetricMemoryUsed, store.MetricStorage:
-		return qty / 3600 // GiB-seconds → GiB-hours
+		unit = "core-hours"
+		if plan != nil {
+			price = plan.CPUHour
+		}
+	case store.MetricMemoryUsed:
+		unit = "GiB-hours"
+		if plan != nil {
+			price = plan.MemoryGiBHour
+		}
+	case store.MetricStorage:
+		unit = "GiB-months"
+		if plan != nil {
+			price = plan.StorageGiBMonth
+		}
+	case store.MetricEgressHTTP:
+		unit = "GiB"
+		if plan != nil {
+			price = plan.EgressGiB
+		}
+	case store.MetricInstanceSec:
+		unit = "instance-hours"
+	}
+	return price, unit
+}
+
+// convertUnits converts from the ledger unit to the billing unit named by
+// unitPriceFor.
+func convertUnits(qty float64, metric string) float64 {
+	switch metric {
+	case store.MetricCPUUsed, store.MetricCPUReserved, store.MetricMemoryUsed, store.MetricInstanceSec:
+		return qty / 3600 // core-seconds, GiB-seconds, seconds → hours
+	case store.MetricStorage:
+		return qty / 3600 / hoursPerMonth // GiB-seconds → GiB-months
+	case store.MetricEgressHTTP:
+		return qty / (1024 * 1024 * 1024) // bytes → GiB
 	}
 	return qty
 }
 
 // ---- usage write (internal) ------------------------------------------------
-
-// WriteSleepEvent records a sleep or wake event from the controller.
-// This is called by the sleep reconciler, not by an API handler.
-func (s *Server) recordSleepEvent(ws, project, component, event string, durationSec *int) {
-	if s.store == nil {
-		return
-	}
-	_ = s.store.WriteSleepEvent(nil, store.SleepEvent{WorkspaceID: ws, Project: project, Component: component, Event: event, DurationSeconds: durationSec})
-}
 
 // ---- authorization guard ---------------------------------------------------
 

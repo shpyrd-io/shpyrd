@@ -228,7 +228,7 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				return
 			}
 			if sp != nil && !s.canSleep() {
-				abort(c, http.StatusConflict, errors.New("this cluster cannot put apps to sleep yet: it needs the keda and keda-http extensions (shpyrd-ctl extensions enable keda keda-http)"))
+				abort(c, http.StatusConflict, errors.New("this cluster cannot put apps to sleep yet: enable the sleep extension first (shpyrd-ctl extensions enable sleep)"))
 				return
 			}
 			sleeps[name] = sp

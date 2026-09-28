@@ -208,6 +208,8 @@ export type UsageBucket = {
 
 /** RFC-0075: a billing line in the month-to-date preview. */
 export type BillingLine = {
+  /** Project slug; the plan's minimum line has none. */
+  project?: string;
   component: string;
   metric: string;
   quantity: number;
@@ -329,6 +331,8 @@ export type ProcessStatus = {
   cpu?: string;
   memory?: string;
   pinned?: string;
+  /** RFC-0075: present when the process has a sleep policy. */
+  sleep?: { state: string; message?: string };
 };
 
 export type VolumeInfo = {

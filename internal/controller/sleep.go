@@ -74,7 +74,7 @@ func parseSleepDuration(after string) time.Duration {
 
 // sleepUnavailableMessage is what the process status says when the policy
 // is set but the cluster lacks the KEDA HTTP add-on.
-const sleepUnavailableMessage = "sleep needs the keda-http extension (shpyrd-ctl extensions enable keda keda-http)"
+const sleepUnavailableMessage = "sleep needs the sleep extension (shpyrd-ctl extensions enable sleep)"
 
 // reconcileSleep ensures or removes the KEDA sleep objects for the app and
 // reports whether the Ingress should route through the interceptor. It is

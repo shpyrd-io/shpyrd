@@ -682,6 +682,10 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	if err != nil {
 		return nil, err
 	}
+	// Sleep (RFC-0075): with a policy and the add-on installed, KEDA owns
+	// the web Deployment's replica count.
+	sleepWanted := sleepEnabled(app)
+	kedaScales := sleepWanted && r.kedaHTTPAvailable()
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
@@ -692,8 +696,9 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			return nil, err
 		}
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
+		scaledExternally := kedaScales && p.Name == "web"
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, revision, res, mounts[p.Name], d)
+			r.Config.mutateDeployment(app, p, image, hash, revision, res, mounts[p.Name], d, scaledExternally)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {
@@ -720,6 +725,16 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 		ps.Memory = res.Requests.Memory().String()
 		ps.Pinned = singleInstanceNote(mounts[p.Name])
+		if p.Name == "web" && sleepWanted {
+			ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
+			switch {
+			case !kedaScales:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
+			case d.Spec.Replicas != nil && *d.Spec.Replicas == 0:
+				ps.Sleep.State = "sleeping"
+				ps.Desired = 0 // the scaler's decision, not a failure
+			}
+		}
 		status[p.Name] = ps
 
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}

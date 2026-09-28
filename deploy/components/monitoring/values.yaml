@@ -72,8 +72,12 @@ grafana:
 kube-state-metrics:
   # Expose the shpyrd labels on kube_pod_labels so the dashboard can break
   # CPU and memory down by process type (web, worker...).
+  # Labels the metering loop attributes usage by (RFC-0075): process type,
+  # database (CNPG), store (Redis), build pod (kpack), volume. KSM exports
+  # kube_*_labels only for the resources and labels listed here.
   metricLabelsAllowlist:
-    - pods=[shpyrd.io/app,shpyrd.io/process]
+    - pods=[shpyrd.io/app,shpyrd.io/process,shpyrd.io/redis,cnpg.io/cluster,kpack.io/build]
+    - persistentvolumeclaims=[shpyrd.io/app,shpyrd.io/volume,shpyrd.io/redis,cnpg.io/cluster]
   resources:
     requests:
       cpu: 10m
