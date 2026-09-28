@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+spec:
+  template:
+    spec:
+      containers:
+        - name: registry
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: registry-s3
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: registry-s3
+                  key: AWS_SECRET_ACCESS_KEY
+          # Remove the PVC volume and its mount — data lives in OCI OS.
+          volumeMounts:
+            - name: config
+              mountPath: /etc/distribution
+              readOnly: true
+            - name: tls
+              mountPath: /etc/registry/tls
+              readOnly: true
+            - name: auth
+              mountPath: /etc/registry/auth
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: registry-config
+        - name: tls
+          secret:
+            secretName: registry-tls
+        - name: auth
+          secret:
+            secretName: registry-htpasswd

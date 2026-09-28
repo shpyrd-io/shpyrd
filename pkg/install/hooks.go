@@ -51,6 +51,7 @@ var hooks = map[string]Hook{
 	"object-storage-credentials":   objectStorageCredentialsHook,
 	"backup-target":                backupTargetHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
+	"registry-s3":                 registryS3Hook,
 	"dns-credentials":              dnsCredentialsHook,
 }
 
@@ -633,5 +634,42 @@ func controlPlaneDBHook(ctx context.Context, e *Engine, c *Component) error {
 		return err
 	}
 	e.rep.Step(c.Name, "generated the control-plane database credentials (Secret "+ControlPlaneDBSecretName+")")
+	return nil
+}
+
+// Registry object storage (RFC-0059 extension): when SHPYRD_REGISTRY_BUCKET
+// is set the registry stores blobs in OCI Object Storage instead of a PVC.
+// The credentials come from --registry-credentials-file, which the backups
+// Terraform module writes alongside the backup credentials.
+const RegistryS3SecretName = "registry-s3"
+
+func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
+	bucket := e.vars[VarRegistryBucket]
+	if bucket == "" {
+		return nil // using filesystem storage — skip
+	}
+	// Reuse existing credentials if already written.
+	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
+	if _, err := secrets.Get(ctx, RegistryS3SecretName, metav1.GetOptions{}); err == nil {
+		e.rep.Step(c.Name, "keeping existing registry S3 credentials")
+		return nil
+	}
+	if e.opts.BackupCredentials == nil {
+		return fmt.Errorf("registry uses OCI Object Storage (SHPYRD_REGISTRY_BUCKET=%s) but no credentials were provided: pass --registry-credentials-file (the backups Terraform module writes contrib/oci/terraform/backups/*-registry.env)", bucket)
+	}
+	data := map[string]string{
+		"AWS_ACCESS_KEY_ID":     e.opts.BackupCredentials["AWS_ACCESS_KEY_ID"],
+		"AWS_SECRET_ACCESS_KEY": e.opts.BackupCredentials["AWS_SECRET_ACCESS_KEY"],
+		"region":                e.vars[VarRegistryRegion],
+		"endpoint":              e.vars[VarRegistryEndpoint],
+		"bucket":                bucket,
+	}
+	if data["AWS_ACCESS_KEY_ID"] == "" {
+		return fmt.Errorf("registry-credentials-file is missing AWS_ACCESS_KEY_ID")
+	}
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, RegistryS3SecretName, data); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, fmt.Sprintf("registry will store images in OCI Object Storage bucket %s", bucket))
 	return nil
 }

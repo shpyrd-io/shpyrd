@@ -79,7 +79,25 @@ locals {
   # compartment (the root compartment by default).
   s3_compartment = coalesce(data.oci_objectstorage_namespace_metadata.this.default_s3compartment_id, var.tenancy_ocid)
   bucket         = "${var.name}-backups"
+  registry_bucket = "${var.name}-registry"
   endpoint       = "https://${local.namespace}.compat.objectstorage.${var.region}.oraclecloud.com"
+}
+
+# Registry bucket: app images and kpack cache images. Same credentials
+# as the backup bucket — simpler than a second user/key pair.
+resource "oci_objectstorage_bucket" "registry" {
+  compartment_id = local.s3_compartment
+  namespace      = local.namespace
+  name           = local.registry_bucket
+
+  # No versioning on the registry bucket: images are immutable by digest;
+  # old tags are garbage collected by `shpyrd cluster registry gc`.
+  versioning = "Disabled"
+
+  # Lifecycle rule: delete manifest objects older than 30 days whose tag is
+  # prefixed with "sha256:" (unreferenced layers after a GC run).
+  # Objects referenced by live manifests stay because GC deletes the
+  # manifest first; nothing tries to delete the still-referenced layer.
 }
 
 resource "oci_objectstorage_bucket" "backups" {
@@ -130,10 +148,12 @@ resource "oci_identity_policy" "backup" {
 
   compartment_id = var.tenancy_ocid
   name           = "${var.name}-backup"
-  description    = "Let the ${var.name}-backup group read, write and delete objects in bucket ${local.bucket}"
+  description    = "Let the ${var.name}-backup group manage objects in the backup and registry buckets"
   statements = [
     "Allow group ${oci_identity_group.backup.name} to read buckets in tenancy where target.bucket.name='${local.bucket}'",
     "Allow group ${oci_identity_group.backup.name} to manage objects in tenancy where target.bucket.name='${local.bucket}'",
+    "Allow group ${oci_identity_group.backup.name} to read buckets in tenancy where target.bucket.name='${local.registry_bucket}'",
+    "Allow group ${oci_identity_group.backup.name} to manage objects in tenancy where target.bucket.name='${local.registry_bucket}'",
   ]
 }
 
@@ -148,6 +168,20 @@ resource "local_sensitive_file" "credentials" {
     AWS_SECRET_ACCESS_KEY=${oci_identity_customer_secret_key.backup.key}
     SHPYRD_BACKUP_ENDPOINT=${local.endpoint}
     SHPYRD_BACKUP_REGION=${var.region}
+  EOT
+}
+
+resource "local_sensitive_file" "registry_credentials" {
+  filename        = "${path.module}/${var.name}-registry.env"
+  file_permission = "0600"
+  content         = <<-EOT
+    # Written by contrib/oci/terraform/backups: S3-compatible credentials for the ${local.registry_bucket} bucket.
+    # Pass to shpyrd cluster init --registry-credentials-file
+    AWS_ACCESS_KEY_ID=${oci_identity_customer_secret_key.backup.id}
+    AWS_SECRET_ACCESS_KEY=${oci_identity_customer_secret_key.backup.key}
+    SHPYRD_REGISTRY_ENDPOINT=${local.endpoint}
+    SHPYRD_REGISTRY_REGION=${var.region}
+    SHPYRD_REGISTRY_BUCKET=${local.registry_bucket}
   EOT
 }
 

@@ -1,0 +1,19 @@
+# OCI profile overlay for the registry component: switches storage to OCI
+# Object Storage (S3-compatible). The base component uses filesystem storage;
+# this overlay patches the ConfigMap to use S3.
+# Requires SHPYRD_REGISTRY_BUCKET, SHPYRD_REGISTRY_ENDPOINT, SHPYRD_REGISTRY_REGION.
+# Credentials come from the registry-s3 Secret (registry-s3 hook).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shpyrd-system
+resources:
+  - ../../../components/registry/base
+patches:
+  - target:
+      kind: ConfigMap
+      name: registry-config
+    path: s3-config-patch.yaml
+  - target:
+      kind: Deployment
+      name: registry
+    path: s3-deployment-patch.yaml

@@ -35,8 +35,11 @@ const (
 	VarRegistryInsecure = "SHPYRD_REGISTRY_INSECURE" // "true" keeps the in-cluster registry on plain HTTP (escape hatch, RFC-0059)
 	VarRegistrySecret   = "SHPYRD_REGISTRY_SECRET"   // name of the registry credentials Secret ("" when the registry needs none)
 	// In-cluster registry (RFC-0059).
-	VarRegistryIP   = "SHPYRD_REGISTRY_IP"   // fixed ClusterIP of the in-cluster registry ("" with an external registry)
-	VarRegistrySize = "SHPYRD_REGISTRY_SIZE" // size of its volume claim
+	VarRegistryIP       = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
+	VarRegistrySize     = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
+	VarRegistryBucket   = "SHPYRD_REGISTRY_BUCKET"   // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
+	VarRegistryEndpoint = "SHPYRD_REGISTRY_ENDPOINT" // S3-compatible endpoint for the registry bucket
+	VarRegistryRegion   = "SHPYRD_REGISTRY_REGION"   // region of the registry bucket
 	VarCASource     = "SHPYRD_CA_SOURCE"     // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
 	// policy-only mode next to the provider's CNI; "none" relies on the
@@ -215,6 +218,12 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if vars[VarPlatformExposure] == "internal" {
 		out[VarPlatformIngressClass] = vars[VarIngressClassInternal]
 		out[VarPlatformIngressSvc] = "ingress-nginx-internal-controller.ingress-nginx-internal.svc:443"
+	}
+	// Registry OCI Object Storage: always defined so the registry YAML renders.
+	for _, v := range []string{VarRegistryBucket, VarRegistryEndpoint, VarRegistryRegion} {
+		if _, ok := vars[v]; !ok {
+			out[v] = ""
+		}
 	}
 	// Cluster autoscaler (RFC-0075): always defined so the deployment YAML
 	// renders on every profile; empty SHPYRD_NODE_POOL_ID means the

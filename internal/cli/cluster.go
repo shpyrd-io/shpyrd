@@ -77,7 +77,8 @@ type initFlags struct {
 	platformExposure string // "" = profile default
 	// Platform backups (RFC-0037): target bucket and its credentials file.
 	backupTarget          string
-	backupCredentialsFile string
+	backupCredentialsFile    string
+	registryCredentialsFile string
 	// varsFile carries what the infrastructure knows (zone, addresses, file
 	// systems) so nobody copies identifiers by hand; domainExplicit says
 	// whether --domain was passed, so the file's domain can apply otherwise.
@@ -107,6 +108,7 @@ func (f *initFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVar(&f.set, "set", nil, "override a variable, e.g. --set SHPYRD_REGISTRY_HOST=...")
 	cmd.Flags().StringVar(&f.backupTarget, "backup-target", "", "s3://bucket/prefix for the platform's encrypted backups (contrib/*/terraform prints it; empty: no backups)")
 	cmd.Flags().StringVar(&f.backupCredentialsFile, "backup-credentials-file", "", "KEY=value file with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the backup target (omit on EKS: Pod Identity)")
+	cmd.Flags().StringVar(&f.registryCredentialsFile, "registry-credentials-file", "", "KEY=value file with S3 credentials for the registry OCI Object Storage bucket (contrib/oci/terraform/backups writes <name>-registry.env)")
 	cmd.Flags().StringVar(&f.varsFile, "vars-file", "", "file of SHPYRD_NAME=value lines with the values the infrastructure produced (contrib/*/terraform writes <name>.vars); flags and --set win over it")
 	cmd.Flags().StringSliceVar(&f.skip, "skip", nil, "components to skip, e.g. --skip monitoring")
 	cmd.Flags().StringSliceVar(&f.only, "only", nil, "apply only these components")
@@ -603,6 +605,21 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 			return fmt.Errorf("--backup-credentials-file: %w", err)
 		}
 		backupCreds = creds
+	}
+	if flags.registryCredentialsFile != "" {
+		creds, err := readVarsFileAny(flags.registryCredentialsFile)
+		if err != nil {
+			return fmt.Errorf("--registry-credentials-file: %w", err)
+		}
+		// Merge into backupCreds so the registryS3Hook can read them;
+		// the registry env file has the same AWS_ keys as the backup one.
+		if backupCreds == nil {
+			backupCreds = creds
+		} else {
+			for k, v := range creds {
+				backupCreds[k] = v
+			}
+		}
 	}
 	if flags.platformExposure != "" && flags.platformExposure != "external" && flags.platformExposure != "internal" {
 		return fmt.Errorf("--platform-exposure %q: external or internal", flags.platformExposure)

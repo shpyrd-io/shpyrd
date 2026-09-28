@@ -57,9 +57,6 @@ data:
         enabled: true
       cache:
         blobdescriptor: inmemory
-      # Garbage collection (shpyrd cluster registry gc) runs the registry from
-      # a copy of this file with readonly enabled; env overrides cannot reach
-      # this section.
       maintenance:
         uploadpurging:
           enabled: true
@@ -152,6 +149,23 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 10
             failureThreshold: 6
+          env:
+            # S3 credentials from the registry-s3 Secret (written by the
+            # registry-s3 hook when SHPYRD_REGISTRY_BUCKET is set; the Secret
+            # exists with empty values when using filesystem storage so the
+            # registry starts cleanly either way).
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: registry-s3
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: registry-s3
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
           resources:
             requests:
               cpu: 20m
