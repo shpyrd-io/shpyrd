@@ -1,3 +1,8 @@
+output "home_region" {
+  description = "The tenancy's home region — used by the root's oci.home provider."
+  value       = local.home_region
+}
+
 output "cluster_id" {
   value = oci_containerengine_cluster.this.id
 }
