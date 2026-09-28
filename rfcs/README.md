@@ -104,7 +104,7 @@ declare what they depend on.
 | [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
 | [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep scaffolding) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
-| [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — namespaces, App names, workload names, labels, registry paths and ledger keys use a base36 ID; slugs, names and addresses become mutable labels so workspaces and projects rename with a field change; retires the RFC-0033 slug/address split as identity | provisional | 0003, 0033, 0059, 0075 |
+| [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — namespaces, App names, workload names, labels, registry paths and ledger keys use a base36 ID; slugs, names and addresses become mutable labels so workspaces and projects rename with a field change; retires the RFC-0033 slug/address split as identity | provisional, on hold | 0003, 0033, 0059, 0075 |
 
 ## Phases
 

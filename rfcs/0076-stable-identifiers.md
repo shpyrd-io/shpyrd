@@ -1,6 +1,6 @@
 # RFC-0076 Stable identifiers: IDs identify, names present
 
-**Status:** provisional
+**Status:** provisional, on hold (2026-09-28: deferred while the first cloud is a dev cloud; to be scheduled before the first invoice)
 
 **Owner:** Patrick Negri
 
@@ -167,9 +167,11 @@ migrated, and the ledger is truncated once more before the first invoice.
 
 ## Implementation status
 
-Not started. Scheduled at the start of the phase after RFC-0075's economics work, before
-Postgres sleep and the workspace-level sleep defaults, which would otherwise be written
-against slug-keyed identity.
+Not started; **on hold** by decision (Patrick, 2026-09-28) while the first cloud is a dev
+cloud. Must land before the first invoice, because ledger rows are immutable and
+`usage_buckets.project` is still the slug. Postgres sleep and the workspace-level sleep
+defaults proceed against slug-keyed identity in the meantime; they key on the App and
+Postgres CRs, whose names the migration will carry over.
 
 ## Open questions
 
