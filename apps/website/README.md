@@ -1,44 +1,55 @@
-# Syntax
+# shpyrd.io
 
-Syntax is a [Tailwind UI](https://tailwindui.com) site template built using [Tailwind CSS](https://tailwindcss.com) and [Next.js](https://nextjs.org).
+The source of [shpyrd.io](https://shpyrd.io): the marketing homepage and the
+product documentation. Built with [Next.js](https://nextjs.org) and
+[Markdoc](https://markdoc.io), deployed on Vercel from this directory.
 
-## Getting started
+## Licence
 
-To get started with this template, first install the npm dependencies:
+**This directory is not covered by the repository's MPL 2.0 licence.** The site
+is built on the commercial Tailwind UI *Syntax* template and is governed by
+[`LICENSE`](LICENSE) in this directory. The rest of the repository is
+[MPL-2.0](../LICENSE).
 
-```bash
+In practice: you may read it, and contribute documentation and content changes
+to it, but you may not redistribute the template or derivatives of it separately
+from this site.
+
+## Running it
+
+```sh
 npm install
+npm run dev      # http://localhost:3000
 ```
 
-Next, run the development server:
+Or from the repository root: `make website-dev`.
 
-```bash
-npm run dev
+Every command must run with this directory as the working directory.
+`src/markdoc/search.mjs` resolves `./src/pages` from the process working
+directory, so a build started from the repository root produces an empty search
+index without failing.
+
+## Layout
+
+```
+src/pages/index.md        the homepage
+src/pages/docs/*.md       the documentation, one file per page, URL follows the filename
+src/components/Layout.jsx the page shell and the documentation navigation tree
+src/components/           navigation, search, callouts, code fences
+src/markdoc/              Markdoc tags, nodes, and the search index builder
+src/styles/               Tailwind entrypoint, fonts, syntax highlighting
+public/install.sh         served at shpyrd.io/install.sh, the documented install path
+public/screenshots/       screenshots used by the docs and the root README
 ```
 
-Finally, open [http://localhost:3000](http://localhost:3000) in your browser to view the website.
+## Adding a documentation page
 
-## Customizing
+Add `src/pages/docs/<slug>.md` with `title` and `description` front matter, then
+add it to the `navigation` tree in `src/components/Layout.jsx`. The search index
+picks it up automatically on the next build.
 
-You can start editing this template by modifying the files in the `/src` folder. The site will auto-update as you edit these files.
+## URLs that must not move
 
-## Global search
-
-This template includes a global search that's powered by the [FlexSearch](https://github.com/nextapps-de/flexsearch) library. It's available by clicking the search input or by using the `⌘K` shortcut.
-
-This feature requires no configuration, and works out of the box by automatically scanning your documentation pages to build its index. You can adjust the search parameters by editing the `/src/markdoc/search.mjs` file.
-
-## License
-
-This site template is a commercial product and is licensed under the [Tailwind UI license](https://tailwindui.com/license).
-
-## Learn more
-
-To learn more about the technologies used in this site template, see the following resources:
-
-- [Tailwind CSS](https://tailwindcss.com/docs) - the official Tailwind CSS documentation
-- [Next.js](https://nextjs.org/docs) - the official Next.js documentation
-- [Headless UI](https://headlessui.dev) - the official Headless UI documentation
-- [Markdoc](https://markdoc.io) - the official Markdoc documentation
-- [Algolia Autocomplete](https://www.algolia.com/doc/ui-libraries/autocomplete/introduction/what-is-autocomplete/) - the official Algolia Autocomplete documentation
-- [FlexSearch](https://github.com/nextapps-de/flexsearch) - the official FlexSearch documentation
+The root `README.md`, the install instructions and published release notes link
+to `/install.sh`, `/screenshots/*.png` and `/docs/*`. Add a redirect in
+`next.config.mjs` if a path has to change.
