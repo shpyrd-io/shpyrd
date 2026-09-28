@@ -178,7 +178,7 @@ resource "oci_core_public_ip" "vpn" {
 resource "local_sensitive_file" "vpn_profile" {
   count = var.vpn ? 1 : 0
 
-  filename        = "${path.module}/${var.name}-vpn.conf"
+  filename        = "${coalesce(var.output_dir, path.root)}/${var.name}-vpn.conf"
   file_permission = "0600"
   content         = <<-EOT
     [Interface]

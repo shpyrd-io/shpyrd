@@ -123,6 +123,34 @@ variable "apps_node_memory_gb" {
   default = 8
 }
 
+# Data pool (RFC-0077 Q1): customer databases and Redis, separate from the
+# platform pool. Same autoscaler mechanism as the apps pool. Enabled when
+# data_max_count > 0.
+
+variable "data_min_count" {
+  description = "Minimum nodes of the data pool. 1 keeps wakes at seconds; 0 lets the pool empty (node boot adds ~2 min to a database cold wake)."
+  type        = number
+  default     = 1
+}
+
+variable "data_max_count" {
+  description = "Maximum nodes of the data pool; 0 means no data pool (databases share the platform pool)."
+  type        = number
+  default     = 0
+}
+
+variable "data_node_ocpus" {
+  description = "OCPUs of a data-pool node."
+  type        = number
+  default     = 1
+}
+
+variable "data_node_memory_gb" {
+  description = "Memory of a data-pool node (GB). Databases are memory-bound; 12–16 GB per OCPU is typical."
+  type        = number
+  default     = 12
+}
+
 variable "node_boot_volume_gb" {
   type    = number
   default = 100
@@ -192,6 +220,12 @@ variable "dns_zone" {
 }
 
 # Platform backups (RFC-0037)
+
+variable "output_dir" {
+  description = "Directory where Terraform writes generated files: the vars file, the DNS key, the VPN profile. Defaults to path.root of the calling module."
+  type        = string
+  default     = ""
+}
 
 variable "backup_bucket" {
   description = "Object Storage bucket for the platform's encrypted backups, created by contrib/oci/terraform/backups so it outlives the cluster; empty means no backups. Its credentials file goes to `shpyrd cluster init --backup-credentials-file`."

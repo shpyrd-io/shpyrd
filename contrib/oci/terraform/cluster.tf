@@ -169,6 +169,62 @@ resource "oci_containerengine_node_pool" "apps" {
   }
 }
 
+# The data pool (RFC-0077 Q1): customer databases and Redis, separate from
+# the platform pool so the platform nodes are not affected by database load
+# and the autoscaler can drain data nodes when all databases sleep.
+# Enabled when data_max_count > 0; the autoscaler owns the size.
+resource "oci_containerengine_node_pool" "data" {
+  count = var.data_max_count > 0 ? 1 : 0
+
+  cluster_id         = oci_containerengine_cluster.this.id
+  compartment_id     = local.compartment_id
+  name               = "data"
+  kubernetes_version = var.kubernetes_version
+  node_shape         = var.node_shape
+  ssh_public_key     = local.ssh_public_key
+
+  node_shape_config {
+    ocpus         = var.data_node_ocpus
+    memory_in_gbs = var.data_node_memory_gb
+  }
+
+  node_source_details {
+    source_type             = "IMAGE"
+    image_id                = local.node_image_id
+    boot_volume_size_in_gbs = var.node_boot_volume_gb
+  }
+
+  initial_node_labels {
+    key   = "shpyrd.io/pool"
+    value = "data"
+  }
+
+  node_config_details {
+    size    = max(var.data_min_count, 1)
+    nsg_ids = [oci_core_network_security_group.workers.id]
+
+    placement_configs {
+      availability_domain = local.ad
+      subnet_id           = oci_core_subnet.this["workers"].id
+    }
+
+    node_pool_pod_network_option_details {
+      cni_type          = "OCI_VCN_IP_NATIVE"
+      pod_subnet_ids    = [oci_core_subnet.this["pods"].id]
+      pod_nsg_ids       = [oci_core_network_security_group.pods.id]
+      max_pods_per_node = var.max_pods_per_node
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [node_config_details[0].size]
+    precondition {
+      condition     = local.node_image_id != null
+      error_message = "No ${local.node_arch} OKE image for Kubernetes ${var.kubernetes_version} in this region."
+    }
+  }
+}
+
 # Bastion service (free): port-forwarding sessions to the API endpoint and
 # ssh to the workers, from the allowed client addresses only.
 resource "oci_bastion_bastion" "this" {

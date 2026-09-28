@@ -36,12 +36,6 @@ locals {
   policy_location = local.compartment_id == var.tenancy_ocid ? "in tenancy" : "in compartment id ${local.compartment_id}"
 }
 
-provider "oci" {
-  alias               = "home"
-  region              = local.home_region
-  config_file_profile = var.config_file_profile
-}
-
 # --- API key -----------------------------------------------------------------
 
 resource "oci_identity_group" "dns" {
@@ -88,7 +82,7 @@ resource "oci_identity_api_key" "dns" {
 resource "local_sensitive_file" "dns_key" {
   count = local.dns_key ? 1 : 0
 
-  filename        = "${path.module}/${var.name}-dns.pem"
+  filename        = "${coalesce(var.output_dir, path.root)}/${var.name}-dns.pem"
   content         = tls_private_key.dns[0].private_key_pem
   file_permission = "0600"
 }

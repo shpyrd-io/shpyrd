@@ -26,8 +26,9 @@ terraform {
   }
 }
 
-# Authenticates with ~/.oci/config (the same profile the oci CLI uses).
-provider "oci" {
-  region              = var.region
-  config_file_profile = var.config_file_profile
-}
+# Providers are configured by the calling root module, not here.
+# The module requires two oci provider configurations:
+#   provider "oci" {}           — the cluster's region (default alias)
+#   provider "oci" { alias = "home" } — the tenancy's home region (IAM)
+# Pass them with:
+#   providers = { oci = oci, oci.home = oci.home }

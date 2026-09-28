@@ -12,6 +12,11 @@ output "apps_node_pool_id" {
   value       = var.apps_max_count > 0 ? oci_containerengine_node_pool.apps[0].id : ""
 }
 
+output "data_node_pool_id" {
+  description = "Data node pool OCID (RFC-0077 Q1), empty when data_max_count = 0."
+  value       = var.data_max_count > 0 ? oci_containerengine_node_pool.data[0].id : ""
+}
+
 output "node_pool_min" {
   value = var.node_min_count
 }
@@ -107,7 +112,7 @@ output "availability_domain" {
 # `shpyrd cluster init --vars-file` reads, so nobody copies OCIDs by hand.
 # The DNS key stays a separate file (--dns-key-file): it is a secret.
 resource "local_file" "shpyrd_vars" {
-  filename        = "${path.module}/${var.name}.vars"
+  filename        = "${coalesce(var.output_dir, path.root)}/${var.name}.vars"
   file_permission = "0644"
   content         = <<-EOT
     # Written by contrib/oci/terraform for shpyrd cluster init --vars-file (flags and --set win over it).
@@ -128,6 +133,7 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_NODE_POOL_ID=${var.apps_max_count > 0 ? oci_containerengine_node_pool.apps[0].id : (var.node_min_count > 0 ? oci_containerengine_node_pool.workers.id : "")}
     SHPYRD_NODE_MIN_COUNT=${var.apps_max_count > 0 ? tostring(var.apps_min_count) : (var.node_min_count > 0 ? tostring(var.node_min_count) : "1")}
     SHPYRD_NODE_MAX_COUNT=${var.apps_max_count > 0 ? tostring(var.apps_max_count) : (var.node_min_count > 0 ? tostring(var.node_max_count) : "5")}
+    SHPYRD_DATA_POOL=${var.data_max_count > 0 ? "data" : ""}
     SHPYRD_APPS_POOL=${var.apps_max_count > 0 ? "apps" : ""}
     SHPYRD_PLATFORM_POOL=${var.apps_max_count > 0 ? "platform" : ""}
     ${join("\n", [for k in sort(keys(var.extra_vars)) : "${k}=${var.extra_vars[k]}"])}
@@ -161,6 +167,6 @@ output "next_steps" {
     ${var.vpn ? "" : "../tunnel.sh                           # Bastion session + ssh tunnel 127.0.0.1:6443 (3 hours; run again)"}
     kubectl --context oke-${var.name} get nodes
     shpyrd cluster init --context oke-${var.name} --profile oci --vars-file ${abspath(local_file.shpyrd_vars.filename)} \
-      --set SHPYRD_ACME_EMAIL=<email>${local.dns_key ? " --dns-key-file ${abspath(local_sensitive_file.dns_key[0].filename)}" : ""}${var.backup_bucket != "" ? " --backup-credentials-file ${abspath("${path.module}/backups/${var.name}-backups.env")}" : ""} --enable auth-local
+      --set SHPYRD_ACME_EMAIL=<email>${local.dns_key ? " --dns-key-file ${abspath(local_sensitive_file.dns_key[0].filename)}" : ""}${var.backup_bucket != "" ? " --backup-credentials-file ${abspath("${var.output_dir}/backups/${var.name}-backups.env")}" : ""} --enable auth-local
   EOT
 }
