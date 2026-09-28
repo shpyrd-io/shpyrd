@@ -12,7 +12,7 @@ Oracle Cloud went first among the cloud profiles for cost - the free tier and ch
 | | |
 | --- | --- |
 | Network | a VCN (`10.0.0.0/16`) with private subnets for the Kubernetes API endpoint, the workers and the pods (VCN-native pod networking), a public and a private load balancer subnet, a Bastion subnet; internet, NAT and service gateways; network security groups with the rules OKE needs |
-| Cluster | OKE, Basic (free control plane) or Enhanced, private API endpoint reached over the VPN (or the OCI Bastion service), one node pool of flexible-shape workers |
+| Cluster | OKE, Basic (free control plane) or Enhanced, private API endpoint reached over the VPN (or the OCI Bastion service), two node pools of flexible shapes: a fixed `platform` pool and an autoscaled `apps` pool ([Node pools](#node-pools)) |
 | Access | a WireGuard instance in a public subnet, keys and profile from Terraform: the way to the private API endpoint, the private front door and the nodes |
 | Front doors | a public OCI flexible load balancer on a **reserved address** (survives cluster rebuilds); a private one for projects marked internal ([Domains and exposure](/docs/domains)) |
 | Certificates | Let's Encrypt; with a DNS provider, one wildcard certificate for every project hostname |
@@ -45,9 +45,14 @@ vpn          = true                  # WireGuard instance + profile: the way to 
 
 cluster_type = "BASIC_CLUSTER"       # ENHANCED_CLUSTER for workload identity (per-cluster fee)
 node_shape   = "VM.Standard.E5.Flex" # or VM.Standard.A1.Flex (Always Free, arm64) where the region has capacity
-node_ocpus   = 2
+node_ocpus   = 2                     # the platform pool: fixed size, carries the platform and every database
 node_memory_gb = 12
 node_count   = 2
+
+apps_min_count = 1                   # the apps pool: autoscaled, carries processes, builds and one-off runs
+apps_max_count = 3                   # 0 = no apps pool (single-pool cluster)
+apps_node_ocpus = 1                  # smaller nodes: the autoscaler scales in finer steps
+apps_node_memory_gb = 8
 
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
@@ -113,8 +118,10 @@ What the file carries, and where each value comes from:
 | `SHPYRD_INTERNAL_LB_SUBNET` | the private load balancer subnet for internal front doors | the `lb_private` subnet |
 | `SHPYRD_FSS_MOUNT_TARGET`, `SHPYRD_FSS_AD` | File Storage behind shared volumes | `shared_storage` |
 | `SHPYRD_DNS_*` | OCI DNS automation: provider, compartment, tenancy, region, user, key or workload identity | the zone and the DNS user |
+| `SHPYRD_APPS_POOL`, `SHPYRD_PLATFORM_POOL` | the node label values the controller schedules by ([Node pools](#node-pools)) | the two node pools |
+| `SHPYRD_NODE_POOL_ID`, `SHPYRD_NODE_MIN_COUNT`, `SHPYRD_NODE_MAX_COUNT` | the pool the cluster autoscaler manages and its bounds | the `apps` pool, `apps_min_count`, `apps_max_count` |
 
-Flags and `--set` win over the file (`--platform-exposure internal`, `--set SHPYRD_REGISTRY_SIZE=100Gi`, `--internal-lb-subnet` for another subnet).
+Flags and `--set` win over the file (`--platform-exposure internal`, `--set SHPYRD_REGISTRY_SIZE=100Gi`, `--internal-lb-subnet` for another subnet). The file wins over what an earlier run recorded: when Terraform changes the infrastructure, run `terraform apply` and then `cluster init` with the same `--vars-file`, and the cluster follows.
 
 What happens, in order:
 
@@ -165,9 +172,26 @@ shpyrd deploy --project shop --context oke-shpyrd-prod
 
 Certificates are publicly trusted, so `https://shop.oci.example.com` opens with no warnings - from its first request when a DNS provider issues the wildcard. From here everything works as on the local profile: [Deploying](/docs/deploying), [Databases and caches](/docs/databases), [Domains and exposure](/docs/domains).
 
+## Node pools
+
+A cloud cluster has two kinds of workload, and they scale differently. The platform's own components and every database are stateful: evicting them is a restart a customer notices, and their volumes attach to whatever node the pod lands on. Application processes, builds and one-off runs can always be moved. So the profile gives them separate node pools ([RFC-0077](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0077-node-pools.md)):
+
+| Pool | Size | Carries |
+| --- | --- | --- |
+| `platform` | fixed, `node_count` | ingress, Prometheus, the control-plane database, KEDA, cert-manager, kpack, the operators, the wake proxy, the autoscaler; every Postgres and Redis resource |
+| `apps` | autoscaled, `apps_min_count` to `apps_max_count` | web and worker processes, release and one-off Jobs, build pods |
+
+The nodes are told apart by the label `shpyrd.io/pool` (OKE node pools have no taints); the controller puts a node selector for the apps pool on everything it schedules for an app and pins databases and stores to the platform pool. The cluster autoscaler manages the apps pool alone: a node joins when a process has no room, and leaves when it has been under half used for ten minutes — which, with [sleep](/docs/cli) (`shpyrd sleep`) putting idle apps to zero, actually happens. The platform pool never changes size on its own.
+
+`apps_min_count = 1` keeps one warm node so a sleeping app wakes in seconds; `0` lets the pool empty when every app sleeps, and the first request then also waits for a node (about two minutes). `apps_max_count = 0` (the default in Terraform) means no apps pool: a single-pool cluster as before.
+
+**Adding the pool to a running cluster.** Set the `apps_*` variables, `terraform apply`, then `cluster init` with the vars file right away — the file now names the apps pool as the one the autoscaler manages, and the controller adds the selector to every app; the rolling update moves the processes as the autoscaler adds nodes for them, old instances serving until the new ones are ready. Do not leave a long gap between the two commands: until `cluster init` runs, the autoscaler still manages the platform pool and, ten minutes after the new node gives it room, would drain one of the old nodes. Once the apps have moved, lower `node_count` to what the platform and the databases need.
+
+In the autoscaler's log, `node pool not found for instance` for a platform node is expected: it only knows the apps pool.
+
 ## Costs
 
-At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` workers (2 OCPU, 12 GB) about $0.10 per hour each; a flexible load balancer at 10 Mbps; the registry's 50 GB block volume; Enhanced clusters add about $0.10 per hour. The Bastion service, the VCN, the reserved addresses, the DNS zone, Calico and the Always Free VPN instance (`VM.Standard.E2.1.Micro`) are free; DNS queries are billed per million. `VM.Standard.A1.Flex` (Ampere, arm64) is Always Free up to 4 OCPUs and 24 GB when the region has capacity - everything shpyrd runs is multi-arch.
+At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` platform nodes (2 OCPU, 12 GB) about $0.10 per hour each, plus one to three apps nodes (1 OCPU, 8 GB) about $0.04 per hour each while they exist; a flexible load balancer at 10 Mbps; the registry's 50 GB block volume; Enhanced clusters add about $0.10 per hour. The Bastion service, the VCN, the reserved addresses, the DNS zone, Calico and the Always Free VPN instance (`VM.Standard.E2.1.Micro`) are free; DNS queries are billed per million. `VM.Standard.A1.Flex` (Ampere, arm64) is Always Free up to 4 OCPUs and 24 GB when the region has capacity - everything shpyrd runs is multi-arch.
 
 ## Good to know
 
