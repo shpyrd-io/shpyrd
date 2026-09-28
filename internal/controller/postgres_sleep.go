@@ -233,8 +233,22 @@ func (r *PostgresReconciler) postgresIsHibernated(_ context.Context, pg *shpyrdv
 
 // ensurePostgresService creates or updates the shpyrd-owned "<name>" Service
 // (distinct from CNPG's "<name>-rw") that apps reference as DATABASE_HOST.
-// Its selector switches between the CNPG primary pod and the gateway pod.
+//
+//	awake      ClusterIP, selector = the CNPG primary.
+//	sleeping/  ExternalName → pgwake-<port>.<system>.svc, a Service in the
+//	waking     system namespace that fronts the gateway pods on this
+//	           database's wake port (a selector cannot cross namespaces).
+//	suspended  ClusterIP with a selector nothing matches: refused at once.
+//
+// Hibernation happens with no clients connected, so the switch to the
+// ExternalName never races a live connection; on wake both paths serve —
+// the gateway proxies straight through once the primary is up.
 func (r *PostgresReconciler) ensurePostgresService(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	if r.postgresIsHibernated(ctx, pg) && pg.Status.Sleep.WakePort != nil {
+		if err := r.ensureGatewayService(ctx, pg); err != nil {
+			return err
+		}
+	}
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: pg.Name, Namespace: pg.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Labels = mergeMaps(svc.Labels, map[string]string{
@@ -242,22 +256,50 @@ func (r *PostgresReconciler) ensurePostgresService(ctx context.Context, pg *shpy
 			"shpyrd.io/postgres":    pg.Name,
 		})
 		port := corev1.ServicePort{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(PostgresPort)}
-		// Awake: the CNPG primary (CNPG labels its pods cnpg.io/cluster and
-		// cnpg.io/instanceRole). Sleeping or waking: the gateway pods, on
-		// this database's wake port.
-		svc.Spec.Selector = map[string]string{"cnpg.io/cluster": pg.Name, "cnpg.io/instanceRole": "primary"}
 		switch {
+		case r.postgresIsHibernated(ctx, pg) && pg.Status.Sleep.WakePort != nil:
+			svc.Spec.Type = corev1.ServiceTypeExternalName
+			svc.Spec.ExternalName = gatewayServiceName(*pg.Status.Sleep.WakePort) + "." + r.SystemNamespace + ".svc.cluster.local"
+			svc.Spec.Selector = nil
+			svc.Spec.ClusterIP, svc.Spec.ClusterIPs = "", nil
 		case pg.Status.Sleep != nil && pg.Status.Sleep.State == pgSuspended:
-			// Nothing matches: clients are refused at once instead of hanging.
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+			svc.Spec.ExternalName = ""
 			svc.Spec.Selector = map[string]string{"shpyrd.io/suspended-postgres": pg.Name}
-		case r.postgresIsHibernated(ctx, pg):
-			if wp := pg.Status.Sleep.WakePort; wp != nil {
-				svc.Spec.Selector = map[string]string{"app.kubernetes.io/name": pgGatewayName}
-				port.TargetPort = intstr.FromInt32(*wp)
-			}
+		default:
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+			svc.Spec.ExternalName = ""
+			// CNPG labels its pods cnpg.io/cluster and cnpg.io/instanceRole.
+			svc.Spec.Selector = map[string]string{"cnpg.io/cluster": pg.Name, "cnpg.io/instanceRole": "primary"}
 		}
 		svc.Spec.Ports = []corev1.ServicePort{port}
 		return controllerutil.SetControllerReference(pg, svc, r.Scheme)
+	})
+	return err
+}
+
+// gatewayServiceName is the per-database Service in the system namespace
+// that fronts the gateway pods on one wake port. Ports are unique across
+// databases, so the port names the Service.
+func gatewayServiceName(port int32) string { return fmt.Sprintf("pgwake-%d", port) }
+
+// ensureGatewayService creates the system-namespace Service for a sleeping
+// database: 5432 in, the database's wake port on the gateway pods out. It
+// is labelled with the database it serves and deleted with the policy; an
+// owner reference cannot cross namespaces.
+func (r *PostgresReconciler) ensureGatewayService(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	port := *pg.Status.Sleep.WakePort
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gatewayServiceName(port), Namespace: r.SystemNamespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		svc.Labels = mergeMaps(svc.Labels, map[string]string{
+			shpyrdv1.LabelManagedBy:      "shpyrd",
+			"shpyrd.io/postgres-wake":    pg.Namespace + "." + pg.Name,
+			"shpyrd.io/postgres-wake-ns": pg.Namespace,
+		})
+		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svc.Spec.Selector = map[string]string{"app.kubernetes.io/name": pgGatewayName}
+		svc.Spec.Ports = []corev1.ServicePort{{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(port)}}
+		return nil
 	})
 	return err
 }
@@ -277,6 +319,12 @@ func (r *PostgresReconciler) deletePostgresService(ctx context.Context, pg *shpy
 	}
 	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
 		return err
+	}
+	if pg.Status.Sleep != nil && pg.Status.Sleep.WakePort != nil {
+		gw := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gatewayServiceName(*pg.Status.Sleep.WakePort), Namespace: r.SystemNamespace}}
+		if err := r.Delete(ctx, gw); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
 	}
 	return nil
 }

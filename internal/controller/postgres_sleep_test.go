@@ -97,8 +97,16 @@ func TestPostgresSleepStateMachine(t *testing.T) {
 		t.Fatalf("expected sleeping+hibernated: %+v hibernated=%v", st, hibernated())
 	}
 	svc := service()
-	if svc.Spec.Selector["app.kubernetes.io/name"] != pgGatewayName || svc.Spec.Ports[0].TargetPort.IntValue() != int(*st.WakePort) {
-		t.Errorf("sleeping Service = selector %v targetPort %v", svc.Spec.Selector, svc.Spec.Ports[0].TargetPort)
+	wantExt := gatewayServiceName(*st.WakePort) + ".shpyrd-system.svc.cluster.local"
+	if svc.Spec.Type != corev1.ServiceTypeExternalName || svc.Spec.ExternalName != wantExt || svc.Spec.Selector != nil {
+		t.Errorf("sleeping Service = type %s externalName %q selector %v", svc.Spec.Type, svc.Spec.ExternalName, svc.Spec.Selector)
+	}
+	gw := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: gatewayServiceName(*st.WakePort)}, gw); err != nil {
+		t.Fatalf("gateway Service: %v", err)
+	}
+	if gw.Spec.Selector["app.kubernetes.io/name"] != pgGatewayName || gw.Spec.Ports[0].TargetPort.IntValue() != int(*st.WakePort) || gw.Spec.Ports[0].Port != PostgresPort {
+		t.Errorf("gateway Service = selector %v ports %v", gw.Spec.Selector, gw.Spec.Ports)
 	}
 
 	// 4. The gateway saw a connection: state waking (it also removes the
@@ -112,8 +120,8 @@ func TestPostgresSleepStateMachine(t *testing.T) {
 	if st.State != pgAwake || st.LastActivityAt == nil || time.Since(st.LastActivityAt.Time) > time.Minute {
 		t.Fatalf("expected awake with a fresh idle window: %+v", st)
 	}
-	if sel := service().Spec.Selector; sel["cnpg.io/instanceRole"] != "primary" {
-		t.Errorf("awake-again selector = %v", sel)
+	if s := service(); s.Spec.Type != corev1.ServiceTypeClusterIP || s.Spec.Selector["cnpg.io/instanceRole"] != "primary" || s.Spec.ExternalName != "" {
+		t.Errorf("awake-again Service = type %s selector %v externalName %q", s.Spec.Type, s.Spec.Selector, s.Spec.ExternalName)
 	}
 
 	// 5. Waking with the primary not ready yet stays waking.
@@ -154,11 +162,14 @@ func TestPostgresSleepStateMachine(t *testing.T) {
 		t.Errorf("resume completes: state = %s", st.State)
 	}
 
-	// 7. Policy removed: awake, Service of ours gone.
+	// 7. Policy removed: awake, both Services of ours gone.
 	pg.Spec.Sleep = nil
 	reconcile()
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db"}, &corev1.Service{}); err == nil {
 		t.Errorf("Service should be deleted when the policy is removed")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: gatewayServiceName(*st.WakePort)}, &corev1.Service{}); err == nil {
+		t.Errorf("gateway Service should be deleted when the policy is removed")
 	}
 }
 
