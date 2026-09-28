@@ -93,7 +93,10 @@ function EconomicsCardInner() {
                 <TableRow>
                   <TableHead>Workspace</TableHead>
                   <TableHead className="text-right">Revenue</TableHead>
-                  <TableHead className="text-right">COGS</TableHead>
+                  <TableHead className="text-right">Direct</TableHead>
+                  <TableHead className="text-right">Shared</TableHead>
+                  <TableHead className="text-right">Idle</TableHead>
+                  <TableHead className="text-right">Total COGS</TableHead>
                   <TableHead className="text-right">Margin</TableHead>
                   <TableHead className="text-right">Margin %</TableHead>
                 </TableRow>
@@ -106,6 +109,15 @@ function EconomicsCardInner() {
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {money(r.revenue)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(r.directCogs)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(r.sharedCogs)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(r.idleCogs)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {money(r.totalCogs)}
@@ -124,6 +136,15 @@ function EconomicsCardInner() {
                     <TableCell className="text-right font-mono text-xs">
                       {money(econ.data.totals.revenue)}
                     </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(econ.data.totals.directCogs)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(econ.data.totals.sharedCogs)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                      {money(econ.data.totals.idleCogs)}
+                    </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {money(econ.data.totals.totalCogs)}
                     </TableCell>
@@ -138,9 +159,12 @@ function EconomicsCardInner() {
               </TableBody>
             </Table>
             <p className="mt-2 text-xs text-muted-foreground">
-              Period: {econ.data.month}. Revenue = plan prices × usage
-              (estimate). COGS = OpenCost allocation including idle and shared
-              infra.
+              Period: {econ.data.month}. Revenue = plan prices × usage.{" "}
+              Direct = pods in the workspace's namespaces.{" "}
+              Shared = proportional share of ingress, monitoring and platform
+              infrastructure.{" "}
+              Idle = proportional share of unused node capacity (shrinks when
+              autoscaling removes nodes).
             </p>
           </>
         )}

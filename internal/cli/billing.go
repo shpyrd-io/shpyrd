@@ -268,9 +268,16 @@ Requires the opencost extension to be enabled for the COGS column.
 				_ = json.Unmarshal(m, &s)
 				fmt.Fprintf(out, "Month: %s\n\n", s)
 			}
+			// Three COGS columns let finance separate what is directly
+			// attributable to the customer (direct), overhead allocated
+			// proportionally (shared), and wasted capacity that shrinks
+			// as the cluster fills or autoscales (idle).
 			type row struct {
 				Workspace   string  `json:"workspace"`
 				Revenue     float64 `json:"revenue"`
+				DirectCOGS  float64 `json:"directCogs"`
+				SharedCOGS  float64 `json:"sharedCogs"`
+				IdleCOGS    float64 `json:"idleCogs"`
 				TotalCOGS   float64 `json:"totalCogs"`
 				GrossMargin float64 `json:"grossMargin"`
 				MarginPct   float64 `json:"marginPct"`
@@ -279,16 +286,20 @@ Requires the opencost extension to be enabled for the COGS column.
 				var rows []row
 				_ = json.Unmarshal(ws, &rows)
 				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "WORKSPACE\tREVENUE\tCOGS\tMARGIN\tMARGIN%")
+				fmt.Fprintln(tw, "WORKSPACE\tREVENUE\tDIRECT\tSHARED\tIDLE\tTOTAL COGS\tMARGIN\tMARGIN%")
 				for _, r := range rows {
-					fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\t%.1f%%\n", r.Workspace, r.Revenue, r.TotalCOGS, r.GrossMargin, r.MarginPct)
+					fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.1f%%\n",
+						r.Workspace, r.Revenue,
+						r.DirectCOGS, r.SharedCOGS, r.IdleCOGS,
+						r.TotalCOGS, r.GrossMargin, r.MarginPct)
 				}
 				_ = tw.Flush()
 			}
 			if tot, ok := raw["totals"]; ok {
 				var t row
 				_ = json.Unmarshal(tot, &t)
-				fmt.Fprintf(out, "\nTotals: revenue %.2f  COGS %.2f  margin %.2f (%.1f%%)\n", t.Revenue, t.TotalCOGS, t.GrossMargin, t.MarginPct)
+				fmt.Fprintf(out, "\nTotals: revenue %.2f  direct %.2f  shared %.2f  idle %.2f  total COGS %.2f  margin %.2f (%.1f%%)\n",
+					t.Revenue, t.DirectCOGS, t.SharedCOGS, t.IdleCOGS, t.TotalCOGS, t.GrossMargin, t.MarginPct)
 			}
 			return nil
 		},
