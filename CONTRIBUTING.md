@@ -4,6 +4,11 @@ shpyrd is [MPL 2.0 licensed](LICENSE) and accepts contributions via GitHub
 pull requests. This document outlines some of the conventions to make it
 easier to get your contribution accepted.
 
+One directory is licensed differently: the website in [`website/`](website) is
+built on the commercial Tailwind UI *Syntax* template and is governed by
+[`website/LICENSE`](website/LICENSE). Documentation and content contributions
+to the site are welcome on those terms.
+
 Design changes go through the [RFC process](rfcs/README.md); see
 [RFC-0001](rfcs/0001-mvp-local-platform.md) for the current architecture.
 

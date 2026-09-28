@@ -353,4 +353,7 @@ sign-off (`git commit -s`).
 
 ## License
 
-[MPL-2.0](LICENSE)
+[MPL-2.0](LICENSE), with one exception: `website/` is built on the commercial
+Tailwind UI *Syntax* template and is governed by
+[`website/LICENSE`](website/LICENSE) instead. Everything else — the platform,
+the CLI, the dashboard, the examples and the RFCs — is MPL-2.0.
