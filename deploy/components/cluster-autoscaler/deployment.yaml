@@ -55,13 +55,18 @@ spec:
             - --expander=least-waste
             - --leader-elect=true
             - --v=2
-          # OCI instance principal: the node's IAM policy carries the
-          # permission to resize the node pool; no key file needed.
+          # OCI user principal: the same API key used for DNS automation
+          # (Secret cluster-autoscaler-oci, same format as external-dns-config).
+          # Needed on BASIC_CLUSTER where instance principal is unavailable.
           env:
-            - name: OCI_RESOURCE_PRINCIPAL_VERSION
-              value: "2.2"
-            - name: OCI_RESOURCE_PRINCIPAL_REGION
-              value: "${SHPYRD_DNS_REGION}"
+            - name: OCI_CONFIG_FILE
+              value: "/etc/oci/config"
+          volumeMounts:
+            - name: oci-config
+              mountPath: /etc/oci
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 50m
@@ -74,10 +79,10 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
       volumes:
+        - name: oci-config
+          secret:
+            secretName: cluster-autoscaler-oci
         - name: tmp
           emptyDir: {}
       tolerations:
