@@ -2,6 +2,19 @@ output "cluster_id" {
   value = oci_containerengine_cluster.this.id
 }
 
+output "node_pool_id" {
+  description = "Node pool OCID — pass to the cluster autoscaler: --set SHPYRD_NODE_POOL_ID=..."
+  value       = oci_containerengine_node_pool.workers.id
+}
+
+output "node_pool_min" {
+  value = var.node_min_count
+}
+
+output "node_pool_max" {
+  value = var.node_max_count
+}
+
 output "cluster_type" {
   value = var.cluster_type
 }
@@ -107,6 +120,9 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_ENDPOINT=${var.backup_bucket != "" ? "https://${data.oci_objectstorage_namespace.this.namespace}.compat.objectstorage.${var.region}.oraclecloud.com" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}
+    SHPYRD_NODE_POOL_ID=${var.node_min_count > 0 ? oci_containerengine_node_pool.workers.id : ""}
+    SHPYRD_NODE_MIN_COUNT=${var.node_min_count > 0 ? tostring(var.node_min_count) : "1"}
+    SHPYRD_NODE_MAX_COUNT=${var.node_min_count > 0 ? tostring(var.node_max_count) : "5"}
     ${join("\n", [for k in sort(keys(var.extra_vars)) : "${k}=${var.extra_vars[k]}"])}
   EOT
 }

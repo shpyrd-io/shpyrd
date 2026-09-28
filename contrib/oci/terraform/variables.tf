@@ -81,6 +81,18 @@ variable "node_count" {
   default = 2
 }
 
+variable "node_min_count" {
+  description = "Minimum number of worker nodes when cluster autoscaling is enabled. Must be <= node_count. Set to 0 to disable autoscaling."
+  type        = number
+  default     = 0
+}
+
+variable "node_max_count" {
+  description = "Maximum number of worker nodes when cluster autoscaling is enabled."
+  type        = number
+  default     = 5
+}
+
 variable "node_boot_volume_gb" {
   type    = number
   default = 100

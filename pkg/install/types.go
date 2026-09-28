@@ -51,6 +51,9 @@ type Component struct {
 	Wait      []WaitSpec     `json:"wait,omitempty"`
 	// Timeout for the whole component including waits. Defaults to 5m.
 	Timeout metav1Duration `json:"timeout,omitempty"`
+	// RequiredVar names a variable that must be non-empty for this
+	// component to be installed. Leave blank to always install.
+	RequiredVar string `json:"requiredVar,omitempty"`
 
 	dir string // directory inside the manifest tree
 }

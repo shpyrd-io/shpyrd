@@ -80,6 +80,7 @@ resource "oci_containerengine_node_pool" "workers" {
     size    = var.node_count
     nsg_ids = [oci_core_network_security_group.workers.id]
 
+
     placement_configs {
       availability_domain = local.ad
       subnet_id           = oci_core_subnet.this["workers"].id

@@ -235,7 +235,11 @@ func (e *Engine) selected(rl Runlevel) []*Component {
 		if len(e.opts.Only) > 0 && !contains(e.opts.Only, name) {
 			continue
 		}
-		out = append(out, e.components[name])
+		c := e.components[name]
+		if c != nil && c.RequiredVar != "" && e.vars[c.RequiredVar] == "" {
+			continue // var not set: component is optional, skip silently
+		}
+		out = append(out, c)
 	}
 	return out
 }

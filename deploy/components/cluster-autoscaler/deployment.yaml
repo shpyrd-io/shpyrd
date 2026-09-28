@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: cluster-autoscaler
+    app.kubernetes.io/managed-by: shpyrd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-autoscaler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cluster-autoscaler
+        app.kubernetes.io/managed-by: shpyrd
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      serviceAccountName: cluster-autoscaler
+      priorityClassName: system-cluster-critical
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cluster-autoscaler
+          # Version must match the cluster's minor Kubernetes version.
+          # OCI provider is built in to the upstream image.
+          image: registry.k8s.io/autoscaling/cluster-autoscaler:v1.36.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /cluster-autoscaler
+            - --cloud-provider=oci
+            # Node group: "min:max:nodePoolOCID" — rendered by the installer.
+            - --nodes=${SHPYRD_NODE_MIN_COUNT}:${SHPYRD_NODE_MAX_COUNT}:${SHPYRD_NODE_POOL_ID}
+            - --scale-down-enabled=true
+            # Wait 10 min idle after a pod disappears before removing a node.
+            # Combined with HTTP sleep (5 min cooldown) this gives the first
+            # request time to wake the app before the node drains.
+            - --scale-down-delay-after-add=10m
+            - --scale-down-unneeded-time=10m
+            - --scale-down-delay-after-delete=2m
+            # Remove a node when its pods could fit on other nodes.
+            - --scale-down-utilization-threshold=0.5
+            - --balance-similar-node-groups=true
+            # Do not skip pods with no PodDisruptionBudget; shpyrd apps can
+            # be rescheduled safely — they roll back to one pod if evicted.
+            - --skip-nodes-with-system-pods=false
+            - --skip-nodes-with-local-storage=false
+            - --expander=least-waste
+            - --leader-elect=true
+            - --v=2
+          # OCI instance principal: the node's IAM policy carries the
+          # permission to resize the node pool; no key file needed.
+          env:
+            - name: OCI_RESOURCE_PRINCIPAL_VERSION
+              value: "2.2"
+            - name: OCI_RESOURCE_PRINCIPAL_REGION
+              value: "${SHPYRD_DNS_REGION}"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule

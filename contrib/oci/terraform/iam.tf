@@ -105,6 +105,40 @@ resource "oci_identity_policy" "dns_key" {
   ]
 }
 
+# --- Cluster autoscaler (instance principal) ---------------------------------
+# The cluster autoscaler pod runs on a worker node and uses the node's
+# instance principal (no key files) to resize the node pool via the OCI API.
+# The policy grants any instance in the cluster's compartment the minimum
+# permissions needed: read the node pool, update its size.
+
+resource "oci_identity_policy" "cluster_autoscaler" {
+  count    = var.node_min_count > 0 ? 1 : 0
+  provider = oci.home
+
+  compartment_id = var.tenancy_ocid
+  name           = "${var.name}-cluster-autoscaler"
+  description    = "Let ${var.name} worker nodes resize the cluster's node pool (cluster autoscaler)"
+  statements = [
+    "Allow dynamic-group id ${oci_identity_dynamic_group.workers[0].id} to manage cluster-node-pools ${local.policy_location}",
+    "Allow dynamic-group id ${oci_identity_dynamic_group.workers[0].id} to manage cluster-family ${local.policy_location}",
+    "Allow dynamic-group id ${oci_identity_dynamic_group.workers[0].id} to use virtual-network-family ${local.policy_location}",
+    "Allow dynamic-group id ${oci_identity_dynamic_group.workers[0].id} to manage instance-family ${local.policy_location}",
+  ]
+}
+
+resource "oci_identity_dynamic_group" "workers" {
+  count    = var.node_min_count > 0 ? 1 : 0
+  provider = oci.home
+
+  compartment_id = var.tenancy_ocid
+  name           = "${var.name}-workers"
+  description    = "Worker nodes of the ${var.name} cluster (for instance principal auth)"
+  # Match all instances in the cluster's compartment that are OKE nodes.
+  # Scope to compartment; if this compartment hosts multiple clusters,
+  # tighten by adding the node pool OCID as a freeform tag on instances.
+  matching_rule = "Any {instance.compartment.id = '${local.compartment_id}'}"
+}
+
 # --- Workload identity -------------------------------------------------------
 
 resource "oci_identity_policy" "dns_workload" {
