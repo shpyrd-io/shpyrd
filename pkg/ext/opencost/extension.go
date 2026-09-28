@@ -279,6 +279,7 @@ func (w *cogsWriter) nodeHourlyCost(ctx context.Context) float64 {
 		slog.Error("opencost: node metrics read failed", "err", err)
 		return 0
 	}
+	slog.Info("opencost: node metrics body", "len", len(body), "preview", string(body[:min(200, len(body))]))
 	var total float64
 	for _, line := range strings.Split(string(body), "\n") {
 		if strings.HasPrefix(line, "#") || line == "" {
