@@ -182,8 +182,22 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 		for _, h := range hosts {
 			rules = append(rules, map[string]interface{}{"hosts": []interface{}{h}})
 		}
+		// What wakes the app. In wait mode requests are held in the
+		// interceptor and the scaler acts on that concurrency. In page mode
+		// the placeholder is answered at once, so concurrency is back to
+		// zero before the scaler looks: the route scales on request rate
+		// instead (every placeholder-served request counts for a minute).
+		// The target values are high on purpose — a sleeping app wakes to
+		// its own instance count and RFC-0047 autoscaling is a separate
+		// feature — so they only ever decide 0 versus awake.
+		scalingMetric := map[string]interface{}{
+			"concurrency": map[string]interface{}{"targetValue": int64(1000)},
+		}
 		coldStart := map[string]interface{}{"maxPendingRequests": int64(100), "overflow": "Reject"}
 		if sp.Resuming == "page" {
+			scalingMetric = map[string]interface{}{
+				"requestRate": map[string]interface{}{"targetValue": int64(1000), "window": "1m", "granularity": "1s"},
+			}
 			if cmErr := r.ensureSleepPage(ctx, app); cmErr != nil {
 				return cmErr
 			}
@@ -201,11 +215,9 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 			}
 		}
 		ir.Object["spec"] = map[string]interface{}{
-			"target": map[string]interface{}{"service": webSvc, "port": int64(80)},
-			"rules":  rules,
-			"scalingMetric": map[string]interface{}{
-				"concurrency": map[string]interface{}{"targetValue": int64(1000)},
-			},
+			"target":        map[string]interface{}{"service": webSvc, "port": int64(80)},
+			"rules":         rules,
+			"scalingMetric": scalingMetric,
 			"staticRoutes": []interface{}{
 				map[string]interface{}{
 					"rules": []interface{}{
@@ -239,6 +251,10 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 			"minReplicaCount": int64(0),
 			"maxReplicaCount": maxR,
 			"cooldownPeriod":  cooldown,
+			// A trigger that has never been active has no cooldown to wait
+			// for; without this KEDA scales a freshly enabled app to zero
+			// at once instead of after the quiet period.
+			"initialCooldownPeriod": cooldown,
 			// The add-on's external scaler reads the InterceptorRoute named
 			// here (v0.16 contract; hostnames/service/port were the
 			// deprecated HTTPScaledObject path) and derives the metric spec
