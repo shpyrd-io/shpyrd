@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1040,15 +1041,41 @@ func seedFromRecord(ctx context.Context, cmd *cobra.Command, kopts kube.Options,
 	}
 	// Variables the operator set explicitly (--set, --registry-host) are
 	// kept across runs; profile defaults stay live for everything else.
-	for k, v := range info.Overrides {
-		if k == install.VarRegistryHost && f.Changed("registry-host") {
-			continue
-		}
-		if !hasSet(flags.set, k) {
-			flags.set = append(flags.set, k+"="+v)
+	// A value the infrastructure produced this run (--vars-file) beats a
+	// remembered flag: when Terraform moves the autoscaled pool, the file
+	// carries the new OCID and the recorded --set from the first install
+	// must not pin the old one.
+	fromFile := map[string]string{}
+	if flags.varsFile != "" {
+		if m, err := readVarsFile(flags.varsFile); err == nil {
+			fromFile = m
 		}
 	}
+	flags.set = seedOverrides(flags.set, info.Overrides, fromFile, f.Changed("registry-host"))
 	return nil
+}
+
+// seedOverrides adds the recorded overrides to --set, except the ones this
+// run already decides: an explicit --set, --registry-host, or a value in
+// --vars-file.
+func seedOverrides(set []string, recorded, fromFile map[string]string, registryHostChanged bool) []string {
+	keys := make([]string, 0, len(recorded))
+	for k := range recorded {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if k == install.VarRegistryHost && registryHostChanged {
+			continue
+		}
+		if _, inFile := fromFile[k]; inFile {
+			continue
+		}
+		if !hasSet(set, k) {
+			set = append(set, k+"="+recorded[k])
+		}
+	}
+	return set
 }
 
 // readVarsFile parses SHPYRD_NAME=value lines (blank lines and # comments
