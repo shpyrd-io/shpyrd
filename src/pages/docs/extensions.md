@@ -21,6 +21,8 @@ postgres        enabled  cnpg            PostgreSQL databases for projects (Clou
 redis           enabled  -               Redis-compatible caches and queues for projects (Valkey or Redis), attached to apps as REDIS_URL (shpyrd redis create)
 object-storage  enabled  object-storage  S3-compatible object store in the cluster (Garage) with a key per consumer: the backing store for Postgres backups and platform backups
 mail            enabled  -               Send email from the platform: invitations and notifications over SMTP (shpyrd-ctl mail set)
+sleep           disabled keda, keda-http Scale web processes to zero after a quiet period and wake them on the first request: KEDA and its HTTP add-on (shpyrd sleep)
+opencost        disabled opencost        Infrastructure cost allocation via OpenCost — operator economics dashboard (RFC-0075)
 ```
 
 Enabling installs the extension's component with the same runlevel installer as the base stack (ordering, readiness waits, install record) and restarts the server with the extension; the choice is recorded in the cluster, so `shpyrd cluster init` and `shpyrd cluster status` keep it. Disabling removes the component and is refused while resources of the extension still exist. The **Cluster** page lists every extension with its state.
