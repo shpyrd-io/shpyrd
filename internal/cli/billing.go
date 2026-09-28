@@ -293,6 +293,7 @@ Requires the opencost extension to be enabled for the COGS column.
 			// as the cluster fills or autoscales (idle).
 			type row struct {
 				Workspace   string  `json:"workspace"`
+				Owner       string  `json:"owner"`
 				Revenue     float64 `json:"revenue"`
 				DirectCOGS  float64 `json:"directCogs"`
 				SharedCOGS  float64 `json:"sharedCogs"`
@@ -305,20 +306,50 @@ Requires the opencost extension to be enabled for the COGS column.
 				var rows []row
 				_ = json.Unmarshal(ws, &rows)
 				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "WORKSPACE\tREVENUE\tDIRECT\tSHARED\tIDLE\tTOTAL COGS\tMARGIN\tMARGIN%")
+				// OWN: C = customer, O = operator.
+				// R/E = Revenue (customer) or - (operator, no billing).
+				// D/S/I = Direct / Shared / Idle expenses.
+				fmt.Fprintln(tw, "WORKSPACE\tOWN\tR/E\tD\tS\tI\tTOTAL\tM\tM%")
+				var custDirect, custShared, custIdle, custTotal, custRev, custMargin float64
+				var opDirect, opShared, opIdle, opTotal float64
 				for _, r := range rows {
-					fmt.Fprintf(tw, "%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.1f%%\n",
-						r.Workspace, r.Revenue,
-						r.DirectCOGS, r.SharedCOGS, r.IdleCOGS,
-						r.TotalCOGS, r.GrossMargin, r.MarginPct)
+					own := "C"
+					if r.Owner == "operator" {
+						own = "O"
+					}
+					if r.Owner == "operator" {
+						fmt.Fprintf(tw, "%s\t%s\t-\t%.2f\t%.2f\t%.2f\t%.2f\t-\t-\n",
+							r.Workspace, own,
+							r.DirectCOGS, r.SharedCOGS, r.IdleCOGS, r.TotalCOGS)
+						opDirect += r.DirectCOGS
+						opShared += r.SharedCOGS
+						opIdle += r.IdleCOGS
+						opTotal += r.TotalCOGS
+					} else {
+						fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.1f%%\n",
+							r.Workspace, own,
+							r.Revenue, r.DirectCOGS, r.SharedCOGS, r.IdleCOGS,
+							r.TotalCOGS, r.GrossMargin, r.MarginPct)
+						custRev += r.Revenue
+						custDirect += r.DirectCOGS
+						custShared += r.SharedCOGS
+						custIdle += r.IdleCOGS
+						custTotal += r.TotalCOGS
+						custMargin += r.GrossMargin
+					}
+				}
+				fmt.Fprintln(tw)
+				custPct := 0.0
+				if custRev > 0 {
+					custPct = custMargin / custRev * 100
+				}
+				fmt.Fprintf(tw, "Customer totals\t\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.1f%%\n",
+					custRev, custDirect, custShared, custIdle, custTotal, custMargin, custPct)
+				if opTotal > 0 {
+					fmt.Fprintf(tw, "Operating expenses\t\t-\t%.2f\t%.2f\t%.2f\t%.2f\t-\t-\n",
+						opDirect, opShared, opIdle, opTotal)
 				}
 				_ = tw.Flush()
-			}
-			if tot, ok := raw["totals"]; ok {
-				var t row
-				_ = json.Unmarshal(tot, &t)
-				fmt.Fprintf(out, "\nTotals: revenue %.2f  direct %.2f  shared %.2f  idle %.2f  total COGS %.2f  margin %.2f (%.1f%%)\n",
-					t.Revenue, t.DirectCOGS, t.SharedCOGS, t.IdleCOGS, t.TotalCOGS, t.GrossMargin, t.MarginPct)
 			}
 			return nil
 		},

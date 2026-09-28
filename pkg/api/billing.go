@@ -331,7 +331,10 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 
 	type wsEcon struct {
 		Workspace   string  `json:"workspace"`
-		Revenue     float64 `json:"revenue"` // billed to the customer
+		// Owner is "operator" or "customer" (RFC-0078): operator workspaces
+		// have expenses but no revenue; Revenue and Margin are zero/empty.
+		Owner       string  `json:"owner,omitempty"`
+		Revenue     float64 `json:"revenue"` // billed to the customer; 0 for operator workspaces
 		DirectCOGS  float64 `json:"directCogs"`
 		SharedCOGS  float64 `json:"sharedCogs"`
 		IdleCOGS    float64 `json:"idleCogs"`
@@ -346,23 +349,26 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 		lines, _ := s.store.QueryInvoiceLines(ctx, ws.Slug, from, to, nil)
 		cogs, _ := s.store.QueryCOGSBuckets(ctx, ws.Slug, from, to)
 		rev := 0.0
-		for _, l := range lines {
-			rev += l.GrossAmount
-		}
-		if len(lines) == 0 {
-			// No finalised invoice lines for the month (the finalisation
-			// job is not written yet): revenue is the same preview the
-			// workspace's Billing card shows, from the ledger at plan prices.
-			end := to
-			if now.Before(end) {
-				end = now
+		isOperator := ws.Owner == store.WorkspaceOwnerOperator
+		if !isOperator {
+			for _, l := range lines {
+				rev += l.GrossAmount
 			}
-			var plan *store.Plan
-			if wp, err := s.store.WorkspacePlan(ctx, ws.Slug); err == nil && wp != nil {
-				plan, _ = s.store.GetPlan(ctx, wp.PlanID)
-			}
-			if buckets, err := s.store.QueryBuckets(ctx, ws.Slug, "", from, end); err == nil {
-				_, rev, _ = computeInvoicePreview(buckets, plan, from, end)
+			if len(lines) == 0 {
+				// No finalised invoice lines for the month (the finalisation
+				// job is not written yet): revenue is the same preview the
+				// workspace's Billing card shows, from the ledger at plan prices.
+				end := to
+				if now.Before(end) {
+					end = now
+				}
+				var plan *store.Plan
+				if wp, err := s.store.WorkspacePlan(ctx, ws.Slug); err == nil && wp != nil {
+					plan, _ = s.store.GetPlan(ctx, wp.PlanID)
+				}
+				if buckets, err := s.store.QueryBuckets(ctx, ws.Slug, "", from, end); err == nil {
+					_, rev, _ = computeInvoicePreview(buckets, plan, from, end)
+				}
 			}
 		}
 		direct, shared, idle, total := 0.0, 0.0, 0.0, 0.0
@@ -377,8 +383,10 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 		if rev > 0 {
 			pct = margin / rev * 100
 		}
-		rows = append(rows, wsEcon{Workspace: ws.Slug, Revenue: rev, DirectCOGS: direct, SharedCOGS: shared, IdleCOGS: idle, TotalCOGS: total, GrossMargin: margin, MarginPct: pct})
-		totRevenue += rev
+		rows = append(rows, wsEcon{Owner: ws.Owner, Workspace: ws.Slug, Revenue: rev, DirectCOGS: direct, SharedCOGS: shared, IdleCOGS: idle, TotalCOGS: total, GrossMargin: margin, MarginPct: pct})
+		if !isOperator {
+			totRevenue += rev // only customer revenue counts toward the platform's income
+		}
 		totCOGS += total
 		totDirect += direct
 		totShared += shared
