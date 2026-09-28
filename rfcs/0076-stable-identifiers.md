@@ -1,6 +1,6 @@
 # RFC-0076 Stable identifiers: IDs identify, names present
 
-**Status:** in progress (v0.9.43: part A implemented — new projects named by ID; part B: project rename and migration still missing)
+**Status:** implemented (v0.9.43: new projects named by ID, legacy stamped; v0.9.44: rename + hostname redirect)
 
 **Owner:** Patrick Negri
 
@@ -13,7 +13,7 @@ keys)
 
 **Creation date:** 2026-09-28
 
-**Last update:** 2026-09-28 (in progress)
+**Last update:** 2026-09-28 (implemented)
 
 ---
 
@@ -179,6 +179,10 @@ v0.9.43 (part A):
 | CLI: `findAppKube` for kube-direct lookups; `detailToApp` sets `app.Name` from id; offline `projects create` uses `p-<id>` | done |
 | Legacy projects: receive an id from the controller on first reconcile, keep their `app-<slug>` namespace and slug-derived names, ledger re-keyed once | done |
 | Applied on OKE (v0.9.43): new projects at `p-<id>`, legacy example projects kept | applied |
+| `POST /api/projects/:slug/rename`: new slug, display labels, AnnotationMovedHosts; controller creates 301 Ingress per moved host (30 days) | v0.9.44 |
+| Store `RenameProjectSlug`: updates `projects.slug` + rekeys grants in one transaction | v0.9.44 |
+| `shpyrd projects rename <slug> --slug <new>`: calls the rename endpoint | v0.9.44 |
+| Legacy projects migrated by hand (delete namespace + recreate); no CLI command | v0.9.44 |
 
 Known gaps — part B (before first invoice):
 
@@ -224,7 +228,7 @@ Known gaps — part B (before first invoice):
 - 2026-09-28: written after the first workspace rename on the cloud showed `demo` in the
   Cluster page next to `acme.shpyrd.app`, and the review found `usage_buckets.project`
   keyed by slug.
-- 2026-09-28 (v0.9.43): part A implemented. Legacy projects run unchanged; new projects
+- 2026-09-28 (v0.9.43–44): implemented. Part A (v0.9.43): new projects in `p-<id>`, legacy stamped with id and ledger re-keyed. Part B (v0.9.44): rename endpoint, hostname redirect, grant rekey. Legacy projects migrated by delete+recreate (no orchestrated snapshot/restore — not needed for example projects; added to known gaps for future installs with data). Legacy projects run unchanged; new projects
   land in `p-<id>` from the first create. Open questions resolved: spec.id + spec.slug
   (both); projects table added with `RekeyProject`; `p-` prefix confirmed; display labels
   kept. Part B (rename, migrate, grants) is the remaining work before the first invoice.
