@@ -270,11 +270,13 @@ func (w *cogsWriter) nodeHourlyCost(ctx context.Context) float64 {
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
+		slog.Error("opencost: node metrics request failed", "err", err)
 		return 0
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		slog.Error("opencost: node metrics read failed", "err", err)
 		return 0
 	}
 	var total float64
