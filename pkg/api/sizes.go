@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -147,6 +150,51 @@ func (s *Server) resizeApp(c *gin.Context) {
 type ProcessChange struct {
 	Size     *string `json:"size,omitempty"`
 	Replicas *int32  `json:"replicas,omitempty"`
+	// Sleep sets or clears HTTP sleep for the web process (RFC-0075):
+	// {"after":"15m","resuming":"page"}; after "off" disables.
+	Sleep *shpyrdv1.SleepSpec `json:"sleep,omitempty"`
+}
+
+// canSleep reports whether the KEDA HTTP add-on is installed, by asking the
+// REST mapper for its InterceptorRoute kind.
+func (s *Server) canSleep() bool {
+	if s.sleepAvailable != nil {
+		return s.sleepAvailable()
+	}
+	if s.apps == nil {
+		return false
+	}
+	_, err := s.apps.RESTMapper().RESTMapping(schema.GroupKind{Group: "http.keda.sh", Kind: "InterceptorRoute"})
+	return err == nil
+}
+
+// validateSleep checks a sleep change: only the web process sleeps, the
+// quiet period is 5m..24h (or "off"), resuming is page or wait. Returns
+// the normalised spec, or nil when sleep is being disabled.
+func validateSleep(process string, sp *shpyrdv1.SleepSpec) (*shpyrdv1.SleepSpec, error) {
+	if process != "web" {
+		return nil, fmt.Errorf("only the web process can sleep (got %s)", process)
+	}
+	after := strings.ToLower(strings.TrimSpace(sp.After))
+	if after == "" || after == "off" || after == "false" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(after)
+	if err != nil {
+		return nil, fmt.Errorf("sleep after: %q is not a duration (try 15m, 1h)", sp.After)
+	}
+	if d < 5*time.Minute || d > 24*time.Hour {
+		return nil, errors.New("sleep after must be between 5m and 24h")
+	}
+	resuming := strings.ToLower(strings.TrimSpace(sp.Resuming))
+	switch resuming {
+	case "":
+		resuming = "wait"
+	case "page", "wait":
+	default:
+		return nil, fmt.Errorf("sleep resuming must be page or wait (got %s)", sp.Resuming)
+	}
+	return &shpyrdv1.SleepSpec{After: d.String(), Resuming: resuming}, nil
 }
 
 type applyProcessesRequest struct {
@@ -171,7 +219,20 @@ func (s *Server) applyProcesses(c *gin.Context) {
 		return
 	}
 	resizes := false
+	sleeps := map[string]*shpyrdv1.SleepSpec{}
 	for name, ch := range req.Processes {
+		if ch.Sleep != nil {
+			sp, err := validateSleep(name, ch.Sleep)
+			if err != nil {
+				abort(c, http.StatusBadRequest, err)
+				return
+			}
+			if sp != nil && !s.canSleep() {
+				abort(c, http.StatusConflict, errors.New("this cluster cannot put apps to sleep yet: it needs the keda and keda-http extensions (shpyrd-ctl extensions enable keda keda-http)"))
+				return
+			}
+			sleeps[name] = sp
+		}
 		if ch.Size != nil {
 			if _, ok := cat.Get(*ch.Size); !ok {
 				abort(c, http.StatusBadRequest, fmt.Errorf("unknown size %q for %s", *ch.Size, name))
@@ -206,6 +267,9 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				}
 				p.Replicas = ch.Replicas
 			}
+			if ch.Sleep != nil {
+				p.Sleep = sleeps[name] // nil clears it
+			}
 			a.Spec.Processes[name] = p
 		}
 		return nil
@@ -232,6 +296,13 @@ func processChangesDetail(changes map[string]ProcessChange) string {
 		}
 		if ch.Size != nil {
 			parts = append(parts, fmt.Sprintf("%s:%s", n, *ch.Size))
+		}
+		if ch.Sleep != nil {
+			if sp, _ := validateSleep(n, ch.Sleep); sp == nil {
+				parts = append(parts, n+" sleep off")
+			} else {
+				parts = append(parts, fmt.Sprintf("%s sleep after %s (%s)", n, sp.After, sp.Resuming))
+			}
 		}
 	}
 	return strings.Join(parts, " ")

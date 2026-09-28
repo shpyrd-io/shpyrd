@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -23,8 +24,11 @@ import (
 //  1. ExternalName Service "web-sleep" → the KEDA HTTP add-on interceptor.
 //  2. InterceptorRoute (http.keda.sh/v1beta1) with the cold-start config.
 //  3. ScaledObject (keda.sh/v1alpha1) driving the Deployment 0↔N.
-// The Ingress backend switches to "web-sleep" via edgeAnnotations while
-// sleep is active (see desired.go); nothing changes in the edge's auth flow.
+// The Ingress backend switches to "web-sleep" only once these objects
+// exist (reconcileSleep reports it; see mutateIngress). On a cluster
+// without the keda-http extension the app keeps routing to its own
+// Service and the process status says what is missing — sleep never takes
+// an app down.
 
 var (
 	InterceptorRouteGVK = schema.GroupVersionKind{Group: "http.keda.sh", Version: "v1beta1", Kind: "InterceptorRoute"}
@@ -68,10 +72,20 @@ func parseSleepDuration(after string) time.Duration {
 	return d
 }
 
-// reconcileSleep ensures or removes the KEDA sleep objects for the app.
-func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) error {
+// sleepUnavailableMessage is what the process status says when the policy
+// is set but the cluster lacks the KEDA HTTP add-on.
+const sleepUnavailableMessage = "sleep needs the keda-http extension (shpyrd-ctl extensions enable keda keda-http)"
+
+// reconcileSleep ensures or removes the KEDA sleep objects for the app and
+// reports whether the Ingress should route through the interceptor. It is
+// false when the policy is off or when KEDA's CRDs are not installed.
+func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (bool, error) {
 	if !sleepEnabled(app) {
-		return r.deleteSleepObjects(ctx, app)
+		return false, r.deleteSleepObjects(ctx, app)
+	}
+	if !r.kedaHTTPAvailable() {
+		log.FromContext(ctx).V(1).Info("sleep policy set but keda-http is not installed; routing stays on the app's Service", "app", app.Name)
+		return false, r.deleteSleepObjects(ctx, app)
 	}
 	sp := webSleepSpec(app)
 	cooldown := int64(parseSleepDuration(sp.After).Seconds())
@@ -101,7 +115,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) e
 		}
 		return controllerutil.SetControllerReference(app, extSvc, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("sleep externalname svc: %w", err)
+		return false, fmt.Errorf("sleep externalname svc: %w", err)
 	}
 
 	// 2. InterceptorRoute.
@@ -152,7 +166,11 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) e
 		}
 		return controllerutil.SetControllerReference(app, ir, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("interceptorroute: %w", err)
+		if isNoMatchKind(err) {
+			log.FromContext(ctx).V(1).Info("sleep policy set but keda-http is not installed", "app", app.Name)
+			return false, nil
+		}
+		return false, fmt.Errorf("interceptorroute: %w", err)
 	}
 
 	// 3. ScaledObject.
@@ -179,12 +197,13 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) e
 		}
 		return controllerutil.SetControllerReference(app, so, r.Scheme)
 	}); err != nil {
-		// ScaledObject creation fails gracefully when KEDA is not installed.
-		if !apierrors.IsNotFound(err) && !isNoMatchKind(err) {
-			return fmt.Errorf("scaledobject: %w", err)
+		if isNoMatchKind(err) {
+			log.FromContext(ctx).V(1).Info("sleep policy set but keda is not installed", "app", app.Name)
+			return false, nil
 		}
+		return false, fmt.Errorf("scaledobject: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // ensureSleepPage creates or updates the ConfigMap that serves the branded
@@ -247,6 +266,21 @@ func (r *AppReconciler) webServiceName(ctx context.Context, app *shpyrdv1.App) (
 		return candidate, nil
 	}
 	return app.Name, nil
+}
+
+// kedaHTTPAvailable asks the REST mapper (kept current by discovery) whether
+// both KEDA kinds the sleep objects need are installed.
+func (r *AppReconciler) kedaHTTPAvailable() bool {
+	m := r.Client.RESTMapper()
+	if m == nil {
+		return false
+	}
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		if _, err := m.RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isNoMatchKind returns true when KEDA's CRDs are not installed.

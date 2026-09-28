@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ReceiptText } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { ErrorBoundary } from "@/components/error-boundary";
 import {
   Card,
   CardContent,
@@ -25,6 +26,19 @@ import {
  * this is a preview at plan prices.
  */
 export function BillingCard() {
+  return (
+    <ErrorBoundary what="The Billing card">
+      <BillingCardInner />
+    </ErrorBoundary>
+  );
+}
+
+/** num guards amounts that may be missing from an older server. */
+function num(n: number | undefined | null): number {
+  return typeof n === "number" && Number.isFinite(n) ? n : 0;
+}
+
+function BillingCardInner() {
   const billing = useQuery({
     queryKey: ["billing-current"],
     queryFn: api.billingCurrent,
@@ -54,12 +68,12 @@ export function BillingCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {b.lines.length === 0 && (
+        {(b.lines ?? []).length === 0 && (
           <p className="text-sm text-muted-foreground">
             No usage recorded yet.
           </p>
         )}
-        {b.lines.length > 0 && (
+        {(b.lines ?? []).length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
@@ -71,7 +85,7 @@ export function BillingCard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {b.lines.map((l) => (
+              {(b.lines ?? []).map((l) => (
                 <TableRow key={l.component + l.metric}>
                   <TableCell className="font-mono text-xs">
                     {l.component}
@@ -80,14 +94,14 @@ export function BillingCard() {
                     {l.metric.replace(/_/g, " ")}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {l.quantity.toFixed(4)}
+                    {num(l.quantity).toFixed(4)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {l.unitPrice > 0 ? l.unitPrice.toFixed(6) : "—"}
+                    {num(l.unitPrice) > 0 ? num(l.unitPrice).toFixed(6) : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {l.grossAmount > 0
-                      ? `${currency} ${l.grossAmount.toFixed(4)}`
+                      ? `${currency} ${num(l.grossAmount).toFixed(4)}`
                       : "—"}
                   </TableCell>
                 </TableRow>
@@ -99,13 +113,13 @@ export function BillingCard() {
           <span className="text-muted-foreground">
             Projected month total:{" "}
             <strong>
-              {currency} {b.projection.toFixed(2)}
+              {currency} {num(b.projection).toFixed(2)}
             </strong>
           </span>
           <span className="text-muted-foreground">
             This month so far:{" "}
             <strong>
-              {currency} {b.total.toFixed(4)}
+              {currency} {num(b.total).toFixed(4)}
             </strong>
           </span>
         </div>

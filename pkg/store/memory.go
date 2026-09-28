@@ -77,6 +77,16 @@ func (m *Memory) Migrate(_ context.Context, defaultName string) error {
 
 func (m *Memory) Close() {}
 
+// hasWorkspaceID reports whether id is the id of a known workspace.
+func (m *Memory) hasWorkspaceID(id string) bool {
+	for _, w := range m.workspaces {
+		if w.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Memory) ws(slug string) (*Workspace, error) {
 	w, ok := m.workspaces[slug]
 	if !ok {
@@ -1471,6 +1481,12 @@ func (m *Memory) WriteBuckets(_ context.Context, buckets []UsageBucket) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, b := range buckets {
+		// Accept a slug or an id, like the Postgres store.
+		if w, err := m.ws(b.WorkspaceID); err == nil {
+			b.WorkspaceID = w.ID
+		} else if !m.hasWorkspaceID(b.WorkspaceID) {
+			continue // unknown workspace: skip
+		}
 		dup := false
 		for _, e := range m.billing().buckets {
 			if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.Component == b.Component &&

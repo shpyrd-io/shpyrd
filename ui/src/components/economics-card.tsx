@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { ErrorBoundary } from "@/components/error-boundary";
 import {
   Card,
   CardContent,
@@ -20,11 +21,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+/** money formats an amount that may be missing from an older server. */
+function money(n: number | undefined | null, digits = 2): string {
+  return (typeof n === "number" && Number.isFinite(n) ? n : 0).toFixed(digits);
+}
+
 /**
  * Operator economics (RFC-0075): revenue, COGS from OpenCost, and gross
  * margin per workspace. Operator-only — never shown to customers.
  */
 export function EconomicsCard() {
+  return (
+    <ErrorBoundary what="The Economics card">
+      <EconomicsCardInner />
+    </ErrorBoundary>
+  );
+}
+
+function EconomicsCardInner() {
   const [month, setMonth] = useState("");
   const econ = useQuery({
     queryKey: ["economics", month],
@@ -59,10 +73,19 @@ export function EconomicsCard() {
         {econ.isLoading && <Skeleton className="h-24 w-full" />}
         {econ.error && (
           <p className="text-sm text-muted-foreground">
-            Install the opencost extension to see cost data (shpyrd-ctl
-            extensions enable opencost).
+            Economics could not be loaded: {(econ.error as Error).message}
           </p>
         )}
+        {econ.data &&
+          (econ.data.totals?.totalCogs ?? 0) === 0 &&
+          (econ.data.totals?.revenue ?? 0) === 0 && (
+            <p className="mb-3 text-sm text-muted-foreground">
+              No revenue or cost recorded for this month yet. Revenue appears
+              once a workspace has a plan (shpyrd-ctl plans assign); COGS
+              appears once the opencost extension is enabled (shpyrd-ctl
+              extensions enable opencost).
+            </p>
+          )}
         {econ.data && (
           <>
             <Table>
@@ -82,16 +105,16 @@ export function EconomicsCard() {
                       {r.workspace}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {r.revenue.toFixed(2)}
+                      {money(r.revenue)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {r.totalCogs.toFixed(2)}
+                      {money(r.totalCogs)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {r.grossMargin.toFixed(2)}
+                      {money(r.grossMargin)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {r.marginPct.toFixed(1)}%
+                      {money(r.marginPct, 1)}%
                     </TableCell>
                   </TableRow>
                 ))}
@@ -99,16 +122,16 @@ export function EconomicsCard() {
                   <TableRow className="font-semibold">
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {econ.data.totals.revenue.toFixed(2)}
+                      {money(econ.data.totals.revenue)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {econ.data.totals.totalCogs.toFixed(2)}
+                      {money(econ.data.totals.totalCogs)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {econ.data.totals.grossMargin.toFixed(2)}
+                      {money(econ.data.totals.grossMargin)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {econ.data.totals.marginPct.toFixed(1)}%
+                      {money(econ.data.totals.marginPct, 1)}%
                     </TableCell>
                   </TableRow>
                 )}

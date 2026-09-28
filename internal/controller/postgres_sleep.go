@@ -3,16 +3,17 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -20,18 +21,24 @@ import (
 // Postgres sleep (RFC-0075): CloudNativePG declarative hibernation with a
 // shpyrd-owned Service and a TCP wake-proxy.
 //
-// The shpyrd Service "<name>" (distinct from CNPG's "<name>-rw") is the
-// address apps use. Its selector points at the CNPG primary pod while awake
-// and at the pg-gateway pod while sleeping/waking, keyed by the wake port
-// allocated in pg.Status.Sleep.WakePort.
+// The shpyrd Service "<name>" (distinct from CNPG's "<name>-rw") exists
+// only for databases with a sleep policy. Its selector points at the CNPG
+// primary while awake, and at the pg-gateway pods — on the database's wake
+// port — while sleeping or waking. Hibernation itself only happens when the
+// gateway is running: without it a sleeping database could not be woken.
+//
+// Status (v0.9.18): bindings still hand apps "<name>-rw", and no activity
+// signal maintains LastActivityAt yet, so this stays behind the gateway
+// gate and the CLI does not expose it. See RFC-0075 "Implementation status".
 
 const (
 	// pgWakePortBase is the start of the wake-port allocation range.
 	pgWakePortBase = 15000
 	// pgWakePortCap is the exclusive end of the range.
 	pgWakePortCap = 16000
-	// pgGatewayPodSelector is the label on the pg-gateway pods.
-	pgGatewayPodSelector = "app.kubernetes.io/name=pg-gateway"
+	// pgGatewayName is the pg-gateway Deployment (system namespace) and the
+	// app.kubernetes.io/name label on its pods.
+	pgGatewayName = "pg-gateway"
 	// pgHibernationAnnotation is the CNPG declarative-hibernation annotation.
 	pgHibernationAnnotation = "cnpg.io/hibernation"
 )
@@ -50,19 +57,17 @@ func sleepAfterDuration(spec *shpyrdv1.PostgresSleepSpec) time.Duration {
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
 	after := sleepAfterDuration(pg.Spec.Sleep)
 
-	// Ensure the shpyrd-owned Service exists regardless of sleep state.
+	// No policy, or an HA database (never sleeps): make sure it is awake
+	// and carry no Service of ours.
+	if after == 0 || instances(pg) > 1 {
+		if err := r.ensurePostgresAwake(ctx, pg); err != nil {
+			return err
+		}
+		return r.deletePostgresService(ctx, pg)
+	}
+
 	if err := r.ensurePostgresService(ctx, pg); err != nil {
 		return err
-	}
-
-	// Single-instance only.
-	if instances(pg) > 1 {
-		return nil
-	}
-
-	if after == 0 {
-		// Sleep disabled: ensure awake.
-		return r.ensurePostgresAwake(ctx, pg)
 	}
 
 	// Assign a wake port if not yet done.
@@ -84,6 +89,14 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 	}
 	switch pg.Status.Sleep.State {
 	case "awake":
+		ready, err := r.gatewayReady(ctx)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			log.FromContext(ctx).V(1).Info("sleep policy set but pg-gateway is not running; staying awake", "postgres", pg.Name)
+			return nil
+		}
 		return r.maybeHibernate(ctx, pg, after)
 	case "sleeping", "waking":
 		// The gateway is responsible for waking on connect; we just watch.
@@ -104,16 +117,56 @@ func (r *PostgresReconciler) ensurePostgresService(ctx context.Context, pg *shpy
 			shpyrdv1.LabelManagedBy: "shpyrd",
 			"shpyrd.io/postgres":    pg.Name,
 		})
-		svc.Spec.Ports = []corev1.ServicePort{{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP}}
-		// Selector: primary pod while awake, gateway pod while sleeping.
+		port := corev1.ServicePort{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(PostgresPort)}
+		// Awake: the CNPG primary (CNPG labels its pods cnpg.io/cluster and
+		// cnpg.io/instanceRole). Sleeping or waking: the gateway pods, on
+		// this database's wake port.
+		svc.Spec.Selector = map[string]string{"cnpg.io/cluster": pg.Name, "cnpg.io/instanceRole": "primary"}
 		if r.postgresIsHibernated(ctx, pg) {
-			svc.Spec.Selector = r.gatewaySvcSelector(pg)
-		} else {
-			svc.Spec.Selector = map[string]string{"cnpg.io/podRole": "primary", "shpyrd.io/postgres": pg.Name}
+			if wp := pg.Status.Sleep.WakePort; wp != nil {
+				svc.Spec.Selector = map[string]string{"app.kubernetes.io/name": pgGatewayName}
+				port.TargetPort = intstr.FromInt32(*wp)
+			}
 		}
+		svc.Spec.Ports = []corev1.ServicePort{port}
 		return controllerutil.SetControllerReference(pg, svc, r.Scheme)
 	})
 	return err
+}
+
+// deletePostgresService removes the shpyrd-owned "<name>" Service when the
+// database has no sleep policy. Only a Service we labelled is touched.
+func (r *PostgresReconciler) deletePostgresService(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pg.Name, Namespace: pg.Namespace}, svc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if svc.Labels[shpyrdv1.LabelManagedBy] != "shpyrd" || svc.Labels["shpyrd.io/postgres"] != pg.Name {
+		return nil
+	}
+	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// gatewayReady reports whether the pg-gateway Deployment in the system
+// namespace has a ready replica. Hibernation waits for it.
+func (r *PostgresReconciler) gatewayReady(ctx context.Context) (bool, error) {
+	if r.SystemNamespace == "" {
+		return false, nil
+	}
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, types.NamespacedName{Name: pgGatewayName, Namespace: r.SystemNamespace}, &dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return dep.Status.ReadyReplicas > 0, nil
 }
 
 // syncServiceSelector flips the Service selector to match the sleep state.
@@ -127,18 +180,6 @@ func (r *PostgresReconciler) postgresIsHibernated(ctx context.Context, pg *shpyr
 		return false
 	}
 	return pg.Status.Sleep.State == "sleeping" || pg.Status.Sleep.State == "waking"
-}
-
-// gatewaySvcSelector returns the label selector that targets the gateway pod
-// listening on the database's wake port.
-func (r *PostgresReconciler) gatewaySvcSelector(pg *shpyrdv1.Postgres) map[string]string {
-	if pg.Status.Sleep == nil || pg.Status.Sleep.WakePort == nil {
-		return nil
-	}
-	return map[string]string{
-		"app.kubernetes.io/name":      "pg-gateway",
-		"shpyrd.io/wake-port-ns-name": fmt.Sprintf("%s.%s", pg.Namespace, pg.Name),
-	}
 }
 
 // maybeHibernate hibernates the database when the idle window has elapsed.
@@ -274,5 +315,3 @@ func pgSleepDescription(pg *shpyrdv1.Postgres) string {
 	}
 	return ""
 }
-
-func _() { _ = pgSleepDescription; _ = strings.Contains; var _ client.Object }

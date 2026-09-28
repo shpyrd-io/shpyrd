@@ -633,7 +633,10 @@ func (c Config) mutateService(app *shpyrdv1.App, p namedProcess, s *corev1.Servi
 // platform's wildcard certificate as the front door's default (RFC-0061)
 // the Ingress declares its hosts under TLS without a certificate of its own:
 // ingress-nginx serves the default and no issuance happens per project.
-func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
+// mutateIngress renders the app's Ingress. sleepActive routes the web host
+// through the KEDA interceptor ("web-sleep", RFC-0075) instead of the
+// process Service; the edge's auth_request flow is unchanged either way.
+func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, sleepActive bool) {
 	ing.Labels = mergeMaps(ing.Labels, processLabels(app, "web"))
 	ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
@@ -665,8 +668,17 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
 		for k, v := range c.edgeAnnotations(app) {
 			ing.Annotations[k] = v
 		}
+		if sleepActive {
+			// A sleeping app's first request must not be served a stale
+			// decision for long: 5 s instead of 20 s (RFC-0075).
+			ing.Annotations["nginx.ingress.kubernetes.io/auth-cache-duration"] = "200 5s, 401 5s, 403 5s"
+		}
 	}
 	ing.Spec.TLS = c.ingressTLS(app)
+	backend := workloadName(app, "web")
+	if sleepActive {
+		backend = webSleepServiceName
+	}
 	pathType := networkingv1.PathTypePrefix
 	rules := make([]networkingv1.IngressRule, 0, len(hosts))
 	for _, h := range hosts {
@@ -677,7 +689,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
 					Path:     "/",
 					PathType: &pathType,
 					Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
-						Name: workloadName(app, "web"),
+						Name: backend,
 						Port: networkingv1.ServiceBackendPort{Name: "http"},
 					}},
 				}},

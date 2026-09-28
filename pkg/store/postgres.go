@@ -1556,7 +1556,22 @@ func (p *Postgres) WriteBuckets(ctx context.Context, buckets []UsageBucket) erro
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+	// WorkspaceID is a slug or an id (the metering loop reads slugs off
+	// namespace labels); resolve once per distinct value.
+	ids := map[string]string{}
 	for _, b := range buckets {
+		wsID, ok := ids[b.WorkspaceID]
+		if !ok {
+			resolved, err := p.wsID(ctx, tx, b.WorkspaceID)
+			if err != nil {
+				if !errors.Is(err, ErrNotFound) {
+					return err
+				}
+				continue // workspace gone (deleted between listing and write): skip its buckets
+			}
+			wsID = resolved
+			ids[b.WorkspaceID] = wsID
+		}
 		labels := "{}"
 		if len(b.Labels) > 0 {
 			if raw, e := json.Marshal(b.Labels); e == nil {
@@ -1565,7 +1580,7 @@ func (p *Postgres) WriteBuckets(ctx context.Context, buckets []UsageBucket) erro
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO usage_buckets (workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb) ON CONFLICT DO NOTHING`,
-			b.WorkspaceID, b.Project, b.Component, b.Metric, b.PeriodStart, b.PeriodEnd, b.Quantity, b.Unit, b.Quality, b.Revision, b.Source, labels); err != nil {
+			wsID, b.Project, b.Component, b.Metric, b.PeriodStart, b.PeriodEnd, b.Quantity, b.Unit, b.Quality, b.Revision, b.Source, labels); err != nil {
 			return err
 		}
 	}

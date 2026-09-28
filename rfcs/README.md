@@ -103,7 +103,7 @@ declare what they depend on.
 | [0072](0072-app-actions.md) | App actions: declared endpoints the platform runs for a person (MCP tools, launcher buttons) | provisional | 0032, 0033, 0070 |
 | [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
-| [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | provisional | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
+| [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep scaffolding) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
 
 ## Phases
 
@@ -154,6 +154,7 @@ an "Implementation status" section with the details; the short version:
 | 0058 | `auth connector add` message without auth-local |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
+| 0075 | `usage_hourly` rollup and monthly invoice finalisation jobs; `min_monthly` floor in the preview; Usage card; `SleepStatus` from KEDA; workspace-level sleep default; wake bench; Postgres sleep end to end (activity signal, binding host switch, `waking → awake`, suspend/resume routes, gateway in the image) — details in the RFC's "Implementation status" |
 
 Fixed in the same audit: the users API required no role (0007/0008), the RBAC mirror was
 not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did nothing (0036),

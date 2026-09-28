@@ -170,6 +170,9 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 		projection = total / elapsed * total_h
 	}
 
+	if lines == nil {
+		lines = []BillingLineView{}
+	}
 	out := WorkspaceBillingView{
 		Workspace: ws, Period: now.Format("2006-01"), Total: total,
 		Currency: "USD", Projection: projection, Quality: quality, Lines: lines,
@@ -271,8 +274,8 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 		GrossMargin float64 `json:"grossMargin"`
 		MarginPct   float64 `json:"marginPct"`
 	}
-	var rows []wsEcon
-	var totRevenue, totCOGS float64
+	rows := []wsEcon{}
+	var totRevenue, totCOGS, totDirect, totShared, totIdle float64
 	for _, ws := range workspaces {
 		lines, _ := s.store.QueryInvoiceLines(ctx, ws.Slug, from, to, nil)
 		cogs, _ := s.store.QueryCOGSBuckets(ctx, ws.Slug, from, to)
@@ -295,6 +298,9 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 		rows = append(rows, wsEcon{Workspace: ws.Slug, Revenue: rev, DirectCOGS: direct, SharedCOGS: shared, IdleCOGS: idle, TotalCOGS: total, GrossMargin: margin, MarginPct: pct})
 		totRevenue += rev
 		totCOGS += total
+		totDirect += direct
+		totShared += shared
+		totIdle += idle
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Workspace < rows[j].Workspace })
 	totMargin := totRevenue - totCOGS
@@ -302,9 +308,13 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 	if totRevenue > 0 {
 		totMarginPct = totMargin / totRevenue * 100
 	}
+	// Totals carry the same field names as rows so clients render both alike.
 	c.JSON(http.StatusOK, gin.H{
 		"month": month, "workspaces": rows,
-		"totals": gin.H{"revenue": totRevenue, "cogs": totCOGS, "grossMargin": totMargin, "marginPct": totMarginPct},
+		"totals": wsEcon{
+			Revenue: totRevenue, DirectCOGS: totDirect, SharedCOGS: totShared, IdleCOGS: totIdle,
+			TotalCOGS: totCOGS, GrossMargin: totMargin, MarginPct: totMarginPct,
+		},
 	})
 }
 

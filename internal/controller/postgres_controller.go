@@ -221,6 +221,14 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		}
 		return ctrl.Result{}, nil
 	default:
+		// A hibernated cluster reports no ready instance: that is sleep,
+		// not provisioning (RFC-0075).
+		if desc := pgSleepDescription(pg); desc != "" {
+			pg.Status.Phase = shpyrdv1.ResourceReady
+			pg.Status.Message = desc
+			setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Sleeping", desc)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 		pg.Status.Phase = shpyrdv1.ResourceProvisioning
 		pg.Status.Message = firstNonEmpty(phase, "creating the PostgreSQL cluster")
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)

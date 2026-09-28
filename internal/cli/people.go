@@ -338,16 +338,13 @@ the first request wakes it. The person may choose:
 			if err != nil {
 				return err
 			}
-			// Patch via the project config vars API: the App CRD `sleep` field
-			// is set through PATCH /api/projects/:slug/config with the sleep JSON.
-			// For now we use the raw app update which mirrors the CRD field.
-			res := map[string]any{}
-			if after != "" {
-				res["sleep"] = map[string]any{"after": after, "resuming": resuming}
-			}
-			body := map[string]any{"processes": map[string]any{"web": res}}
+			// The batch process endpoint takes the sleep spec for web; the
+			// server validates 5m..24h and page|wait, "off" clears it.
+			body := map[string]any{"processes": map[string]any{
+				"web": map[string]any{"sleep": map[string]any{"after": after, "resuming": resuming}},
+			}}
 			var out any
-			if err := t.call(ctx, "PATCH", "api/projects/"+args[0], body, &out); err != nil {
+			if err := t.call(ctx, "POST", "api/projects/"+args[0]+"/processes", body, &out); err != nil {
 				return err
 			}
 			if after == "" || after == "off" {

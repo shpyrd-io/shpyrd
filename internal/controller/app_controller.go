@@ -735,6 +735,12 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 
+	// Sleep objects (RFC-0075) come before the Ingress: the backend only
+	// points at the KEDA interceptor once the objects exist.
+	sleepActive, err := r.reconcileSleep(ctx, app)
+	if err != nil {
+		return nil, err
+	}
 	// Ingress for web, and the certificates its hosts need (RFC-0034). A
 	// suspended workspace's apps are not served: no Ingress, so the front
 	// door's default backend answers for the host with the suspension page.
@@ -742,7 +748,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
 	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
-			r.Config.mutateIngress(app, ing)
+			r.Config.mutateIngress(app, ing, sleepActive)
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
 		}); err != nil {
 			return nil, fmt.Errorf("ingress: %w", err)
@@ -780,11 +786,6 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
 		return nil, err
 	}
-	// Sleep objects (RFC-0075): KEDA InterceptorRoute, ScaledObject, ExternalName.
-	if err := r.reconcileSleep(ctx, app); err != nil {
-		return nil, err
-	}
-
 	// Garbage collect workloads of removed process types.
 	var deployments appsv1.DeploymentList
 	if err := r.List(ctx, &deployments, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {

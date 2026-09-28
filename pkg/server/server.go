@@ -258,7 +258,7 @@ func run(o runOptions, logger *slog.Logger) error {
 			// Metering loop (RFC-0075) — runs on the leader alongside the
 			// registry GC; needs the store and the Prometheus client.
 			if prom != nil {
-				metering := &controller.MeteringLoop{Store: memberships.Store, Prom: prom}
+				metering := &controller.MeteringLoop{Store: memberships.Store, Prom: prom, Client: mgr.GetClient()}
 				if err := mgr.Add(metering); err != nil {
 					return fmt.Errorf("metering loop: %w", err)
 				}

@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,67 +43,41 @@ default (2-3 for high availability with --instances).`,
 	return cmd
 }
 
-// newPgSleepCmd configures automatic hibernation for a database (RFC-0075).
-func newPgSleepCmd(g ext.CLIGlobals) *cobra.Command {
-	var after, project string
-	cmd := &cobra.Command{
-		Use: "sleep <name>", Short: "Configure automatic hibernation for a database",
+// Database sleep (RFC-0075 section 5) is not complete yet: bindings still
+// point apps at "<name>-rw", no activity signal keeps a busy database
+// awake, and the wake proxy image is not shipped. The commands exist so the
+// shape is settled, but they are hidden and refuse until then.
+const pgSleepNotYet = "database sleep is not available in this release yet (RFC-0075 section 5 is in progress); HTTP sleep for apps is: shpyrd sleep <project> --after 15m"
+
+func pgSleepPlaceholder(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use: use, Short: short, Hidden: true,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			body, _ := json.Marshal(map[string]any{"sleep": map[string]any{"after": after}})
-			if _, err := g.API().Request(ctx, "PATCH", "api/projects/"+project+"/resources/"+args[0], body, "application/json"); err != nil {
-				return err
-			}
-			if after == "off" || after == "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Hibernation disabled for %s.\n", args[0])
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Hibernation set: %s sleeps after %s of inactivity.\n", args[0], after)
-			}
-			return nil
+			return errors.New(pgSleepNotYet)
 		},
 	}
-	projectFlag(cmd, &project)
-	cmd.Flags().StringVar(&after, "after", "", "idle window before hibernating, e.g. 30m; 'off' disables (required)")
-	_ = cmd.MarkFlagRequired("after")
+}
+
+// newPgSleepCmd configures automatic hibernation for a database (RFC-0075).
+func newPgSleepCmd(ext.CLIGlobals) *cobra.Command {
+	cmd := pgSleepPlaceholder("sleep <name>", "Configure automatic hibernation for a database")
+	cmd.Flags().String("after", "", "idle window before hibernating, e.g. 30m; 'off' disables")
+	cmd.Flags().String("project", "", "project slug")
 	return cmd
 }
 
 // newPgSuspendCmd suspends a database (explicit, no auto-wake).
-func newPgSuspendCmd(g ext.CLIGlobals) *cobra.Command {
-	var project string
-	cmd := &cobra.Command{
-		Use: "suspend <name>", Short: "Suspend a database (no automatic wake; data kept)",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/"+args[0]+"/suspend", nil, ""); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s suspended.\n", args[0])
-			return nil
-		},
-	}
-	projectFlag(cmd, &project)
+func newPgSuspendCmd(ext.CLIGlobals) *cobra.Command {
+	cmd := pgSleepPlaceholder("suspend <name>", "Suspend a database (no automatic wake; data kept)")
+	cmd.Flags().String("project", "", "project slug")
 	return cmd
 }
 
 // newPgResumeCmd resumes a suspended database.
-func newPgResumeCmd(g ext.CLIGlobals) *cobra.Command {
-	var project string
-	cmd := &cobra.Command{
-		Use: "resume <name>", Short: "Resume a suspended database",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			if _, err := g.API().Request(ctx, "POST", "api/projects/"+project+"/resources/"+args[0]+"/resume", nil, ""); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s resuming.\n", args[0])
-			return nil
-		},
-	}
-	projectFlag(cmd, &project)
+func newPgResumeCmd(ext.CLIGlobals) *cobra.Command {
+	cmd := pgSleepPlaceholder("resume <name>", "Resume a suspended database")
+	cmd.Flags().String("project", "", "project slug")
 	return cmd
 }
 func cliContext() context.Context {

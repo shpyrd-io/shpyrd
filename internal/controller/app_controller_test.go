@@ -148,7 +148,7 @@ func TestReconcilePinnedImage(t *testing.T) {
 	wc := r.Config
 	wc.WildcardTLS = true
 	wcIng := ing.DeepCopy()
-	wc.mutateIngress(app, wcIng)
+	wc.mutateIngress(app, wcIng, false)
 	if wcIng.Spec.TLS[0].SecretName != "" || len(wcIng.Spec.TLS[0].Hosts) != 1 {
 		t.Errorf("wildcard ingress = %+v", wcIng.Spec.TLS)
 	}

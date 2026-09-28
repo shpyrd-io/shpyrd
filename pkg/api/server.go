@@ -172,6 +172,10 @@ type Server struct {
 	// lookupCNAME resolves a CNAME for custom workspace domains; nil uses
 	// the system resolver.
 	lookupCNAME func(ctx context.Context, host string) (string, error)
+	// sleepAvailable reports whether the cluster can put apps to sleep
+	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
+	// REST mapper (tests inject one).
+	sleepAvailable func() bool
 	// hosts caches workspaces' host records (custom domains, moved
 	// addresses; RFC-0033 names).
 	hosts hostsCache

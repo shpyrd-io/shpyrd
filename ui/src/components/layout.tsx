@@ -13,6 +13,7 @@ import { getToken, setToken } from "@/lib/auth";
 import { usePerms } from "@/lib/me";
 import { useTheme, type Theme } from "@/lib/theme";
 import { LogoMark, Wordmark } from "@/components/brand";
+import { PageBoundary } from "@/components/error-boundary";
 import { useUserOnly } from "@/pages/apps";
 import { useBrandColor } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
@@ -100,7 +101,9 @@ export function Layout() {
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <Outlet />
+        <PageBoundary>
+          <Outlet />
+        </PageBoundary>
       </main>
     </div>
   );

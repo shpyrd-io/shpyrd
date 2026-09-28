@@ -57,6 +57,7 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.sleepAvailable = func() bool { return true } // the fake mapper knows no KEDA kinds
 	return s, cr
 }
 
@@ -576,6 +577,46 @@ func TestApplyProcesses(t *testing.T) {
 	}
 	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"size":"nope"}}}`, true); rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown size: %d", rec.Code)
+	}
+
+	// Sleep (RFC-0075): refused up-front on a cluster without the KEDA HTTP add-on.
+	s.sleepAvailable = func() bool { return false }
+	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"15m"}}}}`, true); rec.Code != http.StatusConflict {
+		t.Errorf("sleep without keda-http: %d %s", rec.Code, rec.Body.String())
+	}
+	// Turning it off never needs the add-on.
+	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"off"}}}}`, true); rec.Code != http.StatusOK {
+		t.Errorf("sleep off without keda-http: %d %s", rec.Code, rec.Body.String())
+	}
+	s.sleepAvailable = func() bool { return true }
+	// Web only, 5m..24h, resuming page|wait; "off" clears.
+	for _, bad := range []string{
+		`{"processes":{"web":{"sleep":{"after":"1m"}}}}`,
+		`{"processes":{"web":{"sleep":{"after":"25h"}}}}`,
+		`{"processes":{"web":{"sleep":{"after":"soon"}}}}`,
+		`{"processes":{"web":{"sleep":{"after":"15m","resuming":"spinner"}}}}`,
+	} {
+		if rec := do(t, s, "POST", "/api/projects/web1/processes", bad, true); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", bad, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"15m","resuming":"page"}}}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("sleep on: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if sp := got.Spec.Processes["web"].Sleep; sp == nil || sp.After != "15m0s" || sp.Resuming != "page" {
+		t.Errorf("sleep not applied: %+v", got.Spec.Processes["web"].Sleep)
+	}
+	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"off"}}}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("sleep off: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Processes["web"].Sleep != nil {
+		t.Errorf("sleep not cleared: %+v", got.Spec.Processes["web"].Sleep)
 	}
 }
 

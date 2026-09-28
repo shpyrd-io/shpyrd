@@ -1,6 +1,6 @@
 # RFC-0075 Usage, billing and sleep: the platform's economics and scale to zero
 
-**Status:** in progress (v0.9.17 foundation)
+**Status:** in progress (v0.9.18: phases 1–2 shipped, 3–4 shipped opt-in, 5 scaffolding)
 
 **Owner:** Patrick Negri
 
@@ -595,6 +595,22 @@ OpenCost API windows are immutable).
 
 ---
 
+## Implementation status
+
+Updated 2026-09-27 (v0.9.18).
+
+| Phase | State | What ships | Known gaps |
+| --- | --- | --- | --- |
+| 1 — ledger | **shipped** | Migration 000011; metering loop (leader-elected, 5-min buckets, 7-day catch-up, quality flags); `GET /api/workspace/usage`, `/api/projects/:slug/usage`; `shpyrd billing` | Namespace mapping reads the Kubernetes API, not `kube_namespace_labels` (v0.9.17 depended on a KSM allowlist that does not export namespace labels, and wrote nothing — fixed in v0.9.18). Pods without `shpyrd.io/process` (databases, one-off runs) land in component `default`. `usage_hourly` rollup job not written; egress attributed to `web` only. No Usage card in the UI yet (data is reachable through the API and CLI). |
+| 2 — customer billing | **shipped (preview)** | `plans`, `workspace_plans`, `invoice_lines`; `shpyrd-ctl plans create/list/assign`; `GET /api/workspace/billing/current` (month-to-date at plan prices, run-rate projection); Billing card on Workspace › Overview | Invoice lines are computed on read, not finalised by a monthly job; `min_monthly` floor not applied in the preview; no payment provider (by design). |
+| 3 — OpenCost + economics | **shipped, not enabled** | `opencost` component (chart 2.5.32) and extension with the hourly COGS writer; `GET /api/cluster/economics`; Economics card; `shpyrd-ctl economics` | Not yet enabled on the first cloud; totals not reconciled against the OCI bill; the card is operator-only and shows an explicit empty state until then. |
+| 4 — HTTP sleep | **shipped, opt-in, not yet benched** | `SleepSpec` on the web process; `POST /api/projects/:slug/processes` with `sleep`; `shpyrd sleep <project> --after --resuming`; controller renders ExternalName + `InterceptorRoute` + `ScaledObject` (+ resuming-page ConfigMap) and only then moves the Ingress backend to the interceptor and shortens the auth cache to 5 s; `keda` and `keda-http` components | The API refuses a policy when the cluster lacks the add-on's CRDs, and the controller keeps routing to the app's own Service if they disappear — sleep never takes an app down. Not yet enabled on the first cloud; wake p95/p99 not measured; `SleepStatus` (state, last wake) not filled from KEDA yet; workspace-level default (`off`) not implemented — every project opts in. RFC-0047 autoscaling exclusion not enforced (RFC-0047 not shipped). |
+| 5 — Postgres sleep | **scaffolding only** | CRD fields (`spec.sleep.after`, `status.sleep.{state,lastActivityAt,wakePort}`); hibernation reconciler; `cmd/pg-gateway` wake-proxy; `pg-gateway` component | Not usable yet and deliberately unreachable: `shpyrd pg sleep/suspend/resume` are hidden and refuse; hibernation only runs when the `pg-gateway` Deployment is ready, and the server image does not ship `/pg-gateway`. Still missing: an activity signal that maintains `lastActivityAt` (CNPG `cnpg_backends_total` / xact metrics via Prometheus), binding host switching from `<name>-rw` to the shpyrd Service, the `waking → awake` transition, `suspend`/`resume` API routes, backup-before-sleep. The v0.9.17 build created an endpoint-less `<name>` Service for every database; v0.9.18 creates it only for databases with a policy and removes the others. |
+| 0 — bench | **not started** | — | Wake times per StorageClass, driver connect-timeout matrix, CNPG hibernate loops. Gate for phase 6. |
+| 6 — economics on | **not started** | — | Small plans sleep by default once phases 0 and 4 have two clean weeks. |
+
+---
+
 ## Open questions
 
 1. **Plan price unit for memory**: per working-set GiB-hour, or per reserved
@@ -655,7 +671,12 @@ OpenCost API windows are immutable).
   (KEDA HTTP add-on, InterceptorRoute + ScaledObject + ConfigMap, SleepSpec),
   Postgres sleep (SleepSpec + WakePort, shpyrd-owned Service, hibernation
   reconciler, pg-gateway TCP wake-proxy), OpenCost extension. Bench phase runs
-  before defaults are switched on. The usage ledger, the two-sided cost model (customer billing vs operator COGS),
+  before defaults are switched on.
+- 2026-09-27 (v0.9.18): first-cloud check found the metering loop silent (namespace
+  mapping depended on KSM label export) and the economics card crashing the Cluster
+  page (field name mismatch); both fixed. HTTP sleep loop closed: KEDA objects first,
+  Ingress backend follows, API refuses without the add-on. Postgres sleep gated behind
+  the gateway and hidden in the CLI; "Implementation status" section added. The usage ledger, the two-sided cost model (customer billing vs operator COGS),
   the OpenCost integration and the sleep mechanics (KEDA HTTP add-on + CNPG hibernation)
   are designed together because they share one data source and are incoherent apart.
   Source: internal specification 2026-09-27 (`shpyrd-cloud/docs/research/`); OpenCost

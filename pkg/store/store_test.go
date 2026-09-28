@@ -528,23 +528,26 @@ func TestBillingStore(t *testing.T) {
 			if len(hist) != 2 {
 				t.Errorf("history: %+v", hist)
 			}
-			// Usage buckets: write + query (dedup on conflict).
+			// Usage buckets: write + query (dedup on conflict). The metering
+			// loop writes with the workspace slug (off the namespace label);
+			// the store resolves it to the id.
 			now := time.Now().UTC().Truncate(5 * time.Minute)
 			qty := 300.0
 			buckets := []UsageBucket{
-				{WorkspaceID: "", Project: "shop", Component: "web", Metric: MetricCPUUsed, PeriodStart: now, PeriodEnd: now.Add(5 * time.Minute), Quantity: &qty, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"},
+				{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "web", Metric: MetricCPUUsed, PeriodStart: now, PeriodEnd: now.Add(5 * time.Minute), Quantity: &qty, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"},
+				{WorkspaceID: "no-such-workspace", Project: "ghost", Component: "web", Metric: MetricCPUUsed, PeriodStart: now, PeriodEnd: now.Add(5 * time.Minute), Quantity: &qty, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"},
 			}
-			// Fill WorkspaceID from the store.
 			ws, _ := s.Workspace(ctx, DefaultWorkspace)
-			buckets[0].WorkspaceID = ws.ID
 			if err := s.WriteBuckets(ctx, buckets); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.WriteBuckets(ctx, buckets); err != nil {
+			// Writing by id is accepted too, and is idempotent.
+			buckets[0].WorkspaceID = ws.ID
+			if err := s.WriteBuckets(ctx, buckets[:1]); err != nil {
 				t.Fatal(err)
-			} // idempotent
+			}
 			got, err := s.QueryBuckets(ctx, DefaultWorkspace, "", now.Add(-time.Minute), now.Add(10*time.Minute))
-			if err != nil || len(got) != 1 || *got[0].Quantity != 300.0 {
+			if err != nil || len(got) != 1 || *got[0].Quantity != 300.0 || got[0].WorkspaceID != ws.ID {
 				t.Errorf("query buckets: %+v %v", got, err)
 			}
 			// Invoice lines: upsert.
