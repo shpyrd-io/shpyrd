@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"encoding/json"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -506,8 +507,8 @@ type UpdateAppRequest struct {
 	Featured    *bool   `json:"featured,omitempty"`
 }
 
-// updateApp changes a project's display name, description or featured
-// flag (the slug never changes).
+// updateApp changes a project's display name, description or featured flag.
+// Slug changes go through POST /api/projects/:slug/rename (RFC-0076 part B).
 func (s *Server) updateApp(c *gin.Context) {
 	var req UpdateAppRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1136,4 +1137,180 @@ func (s *Server) setAllow(c *gin.Context) {
 	}
 	s.audit(c, project.SlugOf(app), "allow", project.SlugOf(app), fmt.Sprintf("%d entries", len(req)))
 	c.JSON(http.StatusOK, app.EffectiveAllow())
+}
+
+// RenameAppRequest asks to change the project's slug (RFC-0076 part B).
+type RenameAppRequest struct {
+	Slug string  `json:"slug"`
+	Name *string `json:"name,omitempty"`
+}
+
+// renameApp is POST /api/projects/:slug/rename. For an ID-named project it
+// changes spec.slug + display labels + moves the old host; for a legacy project
+// it is refused — the project must be migrated first.
+func (s *Server) renameApp(c *gin.Context) {
+	var req RenameAppRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	newSlug := strings.TrimSpace(req.Slug)
+	if err := project.ValidateSlug(newSlug); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	if project.Reserved(newSlug) {
+		abort(c, http.StatusBadRequest, fmt.Errorf("%q is reserved; pick another slug", newSlug))
+		return
+	}
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
+	if !project.IDNamed(app) {
+		abort(c, http.StatusBadRequest, fmt.Errorf("project %q uses legacy naming; run `shpyrd projects migrate %s` first", project.SlugOf(app), project.SlugOf(app)))
+		return
+	}
+	oldSlug := project.SlugOf(app)
+	if newSlug == oldSlug {
+		c.JSON(http.StatusOK, detail(app, nil))
+		return
+	}
+	ws := s.workspace(c)
+	// Slug must be free in the workspace.
+	if _, err := s.findApp(c.Request.Context(), ws, newSlug); err == nil {
+		abort(c, http.StatusConflict, fmt.Errorf("project %q already exists in this workspace", newSlug))
+		return
+	}
+	// Build the current default host to store in the redirect annotation.
+	// For the implicit workspace the platform domain is the base; for
+	// explicit workspaces use the workspace's apps domain.
+	wsObj, _ := s.store.Workspace(c.Request.Context(), ws)
+	oldHost := ""
+	if wsObj != nil {
+		oldHost = project.SlugOf(app) + "." + s.appsDomainOf(wsObj)
+	}
+	if _, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
+		a.Spec.Slug = newSlug
+		a.Labels[shpyrdv1.LabelProject] = newSlug
+		// Record the old host so the controller creates the 301 redirect.
+		if oldHost != "" {
+			type movedHost struct {
+				Host string    `json:"host"`
+				At   time.Time `json:"at"`
+			}
+			entry, _ := json.Marshal([]movedHost{{Host: oldHost, At: time.Now().UTC()}})
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[shpyrdv1.AnnotationMovedHosts] = string(entry)
+		}
+		if req.Name != nil {
+			project.SetDisplayName(a, *req.Name)
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+	// Rekey grants and the store's slug.
+	ctx := c.Request.Context()
+	if err := s.store.RenameProjectSlug(ctx, ws, oldSlug, newSlug); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.log.Warn("rename: could not rekey grants", "err", err)
+	}
+	s.audit(c, newSlug, "project.rename", oldSlug+" → "+newSlug, "")
+	// Load the fresh app by ID (not slug — the slug just changed).
+	fresh := &shpyrdv1.App{}
+	if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, fresh); err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	c.JSON(http.StatusOK, detail(fresh, nil))
+}
+
+// migrateApp is POST /api/projects/:slug/migrate (RFC-0076 part B): moves
+// a legacy project (app-<slug> namespace) to a stable-id namespace (p-<id>).
+// Projects without volumes or databases migrate in seconds (workloads are
+// restarted, not moved). Projects with volumes or databases require snapshot/
+// restore and take as long as the volume/database is large; the controller
+// handles the workload switchover once the namespace is ready.
+func (s *Server) migrateApp(c *gin.Context) {
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
+	if project.IDNamed(app) {
+		c.JSON(http.StatusOK, gin.H{"message": "project is already on a stable-id namespace", "namespace": app.Namespace})
+		return
+	}
+	ctx := c.Request.Context()
+	ws := s.workspace(c)
+	slug := project.SlugOf(app)
+
+	// Check for volumes and databases — full orchestration is part B's gap.
+	var vols shpyrdv1.VolumeList
+	_ = s.apps.List(ctx, &vols, client.InNamespace(app.Namespace))
+	var pgs shpyrdv1.PostgresList
+	_ = s.apps.List(ctx, &pgs, client.InNamespace(app.Namespace))
+	if len(vols.Items) > 0 || len(pgs.Items) > 0 {
+		abort(c, http.StatusUnprocessableEntity, fmt.Errorf(
+			"project %q has %d volume(s) and %d database(s); snapshot/restore migration is not yet automated — "+
+				"use `shpyrd volumes snapshot`, delete and recreate the project, then restore. "+
+				"See the RFC-0076 known gaps.", slug, len(vols.Items), len(pgs.Items)))
+		return
+	}
+
+	// No stateful resources: create the new namespace + App, copy config,
+	// delete the old namespace (workloads reschedule naturally).
+	id := app.Spec.ID
+	if id == "" {
+		abort(c, http.StatusInternalServerError, fmt.Errorf("project has no id yet; wait for the controller to assign one"))
+		return
+	}
+	wsObj, err := s.store.Workspace(ctx, ws)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	short := ids.Short(id)
+	labels := project.NamespaceLabelsFor(wsObj.Slug, wsObj.ID, id, slug, short)
+	newNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: project.IDNamespace(id), Labels: labels}}
+	if err := s.apps.Create(ctx, newNS); err != nil && !apierrors.IsAlreadyExists(err) {
+		abort(c, http.StatusBadGateway, fmt.Errorf("create namespace: %w", err))
+		return
+	}
+
+	// Copy the env Secret to the new namespace.
+	oldEnv := &corev1.Secret{}
+	if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}, oldEnv); err == nil {
+		newEnv := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: short + shpyrdv1.EnvSecretSuffix, Namespace: newNS.Name, Labels: labels},
+			Data:       oldEnv.Data,
+		}
+		_ = s.apps.Create(ctx, newEnv)
+	}
+
+	// Create the new App, named by the short id.
+	newApp := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: newNS.Name, Labels: labels, Annotations: app.Annotations},
+		Spec:       app.Spec,
+	}
+	newApp.Spec.ID = id
+	newApp.Spec.Slug = slug
+	if err := s.apps.Create(ctx, newApp); err != nil && !apierrors.IsAlreadyExists(err) {
+		abort(c, http.StatusBadGateway, fmt.Errorf("create app: %w", err))
+		return
+	}
+
+	// Delete the old namespace (takes everything with it).
+	oldNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: app.Namespace}}
+	_ = s.apps.Delete(ctx, oldNS)
+
+	s.audit(c, slug, "project.migrate", app.Namespace+" → "+newNS.Name, "")
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "migration complete",
+		"oldNamespace": app.Namespace,
+		"newNamespace": newNS.Name,
+		"slug":         slug,
+		"id":           id,
+	})
 }

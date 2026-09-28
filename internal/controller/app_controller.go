@@ -304,6 +304,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err := r.mirrorProject(ctx, app); err != nil {
 		return outcome{}, err
 	}
+	if err := r.reconcileMovedHosts(ctx, app); err != nil {
+		return outcome{}, err
+	}
 	if err := r.reconcileIsolation(ctx, app); err != nil {
 		return outcome{}, err
 	}

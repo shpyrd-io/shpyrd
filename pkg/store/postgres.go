@@ -1899,5 +1899,33 @@ func (p *Postgres) RekeyProject(ctx context.Context, ws, slug, id string) (int, 
 	return moved, tx.Commit(ctx)
 }
 
+// RenameProjectSlug changes the slug in projects + grants in one transaction.
+func (p *Postgres) RenameProjectSlug(ctx context.Context, ws, oldSlug, newSlug string) error {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return err
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	tag, err := tx.Exec(ctx, `UPDATE projects SET slug = $3, updated_at = now() WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`, wsID, oldSlug, newSlug)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrConflict
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `UPDATE grants SET project = $3 WHERE workspace_id = $1 AND project = $2`, wsID, oldSlug, newSlug); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 var _ Store = (*Postgres)(nil)
 var _ Store = (*Memory)(nil)

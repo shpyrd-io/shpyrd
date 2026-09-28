@@ -28,7 +28,7 @@ func newAppsCmd(g *globalFlags) *cobra.Command {
 		Short:   "Create, list and inspect projects",
 		Aliases: []string{"project", "apps", "app"},
 	}
-	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsDescribeCmd(g), newAppsDestroyCmd(g))
+	cmd.AddCommand(newAppsCreateCmd(g), newAppsListCmd(g), newAppsInfoCmd(g), newAppsRenameCmd(g), newAppsMigrateCmd(g), newAppsDescribeCmd(g), newAppsDestroyCmd(g))
 	return cmd
 }
 
@@ -154,17 +154,18 @@ the app receives who they are. --public makes it a site anyone can open;
 }
 
 func newAppsRenameCmd(g *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var newSlug string
+	cmd := &cobra.Command{
 		Use:   "rename <project> <new name>",
-		Short: "Change the display name of a project (the slug never changes)",
+		Short: "Change the display name of a project; --slug also changes its URL slug",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateAppName(args[0]); err != nil {
 				return err
 			}
 			name := strings.TrimSpace(args[1])
-			if name == "" {
-				return errors.New("the new name must not be empty")
+			if name == "" && newSlug == "" {
+				return errors.New("provide a new name, --slug, or both")
 			}
 			ctx := signalContext()
 			ac, err := newAppClient(g, cmd.OutOrStdout())
@@ -175,6 +176,32 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if newSlug != "" {
+				// Slug rename: API only (requires ID-named project).
+				if !ac.session {
+					return errors.New("slug rename requires a session (shpyrd login)")
+				}
+				body, _ := json.Marshal(struct {
+					Slug string  `json:"slug"`
+					Name *string `json:"name,omitempty"`
+				}{Slug: newSlug, Name: func() *string {
+					if name != "" {
+						return &name
+					}
+					return nil
+				}()})
+				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+project.SlugOf(app)+"/rename", body, "application/json"); err != nil {
+					return err
+				}
+				label := newSlug
+				if name != "" {
+					label = name + " (" + newSlug + ")"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Renamed project to %s\n", label)
+				fmt.Fprintf(cmd.OutOrStdout(), "Old address redirects for 30 days.\n")
+				return nil
+			}
+			// Display name only.
 			project.SetDisplayName(app, name)
 			if ac.session {
 				body, _ := json.Marshal(map[string]string{"name": name})
@@ -189,6 +216,58 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 			}
 			ac.audit(ctx, project.SlugOf(app), "project.rename", project.Label(app), "")
 			fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&newSlug, "slug", "", "change the URL slug (hostname) too; the old address redirects for 30 days; requires a session and an ID-named project")
+	return cmd
+}
+
+// newAppsMigrateCmd is `shpyrd projects migrate <slug>`: recreates a legacy
+// project (app-<slug> namespace) under its stable id (p-<id> namespace),
+// so it can be renamed. The API does the heavy lifting.
+func newAppsMigrateCmd(g *globalFlags) *cobra.Command {
+	var yes bool
+	return &cobra.Command{
+		Use:   "migrate <project>",
+		Short: "Move a legacy project to a stable-id namespace (RFC-0076); required before renaming",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateAppName(args[0]); err != nil {
+				return err
+			}
+			ctx := signalContext()
+			ac, err := newAppClient(g, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			if !ac.session {
+				return errors.New("migrate requires a session (shpyrd login)")
+			}
+			app, err := ac.getApp(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if project.IDNamed(app) {
+				fmt.Fprintf(cmd.OutOrStdout(), "Project %s is already on stable IDs (namespace %s); nothing to do.\n", args[0], app.Namespace)
+				return nil
+			}
+			if !yes {
+				slug := project.SlugOf(app)
+				fmt.Fprintf(cmd.OutOrStdout(), `Migrating project %s will:
+  - create a new namespace p-<id> and recreate all workloads there
+  - move volumes and databases via snapshot/restore (brief downtime per volume/database)
+  - switch the hostname to the new namespace and delete the old namespace
+
+`, slug)
+				if !confirm(cmd, false, "Proceed?", false) {
+					return fmt.Errorf("aborted")
+				}
+			}
+			if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+args[0]+"/migrate", nil, ""); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Migration started. Watch with `shpyrd projects info %s`.\n", args[0])
 			return nil
 		},
 	}

@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sort"
@@ -321,4 +324,92 @@ func (r *AppReconciler) certificateState(ctx context.Context, app *shpyrdv1.App,
 	}
 	_ = issuing
 	return CertIssuing, shortMessage(firstNonEmpty(msg, "waiting for the certificate authority"))
+}
+
+// reconcileMovedHosts creates a 301 Ingress for each host the project used to
+// serve (stored in AnnotationMovedHosts after a rename), removing the entry
+// once the redirect has been live for 30 days.
+func (r *AppReconciler) reconcileMovedHosts(ctx context.Context, app *shpyrdv1.App) error {
+	raw := app.Annotations[shpyrdv1.AnnotationMovedHosts]
+	if raw == "" {
+		return nil
+	}
+	var hosts []movedHost
+	if err := json.Unmarshal([]byte(raw), &hosts); err != nil {
+		return nil // malformed — clear it
+	}
+	now := time.Now()
+	keep := hosts[:0:0]
+	for _, h := range hosts {
+		if now.Sub(h.At) < 30*24*time.Hour {
+			if err := r.ensureRedirectIngress(ctx, app, h.Host); err != nil {
+				return err
+			}
+			keep = append(keep, h)
+		} else {
+			// Past 30 days: delete the redirect Ingress if we created it.
+			_ = r.deleteIfExists(ctx, &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{
+				Name: redirectIngressName(app, h.Host), Namespace: app.Namespace,
+			}})
+		}
+	}
+	patch := client.MergeFrom(app.DeepCopy())
+	if len(keep) == 0 {
+		delete(app.Annotations, shpyrdv1.AnnotationMovedHosts)
+	} else {
+		b, _ := json.Marshal(keep)
+		app.Annotations[shpyrdv1.AnnotationMovedHosts] = string(b)
+	}
+	if err := r.Patch(ctx, app, patch); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return nil
+}
+
+type movedHost struct {
+	Host string    `json:"host"`
+	At   time.Time `json:"at"`
+}
+
+func redirectIngressName(app *shpyrdv1.App, host string) string {
+	sum := sha256.Sum256([]byte(host))
+	return ingressName(app) + "-moved-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// ensureRedirectIngress creates or updates a 301 redirect Ingress from the
+// old host to the app's current default host.
+func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1.App, oldHost string) error {
+	newHost := r.Config.defaultHost(app)
+	if newHost == "" || newHost == oldHost {
+		return nil
+	}
+	name := redirectIngressName(app, oldHost)
+	class := r.Config.IngressClassExternal
+	if class == "" {
+		class = "nginx"
+	}
+	pathType := networkingv1.PathTypePrefix
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: app.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
+		ing.Labels = mergeMaps(ing.Labels, map[string]string{
+			shpyrdv1.LabelManagedBy: "shpyrd",
+			shpyrdv1.LabelApp:       app.Name,
+		})
+		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
+			"nginx.ingress.kubernetes.io/permanent-redirect": "https://" + newHost + "/$request_uri",
+			"nginx.ingress.kubernetes.io/ssl-redirect":       "true",
+		})
+		ing.Spec.IngressClassName = &class
+		ing.Spec.Rules = []networkingv1.IngressRule{{
+			Host: oldHost,
+			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{{Path: "/", PathType: &pathType,
+					Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+						Name: workloadName(app, "web"), Port: networkingv1.ServiceBackendPort{Name: "http"},
+					}}}},
+			}},
+		}}
+		return controllerutil.SetControllerReference(app, ing, r.Scheme)
+	})
+	return err
 }

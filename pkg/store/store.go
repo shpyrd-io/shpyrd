@@ -487,6 +487,9 @@ type Projects interface {
 	// collide with rows already keyed by the ID are dropped in favour of the
 	// latter. Returns the number of rows moved.
 	RekeyProject(ctx context.Context, ws, slug, id string) (int, error)
+	// RenameProjectSlug changes the slug of a live project and updates every
+	// grant that referenced it. Used by the rename API (RFC-0076 part B).
+	RenameProjectSlug(ctx context.Context, ws, oldSlug, newSlug string) error
 }
 
 // Billing is the metering and economics part of the Store (RFC-0075).

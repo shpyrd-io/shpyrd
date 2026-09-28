@@ -1873,3 +1873,38 @@ func (m *Memory) RekeyProject(_ context.Context, ws, slug, id string) (int, erro
 	}
 	return moved, nil
 }
+
+func (m *Memory) RenameProjectSlug(_ context.Context, ws, oldSlug, newSlug string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.wsAny(ws)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range m.projects {
+		e := &m.projects[i]
+		if e.WorkspaceID == w.ID && e.DeletedAt == nil {
+			if e.Slug == newSlug {
+				return ErrConflict
+			}
+			if e.Slug == oldSlug {
+				found = true
+			}
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	for i := range m.projects {
+		if m.projects[i].WorkspaceID == w.ID && m.projects[i].Slug == oldSlug && m.projects[i].DeletedAt == nil {
+			m.projects[i].Slug = newSlug
+		}
+	}
+	for i := range m.grants {
+		if m.grants[i].WorkspaceID == w.ID && m.grants[i].Project == oldSlug {
+			m.grants[i].Project = newSlug
+		}
+	}
+	return nil
+}

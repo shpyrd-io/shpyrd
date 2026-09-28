@@ -55,6 +55,10 @@ const (
 	// AnnotationRollbackTo asks the controller to restore the config vars
 	// snapshot of that release number before reconciling; consumed once.
 	AnnotationRollbackTo = "shpyrd.io/rollback-to"
+	// AnnotationMovedHosts is a JSON array of hostnames the project used to
+	// answer at, set by the rename API (RFC-0076 part B). The controller
+	// creates 301 Ingresses for them (30 days) then removes the annotation.
+	AnnotationMovedHosts = "shpyrd.io/moved-hosts"
 	// LabelRelease marks per-release snapshots (config var Secrets).
 	LabelRelease = "shpyrd.io/release"
 	// AnnotationBindingProviders on the <app>-bindings Secret maps each

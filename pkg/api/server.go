@@ -530,6 +530,8 @@ func (s *Server) routes() error {
 	api.POST("/projects", s.require(authz.ClusterCreate), s.createApp)
 	api.GET("/projects/:slug", s.require(authz.ProjectView), s.getApp)
 	api.PATCH("/projects/:slug", s.require(authz.ProjectConfig), s.updateApp)
+	api.POST("/projects/:slug/rename", s.require(authz.ProjectConfig), s.renameApp)
+	api.POST("/projects/:slug/migrate", s.require(authz.ProjectConfig), s.migrateApp)
 	api.DELETE("/projects/:slug", s.require(authz.ProjectDestroy), s.deleteApp)
 	api.POST("/projects/:slug/deploy", s.require(authz.ProjectDeploy), s.deployApp)
 	api.GET("/projects/:slug/logs", s.require(authz.ProjectView), s.appLogs)
