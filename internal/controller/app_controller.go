@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -52,6 +53,12 @@ type AppReconciler struct {
 	ProcessTypes func(ctx context.Context, image string) []string
 	// Now returns the current time; nil means time.Now (tests override it).
 	Now func() time.Time
+	// sleepPaused remembers apps whose sleep objects were torn down because
+	// KEDA could not scale them (RFC-0075): App UID → sleepPause. A new
+	// policy (a new spec generation) retries. In memory on purpose: after a
+	// restart the objects are tried once more and paused again if still
+	// broken, and the status says why either way.
+	sleepPaused sync.Map
 	// Resolver checks custom domains' DNS (RFC-0034); nil uses the system's.
 	Resolver interface {
 		LookupCNAME(ctx context.Context, host string) (string, error)
@@ -682,10 +689,12 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	if err != nil {
 		return nil, err
 	}
-	// Sleep (RFC-0075): with a policy and the add-on installed, KEDA owns
-	// the web Deployment's replica count.
+	// Sleep (RFC-0075): with a policy, the add-on installed and no pause,
+	// KEDA owns the web Deployment's replica count.
 	sleepWanted := sleepEnabled(app)
-	kedaScales := sleepWanted && r.kedaHTTPAvailable()
+	_, paused := r.sleepPause(app)
+	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
+	var webReplicas *int32 // what the web Deployment currently asks for
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
@@ -725,15 +734,8 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 		ps.Memory = res.Requests.Memory().String()
 		ps.Pinned = singleInstanceNote(mounts[p.Name])
-		if p.Name == "web" && sleepWanted {
-			ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
-			switch {
-			case !kedaScales:
-				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
-			case d.Spec.Replicas != nil && *d.Spec.Replicas == 0:
-				ps.Sleep.State = "sleeping"
-				ps.Desired = 0 // the scaler's decision, not a failure
-			}
+		if p.Name == "web" {
+			webReplicas = d.Spec.Replicas
 		}
 		status[p.Name] = ps
 
@@ -755,6 +757,21 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	sleepActive, err := r.reconcileSleep(ctx, app)
 	if err != nil {
 		return nil, err
+	}
+	if ps, ok := status["web"]; ok && sleepWanted {
+		// The sleep state, decided after the objects were reconciled (a
+		// pause may have just happened).
+		ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
+		switch pause, paused := r.sleepPause(app); {
+		case paused:
+			ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
+		case !sleepActive:
+			ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
+		case webReplicas != nil && *webReplicas == 0:
+			ps.Sleep.State = "sleeping"
+			ps.Desired = 0 // the scaler's decision, not a failure
+		}
+		status["web"] = ps
 	}
 	// Ingress for web, and the certificates its hosts need (RFC-0034). A
 	// suspended workspace's apps are not served: no Ingress, so the front

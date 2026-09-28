@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -76,6 +79,55 @@ func parseSleepDuration(after string) time.Duration {
 // is set but the cluster lacks the KEDA HTTP add-on.
 const sleepUnavailableMessage = "sleep needs the sleep extension (shpyrd-ctl extensions enable sleep)"
 
+// scaledObjectGrace is how long a ScaledObject may stay not Ready before
+// sleep is torn down for the app. KEDA treats a trigger it cannot evaluate
+// as inactive and scales the Deployment to zero at once, so a broken
+// scaler is an outage, not a no-op: the controller notices, removes the
+// objects (KEDA then restores the replica count and the Ingress goes back
+// to the app's Service) and pauses sleep for this spec generation.
+const scaledObjectGrace = 3 * time.Minute
+
+// sleepPause is why sleep is paused for an app, and for which generation.
+type sleepPause struct {
+	generation int64
+	reason     string
+}
+
+// sleepPause reports whether sleep is paused for the app's current spec.
+func (r *AppReconciler) sleepPause(app *shpyrdv1.App) (sleepPause, bool) {
+	v, ok := r.sleepPaused.Load(app.UID)
+	if !ok {
+		return sleepPause{}, false
+	}
+	p := v.(sleepPause)
+	if p.generation != app.Generation {
+		r.sleepPaused.Delete(app.UID) // a new policy retries
+		return sleepPause{}, false
+	}
+	return p, true
+}
+
+// scaledObjectBroken reports whether the ScaledObject has been not Ready
+// for longer than the grace period, and KEDA's message.
+func (r *AppReconciler) scaledObjectBroken(so *unstructured.Unstructured) (bool, string) {
+	now := time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
+	if now.Sub(so.GetCreationTimestamp().Time) < scaledObjectGrace {
+		return false, ""
+	}
+	conditions, _, _ := unstructured.NestedSlice(so.Object, "status", "conditions")
+	for _, c := range conditions {
+		m, _ := c.(map[string]interface{})
+		if m["type"] == "Ready" && m["status"] == "False" {
+			msg, _ := m["message"].(string)
+			return true, msg
+		}
+	}
+	return false, ""
+}
+
 // reconcileSleep ensures or removes the KEDA sleep objects for the app and
 // reports whether the Ingress should route through the interceptor. It is
 // false when the policy is off or when KEDA's CRDs are not installed.
@@ -85,6 +137,9 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 	}
 	if !r.kedaHTTPAvailable() {
 		log.FromContext(ctx).V(1).Info("sleep policy set but keda-http is not installed; routing stays on the app's Service", "app", app.Name)
+		return false, r.deleteSleepObjects(ctx, app)
+	}
+	if _, paused := r.sleepPause(app); paused {
 		return false, r.deleteSleepObjects(ctx, app)
 	}
 	sp := webSleepSpec(app)
@@ -184,16 +239,21 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 			"minReplicaCount": int64(0),
 			"maxReplicaCount": maxR,
 			"cooldownPeriod":  cooldown,
+			// The add-on's external scaler reads the InterceptorRoute named
+			// here (v0.16 contract; hostnames/service/port were the
+			// deprecated HTTPScaledObject path) and derives the metric spec
+			// from its scalingMetric.
 			"triggers": []interface{}{
 				map[string]interface{}{
 					"type": "external-push",
 					"metadata": map[string]interface{}{
-						"scalerAddress": "keda-add-ons-http-external-scaler.keda:9090",
-						"hostnames":     strings.Join(r.Config.domains(app), ","),
-						"service":       webSvc, "port": "80",
+						"scalerAddress":    "keda-add-ons-http-external-scaler.keda:9090",
+						"interceptorRoute": app.Name,
 					},
 				},
 			},
+			// Waking restores the process's own instance count.
+			"advanced": map[string]interface{}{"restoreToOriginalReplicaCount": true},
 		}
 		return controllerutil.SetControllerReference(app, so, r.Scheme)
 	}); err != nil {
@@ -202,6 +262,27 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 			return false, nil
 		}
 		return false, fmt.Errorf("scaledobject: %w", err)
+	}
+	if broken, msg := r.scaledObjectBroken(so); broken {
+		reason := "sleep paused: KEDA could not scale this app (" + firstNonEmpty(msg, "ScaledObject not Ready") + "); set the policy again to retry"
+		r.sleepPaused.Store(app.UID, sleepPause{generation: app.Generation, reason: reason})
+		r.Recorder.Event(app, corev1.EventTypeWarning, "SleepPaused", reason)
+		log.FromContext(ctx).Info("sleep paused", "app", app.Name, "reason", reason)
+		if err := r.deleteSleepObjects(ctx, app); err != nil {
+			return false, err
+		}
+		// Give the web process its instances back now rather than on the
+		// next event: KEDA may have scaled it to zero.
+		dep := &appsv1.Deployment{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: app.Name + "-web", Namespace: app.Namespace}, dep); err == nil {
+			if dep.Spec.Replicas == nil || *dep.Spec.Replicas != int32(maxR) {
+				dep.Spec.Replicas = ptr.To(int32(maxR))
+				if err := r.Client.Update(ctx, dep); err != nil {
+					return false, fmt.Errorf("restore replicas after sleep pause: %w", err)
+				}
+			}
+		}
+		return false, nil
 	}
 	return true, nil
 }

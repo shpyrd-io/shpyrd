@@ -314,6 +314,42 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 			t.Errorf("web status = %+v, want sleeping with desired 0", st)
 		}
 
+		// KEDA never gets the trigger working: past the grace period the
+		// controller tears sleep down, gives the instances back, routes to
+		// the app's Service again and pauses sleep for this generation.
+		so.Object["status"] = map[string]interface{}{"conditions": []interface{}{
+			map[string]interface{}{"type": "Ready", "status": "False", "message": "no metric specs returned from scalers"},
+		}}
+		if err := c.Status().Update(context.Background(), so); err != nil {
+			// The fake client has no status subresource for unstructured kinds; a plain update will do.
+			if err := c.Update(context.Background(), so); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r.Now = func() time.Time { return time.Now().Add(scaledObjectGrace + time.Minute) }
+		got = runReconcile(t, r, app)
+		if got := ingressOf(t, c).Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != "shop-web" {
+			t.Errorf("backend after pause = %q, want the app's own Service", got)
+		}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep); err != nil {
+			t.Fatal(err)
+		}
+		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 1 {
+			t.Errorf("replicas after pause = %v, want 1", dep.Spec.Replicas)
+		}
+		if st := got.Status.Processes["web"]; st.Sleep == nil || st.Sleep.State != "unavailable" || !strings.Contains(st.Sleep.Message, "paused") {
+			t.Errorf("web status after pause = %+v", st.Sleep)
+		}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); !apierrors.IsNotFound(err) {
+			t.Errorf("scaledobject still there after pause: %v", err)
+		}
+		// Reconciling again does not recreate it (same generation).
+		runReconcile(t, r, app)
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); !apierrors.IsNotFound(err) {
+			t.Errorf("scaledobject recreated while paused: %v", err)
+		}
+		r.Now = nil
+
 		// Turning the policy off removes the objects and restores the backend.
 		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, app); err != nil {
 			t.Fatal(err)
