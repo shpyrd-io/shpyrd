@@ -104,6 +104,25 @@ func TestPostgresReconcile(t *testing.T) {
 		t.Errorf("vars = %v", vars)
 	}
 
+	// With a sleep policy both the host and the URL name the shpyrd-owned
+	// Service "db" (the one that follows the database to the wake proxy);
+	// CNPG's ready-made uri would send URL readers to the dead "-rw".
+	got.Spec.Sleep = &shpyrdv1.PostgresSleepSpec{After: "30m"}
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	vars, err = (PostgresBinder{}).ConfigVars(context.Background(), c, "app-shop", "db", "DATABASE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["DATABASE_URL"] != "postgresql://app:s3cret@db:5432/app" || vars["DATABASE_HOST"] != "db" {
+		t.Errorf("vars with sleep policy = %v", vars)
+	}
+	got.Spec.Sleep = nil
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+
 	// Growth is applied, shrinking refused.
 	bigger := resource.MustParse("20Gi")
 	got.Spec.Storage = &bigger

@@ -418,14 +418,23 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 	// "<name>": it points at the primary while awake and at the wake proxy
 	// while asleep (RFC-0075). Without one, CNPG's "-rw" as always.
 	host := firstNonEmpty(get("host"), name+"-rw")
-	if sleepAfterDuration(pg.Spec.Sleep) > 0 || (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended) {
+	sleeps := sleepAfterDuration(pg.Spec.Sleep) > 0 || (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended)
+	if sleeps {
 		host = name
 	}
 	port := firstNonEmpty(get("port"), fmt.Sprint(PostgresPort))
 	db := firstNonEmpty(get("dbname"), PostgresDatabase)
 	user := firstNonEmpty(get("username"), PostgresUser)
 	pass := get("password")
-	url := firstNonEmpty(get("uri"), fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, pass, host, port, db))
+	// CNPG's ready-made "uri" names its own "-rw" Service; with a sleep
+	// policy the URL must carry the same host as DATABASE_HOST, or every
+	// framework that reads the URL (Rails, Django, Prisma, node-pg) connects
+	// to a Service with no endpoints while the database sleeps and nothing
+	// wakes it.
+	url := get("uri")
+	if sleeps || url == "" {
+		url = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, pass, host, port, db)
+	}
 	return map[string]string{
 		prefix + "_URL":      url,
 		prefix + "_HOST":     host,
