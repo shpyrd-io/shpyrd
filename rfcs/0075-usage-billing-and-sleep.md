@@ -684,6 +684,11 @@ Updated 2026-09-28 (v0.9.21).
   build cache turned out to be the dominant line (OCI's 50 Gi minimum); decision: bill
   it and redesign the cache. `sleep` extension; KEDA owns replicas while a policy is
   active; `SleepStatus` wired into the process status.
+- 2026-09-28: the first workspace rename on the cloud showed that `usage_buckets.project`
+  (and `cogs_buckets`, `sleep_events`) are keyed by the project *slug*. A project rename
+  would split a customer's invoice history. RFC-0076 (stable identifiers) moves these
+  columns to project IDs and is scheduled before the first invoice; the dev ledger is
+  truncated once more when it lands.
 - 2026-09-28 (v0.9.20): storage was metered from the claim's request (2 Gi) instead of
   the volume's capacity (50 Gi on OCI) — a 25× under-bill on the cloud's largest line.
   The metric is now the Bound PersistentVolume's capacity via its claimRef. First real
