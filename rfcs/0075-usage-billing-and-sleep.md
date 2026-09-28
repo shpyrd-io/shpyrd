@@ -691,7 +691,14 @@ Updated 2026-09-28 (v0.9.21).
   truncated once more when it lands.
 - 2026-09-28 (v0.9.20): storage was metered from the claim's request (2 Gi) instead of
   the volume's capacity (50 Gi on OCI) — a 25× under-bill on the cloud's largest line.
-  The metric is now the Bound PersistentVolume's capacity via its claimRef. First real
+  The metric is now the Bound PersistentVolume's capacity via its claimRef. The ledger
+  then settled the build-cache question with data: `build-cache = 50 GiB` for every
+  example project from 2026-09-27 02:20 until 2026-09-28 04:55, when the kpack Images
+  moved to `cache.registry.tag` and kpack deleted the claims — the volumes were real and
+  billed by OCI for ~27 hours (a mid-migration reading of the *recreated*, Pending claims
+  briefly suggested otherwise; the ledger is the record). Registry cache plus the
+  registry's own move to OCI Object Storage remove ~$54/month of block volumes on the
+  first cloud; five 50 Gi volumes remain (two databases, three system). First real
   sleep cycle on the cloud (sleep extension enabled on OKE): the server's ClusterRole
   lacked the KEDA kinds, and the ScaledObject trigger used the deprecated
   HTTPScaledObject keys — the v0.16 external scaler wants `interceptorRoute: <name>`.
