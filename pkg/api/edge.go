@@ -335,7 +335,13 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "your access is suspended"})
 		return
 	}
-	projectRole := roles.ProjectRole(slug)
+	// RFC-0076: resolve the slug to the stable grant key (base36 ID).
+	// findApp is cached on the request context; cheap for a hot path.
+	grantKey := slug // fallback for legacy apps
+	if a, err := s.findApp(c.Request.Context(), ws.Slug, slug); err == nil {
+		grantKey = projectGrantKey(a)
+	}
+	projectRole := roles.ProjectRole(grantKey)
 	name := caller.identity.Name
 	if caller.token != nil {
 		name = firstNonEmpty(caller.token.owner.Name, name) // the person, not the token's label
@@ -355,7 +361,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	if caller.preview != nil {
 		// Open as: the app sees the chosen teams and what they may do.
 		teams = caller.preview.Teams
-		projectRole = snap.RoleForTeams(slug, teams)
+		projectRole = snap.RoleForTeams(grantKey, teams)
 		claims.Preview = true
 		claims.Actor = &edge.Actor{Subject: caller.identity.Subject, Email: caller.identity.Email}
 		if projectRole == "" && mode != shpyrdv1.AccessIdentified {
@@ -363,7 +369,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "these teams may not open this app", "preview": true})
 			return
 		}
-	} else if !roles.Can(authz.ProjectOpen, slug) && mode != shpyrdv1.AccessIdentified {
+	} else if !roles.Can(authz.ProjectOpen, grantKey) && mode != shpyrdv1.AccessIdentified {
 		countDenial(ws.Slug, slug, denialNoRole)
 		c.JSON(http.StatusForbidden, gin.H{"error": "you may not open this app"})
 		return
@@ -566,7 +572,7 @@ func (s *Server) edgeDenied(c *gin.Context) {
 				s.edgePage(c, http.StatusForbidden, "Your access is suspended", "An administrator switched your access off. Ask them to reactivate it.", map[string]string{"Sign in as someone else": edgePathPrefix + "logout"})
 				return
 			}
-			if rerr == nil && authz.ReadOnly(roles.ProjectRole(project.SlugOf(app))) {
+			if rerr == nil && authz.ReadOnly(roles.ProjectRole(projectGrantKey(app))) {
 				if wantsJSON(c) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "your access to " + name + " is read-only", "readOnly": true})
 					return
@@ -777,7 +783,7 @@ func (s *Server) launcher(c *gin.Context) {
 			continue
 		}
 		access := a.EffectiveAccess()
-		if access == shpyrdv1.AccessAuthenticated && !roles.Can(authz.ProjectOpen, project.SlugOf(a)) {
+		if access == shpyrdv1.AccessAuthenticated && !roles.Can(authz.ProjectOpen, projectGrantKey(a)) {
 			continue
 		}
 		out = append(out, LauncherApp{Slug: project.SlugOf(a), DisplayName: project.DisplayName(a), Description: project.Description(a), Featured: project.Featured(a), URL: a.Status.URL, Access: access, Phase: firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending), Role: roles.ProjectRole(a.Name)})

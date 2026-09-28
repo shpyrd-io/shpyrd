@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -217,6 +218,35 @@ func tokenView(t store.APIToken) TokenView {
 	return TokenView{ID: t.ID, Name: t.Name, OwnerEmail: t.OwnerEmail, PlatformRole: t.PlatformRole, ProjectRoles: t.ProjectRoles, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt}
 }
 
+// tokenViewResolved returns tokenView with project_roles keys translated
+// from base36 IDs to human-readable slugs (RFC-0076): the user always sees
+// slugs; the stable ID is stored.
+func (s *Server) tokenViewResolved(ctx context.Context, ws string, t store.APIToken) TokenView {
+	v := tokenView(t)
+	if len(t.ProjectRoles) == 0 {
+		return v
+	}
+	prs, err := s.store.ListProjects(ctx, ws, false)
+	if err != nil {
+		return v
+	}
+	byKey := make(map[string]string, len(prs))
+	for _, p := range prs {
+		byKey[p.Short()] = p.Slug
+		byKey[p.Slug] = p.Slug
+	}
+	resolved := make(map[string]string, len(t.ProjectRoles))
+	for key, role := range t.ProjectRoles {
+		if slug, ok := byKey[key]; ok {
+			resolved[slug] = role
+		} else {
+			resolved[key] = role // unknown key: pass through
+		}
+	}
+	v.ProjectRoles = resolved
+	return v
+}
+
 // listTokens is GET /api/tokens: the caller's own tokens (platform admin
 // sees all).
 func (s *Server) listTokens(c *gin.Context) {
@@ -237,7 +267,7 @@ func (s *Server) listTokens(c *gin.Context) {
 	}
 	out := make([]TokenView, 0, len(tokens))
 	for _, t := range tokens {
-		out = append(out, tokenView(t))
+		out = append(out, s.tokenViewResolved(c.Request.Context(), s.workspace(c), t))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -280,7 +310,22 @@ func (s *Server) createToken(c *gin.Context) {
 			return
 		}
 	}
-	for proj, role := range req.ProjectRoles {
+	// Translate incoming slug-keyed projectRoles to grant-key-keyed (base36 ID),
+	// so the stored token uses the stable identifier (RFC-0076).
+	prs, _ := s.store.ListProjects(c.Request.Context(), s.workspace(c), false)
+	slugToKey := make(map[string]string, len(prs))
+	for _, p := range prs {
+		slugToKey[p.Slug] = p.Short()
+	}
+	grantKeyRoles := make(map[string]string, len(req.ProjectRoles))
+	for slug, role := range req.ProjectRoles {
+		key := slugToKey[slug]
+		if key == "" {
+			key = slug // legacy or not yet mirrored: keep as-is
+		}
+		grantKeyRoles[key] = role
+	}
+	for proj, role := range grantKeyRoles {
 		ownerRole := caller.Projects[proj]
 		if authz.RankRole(role) > authz.RankRole(ownerRole) {
 			abort(c, http.StatusBadRequest, fmt.Errorf("a token cannot be %s on %s: you are %s there", role, proj, roleOrNone(ownerRole)))
@@ -312,7 +357,7 @@ func (s *Server) createToken(c *gin.Context) {
 		Name:         req.Name,
 		OwnerEmail:   callerID.Email,
 		PlatformRole: req.PlatformRole,
-		ProjectRoles: req.ProjectRoles,
+		ProjectRoles: grantKeyRoles,
 		ExpiresAt:    exp,
 	}
 	created, err := s.store.CreateToken(c.Request.Context(), s.workspace(c), tok, hash)

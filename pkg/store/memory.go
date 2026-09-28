@@ -1940,3 +1940,40 @@ func (m *Memory) RenameProjectSlug(_ context.Context, ws, oldSlug, newSlug strin
 	}
 	return nil
 }
+
+// RekeyGrantsToIDs rewrites grants.project and api_tokens.project_roles
+// keys from project slug to short base36 ID. Idempotent.
+func (m *Memory) RekeyGrantsToIDs(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Build slug→short map per workspace from the projects slice.
+	type key struct{ wsID, slug string }
+	toShort := map[key]string{}
+	for _, p := range m.projects {
+		if p.DeletedAt != nil {
+			continue
+		}
+		sh := ids.Short(p.ID)
+		if sh != p.Slug {
+			toShort[key{p.WorkspaceID, p.Slug}] = sh
+		}
+	}
+	if len(toShort) == 0 {
+		return 0, nil
+	}
+	moved := 0
+	// grants
+	for i := range m.grants {
+		g := &m.grants[i]
+		if sh, ok := toShort[key{g.WorkspaceID, g.Project}]; ok {
+			g.Project = sh
+			moved++
+		}
+	}
+	// api_tokens.project_roles
+	for i := range m.otokens {
+		// Memory store doesn't have api_tokens; nothing to do here.
+		_ = i
+	}
+	return moved, nil
+}

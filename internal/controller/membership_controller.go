@@ -115,7 +115,13 @@ func (r *MembershipReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (c
 		if nsWS := ns.Labels[shpyrdv1.LabelWorkspace]; nsWS != "" && nsWS != ws {
 			continue
 		}
-		project := ns.Labels[shpyrdv1.LabelProject]
+		// RFC-0076: use the stable grant key (LabelProjectID = short base36
+		// ID) so grant lookups survive project renames. Fall back to
+		// LabelProject (slug) for legacy namespaces not yet stamped with an ID.
+		project := ns.Labels[shpyrdv1.LabelProjectID]
+		if project == "" {
+			project = ns.Labels[shpyrdv1.LabelProject]
+		}
 		for role, clusterRole := range projectClusterRoles {
 			subjects := projectSubjects(snap, project, role)
 			if err := r.ensureRoleBinding(ctx, ns.Name, "shpyrd-"+role, clusterRole, subjects); err != nil {

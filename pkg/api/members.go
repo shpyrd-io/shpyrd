@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	project_ "github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -89,10 +91,26 @@ func denial(roles authz.Roles, action authz.Action, project string) error {
 	return fmt.Errorf("you have no access to project %s", project)
 }
 
-// canView filters lists to the projects the caller may see.
-func (s *Server) canView(c *gin.Context, project string) bool {
+// projectGrantKey returns the stable grant key for an app: the short base36
+// ID when the app has one (post-RFC-0076), else the slug (legacy apps).
+// This is what is stored in grants.project and api_tokens.project_roles
+// after RekeyGrantsToIDs runs.
+func projectGrantKey(app *shpyrdv1.App) string {
+	if app.Spec.ID != "" {
+		return ids.Short(app.Spec.ID)
+	}
+	return project_.SlugOf(app)
+}
+
+// canView filters lists to the projects the caller may see (by grant key).
+func (s *Server) canView(c *gin.Context, grantKey string) bool {
 	roles, err := s.rolesOf(c)
-	return err == nil && roles.Can(authz.ProjectView, project)
+	return err == nil && roles.Can(authz.ProjectView, grantKey)
+}
+
+// canViewApp is canView using the stable grant key resolved from the App.
+func (s *Server) canViewApp(c *gin.Context, app *shpyrdv1.App) bool {
+	return s.canView(c, projectGrantKey(app))
 }
 
 // ---- teams ----------------------------------------------------------------
@@ -298,12 +316,17 @@ func (s *Server) deleteTeam(c *gin.Context) {
 
 // MemberView is one grant on a project.
 type MemberView struct {
-	Name    string `json:"name"`
-	ID      string `json:"id,omitempty"`
+	Name string `json:"name"`
+	ID   string `json:"id,omitempty"`
+	// Project is the stable grant key (short base36 project ID for
+	// ID-named projects, slug for legacy ones).
 	Project string `json:"project"`
-	Role    string `json:"role"`
-	User    string `json:"user,omitempty"`
-	Team    string `json:"team,omitempty"`
+	// ProjectSlug is the human-readable current slug; resolved at read
+	// time from the projects table (RFC-0076).
+	ProjectSlug string `json:"projectSlug,omitempty"`
+	Role        string `json:"role"`
+	User        string `json:"user,omitempty"`
+	Team        string `json:"team,omitempty"`
 }
 
 // MemberRequest grants a role to a user or a team.
@@ -315,6 +338,42 @@ type MemberRequest struct {
 
 func memberView(g store.Grant) MemberView {
 	return MemberView{Name: MemberName(g.Project, g.Role, g.User, g.Team), ID: g.ID, Project: g.Project, Role: g.Role, User: g.User, Team: g.Team}
+}
+
+// memberViewWithSlug is memberView with the project slug resolved from the
+// projects table (RFC-0076): the UI and CLI show the slug, not the base36 ID.
+func (s *Server) memberViewWithSlug(ctx context.Context, ws string, g store.Grant) MemberView {
+	v := memberView(g)
+	if pr, err := s.store.ProjectBySlug(ctx, ws, g.Project); err == nil {
+		v.ProjectSlug = pr.Slug
+	} else {
+		// Try resolving by short id if the project key is already an id.
+		v.ProjectSlug = g.Project // fallback: show the raw key
+	}
+	return v
+}
+
+// resolveGrantSlugs adds ProjectSlug to a slice of MemberViews by looking up
+// the projects table once. Keys that are already slugs (legacy grants) are
+// returned unchanged.
+func (s *Server) resolveGrantSlugs(ctx context.Context, ws string, views []MemberView) {
+	// Build id→slug map from the projects table.
+	prs, err := s.store.ListProjects(ctx, ws, false)
+	if err != nil {
+		return
+	}
+	byKey := make(map[string]string, len(prs))
+	for _, p := range prs {
+		byKey[p.Short()] = p.Slug
+		byKey[p.Slug] = p.Slug // legacy: slug maps to itself
+	}
+	for i := range views {
+		if slug, ok := byKey[views[i].Project]; ok {
+			views[i].ProjectSlug = slug
+		} else {
+			views[i].ProjectSlug = views[i].Project
+		}
+	}
 }
 
 // MemberName is the deterministic name of a grant, kept from the days
@@ -332,16 +391,21 @@ func MemberName(project, role, user, team string) string {
 }
 
 func (s *Server) listMembers(c *gin.Context) {
-	project := c.Param("slug")
-	grants, err := s.store.ListProjectGrants(c.Request.Context(), s.workspace(c), project)
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	grants, err := s.store.ListProjectGrants(ctx, s.workspace(c), projectGrantKey(app))
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	out := []MemberView{}
+	out := make([]MemberView, 0, len(grants))
 	for _, g := range grants {
 		out = append(out, memberView(g))
 	}
+	s.resolveGrantSlugs(ctx, s.workspace(c), out)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	c.JSON(http.StatusOK, out)
 }
@@ -353,10 +417,11 @@ func (s *Server) listAllMembers(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	out := []MemberView{}
+	out := make([]MemberView, 0, len(grants))
 	for _, g := range grants {
 		out = append(out, memberView(g))
 	}
+	s.resolveGrantSlugs(c.Request.Context(), s.workspace(c), out)
 	c.JSON(http.StatusOK, out)
 }
 
@@ -366,7 +431,11 @@ func (s *Server) addMember(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	project := c.Param("slug")
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
+	project := projectGrantKey(app)
 	switch req.Role {
 	case shpyrdv1.RoleReader, shpyrdv1.RoleUser, shpyrdv1.RoleViewer, shpyrdv1.RoleDeveloper, shpyrdv1.RoleAdmin:
 	default:
@@ -397,13 +466,20 @@ func (s *Server) addMember(c *gin.Context) {
 	}
 	s.membershipChanged()
 	s.audit(c, project, "member.add", firstNonEmpty(req.User, "team "+req.Team), req.Role)
-	c.JSON(http.StatusCreated, memberView(*g))
+	v := memberView(*g)
+	s.resolveGrantSlugs(c.Request.Context(), s.workspace(c), []MemberView{v})
+	c.JSON(http.StatusCreated, v)
 }
 
 // removeMember accepts the grant's id or its deterministic name.
 func (s *Server) removeMember(c *gin.Context) {
-	project, key := c.Param("slug"), c.Param("name")
+	key := c.Param("name")
 	ctx := c.Request.Context()
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
+	project := projectGrantKey(app)
 	grants, err := s.store.ListProjectGrants(ctx, s.workspace(c), project)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)

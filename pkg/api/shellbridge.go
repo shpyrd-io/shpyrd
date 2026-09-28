@@ -138,12 +138,12 @@ func (s *Server) appShell(c *gin.Context) {
 		abort(c, http.StatusBadGateway, fmt.Errorf("resolve roles: %w", err))
 		return
 	}
-	if !roles.Can(authz.ProjectExec, slug) {
-		abort(c, http.StatusForbidden, denial(roles, authz.ProjectExec, slug))
-		return
-	}
 	app, ok := s.loadApp(c)
 	if !ok {
+		return
+	}
+	if !roles.Can(authz.ProjectExec, projectGrantKey(app)) {
+		abort(c, http.StatusForbidden, denial(roles, authz.ProjectExec, slug))
 		return
 	}
 	instances, err := s.instancesOf(c, app.Namespace, app.Name)

@@ -261,7 +261,7 @@ func (s *Server) listApps(c *gin.Context) {
 	out := make([]AppSummary, 0, len(list.Items))
 	ws := s.workspace(c)
 	for i := range list.Items {
-		if workspaceOf(&list.Items[i]) != ws || !s.canView(c, project.SlugOf(&list.Items[i])) {
+		if workspaceOf(&list.Items[i]) != ws || !s.canViewApp(c, &list.Items[i]) {
 			continue
 		}
 		out = append(out, summarize(&list.Items[i]))
@@ -472,7 +472,7 @@ func (s *Server) createApp(c *gin.Context) {
 		return
 	}
 	s.audit(c, slug, "project.create", project.Label(app), "")
-	s.grantCreator(c, slug)
+	s.grantCreator(c, short) // grant key = short base36 id (RFC-0076)
 	c.JSON(http.StatusCreated, summarize(app))
 }
 
@@ -820,7 +820,7 @@ func (s *Server) deleteApp(c *gin.Context) {
 		return
 	}
 	// Grants on a destroyed project go with it (RFC-0033).
-	if err := s.store.DeleteProjectGrants(c.Request.Context(), s.workspace(c), project.SlugOf(app)); err != nil {
+	if err := s.store.DeleteProjectGrants(c.Request.Context(), s.workspace(c), projectGrantKey(app)); err != nil {
 		s.log.Warn("could not remove the project's grants", "project", project.SlugOf(app), "err", err.Error())
 	} else {
 		s.membershipChanged()

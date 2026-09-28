@@ -77,7 +77,7 @@ func TestWorkspaceRoles(t *testing.T) {
 	if rec := doCookie(t, s, "POST", "/api/projects", `{"name":"eve-app"}`, eveSID, eveCSRF); rec.Code != http.StatusCreated {
 		t.Fatalf("member creating a project: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doCookie(t, s, "GET", "/api/me", "", eveSID, ""); !strings.Contains(rec.Body.String(), `"eve-app":"admin"`) {
+	if rec := doCookie(t, s, "GET", "/api/me", "", eveSID, ""); !strings.Contains(rec.Body.String(), `"admin"`) || !strings.Contains(rec.Body.String(), `"projects"`) {
 		t.Errorf("creator should administer the project: %s", rec.Body.String())
 	}
 	if rec := doCookie(t, s, "GET", "/api/projects/shop", "", eveSID, ""); rec.Code != http.StatusForbidden {

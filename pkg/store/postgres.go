@@ -1789,6 +1789,72 @@ func (p *Postgres) QuerySleepEvents(ctx context.Context, ws, project string, fro
 	return out, rows.Err()
 }
 
+// ---- grants project-id rekey (RFC-0076 v0.9.47) ----------------------------------
+
+// RekeyGrantsToIDs rewrites grants.project and api_tokens.project_roles keys
+// from project slugs to short base36 IDs. Idempotent: rows whose project
+// value is already a base36 ID (25 lowercase [0-9a-z] chars) are skipped.
+// Rows whose slug has no live entry in the projects table are left unchanged.
+func (p *Postgres) RekeyGrantsToIDs(ctx context.Context) (int, error) {
+	rows, err := p.pool.Query(ctx, `SELECT workspace_id::text, slug, id::text FROM projects WHERE deleted_at IS NULL`)
+	if err != nil {
+		return 0, fmt.Errorf("RekeyGrantsToIDs: list projects: %w", err)
+	}
+	type proj struct{ wsID, slug, short string }
+	var projects []proj
+	for rows.Next() {
+		var pr proj
+		var rawID string
+		if err := rows.Scan(&pr.wsID, &pr.slug, &rawID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pr.short = ids.Short(rawID)
+		if pr.short != pr.slug { // only rows that still carry the slug
+			projects = append(projects, pr)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(projects) == 0 {
+		return 0, nil
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	moved := 0
+	for _, pr := range projects {
+		// grants.project slug → short id
+		tag, err := tx.Exec(ctx,
+			`UPDATE grants SET project=$3 WHERE workspace_id=$1 AND project=$2`,
+			pr.wsID, pr.slug, pr.short)
+		if err != nil {
+			return 0, fmt.Errorf("RekeyGrantsToIDs grants %s/%s: %w", pr.wsID, pr.slug, err)
+		}
+		moved += int(tag.RowsAffected())
+		// api_tokens.project_roles: replace the slug key with the short id.
+		// Only tokens that have the slug key but not yet the id key.
+		tag, err = tx.Exec(ctx, `
+			UPDATE api_tokens
+			SET    project_roles =
+				       (project_roles - $2::text)
+				    || jsonb_build_object($3::text, project_roles->$2::text)
+			WHERE  workspace_id = $1
+			  AND  project_roles ? $2
+			  AND  NOT (project_roles ? $3)`,
+			pr.wsID, pr.slug, pr.short)
+		if err != nil {
+			return 0, fmt.Errorf("RekeyGrantsToIDs tokens %s/%s: %w", pr.wsID, pr.slug, err)
+		}
+		moved += int(tag.RowsAffected())
+	}
+	return moved, tx.Commit(ctx)
+}
+
 // ---- projects (RFC-0076) ------------------------------------------------------
 
 const projectColumns = `id::text, workspace_id::text, slug, name, namespace, created_at, updated_at, deleted_at`

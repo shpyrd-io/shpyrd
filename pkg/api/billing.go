@@ -266,7 +266,30 @@ func (s *Server) workspaceUsage(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	c.JSON(http.StatusOK, buckets)
+	// Resolve project keys (base36 IDs) to slugs so the UI can display
+	// them without a separate lookup (RFC-0076).
+	c.JSON(http.StatusOK, s.resolveBucketProjects(ctx, ws, buckets))
+}
+
+// resolveBucketProjects returns buckets with project keys translated from
+// base36 IDs to current slugs (RFC-0076). The original slice is unchanged.
+func (s *Server) resolveBucketProjects(ctx context.Context, ws string, buckets []store.UsageBucket) []store.UsageBucket {
+	prs, err := s.store.ListProjects(ctx, ws, false)
+	if err != nil || len(prs) == 0 {
+		return buckets
+	}
+	byKey := make(map[string]string, len(prs))
+	for _, p := range prs {
+		byKey[p.Short()] = p.Slug
+	}
+	out := make([]store.UsageBucket, len(buckets))
+	copy(out, buckets)
+	for i := range out {
+		if slug, ok := byKey[out[i].Project]; ok {
+			out[i].Project = slug
+		}
+	}
+	return out
 }
 
 // ledgerKeyFor translates a project slug into the ledger's project key

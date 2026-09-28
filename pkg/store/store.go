@@ -496,6 +496,11 @@ type Projects interface {
 	// collide with rows already keyed by the ID are dropped in favour of the
 	// latter. Returns the number of rows moved.
 	RekeyProject(ctx context.Context, ws, slug, id string) (int, error)
+	// RekeyGrantsToIDs rewrites grants.project and api_tokens.project_roles
+	// keys from project slugs to short base36 IDs (RFC-0076, v0.9.47);
+	// called once from Migrate. Rows whose slug has no live project entry
+	// are left unchanged. Returns the number of rows updated.
+	RekeyGrantsToIDs(ctx context.Context) (int, error)
 	// RenameProjectSlug changes the slug of a live project and updates every
 	// grant that referenced it. Used by the rename API (RFC-0076 part B).
 	RenameProjectSlug(ctx context.Context, ws, oldSlug, newSlug string) error
