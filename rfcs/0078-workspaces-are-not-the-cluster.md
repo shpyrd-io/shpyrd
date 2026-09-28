@@ -1,6 +1,6 @@
 # RFC-0078 Workspaces are not the cluster
 
-**Status:** implementable
+**Status:** implemented (v0.9.46)
 
 **Owner:** Patrick Negri
 
@@ -12,7 +12,7 @@ cluster init creates the first workspace)
 
 **Creation date:** 2026-09-28
 
-**Last update:** 2026-09-28
+**Last update:** 2026-09-28 (implemented)
 
 ---
 
@@ -199,3 +199,30 @@ Not started.
   `operator.shpyrd.io` + `*.shpyrd.app` production domain layout (operator zone
   delegated, auth.shpyrd.io a manual record), and the decision that the host is the
   workspace (no --workspace flag, no switcher yet).
+
+## Implementation status
+
+v0.9.46:
+
+| Part | Status |
+| --- | --- |
+| `workspaces.owner` column (migration 000014, default 'customer'); `Workspace.Owner` field; `SetWorkspaceOwner`; `WorkspaceOwnerOperator`/`WorkspaceOwnerCustomer` constants | done |
+| `settings` table (migration 000014); `Settings` interface (`GetSetting`/`SetSetting`); `SettingDefaultWorkspaceID`; Postgres + Memory implementations | done |
+| `Migrate` seeds `owner=operator` for the implicit workspace and sets `default_workspace_id` on first run | done |
+| `VarConsoleName` (`SHPYRD_CONSOLE_NAME`, default `shpyrd`; `apex` for the domain-apex production layout); `VarAuthHost` derived from `SHPYRD_AUTH_URL`; `derivedVars` uses consoleName for `SHPYRD_DASHBOARD_URL`; `SHPYRD_AUTH_URL` explicit when set, else derived | done |
+| Dex ingress uses `${SHPYRD_AUTH_HOST}` instead of `auth.${SHPYRD_DOMAIN}` | done |
+| `/api/config` gains `defaultWorkspaceId` and `consoleHost`; workspace views gain `owner`; `PATCH /api/cluster/settings` sets `default_workspace_id` | done |
+| OCI profile: `SHPYRD_CONSOLE_NAME` and `SHPYRD_AUTH_URL` documented | done |
+| Applied on OKE (v0.9.46): `demo` and `default` workspaces set to `owner=operator`; `default_workspace_id=default` set in settings | applied |
+
+Known gaps:
+
+- **The implicit-workspace branch** in `project.NamespaceIn` and `DefaultWorkspace` constant stay for legacy project compatibility; they are not the live code path for new projects.
+- **`cluster init` does not yet create the first workspace explicitly** from the CLI flags — it relies on `Migrate`'s implicit insert. A dedicated `EnsureWorkspace(ctx, Workspace)` call from `openStore` with the display name and slug from `--name`/`--domain` is the follow-up, needed before production where the workspace should have a meaningful slug.
+- **No UI** for `PATCH /api/cluster/settings` yet; the setting is currently changed via the API or directly in the database.
+- **`shpyrd use` multi-workspace switching** deferred (RFC says so).
+
+## History
+
+- 2026-09-28: RFC written from the two-story OSS/cloud discussion and the production domain decisions.
+- 2026-09-28 (v0.9.46): implemented.
