@@ -147,7 +147,7 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 		slog.Error("opencost allocation decode failed", "err", err)
 		return
 	}
-	slog.Info("opencost allocation", "windows", len(body.Data), "window", hour.Format(time.RFC3339))
+
 
 	type wsAgg struct {
 		cpu, mem, storage, net, shared, idle, total float64
@@ -203,7 +203,6 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	}
 	for _, ws := range workspaces {
 		a := wsCosts[ws.ID]
-		slog.Info("opencost workspace costs", "workspace", ws.Slug, "total", a.total, "cpu", a.cpu)
 		if a.total == 0 {
 			continue
 		}
@@ -218,22 +217,31 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 			Quality:          store.QualityComplete,
 		}
 		if err := w.store.WriteCOGSBucket(ctx, b); err != nil {
-			slog.Error("opencost write cogs bucket failed", "workspace", ws.Slug, "err", err)
+			slog.Error("opencost: write cogs bucket failed", "workspace", ws.Slug, "err", err)
 		} else {
-			slog.Info("opencost wrote cogs bucket", "workspace", ws.Slug, "total", a.total)
+			slog.Info("opencost: wrote cogs bucket", "workspace", ws.Slug, "total", a.total)
 		}
 	}
 }
 
 type allocationItem struct {
-	Properties  map[string]string `json:"properties"`
-	CPUCost     float64           `json:"cpuCost"`
-	RAMCost     float64           `json:"ramCost"`
-	PVCost      float64           `json:"pvCost"`
-	NetworkCost float64           `json:"networkCost"`
-	SharedCost  float64           `json:"sharedCost"`
-	IdleCost    float64           `json:"idleCost"`
-	TotalCost   float64           `json:"totalCost"`
+	// Properties contains cluster, namespace, node etc. and a nested
+	// "labels" map. We only need namespace for workspace attribution.
+	Properties  allocationProperties  `json:"properties"`
+	CPUCost     float64               `json:"cpuCost"`
+	RAMCost     float64               `json:"ramCost"`
+	PVCost      float64               `json:"pvCost"`
+	NetworkCost float64               `json:"networkCost"`
+	SharedCost  float64               `json:"sharedCost"`
+	IdleCost    float64               `json:"idleCost"`
+	TotalCost   float64               `json:"totalCost"`
+}
+
+type allocationProperties struct {
+	Cluster   string            `json:"cluster"`
+	Namespace string            `json:"namespace"`
+	Node      string            `json:"node"`
+	Labels    map[string]string `json:"labels"`
 }
 
 // ---- CLI -------------------------------------------------------------------
