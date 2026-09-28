@@ -17,8 +17,8 @@ metadata:
     app.kubernetes.io/managed-by: shpyrd
 rules:
   - apiGroups: [""]
-    resources: [events, endpoints]
-    verbs: [create, patch]
+    resources: [events, endpoints, configmaps]
+    verbs: [create, patch, get, update]
   - apiGroups: [""]
     resources: [pods/eviction]
     verbs: [create]

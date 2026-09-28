@@ -25,8 +25,9 @@ import (
 const Name = "opencost"
 
 // allocationURL is the OpenCost service address; the default is the Helm
-// chart's default in the opencost namespace.
-const allocationURL = "http://opencost.opencost.svc:9003/model/allocation"
+// chart's default in the opencost namespace. OpenCost 1.121+ exposes the
+// allocation endpoint at /allocation/compute (not /model/allocation).
+const allocationURL = "http://opencost.opencost.svc:9003/allocation/compute"
 
 type extension struct{}
 
