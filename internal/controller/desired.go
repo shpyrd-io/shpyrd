@@ -75,7 +75,14 @@ type Config struct {
 	// name one.
 	DefaultBuilder string
 	// BuildCacheSize is the kpack cache volume size (e.g. "2Gi"); empty disables.
+	// Ignored when BuildCacheRegistry is set.
 	BuildCacheSize string
+	// BuildCacheRegistry is the registry host for the kpack registry cache
+	// (RFC-0075): when set, the Image spec uses cache.registry.tag at
+	// <host>/<workspace>/build-cache/<project> instead of a PVC. The PVC
+	// approach creates a 50 Gi block disk per app on OCI regardless of
+	// actual use; the registry cache stores blobs where the app images live.
+	BuildCacheRegistry string
 	// SystemNamespace holds cluster-wide configuration such as the size
 	// catalog.
 	SystemNamespace string
@@ -171,6 +178,8 @@ func (c Config) Defaults() Config {
 	if c.BuildCacheSize == "" {
 		c.BuildCacheSize = "2Gi"
 	}
+	// BuildCacheRegistry takes precedence over BuildCacheSize; when set,
+	// the kpack cache is a registry image, not a PVC.
 	if c.SystemNamespace == "" {
 		c.SystemNamespace = "shpyrd-system"
 	}
@@ -437,7 +446,20 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 		"successBuildHistoryLimit": int64(10),
 		"imageTaggingStrategy":     "BuildNumber",
 	}
-	if c.BuildCacheSize != "" {
+	switch {
+	case c.BuildCacheRegistry != "":
+		// Registry-backed cache (RFC-0075): no PVC; the blobs are stored
+		// alongside the app images in the same registry.
+		// Tag: <registry>/<workspace>/build-cache/<project>
+		// Example: 10.96.0.50:5000/apps/ws123/build-cache/example-go
+		// The workspace path mirrors how app images are tagged.
+		wsID := app.Labels[shpyrdv1.LabelWorkspace]
+		if wsID == "" {
+			wsID = app.Namespace
+		}
+		cacheTag := c.BuildCacheRegistry + "/build-cache/" + wsID + "/" + app.Name
+		spec["cache"] = map[string]interface{}{"registry": map[string]interface{}{"tag": cacheTag}}
+	case c.BuildCacheSize != "":
 		spec["cache"] = map[string]interface{}{"volume": map[string]interface{}{"size": c.BuildCacheSize}}
 	}
 	if app.Spec.Build != nil && len(app.Spec.Build.Env) > 0 {

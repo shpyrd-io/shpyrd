@@ -37,9 +37,10 @@ const (
 	// In-cluster registry (RFC-0059).
 	VarRegistryIP       = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
 	VarRegistrySize     = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
-	VarRegistryBucket   = "SHPYRD_REGISTRY_BUCKET"   // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
-	VarRegistryEndpoint = "SHPYRD_REGISTRY_ENDPOINT" // S3-compatible endpoint for the registry bucket
-	VarRegistryRegion   = "SHPYRD_REGISTRY_REGION"   // region of the registry bucket
+	VarRegistryBucket       = "SHPYRD_REGISTRY_BUCKET"       // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
+	VarRegistryEndpoint     = "SHPYRD_REGISTRY_ENDPOINT"     // S3-compatible endpoint for the registry bucket
+	VarRegistryRegion       = "SHPYRD_REGISTRY_REGION"       // region of the registry bucket
+	VarBuildCacheRegistry   = "SHPYRD_BUILD_CACHE_REGISTRY"  // registry host for kpack registry cache ("" = PVC per app)
 	VarCASource     = "SHPYRD_CA_SOURCE"     // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
 	// policy-only mode next to the provider's CNI; "none" relies on the
@@ -220,7 +221,7 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		out[VarPlatformIngressSvc] = "ingress-nginx-internal-controller.ingress-nginx-internal.svc:443"
 	}
 	// Registry OCI Object Storage: always defined so the registry YAML renders.
-	for _, v := range []string{VarRegistryBucket, VarRegistryEndpoint, VarRegistryRegion} {
+	for _, v := range []string{VarRegistryBucket, VarRegistryEndpoint, VarRegistryRegion, VarBuildCacheRegistry} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
 		}

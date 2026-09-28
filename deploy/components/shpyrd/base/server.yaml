@@ -59,6 +59,8 @@ spec:
             # with this Secret, mirrored into every project namespace.
             - name: SHPYRD_REGISTRY_SECRET
               value: "${SHPYRD_REGISTRY_SECRET}"
+            - name: SHPYRD_BUILD_CACHE_REGISTRY
+              value: "${SHPYRD_BUILD_CACHE_REGISTRY}"
             - name: SHPYRD_REGISTRY_INSECURE
               value: "${SHPYRD_REGISTRY_INSECURE}"
             # Build pods get the platform CA (trust bundle + SSL_CERT_FILE) from

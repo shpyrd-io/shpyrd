@@ -18,7 +18,7 @@ spec:
                 secretKeyRef:
                   name: registry-s3
                   key: AWS_SECRET_ACCESS_KEY
-          # Remove the PVC volume and its mount — data lives in OCI OS.
+          # Only the config, TLS and auth volumes; no data PVC on OCI OS.
           volumeMounts:
             - name: config
               mountPath: /etc/distribution
