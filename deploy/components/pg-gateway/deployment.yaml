@@ -20,6 +20,7 @@ spec:
       containers:
         - name: pg-gateway
           image: "${SHPYRD_SERVER_IMAGE}"   # the server image ships /pg-gateway
+          imagePullPolicy: IfNotPresent
           command: [/pg-gateway]
           env:
             - name: SHPYRD_SYSTEM_NAMESPACE

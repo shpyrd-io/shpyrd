@@ -63,28 +63,23 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Build the initial port → database mapping from Postgres CRDs.
-	if err := gw.reload(ctx); err != nil {
-		log.Error("initial reload", "err", err)
-	}
-
-	// Reload every minute (new databases, port changes).
-	go func() {
-		t := time.NewTicker(time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := gw.reload(ctx); err != nil {
-					log.Warn("reload", "err", err)
-				}
-			}
+	// The port table follows the Postgres resources: reload now and every
+	// 30 s, opening a listener for every wake port that appears and closing
+	// the ones that go. The process lives until the context ends, whether or
+	// not any database has a policy yet.
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		if err := gw.reload(ctx); err != nil {
+			log.Warn("reload", "err", err)
 		}
-	}()
-
-	gw.listen(ctx)
+		gw.syncListeners(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 type gateway struct {
@@ -97,6 +92,8 @@ type gateway struct {
 	mu    sync.RWMutex
 	ports map[int][2]string // port → {namespace, name}
 	waits map[string]*waitGroup
+	// listeners are the open wake-port listeners, port → cancel.
+	listeners map[int]context.CancelFunc
 }
 
 type waitGroup struct {
@@ -122,37 +119,62 @@ func (g *gateway) reload(ctx context.Context) error {
 		ports[port] = [2]string{pg.Namespace, pg.Name}
 	}
 	g.mu.Lock()
+	changed := len(ports) != len(g.ports)
+	if !changed {
+		for p, db := range ports {
+			if g.ports[p] != db {
+				changed = true
+				break
+			}
+		}
+	}
 	g.ports = ports
 	g.mu.Unlock()
-	g.log.Info("port table reloaded", "databases", len(ports))
+	if changed {
+		g.log.Info("port table reloaded", "databases", len(ports))
+	}
 	return nil
 }
 
-func (g *gateway) listen(ctx context.Context) {
-	g.mu.RLock()
-	ports := g.ports
-	g.mu.RUnlock()
-
-	var wg sync.WaitGroup
-	for port, db := range ports {
-		port, db := port, db
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			g.listenPort(ctx, port, db[0], db[1])
-		}()
+// syncListeners opens a listener for every wake port in the table that has
+// none, and closes listeners whose port left the table.
+func (g *gateway) syncListeners(ctx context.Context) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.listeners == nil {
+		g.listeners = map[int]context.CancelFunc{}
 	}
-	wg.Wait()
+	for port, cancel := range g.listeners {
+		if _, still := g.ports[port]; !still {
+			cancel()
+			delete(g.listeners, port)
+			g.log.Info("listener closed", "port", port)
+		}
+	}
+	for port, db := range g.ports {
+		if _, open := g.listeners[port]; open {
+			continue
+		}
+		lctx, cancel := context.WithCancel(ctx)
+		g.listeners[port] = cancel
+		go g.listenPort(lctx, port, db[0], db[1])
+	}
 }
 
 func (g *gateway) listenPort(ctx context.Context, port int, ns, name string) {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		g.log.Error("listen", "port", port, "err", err)
+		g.mu.Lock()
+		delete(g.listeners, port) // try again on the next sync
+		g.mu.Unlock()
 		return
 	}
-	defer ln.Close()
 	g.log.Info("listening", "port", port, "database", ns+"/"+name)
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

@@ -1,0 +1,17 @@
+# OCI profile overlay for the pg-gateway component: it runs the server image
+# (gru.ocir.io/…), so it needs the same OCIR pull secret as the server.
+resources:
+  - ../../../components/pg-gateway
+
+patches:
+  - target:
+      kind: Deployment
+      name: pg-gateway
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ocir-pull
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always

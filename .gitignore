@@ -47,4 +47,5 @@ terraform.tfvars
 shpyrd-ctl
 contrib/oci/terraform/backups/shpyrd-dev-registry.env
 contrib/oci/terraform/backups/tfplan
-pg-gateway
+/pg-gateway
+contrib/oci/terraform/tfplan_autoscaler
