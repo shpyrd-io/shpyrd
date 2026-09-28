@@ -4,16 +4,19 @@ The source of [shpyrd.io](https://shpyrd.io): the marketing homepage and the
 product documentation. Built with [Next.js](https://nextjs.org) and
 [Markdoc](https://markdoc.io), deployed on Vercel from this directory.
 
-## Licence
+## License
 
 **This directory is not covered by the repository's MPL 2.0 licence.** The site
 is built on the commercial Tailwind UI *Syntax* template and is governed by
 [`LICENSE`](LICENSE) in this directory. The rest of the repository is
 [MPL-2.0](../LICENSE).
 
-In practice: you may read it, and contribute documentation and content changes
-to it, but you may not redistribute the template or derivatives of it separately
-from this site.
+In practice: you may read it, and you may not redistribute the template or
+derivatives of it separately from this site. For contributions the line falls
+inside this directory — Markdown under `src/pages/` is ordinary documentation and
+changes to it are welcome, while changes to the template itself (`src/components/`,
+`src/styles/`) need your own Tailwind UI licence, since a derivative of the
+template stays under the template's terms.
 
 ## Running it
 

@@ -118,10 +118,14 @@ Nothing under `src/` or `public/` is modified. `/`, the 22 `/docs/*` pages,
 `/install.sh` and `/screenshots/*.png` therefore serve byte-identical content
 after the move.
 
-`website/.gitignore` keeps only the entries the root does not already provide:
-`/.next`, `/out`, `.vercel` and `.env*.local`. Keeping it local to the directory
-rather than folding it into the root keeps the paths relative and the website
-self-contained.
+`website/.gitignore` is trimmed to the entries that matter here — `/.next`,
+`/out`, `.vercel` and `.env*.local` — because the root already ignores
+`node_modules`, `coverage`, `*.pem` and `.DS_Store` unanchored, so those cover
+`website/` too. The trim also drops `/.pnp`, `.pnp.js`, `/build` and the
+`npm-debug.log*`/`yarn-*.log*` patterns, which the root does *not* cover: npm 7
+and later write debug logs under `~/.npm/_logs`, and Next produces neither pnp
+files nor `/build`. Keeping the file local to the directory rather than folding it
+into the root keeps the paths relative and the website self-contained.
 
 ### Licensing boundary
 

@@ -36,7 +36,7 @@ Five failure modes the spec implies that no obvious task step would catch. Each 
 ## Task 1: Bring the site in with its history
 
 **Files:**
-- Create: `website/` (38 files, imported wholesale from `shpyrd-io/shpyrd-docs@main`)
+- Create: `website/` (93 files, imported wholesale from `shpyrd-io/shpyrd-docs@main`; 91 after Task 2's prune)
 - Modify: nothing outside `website/`
 
 **Interfaces:**
@@ -790,7 +790,7 @@ repository's squash convention.
 
 ## What this does
 
-- brings `website/` in with its ~40 commits of history intact
+- brings `website/` in with its 102 commits of history intact
 - renames `LICENSE.md` to `LICENSE`, text unchanged, and declares the boundary
   in the root `README.md` and `CONTRIBUTING.md`: MPL 2.0 everywhere except
   `website/`, which is governed by the commercial Tailwind UI licence
@@ -834,7 +834,11 @@ Report the pull request URL and restate what only the maintainer can do, in orde
 1. merge this pull request **with a merge commit**, not a squash;
 2. the four Vercel steps from the spec's "Vercel cutover" section — new project, Root Directory `website`, Ignored Build Step `git diff --quiet HEAD^ HEAD ./`, verify on `*.vercel.app`, then move `shpyrd.io` and `www.shpyrd.io`.
 
-Do not attempt either. Then note the one follow-up that is deliberately deferred until after the domain moves: `shpyrd-docs` gets a README banner pointing at `shpyrd-io/shpyrd/website` and its Vercel git integration disconnected. Adding that banner while the old project still serves the live domain would advertise a move that has not happened yet, so it waits. The repository is not deleted and not archived; whether to archive it is a separate, later decision.
+Do not attempt either. Then name the follow-up pull request this move makes necessary, which is deliberately **not** part of this one because the lift-and-shift constraint forbids touching `website/src/`:
+
+- `website/src/pages/docs/how-to-contribute.md` line 6 tells readers the project is "MPL-2.0" with no exception, and line 48 says "This site lives in shpyrd-io/shpyrd-docs". Line 48 becomes false the moment this merges, and line 6 is the published page a prospective contributor or redistributor is most likely to read — it must name `shpyrd-io/shpyrd` + `website/` and state the `website/` exception. This should be the **next** pull request, not held for the domain cutover.
+
+Then note the follow-up that is deliberately deferred until after the domain moves: `shpyrd-docs` gets a README banner pointing at `shpyrd-io/shpyrd/website` and its Vercel git integration disconnected. Adding that banner while the old project still serves the live domain would advertise a move that has not happened yet, so it waits. The repository is not deleted and not archived; whether to archive it is a separate, later decision.
 
 ---
 

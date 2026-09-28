@@ -6,8 +6,11 @@ easier to get your contribution accepted.
 
 One directory is licensed differently: the website in [`website/`](website) is
 built on the commercial Tailwind UI *Syntax* template and is governed by
-[`website/LICENSE`](website/LICENSE). Documentation and content contributions
-to the site are welcome on those terms.
+[`website/LICENSE`](website/LICENSE). Content contributions are welcome on those
+terms — Markdown under `website/src/pages/` is ordinary documentation. Changes to
+the template itself, meaning the components and styles under
+`website/src/components/` and `website/src/styles/`, need your own Tailwind UI
+licence, because a derivative of the template stays under the template's terms.
 
 Design changes go through the [RFC process](rfcs/README.md); see
 [RFC-0001](rfcs/0001-mvp-local-platform.md) for the current architecture.
