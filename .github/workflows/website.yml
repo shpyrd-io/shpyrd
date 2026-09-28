@@ -29,9 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        # Load-bearing: src/markdoc/search.mjs resolves ./src/pages from the
-        # process working directory, so a build from the repository root
-        # produces an empty search index without failing.
+        # Load-bearing: next, the Markdoc loader and src/markdoc/search.mjs
+        # all resolve config and content relative to the process working
+        # directory, so a build from the repository root fails outright.
         working-directory: website
     steps:
       - uses: actions/checkout@v4

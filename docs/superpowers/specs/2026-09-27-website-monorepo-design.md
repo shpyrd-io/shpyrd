@@ -34,7 +34,7 @@ went the way they did, so it is recorded rather than left implicit.
 | Repository | Visibility | Contents |
 | --- | --- | --- |
 | `shpyrd` | public | Go platform, `ui/` Vite dashboard (embedded in the binary), 70 RFCs, 5 example apps the e2e job deploys. MPL 2.0 |
-| `shpyrd-docs` | public | Next.js 13.4.2 + Markdoc site: one marketing homepage and 23 documentation pages. **Tailwind UI licensed**, not MPL |
+| `shpyrd-docs` | public | Next.js 13.4.2 + Markdoc site: one marketing homepage and 22 documentation pages. **Tailwind UI licensed**, not MPL |
 | `shpyrd-examples` | public | 17 examples, one per language or pattern |
 | `homebrew-tap` | public | Homebrew tap for the CLI |
 | `shpyrd-cloud` | private | Go; already matches the proposal's target |
@@ -67,8 +67,10 @@ every live `/docs/*` URL at risk in the same change that relocates the files,
 making a regression impossible to attribute. Restructuring is a later phase that
 can add redirects as its own reviewable concern.
 
-**History preserved through a subtree merge.** `git log -- website/` and
-`git blame` continue to resolve to the original commits and authors. The cost is
+**History preserved through a subtree merge.** `git blame` keeps resolving to
+the original authors and `git log HEAD^2` reaches the imported commits.
+(Path-limited `git log -- website/` does not list them — the pre-move commits
+spell their paths at the repository root, so the filter cannot match.) The cost is
 a merge commit with two parents, which the repository's squash-merge convention
 would discard; this one pull request is therefore merged with a merge commit.
 The alternative — copying the tree in a single commit and leaving the history
@@ -112,7 +114,7 @@ shpyrd/
 Two paths are dropped in the move: `.devcontainer/`, because this repository has
 its own, and `tmp/Hero.jsx`, a stray scratch file.
 
-Nothing under `src/` or `public/` is modified. `/`, the 23 `/docs/*` pages,
+Nothing under `src/` or `public/` is modified. `/`, the 22 `/docs/*` pages,
 `/install.sh` and `/screenshots/*.png` therefore serve byte-identical content
 after the move.
 
@@ -127,10 +129,13 @@ self-contained.
 `LICENSE` is not edited — modifying the MPL text would make the repository's
 licence non-standard and defeat automated licence detection.
 
-The boundary is declared in prose in two places instead:
+The boundary is declared in prose instead, everywhere a reader meets a licence
+claim:
 
 - a **License** section in the root `README.md`: the repository is MPL 2.0
   except `website/`, which is governed by `website/LICENSE`;
+- a paragraph in `CONTRIBUTING.md`, whose opening line otherwise calls the whole
+  project MPL 2.0;
 - a matching note at the top of `website/README.md`.
 
 This is the slot `enterprise/LICENSE` will occupy in a later phase, so the
@@ -169,7 +174,10 @@ simpler and has the same effect.
   `npm ci --no-audit --no-fund`, `npm run lint`, `npm run build`, and
   `working-directory: website` — filtered to
   `paths: ['website/**', '.github/workflows/website.yml']`. The project defines
-  no test script, so there is no test step.
+  no test script, so there is no test step. `working-directory` is load-bearing:
+  a build launched from the repository root fails outright, because Next, the
+  Markdoc loader and the search-index builder all resolve config and content
+  relative to the process working directory.
 - the `Makefile` gains `website:` and `website-dev:` alongside the existing
   `ui:` target.
 
@@ -199,10 +207,12 @@ decision.
 ## Verification
 
 - `cd website && npm ci && npm run lint && npm run build` succeeds locally.
-- `git log --oneline -- website/` lists the pre-move `docs(...)` commits, and
-  `git blame website/src/pages/docs/cli.md` attributes lines to their original
-  authors.
-- The built route list contains `/`, all 23 `/docs/*` paths and the 404 page;
+- the merge commit has two parents, `git log HEAD^2` reaches the imported
+  history, and `git blame website/src/pages/docs/cli.md` attributes lines to
+  their original authors. Path-limited `git log -- website/` does *not* list
+  them: the pre-move commits spell their paths at the repository root, so the
+  filter cannot match them.
+- The built route list contains `/`, all 22 `/docs/*` paths and the 404 page;
   `website/public/install.sh` and the 18 screenshots are present and unmodified
   (compare against `shpyrd-docs` at the merged commit).
 - A Go-only pull request runs `ci.yml` and not `website.yml`; a

@@ -4,7 +4,7 @@
 
 **Goal:** Relocate the `shpyrd-io/shpyrd-docs` website into `website/` in this repository with its git history intact, its licence carved out of MPL 2.0, and CI building it without slowing Go work down.
 
-**Architecture:** A `git subtree add` brings the site in as a two-parent merge commit, so `git log -- website/` and `git blame` keep resolving to the original authors. A second commit applies the only four deliberate changes (licence filename, README, package name, `.gitignore`) and prunes two paths. The licensing boundary is declared in prose because the root MPL text must stay pristine. CI splits into two path-filtered workflows rather than adding per-job filters, since no status check is required to merge.
+**Architecture:** A `git subtree add` brings the site in as a two-parent merge commit, so `git blame` keeps resolving to the original authors and the pre-move commits stay reachable through the merge's second parent. A second commit applies the only four deliberate changes (licence filename, README, package name, `.gitignore`) and prunes two paths. The licensing boundary is declared in prose because the root MPL text must stay pristine. CI splits into two path-filtered workflows rather than adding per-job filters, since no status check is required to merge.
 
 **Tech Stack:** Next.js 13.4.2 + Markdoc + Tailwind CSS 3 (the purchased Tailwind UI *Syntax* template), node 24 in CI, GitHub Actions, GNU Make, Vercel.
 
@@ -15,7 +15,7 @@
 - This is a **lift-and-shift**. Nothing under `website/src/` or `website/public/` may be modified — those paths are what `shpyrd.io` serves today.
 - The root `LICENSE` file is **never edited**. Its MPL 2.0 text must stay byte-identical so automated licence detection keeps working.
 - `website/LICENSE` carries the Tailwind UI licence text **verbatim** from `shpyrd-docs/LICENSE.md`. Only the filename changes.
-- Every command that builds the site runs with the working directory set to `website/`. `src/markdoc/search.mjs:53` calls `path.resolve('./src/pages')`, which resolves from the process CWD, so a build launched from the repository root produces an empty search index **without failing**.
+- Every command that builds the site runs with the working directory set to `website/`. `src/markdoc/search.mjs:53` calls `path.resolve('./src/pages')`, and Next and the Markdoc loader resolve their config the same way, so a build launched from the repository root **fails outright** (verified: lint reports `Cannot find module 'next/babel'`; with `--no-lint`, the Markdoc loader errors).
 - Node version in CI is **24**, matching the existing `ui` job and `website/package.json`'s `engines` field.
 - No `--squash` on the subtree add, and the resulting pull request is merged with a **merge commit**, not squashed. Squashing discards the second parent and the history with it.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org) and need a DCO sign-off: use `git commit -s`.
@@ -25,7 +25,7 @@
 
 Five failure modes the spec implies that no obvious task step would catch. Each has a test pinned to the task that owns the code.
 
-1. **A build launched from the repository root silently produces an empty search index.** `search.mjs` resolves `./src/pages` from the process CWD, and the build still exits 0. Pinned in Task 2, Step 6 and Task 5, Step 4.
+1. **A build launched from the repository root fails.** Next, the Markdoc loader and `search.mjs` all resolve config and content relative to the process CWD — lint dies with `Cannot find module 'next/babel'`, and with lint skipped the Markdoc loader errors. Verified 2026-09-27; the failure is loud, not silent. Pinned in Task 2, Step 6 and Task 5, Step 4.
 2. **`public/install.sh` must stay byte-identical.** It is the documented non-Homebrew install path (`curl -fsSL https://shpyrd.io/install.sh | sh` in `README.md:18`); a mangled line ending breaks installs for everyone. Pinned in Task 2, Step 5.
 3. **A docs-only pull request reports no status checks at all** under `paths-ignore`. Harmless today with no branch protection; it becomes a merge blocker the moment a required check is added. Pinned in Task 4, Step 6.
 4. **The 18 screenshots and the 3 `woff2` fonts must survive the move intact** (`public/fonts/` holds four files — three binaries and `lexend.txt`). `README.md:8` hot-links a screenshot, and the fonts are `woff2` binaries that a text-mode copy would corrupt. Pinned in Task 2, Step 5.
@@ -61,7 +61,7 @@ git fetch website-src main
 git log --oneline -1 website-src/main
 ```
 
-Expected: the fetch succeeds and the last commit is `df5765b docs(v0.9.10): build profiles and --save, ...`. If the SHA differs, someone pushed to `shpyrd-docs` since this plan was written — that is fine, note the new SHA and carry on.
+Expected: the fetch succeeds. The tip was `9503858 docs(roadmap): RFC-0075 in progress (v0.9.17 foundation) (#53)` on 2026-09-27; a later SHA just means someone pushed to `shpyrd-docs` since — note it and carry on. Do not import from a local clone of `shpyrd-docs`: the one on this machine was 12 commits behind origin, which is how `mcp.md` nearly went missing.
 
 - [ ] **Step 3: Import the tree with its history**
 
@@ -74,11 +74,14 @@ Expected: `git subtree` prints `Added dir 'website'` and creates a merge commit.
 - [ ] **Step 4: Verify the history came with it**
 
 ```bash
-git log --oneline -- website/ | head -5
-git log --oneline -- website/ | wc -l
+git log --oneline HEAD^2 | wc -l
+git log --oneline HEAD^2 | head -3
+git log --oneline HEAD^2 -- src/pages/docs/cli.md | wc -l
 ```
 
-Expected: the pre-move commits are listed, starting with `docs(v0.9.10): build profiles and --save, ...`, and the count is well above 1 (roughly 40). A count of 1 means the history was squashed — reset with `git reset --hard HEAD~1` and redo Step 3 without `--squash`.
+Expected: ~100 commits reachable through the second parent, the newest being the `shpyrd-docs` tip, and ~27 of them touching `src/pages/docs/cli.md`. `HEAD^2` failing means the import was squashed — reset with `git reset --hard HEAD~1` and redo Step 3 without `--squash`.
+
+Do **not** assert on `git log --oneline -- website/`: it prints 1, and that is correct. Path-limiting matches paths as each commit spells them, and the pre-move commits spell theirs at the repository root (`src/pages/...`), so the filter cannot reach them. `--follow` returns 0 for the same reason.
 
 - [ ] **Step 5: Verify blame resolves to the original authors**
 
@@ -204,7 +207,7 @@ npm run lint
 npm run build
 ```
 
-Expected: `lint` exits 0 (it prints a `caniuse-lite is outdated` notice, a `scrollRestoration` experimental warning, and one `import/no-anonymous-default-export` warning in `src/markdoc/search.mjs` — all pre-existing and all warnings). `build` exits 0 and its route table lists `/`, `/404` and 23 `/docs/*` routes.
+Expected: `lint` exits 0 (it prints a `caniuse-lite is outdated` notice, a `scrollRestoration` experimental warning, and one `import/no-anonymous-default-export` warning in `src/markdoc/search.mjs` — all pre-existing and all warnings). `build` exits 0 and its route table lists `/` (as `┌ ● /`), `/404` and 22 `/docs/*` routes — 24 route lines in total.
 
 - [ ] **Step 7: Verify the search index is populated, not silently empty**
 
@@ -739,21 +742,24 @@ Expected: no output from either. This is the lift-and-shift guarantee, and it is
 - [ ] **Step 3: Verify the route list is complete**
 
 ```bash
-cd website && npm run build 2>&1 | grep -cE '^[├└] ● /docs/'
-npm run build 2>&1 | grep -E '^[├└] ○ /(404)?$' | head -3
+cd website && npm run build 2>&1 > /tmp/rb.log
+grep -cE '^[├└] ● /docs/' /tmp/rb.log      # docs pages
+grep -cE '^[┌├└] [●○]' /tmp/rb.log         # all routes
+grep -E '^┌ ● /  |^├ ○ /404' /tmp/rb.log
 ```
 
-Expected: `23` docs routes, and the homepage and 404 both present.
+Expected: `22` docs routes and `24` route lines in total (22 docs + `/` + `/404`). Next prints the homepage as `┌ ● /` (SSG) and the 404 as `├ ○ /404`, both with column padding — an assertion anchored with `$` straight after the path matches neither.
 
 - [ ] **Step 4: Verify the history survived every subsequent commit**
 
 ```bash
 cd /home/nkr/Projects/shpyrd
-git log --oneline -- website/ | wc -l
-git log --oneline --graph --max-count=12
+git cat-file -p $(git rev-list --merges -1 HEAD) | grep -c '^parent '
+git log --oneline HEAD^2 2>/dev/null | wc -l || git log --oneline $(git rev-list --merges -1 HEAD)^2 | wc -l
+git blame --porcelain website/src/pages/docs/cli.md | grep -c '^author Patrick Negri'
 ```
 
-Expected: the count is still ~40+, and the graph shows the merge commit with its two lines of history converging.
+Expected: `2` parents, ~100 commits reachable through the merge's second parent, and blame still crediting the original author. Do **not** assert on `git log --oneline -- website/`: it prints 1, because path-limiting matches paths as each commit spells them and the pre-move commits used `src/pages/...` at the repository root.
 
 - [ ] **Step 5: Confirm before pushing**
 
@@ -777,10 +783,10 @@ Design: `docs/superpowers/specs/2026-09-27-website-monorepo-design.md`.
 ## ⚠️ Merge this with a merge commit, not a squash
 
 The site arrives through `git subtree add`, so this pull request has a merge
-commit with two parents. Squashing discards the second parent and the site's
-history with it — `git log -- website/` would collapse to one commit and
-`git blame` would credit the move instead of the authors. Every later pull
-request keeps the repository's squash convention.
+commit with two parents. Squashing discards the second parent, which is the only
+thing making the site's ~100 pre-move commits reachable, and `git blame` would
+then credit the move instead of the authors. Every later pull request keeps the
+repository's squash convention.
 
 ## What this does
 
@@ -794,7 +800,7 @@ request keeps the repository's squash convention.
   prose paths, so a docs typo no longer runs the 45-minute kind e2e
 - adds `make website` and `make website-dev`
 
-**Nothing under `website/src/` or `website/public/` changed**, so `/`, the 23
+**Nothing under `website/src/` or `website/public/` changed**, so `/`, the 22
 `/docs/*` pages, `/install.sh` and `/screenshots/*.png` serve byte-identical
 content.
 
@@ -819,7 +825,7 @@ BODY
 sleep 45 && gh pr checks --repo shpyrd-io/shpyrd chore/website-monorepo
 ```
 
-Expected: the `website` workflow runs; `ci` does not, because this branch changes `website/**`, `*.md` and `.github/**` — no Go source. If `ci` did run, check whether a non-prose path crept into the diff (Step 1).
+Expected: **both** workflows run. `website.yml` is triggered by `website/**`; `ci.yml` is triggered by `.github/workflows/*.yml` and `Makefile`, neither of which matches a `paths-ignore` pattern — correct, since both affect the Go build. The filters themselves are proven by simulating GitHub's matching rules in Task 4 Step 6, not by this one pull request.
 
 - [ ] **Step 8: Hand the Vercel cutover over**
 

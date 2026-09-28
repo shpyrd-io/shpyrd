@@ -24,10 +24,12 @@ npm run dev      # http://localhost:3000
 
 Or from the repository root: `make website-dev`.
 
-Every command must run with this directory as the working directory.
-`src/markdoc/search.mjs` resolves `./src/pages` from the process working
-directory, so a build started from the repository root produces an empty search
-index without failing.
+Every command must run with this directory as the working directory. Next, the
+Markdoc loader and `src/markdoc/search.mjs` all resolve their config and content
+relative to the process working directory, so a build started from the repository
+root fails — at lint with `Cannot find module 'next/babel'`, or, with lint
+skipped, in the Markdoc loader. That is why `make website` and the CI job both
+`cd` in first.
 
 ## Layout
 
