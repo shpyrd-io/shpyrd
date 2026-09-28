@@ -27,13 +27,53 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // appNamespace is the namespace of a project (app-<slug>).
+// appNamespace is the legacy namespace of a project of the implicit
+// workspace (app-<slug>); projects created since RFC-0076 live in p-<id>,
+// so callers with a project at hand read app.Namespace instead, and the
+// kube-direct lookups try both (findAppKube).
 func appNamespace(slug string) string { return project.Namespace(slug) }
+
+// findAppKube locates a project by slug without the API (kubeconfig
+// access): the legacy key first, then the Apps labelled with the slug in
+// the implicit workspace. Not-found errors are returned as such.
+func findAppKube(ctx context.Context, c client.Client, slug string) (*shpyrdv1.App, error) {
+	app := &shpyrdv1.App{}
+	err := c.Get(ctx, types.NamespacedName{Namespace: appNamespace(slug), Name: slug}, app)
+	if err == nil {
+		return app, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	var list shpyrdv1.AppList
+	if lerr := c.List(ctx, &list, client.MatchingLabels{shpyrdv1.LabelProject: slug}); lerr != nil {
+		return nil, lerr
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		ws := item.Labels[shpyrdv1.LabelWorkspace]
+		if project.SlugOf(item) == slug && (ws == "" || ws == project.DefaultWorkspace) {
+			return item, nil
+		}
+	}
+	return nil, err // the original not-found
+}
+
+// namespaceOf is the namespace of a project, through the API or the cluster.
+func (a *appClient) namespaceOf(ctx context.Context, slug string) (string, error) {
+	app, err := a.getApp(ctx, slug)
+	if err != nil {
+		return "", err
+	}
+	return app.Namespace, nil
+}
 
 // validateAppName checks a project identifier given on the command line or
 // in shpyrd.yaml: always the slug, never the display name.
@@ -621,8 +661,7 @@ func (a *appClient) getApp(ctx context.Context, name string) (*shpyrdv1.App, err
 		}
 		return detailToApp(d), nil
 	}
-	app := &shpyrdv1.App{}
-	err := a.c.Get(ctx, types.NamespacedName{Namespace: appNamespace(name), Name: name}, app)
+	app, err := findAppKube(ctx, a.c, name)
 	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("project %q not found; create it with `shpyrd projects create %s`", name, name)
 	}
@@ -992,11 +1031,18 @@ func age(t metav1.Time) string {
 // take one. Only what the detail carries is filled.
 func detailToApp(d *api.AppDetail) *shpyrdv1.App {
 	app := &shpyrdv1.App{}
+	// RFC-0076: the App is named by its id when it has one; the slug is a
+	// field. Selectors and object names in the CLI follow app.Name, what
+	// people read follows project.SlugOf.
 	app.Name, app.Namespace = d.Slug, d.Namespace
+	if d.ID != "" {
+		app.Name = ids.Short(d.ID)
+	}
 	app.CreationTimestamp = metav1.NewTime(d.CreatedAt)
 	app.Generation = d.Status.Generation
 	project.SetDisplayName(app, d.DisplayName)
 	app.Spec = shpyrdv1.AppSpec{
+		ID: d.ID, Slug: d.Slug,
 		Source: d.Spec.Source, Image: d.Spec.PinnedImage, Processes: d.Spec.Processes, Env: d.Spec.Env,
 		Domains: d.Spec.Domains, Build: d.Spec.Build, Bindings: d.Spec.Bindings, Exposure: d.Spec.Exposure, Access: d.Spec.Access,
 	}

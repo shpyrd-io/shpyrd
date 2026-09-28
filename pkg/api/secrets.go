@@ -17,6 +17,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // ConfigVarsResponse lists config var names; values are never returned.
@@ -134,7 +135,7 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 			err = s.apps.Update(ctx, sec)
 		}
 		if err == nil {
-			s.audit(c, app.Name, "config.set", app.Name, configChangeDetail(req))
+			s.audit(c, project.SlugOf(app), "config.set", project.SlugOf(app), configChangeDetail(req))
 			c.JSON(http.StatusOK, ConfigVarsResponse{Vars: configvars.List(sec)})
 			return
 		}

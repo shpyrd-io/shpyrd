@@ -21,6 +21,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -158,29 +159,47 @@ func TestTenancyByHost(t *testing.T) {
 		t.Errorf("config = %s", rec.Body.String())
 	}
 
-	// Creating a project at acme lands in app-acme-<slug>, labelled.
+	// Creating a project at acme: the App is named by its id (RFC-0076),
+	// labelled with the workspace and the slug; the same slug in another
+	// workspace is a different project.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"Billing"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create at acme = %d %s", rec.Code, rec.Body.String())
 	}
+	var created AppSummary
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.Namespace != project.IDNamespace(created.ID) || created.Slug != "billing" {
+		t.Fatalf("created = %+v", created)
+	}
 	ns := &corev1.Namespace{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Name: "app-acme-billing"}, ns); err != nil || ns.Labels[shpyrdv1.LabelWorkspace] != "acme" {
-		t.Errorf("namespace app-acme-billing: %v %v", err, ns.Labels)
+	if err := cr.Get(context.Background(), types.NamespacedName{Name: created.Namespace}, ns); err != nil || ns.Labels[shpyrdv1.LabelWorkspace] != "acme" || ns.Labels[shpyrdv1.LabelProject] != "billing" || ns.Labels[shpyrdv1.LabelWorkspaceID] == "" {
+		t.Errorf("namespace %s: %v %v", created.Namespace, err, ns.Labels)
 	}
 	app := &shpyrdv1.App{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-billing", Name: "billing"}, app); err != nil || app.Labels[shpyrdv1.LabelWorkspace] != "acme" {
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: created.Namespace, Name: ids.Short(created.ID)}, app); err != nil || app.Labels[shpyrdv1.LabelWorkspace] != "acme" || app.Spec.Slug != "billing" {
 		t.Errorf("app billing: %v %v", err, app.Labels)
 	}
-	// Reserved names are refused, and long slugs that would overflow the namespace.
+	// The path resolves the slug within the workspace.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/projects/billing", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"slug":"billing"`) {
+		t.Errorf("get billing at acme = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/projects/billing", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("billing must not resolve in the implicit workspace: %d", rec.Code)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"Billing"}`); rec.Code != http.StatusConflict {
+		t.Errorf("duplicate slug in the workspace = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "long.shpyrd.test", "POST", "/api/projects", `{"name":"Billing"}`); rec.Code != http.StatusCreated {
+		t.Errorf("same slug in another workspace = %d %s", rec.Code, rec.Body.String())
+	}
+	// Reserved names are refused.
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"login"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reserved") {
 		t.Errorf("reserved slug = %d %s", rec.Code, rec.Body.String())
 	}
-	// app- + 24 + - leaves 34 characters for the slug in that workspace.
-	if rec := at(t, s, "long.shpyrd.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 34 characters") {
+	// The namespace no longer carries the slugs, so the workspace's length
+	// does not bound the project's: 40 characters everywhere.
+	if rec := at(t, s, "long.shpyrd.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusCreated {
 		t.Errorf("long slug in explicit workspace = %d %s", rec.Code, rec.Body.String())
-	}
-	if rec := at(t, s, "long.shpyrd.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 34)+`"}`); rec.Code != http.StatusCreated {
-		t.Errorf("34-char slug in 24-char workspace = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusCreated {
 		t.Errorf("long slug in implicit workspace = %d %s", rec.Code, rec.Body.String())

@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
 // DefaultWorkspace is the slug of the implicit workspace every open-source
@@ -449,6 +451,44 @@ type SleepEvent struct {
 	Reason          string    `json:"reason,omitempty"`
 }
 
+// Project is the store's mirror of a project (RFC-0076): its stable ID, the
+// workspace it belongs to, and the current slug and name — kept by the
+// controller from the App custom resource. Deleted projects stay, marked,
+// so an invoice can still name them. The ledger keys on Short().
+type Project struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	Slug        string     `json:"slug"`
+	Name        string     `json:"name"`
+	Namespace   string     `json:"namespace"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	DeletedAt   *time.Time `json:"deletedAt,omitempty"`
+}
+
+// Short is the project's ID as the ledger, namespaces and labels carry it:
+// 25 lowercase base36 characters (RFC-0059, RFC-0076).
+func (p Project) Short() string { return ids.Short(p.ID) }
+
+// Projects is the project registry part of the Store (RFC-0076).
+type Projects interface {
+	// UpsertProject records a project's identity, slug, name and namespace
+	// (insert or update by ID); a deleted project is revived.
+	UpsertProject(ctx context.Context, p Project) (*Project, error)
+	// DeleteProject marks a project deleted; its rows stay for invoices.
+	DeleteProject(ctx context.Context, id string) error
+	// ListProjects returns the projects of a workspace (slug or ID), oldest
+	// first; deleted ones only when withDeleted is set.
+	ListProjects(ctx context.Context, ws string, withDeleted bool) ([]Project, error)
+	// ProjectBySlug finds the live project with that slug in a workspace.
+	ProjectBySlug(ctx context.Context, ws, slug string) (*Project, error)
+	// RekeyProject rewrites ledger rows keyed by a legacy project slug to the
+	// project's ID (the one-time migration of RFC-0076); rows that would
+	// collide with rows already keyed by the ID are dropped in favour of the
+	// latter. Returns the number of rows moved.
+	RekeyProject(ctx context.Context, ws, slug, id string) (int, error)
+}
+
 // Billing is the metering and economics part of the Store (RFC-0075).
 type Billing interface {
 	// Plans.
@@ -590,6 +630,7 @@ type Store interface {
 	Hosts
 	OAuth
 	Billing
+	Projects
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

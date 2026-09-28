@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/prom"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -157,9 +158,13 @@ func nextBoundary(t time.Time) time.Time {
 	return t.UTC().Truncate(bucketInterval).Add(bucketInterval)
 }
 
-// nsMapping resolves namespace → {workspace slug, project slug} for every
-// project namespace. Reads the Kubernetes API when a client is available;
-// otherwise falls back to kube_namespace_labels in Prometheus.
+// nsMapping resolves namespace → {workspace key, project key} for every
+// project namespace: the ledger's keys (RFC-0076). The workspace key is the
+// workspace's UUID and the project key the project's short id, read off the
+// identity labels; a namespace the controller has not stamped yet (a legacy
+// project seen before its first reconcile) maps by its slug labels, which
+// the store re-keys once the id arrives. Reads the Kubernetes API when a
+// client is available; otherwise falls back to kube_namespace_labels.
 func (m *MeteringLoop) nsMapping(ctx context.Context) (map[string][2]string, error) {
 	out := map[string][2]string{}
 	if m.Client != nil {
@@ -171,12 +176,9 @@ func (m *MeteringLoop) nsMapping(ctx context.Context) (map[string][2]string, err
 			if ns.DeletionTimestamp != nil {
 				continue
 			}
-			ws := ns.Labels[shpyrdv1.LabelWorkspace]
-			proj := ns.Labels[shpyrdv1.LabelProject]
-			if ws == "" || proj == "" {
-				continue
+			if ws, proj, ok := ledgerKeys(ns.Labels); ok {
+				out[ns.Name] = [2]string{ws, proj}
 			}
-			out[ns.Name] = [2]string{ws, proj}
 		}
 		return out, nil
 	}
@@ -186,14 +188,33 @@ func (m *MeteringLoop) nsMapping(ctx context.Context) (map[string][2]string, err
 	}
 	for _, s := range series {
 		ns := s.Labels["namespace"]
-		ws := s.Labels["label_shpyrd_io_workspace"]
-		proj := s.Labels["label_shpyrd_io_project"]
-		if ns == "" || ws == "" || proj == "" {
-			continue
+		labels := map[string]string{
+			shpyrdv1.LabelWorkspace:   s.Labels["label_shpyrd_io_workspace"],
+			shpyrdv1.LabelProject:     s.Labels["label_shpyrd_io_project"],
+			shpyrdv1.LabelWorkspaceID: s.Labels["label_shpyrd_io_workspace_id"],
+			shpyrdv1.LabelProjectID:   s.Labels["label_shpyrd_io_project_id"],
 		}
-		out[ns] = [2]string{ws, proj}
+		if ws, proj, ok := ledgerKeys(labels); ok && ns != "" {
+			out[ns] = [2]string{ws, proj}
+		}
 	}
 	return out, nil
+}
+
+// ledgerKeys picks the ledger's workspace and project keys off a project
+// namespace's labels: ids when present (the workspace's as its UUID, the
+// project's in its short form), slugs otherwise.
+func ledgerKeys(labels map[string]string) (ws, proj string, ok bool) {
+	ws, proj = labels[shpyrdv1.LabelWorkspace], labels[shpyrdv1.LabelProject]
+	if short := labels[shpyrdv1.LabelWorkspaceID]; short != "" {
+		if id, err := ids.Decode(short); err == nil {
+			ws = id
+		}
+	}
+	if short := labels[shpyrdv1.LabelProjectID]; short != "" {
+		proj = short
+	}
+	return ws, proj, ws != "" && proj != ""
 }
 
 // writeBuckets closes one 5-minute bucket [start, end) for all projects and
@@ -352,7 +373,7 @@ func (m *MeteringLoop) cpuBuckets(ctx context.Context, start, end time.Time, nsM
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
 		`sum by (namespace, `+podLabels+`) (`+
-			`increase(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~"app-.*"}[%ds]) `+
+			`increase(container_cpu_usage_seconds_total{container!="",container!="POD",namespace=~"(app|p)-.*"}[%ds]) `+
 			podJoin+`)`,
 		int(dur)+30,
 	)
@@ -364,7 +385,7 @@ func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, 
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
 		`sum by (namespace, `+podLabels+`) (`+
-			`avg_over_time(container_memory_working_set_bytes{container!="",container!="POD",namespace=~"app-.*"}[%ds]) `+
+			`avg_over_time(container_memory_working_set_bytes{container!="",container!="POD",namespace=~"(app|p)-.*"}[%ds]) `+
 			podJoin+`) * %.6f / (1024*1024*1024)`,
 		int(dur)+30, dur, // avg × duration = GiB-seconds
 	)
@@ -393,7 +414,7 @@ func (m *MeteringLoop) storageBuckets(ctx context.Context, start, end time.Time,
 		dur,
 	)
 	claimLabels := map[string]map[string]string{}
-	if series, err := m.Prom.QueryInstantSeriesAt(ctx, `kube_persistentvolumeclaim_labels{namespace=~"app-.*"}`, end); err == nil {
+	if series, err := m.Prom.QueryInstantSeriesAt(ctx, `kube_persistentvolumeclaim_labels{namespace=~"(app|p)-.*"}`, end); err == nil {
 		for _, s := range series {
 			claimLabels[s.Labels["namespace"]+"/"+s.Labels["persistentvolumeclaim"]] = s.Labels
 		}

@@ -73,7 +73,11 @@ type ResizeVolumeRequest struct {
 
 func (s *Server) listVolumes(c *gin.Context) {
 	var list shpyrdv1.VolumeList
-	if err := s.apps.List(c.Request.Context(), &list, client.InNamespace(s.projectNamespace(c))); err != nil {
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
+	if err := s.apps.List(c.Request.Context(), &list, client.InNamespace(ns)); err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
@@ -111,8 +115,12 @@ func (s *Server) createVolume(c *gin.Context) {
 	} else {
 		size, note = s.applyVolumeMinimum(size)
 	}
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
 	vol := &shpyrdv1.Volume{
-		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: s.projectNamespace(c), Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: c.Param("slug")}},
+		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: c.Param("slug")}},
 		Spec:       shpyrdv1.VolumeSpec{Size: size, StorageClass: req.StorageClass, AccessMode: corev1.ReadWriteOnce, FromSnapshot: req.FromSnapshot},
 	}
 	if req.Shared {
@@ -206,7 +214,11 @@ func (s *Server) resizeVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	key := types.NamespacedName{Namespace: s.projectNamespace(c), Name: c.Param("name")}
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
+	key := types.NamespacedName{Namespace: ns, Name: c.Param("name")}
 	vol := &shpyrdv1.Volume{}
 	if err := s.apps.Get(c.Request.Context(), key, vol); err != nil {
 		abortNotFound(c, err, "volume")
@@ -239,7 +251,11 @@ func (s *Server) resizeVolume(c *gin.Context) {
 // deleteVolume removes a volume and its data. Mounted volumes are refused
 // unless ?force=true.
 func (s *Server) deleteVolume(c *gin.Context) {
-	key := types.NamespacedName{Namespace: s.projectNamespace(c), Name: c.Param("name")}
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
+	key := types.NamespacedName{Namespace: ns, Name: c.Param("name")}
 	vol := &shpyrdv1.Volume{}
 	if err := s.apps.Get(c.Request.Context(), key, vol); err != nil {
 		abortNotFound(c, err, "volume")

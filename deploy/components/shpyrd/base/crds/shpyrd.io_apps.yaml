@@ -518,6 +518,14 @@ spec:
                       type: string
                     type: array
                 type: object
+              id:
+                description: |-
+                  ID is the project's stable identifier, a UUID (RFC-0076). Set once at
+                  creation and never changed. Projects created since RFC-0076 are named
+                  by its short base36 form and live in namespace p-<short id>; legacy
+                  projects (named by their slug in an app-<slug> namespace) receive an
+                  ID from the controller and keep their names.
+                type: string
               image:
                 description: |-
                   Image runs a prebuilt image instead of building Source. Set by
@@ -702,6 +710,13 @@ spec:
                   Processes maps process types (web, worker, ...) to their settings.
                   Defaults to a single "web" process.
                 type: object
+              slug:
+                description: |-
+                  Slug is the project's short name: the hostname label
+                  (<slug>.<workspace address>) and what people type in the CLI. Unique
+                  within the workspace, mutable. Empty on legacy projects, whose slug is
+                  their name.
+                type: string
               source:
                 description: |-
                   Source is where the application code comes from. It is built into an

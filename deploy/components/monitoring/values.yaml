@@ -78,6 +78,7 @@ kube-state-metrics:
   metricLabelsAllowlist:
     - pods=[shpyrd.io/app,shpyrd.io/process,shpyrd.io/redis,cnpg.io/cluster,kpack.io/build]
     - persistentvolumeclaims=[shpyrd.io/app,shpyrd.io/volume,shpyrd.io/redis,cnpg.io/cluster]
+    - namespaces=[shpyrd.io/workspace,shpyrd.io/project,shpyrd.io/workspace-id,shpyrd.io/project-id]
   resources:
     requests:
       cpu: 10m

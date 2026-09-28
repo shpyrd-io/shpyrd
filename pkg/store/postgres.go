@@ -10,6 +10,7 @@ import (
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"regexp"
 	"strconv"
@@ -215,8 +216,10 @@ func notFoundOnBadID(err error) error {
 func (p *Postgres) wsID(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, slug string) (string, error) {
+	// A slug, or the ID itself (the metering loop reads IDs off namespace
+	// labels since RFC-0076; older callers pass slugs).
 	var id string
-	err := q.QueryRow(ctx, `SELECT id FROM workspaces WHERE slug = $1`, slug).Scan(&id)
+	err := q.QueryRow(ctx, `SELECT id FROM workspaces WHERE slug = $1 OR id::text = $1`, slug).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -1765,6 +1768,135 @@ func (p *Postgres) QuerySleepEvents(ctx context.Context, ws, project string, fro
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ---- projects (RFC-0076) ------------------------------------------------------
+
+const projectColumns = `id::text, workspace_id::text, slug, name, namespace, created_at, updated_at, deleted_at`
+
+func scanProject(row pgx.Row) (*Project, error) {
+	var pr Project
+	err := row.Scan(&pr.ID, &pr.WorkspaceID, &pr.Slug, &pr.Name, &pr.Namespace, &pr.CreatedAt, &pr.UpdatedAt, &pr.DeletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &pr, nil
+}
+
+func (p *Postgres) UpsertProject(ctx context.Context, pr Project) (*Project, error) {
+	if pr.ID == "" || pr.WorkspaceID == "" || pr.Slug == "" {
+		return nil, errors.New("project needs id, workspace and slug")
+	}
+	wsID, err := p.wsID(ctx, p.pool, pr.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	row := p.pool.QueryRow(ctx, `INSERT INTO projects (id, workspace_id, slug, name, namespace)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name,
+			namespace = CASE WHEN EXCLUDED.namespace = '' THEN projects.namespace ELSE EXCLUDED.namespace END,
+			deleted_at = NULL, updated_at = now()
+		RETURNING `+projectColumns, pr.ID, wsID, pr.Slug, pr.Name, pr.Namespace)
+	out, err := scanProject(row)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrConflict // another live project has this slug
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+func (p *Postgres) DeleteProject(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE projects SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) ListProjects(ctx context.Context, ws string, withDeleted bool) ([]Project, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + projectColumns + ` FROM projects WHERE workspace_id = $1`
+	if !withDeleted {
+		q += ` AND deleted_at IS NULL`
+	}
+	rows, err := p.pool.Query(ctx, q+` ORDER BY created_at, id`, wsID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Project
+	for rows.Next() {
+		pr, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *pr)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) ProjectBySlug(ctx context.Context, ws, slug string) (*Project, error) {
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return nil, err
+	}
+	return scanProject(p.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`, wsID, slug))
+}
+
+// RekeyProject moves ledger rows from the legacy slug key to the ID key in
+// one transaction: copy under the new key (rows already there win), then
+// delete the old ones.
+func (p *Postgres) RekeyProject(ctx context.Context, ws, slug, id string) (int, error) {
+	if slug == "" || id == "" {
+		return 0, errors.New("rekey needs a slug and an id")
+	}
+	wsID, err := p.wsID(ctx, p.pool, ws)
+	if err != nil {
+		return 0, err
+	}
+	short := ids.Short(id)
+	if short == slug {
+		return 0, nil
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	moved := 0
+	for _, t := range []struct{ table, cols string }{
+		{"usage_buckets", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
+		{"usage_hourly", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
+		{"cogs_buckets", "workspace_id, project, period_start, period_end, cpu_cost, memory_cost, storage_cost, network_cost, shared_cost, idle_cost, total_cost, currency, allocation_policy, quality"},
+	} {
+		newCols := strings.Replace(t.cols, "project,", "$3::text AS project,", 1)
+		if _, err := tx.Exec(ctx, `INSERT INTO `+t.table+` (`+t.cols+`) SELECT `+newCols+` FROM `+t.table+` WHERE workspace_id = $1 AND project = $2 ON CONFLICT DO NOTHING`, wsID, slug, short); err != nil {
+			return 0, fmt.Errorf("rekey %s: %w", t.table, err)
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM `+t.table+` WHERE workspace_id = $1 AND project = $2`, wsID, slug)
+		if err != nil {
+			return 0, fmt.Errorf("rekey %s: %w", t.table, err)
+		}
+		moved += int(tag.RowsAffected())
+	}
+	tag, err := tx.Exec(ctx, `UPDATE sleep_events SET project = $3 WHERE workspace_id = $1 AND project = $2`, wsID, slug, short)
+	if err != nil {
+		return 0, fmt.Errorf("rekey sleep_events: %w", err)
+	}
+	moved += int(tag.RowsAffected())
+	return moved, tx.Commit(ctx)
 }
 
 var _ Store = (*Postgres)(nil)

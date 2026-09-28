@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
 // The same behaviour for every implementation. Postgres runs when
@@ -39,7 +41,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -922,5 +924,108 @@ func TestMigrateBridgesLegacyRunner(t *testing.T) {
 	}
 	if _, err := p.AddGrant(ctx, "acme", Grant{Project: "shop", Role: "user", Team: "finance"}); !errors.Is(err, ErrConflict) {
 		t.Errorf("the grants uniqueness index must still hold: %v", err)
+	}
+}
+
+// RFC-0076: projects live in the store keyed by ID; the ledger is re-keyed
+// from legacy slugs once, rows already under the ID winning.
+func TestProjectsStore(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			ws, err := s.Workspace(ctx, DefaultWorkspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const id = "0b1e6c7a-9d6e-4c2f-8a1b-2f3e4d5c6b7a"
+			pr, err := s.UpsertProject(ctx, Project{ID: id, WorkspaceID: DefaultWorkspace, Slug: "shop", Name: "Shop", Namespace: "app-shop"})
+			if err != nil || pr.WorkspaceID != ws.ID || pr.Short() != ids.Short(id) || pr.CreatedAt.IsZero() {
+				t.Fatalf("upsert: %+v %v", pr, err)
+			}
+			// Same ID again: rename in place, namespace kept when omitted.
+			pr, err = s.UpsertProject(ctx, Project{ID: id, WorkspaceID: ws.ID, Slug: "store", Name: "The Store"})
+			if err != nil || pr.Slug != "store" || pr.Name != "The Store" || pr.Namespace != "app-shop" {
+				t.Fatalf("rename: %+v %v", pr, err)
+			}
+			// Another live project cannot take the slug.
+			const other = "7f0d9e2c-1111-4222-8333-444455556666"
+			if _, err := s.UpsertProject(ctx, Project{ID: other, WorkspaceID: DefaultWorkspace, Slug: "store"}); !errors.Is(err, ErrConflict) {
+				t.Fatalf("slug conflict: %v", err)
+			}
+			if _, err := s.UpsertProject(ctx, Project{ID: other, WorkspaceID: DefaultWorkspace, Slug: "blog", Namespace: "p-" + ids.Short(other)}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.ProjectBySlug(ctx, DefaultWorkspace, "store")
+			if err != nil || got.ID != id {
+				t.Fatalf("by slug: %+v %v", got, err)
+			}
+			list, err := s.ListProjects(ctx, DefaultWorkspace, false)
+			if err != nil || len(list) != 2 || list[0].ID != id {
+				t.Fatalf("list: %+v %v", list, err)
+			}
+			if err := s.DeleteProject(ctx, other); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteProject(ctx, other); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("second delete: %v", err)
+			}
+			if list, _ = s.ListProjects(ctx, DefaultWorkspace, false); len(list) != 1 {
+				t.Fatalf("live after delete: %+v", list)
+			}
+			if list, _ = s.ListProjects(ctx, DefaultWorkspace, true); len(list) != 2 || list[1].DeletedAt == nil {
+				t.Fatalf("with deleted: %+v", list)
+			}
+			// The slug of a deleted project is free again.
+			if _, err := s.UpsertProject(ctx, Project{ID: "9a9a9a9a-0000-4000-8000-000000000009", WorkspaceID: DefaultWorkspace, Slug: "blog"}); err != nil {
+				t.Fatalf("slug reuse after delete: %v", err)
+			}
+
+			// Ledger rekey: three legacy rows, one of them colliding with a
+			// row already keyed by the ID.
+			t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+			row := func(project string, start time.Time, qty float64) UsageBucket {
+				return UsageBucket{WorkspaceID: DefaultWorkspace, Project: project, Component: "web", Metric: MetricCPUUsed,
+					PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Quantity: &qty, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1}
+			}
+			short := ids.Short(id)
+			if err := s.WriteBuckets(ctx, []UsageBucket{row("shop", t0, 1), row("shop", t0.Add(5*time.Minute), 2), row("shop", t0.Add(10*time.Minute), 3), row(short, t0.Add(10*time.Minute), 30)}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteCOGSBucket(ctx, COGSBucket{WorkspaceID: DefaultWorkspace, Project: "shop", PeriodStart: t0, PeriodEnd: t0.Add(time.Hour), TotalCost: 1, Currency: "USD"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteSleepEvent(ctx, SleepEvent{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "web", Event: "sleep", At: t0}); err != nil {
+				t.Fatal(err)
+			}
+			moved, err := s.RekeyProject(ctx, DefaultWorkspace, "shop", id)
+			if err != nil || moved != 5 {
+				t.Fatalf("rekey moved %d, err %v", moved, err)
+			}
+			buckets, err := s.QueryBuckets(ctx, DefaultWorkspace, short, t0, t0.Add(time.Hour))
+			if err != nil || len(buckets) != 3 {
+				t.Fatalf("buckets under the id: %d %v", len(buckets), err)
+			}
+			for _, b := range buckets {
+				if b.PeriodStart.Equal(t0.Add(10*time.Minute)) && (b.Quantity == nil || *b.Quantity != 30) {
+					t.Errorf("the row already keyed by the id must win, got quantity %v", b.Quantity)
+				}
+			}
+			if left, _ := s.QueryBuckets(ctx, DefaultWorkspace, "shop", t0, t0.Add(time.Hour)); len(left) != 0 {
+				t.Errorf("legacy rows left: %d", len(left))
+			}
+			cogs, _ := s.QueryCOGSBuckets(ctx, DefaultWorkspace, t0, t0.Add(time.Hour))
+			if len(cogs) != 1 || cogs[0].Project != short {
+				t.Errorf("cogs after rekey: %+v", cogs)
+			}
+			ev, _ := s.QuerySleepEvents(ctx, DefaultWorkspace, short, t0.Add(-time.Minute), t0.Add(time.Hour))
+			if len(ev) != 1 {
+				t.Errorf("sleep events after rekey: %+v", ev)
+			}
+			// Rekeying again moves nothing.
+			if moved, err := s.RekeyProject(ctx, DefaultWorkspace, "shop", id); err != nil || moved != 0 {
+				t.Errorf("second rekey: %d %v", moved, err)
+			}
+		})
 	}
 }

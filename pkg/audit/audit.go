@@ -59,6 +59,9 @@ type Ref struct {
 }
 
 // AppRef points at the App of a project of the implicit workspace.
+// Legacy: constructs the namespace from the slug (app-<slug>); for apps
+// created since RFC-0076, the namespace is p-<id> — use AppRefIn with the
+// actual namespace when it is available.
 func AppRef(project string) Ref {
 	return AppRefIn("app-"+project, project)
 }

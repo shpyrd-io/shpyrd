@@ -710,7 +710,7 @@ func TestMetricsDirectionParsesOutOfEveryNameShape(t *testing.T) {
 func TestMetricsInstancesQueryEscapesProcess(t *testing.T) {
 	const inj = `x"} or kube_deployment_status_replicas_available{namespace="other`
 	want := `sum by (deployment) (kube_deployment_status_replicas_available{namespace="app-shop",deployment="shop-x\"} or kube_deployment_status_replicas_available{namespace=\"other"})`
-	if got := instancesQuery("app-shop", "shop", inj); got != want {
+	if got := instancesQuery("app-shop", "shop-"+inj, inj); got != want {
 		t.Fatalf("instancesQuery with a crafted process = %q, want %q", got, want)
 	}
 

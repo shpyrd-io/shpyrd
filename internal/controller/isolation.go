@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // Project isolation (RFC-0008): a NetworkPolicy per project namespace and
@@ -47,9 +48,13 @@ func (r *AppReconciler) ensureNamespaceLabels(ctx context.Context, app *shpyrdv1
 	if ns.Labels[shpyrdv1.LabelManagedBy] != "shpyrd" {
 		return nil
 	}
-	// The workspace label too: the allow-list selectors match on it, and a
-	// namespace without it would look like the implicit workspace's.
-	want := map[string]string{shpyrdv1.LabelProject: app.Name, shpyrdv1.LabelWorkspace: workspaceOf(app)}
+	// The workspace label too: a namespace without it would look like the
+	// implicit workspace's. Identity labels (RFC-0076) are what selectors
+	// match on; the slug labels are for people reading kubectl.
+	want := map[string]string{shpyrdv1.LabelProject: project.SlugOf(app), shpyrdv1.LabelWorkspace: workspaceOf(app)}
+	for k, v := range namespaceIdentityLabels(app) {
+		want[k] = v
+	}
 	for k, v := range podSecurityLabels {
 		want[k] = v
 	}
@@ -72,9 +77,10 @@ func (r *AppReconciler) ensureNamespaceLabels(ctx context.Context, app *shpyrdv1
 // in spec.allow (RFC-0033 phase 5); everything else is refused.
 func (r *AppReconciler) reconcileIsolation(ctx context.Context, app *shpyrdv1.App) error {
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: IsolationPolicyName, Namespace: app.Namespace}}
+	resolve := func(slug string) string { return r.projectIDBySlug(ctx, app, slug) }
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = mergeMaps(np.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"})
-		np.Spec = r.Config.isolationPolicyFor(app)
+		np.Spec = r.Config.isolationPolicyFor(app, resolve)
 		return nil
 	})
 	if err != nil {
@@ -93,11 +99,20 @@ func (r *AppReconciler) reconcileIsolation(ctx context.Context, app *shpyrdv1.Ap
 // decides, and no packet crosses a workspace. Kubernetes evaluates egress
 // on the pod address a Service resolves to, which is why the internet block
 // (which excludes the pod CIDR) does not cover this.
-func (c Config) isolationPolicyFor(app *shpyrdv1.App) networkingv1.NetworkPolicySpec {
+//
+// Selectors match identity labels (RFC-0076) when the peers carry them:
+// the workspace by id, a listed project by id, resolved from the slug the
+// allow entry names. A peer without an id yet (a legacy project the
+// controller has not visited) is matched by its slug labels until it has.
+func (c Config) isolationPolicyFor(app *shpyrdv1.App, resolve func(slug string) string) networkingv1.NetworkPolicySpec {
 	spec := c.isolationPolicy()
 	ws := workspaceOf(app)
+	wsSelector := map[string]string{shpyrdv1.LabelWorkspace: ws}
+	if wsID := app.Labels[shpyrdv1.LabelWorkspaceID]; wsID != "" {
+		wsSelector = map[string]string{shpyrdv1.LabelWorkspaceID: wsID}
+	}
 	spec.Egress[0].To = append(spec.Egress[0].To, networkingv1.NetworkPolicyPeer{
-		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{shpyrdv1.LabelWorkspace: ws}},
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: wsSelector},
 		PodSelector:       &metav1.LabelSelector{},
 	})
 	for _, e := range app.EffectiveAllow() {
@@ -106,8 +121,14 @@ func (c Config) isolationPolicyFor(app *shpyrdv1.App) networkingv1.NetworkPolicy
 		case e.Project != "":
 			// Any pod in that project's namespace, in this workspace: two
 			// workspaces may both have a project of that name.
+			match := map[string]string{shpyrdv1.LabelProject: e.Project, shpyrdv1.LabelWorkspace: ws}
+			if resolve != nil {
+				if id := resolve(e.Project); id != "" {
+					match = map[string]string{shpyrdv1.LabelProjectID: id}
+				}
+			}
 			peer = networkingv1.NetworkPolicyPeer{
-				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{shpyrdv1.LabelProject: e.Project, shpyrdv1.LabelWorkspace: ws}},
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: match},
 				PodSelector:       &metav1.LabelSelector{},
 			}
 		case e.Platform == "actions" || e.Platform == "mcp":

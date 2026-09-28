@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // HTTP sleep (RFC-0075): when a web process has a sleep policy the controller
@@ -336,7 +337,7 @@ func (r *AppReconciler) ensureSleepPage(ctx context.Context, app *shpyrdv1.App) 
 		},
 	}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Data = map[string]string{"index.html": buildSleepPageHTML(app.Name)}
+		cm.Data = map[string]string{"index.html": buildSleepPageHTML(project.DisplayName(app))}
 		return controllerutil.SetControllerReference(app, cm, r.Scheme)
 	})
 	return err

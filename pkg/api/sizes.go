@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
@@ -142,7 +143,7 @@ func (s *Server) resizeApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "resize", app.Name, req.Process+"="+req.Size)
+	s.audit(c, project.SlugOf(app), "resize", project.SlugOf(app), req.Process+"="+req.Size)
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -277,7 +278,7 @@ func (s *Server) applyProcesses(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "processes", app.Name, processChangesDetail(req.Processes))
+	s.audit(c, project.SlugOf(app), "processes", project.SlugOf(app), processChangesDetail(req.Processes))
 	c.JSON(http.StatusOK, summarize(app))
 }
 

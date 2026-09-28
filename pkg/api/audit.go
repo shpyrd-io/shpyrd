@@ -9,7 +9,6 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
-	projectpkg "github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // audit records a mutation performed through the API. project is "" for
@@ -34,9 +33,14 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 			}
 		}
 	}
+	// Events attach to the App when it exists (RFC-0076: found by slug,
+	// named by id); an action on a project that is gone (destroy) is
+	// recorded against the cluster, the target still naming it.
 	ref := audit.ClusterRef(s.deps().SystemNamespace)
 	if project != "" {
-		ref = audit.AppRefIn(projectpkg.NamespaceIn(s.workspace(c), project), project)
+		if app, err := s.findApp(c.Request.Context(), s.workspace(c), project); err == nil {
+			ref = audit.AppRefIn(app.Namespace, app.Name)
+		}
 	}
 	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: realm}
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, ref, entry); err != nil {
@@ -76,9 +80,12 @@ func (s *Server) auditFailure(c *gin.Context, action, target, detail string) {
 
 // appAudit lists the audit trail of a project.
 func (s *Server) appAudit(c *gin.Context) {
-	project := c.Param("slug")
+	app, ok := s.loadApp(c)
+	if !ok {
+		return
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
-	entries, err := audit.List(c.Request.Context(), s.kube.Kube, audit.AppRefIn(projectpkg.NamespaceIn(s.workspace(c), project), project), limit)
+	entries, err := audit.List(c.Request.Context(), s.kube.Kube, audit.AppRefIn(app.Namespace, app.Name), limit)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return

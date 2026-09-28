@@ -48,7 +48,7 @@ const (
 // defaultHost is the hostname every project is served at: one label under
 // its workspace's apps domain.
 func (c Config) defaultHost(app *shpyrdv1.App) string {
-	return app.Name + "." + c.appsDomain(app)
+	return projectSlug(app) + "." + c.appsDomain(app)
 }
 
 // customDomains are the hosts the project added, normalised and without the
@@ -69,7 +69,7 @@ func (c Config) customDomains(app *shpyrdv1.App) []string {
 	}
 	if ws := workspaceOf(app); ws != project.DefaultWorkspace && c.WorkspaceExtraDomains != nil {
 		for _, d := range c.WorkspaceExtraDomains(ws) {
-			add(app.Name + "." + d)
+			add(projectSlug(app) + "." + d)
 		}
 	}
 	for _, d := range app.Spec.Domains {

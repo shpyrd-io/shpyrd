@@ -392,6 +392,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceSleepDefault: workspaceCache.SleepDefault,
 			WorkspaceSuspended:    workspaceCache.Suspended,
 			WorkspaceID:           workspaceCache.ID,
+			Projects:              memberships.Store,
 			DashboardURL:          envOr("SHPYRD_DASHBOARD_URL", ""),
 			HTTPSPort:             os.Getenv("SHPYRD_HTTPS_PORT"),
 			RegistryHost:          os.Getenv("SHPYRD_REGISTRY_HOST"),

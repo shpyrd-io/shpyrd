@@ -70,7 +70,12 @@ func (r *Restorer) Run(ctx context.Context) (*Result, error) {
 		want[p] = true
 	}
 	for _, ns := range r.Archive.ProjectNamespaces() {
-		slug := strings.TrimPrefix(ns, "app-")
+		// RFC-0076: a namespace is either app-<slug> or p-<id>; read the
+		// slug from the archive's namespace labels when present.
+		slug := r.Archive.ProjectSlug(ns)
+		if slug == "" {
+			slug = strings.TrimPrefix(ns, "app-")
+		}
 		if len(want) > 0 && !want[slug] {
 			continue
 		}
@@ -83,7 +88,11 @@ func (r *Restorer) Run(ctx context.Context) (*Result, error) {
 		for slug := range want {
 			found := false
 			for _, ns := range r.Archive.ProjectNamespaces() {
-				if strings.TrimPrefix(ns, "app-") == slug {
+				s := r.Archive.ProjectSlug(ns)
+				if s == "" {
+					s = strings.TrimPrefix(ns, "app-")
+				}
+				if s == slug {
 					found = true
 				}
 			}
@@ -97,6 +106,23 @@ func (r *Restorer) Run(ctx context.Context) (*Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// ProjectSlug is the project's slug for a namespace in the archive: reads
+// the shpyrd.io/project label off the stored Namespace object; "" if absent
+// or not stored (the caller falls back to stripping the app- prefix).
+func (a *Archive) ProjectSlug(ns string) string {
+	data := a.Files["projects/"+ns+"/namespace.yaml"]
+	if data == nil {
+		return ""
+	}
+	// Minimal parse: look for "shpyrd.io/project: <slug>" in the YAML.
+	for _, line := range strings.Split(string(data), "\n") {
+		if v := strings.TrimPrefix(strings.TrimSpace(line), "shpyrd.io/project: "); v != line && v != "" {
+			return strings.Trim(strings.Trim(v, "\""), "'")
+		}
+	}
+	return ""
 }
 
 // ProjectNamespaces lists the project namespaces in the archive, sorted.

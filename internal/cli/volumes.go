@@ -143,8 +143,14 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 					return err
 				}
 				list.Items = items
-			} else if err := ac.c.List(ctx, &list, client.InNamespace(appNamespace(name))); err != nil {
-				return err
+			} else {
+				app, err := ac.getApp(ctx, name)
+				if err != nil {
+					return err
+				}
+				if lerr := ac.c.List(ctx, &list, client.InNamespace(app.Namespace)); lerr != nil {
+					return lerr
+				}
 			}
 			if len(list.Items) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "No volumes in project %s. Create one with `shpyrd volumes create data --size 5Gi`.\n", name)
@@ -321,7 +327,12 @@ func (a *appClient) getVolume(ctx context.Context, project, name string) (*shpyr
 		return nil, fmt.Errorf("volume %q not found in project %s (see `shpyrd volumes list`)", name, project)
 	}
 	vol := &shpyrdv1.Volume{}
-	if err := a.c.Get(ctx, types.NamespacedName{Namespace: appNamespace(project), Name: name}, vol); err != nil {
+	app, aerr := a.getApp(ctx, project)
+	ns := appNamespace(project)
+	if aerr == nil {
+		ns = app.Namespace
+	}
+	if err := a.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, vol); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("volume %q not found in project %s (see `shpyrd volumes list`)", name, project)
 		}

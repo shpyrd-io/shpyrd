@@ -19,6 +19,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // ResourceView is any resource of a project in the shared shape the
@@ -43,7 +44,10 @@ type ResourceView struct {
 
 // listProjectResources returns every resource of the project namespace.
 func (s *Server) listProjectResources(c *gin.Context) {
-	ns := s.projectNamespace(c)
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
 	ctx := c.Request.Context()
 	var apps shpyrdv1.AppList
 	if err := s.apps.List(ctx, &apps, client.InNamespace(ns)); err != nil {
@@ -212,7 +216,10 @@ func (s *Server) createResource(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)"))
 		return
 	}
-	ns := s.projectNamespace(c)
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
 	u := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": t.Group + "/" + t.Version,
 		"kind":       t.Kind,
@@ -247,7 +254,11 @@ func (s *Server) deleteResource(c *gin.Context) {
 		abort(c, http.StatusNotFound, errors.New("unknown resource kind"))
 		return
 	}
-	ns, name := s.projectNamespace(c), c.Param("name")
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
+	name := c.Param("name")
 	var apps shpyrdv1.AppList
 	_ = s.apps.List(c.Request.Context(), &apps, client.InNamespace(ns))
 	var bound []string
@@ -301,7 +312,10 @@ func (s *Server) attachResource(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("prefix must be letters, digits and underscores"))
 		return
 	}
-	ns := s.projectNamespace(c)
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: t.Group, Version: t.Version, Kind: t.Kind})
 	if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: ns, Name: req.Name}, u); err != nil {
@@ -324,7 +338,7 @@ func (s *Server) attachResource(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "attach", t.Kind+" "+req.Name, req.Prefix)
+	s.audit(c, project.SlugOf(app), "attach", t.Kind+" "+req.Name, req.Prefix)
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -354,7 +368,7 @@ func (s *Server) detachResource(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "detach", kind+" "+name, "")
+	s.audit(c, project.SlugOf(app), "detach", kind+" "+name, "")
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -467,7 +481,11 @@ func (s *Server) setPostgresSuspended(c *gin.Context, suspended bool) {
 // mutatePostgres loads a Postgres of the project, applies mutate and updates
 // it; conflicts are retried like mutateApp. Errors are already written.
 func (s *Server) mutatePostgres(c *gin.Context, mutate func(*shpyrdv1.Postgres) error) (*shpyrdv1.Postgres, error) {
-	ns, name := s.projectNamespace(c), c.Param("name")
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return nil, errors.New("project not found")
+	}
+	name := c.Param("name")
 	var out *shpyrdv1.Postgres
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		pg := &shpyrdv1.Postgres{}

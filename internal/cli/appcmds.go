@@ -685,7 +685,7 @@ that results is a normal deploy.`,
 				if err != nil {
 					return err
 				}
-				if err := ac.followBuild(ctx, appNamespace(name), build); err != nil {
+				if err := ac.followBuild(ctx, app.Namespace, build); err != nil {
 					return err
 				}
 			}

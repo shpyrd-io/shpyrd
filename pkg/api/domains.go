@@ -15,6 +15,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -103,7 +104,7 @@ func (s *Server) addDomain(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "domain.add", app.Name, host)
+	s.audit(c, project.SlugOf(app), "domain.add", project.SlugOf(app), host)
 	c.JSON(http.StatusOK, s.domainsResult(c.Request.Context(), app, host))
 }
 
@@ -132,7 +133,7 @@ func (s *Server) removeDomain(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "domain.remove", app.Name, host)
+	s.audit(c, project.SlugOf(app), "domain.remove", project.SlugOf(app), host)
 	c.JSON(http.StatusOK, s.domainsResult(c.Request.Context(), app, ""))
 }
 
@@ -147,10 +148,10 @@ func (s *Server) listDomains(c *gin.Context) {
 // domainsResult builds the answer: the CNAME target is the project's own
 // hostname, the A target the front door's address.
 func (s *Server) domainsResult(ctx context.Context, app *shpyrdv1.App, host string) DomainsResult {
-	target := app.Name + "." + s.opts.Public.Domain
+	target := project.SlugOf(app) + "." + s.opts.Public.Domain
 	if slug := workspaceOf(app); slug != store.DefaultWorkspace {
 		if ws, err := s.store.Workspace(ctx, slug); err == nil {
-			target = app.Name + "." + s.appsDomainOf(ws)
+			target = project.SlugOf(app) + "." + s.appsDomainOf(ws)
 		}
 	}
 	res := DomainsResult{

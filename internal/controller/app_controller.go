@@ -51,6 +51,8 @@ type AppReconciler struct {
 	// ProcessTypes reads an image's process types (RFC-0066); nil uses the
 	// platform registry. Tests inject one.
 	ProcessTypes func(ctx context.Context, image string) []string
+	// mirror remembers what the store already knows per App (RFC-0076).
+	mirror projectMirror
 	// Now returns the current time; nil means time.Now (tests override it).
 	Now func() time.Time
 	// sleepPaused remembers apps whose sleep objects were torn down because
@@ -172,7 +174,17 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !app.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
+		return r.finalizeProject(ctx, app)
+	}
+	// Identity first (RFC-0076): a legacy App gets its id and labels in one
+	// write. It happens before orig is taken, so the optimistic status
+	// patch below still compares against the version this reconcile
+	// worked from; nothing else may write the App in between.
+	if _, err := r.ensureIdentity(ctx, app); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, err
 	}
 	orig := app.DeepCopy()
 
@@ -287,6 +299,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	ghash := globalHash(globals)
 	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if err := r.ensureNamespaceLabels(ctx, app); err != nil {
+		return outcome{}, err
+	}
+	if err := r.mirrorProject(ctx, app); err != nil {
 		return outcome{}, err
 	}
 	if err := r.reconcileIsolation(ctx, app); err != nil {
@@ -782,7 +797,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// suspended workspace's apps are not served: no Ingress, so the front
 	// door's default backend answers for the host with the suspension page.
 	serving := hasWeb(app) && !r.Config.suspended(app)
-	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app), Namespace: app.Namespace}}
 	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 			r.Config.mutateIngress(app, ing, sleepActive)

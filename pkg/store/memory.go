@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"sort"
 	"strings"
@@ -42,6 +43,7 @@ type Memory struct {
 	ocodes      map[string]*OAuthCode
 	otokens     []OAuthToken
 	bill        *billingMemory
+	projects    []Project
 	now         func() time.Time
 }
 
@@ -93,6 +95,19 @@ func (m *Memory) ws(slug string) (*Workspace, error) {
 		return nil, ErrNotFound
 	}
 	return w, nil
+}
+
+// wsAny resolves a slug or an ID, like the Postgres store's wsID.
+func (m *Memory) wsAny(slugOrID string) (*Workspace, error) {
+	if w, err := m.ws(slugOrID); err == nil {
+		return w, nil
+	}
+	for _, w := range m.workspaces {
+		if w.ID == slugOrID {
+			return w, nil
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func (m *Memory) Workspace(_ context.Context, slug string) (*Workspace, error) {
@@ -1648,6 +1663,12 @@ func (m *Memory) QueryInvoiceLines(_ context.Context, ws string, from, to time.T
 func (m *Memory) WriteCOGSBucket(_ context.Context, b COGSBucket) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Accept a slug or an id, like the Postgres store.
+	w, err := m.wsAny(b.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	b.WorkspaceID = w.ID
 	for i, e := range m.billing().cogs {
 		if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.PeriodStart.Equal(b.PeriodStart) {
 			m.billing().cogs[i] = b
@@ -1683,6 +1704,11 @@ func (m *Memory) WriteSleepEvent(_ context.Context, e SleepEvent) error {
 	if e.At.IsZero() {
 		e.At = m.now()
 	}
+	w, err := m.wsAny(e.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	e.WorkspaceID = w.ID
 	m.billing().sleepEvents = append(m.billing().sleepEvents, e)
 	return nil
 }
@@ -1709,4 +1735,141 @@ func (m *Memory) QuerySleepEvents(_ context.Context, ws, project string, from, t
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// ---- projects (RFC-0076) ------------------------------------------------------
+
+func (m *Memory) UpsertProject(_ context.Context, pr Project) (*Project, error) {
+	if pr.ID == "" || pr.WorkspaceID == "" || pr.Slug == "" {
+		return nil, errors.New("project needs id, workspace and slug")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.wsAny(pr.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	now := m.now()
+	for i := range m.projects {
+		e := &m.projects[i]
+		if e.ID != pr.ID && e.WorkspaceID == w.ID && e.Slug == pr.Slug && e.DeletedAt == nil {
+			return nil, ErrConflict
+		}
+	}
+	for i := range m.projects {
+		e := &m.projects[i]
+		if e.ID == pr.ID {
+			e.Slug, e.Name, e.UpdatedAt, e.DeletedAt = pr.Slug, pr.Name, now, nil
+			if pr.Namespace != "" {
+				e.Namespace = pr.Namespace
+			}
+			out := *e
+			return &out, nil
+		}
+	}
+	stored := Project{ID: pr.ID, WorkspaceID: w.ID, Slug: pr.Slug, Name: pr.Name, Namespace: pr.Namespace, CreatedAt: now, UpdatedAt: now}
+	m.projects = append(m.projects, stored)
+	return &stored, nil
+}
+
+func (m *Memory) DeleteProject(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.projects {
+		e := &m.projects[i]
+		if e.ID == id && e.DeletedAt == nil {
+			now := m.now()
+			e.DeletedAt, e.UpdatedAt = &now, now
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) ListProjects(_ context.Context, ws string, withDeleted bool) ([]Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.wsAny(ws)
+	if err != nil {
+		return nil, err
+	}
+	var out []Project
+	for _, e := range m.projects {
+		if e.WorkspaceID != w.ID || (!withDeleted && e.DeletedAt != nil) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func (m *Memory) ProjectBySlug(_ context.Context, ws, slug string) (*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.wsAny(ws)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range m.projects {
+		if e.WorkspaceID == w.ID && e.Slug == slug && e.DeletedAt == nil {
+			out := e
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) RekeyProject(_ context.Context, ws, slug, id string) (int, error) {
+	if slug == "" || id == "" {
+		return 0, errors.New("rekey needs a slug and an id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.wsAny(ws)
+	if err != nil {
+		return 0, err
+	}
+	short := ids.Short(id)
+	if short == slug {
+		return 0, nil
+	}
+	b := m.billing()
+	moved := 0
+	rekeyBuckets := func(rows []UsageBucket) []UsageBucket {
+		keep := rows[:0:0]
+		for _, r := range rows {
+			if r.WorkspaceID != w.ID || r.Project != slug {
+				keep = append(keep, r)
+				continue
+			}
+			moved++
+			r.Project = short
+			dup := false
+			for _, e := range rows {
+				if e.WorkspaceID == w.ID && e.Project == short && e.Component == r.Component && e.Metric == r.Metric && e.PeriodStart.Equal(r.PeriodStart) && e.Revision == r.Revision {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				keep = append(keep, r)
+			}
+		}
+		return keep
+	}
+	b.buckets = rekeyBuckets(b.buckets)
+	b.hourly = rekeyBuckets(b.hourly)
+	for i := range b.cogs {
+		if b.cogs[i].WorkspaceID == w.ID && b.cogs[i].Project == slug {
+			b.cogs[i].Project = short
+			moved++
+		}
+	}
+	for i := range b.sleepEvents {
+		if b.sleepEvents[i].WorkspaceID == w.ID && b.sleepEvents[i].Project == slug {
+			b.sleepEvents[i].Project = short
+			moved++
+		}
+	}
+	return moved, nil
 }

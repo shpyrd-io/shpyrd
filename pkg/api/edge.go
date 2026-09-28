@@ -160,7 +160,7 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 			continue // an app of a workspace this server does not know
 		}
 		for _, domain := range wsDomains {
-			index[strings.ToLower(app.Name+"."+domain)] = app
+			index[strings.ToLower(project.SlugOf(app)+"."+domain)] = app
 		}
 		for _, d := range app.Spec.Domains {
 			index[hostOnly(d)] = app
@@ -464,7 +464,7 @@ func (s *Server) edgeStart(c *gin.Context) {
 		return
 	}
 	sid, _ := c.Cookie(sessionCookie)
-	code, err := s.edgeCodes.Mint(c.Request.Context(), appHost, edge.CookieClaims{SessionID: sid, Project: app.Name})
+	code, err := s.edgeCodes.Mint(c.Request.Context(), appHost, edge.CookieClaims{SessionID: sid, Project: project.SlugOf(app)})
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -481,7 +481,7 @@ func (s *Server) edgeCallback(c *gin.Context) {
 		return
 	}
 	claims, err := s.edgeCodes.Redeem(c.Request.Context(), c.Query("code"), c.Request.Host)
-	if err != nil || claims.Project != app.Name || workspaceOf(app) != s.workspace(c) {
+	if err != nil || claims.Project != project.SlugOf(app) || workspaceOf(app) != s.workspace(c) {
 		s.edgePage(c, http.StatusBadRequest, "Sign-in link expired", "Open the app again to sign in.", nil)
 		return
 	}
@@ -509,7 +509,7 @@ func (s *Server) edgeLogout(c *gin.Context) {
 	redirect := s.dashboardURLFor(c)
 	app, appErr := s.appByHost(c, c.Request.Host)
 	if raw, err := c.Cookie(s.edgeCookieName()); err == nil && raw != "" && s.rp != nil && appErr == nil {
-		if claims, err := s.edgeKeys.VerifyCookie(raw, app.Name); err == nil && claims.SessionID != "" {
+		if claims, err := s.edgeKeys.VerifyCookie(raw, project.SlugOf(app)); err == nil && claims.SessionID != "" {
 			if sess, ok := s.rp.sessions.getIn(claims.SessionID, s.workspaceID(c)); ok {
 				if u := s.rp.endSessionURL(sess); u != "" {
 					redirect = u
@@ -534,7 +534,7 @@ func (s *Server) edgeDenied(c *gin.Context) {
 	// role), never people, and not the teams that operate it.
 	var teams []string
 	if app != nil {
-		if grants, err := s.store.ListProjectGrants(c.Request.Context(), s.workspace(c), app.Name); err == nil {
+		if grants, err := s.store.ListProjectGrants(c.Request.Context(), s.workspace(c), project.SlugOf(app)); err == nil {
 			seen := map[string]bool{}
 			for _, g := range grants {
 				if g.Team != "" && g.Role == shpyrdv1.RoleUser && !seen[g.Team] {
@@ -546,7 +546,7 @@ func (s *Server) edgeDenied(c *gin.Context) {
 		}
 	}
 	if app != nil {
-		caller, err := s.edgeIdentify(c, app.Name)
+		caller, err := s.edgeIdentify(c, project.SlugOf(app))
 		// An API client that is not signed in: the answer is 401 with a
 		// JSON body, not a sign-in page it cannot follow (RFC-0033). The
 		// auth subrequest answered 403 to keep nginx from redirecting.
@@ -566,7 +566,7 @@ func (s *Server) edgeDenied(c *gin.Context) {
 				s.edgePage(c, http.StatusForbidden, "Your access is suspended", "An administrator switched your access off. Ask them to reactivate it.", map[string]string{"Sign in as someone else": edgePathPrefix + "logout"})
 				return
 			}
-			if rerr == nil && authz.ReadOnly(roles.ProjectRole(app.Name)) {
+			if rerr == nil && authz.ReadOnly(roles.ProjectRole(project.SlugOf(app))) {
 				if wantsJSON(c) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "your access to " + name + " is read-only", "readOnly": true})
 					return
@@ -727,8 +727,8 @@ func (s *Server) previewApp(c *gin.Context) {
 		}
 	}
 	ws, _ := s.tenant(c)
-	host := s.appPublicHostIn(ws, app.Name)
-	code, err := s.edgeCodes.Mint(c.Request.Context(), host, edge.CookieClaims{SessionID: sid, Project: app.Name, Preview: &edge.Preview{Teams: teams, Anonymous: req.Anonymous}})
+	host := s.appPublicHostIn(ws, project.SlugOf(app))
+	code, err := s.edgeCodes.Mint(c.Request.Context(), host, edge.CookieClaims{SessionID: sid, Project: project.SlugOf(app), Preview: &edge.Preview{Teams: teams, Anonymous: req.Anonymous}})
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -740,7 +740,7 @@ func (s *Server) previewApp(c *gin.Context) {
 			what = "a member of no team"
 		}
 	}
-	s.audit(c, app.Name, "project.preview", app.Name, "opened as "+what)
+	s.audit(c, project.SlugOf(app), "project.preview", project.SlugOf(app), "opened as "+what)
 	c.JSON(http.StatusOK, gin.H{"url": "https://" + host + edgePathPrefix + "callback?" + url.Values{"code": {code}, "rd": {"/"}}.Encode()})
 }
 
@@ -777,10 +777,10 @@ func (s *Server) launcher(c *gin.Context) {
 			continue
 		}
 		access := a.EffectiveAccess()
-		if access == shpyrdv1.AccessAuthenticated && !roles.Can(authz.ProjectOpen, a.Name) {
+		if access == shpyrdv1.AccessAuthenticated && !roles.Can(authz.ProjectOpen, project.SlugOf(a)) {
 			continue
 		}
-		out = append(out, LauncherApp{Slug: a.Name, DisplayName: project.DisplayName(a), Description: project.Description(a), Featured: project.Featured(a), URL: a.Status.URL, Access: access, Phase: firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending), Role: roles.ProjectRole(a.Name)})
+		out = append(out, LauncherApp{Slug: project.SlugOf(a), DisplayName: project.DisplayName(a), Description: project.Description(a), Featured: project.Featured(a), URL: a.Status.URL, Access: access, Phase: firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending), Role: roles.ProjectRole(a.Name)})
 	}
 	// Featured apps first, then by name.
 	sort.Slice(out, func(i, j int) bool {

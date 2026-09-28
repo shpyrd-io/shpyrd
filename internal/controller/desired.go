@@ -58,6 +58,9 @@ type Config struct {
 	// is not known yet: image repositories are keyed by it. Nil: no store,
 	// as in tests, and repositories fall back to the slug.
 	WorkspaceID func(slug string) string
+	// Projects is the store's project registry (RFC-0076): the controller
+	// mirrors every App into it and marks deletions. Nil: no store (tests).
+	Projects store.Projects
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
@@ -250,10 +253,36 @@ func (p namedProcess) replicas() int32 {
 	return 1
 }
 
+// Names derived from an App follow one of two schemes (RFC-0076). An App
+// named by its ID lives in p-<id> and owns its namespace alone, so its
+// objects carry plain names: Deployment "web", Ingress "app". A legacy App
+// is named by its slug and keeps the slug-prefixed names it was created
+// with — names are immutable in Kubernetes, and the controller must keep
+// finding what it made. Every derivation goes through these helpers;
+// nothing recomputes a name from the slug.
+
+// WorkloadName is workloadName for other packages (the API's metric
+// queries name Deployments).
+func WorkloadName(app *shpyrdv1.App, process string) string { return workloadName(app, process) }
+
 // workloadName is the Deployment/Service name of a process.
 func workloadName(app *shpyrdv1.App, process string) string {
+	if project.IDNamed(app) {
+		return process
+	}
 	return app.Name + "-" + process
 }
+
+// ingressName is the app's main Ingress.
+func ingressName(app *shpyrdv1.App) string {
+	if project.IDNamed(app) {
+		return "app"
+	}
+	return app.Name
+}
+
+// projectSlug is the slug people read: spec.slug, or the legacy name.
+func projectSlug(app *shpyrdv1.App) string { return project.SlugOf(app) }
 
 func commonLabels(app *shpyrdv1.App) map[string]string {
 	l := map[string]string{
@@ -266,7 +295,28 @@ func commonLabels(app *shpyrdv1.App) map[string]string {
 	if ws := app.Labels[shpyrdv1.LabelWorkspace]; ws != "" && ws != project.DefaultWorkspace {
 		l[shpyrdv1.LabelWorkspace] = ws
 	}
+	// Identity labels (RFC-0076) follow the App onto everything it owns,
+	// with the display slug next to them for people reading kubectl.
+	for k, v := range identityLabels(app) {
+		l[k] = v
+	}
 	return l
+}
+
+// identityLabels are the RFC-0076 labels an App's objects carry: the
+// project's ID and slug, and the workspace's ID when the App knows it.
+// Legacy Apps without an ID yet contribute nothing (no empty labels).
+func identityLabels(app *shpyrdv1.App) map[string]string {
+	out := map[string]string{}
+	if app.Spec.ID == "" {
+		return out
+	}
+	out[shpyrdv1.LabelProjectID] = ids.Short(app.Spec.ID)
+	out[shpyrdv1.LabelProject] = projectSlug(app)
+	if ws := app.Labels[shpyrdv1.LabelWorkspaceID]; ws != "" {
+		out[shpyrdv1.LabelWorkspaceID] = ws
+	}
+	return out
 }
 
 // workspaceOf is the workspace an App belongs to, from its authoritative
@@ -351,9 +401,12 @@ func (c Config) issuer(app *shpyrdv1.App) string {
 // not a git checkout; empty for prebuilt images.
 func (c Config) platformEnv(app *shpyrdv1.App, revision string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
-		{Name: "SHPYRD_PROJECT", Value: app.Name},
+		{Name: "SHPYRD_PROJECT", Value: projectSlug(app)},
 		{Name: "SHPYRD_WORKSPACE", Value: workspaceOf(app)},
 		{Name: "SHPYRD_ISSUER", Value: c.issuer(app)},
+	}
+	if app.Spec.ID != "" {
+		env = append(env, corev1.EnvVar{Name: "SHPYRD_PROJECT_ID", Value: app.Spec.ID})
 	}
 	if revision != "" {
 		env = append(env,
@@ -410,6 +463,22 @@ func (c Config) imageTag(app *shpyrdv1.App) (string, error) {
 	return c.RegistryHost + "/apps/" + ids.Short(id) + "/" + app.Name, nil
 }
 
+// workspaceKey is the workspace's id in its short form for registry paths
+// that need no error path: the store's id when known, else the slug (tests,
+// or a store that has not caught up).
+func (c Config) workspaceKey(app *shpyrdv1.App) string {
+	if v := app.Labels[shpyrdv1.LabelWorkspaceID]; v != "" {
+		return v
+	}
+	ws := workspaceOf(app)
+	if c.WorkspaceID != nil {
+		if id := c.WorkspaceID(ws); id != "" {
+			return ids.Short(id)
+		}
+	}
+	return ws
+}
+
 // kpackImageKey names the kpack Image of an app (for lookups and deletes
 // that need no spec).
 func kpackImageKey(app *shpyrdv1.App) *unstructured.Unstructured {
@@ -459,15 +528,11 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 	switch {
 	case c.BuildCacheRegistry != "":
 		// Registry-backed cache (RFC-0075): no PVC; the blobs are stored
-		// alongside the app images in the same registry.
-		// Tag: <registry>/<workspace>/build-cache/<project>
-		// Example: 10.96.0.50:5000/apps/ws123/build-cache/example-go
-		// The workspace path mirrors how app images are tagged.
-		wsID := app.Labels[shpyrdv1.LabelWorkspace]
-		if wsID == "" {
-			wsID = app.Namespace
-		}
-		cacheTag := c.BuildCacheRegistry + "/build-cache/" + wsID + "/" + app.Name
+		// alongside the app images in the same registry, under the same
+		// keys: build-cache/<workspace id>/<app name> (RFC-0076 — the id,
+		// so a workspace rename keeps its caches; the app name is the
+		// project id for apps named by it).
+		cacheTag := c.BuildCacheRegistry + "/build-cache/" + c.workspaceKey(app) + "/" + app.Name
 		spec["cache"] = map[string]interface{}{"registry": map[string]interface{}{"tag": cacheTag}}
 	case c.BuildCacheSize != "":
 		spec["cache"] = map[string]interface{}{"volume": map[string]interface{}{"size": c.BuildCacheSize}}
@@ -762,14 +827,14 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 const EdgeServiceName = "shpyrd-edge"
 
 // edgeName is the companion Ingress of an app.
-func edgeName(app *shpyrdv1.App) string { return app.Name + "-edge" }
+func edgeName(app *shpyrdv1.App) string { return ingressName(app) + "-edge" }
 
 // edgeAnnotations are the auth_request annotations for the app's Ingress.
 func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 	mode := app.EffectiveAccess()
 	// Fully qualified: nginx resolves the name itself, without the pod's
 	// search domains.
-	server := fmt.Sprintf("http://shpyrd-server.%s.svc.cluster.local/edge/auth?project=%s&mode=%s", c.SystemNamespace, app.Name, mode)
+	server := fmt.Sprintf("http://shpyrd-server.%s.svc.cluster.local/edge/auth?project=%s&mode=%s", c.SystemNamespace, projectSlug(app), mode)
 	if ws := workspaceOf(app); ws != project.DefaultWorkspace {
 		server += "&workspace=" + ws
 	}

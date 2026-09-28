@@ -40,7 +40,10 @@ data:
         inputs: [kubernetes_logs]
         source: |
           # Core shpyrd labels from the pod annotations and labels.
-          .project   = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/app"])
+          # RFC-0076: prefer the human-readable slug label; fall back to the
+          # shpyrd.io/app label (which equals the App's name = the short id).
+          .project   = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/project"]) ??
+                       get!(object!(.kubernetes.pod_labels), ["shpyrd.io/app"])
           .process   = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/process"])
           # The namespace tells projects of different workspaces apart
           # (RFC-0033): drains select on it, never on the project name alone.

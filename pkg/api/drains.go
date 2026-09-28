@@ -20,6 +20,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // Log drains (RFC-0023). Project drains live in the project namespace and
@@ -232,7 +233,7 @@ func (s *Server) createProjectDrain(c *gin.Context) {
 	if !ok {
 		return
 	}
-	s.createDrainIn(c, app.Namespace, app.Name)
+	s.createDrainIn(c, app.Namespace, project.SlugOf(app))
 }
 
 func (s *Server) deleteProjectDrain(c *gin.Context) {
@@ -240,7 +241,7 @@ func (s *Server) deleteProjectDrain(c *gin.Context) {
 	if !ok {
 		return
 	}
-	s.deleteDrainIn(c, app.Namespace, app.Name, c.Param("name"))
+	s.deleteDrainIn(c, app.Namespace, project.SlugOf(app), c.Param("name"))
 }
 
 // ---- cluster scope ------------------------------------------------------------

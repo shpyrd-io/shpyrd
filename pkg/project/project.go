@@ -11,6 +11,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
 // MaxSlugLength keeps hostnames (<slug>.<domain>) and namespaces
@@ -148,8 +149,69 @@ func NamespaceLabels(workspace, slug string) map[string]string {
 	}
 }
 
-// FromNamespace maps app-<slug> to <slug>.
+// FromNamespace maps app-<slug> to <slug>. It is lossy for explicit
+// workspaces and meaningless for ID namespaces (RFC-0076): read the
+// shpyrd.io/project label instead where a namespace is at hand.
 func FromNamespace(ns string) string { return strings.TrimPrefix(ns, "app-") }
+
+// IDNamespacePrefix starts every namespace named by a project ID (RFC-0076).
+const IDNamespacePrefix = "p-"
+
+// IDNamespace is the namespace of a project identified by its UUID:
+// p-<short id>, 27 characters, the same for every workspace — the workspace
+// is a label on it, not part of its name.
+func IDNamespace(id string) string { return IDNamespacePrefix + ids.Short(id) }
+
+// IsIDNamespace reports whether ns is named by a project ID.
+func IsIDNamespace(ns string) bool {
+	return strings.HasPrefix(ns, IDNamespacePrefix) && len(ns) == len(IDNamespacePrefix)+25
+}
+
+// IDNamed reports whether the App is named by its ID (RFC-0076): created
+// since IDs exist, in a p-<id> namespace, every derived name fixed. A legacy
+// App is named by its slug and keeps its slug-derived names even after the
+// controller gives it an ID.
+func IDNamed(a *shpyrdv1.App) bool {
+	return a != nil && a.Spec.ID != "" && a.Name == ids.Short(a.Spec.ID)
+}
+
+// SlugOf is the project's slug: spec.slug when set, otherwise the App's
+// name (legacy projects).
+func SlugOf(a *shpyrdv1.App) string {
+	if a == nil {
+		return ""
+	}
+	if a.Spec.Slug != "" {
+		return a.Spec.Slug
+	}
+	return a.Name
+}
+
+// IDLabels are the authoritative identity labels of a project (RFC-0076),
+// in the short form used in names. Empty values are left out so a legacy
+// object is not stamped with an empty label.
+func IDLabels(workspaceID, projectID string) map[string]string {
+	out := map[string]string{}
+	if workspaceID != "" {
+		out[shpyrdv1.LabelWorkspaceID] = ids.Short(workspaceID)
+	}
+	if projectID != "" {
+		out[shpyrdv1.LabelProjectID] = ids.Short(projectID)
+	}
+	return out
+}
+
+// NamespaceLabelsFor are the labels of a project namespace and its App
+// (RFC-0076): the display labels (workspace and project slugs, updated on
+// rename), the identity labels, and shpyrd.io/app with the App's name.
+func NamespaceLabelsFor(workspaceSlug, workspaceID, projectID, slug, appName string) map[string]string {
+	out := NamespaceLabels(workspaceSlug, slug)
+	out[shpyrdv1.LabelApp] = appName
+	for k, v := range IDLabels(workspaceID, projectID) {
+		out[k] = v
+	}
+	return out
+}
 
 // DisplayName of an App: its annotation, or the slug.
 func DisplayName(a *shpyrdv1.App) string {
@@ -159,14 +221,14 @@ func DisplayName(a *shpyrdv1.App) string {
 	if n := strings.TrimSpace(a.Annotations[shpyrdv1.AnnotationDisplayName]); n != "" {
 		return n
 	}
-	return a.Name
+	return SlugOf(a)
 }
 
 // SetDisplayName records the display name on the App, dropping the
 // annotation when it adds nothing over the slug.
 func SetDisplayName(a *shpyrdv1.App, name string) {
 	name = strings.TrimSpace(name)
-	if name == "" || name == a.Name {
+	if name == "" || name == SlugOf(a) {
 		delete(a.Annotations, shpyrdv1.AnnotationDisplayName)
 		return
 	}
@@ -222,8 +284,8 @@ func SetFeatured(a *shpyrdv1.App, on bool) {
 // slug when the two coincide.
 func Label(a *shpyrdv1.App) string {
 	n := DisplayName(a)
-	if n == a.Name {
+	if n == SlugOf(a) {
 		return n
 	}
-	return n + " (" + a.Name + ")"
+	return n + " (" + SlugOf(a) + ")"
 }

@@ -7,6 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
 func TestSlug(t *testing.T) {
@@ -135,5 +136,37 @@ func TestDisplayName(t *testing.T) {
 	}
 	if DisplayName(nil) != "" {
 		t.Fatal("nil app")
+	}
+}
+
+func TestIDNaming(t *testing.T) {
+	const id = "0b1e6c7a-9d6e-4c2f-8a1b-2f3e4d5c6b7a"
+	short := ids.Short(id)
+	ns := IDNamespace(id)
+	if ns != "p-"+short || len(ns) != 27 || !IsIDNamespace(ns) {
+		t.Fatalf("IDNamespace = %q", ns)
+	}
+	if IsIDNamespace("app-shop") || IsIDNamespace("p-short") {
+		t.Error("legacy or malformed names must not read as ID namespaces")
+	}
+	idNamed := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: short}, Spec: shpyrdv1.AppSpec{ID: id, Slug: "shop"}}
+	legacy := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Spec: shpyrdv1.AppSpec{ID: id}}
+	if !IDNamed(idNamed) || IDNamed(legacy) {
+		t.Error("IDNamed: named by ID vs legacy with an ID")
+	}
+	if SlugOf(idNamed) != "shop" || SlugOf(legacy) != "shop" || DisplayName(idNamed) != "shop" {
+		t.Errorf("SlugOf/DisplayName: %q %q %q", SlugOf(idNamed), SlugOf(legacy), DisplayName(idNamed))
+	}
+	SetDisplayName(idNamed, "shop")
+	if _, has := idNamed.Annotations[shpyrdv1.AnnotationDisplayName]; has {
+		t.Error("display name equal to the slug must not be recorded")
+	}
+	labels := NamespaceLabelsFor("acme", "7f0d9e2c-1111-4222-8333-444455556666", id, "shop", short)
+	if labels[shpyrdv1.LabelProject] != "shop" || labels[shpyrdv1.LabelWorkspace] != "acme" || labels[shpyrdv1.LabelApp] != short ||
+		labels[shpyrdv1.LabelProjectID] != short || labels[shpyrdv1.LabelWorkspaceID] != ids.Short("7f0d9e2c-1111-4222-8333-444455556666") {
+		t.Errorf("labels = %v", labels)
+	}
+	if l := IDLabels("", id); len(l) != 1 {
+		t.Errorf("IDLabels with an empty workspace = %v", l)
 	}
 }

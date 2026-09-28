@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -151,8 +152,15 @@ type WorkspaceBillingView struct {
 }
 
 type BillingLineView struct {
-	// Project is the slug the usage belongs to; "minimum" lines have none.
-	Project     string  `json:"project,omitempty"`
+	// Project is the slug the usage belongs to, as the project is called
+	// now (RFC-0076: the ledger keys on the id and the name is resolved at
+	// read time, so a renamed project's history follows it); "minimum"
+	// lines have none.
+	Project string `json:"project,omitempty"`
+	// ProjectID is the project's id; empty for lines keyed by a legacy slug
+	// the store cannot resolve (a project deleted before RFC-0076).
+	ProjectID   string  `json:"projectId,omitempty"`
+	ProjectName string  `json:"projectName,omitempty"`
 	Component   string  `json:"component"`
 	Metric      string  `json:"metric"`
 	Quantity    float64 `json:"quantity"`
@@ -184,6 +192,7 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 	}
 
 	lines, total, quality := computeInvoicePreview(buckets, plan, monthStart, now)
+	s.nameLedgerProjects(ctx, ws, lines)
 	// Simple run-rate projection.
 	elapsed := now.Sub(monthStart).Hours()
 	total_h := monthEnd.Sub(monthStart).Hours()
@@ -252,12 +261,46 @@ func (s *Server) workspaceUsage(c *gin.Context) {
 		}
 	}
 
-	buckets, err := s.store.QueryBuckets(ctx, ws, project, from, to)
+	buckets, err := s.store.QueryBuckets(ctx, ws, s.ledgerKeyFor(ctx, ws, project), from, to)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
 	c.JSON(http.StatusOK, buckets)
+}
+
+// ledgerKeyFor translates a project slug into the ledger's project key
+// (RFC-0076): the short id of the live project with that slug, or the slug
+// itself for rows written before the project had an id.
+func (s *Server) ledgerKeyFor(ctx context.Context, ws, slug string) string {
+	if slug == "" {
+		return ""
+	}
+	if pr, err := s.store.ProjectBySlug(ctx, ws, slug); err == nil {
+		return pr.Short()
+	}
+	return slug
+}
+
+// nameLedgerProjects resolves the ledger's project keys to the projects'
+// current slugs and names (deleted ones included, so an invoice can still
+// name them). Keys the store does not know are left as they are.
+func (s *Server) nameLedgerProjects(ctx context.Context, ws string, lines []BillingLineView) {
+	projects, err := s.store.ListProjects(ctx, ws, true)
+	if err != nil || len(projects) == 0 {
+		return
+	}
+	byKey := map[string]store.Project{}
+	for _, p := range projects {
+		byKey[p.Short()] = p
+	}
+	for i := range lines {
+		if p, ok := byKey[lines[i].Project]; ok {
+			lines[i].ProjectID = p.ID
+			lines[i].Project = p.Slug
+			lines[i].ProjectName = p.Name
+		}
+	}
 }
 
 // projectUsage is GET /api/projects/:slug/usage.

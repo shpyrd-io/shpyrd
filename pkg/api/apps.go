@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,17 +11,20 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -28,6 +32,9 @@ import (
 // AppSummary is the list view of a project. Image references are reduced
 // to their digest so registry internals never surface in the UI.
 type AppSummary struct {
+	// ID is the project's stable identifier (RFC-0076); empty on a legacy
+	// project the controller has not visited yet.
+	ID string `json:"id,omitempty"`
 	// Slug identifies the project in URLs, the CLI and hostnames.
 	Slug string `json:"slug"`
 	// DisplayName is the human name; the slug when none was given.
@@ -56,7 +63,8 @@ func summarize(a *shpyrdv1.App) AppSummary {
 	s := AppSummary{
 		Exposure:    a.Spec.Exposure,
 		Access:      a.EffectiveAccess(),
-		Slug:        a.Name,
+		ID:          a.Spec.ID,
+		Slug:        project.SlugOf(a),
 		DisplayName: project.DisplayName(a),
 		Description: project.Description(a),
 		Featured:    project.Featured(a),
@@ -100,6 +108,7 @@ func Digest(image string) string {
 
 // AppDetail is the App with image references replaced by digests.
 type AppDetail struct {
+	ID          string                            `json:"id,omitempty"`
 	Slug        string                            `json:"slug"`
 	DisplayName string                            `json:"displayName"`
 	Description string                            `json:"description,omitempty"`
@@ -173,7 +182,8 @@ func releaseKind(prev *shpyrdv1.Release, cur shpyrdv1.Release) string {
 
 func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 	d := AppDetail{
-		Slug:        a.Name,
+		ID:          a.Spec.ID,
+		Slug:        project.SlugOf(a),
 		DisplayName: project.DisplayName(a),
 		Description: project.Description(a),
 		Featured:    project.Featured(a),
@@ -250,7 +260,7 @@ func (s *Server) listApps(c *gin.Context) {
 	out := make([]AppSummary, 0, len(list.Items))
 	ws := s.workspace(c)
 	for i := range list.Items {
-		if workspaceOf(&list.Items[i]) != ws || !s.canView(c, list.Items[i].Name) {
+		if workspaceOf(&list.Items[i]) != ws || !s.canView(c, project.SlugOf(&list.Items[i])) {
 			continue
 		}
 		out = append(out, summarize(&list.Items[i]))
@@ -264,22 +274,82 @@ func (s *Server) listApps(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// projectKey locates the App of the project named in the path, in the
-// request's workspace (RFC-0033: the namespace carries the workspace).
-func (s *Server) projectKey(c *gin.Context) types.NamespacedName {
-	slug := c.Param("slug")
-	return types.NamespacedName{Namespace: s.projectNamespace(c), Name: slug}
+// findApp resolves a project slug within a workspace to its App (RFC-0076:
+// the path carries the slug, what people type; the App is named by its id).
+// A legacy project sits at app-<ws>-<slug>/<slug> and is tried first — one
+// exact read; otherwise the Apps labelled with the slug are listed (from the
+// cache) and the one in this workspace whose slug it is wins. ErrNotFound
+// when there is none.
+func (s *Server) findApp(ctx context.Context, ws, slug string) (*shpyrdv1.App, error) {
+	if !project.ValidSlug(slug) {
+		return nil, store.ErrNotFound
+	}
+	legacy := &shpyrdv1.App{}
+	err := s.apps.Get(ctx, types.NamespacedName{Namespace: project.NamespaceIn(ws, slug), Name: slug}, legacy)
+	if err == nil && workspaceOf(legacy) == ws {
+		return legacy, nil
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	var list shpyrdv1.AppList
+	if err := s.apps.List(ctx, &list, client.MatchingLabels{shpyrdv1.LabelProject: slug}); err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		app := &list.Items[i]
+		if workspaceOf(app) == ws && project.SlugOf(app) == slug && app.DeletionTimestamp.IsZero() {
+			return app, nil
+		}
+	}
+	return nil, store.ErrNotFound
 }
 
-// projectNamespace is the namespace of the project named in the path.
-func (s *Server) projectNamespace(c *gin.Context) string {
-	return project.NamespaceIn(s.workspace(c), c.Param("slug"))
+// projectApp is findApp for the project named in the request path, in the
+// request's workspace, remembered on the request so handlers that need both
+// the App and its namespace read once.
+func (s *Server) projectApp(c *gin.Context) (*shpyrdv1.App, error) {
+	if v, ok := c.Get("shpyrd.project"); ok {
+		if app, ok := v.(*shpyrdv1.App); ok {
+			return app, nil
+		}
+	}
+	app, err := s.findApp(c.Request.Context(), s.workspace(c), c.Param("slug"))
+	if err != nil {
+		return nil, err
+	}
+	c.Set("shpyrd.project", app)
+	return app, nil
+}
+
+// projectKey locates the App of the project named in the path; a zero
+// key when the project does not exist (the Get that follows says so).
+func (s *Server) projectKey(c *gin.Context) types.NamespacedName {
+	app, err := s.projectApp(c)
+	if err != nil {
+		return types.NamespacedName{}
+	}
+	return types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+}
+
+// projectNamespace is the namespace of the project named in the path; it
+// answers the request with 404 (or 502) itself when there is none.
+func (s *Server) projectNamespace(c *gin.Context) (string, bool) {
+	app, err := s.projectApp(c)
+	if errors.Is(err, store.ErrNotFound) {
+		abort(c, http.StatusNotFound, errors.New("project not found"))
+		return "", false
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return "", false
+	}
+	return app.Namespace, true
 }
 
 func (s *Server) loadApp(c *gin.Context) (*shpyrdv1.App, bool) {
-	app := &shpyrdv1.App{}
-	err := s.apps.Get(c.Request.Context(), s.projectKey(c), app)
-	if apierrors.IsNotFound(err) {
+	app, err := s.projectApp(c)
+	if errors.Is(err, store.ErrNotFound) || apierrors.IsNotFound(err) {
 		abort(c, http.StatusNotFound, errors.New("project not found"))
 		return nil, false
 	}
@@ -287,7 +357,8 @@ func (s *Server) loadApp(c *gin.Context) (*shpyrdv1.App, bool) {
 		abort(c, http.StatusBadGateway, err)
 		return nil, false
 	}
-	return app, true
+	// A fresh copy: handlers mutate what they load.
+	return app.DeepCopy(), true
 }
 
 func (s *Server) getApp(c *gin.Context) {
@@ -339,12 +410,17 @@ func (s *Server) createApp(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	// app-<workspace>-<project> must stay a DNS label (63 characters).
-	if !ws.Implicit() && len(project.NamespaceIn(ws.Slug, slug)) > 63 {
-		abort(c, http.StatusBadRequest, fmt.Errorf("slug %q is too long for this workspace: at most %d characters", slug, 63-len("app-"+ws.Slug+"-")))
+	ctx := c.Request.Context()
+	// The slug is unique within the workspace (RFC-0076: it is a label on
+	// the App, the App is named by its id, so the API checks — not the
+	// API server's name uniqueness).
+	if _, err := s.findApp(ctx, ws.Slug, slug); err == nil {
+		abort(c, http.StatusConflict, fmt.Errorf("project %q already exists; choose another slug, for example %s-2", slug, slug))
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	ctx := c.Request.Context()
 	if limits := s.planOf(ctx, ws.Slug); limits != nil && limits.Projects > 0 {
 		cat, err := s.catalog(ctx)
 		if err != nil {
@@ -361,9 +437,14 @@ func (s *Server) createApp(c *gin.Context) {
 			return
 		}
 	}
+	// Identity (RFC-0076): a UUID, the App named by its short form in its
+	// own namespace p-<short id>; the slug and workspace are labels.
+	id := uuid.NewString()
+	short := ids.Short(id)
+	labels := project.NamespaceLabelsFor(ws.Slug, ws.ID, id, slug, short)
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   project.NamespaceIn(ws.Slug, slug),
-		Labels: project.NamespaceLabels(ws.Slug, slug),
+		Name:   project.IDNamespace(id),
+		Labels: labels,
 	}}
 	if err := s.apps.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		abort(c, http.StatusBadGateway, fmt.Errorf("create namespace: %w", err))
@@ -378,22 +459,18 @@ func (s *Server) createApp(c *gin.Context) {
 		return
 	}
 	app := &shpyrdv1.App{
-		ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: ns.Name, Labels: project.NamespaceLabels(ws.Slug, slug)},
-		Spec:       shpyrdv1.AppSpec{Domains: req.Domains, Processes: req.Processes, Access: access},
+		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns.Name, Labels: labels},
+		Spec:       shpyrdv1.AppSpec{ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
 	}
 	project.SetDisplayName(app, req.Name)
 	if req.Git != nil && req.Git.URL != "" {
 		app.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
 	}
 	if err := s.apps.Create(ctx, app); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			abort(c, http.StatusConflict, fmt.Errorf("project %q already exists; choose another slug, for example %s-2", slug, slug))
-			return
-		}
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	s.audit(c, app.Name, "project.create", project.Label(app), "")
+	s.audit(c, slug, "project.create", project.Label(app), "")
 	s.grantCreator(c, slug)
 	c.JSON(http.StatusCreated, summarize(app))
 }
@@ -469,7 +546,7 @@ func (s *Server) updateApp(c *gin.Context) {
 	if req.Name != nil && req.Description == nil && req.Featured == nil {
 		action = "project.rename"
 	}
-	s.audit(c, app.Name, action, project.Label(app), strings.Join(changes, ", "))
+	s.audit(c, project.SlugOf(app), action, project.Label(app), strings.Join(changes, ", "))
 	c.JSON(http.StatusOK, detail(app, s.buildsByDigest(c.Request.Context(), app)))
 }
 
@@ -622,7 +699,7 @@ func (s *Server) deployApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "deploy", app.Name, deployDetail(req))
+	s.audit(c, project.SlugOf(app), "deploy", project.SlugOf(app), deployDetail(req))
 	c.JSON(http.StatusAccepted, detail(app, s.buildsByDigest(c.Request.Context(), app)))
 }
 
@@ -647,9 +724,8 @@ func (s *Server) validateAllow(c *gin.Context, self string, entries []shpyrdv1.A
 		if !project.ValidSlug(e.Project) {
 			return fmt.Errorf("allow: %q is not a project slug", e.Project)
 		}
-		other := &shpyrdv1.App{}
-		err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: project.NamespaceIn(s.workspace(c), e.Project), Name: e.Project}, other)
-		if apierrors.IsNotFound(err) {
+		_, err := s.findApp(c.Request.Context(), s.workspace(c), e.Project)
+		if errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("allow: no project %q in this workspace", e.Project)
 		}
 		if err != nil {
@@ -743,12 +819,12 @@ func (s *Server) deleteApp(c *gin.Context) {
 		return
 	}
 	// Grants on a destroyed project go with it (RFC-0033).
-	if err := s.store.DeleteProjectGrants(c.Request.Context(), s.workspace(c), app.Name); err != nil {
-		s.log.Warn("could not remove the project's grants", "project", app.Name, "err", err.Error())
+	if err := s.store.DeleteProjectGrants(c.Request.Context(), s.workspace(c), project.SlugOf(app)); err != nil {
+		s.log.Warn("could not remove the project's grants", "project", project.SlugOf(app), "err", err.Error())
 	} else {
 		s.membershipChanged()
 	}
-	s.audit(c, app.Name, "project.destroy", app.Name, "")
+	s.audit(c, project.SlugOf(app), "project.destroy", project.SlugOf(app), "")
 	c.JSON(http.StatusAccepted, gin.H{"status": "deleting"})
 }
 
@@ -785,7 +861,7 @@ func (s *Server) scaleApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "scale", app.Name, fmt.Sprintf("%s=%d", req.Process, *req.Replicas))
+	s.audit(c, project.SlugOf(app), "scale", project.SlugOf(app), fmt.Sprintf("%s=%d", req.Process, *req.Replicas))
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -824,7 +900,7 @@ func (s *Server) rollbackApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "rollback", app.Name, fmt.Sprintf("to v%d", req.Release))
+	s.audit(c, project.SlugOf(app), "rollback", project.SlugOf(app), fmt.Sprintf("to v%d", req.Release))
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -868,7 +944,7 @@ func (s *Server) setExposure(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "exposure", app.Name, req.Exposure)
+	s.audit(c, project.SlugOf(app), "exposure", project.SlugOf(app), req.Exposure)
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -898,7 +974,7 @@ func (s *Server) setAccess(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "access", app.Name, req.Access)
+	s.audit(c, project.SlugOf(app), "access", project.SlugOf(app), req.Access)
 	c.JSON(http.StatusOK, summarize(app))
 }
 
@@ -959,7 +1035,7 @@ func (s *Server) redeployApp(c *gin.Context) {
 	if action == "rebuild" {
 		msg = "Building the same source again"
 	}
-	s.audit(c, app.Name, "redeploy", app.Name, action)
+	s.audit(c, project.SlugOf(app), "redeploy", project.SlugOf(app), action)
 	c.JSON(http.StatusOK, RedeployResult{Action: action, Message: msg, App: summarize(app)})
 }
 
@@ -1058,6 +1134,6 @@ func (s *Server) setAllow(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, app.Name, "allow", app.Name, fmt.Sprintf("%d entries", len(req)))
+	s.audit(c, project.SlugOf(app), "allow", project.SlugOf(app), fmt.Sprintf("%d entries", len(req)))
 	c.JSON(http.StatusOK, app.EffectiveAllow())
 }

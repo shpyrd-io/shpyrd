@@ -169,7 +169,7 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 			project.SetDisplayName(app, name)
 			if ac.session {
 				body, _ := json.Marshal(map[string]string{"name": name})
-				if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+app.Name, body, "application/json"); err != nil {
+				if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+project.SlugOf(app), body, "application/json"); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
@@ -178,7 +178,7 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 			if err := ac.c.Update(ctx, app); err != nil {
 				return err
 			}
-			ac.audit(ctx, app.Name, "project.rename", project.Label(app), "")
+			ac.audit(ctx, project.SlugOf(app), "project.rename", project.Label(app), "")
 			fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
 			return nil
 		},
@@ -282,7 +282,7 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 			printAppInfo(cmd, app)
 			var vols []shpyrdv1.Volume
 			if ac.session {
-				vols, _ = ac.listVolumesAPI(ctx, app.Name)
+				vols, _ = ac.listVolumesAPI(ctx, project.SlugOf(app))
 			} else {
 				var list shpyrdv1.VolumeList
 				_ = ac.c.List(ctx, &list, client.InNamespace(app.Namespace))
@@ -300,7 +300,7 @@ func printResources(cmd *cobra.Command, app *shpyrdv1.App, vols []shpyrdv1.Volum
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Resources:")
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", "App", app.Name, firstNonEmpty(app.Status.Phase, "Pending"), firstNonEmpty(app.Status.URL, "-"))
+	fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", "App", project.SlugOf(app), firstNonEmpty(app.Status.Phase, "Pending"), firstNonEmpty(app.Status.URL, "-"))
 	for _, b := range app.Spec.Bindings {
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", b.Kind, b.Name, "attached", "config vars "+strings.ToUpper(firstNonEmpty(b.Prefix, defaultPrefix(b.Kind)))+"_*")
 	}
@@ -428,7 +428,7 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 				items, _ := ac.listVolumesAPI(ctx, name)
 				vols.Items = items
 			} else {
-				_ = ac.c.List(ctx, &vols, client.InNamespace(appNamespace(name)))
+				_ = ac.c.List(ctx, &vols, client.InNamespace(app.Namespace))
 			}
 			if len(vols.Items) > 0 {
 				var names []string
@@ -440,7 +440,7 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 			if !confirm(cmd, yes, fmt.Sprintf("Delete project %s with all its resources?", project.Label(app)), false) {
 				return fmt.Errorf("aborted")
 			}
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: appNamespace(name)}}
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: app.Namespace}}
 			if ac.session {
 				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name, nil, ""); err != nil {
 					return err

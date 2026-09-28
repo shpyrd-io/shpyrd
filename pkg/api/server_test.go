@@ -22,8 +22,11 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 const testToken = "secret-token"
@@ -316,7 +319,7 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 		t.Fatalf("deploy: %d %s", rec.Code, rec.Body.String())
 	}
 	got := &shpyrdv1.App{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got); err != nil {
+	if err := cr.Get(context.Background(), keyOf(t, s, "newapp"), got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Spec.Source == nil || got.Spec.Source.Git.Revision != "main" || got.Spec.Source.SubPath != "svc" || len(got.Spec.Processes) != 2 {
@@ -329,7 +332,7 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("dockerfile deploy: %d %s", rec.Code, rec.Body.String())
 	}
-	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got); err != nil {
+	if err := cr.Get(context.Background(), keyOf(t, s, "newapp"), got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Spec.Build == nil || got.Spec.Build.Strategy != shpyrdv1.StrategyDockerfile || got.Spec.Build.Dockerfile != "deploy/Dockerfile" {
@@ -344,17 +347,17 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("deploy with env: %d %s", rec.Code, rec.Body.String())
 	}
-	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	_ = cr.Get(context.Background(), keyOf(t, s, "newapp"), got)
 	if len(got.Spec.Env) != 1 || got.Spec.Env[0].Name != "RAILS_ENV" {
 		t.Errorf("env not applied: %+v", got.Spec.Env)
 	}
 	do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"}}`, true)
-	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	_ = cr.Get(context.Background(), keyOf(t, s, "newapp"), got)
 	if len(got.Spec.Env) != 1 {
 		t.Errorf("a deploy without env must keep the variables: %+v", got.Spec.Env)
 	}
 	do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"env":[]}`, true)
-	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-newapp", Name: "newapp"}, got)
+	_ = cr.Get(context.Background(), keyOf(t, s, "newapp"), got)
 	if len(got.Spec.Env) != 0 {
 		t.Errorf("an empty env list must clear the variables: %+v", got.Spec.Env)
 	}
@@ -364,7 +367,7 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 		}
 	}
 	ns := &corev1.Namespace{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Name: "app-newapp"}, ns); err != nil {
+	if err := cr.Get(context.Background(), types.NamespacedName{Name: keyOf(t, s, "newapp").Namespace}, ns); err != nil {
 		t.Errorf("namespace not created: %v", err)
 	}
 }
@@ -852,15 +855,27 @@ func TestProjectIdentity(t *testing.T) {
 	}
 	var created AppSummary
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
-	if created.Slug != "my-shop" || created.DisplayName != "My Shop" || created.Namespace != "app-my-shop" {
+	// RFC-0076: the App is named by its id in namespace p-<short id>; the
+	// slug is a field and a label.
+	if created.Slug != "my-shop" || created.DisplayName != "My Shop" || created.ID == "" || created.Namespace != project.IDNamespace(created.ID) {
 		t.Fatalf("created = %+v", created)
 	}
 	app := &shpyrdv1.App{}
-	if err := k.Get(context.Background(), types.NamespacedName{Namespace: "app-my-shop", Name: "my-shop"}, app); err != nil {
+	if err := k.Get(context.Background(), types.NamespacedName{Namespace: created.Namespace, Name: ids.Short(created.ID)}, app); err != nil {
 		t.Fatal(err)
+	}
+	if app.Spec.ID != created.ID || app.Spec.Slug != "my-shop" || app.Labels[shpyrdv1.LabelProject] != "my-shop" || app.Labels[shpyrdv1.LabelProjectID] != ids.Short(created.ID) || !project.IDNamed(app) {
+		t.Errorf("app identity: spec=%+v labels=%v", app.Spec, app.Labels)
 	}
 	if app.Annotations[shpyrdv1.AnnotationDisplayName] != "My Shop" {
 		t.Errorf("annotation = %v", app.Annotations)
+	}
+	ns := &corev1.Namespace{}
+	if err := k.Get(context.Background(), types.NamespacedName{Name: created.Namespace}, ns); err != nil {
+		t.Fatal(err)
+	}
+	if ns.Labels[shpyrdv1.LabelProjectID] != ids.Short(created.ID) || ns.Labels[shpyrdv1.LabelProject] != "my-shop" || ns.Labels[shpyrdv1.LabelWorkspace] != "default" || ns.Labels[shpyrdv1.LabelWorkspaceID] == "" {
+		t.Errorf("namespace labels = %v", ns.Labels)
 	}
 
 	// An explicit slug wins over the derived one.
@@ -874,7 +889,7 @@ func TestProjectIdentity(t *testing.T) {
 		t.Fatalf("plain: %d %s", rec.Code, rec.Body.String())
 	}
 	plain := &shpyrdv1.App{}
-	_ = k.Get(context.Background(), types.NamespacedName{Namespace: "app-plain", Name: "plain"}, plain)
+	_ = k.Get(context.Background(), keyOf(t, s, "plain"), plain)
 	if _, ok := plain.Annotations[shpyrdv1.AnnotationDisplayName]; ok {
 		t.Errorf("plain slug must not carry a display-name annotation: %v", plain.Annotations)
 	}
@@ -1154,4 +1169,15 @@ func TestPostgresSleepAPI(t *testing.T) {
 	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/ha/suspend", "", true); rec.Code != http.StatusBadRequest {
 		t.Errorf("HA suspend must refuse: %d", rec.Code)
 	}
+}
+
+// keyOf is where the API put the project with that slug (RFC-0076: found by
+// slug, named by id).
+func keyOf(t *testing.T, s *Server, slug string) types.NamespacedName {
+	t.Helper()
+	app, err := s.findApp(context.Background(), store.DefaultWorkspace, slug)
+	if err != nil {
+		t.Fatalf("project %s: %v", slug, err)
+	}
+	return types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 }

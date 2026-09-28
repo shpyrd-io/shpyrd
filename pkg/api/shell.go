@@ -14,6 +14,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // The web terminal (RFC-0026): a shell into a running instance from the
@@ -148,7 +149,7 @@ func (s *Server) mintShellTicket(c *gin.Context) {
 		return
 	}
 	id, _ := ext.IdentityFrom(c)
-	if s.shells.held(actorKey(id), app.Name) {
+	if s.shells.held(actorKey(id), project.SlugOf(app)) {
 		abort(c, http.StatusConflict, errors.New("you already have a shell open on this project; close it first"))
 		return
 	}
@@ -161,7 +162,7 @@ func (s *Server) mintShellTicket(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("the command is too long"))
 		return
 	}
-	code, err := s.execTickets.mint(execTicket{Identity: id, Project: app.Name, Instance: instance, Command: command})
+	code, err := s.execTickets.mint(execTicket{Identity: id, Project: project.SlugOf(app), Instance: instance, Command: command})
 	if errors.Is(err, errTicketsFull) {
 		// Not the caller's fault and not permanent: the store drains itself
 		// within a ticket's 30 seconds, so say so rather than reporting a fault.

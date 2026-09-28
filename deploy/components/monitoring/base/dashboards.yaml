@@ -69,14 +69,14 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-          "targets": [{"refId": "A", "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{namespace=~\"app-.*\", container!=\"\"}[2m]))", "legendFormat": "{{namespace}}"}]
+          "targets": [{"refId": "A", "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{namespace=~\"(app|p)-.*\", container!=\"\"}[2m]))", "legendFormat": "{{namespace}}"}]
         },
         {
           "id": 6, "type": "timeseries", "title": "Memory (working set) by app namespace",
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
-          "targets": [{"refId": "A", "expr": "sum by (namespace) (container_memory_working_set_bytes{namespace=~\"app-.*\", container!=\"\"})", "legendFormat": "{{namespace}}"}]
+          "targets": [{"refId": "A", "expr": "sum by (namespace) (container_memory_working_set_bytes{namespace=~\"(app|p)-.*\", container!=\"\"})", "legendFormat": "{{namespace}}"}]
         }
       ]
     }

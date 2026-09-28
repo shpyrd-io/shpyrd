@@ -168,12 +168,23 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	_, idleFromMetrics := w.nodeMetrics(ctx)
 
 	// ---- Build namespace → workspace mapping --------------------------------
+	// Exact: every project the store knows names its namespace (RFC-0076,
+	// p-<id> or a legacy app-<...>). Legacy namespaces the controller has
+	// not mirrored yet fall back to the slug prefix.
 	nsToWS := map[string]string{}
+	prefixToWS := map[string]string{}
 	var implicitWS string
 	for _, ws := range workspaces {
-		nsToWS["app-"+ws.Slug] = ws.ID
+		prefixToWS["app-"+ws.Slug] = ws.ID
 		if implicitWS == "" {
 			implicitWS = ws.ID
+		}
+		if projects, err := w.store.ListProjects(ctx, ws.ID, true); err == nil {
+			for _, p := range projects {
+				if p.Namespace != "" {
+					nsToWS[p.Namespace] = ws.ID
+				}
+			}
 		}
 	}
 
@@ -191,21 +202,20 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 			sharedTotal += total
 			continue
 		}
-		if !strings.HasPrefix(ns, "app-") {
-			continue
-		}
-		wsID := ""
-		for prefix, id := range nsToWS {
-			if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
-				wsID = id
-				break
+		wsID := nsToWS[ns]
+		if wsID == "" && strings.HasPrefix(ns, "app-") {
+			for prefix, id := range prefixToWS {
+				if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
+					wsID = id
+					break
+				}
+			}
+			if wsID == "" {
+				wsID = implicitWS
 			}
 		}
 		if wsID == "" {
-			wsID = implicitWS
-		}
-		if wsID == "" {
-			continue
+			continue // not a project namespace, or one the store has not seen yet
 		}
 		a := wsCosts[wsID]
 		a.cpu += item.CPUCost

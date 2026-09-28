@@ -19,6 +19,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	project_ "github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
@@ -163,17 +164,17 @@ func (s *Server) appShell(c *gin.Context) {
 		return
 	}
 	actor := actorKey(t.Identity)
-	if !s.shells.claim(actor, app.Name) {
+	if !s.shells.claim(actor, project.SlugOf(app)) {
 		abort(c, http.StatusConflict, errors.New("you already have a shell open on this project; close it first"))
 		return
 	}
-	defer s.shells.release(actor, app.Name)
+	defer s.shells.release(actor, project.SlugOf(app))
 
 	up := websocket.Upgrader{CheckOrigin: sameOrigin}
 	conn, err := up.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		// Upgrade has already written its own response.
-		s.log.Warn("shell: upgrade failed", "project", app.Name, "error", err)
+		s.log.Warn("shell: upgrade failed", "project", project.SlugOf(app), "error", err)
 		return
 	}
 	defer conn.Close()
@@ -185,7 +186,7 @@ func (s *Server) appShell(c *gin.Context) {
 	// registry and every other tenant's dashboard, and this route is reachable
 	// by anyone holding project.exec on a single project of their own.
 	conn.SetReadLimit(shellReadLimit)
-	s.runShell(c, conn, app.Namespace, pod, t.Instance, app.Name, t.Command)
+	s.runShell(c, conn, app.Namespace, pod, t.Instance, project.SlugOf(app), t.Command)
 }
 
 // runShell resolves the shell (or takes the ticket's command), then pipes

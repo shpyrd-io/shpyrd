@@ -16,7 +16,16 @@ const (
 	// LabelManagedBy is set on namespaces created for apps.
 	LabelManagedBy = "app.kubernetes.io/managed-by"
 	// LabelProject marks the namespace of a project (value: project slug).
+	// Since RFC-0076 it is a display label, updated on rename; nothing
+	// selects on it.
 	LabelProject = "shpyrd.io/project"
+	// LabelProjectID is the authoritative project identity on the
+	// namespace and every object of the project (RFC-0076): the project's
+	// ID in its short base36 form, never changing.
+	LabelProjectID = "shpyrd.io/project-id"
+	// LabelWorkspaceID is the authoritative workspace identity (RFC-0076):
+	// the workspace's ID in its short base36 form.
+	LabelWorkspaceID = "shpyrd.io/workspace-id"
 	// Access values (RFC-0033).
 	AccessPublic        = "public"
 	AccessAuthenticated = "authenticated"
@@ -99,6 +108,21 @@ const (
 
 // AppSpec is the desired state of an application.
 type AppSpec struct {
+	// ID is the project's stable identifier, a UUID (RFC-0076). Set once at
+	// creation and never changed. Projects created since RFC-0076 are named
+	// by its short base36 form and live in namespace p-<short id>; legacy
+	// projects (named by their slug in an app-<slug> namespace) receive an
+	// ID from the controller and keep their names.
+	// +optional
+	ID string `json:"id,omitempty"`
+
+	// Slug is the project's short name: the hostname label
+	// (<slug>.<workspace address>) and what people type in the CLI. Unique
+	// within the workspace, mutable. Empty on legacy projects, whose slug is
+	// their name.
+	// +optional
+	Slug string `json:"slug,omitempty"`
+
 	// Source is where the application code comes from. It is built into an
 	// image with buildpacks. Leave empty when Image is set.
 	// +optional

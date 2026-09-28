@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 )
 
 // The chart table for a project's Metrics tab. Kept apart from the handler
@@ -127,7 +128,7 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 			// replica count is a single number, with nothing to break down per
 			// instance.
 			Chart:    Chart{ID: "instances", Title: "Instances", Unit: "count", Kind: "step"},
-			Query:    instancesQuery(ns, name, opts.Process),
+			Query:    instancesQuery(ns, controller.WorkloadName(app, opts.Process), opts.Process),
 			LabelKey: "deployment",
 			nameMap:  stripApp,
 		},
@@ -172,11 +173,11 @@ func chartQueries(app *shpyrdv1.App, opts metricsOptions) []chartQuery {
 // it goes through %q exactly like procFilter above rather than a raw %s — a
 // crafted value must stay inside the string literal it is placed in, not
 // close the selector and add a second matcher of its own.
-func instancesQuery(ns, app, process string) string {
+func instancesQuery(ns, deployment, process string) string {
 	if process == "" {
 		return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s"})`, ns)
 	}
-	return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s",deployment=%q})`, ns, app+"-"+process)
+	return fmt.Sprintf(`sum by (deployment) (kube_deployment_status_replicas_available{namespace="%s",deployment=%q})`, ns, deployment)
 }
 
 // hostRegex builds a PromQL regex matching the app's ingress hosts.

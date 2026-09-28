@@ -78,11 +78,15 @@ detach is a release that can be rolled back.
 				fmt.Fprintln(cmd.OutOrStdout(), "Releasing with the new configuration (the app waits while the resource is still provisioning).")
 				return nil
 			}
-			t, err := ac.findResource(ctx, appNamespace(name), args[0], kind)
+			app, err := ac.getApp(ctx, name)
 			if err != nil {
 				return err
 			}
-			app, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
+			t, err := ac.findResource(ctx, app.Namespace, args[0], kind)
+			if err != nil {
+				return err
+			}
+			app, err = ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
 				for _, b := range a.Spec.Bindings {
 					if b.Kind == t.Kind && b.Name == args[0] {
 						return fmt.Errorf("%s %s is already attached", t.Kind, args[0])
