@@ -298,7 +298,7 @@ func (w *cogsWriter) nodeMetrics(ctx context.Context) (nodeCost, idleCost float6
 			nodeCost += v
 		case strings.HasPrefix(line, "container_cpu_allocation{"):
 			cpuAllocated += v
-		case strings.HasPrefix(line, "kube_node_status_capacity{resource=\"cpu\""):
+		case strings.HasPrefix(line, "kube_node_status_allocatable{") && strings.Contains(line, "resource=\"cpu\""):
 			cpuCapacity += v
 		}
 	}
