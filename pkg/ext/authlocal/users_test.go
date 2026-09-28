@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -104,3 +105,65 @@ func TestStoreLifecycle(t *testing.T) {
 func metav1GetOptions() metav1.GetOptions { return metav1.GetOptions{} }
 
 func decodeHash(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
+
+func TestPendingAndLockout(t *testing.T) {
+	scheme := runtime.NewScheme()
+	gvr := PasswordGVR
+	scheme.AddKnownTypeWithName(schema.GroupVersionKind{Group: gvr.Group, Version: gvr.Version, Kind: "Password"}, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(schema.GroupVersionKind{Group: gvr.Group, Version: gvr.Version, Kind: "PasswordList"}, &unstructured.UnstructuredList{})
+	dyn := dynamicfake.NewSimpleDynamicClient(scheme)
+	st := &Store{Dynamic: dyn, Namespace: "test"}
+	ctx := context.Background()
+
+	// CreatePending: no usable password, status=pending.
+	if err := st.CreatePending(ctx, "ada@example.test", "Ada"); err != nil {
+		t.Fatalf("CreatePending: %v", err)
+	}
+	users, _ := st.List(ctx)
+	if len(users) != 1 || users[0].Status != StatusPending || users[0].Verified {
+		t.Fatalf("after CreatePending: %+v", users)
+	}
+	// Re-invite: no error, still pending.
+	if err := st.CreatePending(ctx, "ada@example.test", "Ada"); err != nil {
+		t.Fatalf("re-invite: %v", err)
+	}
+	// The hash must be unusable: no real password should match it.
+	obj, _ := st.res().Get(ctx, PasswordName("ada@example.test"), metav1.GetOptions{})
+	raw, _, _ := unstructured.NestedString(obj.Object, "hash")
+	hashBytes, _ := base64.StdEncoding.DecodeString(raw)
+	if bcrypt.CompareHashAndPassword(hashBytes, []byte("anything")) == nil {
+		t.Error("pending hash must not match any password")
+	}
+
+	// ActivateFromInvite: sets real password, clears pending, marks verified.
+	if err := st.ActivateFromInvite(ctx, "ada@example.test", "secure123"); err != nil {
+		t.Fatalf("ActivateFromInvite: %v", err)
+	}
+	users, _ = st.List(ctx)
+	if users[0].Status != StatusActive || !users[0].Verified {
+		t.Fatalf("after activate: %+v", users[0])
+	}
+
+	// Lock and IsLocked.
+	if err := st.Lock(ctx, "ada@example.test", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	if locked, err := st.IsLocked(ctx, "ada@example.test"); err != nil || !locked {
+		t.Fatalf("IsLocked after lock: %v %v", locked, err)
+	}
+	// Unlock: zero time clears the annotation.
+	if err := st.Lock(ctx, "ada@example.test", time.Time{}); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if locked, _ := st.IsLocked(ctx, "ada@example.test"); locked {
+		t.Error("should not be locked after unlock")
+	}
+	// SetPasswordAndVerify unlocks and marks verified.
+	_ = st.Lock(ctx, "ada@example.test", time.Now().Add(time.Hour))
+	if err := st.SetPasswordAndVerify(ctx, "ada@example.test", "newpass1"); err != nil {
+		t.Fatalf("SetPasswordAndVerify: %v", err)
+	}
+	if locked, _ := st.IsLocked(ctx, "ada@example.test"); locked {
+		t.Error("SetPasswordAndVerify must clear the lock")
+	}
+}

@@ -232,6 +232,13 @@ func (s *Server) createInvitation(c *gin.Context) {
 			result.Emailed = true
 		}
 	}
+	// RFC-0014: if auth-local is enabled and the person has no local account
+	// yet, create a pending account and send the set-password link alongside
+	// (or in place of) the workspace invite. A single shpyrd invite email
+	// covers both workspace membership and local account creation.
+	if err := s.inviteUser(c, email, strings.SplitN(email, "@", 2)[0]); err != nil {
+		s.log.Warn("invite: could not create pending local account", "email", email, "err", err.Error())
+	}
 	c.JSON(http.StatusCreated, result)
 }
 

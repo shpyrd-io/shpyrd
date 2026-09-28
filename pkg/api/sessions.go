@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -236,6 +237,22 @@ func (st *sessionStore) delete(ctx context.Context, id string) {
 }
 
 // count is used by tests and the cluster page.
+// deleteByEmail removes all sessions belonging to email (called after a
+// password reset so the person must sign in fresh).
+func (st *sessionStore) deleteByEmail(ctx context.Context, email string) {
+	st.mu.Lock()
+	var ids []string
+	for id, cs := range st.cache {
+		if cs != nil && cs.s != nil && strings.EqualFold(cs.s.Identity.Email, email) {
+			ids = append(ids, id)
+		}
+	}
+	st.mu.Unlock()
+	for _, id := range ids {
+		st.delete(ctx, id)
+	}
+}
+
 func (st *sessionStore) count() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

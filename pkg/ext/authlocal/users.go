@@ -42,7 +42,26 @@ type User struct {
 	Email     string    `json:"email"`
 	Name      string    `json:"name,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Status is "active", "pending" (invited, no password yet) or "locked".
+	Status    string    `json:"status,omitempty"`
+	// Verified reports whether the email address has been confirmed.
+	Verified  bool      `json:"verified"`
 }
+
+// Account status values.
+const (
+	StatusActive  = "active"
+	StatusPending = "pending"  // invited; no usable password
+	StatusLocked  = "locked"   // locked after repeated failures
+)
+
+// Annotation keys on Password objects.
+const (
+	AnnotationInvited  = "shpyrd.io/invited"   // "true" = pending invitation
+	AnnotationVerified = "shpyrd.io/verified"  // "true" = email verified
+	AnnotationLocked   = "shpyrd.io/locked"    // RFC3339 lock expiry or ""
+	AnnotationFailures = "shpyrd.io/failures"  // JSON: count + window start
+)
 
 // nameEncoding is the alphabet Dex uses to turn ids into object names.
 var nameEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567")
@@ -91,12 +110,33 @@ func (s *Store) List(ctx context.Context) ([]User, error) {
 	}
 	out := make([]User, 0, len(list.Items))
 	for _, u := range list.Items {
-		email, _, _ := unstructured.NestedString(u.Object, "email")
-		name, _, _ := unstructured.NestedString(u.Object, "username")
-		out = append(out, User{Email: email, Name: name, CreatedAt: u.GetCreationTimestamp().Time})
+		out = append(out, userOf(u))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
 	return out, nil
+}
+
+// userOf converts a Dex Password object to a User.
+func userOf(u unstructured.Unstructured) User {
+	email, _, _ := unstructured.NestedString(u.Object, "email")
+	name, _, _ := unstructured.NestedString(u.Object, "username")
+	ann := u.GetAnnotations()
+	status := StatusActive
+	if ann[AnnotationInvited] == "true" {
+		status = StatusPending
+	}
+	if exp := ann[AnnotationLocked]; exp != "" {
+		if t, err := time.Parse(time.RFC3339, exp); err == nil && time.Now().Before(t) {
+			status = StatusLocked
+		}
+	}
+	return User{
+		Email:    email,
+		Name:     name,
+		CreatedAt: u.GetCreationTimestamp().Time,
+		Status:   status,
+		Verified: ann[AnnotationVerified] == "true",
+	}
 }
 
 // Create adds an account; the email must be new.
@@ -163,6 +203,192 @@ func (s *Store) SetPassword(ctx context.Context, email, password string) error {
 		return err
 	}
 	obj.Object["hash"] = base64.StdEncoding.EncodeToString(hash)
+	if _, err := s.res().Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		return wrap(err)
+	}
+	return nil
+}
+
+// unusableHash is a bcrypt hash no plaintext will ever produce, used for
+// pending accounts that have no password yet.
+const unusableHash = "$2a$10$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+// CreatePending creates an account in the "pending" state (invited): a
+// Password object with an unusable hash. The person uses the invite link
+// to set their own password. Implements ext.LocalAccountStore.
+func (s *Store) CreatePending(ctx context.Context, email, name string) error {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		name = strings.SplitN(email, "@", 2)[0]
+	}
+	idRaw := make([]byte, 16)
+	if _, err := rand.Read(idRaw); err != nil {
+		return err
+	}
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": PasswordGVR.Group + "/" + PasswordGVR.Version,
+		"kind":       "Password",
+		"metadata": map[string]interface{}{
+			"name":      PasswordName(email),
+			"namespace": s.Namespace,
+			"labels":    map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"},
+			"annotations": map[string]interface{}{
+				AnnotationInvited: "true",
+			},
+		},
+		"email":    email,
+		"hash":     base64.StdEncoding.EncodeToString([]byte(unusableHash)),
+		"username": name,
+		"userID":   hex.EncodeToString(idRaw),
+	}}
+	created, err := s.res().Create(ctx, obj, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		// Re-invite: mark existing account as pending again, keep its password.
+		_, serr := s.setAnnotation(ctx, email, AnnotationInvited, "true")
+		return serr
+	}
+	if err != nil {
+		return wrap(err)
+	}
+	_ = created
+	return nil
+}
+
+// MarkVerified records that the email address has been confirmed.
+func (s *Store) MarkVerified(ctx context.Context, email string) error {
+	_, err := s.setAnnotation(ctx, email, AnnotationVerified, "true")
+	return err
+}
+
+// Lock locks an account until expiry; expiry="" clears the lock.
+func (s *Store) Lock(ctx context.Context, email string, until time.Time) error {
+	v := until.UTC().Format(time.RFC3339)
+	if until.IsZero() {
+		v = ""
+	}
+	_, err := s.setAnnotation(ctx, email, AnnotationLocked, v)
+	return err
+}
+
+// IsLocked reports whether the account is currently locked.
+func (s *Store) IsLocked(ctx context.Context, email string) (bool, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return false, err
+	}
+	obj, err := s.res().Get(ctx, PasswordName(email), metav1.GetOptions{})
+	if err != nil {
+		return false, wrap(err)
+	}
+	exp := obj.GetAnnotations()[AnnotationLocked]
+	if exp == "" {
+		return false, nil
+	}
+	t, err := time.Parse(time.RFC3339, exp)
+	if err != nil {
+		return false, nil
+	}
+	return time.Now().Before(t), nil
+}
+
+// setAnnotation is a helper: read, patch one annotation, write back.
+func (s *Store) setAnnotation(ctx context.Context, email, key, value string) (*User, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := s.res().Get(ctx, PasswordName(email), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("user %s not found", email)
+		}
+		return nil, wrap(err)
+	}
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	if value == "" {
+		delete(ann, key)
+	} else {
+		ann[key] = value
+	}
+	obj.SetAnnotations(ann)
+	updated, err := s.res().Update(ctx, obj, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	u := userOf(*updated)
+	return &u, nil
+}
+
+// ActivateFromInvite sets the password (clearing the pending state) and marks
+// the email verified — called when the invite link is used.
+func (s *Store) ActivateFromInvite(ctx context.Context, email, password string) error {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	if err := CheckPassword(password); err != nil {
+		return err
+	}
+	obj, err := s.res().Get(ctx, PasswordName(email), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("user %s not found", email)
+		}
+		return wrap(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	obj.Object["hash"] = base64.StdEncoding.EncodeToString(hash)
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	delete(ann, AnnotationInvited)
+	ann[AnnotationVerified] = "true"
+	obj.SetAnnotations(ann)
+	if _, err := s.res().Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		return wrap(err)
+	}
+	return nil
+}
+
+// SetPasswordAndVerify updates the password and marks the email verified
+// (called on reset completion).
+func (s *Store) SetPasswordAndVerify(ctx context.Context, email, password string) error {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	if err := CheckPassword(password); err != nil {
+		return err
+	}
+	obj, err := s.res().Get(ctx, PasswordName(email), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("user %s not found", email)
+		}
+		return wrap(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	obj.Object["hash"] = base64.StdEncoding.EncodeToString(hash)
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[AnnotationVerified] = "true"
+	delete(ann, AnnotationLocked) // unlock on successful reset
+	obj.SetAnnotations(ann)
 	if _, err := s.res().Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
 		return wrap(err)
 	}

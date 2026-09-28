@@ -54,6 +54,13 @@ func (extension) Routes(r ext.Router, deps ext.Deps) error {
 	if deps.Kube != nil {
 		store.Dynamic = deps.Kube.Dynamic
 	}
+	// Surface the store to the server for lockout, reset and invite flows
+	// (RFC-0014). The Deps pointer is not available for direct mutation here,
+	// but ext.Router carries the same Deps by reference — set it through the
+	// router's Deps setter if available, otherwise ignore.
+	if setter, ok := r.(interface{ SetLocalAccounts(ext.LocalAccountStore) }); ok {
+		setter.SetLocalAccounts(store)
+	}
 	// Accounts are managed by platform administrators (RFC-0007, RFC-0008).
 	h := &handlers{store: store}
 	api := r.Admin()

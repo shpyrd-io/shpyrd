@@ -183,6 +183,11 @@ type Server struct {
 	tokenFailures *rateLimiter
 	// passwordFailures throttles wrong passwords per account (RFC-0012).
 	passwordFailures *rateLimiter
+	// resetRateLimit throttles POST /api/auth/reset per IP (RFC-0014).
+	resetRateLimit *rateLimiter
+	// localAccounts is the authlocal user store (RFC-0014): set by the
+	// auth-local extension; used for lockout, reset and invite.
+	localAccounts ext.LocalAccountStore
 	// regCache holds the registry catalog summary for a minute.
 	regCache registryCache
 	// The web terminal (RFC-0026): unredeemed tickets and the live shells.
@@ -272,6 +277,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.authz = &authz.Resolver{Store: opts.Store}
 	s.tokenFailures = newRateLimiter(20)
 	s.passwordFailures = newRateLimiter(10)
+	s.resetRateLimit = newRateLimiter(resetRequestsPerMinute)
 	s.execTickets = newTicketStore(execTicketTTL)
 	s.shells = newShellRegistry()
 	s.execStream = s.streamExec
@@ -334,9 +340,14 @@ func (s *Server) deps() ext.Deps {
 }
 
 // routeGroups implements ext.Router.
-type routeGroups struct{ pub, api, wsAdmin, admin gin.IRouter }
+type routeGroups struct{ pub, api, wsAdmin, admin gin.IRouter; s *Server }
 
 func (r routeGroups) Public() gin.IRouter         { return r.pub }
+func (r routeGroups) SetLocalAccounts(la ext.LocalAccountStore) {
+	if r.s != nil {
+		r.s.localAccounts = la
+	}
+}
 func (r routeGroups) Protected() gin.IRouter      { return r.api }
 func (r routeGroups) WorkspaceAdmin() gin.IRouter { return r.wsAdmin }
 func (r routeGroups) Admin() gin.IRouter          { return r.admin }
@@ -415,6 +426,11 @@ func (s *Server) routes() error {
 	s.engine.GET(edgePathPrefix+"session", tenant, s.edgeSession) // console → workspace sign-in handoff
 
 	s.engine.GET("/api/healthz", s.healthz)
+	// Account self-service pages (RFC-0014): no session required.
+	s.engine.GET("/account/reset", s.showResetPage)
+	s.engine.POST("/account/reset", s.handleReset)
+	s.engine.GET("/account/set-password", s.showSetPasswordPage)
+	s.engine.POST("/account/set-password", s.handleSetPassword)
 	pub := s.engine.Group("/api", tenant)
 	pub.GET("/config", s.config)
 	// Archives are content addressed (SHA-256) and fetched by build
@@ -433,6 +449,7 @@ func (s *Server) routes() error {
 	pub.GET("/auth/callback", login, s.authCallback)
 	pub.GET("/auth/ticket", login, s.authTicket)
 	pub.POST("/auth/password", login, s.authPassword)      // RFC-0012
+	pub.POST("/auth/reset", s.requestReset)                 // RFC-0014: send reset link (public)
 	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
 	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
 	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
@@ -600,7 +617,7 @@ func (s *Server) routes() error {
 	for _, x := range s.opts.Extensions {
 		// Extensions manage cluster-level things (accounts, connectors,
 		// storage): the operator's, so the console's.
-		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin))}, deps); err != nil {
+		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin)), s: s}, deps); err != nil {
 			return fmt.Errorf("extension %s: %w", x.Name(), err)
 		}
 	}

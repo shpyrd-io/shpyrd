@@ -247,6 +247,14 @@ func (rp *relyingParty) provider(id string) *oidcProvider {
 // errBadCredentials is the password grant's "wrong email or password".
 var errBadCredentials = errors.New("wrong email or password")
 
+// lockoutThreshold is the number of failed password attempts before the
+// account is locked for lockoutDuration (RFC-0014).
+const (
+	lockoutThreshold = 10
+	lockoutWindow    = 15 * time.Minute
+	lockoutDuration  = 15 * time.Minute
+)
+
 // password signs a user in with the OAuth2 password grant (RFC-0012): the
 // credentials go to the issuer's token endpoint server to server, and the
 // id_token that comes back is verified like the code flow's. The request is
@@ -496,6 +504,14 @@ func (s *Server) authPassword(c *gin.Context) {
 		abort(c, http.StatusNotFound, errors.New("this workspace does not offer password sign-in"))
 		return
 	}
+	// RFC-0014 lockout: check durable lock first, then in-memory rate limit.
+	if s.localAccounts != nil {
+		if locked, _ := s.localAccounts.IsLocked(c.Request.Context(), email); locked {
+			c.Header("Retry-After", "900")
+			abort(c, http.StatusTooManyRequests, errors.New("account is locked due to repeated failed attempts; try again in 15 minutes or use 'Forgot password'"))
+			return
+		}
+	}
 	if s.passwordFailures.exhausted(email) {
 		c.Header("Retry-After", "60")
 		abort(c, http.StatusTooManyRequests, errors.New("too many failed attempts for this account; try again in a minute"))
@@ -505,7 +521,13 @@ func (s *Server) authPassword(c *gin.Context) {
 	if err != nil {
 		s.log.Warn("password sign-in failed", "email", email, "error", err, "remote", c.ClientIP())
 		if errors.Is(err, errBadCredentials) {
-			s.passwordFailures.allow(email)
+			// Count the failure; lock the account after the threshold.
+			if !s.passwordFailures.allow(email) && s.localAccounts != nil {
+				until := time.Now().Add(lockoutDuration)
+				if lerr := s.localAccounts.Lock(c.Request.Context(), email, until); lerr == nil {
+					s.auditFailure(c, "auth.locked", email, "account locked after repeated failures")
+				}
+			}
 			s.auditFailure(c, "auth.login_failed", email, "wrong password")
 			abort(c, http.StatusUnauthorized, err)
 			return
@@ -513,6 +535,10 @@ func (s *Server) authPassword(c *gin.Context) {
 		s.auditFailure(c, "auth.login_failed", email, err.Error())
 		abort(c, http.StatusBadGateway, errors.New("the sign-in service is not reachable; try again"))
 		return
+	}
+	// Successful sign-in: clear in-memory failure count.
+	if s.localAccounts != nil {
+		_ = s.localAccounts.Lock(c.Request.Context(), email, time.Time{}) // unlock
 	}
 	if err := s.admitSignIn(c.Request.Context(), s.workspace(c), id); err != nil {
 		s.auditFailure(c, "auth.refused", id.Email, err.Error())

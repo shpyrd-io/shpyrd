@@ -7,6 +7,7 @@ package ext
 
 import (
 	"context"
+	"time"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 
 	"github.com/gin-gonic/gin"
@@ -105,6 +106,21 @@ type Deps struct {
 	// Mail sends email on the platform's behalf (RFC-0013): the mail
 	// extension provides it; nil when none is enabled.
 	Mail Mailer
+	// LocalAccounts is the authlocal user store (RFC-0014): the auth-local
+	// extension provides it so the server can check lockout and set passwords
+	// during reset/invite flows. Nil when auth-local is not enabled.
+	LocalAccounts LocalAccountStore
+}
+
+// LocalAccountStore is the interface the server uses from the auth-local
+// extension (RFC-0014). The concrete type is *authlocal.Store.
+type LocalAccountStore interface {
+	IsLocked(ctx context.Context, email string) (bool, error)
+	Lock(ctx context.Context, email string, until time.Time) error
+	MarkVerified(ctx context.Context, email string) error
+	ActivateFromInvite(ctx context.Context, email, password string) error
+	SetPasswordAndVerify(ctx context.Context, email, password string) error
+	CreatePending(ctx context.Context, email, name string) error
 }
 
 // Var reads an install variable, "" when none is configured.

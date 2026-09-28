@@ -59,15 +59,25 @@ func newUsersAddCmd(g ext.CLIGlobals) *cobra.Command {
 	var (
 		name     string
 		password string
+		invite   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add <email>",
-		Short: "Create an account (prompts for the password unless --password is given)",
+		Short: "Create an account (prompts for the password unless --password or --invite is given)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := storeFor(g)
 			if err != nil {
 				return err
+			}
+			if invite {
+				// RFC-0014: create a pending account; the person sets
+				// their own password by clicking the link in their email.
+				if err := st.CreatePending(cliContext(), args[0], name); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Created pending account %s. Send the set-password link via `shpyrd invite %s` or ask them to use \"Forgot password\" once mail is configured.\n", args[0], args[0])
+				return nil
 			}
 			pw, err := passwordOrPrompt(cmd, password, true)
 			if err != nil {
@@ -83,6 +93,7 @@ func newUsersAddCmd(g ext.CLIGlobals) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the part before @)")
 	cmd.Flags().StringVar(&password, "password", "", "password (prompted when omitted; prefer the prompt so it stays out of shell history)")
+	cmd.Flags().BoolVar(&invite, "invite", false, "create a pending account without a password; the person sets it via the reset flow or a workspace invite")
 	return cmd
 }
 
@@ -105,9 +116,17 @@ func newUsersListCmd(g ext.CLIGlobals) *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "EMAIL\tNAME\tCREATED")
+			fmt.Fprintln(tw, "EMAIL\tNAME\tSTATUS\tVERIFIED\tCREATED")
 			for _, u := range users {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", u.Email, u.Name, u.CreatedAt.Local().Format(time.DateTime))
+				status := u.Status
+				if status == "" {
+					status = StatusActive
+				}
+				verified := "no"
+				if u.Verified {
+					verified = "yes"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", u.Email, u.Name, status, verified, u.CreatedAt.Local().Format(time.DateTime))
 			}
 			return tw.Flush()
 		},
