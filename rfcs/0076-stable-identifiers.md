@@ -1,6 +1,6 @@
 # RFC-0076 Stable identifiers: IDs identify, names present
 
-**Status:** provisional, on hold (2026-09-28: deferred while the first cloud is a dev cloud; to be scheduled before the first invoice)
+**Status:** in progress (v0.9.43: part A implemented — new projects named by ID; part B: project rename and migration still missing)
 
 **Owner:** Patrick Negri
 
@@ -13,7 +13,7 @@ keys)
 
 **Creation date:** 2026-09-28
 
-**Last update:** 2026-09-28
+**Last update:** 2026-09-28 (in progress)
 
 ---
 
@@ -167,11 +167,28 @@ migrated, and the ledger is truncated once more before the first invoice.
 
 ## Implementation status
 
-Not started; **on hold** by decision (Patrick, 2026-09-28) while the first cloud is a dev
-cloud. Must land before the first invoice, because ledger rows are immutable and
-`usage_buckets.project` is still the slug. Postgres sleep and the workspace-level sleep
-defaults proceed against slug-keyed identity in the meantime; they key on the App and
-Postgres CRs, whose names the migration will carry over.
+v0.9.43 (part A):
+
+| Part | Status |
+| --- | --- |
+| App `spec.id` + `spec.slug`; `LabelProjectID` / `LabelWorkspaceID` constants; `pkg/project` helpers (`SlugOf`, `IDNamespace`, `IDNamed`, `NamespaceLabelsFor`, `IDLabels`) | done |
+| `pkg/store` migration 000013 (`projects` table); `Projects` interface (`UpsertProject`, `DeleteProject`, `ListProjects`, `ProjectBySlug`, `RekeyProject`); `wsID` accepts UUID | done |
+| Controller: `workloadName`/`ingressName`/`edgeName`/`defaultHost` branch on `IDNamed`; `ensureIdentity` (assigns UUID, stamps `-id` labels, adds finalizer); `mirrorProject` (upserts into the store, re-keys ledger once); isolation policy selects workspace by `-id`, peer projects by `-id` when resolved | done |
+| Metering `nsMapping` reads `-id` labels (workspace UUID, project short id); PromQL `(app\|p)-.*`; OpenCost writer resolves namespaces via the projects table | done |
+| API `findApp`/`projectApp` resolver (legacy exact Get → label-list fallback); `createApp` generates UUID and names by short id in `p-<id>` namespace; `AppSummary`/`AppDetail` carry `id`; billing preview resolves project keys to slugs/names | done |
+| CLI: `findAppKube` for kube-direct lookups; `detailToApp` sets `app.Name` from id; offline `projects create` uses `p-<id>` | done |
+| Legacy projects: receive an id from the controller on first reconcile, keep their `app-<slug>` namespace and slug-derived names, ledger re-keyed once | done |
+| Applied on OKE (v0.9.43): new projects at `p-<id>`, legacy example projects kept | applied |
+
+Known gaps — part B (before first invoice):
+
+- **Project rename**: `shpyrd projects rename` changes `spec.slug`, display labels, the hostname and certificate; old hostname redirects 301 for 30 days.
+- **`shpyrd projects migrate <slug>`**: recreates a legacy project under its id; volumes and databases via snapshot/restore; old namespace deleted after a soak. The first cloud's projects are recreated; the ledger is truncated before the first invoice.
+- **Grants by slug**: `store.Grant.Project` is still the slug; rename must update them.
+- **`--wide` id column** in `shpyrd projects list`.
+- **Economics/COGS** show project short ids; need `nameLedgerProjects` on the COGS side.
+- **`pkg/audit.AppRef`**: still constructs `app-<slug>` for the implicit workspace.
+- **The `app-` slug reservation** can be dropped once no legacy namespace remains.
 
 ## Open questions
 
@@ -207,3 +224,7 @@ Postgres CRs, whose names the migration will carry over.
 - 2026-09-28: written after the first workspace rename on the cloud showed `demo` in the
   Cluster page next to `acme.shpyrd.app`, and the review found `usage_buckets.project`
   keyed by slug.
+- 2026-09-28 (v0.9.43): part A implemented. Legacy projects run unchanged; new projects
+  land in `p-<id>` from the first create. Open questions resolved: spec.id + spec.slug
+  (both); projects table added with `RekeyProject`; `p-` prefix confirmed; display labels
+  kept. Part B (rename, migrate, grants) is the remaining work before the first invoice.
