@@ -244,20 +244,29 @@ func (m *MeteringLoop) postgresActivity(ctx context.Context, at time.Time) error
 	if len(withPolicy) == 0 {
 		return nil
 	}
-	// One query for all of them: backends per (namespace, cluster) over the
-	// last window, so a short burst between scrapes still counts.
-	series, err := m.Prom.QueryInstantSeriesAt(ctx,
-		`max by (namespace, cluster) (max_over_time(cnpg_backends_total{usename!~"postgres|streaming_replica"}[5m]))`, at)
+	// Two queries for all of them. CNPG's PodMonitor labels each database's
+	// series job="<namespace>/<name>". The exporter's own session
+	// (cnpg_metrics_exporter) proves the database is scraped — that is the
+	// "answered" set; client sessions are everything but CNPG's own users.
+	// A database that is scraped but has no client series has zero clients.
+	scraped, err := m.Prom.QueryInstantSeriesAt(ctx,
+		`max by (job) (max_over_time(cnpg_backends_total[5m]))`, at)
 	if err != nil {
 		return fmt.Errorf("cnpg backends: %w", err)
 	}
-	seen := map[string]bool{} // namespace/cluster with ≥1 client backend
-	answered := map[string]bool{}
-	for _, s := range series {
-		key := s.Labels["namespace"] + "/" + s.Labels["cluster"]
-		answered[key] = true
+	clients, err := m.Prom.QueryInstantSeriesAt(ctx,
+		`max by (job) (max_over_time(cnpg_backends_total{usename!~"postgres|streaming_replica|cnpg_metrics_exporter"}[5m]))`, at)
+	if err != nil {
+		return fmt.Errorf("cnpg client backends: %w", err)
+	}
+	answered := map[string]bool{} // "<ns>/<name>" scraped in the window
+	seen := map[string]bool{}     // "<ns>/<name>" with ≥1 client backend
+	for _, s := range scraped {
+		answered[s.Labels["job"]] = true
+	}
+	for _, s := range clients {
 		if s.Value > 0 {
-			seen[key] = true
+			seen[s.Labels["job"]] = true
 		}
 	}
 	now := metav1.NewTime(at)

@@ -23,10 +23,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/go-logr/logr"
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -41,6 +43,9 @@ const (
 
 func main() {
 	log := slog.Default()
+	// controller-runtime's client wants a logger set or it prints a stack
+	// trace at first use.
+	ctrllog.SetLogger(logr.Discard())
 	ns := envOr("SHPYRD_SYSTEM_NAMESPACE", "shpyrd-system")
 
 	cfg, err := rest.InClusterConfig()
