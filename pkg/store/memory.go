@@ -1501,6 +1501,83 @@ func (m *Memory) WriteBuckets(_ context.Context, buckets []UsageBucket) error {
 	}
 	return nil
 }
+
+// RollupHourly mirrors the Postgres rollup on the in-memory tables.
+func (m *Memory) RollupHourly(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := before.UTC().Truncate(time.Hour)
+	type key struct {
+		ws, project, component, metric string
+		hour                           time.Time
+	}
+	type agg struct {
+		sum      float64
+		nilQty   bool
+		missing  bool
+		partial  bool
+		n        int
+		unit     string
+		revision int
+		source   string
+	}
+	groups := map[key]*agg{}
+	var keep []UsageBucket
+	for _, b := range m.billing().buckets {
+		if !b.PeriodStart.Before(cutoff) {
+			keep = append(keep, b)
+			continue
+		}
+		k := key{b.WorkspaceID, b.Project, b.Component, b.Metric, b.PeriodStart.UTC().Truncate(time.Hour)}
+		a := groups[k]
+		if a == nil {
+			a = &agg{unit: b.Unit, source: b.Source}
+			groups[k] = a
+		}
+		a.n++
+		if b.Quantity == nil {
+			a.nilQty = true
+		} else {
+			a.sum += *b.Quantity
+		}
+		a.missing = a.missing || b.Quality == QualityMissing
+		a.partial = a.partial || b.Quality == QualityPartial
+		if b.Revision > a.revision {
+			a.revision = b.Revision
+		}
+	}
+	existing := map[key]bool{}
+	for _, h := range m.billing().hourly {
+		existing[key{h.WorkspaceID, h.Project, h.Component, h.Metric, h.PeriodStart}] = true
+	}
+	rolled := 0
+	for k, a := range groups {
+		if existing[k] {
+			continue
+		}
+		q := QualityComplete
+		switch {
+		case a.missing:
+			q = QualityMissing
+		case a.partial || a.n < 12:
+			q = QualityPartial
+		}
+		var qty *float64
+		if !a.nilQty {
+			v := a.sum
+			qty = &v
+		}
+		m.billing().hourly = append(m.billing().hourly, UsageBucket{
+			WorkspaceID: k.ws, Project: k.project, Component: k.component, Metric: k.metric,
+			PeriodStart: k.hour, PeriodEnd: k.hour.Add(time.Hour),
+			Quantity: qty, Unit: a.unit, Quality: q, Revision: a.revision, Source: a.source,
+		})
+		rolled++
+	}
+	m.billing().buckets = keep
+	return rolled, nil
+}
+
 func (m *Memory) QueryBuckets(_ context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error) {
 	m.mu.Lock()
 	w, err := m.ws(ws)

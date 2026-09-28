@@ -46,6 +46,15 @@ const bucketDelay = 2 * time.Minute
 // default retention is 7 days).
 const catchupWindow = 7 * 24 * time.Hour
 
+// rollupKeep is how much five-minute history stays in usage_buckets; older
+// hours fold into usage_hourly (RFC-0075). Two days keeps the project usage
+// graphs sharp and bounds the table: a cluster with 100 projects and six
+// metrics writes ~170k rows a day at five minutes, ~14k at one hour.
+const rollupKeep = 48 * time.Hour
+
+// rollupEvery is how often the rollup runs.
+const rollupEvery = 6 * time.Hour
+
 // Start runs the metering loop until ctx is cancelled.
 func (m *MeteringLoop) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("metering")
@@ -59,6 +68,30 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 		m.catchup(cctx)
+	}()
+	// Roll up closed hours: once the catch-up has had time to land, then
+	// periodically. The catch-up writes five-minute rows for the last 7 days
+	// and the rollup folds all but the last 48 hours of them.
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Minute):
+		}
+		t := time.NewTicker(rollupEvery)
+		defer t.Stop()
+		for {
+			if n, err := m.Store.RollupHourly(ctx, time.Now().Add(-rollupKeep)); err != nil {
+				logger.Error(err, "hourly rollup failed")
+			} else if n > 0 {
+				logger.Info("hourly rollup", "hours", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
 	}()
 	// Close the first bucket 2 min after the next 5-min boundary.
 	next := nextBoundary(time.Now()).Add(bucketDelay)

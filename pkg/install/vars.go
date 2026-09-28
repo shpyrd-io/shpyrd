@@ -35,13 +35,13 @@ const (
 	VarRegistryInsecure = "SHPYRD_REGISTRY_INSECURE" // "true" keeps the in-cluster registry on plain HTTP (escape hatch, RFC-0059)
 	VarRegistrySecret   = "SHPYRD_REGISTRY_SECRET"   // name of the registry credentials Secret ("" when the registry needs none)
 	// In-cluster registry (RFC-0059).
-	VarRegistryIP       = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
-	VarRegistrySize     = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
-	VarRegistryBucket       = "SHPYRD_REGISTRY_BUCKET"       // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
-	VarRegistryEndpoint     = "SHPYRD_REGISTRY_ENDPOINT"     // S3-compatible endpoint for the registry bucket
-	VarRegistryRegion       = "SHPYRD_REGISTRY_REGION"       // region of the registry bucket
-	VarBuildCacheRegistry   = "SHPYRD_BUILD_CACHE_REGISTRY"  // registry host for kpack registry cache ("" = PVC per app)
-	VarCASource     = "SHPYRD_CA_SOURCE"     // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
+	VarRegistryIP         = "SHPYRD_REGISTRY_IP"          // fixed ClusterIP of the in-cluster registry ("" with an external registry)
+	VarRegistrySize       = "SHPYRD_REGISTRY_SIZE"        // size of its volume claim (only when using filesystem storage)
+	VarRegistryBucket     = "SHPYRD_REGISTRY_BUCKET"      // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
+	VarRegistryEndpoint   = "SHPYRD_REGISTRY_ENDPOINT"    // S3-compatible endpoint for the registry bucket
+	VarRegistryRegion     = "SHPYRD_REGISTRY_REGION"      // region of the registry bucket
+	VarBuildCacheRegistry = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
+	VarCASource           = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
 	// policy-only mode next to the provider's CNI; "none" relies on the
 	// cluster's own engine (kind's kindnet enforces policies).
@@ -89,9 +89,9 @@ const (
 	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
 	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
 	// Cluster autoscaler (RFC-0075): node pool autoscaling for OCI OKE.
-	VarNodePoolID   = "SHPYRD_NODE_POOL_ID"    // OCI node pool OCID ("" = autoscaler not deployed)
-	VarNodeMinCount = "SHPYRD_NODE_MIN_COUNT"   // minimum worker nodes (1 = never fully drain)
-	VarNodeMaxCount = "SHPYRD_NODE_MAX_COUNT"   // maximum worker nodes
+	VarNodePoolID   = "SHPYRD_NODE_POOL_ID"   // OCI node pool OCID ("" = autoscaler not deployed)
+	VarNodeMinCount = "SHPYRD_NODE_MIN_COUNT" // minimum worker nodes (1 = never fully drain)
+	VarNodeMaxCount = "SHPYRD_NODE_MAX_COUNT" // maximum worker nodes
 	// AWS Load Balancer Controller (RFC-0035): the cluster it manages and the
 	// Elastic IPs of the public front door.
 	VarAWSCluster = "SHPYRD_AWS_CLUSTER"

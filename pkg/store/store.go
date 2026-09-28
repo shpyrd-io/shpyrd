@@ -464,6 +464,11 @@ type Billing interface {
 	// QueryBuckets returns buckets for a workspace and optional project, from
 	// the five-minute table when the range is recent or the hourly table otherwise.
 	QueryBuckets(ctx context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error)
+	// RollupHourly folds five-minute buckets whose hour closed before the given
+	// time into usage_hourly (sum of quantities; quality is the worst of the
+	// hour's buckets) and deletes the folded five-minute rows. Idempotent: an
+	// hour already rolled up is left alone. Returns hours rolled up.
+	RollupHourly(ctx context.Context, before time.Time) (int, error)
 
 	// Invoice lines.
 	// UpsertInvoiceLine writes or replaces an invoice line (same (ws, period,

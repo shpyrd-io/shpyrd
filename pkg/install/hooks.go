@@ -51,7 +51,7 @@ var hooks = map[string]Hook{
 	"object-storage-credentials":   objectStorageCredentialsHook,
 	"backup-target":                backupTargetHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
-	"registry-s3":                 registryS3Hook,
+	"registry-s3":                  registryS3Hook,
 	"dns-credentials":              dnsCredentialsHook,
 }
 

@@ -97,7 +97,6 @@ type cogsWriter struct {
 
 func (w *cogsWriter) run(ctx context.Context) {
 	h := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
-	slog.Info("opencost cogs writer starting", "first_window", h.Format(time.RFC3339))
 	w.writeHour(ctx, h)
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -106,9 +105,7 @@ func (w *cogsWriter) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			h := now.UTC().Truncate(time.Hour).Add(-time.Hour)
-			slog.Info("opencost cogs writer tick", "window", h.Format(time.RFC3339))
-			w.writeHour(ctx, h)
+			w.writeHour(ctx, now.UTC().Truncate(time.Hour).Add(-time.Hour))
 		}
 	}
 }
@@ -168,8 +165,7 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	// ---- Node total cost: cpu + ram ----------------------------------------
 	// Pull from OpenCost's own Prometheus metrics so we get the actual OCI
 	// price (not just what is allocated to pods).
-	nodeTotal, idleFromMetrics := w.nodeMetrics(ctx)
-	_ = nodeTotal // used for reference; idle comes directly
+	_, idleFromMetrics := w.nodeMetrics(ctx)
 
 	// ---- Build namespace → workspace mapping --------------------------------
 	nsToWS := map[string]string{}
@@ -309,8 +305,9 @@ func (w *cogsWriter) nodeMetrics(ctx context.Context) (nodeCost, idleCost float6
 		}
 		idleCost = nodeCost * idleFraction
 	}
-	slog.Info("opencost: node metrics", "node_cost_hr", nodeCost,
-		"cpu_allocated", cpuAllocated, "cpu_capacity", cpuCapacity, "idle_cost_hr", idleCost)
+	if cpuCapacity == 0 {
+		slog.Warn("opencost: no node capacity in metrics; idle cost recorded as 0")
+	}
 	return
 }
 

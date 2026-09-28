@@ -1586,6 +1586,45 @@ func (p *Postgres) WriteBuckets(ctx context.Context, buckets []UsageBucket) erro
 	}
 	return tx.Commit(ctx)
 }
+
+// RollupHourly folds closed hours of usage_buckets into usage_hourly in one
+// transaction per call. Quality: missing if any bucket in the hour is
+// missing, else partial if any is partial, else complete. period_end of the
+// hourly row is the hour's end regardless of how many buckets existed.
+func (p *Postgres) RollupHourly(ctx context.Context, before time.Time) (int, error) {
+	cutoff := before.UTC().Truncate(time.Hour)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO usage_hourly (workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels)
+		SELECT workspace_id, project, component, metric,
+		       date_trunc('hour', period_start) AS hour_start,
+		       date_trunc('hour', period_start) + interval '1 hour',
+		       CASE WHEN bool_or(quantity IS NULL) THEN NULL ELSE sum(quantity) END,
+		       min(unit),
+		       CASE WHEN bool_or(quality = 'missing') THEN 'missing'
+		            WHEN bool_or(quality = 'partial') OR count(*) < 12 THEN 'partial'
+		            ELSE 'complete' END,
+		       max(revision), min(source), '{}'::jsonb
+		FROM usage_buckets
+		WHERE period_start < $1
+		GROUP BY workspace_id, project, component, metric, date_trunc('hour', period_start)
+		ON CONFLICT (workspace_id, project, component, metric, period_start) DO NOTHING`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("rollup insert: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM usage_buckets WHERE period_start < $1`, cutoff); err != nil {
+		return 0, fmt.Errorf("rollup delete: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (p *Postgres) QueryBuckets(ctx context.Context, ws, project string, from, to time.Time) ([]UsageBucket, error) {
 	args := []any{ws, from, to}
 	filter := "AND b.project = $4"

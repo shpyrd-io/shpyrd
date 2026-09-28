@@ -550,6 +550,62 @@ func TestBillingStore(t *testing.T) {
 			if err != nil || len(got) != 1 || *got[0].Quantity != 300.0 || got[0].WorkspaceID != ws.ID {
 				t.Errorf("query buckets: %+v %v", got, err)
 			}
+
+			// Rollup: an old hour with 12 complete buckets and one with 3
+			// buckets (one missing) folds into usage_hourly; recent rows stay.
+			old := now.Add(-72 * time.Hour).Truncate(time.Hour)
+			var olds []UsageBucket
+			for i := 0; i < 12; i++ {
+				q := 60.0
+				olds = append(olds, UsageBucket{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "web", Metric: MetricCPUUsed,
+					PeriodStart: old.Add(time.Duration(i) * 5 * time.Minute), PeriodEnd: old.Add(time.Duration(i+1) * 5 * time.Minute),
+					Quantity: &q, Unit: UnitCoreSeconds, Quality: QualityComplete, Revision: 1, Source: "prom_v1"})
+			}
+			gap := old.Add(time.Hour)
+			for i := 0; i < 3; i++ {
+				var q *float64
+				if i != 1 {
+					v := 10.0
+					q = &v
+				}
+				qual := QualityComplete
+				if q == nil {
+					qual = QualityMissing
+				}
+				olds = append(olds, UsageBucket{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "web", Metric: MetricMemoryUsed,
+					PeriodStart: gap.Add(time.Duration(i) * 5 * time.Minute), PeriodEnd: gap.Add(time.Duration(i+1) * 5 * time.Minute),
+					Quantity: q, Unit: UnitGiBSeconds, Quality: qual, Revision: 1, Source: "prom_v1"})
+			}
+			if err := s.WriteBuckets(ctx, olds); err != nil {
+				t.Fatal(err)
+			}
+			n, err := s.RollupHourly(ctx, now.Add(-48*time.Hour))
+			if err != nil || n != 2 {
+				t.Fatalf("rollup: hours=%d err=%v", n, err)
+			}
+			if n, err := s.RollupHourly(ctx, now.Add(-48*time.Hour)); err != nil || n != 0 {
+				t.Errorf("rollup is not idempotent: hours=%d err=%v", n, err)
+			}
+			hourly, err := s.QueryBuckets(ctx, DefaultWorkspace, "shop", old.Add(-time.Minute), gap.Add(2*time.Hour))
+			if err != nil || len(hourly) != 2 {
+				t.Fatalf("hourly rows: %+v %v", hourly, err)
+			}
+			for _, h := range hourly {
+				switch h.Metric {
+				case MetricCPUUsed:
+					if h.Quantity == nil || *h.Quantity != 720 || h.Quality != QualityComplete || !h.PeriodEnd.Equal(old.Add(time.Hour)) {
+						t.Errorf("cpu hour: %+v", h)
+					}
+				case MetricMemoryUsed:
+					if h.Quantity != nil || h.Quality != QualityMissing {
+						t.Errorf("memory hour with a gap: %+v", h)
+					}
+				}
+			}
+			// The recent bucket is untouched.
+			if recent, _ := s.QueryBuckets(ctx, DefaultWorkspace, "", now.Add(-time.Minute), now.Add(10*time.Minute)); len(recent) != 1 {
+				t.Errorf("recent buckets after rollup: %+v", recent)
+			}
 			// Invoice lines: upsert.
 			line := InvoiceLine{WorkspaceID: ws.ID, PeriodStart: now, PeriodEnd: now.Add(time.Hour), Component: "web", Metric: MetricCPUUsed, Quantity: 3600, Unit: UnitCoreSeconds, UnitPrice: 0.02, GrossAmount: 0.02, Quality: QualityComplete, Revision: 1}
 			if err := s.UpsertInvoiceLine(ctx, line); err != nil {

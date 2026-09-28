@@ -76,8 +76,8 @@ type initFlags struct {
 	internalLBSubnet string // OCI subnet OCID for the private LB
 	platformExposure string // "" = profile default
 	// Platform backups (RFC-0037): target bucket and its credentials file.
-	backupTarget          string
-	backupCredentialsFile    string
+	backupTarget            string
+	backupCredentialsFile   string
 	registryCredentialsFile string
 	// varsFile carries what the infrastructure knows (zone, addresses, file
 	// systems) so nobody copies identifiers by hand; domainExplicit says
