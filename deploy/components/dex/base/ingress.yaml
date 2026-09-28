@@ -8,7 +8,7 @@ spec:
     - ${SHPYRD_AUTH_HOST}
   issuerRef:
     kind: ClusterIssuer
-    name: ${SHPYRD_PLATFORM_ISSUER}
+    name: ${SHPYRD_AUTH_ISSUER}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

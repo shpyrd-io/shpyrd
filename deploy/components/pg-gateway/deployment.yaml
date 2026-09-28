@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pg-gateway
-  namespace: shpyrd-system
+  namespace: ${SHPYRD_SYSTEM_NS}
   labels:
     app.kubernetes.io/name: pg-gateway
     app.kubernetes.io/managed-by: shpyrd
@@ -16,7 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: pg-gateway
     spec:
-      serviceAccountName: shpyrd-server   # reuse: reads Postgres CRDs
+      serviceAccountName: pg-gateway
       containers:
         - name: pg-gateway
           image: "${SHPYRD_SERVER_IMAGE}"   # the server image ships /pg-gateway

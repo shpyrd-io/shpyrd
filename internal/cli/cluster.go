@@ -80,6 +80,7 @@ type initFlags struct {
 	backupTarget            string
 	backupCredentialsFile   string
 	registryCredentialsFile string
+	imagePullSecretFile     string
 	// varsFile carries what the infrastructure knows (zone, addresses, file
 	// systems) so nobody copies identifiers by hand; domainExplicit says
 	// whether --domain was passed, so the file's domain can apply otherwise.
@@ -109,7 +110,8 @@ func (f *initFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVar(&f.set, "set", nil, "override a variable, e.g. --set SHPYRD_REGISTRY_HOST=...")
 	cmd.Flags().StringVar(&f.backupTarget, "backup-target", "", "s3://bucket/prefix for the platform's encrypted backups (contrib/*/terraform prints it; empty: no backups)")
 	cmd.Flags().StringVar(&f.backupCredentialsFile, "backup-credentials-file", "", "KEY=value file with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the backup target (omit on EKS: Pod Identity)")
-	cmd.Flags().StringVar(&f.registryCredentialsFile, "registry-credentials-file", "", "KEY=value file with S3 credentials for the registry OCI Object Storage bucket (contrib/oci/terraform/backups writes <name>-registry.env)")
+	cmd.Flags().StringVar(&f.registryCredentialsFile, "registry-credentials-file", "", "KEY=value file with S3 credentials for the registry OCI Object Storage bucket (contrib/oci/terraform/backups writes <name>-registry.env); its SHPYRD_REGISTRY_* lines set the bucket, endpoint and region unless --set overrides them")
+	cmd.Flags().StringVar(&f.imagePullSecretFile, "image-pull-secret-file", "", "Docker config.json with credentials for the private registry the server image is pulled from (OCIR on the cloud); creates Secret ocir-pull")
 	cmd.Flags().StringVar(&f.varsFile, "vars-file", "", "file of SHPYRD_NAME=value lines with the values the infrastructure produced (contrib/*/terraform writes <name>.vars); flags and --set win over it")
 	cmd.Flags().StringSliceVar(&f.skip, "skip", nil, "components to skip, e.g. --skip monitoring")
 	cmd.Flags().StringSliceVar(&f.only, "only", nil, "apply only these components")
@@ -607,6 +609,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		}
 		backupCreds = creds
 	}
+	var registryVars map[string]string
 	if flags.registryCredentialsFile != "" {
 		creds, err := readVarsFileAny(flags.registryCredentialsFile)
 		if err != nil {
@@ -621,6 +624,26 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 				backupCreds[k] = v
 			}
 		}
+		// The file also names the bucket, endpoint and region: they are
+		// settings, not secrets, and nobody should have to repeat them as
+		// three --set flags on every run.
+		registryVars = map[string]string{}
+		for _, k := range []string{install.VarRegistryBucket, install.VarRegistryEndpoint, install.VarRegistryRegion} {
+			if v := creds[k]; v != "" {
+				registryVars[k] = v
+			}
+		}
+	}
+	var imagePullConfig []byte
+	if flags.imagePullSecretFile != "" {
+		b, err := os.ReadFile(flags.imagePullSecretFile)
+		if err != nil {
+			return fmt.Errorf("--image-pull-secret-file: %w", err)
+		}
+		if !json.Valid(b) {
+			return fmt.Errorf("--image-pull-secret-file: not a Docker config.json")
+		}
+		imagePullConfig = b
 	}
 	if flags.platformExposure != "" && flags.platformExposure != "external" && flags.platformExposure != "internal" {
 		return fmt.Errorf("--platform-exposure %q: external or internal", flags.platformExposure)
@@ -637,6 +660,13 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 	vars, err := flags.vars(clusterName)
 	if err != nil {
 		return err
+	}
+	// Registry settings from the credentials file fill in what --set and
+	// the vars file did not say.
+	for k, v := range registryVars {
+		if vars[k] == "" {
+			vars[k] = v
+		}
 	}
 	// Extensions already enabled on the cluster stay enabled.
 	extNames := mergeExtensions(recordedExtensions(ctx, k), flags.enable, flags.disable)
@@ -669,6 +699,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		DNSKeyPEM:         dnsKey,
 		DNSKeyFingerprint: flags.dnsFingerprint,
 		BackupCredentials: backupCreds,
+		ImagePullConfig:   imagePullConfig,
 	}
 	eng, err := install.New(k, opts)
 	if err != nil {
@@ -717,7 +748,7 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 				accept = append(accept, intl)
 			}
 		}
-		if err := waitForDNS(ctx, cmd, eng.Vars()[install.VarDomain], accept); err != nil {
+		if err := waitForDNS(ctx, cmd, eng.Vars()[install.VarDomain], eng.Vars()[install.VarConsoleHost], accept); err != nil {
 			return err
 		}
 	}
@@ -928,7 +959,9 @@ func waitForLoadBalancer(ctx context.Context, cmd *cobra.Command, k *kube.Client
 // waitForDNS tells the operator the record to create and waits until the
 // platform hostname resolves to the load balancer, which Let's Encrypt
 // needs before it can issue the first certificate.
-func waitForDNS(ctx context.Context, cmd *cobra.Command, domain string, addrs []string) error {
+// consoleHost is the hostname the console answers at (RFC-0078): the
+// domain itself in apex mode, shpyrd.<domain> otherwise.
+func waitForDNS(ctx context.Context, cmd *cobra.Command, domain, consoleHost string, addrs []string) error {
 	addr := addrs[0]
 	resolvesToAny := func(host string) bool {
 		for _, a := range addrs {
@@ -939,7 +972,10 @@ func waitForDNS(ctx context.Context, cmd *cobra.Command, domain string, addrs []
 		return false
 	}
 	out := cmd.OutOrStdout()
-	host := "shpyrd." + domain
+	host := consoleHost
+	if host == "" {
+		host = "shpyrd." + domain
+	}
 	if resolvesToAny(host) {
 		fmt.Fprintf(out, "DNS: %s resolves to the load balancer.\n", host)
 		return nil

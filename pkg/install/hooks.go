@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -52,6 +53,8 @@ var hooks = map[string]Hook{
 	"backup-target":                backupTargetHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
 	"registry-s3":                  registryS3Hook,
+	"autoscaler-credentials":       autoscalerCredentialsHook,
+	"image-pull-secret":            imagePullSecretHook,
 	"dns-credentials":              dnsCredentialsHook,
 }
 
@@ -671,5 +674,87 @@ func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
 		return err
 	}
 	e.rep.Step(c.Name, fmt.Sprintf("registry will store images in OCI Object Storage bucket %s", bucket))
+	return nil
+}
+
+// ---- cluster autoscaler credentials (RFC-0075/0077) -----------------------
+
+// AutoscalerSecretName holds the OCI API key the cluster autoscaler uses to
+// resize node pools. BASIC clusters have no instance principal, so the
+// autoscaler authenticates as the DNS automation user, whose policy already
+// covers cluster-node-pools (contrib/oci/terraform iam.tf). One credential,
+// one policy: nothing new to rotate.
+const AutoscalerSecretName = "cluster-autoscaler-oci"
+
+func autoscalerCredentialsHook(ctx context.Context, e *Engine, c *Component) error {
+	if e.vars[VarNodePoolID] == "" {
+		return nil // no autoscaling on this cluster
+	}
+	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
+	if e.opts.DNSKeyPEM == "" {
+		if _, err := secrets.Get(ctx, AutoscalerSecretName, metav1.GetOptions{}); err == nil {
+			e.rep.Step(c.Name, "keeping existing autoscaler credentials")
+			return nil
+		}
+		return fmt.Errorf("the cluster autoscaler authenticates with the DNS user's API key on this cluster type: pass --dns-key-file (or unset SHPYRD_NODE_POOL_ID to skip autoscaling)")
+	}
+	user, tenancy, region := e.vars[VarDNSUser], e.vars[VarDNSTenancy], e.vars[VarDNSRegion]
+	if user == "" || tenancy == "" || region == "" {
+		return errors.New("the cluster autoscaler needs SHPYRD_DNS_USER, SHPYRD_DNS_TENANCY and SHPYRD_DNS_REGION (the vars file carries them with dns_auth = \"key\")")
+	}
+	fingerprint := e.opts.DNSKeyFingerprint
+	if fingerprint == "" {
+		var err error
+		if fingerprint, err = KeyFingerprint(e.opts.DNSKeyPEM); err != nil {
+			return fmt.Errorf("DNS key: %w", err)
+		}
+	}
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, AutoscalerSecretName, map[string]string{
+		"config":          ociINIConfig(user, fingerprint, tenancy, region),
+		"oci_api_key.pem": e.opts.DNSKeyPEM,
+	}); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, "autoscaler authenticates as the DNS user "+user)
+	return nil
+}
+
+// ociINIConfig renders the OCI SDK's INI config the cluster autoscaler reads
+// from /etc/oci (mounted from the Secret; the key sits next to it).
+func ociINIConfig(user, fingerprint, tenancy, region string) string {
+	return fmt.Sprintf("[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=/etc/oci/oci_api_key.pem\n", user, fingerprint, tenancy, region)
+}
+
+// ---- image pull secret for the server image --------------------------------
+
+// ImagePullSecretName is the docker-registry Secret the server and the wake
+// proxy pull their image with when it lives in a private registry (OCIR on
+// the cloud). Created from --image-pull-secret-file, a Docker config.json.
+const ImagePullSecretName = "ocir-pull"
+
+func imagePullSecretHook(ctx context.Context, e *Engine, c *Component) error {
+	if len(e.opts.ImagePullConfig) == 0 {
+		// Nothing to create; the manifests reference the Secret optionally
+		// only on profiles that expect a private registry.
+		return nil
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ImagePullSecretName,
+			Namespace: c.Namespace,
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "shpyrd"},
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: e.opts.ImagePullConfig},
+	}
+	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
+	if _, err := secrets.Get(ctx, ImagePullSecretName, metav1.GetOptions{}); err == nil {
+		if _, err := secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("image pull secret: %w", err)
+		}
+	} else if _, err := secrets.Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("image pull secret: %w", err)
+	}
+	e.rep.Step(c.Name, "image pull secret "+ImagePullSecretName+" from --image-pull-secret-file")
 	return nil
 }

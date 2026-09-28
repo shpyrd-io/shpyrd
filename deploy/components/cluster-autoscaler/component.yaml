@@ -4,6 +4,7 @@ namespace: kube-system
 # Only installed when the node pool OCID is provided (Terraform output node_pool_id).
 # On clusters without autoscaling set SHPYRD_NODE_POOL_ID="" or omit it.
 requiredVar: SHPYRD_NODE_POOL_ID
+hooks: [autoscaler-credentials]
 kustomize:
   path: ""
 wait:

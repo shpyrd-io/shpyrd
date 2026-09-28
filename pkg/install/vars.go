@@ -1,8 +1,8 @@
 package install
 
 import (
-	"net/url"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -24,12 +24,18 @@ const (
 	VarHTTPPort     = "SHPYRD_HTTP_PORT"     // host port reaching ingress HTTP (URLs only)
 	VarHTTPSPort    = "SHPYRD_HTTPS_PORT"    // host port reaching ingress HTTPS (URLs only)
 	// Derived variables, computed by the engine (see derivedVars).
-	VarExtensions          = "SHPYRD_EXTENSIONS"            // enabled extensions, comma separated
-	VarDashboardURL        = "SHPYRD_DASHBOARD_URL"         // external dashboard URL
-	VarAuthURL             = "SHPYRD_AUTH_URL"              // external URL of the login issuer (auth.<domain>)
+	VarExtensions   = "SHPYRD_EXTENSIONS"    // enabled extensions, comma separated
+	VarDashboardURL = "SHPYRD_DASHBOARD_URL" // external dashboard URL
+	VarAuthURL      = "SHPYRD_AUTH_URL"      // external URL of the login issuer (auth.<domain>)
 	// VarAuthHost is the hostname part of SHPYRD_AUTH_URL (for the Dex
 	// Ingress/Certificate that cannot parse a full URL). Derived.
 	VarAuthHost = "SHPYRD_AUTH_HOST"
+	// VarAuthIssuer is the ClusterIssuer for the sign-in service's
+	// certificate: the platform issuer (DNS-01) when auth.<host> is under
+	// SHPYRD_DOMAIN, the HTTP-01 one when it is a host outside the zone the
+	// platform's DNS automation owns (auth.shpyrd.io next to
+	// operator.shpyrd.io, RFC-0078). Derived.
+	VarAuthIssuer = "SHPYRD_AUTH_ISSUER"
 	// VarConsoleHost is the hostname part of SHPYRD_DASHBOARD_URL (for the
 	// console Ingress/Certificate): shpyrd.<domain>, or the domain itself
 	// when SHPYRD_CONSOLE_NAME is "apex" (RFC-0078). Derived.
@@ -37,7 +43,7 @@ const (
 	// VarConsoleName is the subdomain of the platform domain the console
 	// answers at (RFC-0078): "shpyrd" → shpyrd.<domain>; "" → the apex.
 	// Default "shpyrd" keeps existing installs unchanged.
-	VarConsoleName = "SHPYRD_CONSOLE_NAME"
+	VarConsoleName         = "SHPYRD_CONSOLE_NAME"
 	VarServerImage         = "SHPYRD_SERVER_IMAGE"          // server image; derived from the version unless set
 	VarWorkspacesDomain    = "SHPYRD_WORKSPACES_DOMAIN"     // domain tenant workspaces live under (cloud layer)
 	VarWorkspaceCertIssuer = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
@@ -219,10 +225,10 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		consoleHost = u.Hostname() // no port: certificates and Ingress hosts carry none
 	}
 	out := map[string]string{
-		VarDashboardURL: dashboardURL,
-		VarAuthURL:      authURL,
-		VarAuthHost:     authHost,
-		VarConsoleHost:  consoleHost,
+		VarDashboardURL:     dashboardURL,
+		VarAuthURL:          authURL,
+		VarAuthHost:         authHost,
+		VarConsoleHost:      consoleHost,
 		VarExtensions:       strings.Join(names, ","),
 		VarURLPort:          URLPort(vars),
 		VarForwardedHeaders: "false",
@@ -250,6 +256,14 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		out[VarDefaultTLSSecret] = DefaultSystemNamespace + "/" + WildcardTLSSecretName
 		out[VarWildcardTLS] = "true"
 		out[VarPlatformIssuer] = "letsencrypt-dns01"
+	}
+	// The sign-in host's certificate: DNS-01 only works for names inside
+	// the zone the platform's DNS user manages (SHPYRD_DOMAIN). An auth
+	// host outside it (auth.shpyrd.io, a manual record at the registrar)
+	// gets HTTP-01 through the public front door.
+	out[VarAuthIssuer] = out[VarPlatformIssuer]
+	if domain := vars[VarDomain]; domain != "" && authHost != domain && !strings.HasSuffix(authHost, "."+domain) {
+		out[VarAuthIssuer] = vars[VarClusterIssuer]
 	}
 	// Front door of the dashboard, sign-in and Grafana (RFC-0036), and the
 	// controller Service behind it, which the server dials for those

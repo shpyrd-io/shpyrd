@@ -49,6 +49,9 @@ type Options struct {
 	// DNS automation credential (RFC-0061): an OCI API signing key of the
 	// user in SHPYRD_DNS_USER, written to Secrets by the dns-credentials hook.
 	DNSKeyPEM string
+	// ImagePullConfig is the Docker config.json of --image-pull-secret-file:
+	// credentials for the private registry the server image is pulled from.
+	ImagePullConfig []byte
 	// BackupCredentials are the KEY=value pairs of --backup-credentials-file
 	// (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) for the backup target; nil
 	// keeps what an earlier run stored or relies on the pod's identity.

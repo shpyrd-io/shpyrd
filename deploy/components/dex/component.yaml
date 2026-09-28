@@ -12,4 +12,4 @@ wait:
       namespace: shpyrd-system
       name: dex-tls
       type: Ready
-timeout: 5m
+timeout: 15m

@@ -1,0 +1,49 @@
+# The wake proxy's own identity (RFC-0075). It lists Postgres resources to
+# know which ports to listen on, watches the primary's Endpoints to know when
+# a database is up, patches the CNPG Cluster's hibernation annotation to wake
+# it, and records the wake on the Postgres status. Nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pg-gateway
+  namespace: ${SHPYRD_SYSTEM_NS}
+  labels:
+    app.kubernetes.io/name: pg-gateway
+    app.kubernetes.io/managed-by: shpyrd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shpyrd-pg-gateway
+  labels:
+    app.kubernetes.io/name: pg-gateway
+    app.kubernetes.io/managed-by: shpyrd
+rules:
+  - apiGroups: ["shpyrd.io"]
+    resources: ["postgres"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["shpyrd.io"]
+    resources: ["postgres/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shpyrd-pg-gateway
+  labels:
+    app.kubernetes.io/name: pg-gateway
+    app.kubernetes.io/managed-by: shpyrd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shpyrd-pg-gateway
+subjects:
+  - kind: ServiceAccount
+    name: pg-gateway
+    namespace: ${SHPYRD_SYSTEM_NS}

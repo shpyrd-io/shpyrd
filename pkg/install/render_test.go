@@ -283,3 +283,77 @@ func TestNetworkPolicyRendersForOKE(t *testing.T) {
 	}
 	t.Error("calico-node DaemonSet not rendered")
 }
+
+// RFC-0078 production layout: the console at the domain's apex, the sign-in
+// host outside the platform zone. The console Ingress and Certificate must
+// name the apex, and the sign-in certificate must fall back to HTTP-01 since
+// DNS-01 cannot write into a zone the platform's DNS user does not own.
+func TestOCIProfileApexConsoleAndExternalAuth(t *testing.T) {
+	eng := testProfileRenders(t, "oci", map[string]string{
+		VarDomain:      "operator.shpyrd.example",
+		VarACMEEmail:   "ops@shpyrd.example",
+		VarConsoleName: "apex",
+		VarAuthURL:     "https://auth.shpyrd.example",
+		VarDNSProvider: "oci",
+		VarDNSZoneID:   "ocid1.dns-zone.oc1..x",
+		VarDNSRegion:   "us-ashburn-1",
+	}, "https://auth.shpyrd.example")
+	v := eng.vars
+	if v[VarDashboardURL] != "https://operator.shpyrd.example" || v[VarConsoleHost] != "operator.shpyrd.example" {
+		t.Errorf("apex console: dashboard=%s host=%s", v[VarDashboardURL], v[VarConsoleHost])
+	}
+	if v[VarAuthHost] != "auth.shpyrd.example" {
+		t.Errorf("auth host = %s", v[VarAuthHost])
+	}
+	// With a DNS provider the platform's certificates are DNS-01; the
+	// external auth host is not, because DNS-01 cannot reach it.
+	if v[VarPlatformIssuer] != "letsencrypt-dns01" || v[VarAuthIssuer] != "letsencrypt" {
+		t.Errorf("issuers: platform=%s auth=%s", v[VarPlatformIssuer], v[VarAuthIssuer])
+	}
+	// The rendered console manifests name the apex, never shpyrd.<domain>.
+	objs, err := eng.renderComponent(eng.components["shpyrd"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawIngress, sawCert bool
+	for _, o := range objs {
+		switch o.GetKind() {
+		case "Ingress":
+			if o.GetName() == "shpyrd-server" {
+				sawIngress = true
+				rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "rules")
+				host, _, _ := unstructured.NestedString(rules[0].(map[string]interface{}), "host")
+				if host != "operator.shpyrd.example" {
+					t.Errorf("console ingress host = %s", host)
+				}
+			}
+		case "Certificate":
+			if o.GetName() == "shpyrd-tls" {
+				sawCert = true
+				names, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "dnsNames")
+				if len(names) != 1 || names[0] != "operator.shpyrd.example" {
+					t.Errorf("console certificate dnsNames = %v", names)
+				}
+			}
+		}
+	}
+	if !sawIngress || !sawCert {
+		t.Errorf("console ingress/certificate rendered: %v/%v", sawIngress, sawCert)
+	}
+}
+
+// The default layout is unchanged: shpyrd.<domain>, auth.<domain>, both
+// through the platform issuer.
+func TestOCIProfileDefaultConsoleAndAuth(t *testing.T) {
+	eng := testProfileRenders(t, "oci", map[string]string{
+		VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com",
+		VarDNSProvider: "oci", VarDNSZoneID: "ocid1.dns-zone.oc1..x", VarDNSRegion: "sa-saopaulo-1",
+	}, "https://auth.oci.example.com")
+	v := eng.vars
+	if v[VarConsoleHost] != "shpyrd.oci.example.com" || v[VarAuthHost] != "auth.oci.example.com" {
+		t.Errorf("hosts: console=%s auth=%s", v[VarConsoleHost], v[VarAuthHost])
+	}
+	if v[VarAuthIssuer] != v[VarPlatformIssuer] || v[VarAuthIssuer] != "letsencrypt-dns01" {
+		t.Errorf("auth under the domain uses the platform issuer: auth=%s platform=%s", v[VarAuthIssuer], v[VarPlatformIssuer])
+	}
+}
