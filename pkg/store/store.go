@@ -32,6 +32,9 @@ type Workspace struct {
 	Name      string            `json:"name"`
 	Address   string            `json:"address,omitempty"`
 	Status    string            `json:"status"` // WorkspaceActive or WorkspaceSuspended
+	// Owner distinguishes operator workspaces (COGS, never invoiced) from
+	// customer workspaces (revenue). RFC-0078.
+	Owner     string            `json:"owner,omitempty"` // "operator" | "customer"
 	Settings  WorkspaceSettings `json:"settings"`
 	CreatedAt time.Time         `json:"createdAt"`
 	UpdatedAt time.Time         `json:"updatedAt"`
@@ -41,6 +44,12 @@ type Workspace struct {
 const (
 	WorkspaceActive    = "active"
 	WorkspaceSuspended = "suspended" // answers nothing but the "suspended" page
+)
+
+// Workspace owner values (RFC-0078).
+const (
+	WorkspaceOwnerOperator = "operator"
+	WorkspaceOwnerCustomer = "customer"
 )
 
 // Implicit reports whether this is the one workspace every install has.
@@ -534,6 +543,21 @@ type Billing interface {
 	QuerySleepEvents(ctx context.Context, ws, project string, from, to time.Time) ([]SleepEvent, error)
 }
 
+// Settings is the cluster-wide key/value store (RFC-0078).
+type Settings interface {
+	// GetSetting returns the value for key, "" when not set.
+	GetSetting(ctx context.Context, key string) (string, error)
+	// SetSetting stores a key/value pair (upsert).
+	SetSetting(ctx context.Context, key, value string) error
+}
+
+// Well-known setting keys.
+const (
+	// SettingDefaultWorkspaceID is the slug of the workspace the console
+	// host resolves to (RFC-0078).
+	SettingDefaultWorkspaceID = "default_workspace_id"
+)
+
 // Memberships is the workspace-role part of the Store.
 type Memberships interface {
 	ListMemberships(ctx context.Context, ws string) ([]Membership, error)
@@ -634,6 +658,7 @@ type Store interface {
 	OAuth
 	Billing
 	Projects
+	Settings
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

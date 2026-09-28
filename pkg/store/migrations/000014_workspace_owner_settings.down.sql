@@ -1,0 +1,2 @@
+ALTER TABLE workspaces DROP COLUMN IF EXISTS owner;
+DROP TABLE IF EXISTS settings;

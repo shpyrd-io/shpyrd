@@ -33,6 +33,15 @@ vars:
   # Front doors (RFC-0036): external LB for the platform (default; move to
   # internal when you have a VPN). Pass --internal-lb-subnet <ocid> to
   # create the private controller; SHPYRD_INTERNAL_LB=false skips it.
+  # Console name (RFC-0078): the subdomain of SHPYRD_DOMAIN the dashboard
+  # answers at. Default "shpyrd" → shpyrd.<domain>. Set to "apex" for the
+  # production layout where the console is at the domain itself
+  # (e.g. operator.shpyrd.io with SHPYRD_DOMAIN=operator.shpyrd.io).
+  SHPYRD_CONSOLE_NAME: shpyrd
+  # Auth URL: the Dex OIDC issuer (RFC-0014). Defaults to auth.<domain>.
+  # On production set this explicitly to auth.shpyrd.io (a manual A record
+  # outside the delegated zone) so SSO connector callbacks are stable.
+  SHPYRD_AUTH_URL: ""
   SHPYRD_PLATFORM_EXPOSURE: external
   SHPYRD_INTERNAL_LB: "auto"
   SHPYRD_INTERNAL_LB_SUBNET: ""

@@ -60,6 +60,8 @@ type WorkspaceView struct {
 	MCPName string `json:"mcpName"`
 	MCPURL  string `json:"mcpUrl"`
 	// Owners are the emails of the workspace's owners (RFC-0033).
+	// Owner is "operator" or "customer" (RFC-0078).
+	Owner     string    `json:"owner,omitempty"`
 	Owners    []string  `json:"owners"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -120,7 +122,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 	return WorkspaceView{
 		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
-		JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",
 	}
 }
@@ -813,3 +815,39 @@ func (s *Server) importWorkspace(c *gin.Context) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// patchClusterSettings handles PATCH /api/cluster/settings: cluster-wide
+// settings a platform admin may change (RFC-0078).
+func (s *Server) patchClusterSettings(c *gin.Context) {
+	var req struct {
+		DefaultWorkspaceID *string `json:"defaultWorkspaceId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	ctx := c.Request.Context()
+	if req.DefaultWorkspaceID != nil {
+		slug := strings.TrimSpace(*req.DefaultWorkspaceID)
+		if slug == "" {
+			abort(c, http.StatusBadRequest, errors.New("defaultWorkspaceId must not be empty"))
+			return
+		}
+		if _, err := s.store.Workspace(ctx, slug); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				abort(c, http.StatusBadRequest, fmt.Errorf("workspace %q not found", slug))
+				return
+			}
+			storeErr(c, err, "workspace")
+			return
+		}
+		if err := s.store.SetSetting(ctx, store.SettingDefaultWorkspaceID, slug); err != nil {
+			storeErr(c, err, "setting")
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"defaultWorkspaceId": func() string {
+		v, _ := s.store.GetSetting(ctx, store.SettingDefaultWorkspaceID)
+		return v
+	}()})
+}

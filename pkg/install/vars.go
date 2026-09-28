@@ -1,6 +1,7 @@
 package install
 
 import (
+	"net/url"
 	"fmt"
 	"regexp"
 	"sort"
@@ -26,6 +27,13 @@ const (
 	VarExtensions          = "SHPYRD_EXTENSIONS"            // enabled extensions, comma separated
 	VarDashboardURL        = "SHPYRD_DASHBOARD_URL"         // external dashboard URL
 	VarAuthURL             = "SHPYRD_AUTH_URL"              // external URL of the login issuer (auth.<domain>)
+	// VarAuthHost is the hostname part of SHPYRD_AUTH_URL (for the Dex
+	// Ingress/Certificate that cannot parse a full URL). Derived.
+	VarAuthHost = "SHPYRD_AUTH_HOST"
+	// VarConsoleName is the subdomain of the platform domain the console
+	// answers at (RFC-0078): "shpyrd" → shpyrd.<domain>; "" → the apex.
+	// Default "shpyrd" keeps existing installs unchanged.
+	VarConsoleName = "SHPYRD_CONSOLE_NAME"
 	VarServerImage         = "SHPYRD_SERVER_IMAGE"          // server image; derived from the version unless set
 	VarWorkspacesDomain    = "SHPYRD_WORKSPACES_DOMAIN"     // domain tenant workspaces live under (cloud layer)
 	VarWorkspaceCertIssuer = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
@@ -175,9 +183,37 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		seen[x.Extension] = true
 		names = append(names, x.Extension)
 	}
+	consoleName := vars[VarConsoleName]
+	if consoleName == "" || consoleName == "apex" {
+		consoleName = "shpyrd" // default for URL building; "apex" handled in dashboardURL below
+	}
+	authURL := vars[VarAuthURL] // explicit wins: auth.shpyrd.io is a manual record on production
+	if authURL == "" {
+		authURL = base("auth")
+	}
+	var dashboardURL string
+	if vars[VarConsoleName] == "apex" {
+		// Explicit apex mode (production layout): the console sits at the
+		// platform domain itself, e.g. operator.shpyrd.io.
+		scheme := "https"
+		if vars[VarHTTPSPort] != "" && vars[VarHTTPSPort] != "443" {
+			dashboardURL = scheme + "://" + vars[VarDomain] + ":" + vars[VarHTTPSPort]
+		} else {
+			dashboardURL = scheme + "://" + vars[VarDomain]
+		}
+	} else {
+		dashboardURL = base(consoleName)
+	}
+	// Derive the auth host from the URL so the Dex ingress can use it
+	// (Dex's manifest cannot parse a URL for just the hostname).
+	authHost := authURL
+	if u, err := url.Parse(authURL); err == nil && u.Host != "" {
+		authHost = u.Host
+	}
 	out := map[string]string{
-		VarDashboardURL:     base("shpyrd"),
-		VarAuthURL:          base("auth"),
+		VarDashboardURL: dashboardURL,
+		VarAuthURL:      authURL,
+		VarAuthHost:     authHost,
 		VarExtensions:       strings.Join(names, ","),
 		VarURLPort:          URLPort(vars),
 		VarForwardedHeaders: "false",

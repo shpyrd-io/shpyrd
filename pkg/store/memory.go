@@ -44,6 +44,7 @@ type Memory struct {
 	otokens     []OAuthToken
 	bill        *billingMemory
 	projects    []Project
+	settings    map[string]string
 	now         func() time.Time
 }
 
@@ -87,6 +88,37 @@ func (m *Memory) hasWorkspaceID(id string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Memory) SetWorkspaceOwner(_ context.Context, slug, owner string) (*Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(slug)
+	if err != nil {
+		return nil, err
+	}
+	w.Owner = owner
+	out := *w
+	return &out, nil
+}
+
+func (m *Memory) GetSetting(_ context.Context, key string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.settings == nil {
+		return "", nil
+	}
+	return m.settings[key], nil
+}
+
+func (m *Memory) SetSetting(_ context.Context, key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.settings == nil {
+		m.settings = map[string]string{}
+	}
+	m.settings[key] = value
+	return nil
 }
 
 func (m *Memory) ws(slug string) (*Workspace, error) {

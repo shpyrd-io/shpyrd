@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -117,6 +118,11 @@ type PublicConfig struct {
 	// Workspace is the one answering at this host: its slug and name, for
 	// the sign-in page.
 	Workspace *WorkspaceRef `json:"workspace,omitempty"`
+	// DefaultWorkspaceID is the slug of the workspace the console resolves
+	// to on sign-in (RFC-0078).
+	DefaultWorkspaceID string `json:"defaultWorkspaceId,omitempty"`
+	// ConsoleHost is the hostname the console dashboard answers at.
+	ConsoleHost string `json:"consoleHost,omitempty"`
 	// Volumes describes the profile's storage rules (RFC-0060).
 	Volumes VolumesConfig `json:"volumes"`
 }
@@ -493,6 +499,7 @@ func (s *Server) routes() error {
 	api.POST("/cluster/backups", console, s.require(authz.ClusterAdmin), s.runBackup)
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
 	api.PUT("/sizes", console, s.require(authz.ClusterAdmin), s.putSizes)
+	api.PATCH("/cluster/settings", console, s.require(authz.ClusterAdmin), s.patchClusterSettings) // RFC-0078
 	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
 	// Cluster log drains: every project's lines (RFC-0023).
@@ -712,6 +719,16 @@ func (s *Server) config(c *gin.Context) {
 		pub.DashboardURL = s.dashboardURLOf(ws)
 	}
 	pub.Volumes = VolumesConfig{MinSize: s.vars(install.VarVolumeMinSize), Snapshots: s.vars(install.VarSnapshotClass) != ""}
+	if s.store != nil {
+		if v, err := s.store.GetSetting(c.Request.Context(), store.SettingDefaultWorkspaceID); err == nil && v != "" {
+			pub.DefaultWorkspaceID = v
+		}
+	}
+	if ch := s.vars(install.VarDashboardURL); ch != "" {
+		if u, err := url.Parse(ch); err == nil {
+			pub.ConsoleHost = u.Host
+		}
+	}
 	c.JSON(http.StatusOK, pub)
 }
 

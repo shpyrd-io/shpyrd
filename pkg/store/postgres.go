@@ -87,13 +87,25 @@ func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`, newID(), DefaultWorkspace, defaultName); err != nil {
+	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name, owner) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING`, newID(), DefaultWorkspace, defaultName, WorkspaceOwnerOperator); err != nil {
 		return err
 	}
 	// The built-in team of the implicit workspace.
-	_, err = p.pool.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind)
+	if _, err = p.pool.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind)
 		SELECT $1, id, $2, 'Everyone who has signed in', 'everyone' FROM workspaces WHERE slug = $3
-		ON CONFLICT (workspace_id, name) DO UPDATE SET kind = 'everyone'`, newID(), TeamEveryone, DefaultWorkspace)
+		ON CONFLICT (workspace_id, name) DO UPDATE SET kind = 'everyone'`, newID(), TeamEveryone, DefaultWorkspace); err != nil {
+		return err
+	}
+	// Set default_workspace_id if not already set (RFC-0078); the default
+	// workspace's slug is always "default" at init, the operator may rename
+	// it later through the settings API.
+	var existing string
+	err = p.pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, SettingDefaultWorkspaceID).Scan(&existing)
+	if errors.Is(err, pgx.ErrNoRows) || existing == "" {
+		_, err = p.pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, SettingDefaultWorkspaceID, DefaultWorkspace)
+	} else {
+		err = nil
+	}
 	return err
 }
 
@@ -226,12 +238,12 @@ func (p *Postgres) wsID(ctx context.Context, q interface {
 	return id, err
 }
 
-const workspaceColumns = `id, slug, name, address, status, settings, created_at, updated_at`
+const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at`
 
 func scanWorkspace(row pgx.Row) (*Workspace, error) {
 	var w Workspace
 	var settings []byte
-	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &settings, &w.CreatedAt, &w.UpdatedAt)
+	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -271,7 +283,14 @@ func (p *Postgres) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	return out, rows.Err()
 }
 
+func (p *Postgres) SetWorkspaceOwner(ctx context.Context, slug, owner string) (*Workspace, error) {
+	return scanWorkspace(p.pool.QueryRow(ctx, `UPDATE workspaces SET owner=$2, updated_at=now() WHERE slug=$1 RETURNING `+workspaceColumns, slug, owner))
+}
+
 func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace, error) {
+	if w.Owner == "" {
+		w.Owner = WorkspaceOwnerCustomer
+	}
 	// The slug is a hostname label and a namespace part: the store is the
 	// last line, whoever the caller is (the cloud's API, a restore).
 	if err := project.ValidateWorkspaceSlug(w.Slug); err != nil {
@@ -1925,6 +1944,22 @@ func (p *Postgres) RenameProjectSlug(ctx context.Context, ws, oldSlug, newSlug s
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// ---- settings (RFC-0078) -------------------------------------------------------
+
+func (p *Postgres) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := p.pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+func (p *Postgres) SetSetting(ctx context.Context, key, value string) error {
+	_, err := p.pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, key, value)
+	return err
 }
 
 var _ Store = (*Postgres)(nil)
