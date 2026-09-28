@@ -156,7 +156,7 @@ an "Implementation status" section with the details; the short version:
 | 0058 | `auth connector add` message without auth-local |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
-| 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; workspace-level sleep default; wake bench; build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |
+| 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |
 
 Fixed in the same audit: the users API required no role (0007/0008), the RBAC mirror was
 not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did nothing (0036),

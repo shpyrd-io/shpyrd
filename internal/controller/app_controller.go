@@ -691,7 +691,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	}
 	// Sleep (RFC-0075): with a policy, the add-on installed and no pause,
 	// KEDA owns the web Deployment's replica count.
-	sleepWanted := sleepEnabled(app)
+	sleepWanted := r.sleepEnabled(app)
 	_, paused := r.sleepPause(app)
 	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
 	var webReplicas *int32 // what the web Deployment currently asks for
@@ -770,6 +770,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		case webReplicas != nil && *webReplicas == 0:
 			ps.Sleep.State = "sleeping"
 			ps.Desired = 0 // the scaler's decision, not a failure
+		}
+		if ps.Sleep.Message == "" && r.sleepSource(app) == "plan" {
+			if sp := r.webSleepSpec(app); sp != nil {
+				ps.Sleep.Message = "workspace plan default: after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode); shpyrd sleep <project> --after off opts out"
+			}
 		}
 		status["web"] = ps
 	}

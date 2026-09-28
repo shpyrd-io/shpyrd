@@ -256,6 +256,7 @@ type Addresses struct {
 	mu    sync.Mutex
 	cache map[string]wsEntry
 	hosts map[string]hostsEntry
+	sleep map[string]sleepEntry
 }
 
 type wsEntry struct {
@@ -399,4 +400,47 @@ func (a *Addresses) Limits(slug string) *store.Limits {
 		return ws.Settings.Limits
 	}
 	return nil
+}
+
+// SleepDefault is the workspace's plan's default HTTP sleep policy (RFC-0075):
+// after and resuming, or "" when the workspace has no plan or the plan sets
+// none. Cached like Workspace; a plan change shows within the TTL.
+func (a *Addresses) SleepDefault(slug string) (after, resuming string) {
+	if slug == "" {
+		slug = store.DefaultWorkspace
+	}
+	ttl := a.TTL
+	if ttl <= 0 {
+		ttl = 10 * time.Second
+	}
+	now := time.Now()
+	a.mu.Lock()
+	if e, ok := a.sleep[slug]; ok && now.Before(e.expires) {
+		a.mu.Unlock()
+		return e.after, e.resuming
+	}
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var e sleepEntry
+	if wp, err := a.Store.WorkspacePlan(ctx, slug); err == nil && wp != nil {
+		if p, err := a.Store.GetPlan(ctx, wp.PlanID); err == nil && p != nil {
+			e.after, e.resuming = p.SleepAfter, p.SleepResuming
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return "", "" // store trouble: not cached, no default this round
+	}
+	e.expires = now.Add(ttl)
+	a.mu.Lock()
+	if a.sleep == nil {
+		a.sleep = map[string]sleepEntry{}
+	}
+	a.sleep[slug] = e
+	a.mu.Unlock()
+	return e.after, e.resuming
+}
+
+type sleepEntry struct {
+	after, resuming string
+	expires         time.Time
 }

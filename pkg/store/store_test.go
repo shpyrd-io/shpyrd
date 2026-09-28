@@ -495,7 +495,7 @@ func TestBillingStore(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
 			// Plans: create, list, get, assign to workspace, history.
-			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0}); err != nil {
+			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0, SleepAfter: "15m0s", SleepResuming: "page"}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.CreatePlan(ctx, Plan{Name: "starter"}); !errors.Is(err, ErrConflict) {
@@ -506,7 +506,7 @@ func TestBillingStore(t *testing.T) {
 				t.Fatalf("list plans: %+v", plans)
 			}
 			pl, err := s.GetPlan(ctx, "starter")
-			if err != nil || pl.CPUHour != 0.02 {
+			if err != nil || pl.CPUHour != 0.02 || pl.SleepAfter != "15m0s" || pl.SleepResuming != "page" {
 				t.Fatalf("get plan: %+v %v", pl, err)
 			}
 			wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter")

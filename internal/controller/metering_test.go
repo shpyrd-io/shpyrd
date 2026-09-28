@@ -178,6 +178,42 @@ func TestMeteringStorageZeroFill(t *testing.T) {
 	}
 }
 
+// TestSleepWorkspaceDefault: a project without its own policy inherits the
+// workspace plan's default; an explicit "off" opts out.
+func TestSleepWorkspaceDefault(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}},
+		Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080)}}},
+	}
+	r, _ := newTestReconciler(t, app)
+	r.Config.WorkspaceSleepDefault = func(slug string) (string, string) {
+		if slug == "acme" {
+			return "15m", "page"
+		}
+		return "", ""
+	}
+	if !r.sleepEnabled(app) {
+		t.Fatal("plan default should enable sleep")
+	}
+	if sp := r.webSleepSpec(app); sp == nil || sp.After != "15m" || sp.Resuming != "page" || r.sleepSource(app) != "plan" {
+		t.Errorf("effective spec = %+v source=%s", sp, r.sleepSource(app))
+	}
+	// Explicit off wins.
+	p := app.Spec.Processes["web"]
+	p.Sleep = &shpyrdv1.SleepSpec{After: "off"}
+	app.Spec.Processes["web"] = p
+	if r.sleepEnabled(app) {
+		t.Error("explicit off must opt out of the plan default")
+	}
+	// Another workspace without a plan default: no sleep.
+	app.Labels[shpyrdv1.LabelWorkspace] = "other"
+	p.Sleep = nil
+	app.Spec.Processes["web"] = p
+	if r.sleepEnabled(app) {
+		t.Error("no default, no policy: no sleep")
+	}
+}
+
 // TestMeteringNoProjects: with no project namespaces the loop writes
 // nothing and reports zero (not an error).
 func TestMeteringNoProjects(t *testing.T) {

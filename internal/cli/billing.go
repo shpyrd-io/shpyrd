@@ -147,9 +147,13 @@ func plansList(cmd *cobra.Command, g *globalFlags) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tCURRENCY")
+	fmt.Fprintln(tw, "NAME\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tCURRENCY\tSLEEP DEFAULT")
 	for _, p := range plans {
-		fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\n", p.Name, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency)
+		sleep := "-"
+		if p.SleepAfter != "" {
+			sleep = p.SleepAfter + " " + firstNonEmpty(p.SleepResuming, "wait")
+		}
+		fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\t%s\n", p.Name, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency, sleep)
 	}
 	return tw.Flush()
 }
@@ -163,11 +167,19 @@ func newPlansListCmd(g *globalFlags) *cobra.Command {
 
 func newPlansCreateCmd(g *globalFlags) *cobra.Command {
 	var cpuHour, memGiBHour, storageGiBMonth, egressGiB, minMonthly float64
-	var currency, effectiveFrom string
+	var currency, effectiveFrom, sleepAfter, sleepResuming string
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a billing plan",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a billing plan: the unit prices a workspace is charged at, and the
+plan's default sleep policy for HTTP apps (RFC-0075). Projects on a plan
+with --sleep-after inherit it unless they set their own policy;
+'shpyrd sleep <project> --after off' opts a project out.
+
+  shpyrd-ctl plans create starter --cpu-hour 0.02 --memory-gib-hour 0.005 \
+      --storage-gib-month 0.10 --egress-gib 0.05 \
+      --sleep-after 15m --sleep-resuming page`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
 			t, err := newTeamsAPI(g)
@@ -179,6 +191,7 @@ func newPlansCreateCmd(g *globalFlags) *cobra.Command {
 				"cpuHour": cpuHour, "memoryGibHour": memGiBHour,
 				"storageGibMonth": storageGiBMonth, "egressGib": egressGiB,
 				"minMonthly": minMonthly, "currency": firstNonEmpty(currency, "USD"),
+				"sleepAfter": sleepAfter, "sleepResuming": sleepResuming,
 			}
 			if effectiveFrom != "" {
 				t, err := time.Parse("2006-01-02", effectiveFrom)
@@ -191,7 +204,11 @@ func newPlansCreateCmd(g *globalFlags) *cobra.Command {
 			if err := t.call(ctx, "POST", "api/cluster/plans", body, &p); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Plan %s created.\n", p.Name)
+			if p.SleepAfter != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Plan %s created; its projects sleep after %s (%s mode) unless they say otherwise.\n", p.Name, p.SleepAfter, firstNonEmpty(p.SleepResuming, "wait"))
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Plan %s created.\n", p.Name)
+			}
 			return nil
 		},
 	}
@@ -202,6 +219,8 @@ func newPlansCreateCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().Float64Var(&minMonthly, "min-monthly", 0, "minimum charge per month (workspace floor)")
 	cmd.Flags().StringVar(&currency, "currency", "USD", "three-letter currency code")
 	cmd.Flags().StringVar(&effectiveFrom, "effective-from", "", "date the plan is effective from (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&sleepAfter, "sleep-after", "", "default quiet period before projects on this plan sleep, 5m to 24h (empty: no default)")
+	cmd.Flags().StringVar(&sleepResuming, "sleep-resuming", "page", "default resuming mode for the plan's projects: page or wait")
 	return cmd
 }
 

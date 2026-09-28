@@ -43,6 +43,10 @@ type Config struct {
 	// under, one label under each (the address when a custom domain is
 	// primary; other verified custom domains). Nil: none.
 	WorkspaceExtraDomains func(slug string) []string
+	// WorkspaceSleepDefault answers a workspace's default HTTP sleep policy
+	// from its plan (RFC-0075): after and resuming, "" when none. Projects
+	// without a policy of their own inherit it; an explicit "off" opts out.
+	WorkspaceSleepDefault func(slug string) (after, resuming string)
 	// WorkspaceLimits answers a workspace's plan, nil when it has none; the
 	// controller backs it with a ResourceQuota per project namespace.
 	WorkspaceLimits func(slug string) *store.Limits

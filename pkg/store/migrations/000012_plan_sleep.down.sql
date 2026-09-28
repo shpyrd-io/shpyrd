@@ -1,0 +1,2 @@
+ALTER TABLE plans DROP COLUMN IF EXISTS sleep_after;
+ALTER TABLE plans DROP COLUMN IF EXISTS sleep_resuming;

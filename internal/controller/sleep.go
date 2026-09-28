@@ -43,20 +43,41 @@ const (
 	webSleepServiceName = "web-sleep"
 )
 
-// sleepEnabled reports whether the web process has a valid sleep policy.
-func sleepEnabled(app *shpyrdv1.App) bool {
-	spec := webSleepSpec(app)
+// sleepEnabled reports whether the web process has a valid sleep policy,
+// its own or the workspace's default.
+func (r *AppReconciler) sleepEnabled(app *shpyrdv1.App) bool {
+	spec := r.webSleepSpec(app)
 	return spec != nil && parseSleepDuration(spec.After) > 0
 }
 
-// webSleepSpec returns the SleepSpec of the web process, or nil.
-func webSleepSpec(app *shpyrdv1.App) *shpyrdv1.SleepSpec {
+// webSleepSpec returns the effective SleepSpec of the web process: the
+// process's own when set (an explicit "off" is a policy too — it opts the
+// project out of the workspace default), else the workspace's plan default,
+// else nil.
+func (r *AppReconciler) webSleepSpec(app *shpyrdv1.App) *shpyrdv1.SleepSpec {
 	for _, p := range processes(app) {
 		if p.Name == "web" && p.Sleep != nil {
 			return p.Sleep
 		}
 	}
-	return nil
+	if r.Config.WorkspaceSleepDefault == nil {
+		return nil
+	}
+	after, resuming := r.Config.WorkspaceSleepDefault(app.Labels[shpyrdv1.LabelWorkspace])
+	if parseSleepDuration(after) == 0 {
+		return nil
+	}
+	return &shpyrdv1.SleepSpec{After: after, Resuming: resuming}
+}
+
+// sleepSource says where the effective policy comes from, for the status.
+func (r *AppReconciler) sleepSource(app *shpyrdv1.App) string {
+	for _, p := range processes(app) {
+		if p.Name == "web" && p.Sleep != nil {
+			return "project"
+		}
+	}
+	return "plan"
 }
 
 // parseSleepDuration parses the after value; returns 0 when disabled.
@@ -132,7 +153,7 @@ func (r *AppReconciler) scaledObjectBroken(so *unstructured.Unstructured) (bool,
 // reports whether the Ingress should route through the interceptor. It is
 // false when the policy is off or when KEDA's CRDs are not installed.
 func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (bool, error) {
-	if !sleepEnabled(app) {
+	if !r.sleepEnabled(app) {
 		return false, r.deleteSleepObjects(ctx, app)
 	}
 	if !r.kedaHTTPAvailable() {
@@ -142,7 +163,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 	if _, paused := r.sleepPause(app); paused {
 		return false, r.deleteSleepObjects(ctx, app)
 	}
-	sp := webSleepSpec(app)
+	sp := r.webSleepSpec(app)
 	cooldown := int64(parseSleepDuration(sp.After).Seconds())
 
 	// Discover the web Service name (convention: app.Name + "-web" or app.Name).

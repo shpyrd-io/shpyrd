@@ -389,6 +389,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceAddress:      workspaceCache.Address,
 			WorkspaceExtraDomains: workspaceCache.ExtraDomains,
 			WorkspaceLimits:       workspaceCache.Limits,
+			WorkspaceSleepDefault: workspaceCache.SleepDefault,
 			WorkspaceSuspended:    workspaceCache.Suspended,
 			WorkspaceID:           workspaceCache.ID,
 			DashboardURL:          envOr("SHPYRD_DASHBOARD_URL", ""),

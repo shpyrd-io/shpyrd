@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -31,10 +33,14 @@ type PlanView struct {
 	MinMonthly      float64   `json:"minMonthly"`
 	Currency        string    `json:"currency"`
 	EffectiveFrom   time.Time `json:"effectiveFrom"`
+	// SleepAfter / SleepResuming: the plan's default HTTP sleep policy for
+	// projects without one of their own (RFC-0075). Empty = no default.
+	SleepAfter    string `json:"sleepAfter,omitempty"`
+	SleepResuming string `json:"sleepResuming,omitempty"`
 }
 
 func planView(p store.Plan) PlanView {
-	return PlanView{ID: p.ID, Name: p.Name, CPUHour: p.CPUHour, MemoryGiBHour: p.MemoryGiBHour, StorageGiBMonth: p.StorageGiBMonth, EgressGiB: p.EgressGiB, MinMonthly: p.MinMonthly, Currency: firstNonEmpty(p.Currency, "USD"), EffectiveFrom: p.EffectiveFrom}
+	return PlanView{ID: p.ID, Name: p.Name, CPUHour: p.CPUHour, MemoryGiBHour: p.MemoryGiBHour, StorageGiBMonth: p.StorageGiBMonth, EgressGiB: p.EgressGiB, MinMonthly: p.MinMonthly, Currency: firstNonEmpty(p.Currency, "USD"), EffectiveFrom: p.EffectiveFrom, SleepAfter: p.SleepAfter, SleepResuming: p.SleepResuming}
 }
 
 // listPlans is GET /api/cluster/plans (cluster admins).
@@ -62,6 +68,8 @@ func (s *Server) createPlan(c *gin.Context) {
 		MinMonthly      float64    `json:"minMonthly"`
 		Currency        string     `json:"currency"`
 		EffectiveFrom   *time.Time `json:"effectiveFrom"`
+		SleepAfter      string     `json:"sleepAfter"`
+		SleepResuming   string     `json:"sleepResuming"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -76,7 +84,19 @@ func (s *Server) createPlan(c *gin.Context) {
 	if req.EffectiveFrom != nil {
 		ef = *req.EffectiveFrom
 	}
-	p := store.Plan{Name: req.Name, CPUHour: req.CPUHour, MemoryGiBHour: req.MemoryGiBHour, StorageGiBMonth: req.StorageGiBMonth, EgressGiB: req.EgressGiB, MinMonthly: req.MinMonthly, Currency: firstNonEmpty(req.Currency, "USD"), EffectiveFrom: ef}
+	// The default sleep policy obeys the same rules as a project's own.
+	sleepAfter, sleepResuming := "", ""
+	if strings.TrimSpace(req.SleepAfter) != "" {
+		sp, err := validateSleep("web", &shpyrdv1.SleepSpec{After: req.SleepAfter, Resuming: req.SleepResuming})
+		if err != nil {
+			abort(c, http.StatusBadRequest, fmt.Errorf("plan sleep default: %w", err))
+			return
+		}
+		if sp != nil {
+			sleepAfter, sleepResuming = sp.After, sp.Resuming
+		}
+	}
+	p := store.Plan{Name: req.Name, CPUHour: req.CPUHour, MemoryGiBHour: req.MemoryGiBHour, StorageGiBMonth: req.StorageGiBMonth, EgressGiB: req.EgressGiB, MinMonthly: req.MinMonthly, Currency: firstNonEmpty(req.Currency, "USD"), EffectiveFrom: ef, SleepAfter: sleepAfter, SleepResuming: sleepResuming}
 	created, err := s.store.CreatePlan(c.Request.Context(), p)
 	if errors.Is(err, store.ErrConflict) {
 		abort(c, http.StatusConflict, errors.New("a plan with that name already exists"))

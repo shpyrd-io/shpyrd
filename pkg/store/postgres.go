@@ -1454,17 +1454,26 @@ func (p *Postgres) CreatePlan(ctx context.Context, pl Plan) (*Plan, error) {
 		pl.Currency = "USD"
 	}
 	var out Plan
-	err := p.pool.QueryRow(ctx, `INSERT INTO plans (name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at`,
-		pl.Name, pl.CPUHour, pl.MemoryGiBHour, pl.StorageGiBMonth, pl.EgressGiB, pl.MinMonthly, pl.Currency, pl.EffectiveFrom).
-		Scan(&out.ID, &out.Name, &out.CPUHour, &out.MemoryGiBHour, &out.StorageGiBMonth, &out.EgressGiB, &out.MinMonthly, &out.Currency, &out.EffectiveFrom, &out.CreatedAt)
+	err := p.pool.QueryRow(ctx, `INSERT INTO plans (name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, sleep_after, sleep_resuming)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+planColumns,
+		pl.Name, pl.CPUHour, pl.MemoryGiBHour, pl.StorageGiBMonth, pl.EgressGiB, pl.MinMonthly, pl.Currency, pl.EffectiveFrom, pl.SleepAfter, pl.SleepResuming).
+		Scan(planFields(&out)...)
 	if isUnique(err) {
 		return nil, ErrConflict
 	}
 	return &out, err
 }
+
+// planColumns and planFields keep the plan's SELECT list and Scan targets
+// in one place.
+const planColumns = `id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at, sleep_after, sleep_resuming`
+
+func planFields(pl *Plan) []any {
+	return []any{&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt, &pl.SleepAfter, &pl.SleepResuming}
+}
+
 func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at FROM plans ORDER BY name`)
+	rows, err := p.pool.Query(ctx, `SELECT `+planColumns+` FROM plans ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -1472,7 +1481,7 @@ func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
 	var out []Plan
 	for rows.Next() {
 		var pl Plan
-		if err := rows.Scan(&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt); err != nil {
+		if err := rows.Scan(planFields(&pl)...); err != nil {
 			return nil, err
 		}
 		out = append(out, pl)
@@ -1481,8 +1490,8 @@ func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
 }
 func (p *Postgres) GetPlan(ctx context.Context, nameOrID string) (*Plan, error) {
 	var pl Plan
-	err := p.pool.QueryRow(ctx, `SELECT id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at FROM plans WHERE id::text = $1 OR name = $1`, nameOrID).
-		Scan(&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt)
+	err := p.pool.QueryRow(ctx, `SELECT `+planColumns+` FROM plans WHERE id::text = $1 OR name = $1`, nameOrID).
+		Scan(planFields(&pl)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

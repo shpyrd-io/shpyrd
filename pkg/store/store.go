@@ -346,6 +346,11 @@ type Plan struct {
 	Currency        string    `json:"currency"`
 	EffectiveFrom   time.Time `json:"effectiveFrom"`
 	CreatedAt       time.Time `json:"createdAt"`
+	// SleepAfter and SleepResuming are the plan's default HTTP sleep policy
+	// (RFC-0075): projects without one of their own inherit it. Empty
+	// SleepAfter means no default.
+	SleepAfter    string `json:"sleepAfter,omitempty"`
+	SleepResuming string `json:"sleepResuming,omitempty"`
 }
 
 // WorkspacePlan is a workspace's current or historical plan assignment.
