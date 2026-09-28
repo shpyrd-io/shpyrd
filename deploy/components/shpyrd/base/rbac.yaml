@@ -94,6 +94,14 @@ rules:
   - apiGroups: [barmancloud.cnpg.io]
     resources: [objectstores]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Sleep (RFC-0075, extension sleep): a ScaledObject and an InterceptorRoute
+  # per sleeping web process. Autoscaling (RFC-0047) will share the first.
+  - apiGroups: [keda.sh]
+    resources: [scaledobjects]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [http.keda.sh]
+    resources: [interceptorroutes]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [monitoring.coreos.com]
     resources: [servicemonitors, podmonitors]
     verbs: [get, list, watch, create, update, patch, delete]
