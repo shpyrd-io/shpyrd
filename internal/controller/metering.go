@@ -255,9 +255,11 @@ func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, 
 }
 
 // storageBuckets writes storage (GiB-seconds) per (namespace, claim
-// component). Only Bound claims count: a claim that never got a volume
-// costs nothing. Capacity is what the claim requests (provisioned), which
-// on cloud profiles is the provider's minimum when that is larger.
+// component). The quantity is the capacity of the Bound PersistentVolume
+// behind each claim — what was provisioned and what the provider bills —
+// not the claim's request: a 2 Gi request on OCI yields a 50 Gi volume,
+// and the customer pays for 50. A claim without a volume costs nothing.
+// The PV's claimRef gives the claim's namespace and name.
 //
 // Claim labels come from a second query and are merged here: KSM emits
 // kube_persistentvolumeclaim_labels only when claims are on its allowlist,
@@ -266,9 +268,10 @@ func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, 
 func (m *MeteringLoop) storageBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
-		`sum by (namespace, persistentvolumeclaim) (`+
-			`kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=~"app-.*"} `+
-			`and on (namespace, persistentvolumeclaim) (kube_persistentvolumeclaim_status_phase{phase="Bound"} == 1)`+
+		`sum by (namespace, persistentvolumeclaim) (label_replace(label_replace(`+
+			`(kube_persistentvolume_capacity_bytes and on (persistentvolume) (kube_persistentvolume_status_phase{phase="Bound"} == 1)) `+
+			`* on (persistentvolume) group_left (claim_namespace, name) kube_persistentvolume_claim_ref, `+
+			`"namespace", "$1", "claim_namespace", "(.*)"), "persistentvolumeclaim", "$1", "name", "(.*)")`+
 			`) * %.6f / (1024*1024*1024)`,
 		dur,
 	)

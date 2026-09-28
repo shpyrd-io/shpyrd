@@ -82,7 +82,7 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 		"container_memory_working_set_bytes": {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "0.25"),
 		},
-		"kube_persistentvolumeclaim_resource_requests_storage_bytes": {
+		"kube_persistentvolume_capacity_bytes": {
 			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "shop-cache"}, "50"),
 			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "db-1"}, "20"),
 			sample(map[string]string{"namespace": "app-shop", "persistentvolumeclaim": "uploads"}, "5"),
