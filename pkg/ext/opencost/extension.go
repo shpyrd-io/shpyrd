@@ -6,6 +6,7 @@
 package opencost
 
 import (
+	"strings"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -144,27 +145,40 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 		cpu, mem, storage, net, shared, idle, total float64
 		direct                                       float64
 	}
-	// For each workspace, sum the costs of its app-* namespaces.
-	// The workspace slug appears in the namespace: app-<ws>-<proj> where
-	// the workspace has a slug that matches the prefix after "app-".
-	// Build a map of namespace prefix → workspace ID.
-	nsToWS := map[string]string{} // namespace prefix "app-<ws>" → ws.ID
+	// Build a namespace → workspace mapping.
+	// Convention: project namespaces are "app-<ws>-<proj>" when multiple
+	// workspaces exist, and "app-<proj>" for the implicit single workspace.
+	// Match by trying each workspace slug as the second path segment; anything
+	// that starts with "app-" but doesn't match a known workspace slug-prefix
+	// belongs to the implicit workspace (the first workspace with no explicit
+	// slug match).
+	nsToWS := map[string]string{} // namespace prefix "app-<slug>" → ws.ID
+	var implicitWS string          // fallback for "app-<proj>" namespaces
 	for _, ws := range workspaces {
 		nsToWS["app-"+ws.Slug] = ws.ID
+		if implicitWS == "" {
+			implicitWS = ws.ID
+		}
 	}
-	wsCosts := map[string]*wsAgg{} // ws.ID → agg
+	wsCosts := map[string]*wsAgg{}
 	for _, ws := range workspaces {
 		wsCosts[ws.ID] = &wsAgg{}
 	}
 	for _, batch := range body.Data {
 		for ns, item := range batch {
-			// Match namespace to workspace: try exact prefix "app-<ws>".
+			if !strings.HasPrefix(ns, "app-") {
+				continue
+			}
 			var wsID string
 			for prefix, id := range nsToWS {
-				if ns == prefix || len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-" {
+				if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
 					wsID = id
 					break
 				}
+			}
+			// app-<proj> (no workspace slug in the name): implicit workspace.
+			if wsID == "" && implicitWS != "" {
+				wsID = implicitWS
 			}
 			if wsID == "" {
 				continue
