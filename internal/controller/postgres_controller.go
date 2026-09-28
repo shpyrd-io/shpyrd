@@ -38,6 +38,8 @@ type PostgresReconciler struct {
 	SystemNamespace string
 	// Storage is the profile's disk rules (RFC-0060).
 	Storage StorageProfile
+	// PlatformPool is the node pool databases run on (RFC-0077); "" = any.
+	PlatformPool string
 }
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
@@ -161,7 +163,7 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 			return ctrl.Result{}, err
 		}
 	}
-	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class)
+	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class, r.PlatformPool)
 	if err := controllerutil.SetControllerReference(pg, desired, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -275,6 +277,16 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 		_ = unstructured.SetNestedField(current.Object, true, "spec", "monitoring", "enablePodMonitor")
 		changed = true
 	}
+	// Node pool (RFC-0077): follow the desired affinity (set or absent).
+	wantAff, _, _ := unstructured.NestedMap(desired.Object, "spec", "affinity")
+	if curAff, _, _ := unstructured.NestedMap(current.Object, "spec", "affinity"); !equalJSON(curAff, wantAff) {
+		if len(wantAff) == 0 {
+			unstructured.RemoveNestedField(current.Object, "spec", "affinity")
+		} else {
+			_ = unstructured.SetNestedMap(current.Object, wantAff, "spec", "affinity")
+		}
+		changed = true
+	}
 	if !changed {
 		return nil
 	}
@@ -317,7 +329,7 @@ func instances(pg *shpyrdv1.Postgres) int32 {
 }
 
 // desiredCNPGCluster renders the CloudNativePG Cluster for a Postgres.
-func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res corev1.ResourceRequirements, storageClass string) *unstructured.Unstructured {
+func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res corev1.ResourceRequirements, storageClass string, platformPool string) *unstructured.Unstructured {
 	toMap := func(l corev1.ResourceList) map[string]interface{} {
 		out := map[string]interface{}{}
 		for k, v := range l {
@@ -343,6 +355,11 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},
+	}
+	if platformPool != "" {
+		// Databases are stateful and single-instance: the platform pool,
+		// where the autoscaler never drains (RFC-0077).
+		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: platformPool}}
 	}
 	// Backups and recovery (RFC-0038).
 	if pg.Spec.Backups != nil {

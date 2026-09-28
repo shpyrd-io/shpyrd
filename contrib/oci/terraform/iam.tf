@@ -105,9 +105,9 @@ resource "oci_identity_policy" "dns_key" {
     # The cluster autoscaler uses the same API key (mounted as a Secret)
     # to resize the node pool on a BASIC_CLUSTER where instance principal
     # is not available. Only added when autoscaling is configured.
-    var.node_min_count > 0 ? "Allow group ${oci_identity_group.dns[0].name} to manage cluster-node-pools ${local.policy_location}" : null,
-    var.node_min_count > 0 ? "Allow group ${oci_identity_group.dns[0].name} to manage instance-family ${local.policy_location}" : null,
-    var.node_min_count > 0 ? "Allow group ${oci_identity_group.dns[0].name} to use virtual-network-family ${local.policy_location}" : null,
+    (var.node_min_count > 0 || var.apps_max_count > 0) ? "Allow group ${oci_identity_group.dns[0].name} to manage cluster-node-pools ${local.policy_location}" : null,
+    (var.node_min_count > 0 || var.apps_max_count > 0) ? "Allow group ${oci_identity_group.dns[0].name} to manage instance-family ${local.policy_location}" : null,
+    (var.node_min_count > 0 || var.apps_max_count > 0) ? "Allow group ${oci_identity_group.dns[0].name} to use virtual-network-family ${local.policy_location}" : null,
   ]
 }
 
@@ -118,7 +118,7 @@ resource "oci_identity_policy" "dns_key" {
 # permissions needed: read the node pool, update its size.
 
 resource "oci_identity_policy" "cluster_autoscaler" {
-  count    = var.node_min_count > 0 ? 1 : 0
+  count    = var.node_min_count > 0 || var.apps_max_count > 0 ? 1 : 0
   provider = oci.home
 
   compartment_id = var.tenancy_ocid
@@ -133,7 +133,7 @@ resource "oci_identity_policy" "cluster_autoscaler" {
 }
 
 resource "oci_identity_dynamic_group" "workers" {
-  count    = var.node_min_count > 0 ? 1 : 0
+  count    = var.node_min_count > 0 || var.apps_max_count > 0 ? 1 : 0
   provider = oci.home
 
   compartment_id = var.tenancy_ocid

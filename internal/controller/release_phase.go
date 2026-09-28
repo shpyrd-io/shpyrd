@@ -199,6 +199,7 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 			Spec: corev1.PodSpec{
 				RestartPolicy:      corev1.RestartPolicyNever,
 				EnableServiceLinks: ptr.To(false),
+				NodeSelector:       r.Config.appsNodeSelector(), // RFC-0077
 				ImagePullSecrets:   r.Config.imagePullSecrets(),
 				SecurityContext:    &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 				Containers:         []corev1.Container{container},

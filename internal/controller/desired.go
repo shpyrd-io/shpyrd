@@ -78,6 +78,12 @@ type Config struct {
 	// DefaultBuilder is the kpack ClusterBuilder used when the App does not
 	// name one.
 	DefaultBuilder string
+	// AppsPool and PlatformPool are the shpyrd.io/pool label values of the
+	// two node pools (RFC-0077); empty means a single pool and no selectors.
+	// Application processes, builds and one-off runs select AppsPool; the
+	// datastores select PlatformPool.
+	AppsPool     string
+	PlatformPool string
 	// BuildCacheSize is the kpack cache volume size (e.g. "2Gi"); empty disables.
 	// Ignored when BuildCacheRegistry is set.
 	BuildCacheSize string
@@ -466,12 +472,24 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 	case c.BuildCacheSize != "":
 		spec["cache"] = map[string]interface{}{"volume": map[string]interface{}{"size": c.BuildCacheSize}}
 	}
+	build := map[string]interface{}{}
 	if app.Spec.Build != nil && len(app.Spec.Build.Env) > 0 {
 		var env []interface{}
 		for _, e := range app.Spec.Build.Env {
 			env = append(env, map[string]interface{}{"name": e.Name, "value": e.Value})
 		}
-		spec["build"] = map[string]interface{}{"env": env}
+		build["env"] = env
+	}
+	if sel := c.appsNodeSelector(); sel != nil {
+		// Builds are bursty and transient: the apps pool (RFC-0077).
+		ns := map[string]interface{}{}
+		for k, v := range sel {
+			ns[k] = v
+		}
+		build["nodeSelector"] = ns
+	}
+	if len(build) > 0 {
+		spec["build"] = build
 	}
 
 	u := kpackImageKey(app)
@@ -549,6 +567,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		d.Spec.Template.Annotations[shpyrdv1.AnnotationRestartedAt] = at
 	}
 	d.Spec.Template.Spec.EnableServiceLinks = ptr.To(false)
+	d.Spec.Template.Spec.NodeSelector = c.appsNodeSelector() // RFC-0077
 	d.Spec.Template.Spec.ImagePullSecrets = c.imagePullSecrets()
 	d.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	hc := p.HealthCheck
@@ -828,6 +847,25 @@ func (c Config) mutateEdgeService(app *shpyrdv1.App, svc *corev1.Service) {
 	svc.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(80)}}
 	svc.Spec.Selector = nil
 	svc.Spec.ClusterIP = ""
+}
+
+// PoolLabel is the node label naming a node pool (RFC-0077).
+const PoolLabel = "shpyrd.io/pool"
+
+// appsNodeSelector pins a pod to the apps pool, nil in single-pool mode.
+func (c Config) appsNodeSelector() map[string]string {
+	if c.AppsPool == "" {
+		return nil
+	}
+	return map[string]string{PoolLabel: c.AppsPool}
+}
+
+// platformNodeSelector pins a pod to the platform pool, nil in single-pool mode.
+func (c Config) platformNodeSelector() map[string]string {
+	if c.PlatformPool == "" {
+		return nil
+	}
+	return map[string]string{PoolLabel: c.PlatformPool}
 }
 
 func mergeMaps(dst, src map[string]string) map[string]string {

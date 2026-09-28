@@ -213,6 +213,12 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 			}
 			tty := !detach && kexec.StdinIsTerminal()
 			pod := runPod(app, image, args, res, tty, !detach)
+			// Node pools (RFC-0077): one-off runs belong with the apps.
+			if info, err := install.ReadInstallInfo(ctx, ac.k, ac.k.Namespace); err == nil {
+				if pool := info.Vars[install.VarAppsPool]; pool != "" {
+					pod.Spec.NodeSelector = map[string]string{controller.PoolLabel: pool}
+				}
+			}
 			created, err := ac.k.Kube.CoreV1().Pods(app.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("start one-off instance: %w", err)

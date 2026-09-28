@@ -14,6 +14,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -411,4 +412,44 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 			t.Errorf("interceptorroute still there: %v", err)
 		}
 	})
+}
+
+// TestNodePools: with two pools (RFC-0077) app processes select the apps
+// pool, kpack builds too, databases select the platform pool; with a single
+// pool nothing carries a selector.
+func TestNodePools(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"},
+		Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080)}}},
+	}
+	r, c := newTestReconciler(t, app)
+	r.Config.AppsPool, r.Config.PlatformPool = "apps", "platform"
+	runReconcile(t, r, app)
+	dep := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if got := dep.Spec.Template.Spec.NodeSelector[PoolLabel]; got != "apps" {
+		t.Errorf("web pod nodeSelector = %v", dep.Spec.Template.Spec.NodeSelector)
+	}
+
+	// Databases go to the platform pool.
+	storage := resource.MustParse("10Gi")
+	pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &storage}}
+	cl := desiredCNPGCluster(pg, storage, corev1.ResourceRequirements{}, "", "platform")
+	sel, _, _ := unstructured.NestedMap(cl.Object, "spec", "affinity", "nodeSelector")
+	if sel[PoolLabel] != "platform" {
+		t.Errorf("cnpg nodeSelector = %v", sel)
+	}
+	// Single pool: no selectors anywhere.
+	cl = desiredCNPGCluster(pg, storage, corev1.ResourceRequirements{}, "", "")
+	if _, found, _ := unstructured.NestedMap(cl.Object, "spec", "affinity"); found {
+		t.Errorf("single pool must not set affinity")
+	}
+	r.Config.AppsPool = ""
+	runReconcile(t, r, app)
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep)
+	if dep.Spec.Template.Spec.NodeSelector != nil {
+		t.Errorf("single pool web nodeSelector = %v", dep.Spec.Template.Spec.NodeSelector)
+	}
 }

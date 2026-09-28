@@ -61,6 +61,11 @@ spec:
               value: "${SHPYRD_REGISTRY_SECRET}"
             - name: SHPYRD_BUILD_CACHE_REGISTRY
               value: "${SHPYRD_BUILD_CACHE_REGISTRY}"
+            # Node pools (RFC-0077): "" = single pool.
+            - name: SHPYRD_APPS_POOL
+              value: "${SHPYRD_APPS_POOL}"
+            - name: SHPYRD_PLATFORM_POOL
+              value: "${SHPYRD_PLATFORM_POOL}"
             - name: SHPYRD_REGISTRY_INSECURE
               value: "${SHPYRD_REGISTRY_INSECURE}"
             # Build pods get the platform CA (trust bundle + SSL_CERT_FILE) from

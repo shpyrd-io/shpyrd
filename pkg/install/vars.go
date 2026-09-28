@@ -88,6 +88,9 @@ const (
 	VarFSSMountTarget = "SHPYRD_FSS_MOUNT_TARGET" // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
 	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
 	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
+	// Node pools (RFC-0077): label values of the two pools ("" = single pool).
+	VarAppsPool     = "SHPYRD_APPS_POOL"     // apps, builds, one-off runs
+	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components, databases, stores
 	// Cluster autoscaler (RFC-0075): node pool autoscaling for OCI OKE.
 	VarNodePoolID   = "SHPYRD_NODE_POOL_ID"   // OCI node pool OCID ("" = autoscaler not deployed)
 	VarNodeMinCount = "SHPYRD_NODE_MIN_COUNT" // minimum worker nodes (1 = never fully drain)
@@ -222,6 +225,11 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	}
 	// Registry OCI Object Storage: always defined so the registry YAML renders.
 	for _, v := range []string{VarRegistryBucket, VarRegistryEndpoint, VarRegistryRegion, VarBuildCacheRegistry} {
+		if _, ok := vars[v]; !ok {
+			out[v] = ""
+		}
+	}
+	for _, v := range []string{VarAppsPool, VarPlatformPool} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
 		}

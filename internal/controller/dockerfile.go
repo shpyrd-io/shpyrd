@@ -366,6 +366,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
 					EnableServiceLinks: ptr.To(false),
+					NodeSelector:       c.appsNodeSelector(), // RFC-0077
 					SecurityContext:    &corev1.PodSecurityContext{FSGroup: uid},
 					InitContainers: []corev1.Container{{
 						Name:                     fetchContainer,

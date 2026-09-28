@@ -76,6 +76,13 @@ resource "oci_containerengine_node_pool" "workers" {
     boot_volume_size_in_gbs = var.node_boot_volume_gb
   }
 
+  # The platform pool (RFC-0077): stateful things select it explicitly
+  # (databases, stores, the control-plane database, Prometheus).
+  initial_node_labels {
+    key   = "shpyrd.io/pool"
+    value = "platform"
+  }
+
   node_config_details {
     size    = var.node_count
     nsg_ids = [oci_core_network_security_group.workers.id]
@@ -95,6 +102,66 @@ resource "oci_containerengine_node_pool" "workers" {
   }
 
   lifecycle {
+    precondition {
+      condition     = local.node_image_id != null
+      error_message = "No ${local.node_arch} OKE image for Kubernetes ${var.kubernetes_version} in this region."
+    }
+  }
+}
+
+# The apps pool (RFC-0077): application processes, builds and one-off runs.
+# Labelled and tainted so only pods that ask for it land here; the cluster
+# autoscaler scales it between apps_min_count and apps_max_count. The
+# initial size is the minimum (or 1, so the pool exists); the autoscaler
+# owns the count from then on — Terraform ignores changes to it.
+resource "oci_containerengine_node_pool" "apps" {
+  count = var.apps_max_count > 0 ? 1 : 0
+
+  cluster_id         = oci_containerengine_cluster.this.id
+  compartment_id     = local.compartment_id
+  name               = "apps"
+  kubernetes_version = var.kubernetes_version
+  node_shape         = var.node_shape
+  ssh_public_key     = local.ssh_public_key
+
+  node_shape_config {
+    ocpus         = var.apps_node_ocpus
+    memory_in_gbs = var.apps_node_memory_gb
+  }
+
+  node_source_details {
+    source_type             = "IMAGE"
+    image_id                = local.node_image_id
+    boot_volume_size_in_gbs = var.node_boot_volume_gb
+  }
+
+  initial_node_labels {
+    key   = "shpyrd.io/pool"
+    value = "apps"
+  }
+
+  node_config_details {
+    size    = max(var.apps_min_count, 1)
+    nsg_ids = [oci_core_network_security_group.workers.id]
+
+    placement_configs {
+      availability_domain = local.ad
+      subnet_id           = oci_core_subnet.this["workers"].id
+    }
+
+    node_pool_pod_network_option_details {
+      cni_type          = "OCI_VCN_IP_NATIVE"
+      pod_subnet_ids    = [oci_core_subnet.this["pods"].id]
+      pod_nsg_ids       = [oci_core_network_security_group.pods.id]
+      max_pods_per_node = var.max_pods_per_node
+    }
+  }
+
+  # OKE node pools have no taint field; the pool is kept for apps by
+  # selectors on both sides instead — apps select "apps", stateful
+  # workloads select "platform" (RFC-0077).
+  lifecycle {
+    ignore_changes = [node_config_details[0].size]
     precondition {
       condition     = local.node_image_id != null
       error_message = "No ${local.node_arch} OKE image for Kubernetes ${var.kubernetes_version} in this region."

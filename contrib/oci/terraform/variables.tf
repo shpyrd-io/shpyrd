@@ -81,16 +81,46 @@ variable "node_count" {
   default = 2
 }
 
+# Node pools (RFC-0077). The "workers" pool is the platform pool: fixed at
+# node_count, it carries the platform's components and every stateful
+# resource (databases, stores). The "apps" pool carries application
+# processes, builds and one-off runs only, and is what the cluster
+# autoscaler scales. apps_max_count = 0 means no apps pool: a single pool
+# as before, and node_min_count/node_max_count bound the autoscaler on it.
+
 variable "node_min_count" {
-  description = "Minimum number of worker nodes when cluster autoscaling is enabled. Must be <= node_count. Set to 0 to disable autoscaling."
+  description = "Single-pool mode only (apps_max_count = 0): minimum worker nodes for the cluster autoscaler; 0 disables autoscaling."
   type        = number
   default     = 0
 }
 
 variable "node_max_count" {
-  description = "Maximum number of worker nodes when cluster autoscaling is enabled."
+  description = "Single-pool mode only (apps_max_count = 0): maximum worker nodes for the cluster autoscaler."
   type        = number
   default     = 5
+}
+
+variable "apps_min_count" {
+  description = "Minimum nodes of the apps pool. 0 lets the pool empty when every app sleeps (the first request then waits for a node, ~2 min); 1 keeps wakes at seconds."
+  type        = number
+  default     = 1
+}
+
+variable "apps_max_count" {
+  description = "Maximum nodes of the apps pool; 0 means no apps pool (single-pool cluster)."
+  type        = number
+  default     = 0
+}
+
+variable "apps_node_ocpus" {
+  description = "OCPUs of an apps-pool node. Smaller than the platform node so the autoscaler scales in finer steps."
+  type        = number
+  default     = 1
+}
+
+variable "apps_node_memory_gb" {
+  type    = number
+  default = 8
 }
 
 variable "node_boot_volume_gb" {

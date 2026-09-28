@@ -406,6 +406,8 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			CABundle:              envOr("SHPYRD_CA_BUNDLE", "shpyrd-ca-bundle"),
 			RegistryDeletes:       os.Getenv("SHPYRD_REGISTRY_IP") != "",
 			BuildCacheRegistry:    os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
+			AppsPool:              os.Getenv("SHPYRD_APPS_POOL"),
+			PlatformPool:          os.Getenv("SHPYRD_PLATFORM_POOL"),
 			WildcardTLS:           os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
 			IngressClassExternal:  envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),
 			IngressClassInternal:  envOr("SHPYRD_INGRESS_CLASS_INTERNAL", "nginx-internal"),

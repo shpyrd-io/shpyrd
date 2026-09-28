@@ -3,8 +3,13 @@ output "cluster_id" {
 }
 
 output "node_pool_id" {
-  description = "Node pool OCID — pass to the cluster autoscaler: --set SHPYRD_NODE_POOL_ID=..."
+  description = "Platform (workers) node pool OCID."
   value       = oci_containerengine_node_pool.workers.id
+}
+
+output "apps_node_pool_id" {
+  description = "Apps node pool OCID (RFC-0077), empty when apps_max_count = 0."
+  value       = var.apps_max_count > 0 ? oci_containerengine_node_pool.apps[0].id : ""
 }
 
 output "node_pool_min" {
@@ -120,9 +125,11 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_ENDPOINT=${var.backup_bucket != "" ? "https://${data.oci_objectstorage_namespace.this.namespace}.compat.objectstorage.${var.region}.oraclecloud.com" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}
-    SHPYRD_NODE_POOL_ID=${var.node_min_count > 0 ? oci_containerengine_node_pool.workers.id : ""}
-    SHPYRD_NODE_MIN_COUNT=${var.node_min_count > 0 ? tostring(var.node_min_count) : "1"}
-    SHPYRD_NODE_MAX_COUNT=${var.node_min_count > 0 ? tostring(var.node_max_count) : "5"}
+    SHPYRD_NODE_POOL_ID=${var.apps_max_count > 0 ? oci_containerengine_node_pool.apps[0].id : (var.node_min_count > 0 ? oci_containerengine_node_pool.workers.id : "")}
+    SHPYRD_NODE_MIN_COUNT=${var.apps_max_count > 0 ? tostring(var.apps_min_count) : (var.node_min_count > 0 ? tostring(var.node_min_count) : "1")}
+    SHPYRD_NODE_MAX_COUNT=${var.apps_max_count > 0 ? tostring(var.apps_max_count) : (var.node_min_count > 0 ? tostring(var.node_max_count) : "5")}
+    SHPYRD_APPS_POOL=${var.apps_max_count > 0 ? "apps" : ""}
+    SHPYRD_PLATFORM_POOL=${var.apps_max_count > 0 ? "platform" : ""}
     ${join("\n", [for k in sort(keys(var.extra_vars)) : "${k}=${var.extra_vars[k]}"])}
   EOT
 }
