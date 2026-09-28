@@ -6,6 +6,11 @@ terraform {
     oci = {
       source  = "oracle/oci"
       version = "~> 9.0"
+      # The module uses two OCI provider configurations:
+      # - default (the cluster region)
+      # - oci.home (the tenancy home region, for IAM)
+      # Both are passed in from the calling root module.
+      configuration_aliases = [oci.home]
     }
     http = {
       source  = "hashicorp/http"
