@@ -86,7 +86,7 @@ Platform-level, for the operator:
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD]` | Define the unit prices a workspace is billed at. |
+| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD] [--sleep-after 15m --sleep-resuming page]` | Define the unit prices a workspace is billed at, and optionally the plan's default sleep policy: projects on the plan sleep after the quiet period unless they set their own (`shpyrd sleep <project> --after off` opts out). |
 | `shpyrd-ctl plans list` | Plans and their prices. |
 | `shpyrd-ctl plans assign <plan> --workspace <slug>` | Bill a workspace at a plan (its history is kept). |
 | `shpyrd-ctl economics [--month YYYY-MM]` | Revenue at plan prices, infrastructure cost from OpenCost (extension `opencost`) and gross margin per workspace. Operator-only; customers see usage and their plan's prices, never cost. |
@@ -135,6 +135,8 @@ Platform-level, for the operator:
 | `shpyrd pg list\|info\|psql\|delete` | Manage databases; `psql <name> -- <args>` opens psql on the primary; delete is refused while attached (`--force`). |
 | `shpyrd pg backups enable\|disable\|list <name>` | Backups of a database (needs extension `object-storage`): continuous WAL archiving and a scheduled base backup (`--retention 14d`, `--schedule "0 2 * * *"`); list shows the base backups and the recovery window. |
 | `shpyrd pg backup <name>` | Take a base backup now. |
+| `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables. Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
+| `shpyrd pg suspend <name>`, `shpyrd pg resume <name>` | Stop a database now and refuse connections until resumed (data kept), and bring it back. |
 | `shpyrd pg restore <name> --as <new> [--to <RFC 3339>]` | Restore into a new database at a point in time (latest when omitted); attach the app to it when ready. |
 | `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size`, `--persistent`, `--storage`. |
 | `shpyrd redis list\|info\|cli\|delete` | Manage stores; `cli <name> -- <args>` runs valkey-cli or redis-cli. |
@@ -148,7 +150,7 @@ Platform-level, for the operator:
 | `shpyrd domains list`, `rm <host>` | Custom domains with DNS and certificate state; stop serving one. |
 | `shpyrd exposure internal\|external` | Which front door serves the project on cloud profiles (public or private load balancer). Release-free. |
 | `shpyrd access [set public\|authenticated\|identified]` | Who may open the app: sign-in required (the default), public, or public with signed-in visitors identified; without `set`, shows the mode and the roles that open it. |
-| `shpyrd sleep <project> --after 15m [--resuming page\|wait]` | Scale the web process to zero after a quiet period (5m to 24h); the first request wakes it, either behind a branded "resuming" page or by holding the connection. `--after off` disables. Needs the `sleep` extension on the cluster (`shpyrd-ctl extensions enable sleep`); the command says so otherwise. Opt-in per project; nothing sleeps by default. While a project sleeps, its page and `projects info` say so instead of "0 of 1 running". |
+| `shpyrd sleep <project> --after 15m [--resuming page\|wait]` | Scale the web process to zero after a quiet period (5m to 24h); the first request wakes it (about 6–7 s), either behind a branded "resuming" page or by holding the connection. `--after off` disables — also when the workspace's plan has a default. Needs the `sleep` extension on the cluster (`shpyrd-ctl extensions enable sleep`); the command says so otherwise. Nothing sleeps unless a project or its plan says so. While a project sleeps, its page and `projects info` say so instead of "0 of 1 running". |
 | `shpyrd billing` | Month-to-date usage of the workspace and the estimate at its plan's prices, one line per project and component: `web`/`worker` (CPU core-hours, memory GiB-hours, egress GiB), `postgres/<name>`, `redis/<name>`, `volume/<name>` and `build-cache` (storage in GiB-months of provisioned capacity — on cloud profiles that is the provider's minimum volume size), `build` (build instances). Informational: no money changes hands until a payment provider is connected. |
 | `shpyrd open` | Open the project URL in the browser. |
 

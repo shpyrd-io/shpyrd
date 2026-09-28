@@ -38,6 +38,23 @@ shpyrd pg restore db --as db-restored --to 2026-09-25T16:58:02Z --project shop
 
 Backups live in the cluster's object store and go with the cluster: a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents. Copying the in-cluster store to the provider's bucket is the open follow-up ([RFC-0046](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0046-object-storage.md)); until then, `pg_dump` what must survive the cluster.
 
+### Sleep
+
+A database nobody is connected to can be put to sleep: its instance stops, its volume and data stay, and the first connection wakes it. While it sleeps you pay for the volume only.
+
+```shell
+shpyrd pg sleep db --project shop --after 30m      # sleep after 30 min without client connections
+shpyrd pg sleep db --project shop --after off      # never sleep
+shpyrd pg suspend db --project shop                # stop now and stay stopped; connections are refused
+shpyrd pg resume db --project shop
+```
+
+How it decides: every five minutes the platform counts the database's client sessions. Any connection counts — an application's idle connection pool keeps its database awake, on purpose; a database sleeps when its app has no connection open, which is what happens when the app itself is [asleep](/docs/cli#deploying-and-running) or has no pool. The database will not sleep when the count is stale (the metrics pipeline is down), when the quiet period has not elapsed, or when the wake proxy is not running; `pg info` says which.
+
+How it wakes: the database's address stays the same. While it sleeps, connections land on a proxy that holds them, starts the database and hands them over once PostgreSQL accepts connections — the client sees a slow connect, not an error. **Expect about 30–40 s** for the first connection after sleep on a cloud block volume (PostgreSQL start plus volume attach); the next connections take milliseconds. An app whose first request needs its database therefore sees the app wake plus the database wake; the app's `resuming: page` mode covers that with a "waking up" page, `wait` mode may exceed HTTP client timeouts.
+
+Only single-instance databases sleep; a database with `--instances 2` or more exists to be available. Setting or removing a policy re-releases the attached apps once (their database host changes to the platform's wake-capable address). Sleep keeps the volume; it is not a backup — see above for those.
+
 Not there yet: connection pooling and credential rotation ([RFC-0039](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0039-postgres-pooling-rotation-resize.md)).
 
 ## Redis and Valkey
