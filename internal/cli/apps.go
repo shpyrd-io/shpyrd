@@ -15,8 +15,10 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/google/uuid"
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
@@ -89,16 +91,23 @@ the app receives who they are. --public makes it a site anyone can open;
 					label += " (" + slug + ")"
 				}
 			} else {
+				// Offline (kubeconfig): generate an id and follow the
+				// same naming scheme as the API (RFC-0076).
+				id := uuid.NewString()
+				short := ids.Short(id)
+				ws := project.DefaultWorkspace
+				wsID := "" // no store access in offline mode; ws-id stamped later
+				labels := project.NamespaceLabelsFor(ws, wsID, id, slug, short)
 				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-					Name:   appNamespace(slug),
-					Labels: project.NamespaceLabels(project.DefaultWorkspace, slug),
+					Name:   project.IDNamespace(id),
+					Labels: labels,
 				}}
 				if err := ac.c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 					return fmt.Errorf("create namespace: %w", err)
 				}
 				app := &shpyrdv1.App{
-					ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: ns.Name, Labels: project.NamespaceLabels(project.DefaultWorkspace, slug)},
-					Spec:       shpyrdv1.AppSpec{Domains: domains, Access: access},
+					ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns.Name, Labels: labels},
+					Spec:       shpyrdv1.AppSpec{ID: id, Slug: slug, Domains: domains, Access: access},
 				}
 				project.SetDisplayName(app, name)
 				if err := ac.c.Create(ctx, app); err != nil {
