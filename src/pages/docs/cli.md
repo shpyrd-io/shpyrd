@@ -80,6 +80,17 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd auth connector add github\|google\|microsoft\|oidc --client-id ... --client-secret ... [--org] [--hosted-domain] [--tenant] [--issuer]` | A sign-in method through the bundled issuer (extension `auth-local`): GitHub, Google, Microsoft or any OpenID Connect provider; the button appears at once. Also on the dashboard's Workspace › Sign-in tab. |
 | `shpyrd auth connector list` / `remove <id>` | List or remove connectors. |
 
+## Plans and economics
+
+Platform-level, for the operator:
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD]` | Define the unit prices a workspace is billed at. |
+| `shpyrd-ctl plans list` | Plans and their prices. |
+| `shpyrd-ctl plans assign <plan> --workspace <slug>` | Bill a workspace at a plan (its history is kept). |
+| `shpyrd-ctl economics [--month YYYY-MM]` | Revenue at plan prices, infrastructure cost from OpenCost (extension `opencost`) and gross margin per workspace. Operator-only; customers see usage and their plan's prices, never cost. |
+
 ## Email
 
 | Command | What it does |
@@ -137,6 +148,8 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 | `shpyrd domains list`, `rm <host>` | Custom domains with DNS and certificate state; stop serving one. |
 | `shpyrd exposure internal\|external` | Which front door serves the project on cloud profiles (public or private load balancer). Release-free. |
 | `shpyrd access [set public\|authenticated\|identified]` | Who may open the app: sign-in required (the default), public, or public with signed-in visitors identified; without `set`, shows the mode and the roles that open it. |
+| `shpyrd sleep <project> --after 15m [--resuming page\|wait]` | Scale the web process to zero after a quiet period (5m to 24h); the first request wakes it, either behind a branded "resuming" page or by holding the connection. `--after off` disables. Needs the `keda` and `keda-http` extensions on the cluster; the command says so otherwise. Opt-in per project; nothing sleeps by default. |
+| `shpyrd billing` | Month-to-date usage of the workspace and the estimate at its plan's prices (CPU core-hours, memory GiB-hours, storage, egress). Informational: no money changes hands until a payment provider is connected. |
 | `shpyrd open` | Open the project URL in the browser. |
 
 ## Where things are
