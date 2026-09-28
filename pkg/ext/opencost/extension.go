@@ -6,6 +6,7 @@
 package opencost
 
 import (
+	"log/slog"
 	"strings"
 	"context"
 	"encoding/json"
@@ -79,7 +80,9 @@ type cogsWriter struct {
 }
 
 func (w *cogsWriter) run(ctx context.Context) {
-	w.writeHour(ctx, time.Now().UTC().Truncate(time.Hour).Add(-time.Hour))
+	h := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	slog.Info("opencost cogs writer starting", "first_window", h.Format(time.RFC3339))
+	w.writeHour(ctx, h)
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
@@ -87,7 +90,9 @@ func (w *cogsWriter) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			w.writeHour(ctx, now.UTC().Truncate(time.Hour).Add(-time.Hour))
+			h := now.UTC().Truncate(time.Hour).Add(-time.Hour)
+			slog.Info("opencost cogs writer tick", "window", h.Format(time.RFC3339))
+			w.writeHour(ctx, h)
 		}
 	}
 }
@@ -131,6 +136,7 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
+		slog.Error("opencost allocation request failed", "err", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -138,8 +144,10 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 		Data []map[string]allocationItem `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		slog.Error("opencost allocation decode failed", "err", err)
 		return
 	}
+	slog.Info("opencost allocation", "windows", len(body.Data), "window", hour.Format(time.RFC3339))
 
 	type wsAgg struct {
 		cpu, mem, storage, net, shared, idle, total float64
@@ -195,6 +203,7 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 	}
 	for _, ws := range workspaces {
 		a := wsCosts[ws.ID]
+		slog.Info("opencost workspace costs", "workspace", ws.Slug, "total", a.total, "cpu", a.cpu)
 		if a.total == 0 {
 			continue
 		}
@@ -208,7 +217,11 @@ func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
 			AllocationPolicy: "namespace;shareIdle=proportional",
 			Quality:          store.QualityComplete,
 		}
-		_ = w.store.WriteCOGSBucket(ctx, b)
+		if err := w.store.WriteCOGSBucket(ctx, b); err != nil {
+			slog.Error("opencost write cogs bucket failed", "workspace", ws.Slug, "err", err)
+		} else {
+			slog.Info("opencost wrote cogs bucket", "workspace", ws.Slug, "total", a.total)
+		}
 	}
 }
 
