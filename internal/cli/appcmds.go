@@ -322,9 +322,11 @@ what a tool reading the output wants.`,
 			}
 			// Build pods inherit the app label from the kpack Image; only
 			// workloads carry the process label.
-			selector := shpyrdv1.LabelApp + "=" + name + "," + shpyrdv1.LabelProcess
+			// RFC-0076: app.Name is the short ID for ID-named projects;
+			// the pods carry LabelApp=app.Name, not the slug.
+			selector := shpyrdv1.LabelApp + "=" + app.Name + "," + shpyrdv1.LabelProcess
 			if process != "" {
-				selector = shpyrdv1.LabelApp + "=" + name + "," + shpyrdv1.LabelProcess + "=" + process
+				selector = shpyrdv1.LabelApp + "=" + app.Name + "," + shpyrdv1.LabelProcess + "=" + process
 			}
 			return ac.streamPodLogs(ctx, app.Namespace, selector, follow, tail, renderPretty)
 		},
