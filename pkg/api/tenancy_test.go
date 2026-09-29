@@ -416,6 +416,39 @@ func TestPerHostSignIn(t *testing.T) {
 		t.Errorf("first person at the operator's workspace on a fresh cluster = %d %s (bootstrap owner)", code, body)
 	}
 
+	// 1c. A personal token minted there carries the same owner role: the
+	// CLI can create and deploy projects in the operator's workspace.
+	var osess *session
+	if v, ok := s.rp.sessions.get(osid); ok {
+		osess = v
+	}
+	if osess == nil {
+		t.Fatal("no session for the operator's workspace sign-in")
+	}
+	// Tokens are least privilege (RFC-0031): the CLI's asks for the owner's
+	// platform role, which the door grants this person without a membership.
+	mintReq := httptest.NewRequest("POST", "https://platform.shpyrd.test/api/tokens", strings.NewReader(`{"name":"laptop","platformRole":"platform-admin"}`))
+	mintReq.Host = "platform.shpyrd.test"
+	mintReq.Header.Set("Content-Type", "application/json")
+	mintReq.Header.Set(csrfHeader, osess.CSRF)
+	mintReq.AddCookie(&http.Cookie{Name: sessionCookie, Value: osid})
+	mintRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mintRec, mintReq)
+	if mintRec.Code != http.StatusCreated {
+		t.Fatalf("mint token at the operator's workspace = %d %s", mintRec.Code, mintRec.Body.String())
+	}
+	var minted TokenCreateView
+	_ = json.Unmarshal(mintRec.Body.Bytes(), &minted)
+	createReq := httptest.NewRequest("POST", "https://platform.shpyrd.test/api/projects", strings.NewReader(`{"name":"handbook"}`))
+	createReq.Host = "platform.shpyrd.test"
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("Authorization", "Bearer "+minted.Token)
+	createRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Errorf("create a project with the operator's personal token = %d %s", createRec.Code, createRec.Body.String())
+	}
+
 	// 2. At the console: the platform default is not offered; the console's
 	// own is, and the first person through it is the platform admin
 	// (bootstrap applies to the console realm alone).

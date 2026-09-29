@@ -180,7 +180,13 @@ func (s *Server) tokenOwnerRoles(c *gin.Context, snap *authz.Snapshot, t *store.
 		Provider: person.Provider,
 		Groups:   person.Groups,
 	}
-	roles := snap.RolesFor(owner)
+	// The owner's roles as this door resolves them (RFC-0080): in an
+	// operator workspace a platform admin owns it without a membership,
+	// which the workspace's snapshot alone would not show.
+	roles, err := s.rolesAt(c, owner)
+	if err != nil {
+		roles = snap.RolesFor(owner)
+	}
 	if roles.Suspended {
 		return ext.Identity{}, authz.Roles{}, false
 	}
