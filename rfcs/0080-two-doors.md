@@ -1,6 +1,6 @@
 # RFC-0080 Two doors: the console and workspaces are separate applications
 
-**Status:** in progress
+**Status:** implemented (v0.9.52); gaps
 
 **Owner:** Patrick Negri
 
@@ -17,7 +17,7 @@ UI is two applications served by host)
 
 **Creation date:** 2026-09-29
 
-**Last update:** 2026-09-29
+**Last update:** 2026-09-29 (implemented)
 
 ---
 
@@ -261,10 +261,49 @@ in `extra_vars`.
 
 ## Implementation status
 
-In progress. Delivered so far: nothing. The list below is updated as releases ship.
+Implemented in v0.9.52 (2026-09-29):
+
+- Tenancy resolves a door: the console host (no workspace), workspace hosts, internal
+  hosts as the operator's door with the default workspace as tenant; workspace routes
+  answer 404 at the console (`pkg/tenancy`, `pkg/api/members.go`).
+- Every workspace has an address; `Migrate` gives the default one the platform domain or
+  `<slug>.<workspaces domain>` (`SHPYRD_DEFAULT_WORKSPACE`,
+  `SHPYRD_DEFAULT_WORKSPACE_ADDRESS`, derived by the installer). `Workspace.Implicit()`
+  is gone; `settings.default_workspace_id` is read everywhere the constant was.
+- Three connector scopes with realm labels, workspace connectors keyed by short id and
+  rekeyed once at start; the console's password form behind
+  `console.password_signin` (`PATCH /api/cluster/settings`, refused without another
+  console method); `shpyrd auth connector add/remove --realm console|platform`.
+- Sessions carry their realm; a realm accepts only its own; per-host callbacks with the
+  server-managed Dex `OAuth2Client`; the console handoff removed; cookies Secure by the
+  request's scheme.
+- Bootstrap at the console realm only; workspaces enforced from birth; platform admins
+  own operator workspaces (`authz.ConsoleAdmin`); `/api/me` `console`; `/api/config`
+  `door`, `consoleUrl`, `workspace.ownedByOperator`.
+- Two applications (`ui/apps/console`, `ui/apps/workspace`) on the shared `ui/src`,
+  served by door; the console's Workspaces, Accounts, Sign-in (three scopes) and Settings
+  pages; the workspace application's link to the console; the open-source server's
+  `GET /api/workspaces`.
+- `shpyrd-ctl workspaces create --operator`; the cloud layer sets the owner and no longer
+  knows an implicit workspace.
+- `shpyrd cluster destroy --keep-cluster` (not this RFC's, but what the rebuild of
+  production for it required).
+
+Known gaps (each stays here until done or dropped):
+
+| Gap | Where |
+| --- | --- |
+| `ui/src` is not yet an npm workspace (`packages/ui`, `packages/client`); one build, two entries, shared source | open question 5, by design until a second consumer |
+| Identity linking across connectors: a person is their email as each provider asserts it; `email_verified` is not checked and password accounts are not linked to provider accounts | open question 1 |
+| The CI end-to-end run (kind) exercises the one-door fallback, not two hosts | test matrix |
+| Google `hostedDomains` is set from one `--hosted-domain`; Dex's `groups` for Google are not mirrored | RFC-0058 |
+| The docs site does not describe the two doors yet | docs |
 
 ## History
 
 - 2026-09-29: created from the owner's decision to separate console and workspaces
   completely (separate also in OSS; one Dex; one identity; rebuild dev and prod rather
   than migrate).
+- 2026-09-29: implemented in v0.9.52; the console realm's roles are those of the
+  operator's default workspace (its owners and admins are the platform admins), which is
+  RFC-0078's operator workspace read from the console's door.
