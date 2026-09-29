@@ -68,6 +68,7 @@ const (
 	// Secrets written by the dns-credentials hook, never in variables.
 	VarDNSProvider    = "SHPYRD_DNS_PROVIDER"
 	VarDNSAuth        = "SHPYRD_DNS_AUTH"        // "key" (an API signing key) or "workload" (OKE workload identity)
+	VarDNSDomains     = "SHPYRD_DNS_DOMAINS"     // derived: YAML list of the zones ExternalDNS manages (the platform's, plus the workspaces domain when set)
 	VarDNSCompartment = "SHPYRD_DNS_COMPARTMENT" // compartment holding the zone
 	VarDNSTenancy     = "SHPYRD_DNS_TENANCY"
 	VarDNSRegion      = "SHPYRD_DNS_REGION"
@@ -276,6 +277,16 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if _, ok := vars[VarWorkspaceCertIssuer]; !ok {
 		out[VarWorkspaceCertIssuer] = ""
 	}
+	// ExternalDNS publishes hosts under the platform domain and, when the
+	// cloud layer gives workspaces their own domain, under that one too:
+	// <workspace>.<domain> and *.<workspace>.<domain> live in a zone the
+	// same DNS user manages. A filter naming only the platform domain
+	// silently skips them (the first production cluster's).
+	domains := []string{vars[VarDomain]}
+	if ws := vars[VarWorkspacesDomain]; ws != "" && ws != vars[VarDomain] {
+		domains = append(domains, ws)
+	}
+	out[VarDNSDomains] = "[" + strings.Join(domains, ", ") + "]"
 	out[VarPlatformIngressClass] = vars[VarIngressClassExternal]
 	out[VarPlatformIngressSvc] = "ingress-nginx-controller.ingress-nginx.svc:443"
 	if vars[VarPlatformExposure] == "internal" {

@@ -219,6 +219,18 @@ variable "dns_zone" {
   default     = ""
 }
 
+variable "workspaces_zone" {
+  description = "Public zone in OCI DNS for tenant workspaces (cloud layer): <workspace>.<zone> and *.<workspace>.<zone>, records written by the cluster's ExternalDNS, certificates by DNS-01. Written to the vars file as SHPYRD_WORKSPACES_DOMAIN. Delegate it at the registrar with workspaces_zone_nameservers. Empty: workspaces live under dns_zone."
+  type        = string
+  default     = ""
+}
+
+variable "workspaces_delegations" {
+  description = "Subzones of workspaces_zone served elsewhere, as label => nameservers: { dev = [\"ns1.p1.dns.oraclecloud.net\", ...] } delegates dev.<workspaces_zone> to another cluster's workspaces zone."
+  type        = map(list(string))
+  default     = {}
+}
+
 # Platform backups (RFC-0037)
 
 variable "output_dir" {

@@ -432,3 +432,45 @@ func TestOCIProfileServerImagePullsThroughServiceAccount(t *testing.T) {
 		}
 	}
 }
+
+// ExternalDNS must manage the workspaces domain as well as the platform's:
+// workspace hosts are Ingresses like any other, and a filter naming only
+// the platform domain drops them without a log line.
+func TestExternalDNSFiltersIncludeWorkspacesDomain(t *testing.T) {
+	filters := func(vars map[string]string) []interface{} {
+		eng := testProfileRenders(t, "oci", vars, "https://auth."+vars[VarDomain])
+		c := eng.components["external-dns"]
+		if c == nil || c.Helm == nil {
+			t.Fatal("oci profile installs external-dns with Helm")
+		}
+		values, err := loadValues(deploy.FS, valuesFiles(deploy.FS, c, "oci"), eng.vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := values["domainFilters"].([]interface{})
+		if !ok {
+			t.Fatalf("domainFilters = %#v, want a list", values["domainFilters"])
+		}
+		return got
+	}
+	base := map[string]string{VarDomain: "operator.shpyrd.example", VarACMEEmail: "ops@shpyrd.example",
+		VarDNSProvider: "oci", VarDNSZoneID: "ocid1.dns-zone.oc1..x", VarDNSRegion: "us-ashburn-1"}
+	if got := filters(base); len(got) != 1 || got[0] != "operator.shpyrd.example" {
+		t.Errorf("platform only: %v", got)
+	}
+	withWS := map[string]string{VarWorkspacesDomain: "shpyrd.example"}
+	for k, v := range base {
+		withWS[k] = v
+	}
+	if got := filters(withWS); len(got) != 2 || got[0] != "operator.shpyrd.example" || got[1] != "shpyrd.example" {
+		t.Errorf("with workspaces domain: %v", got)
+	}
+	// The same domain twice would be a duplicate filter, not two zones.
+	same := map[string]string{VarWorkspacesDomain: "operator.shpyrd.example"}
+	for k, v := range base {
+		same[k] = v
+	}
+	if got := filters(same); len(got) != 1 {
+		t.Errorf("workspaces domain equal to the platform's: %v", got)
+	}
+}

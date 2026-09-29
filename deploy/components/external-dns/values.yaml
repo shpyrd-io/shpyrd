@@ -7,7 +7,7 @@ sources: [service, ingress]
 policy: sync
 registry: txt
 txtOwnerId: shpyrd-${SHPYRD_CLUSTER}
-domainFilters: [${SHPYRD_DOMAIN}]
+domainFilters: ${SHPYRD_DNS_DOMAINS}
 extraArgs:
   # The ownership record of a wildcard cannot be named "a-*": use a label.
   txt-wildcard-replacement: wildcard

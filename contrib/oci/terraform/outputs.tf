@@ -62,6 +62,11 @@ output "dns_zone_nameservers" {
   value       = var.dns_zone != "" ? [for ns in oci_dns_zone.platform[0].nameservers : ns.hostname] : []
 }
 
+output "workspaces_zone_nameservers" {
+  description = "Point the registrar's NS records for workspaces_zone here (or, for a dev.<zone> subzone, the parent's workspaces_delegations)."
+  value       = var.workspaces_zone != "" ? [for ns in oci_dns_zone.workspaces[0].nameservers : ns.hostname] : []
+}
+
 output "lb_public_subnet_id" {
   value = oci_core_subnet.this["lb_public"].id
 }
@@ -132,6 +137,8 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_DNS_TENANCY=${var.dns_zone != "" ? var.tenancy_ocid : ""}
     SHPYRD_DNS_REGION=${var.dns_zone != "" ? var.region : ""}
     SHPYRD_DNS_USER=${local.dns_key ? oci_identity_user.dns[0].id : ""}
+    SHPYRD_WORKSPACES_DOMAIN=${var.workspaces_zone}
+    SHPYRD_WORKSPACE_CERT_ISSUER=${var.workspaces_zone != "" ? "letsencrypt-dns01" : ""}
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_ENDPOINT=${var.backup_bucket != "" ? "https://${data.oci_objectstorage_namespace.this.namespace}.compat.objectstorage.${var.region}.oraclecloud.com" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}

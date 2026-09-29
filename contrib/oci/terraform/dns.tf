@@ -41,3 +41,43 @@ resource "oci_dns_rrset" "wildcard" {
     ttl    = 300
   }
 }
+
+# The workspaces zone (cloud layer): one zone per production, with the
+# development cluster's zone delegated from it (dev.<zone>) so every
+# environment answers for its own names and none can touch another's.
+resource "oci_dns_zone" "workspaces" {
+  count = var.workspaces_zone != "" ? 1 : 0
+
+  compartment_id = local.compartment_id
+  name           = var.workspaces_zone
+  zone_type      = "PRIMARY"
+  scope          = "GLOBAL"
+
+  lifecycle {
+    precondition {
+      # ExternalDNS, the DNS user and the DNS-01 issuer only exist with a
+      # platform zone; a workspaces zone alone would be records nobody writes.
+      condition     = var.dns_zone != ""
+      error_message = "workspaces_zone needs dns_zone: the same DNS automation serves both."
+    }
+  }
+}
+
+resource "oci_dns_rrset" "workspaces_delegation" {
+  for_each = var.workspaces_zone != "" ? var.workspaces_delegations : {}
+
+  zone_name_or_id = oci_dns_zone.workspaces[0].id
+  domain          = "${each.key}.${var.workspaces_zone}"
+  rtype           = "NS"
+  compartment_id  = local.compartment_id
+
+  dynamic "items" {
+    for_each = each.value
+    content {
+      domain = "${each.key}.${var.workspaces_zone}"
+      rtype  = "NS"
+      rdata  = items.value
+      ttl    = 3600
+    }
+  }
+}
