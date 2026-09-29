@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/base32"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -169,11 +171,12 @@ func (s *Server) reconcileOIDCClient(ctx context.Context) error {
 		list = append(list, u)
 	}
 	res := s.kube.Dynamic.Resource(OAuth2ClientGVR).Namespace(ns)
+	name := dexObjectName(id)
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "dex.coreos.com/v1",
 		"kind":       "OAuth2Client",
 		"metadata": map[string]interface{}{
-			"name":      id,
+			"name":      name,
 			"namespace": ns,
 			"labels":    map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"},
 		},
@@ -182,7 +185,11 @@ func (s *Server) reconcileOIDCClient(ctx context.Context) error {
 		"secret":       secret,
 		"redirectURIs": list,
 	}}
-	existing, err := res.Get(ctx, id, metav1.GetOptions{})
+	// v0.9.52 named the object by the id, which Dex never read: remove it.
+	if name != id {
+		_ = res.Delete(ctx, id, metav1.DeleteOptions{})
+	}
+	existing, err := res.Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 		_, err = res.Create(ctx, obj, metav1.CreateOptions{})
@@ -232,6 +239,18 @@ func (s *Server) keepOIDCClient(ctx context.Context) {
 		}
 	}
 }
+
+// dexObjectName is the object name Dex's Kubernetes storage gives an id
+// (a client id, a lower-cased email): the FNV-64 offset basis appended to
+// the id, base32 in Dex's alphabet, padding removed
+// (dex/storage/kubernetes/client.go idToName). Dex looks the client up by
+// this name; an object named by the id itself is invisible to it.
+func dexObjectName(id string) string {
+	sum := fnv.New64().Sum([]byte(id))
+	return strings.TrimRight(dexNameEncoding.EncodeToString(sum), "=")
+}
+
+var dexNameEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567")
 
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
