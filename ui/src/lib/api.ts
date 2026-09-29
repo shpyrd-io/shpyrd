@@ -154,7 +154,9 @@ export type WorkspaceSummary = {
   status: string;
   /** "operator" or "customer" (RFC-0078). */
   owner?: string;
-  plan?: WorkspaceInfo["limits"];
+  /** Billing plan the workspace is metered against (RFC-0075); absent when none, never for the operator's own. */
+  plan?: string;
+  limits?: WorkspaceInfo["limits"];
   usage?: WorkspaceInfo["usage"];
   owners: string[];
   createdAt: string;
@@ -905,7 +907,14 @@ export const api = {
     address?: string;
     owner?: string;
     operatorOwned?: boolean;
+    /** Billing plan name; refused for operator workspaces. */
+    plan?: string;
   }) => request<WorkspaceSummary>("/api/workspaces", json("POST", body)),
+  /** Billing plans (RFC-0075; cluster admins). */
+  plans: () =>
+    request<{ id: string; name: string; currency: string; minMonthly: number }[]>(
+      "/api/cluster/plans",
+    ),
   /** Cluster-wide settings (RFC-0078, RFC-0080). */
   patchClusterSettings: (body: {
     defaultWorkspaceId?: string;

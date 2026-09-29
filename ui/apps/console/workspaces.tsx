@@ -23,6 +23,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -88,6 +95,7 @@ export function WorkspacesPage() {
                   <TableHead>Workspace</TableHead>
                   <TableHead>Address</TableHead>
                   <TableHead>Owner</TableHead>
+                  <TableHead>Plan</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="w-20" />
@@ -149,6 +157,15 @@ function WorkspaceRow({
           </span>
         )}
       </TableCell>
+      <TableCell className="text-sm">
+        {w.owner === "operator" ? (
+          <span className="text-muted-foreground">never invoiced</span>
+        ) : w.plan ? (
+          <span className="font-mono text-xs">{w.plan}</span>
+        ) : (
+          <span className="text-amber-600">no plan</span>
+        )}
+      </TableCell>
       <TableCell>
         <Badge variant={w.status === "active" ? "secondary" : "destructive"}>
           {w.status}
@@ -176,6 +193,12 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [owner, setOwner] = useState("");
   const [operator, setOperator] = useState(false);
+  const [plan, setPlan] = useState<string | undefined>(undefined);
+  const plans = useQuery({ queryKey: ["plans"], queryFn: api.plans });
+  // A customer workspace is priced from birth: the first plan is
+  // preselected when the operator has defined any.
+  const chosenPlan =
+    plan ?? (plans.data && plans.data.length > 0 ? plans.data[0].name : "");
   const create = useMutation({
     mutationFn: () =>
       api.createWorkspace({
@@ -183,6 +206,7 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
         name: name.trim() || undefined,
         owner: operator ? undefined : owner.trim(),
         operatorOwned: operator,
+        plan: operator || !chosenPlan ? undefined : chosenPlan,
       }),
     onSuccess: (w) => {
       toast.success(`Workspace ${w.slug} created at ${w.address}`);
@@ -240,6 +264,33 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setOwner(e.target.value)}
                 placeholder="ana@acme.com"
               />
+            </div>
+          )}
+          {!operator && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="ws-plan">Billing plan</Label>
+              {plans.data && plans.data.length > 0 ? (
+                <Select value={chosenPlan} onValueChange={setPlan}>
+                  <SelectTrigger id="ws-plan">
+                    <SelectValue placeholder="Pick a plan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {plans.data.map((p) => (
+                      <SelectItem key={p.id} value={p.name}>
+                        {p.name}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          min {p.minMonthly.toFixed(2)} {p.currency}/mo
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No billing plans yet: usage will not be priced until one is
+                  created (<code>shpyrd-ctl plans create</code>) and assigned.
+                </p>
+              )}
             </div>
           )}
         </div>

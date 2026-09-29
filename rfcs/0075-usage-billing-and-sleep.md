@@ -597,7 +597,16 @@ OpenCost API windows are immutable).
 
 ## Implementation status
 
-Updated 2026-09-28 (v0.9.21).
+Updated 2026-09-29 (v0.9.56).
+
+- **v0.9.56 — a plan from birth.** `shpyrd-ctl workspaces create --plan <name>` and the
+  console's New workspace dialog (first plan preselected) assign the billing plan as the
+  workspace is created; the server checks the plan exists before writing anything and
+  refuses one on an operator workspace (never invoiced). `workspaces list` and the console
+  show the plan per workspace; a customer without one reads "no plan". The word *plan* now
+  means the billing plan alone: the ceilings are **limits** (`shpyrd-ctl workspaces limits`,
+  formerly `workspaces plan`, kept as an alias; API fields `limits`/`clearLimits`, formerly
+  `plan`/`clearPlan`).
 
 | Phase | State | What ships | Known gaps |
 | --- | --- | --- | --- |

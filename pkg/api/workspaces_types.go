@@ -27,8 +27,12 @@ type CreateWorkspaceRequest struct {
 	// (RFC-0078, RFC-0080): its costs are the operator's, it is never
 	// invoiced, platform admins own it and see the way to the console.
 	OperatorOwned bool `json:"operatorOwned,omitempty"`
-	// Plan sets the workspace's ceilings; nil means none.
-	Plan *store.Limits `json:"plan,omitempty"`
+	// Plan names the billing plan (RFC-0075) the workspace is metered
+	// against from birth. Empty: none yet. Refused for the operator's own
+	// workspaces, which are never invoiced.
+	Plan string `json:"plan,omitempty"`
+	// Limits sets the workspace's ceilings; nil means none.
+	Limits *store.Limits `json:"limits,omitempty"`
 }
 
 // UpdateWorkspaceRequest is PATCH /api/workspaces/:slug; every field is
@@ -37,21 +41,24 @@ type UpdateWorkspaceRequest struct {
 	Name    *string       `json:"name,omitempty"`
 	Address *string       `json:"address,omitempty"`
 	Status  *string       `json:"status,omitempty"` // active or suspended
-	Plan    *store.Limits `json:"plan,omitempty"`
-	// ClearPlan removes the ceilings.
-	ClearPlan bool `json:"clearPlan,omitempty"`
+	Limits  *store.Limits `json:"limits,omitempty"`
+	// ClearLimits removes the ceilings.
+	ClearLimits bool `json:"clearLimits,omitempty"`
 }
 
 // WorkspaceSummary is one workspace as the console lists them.
 type WorkspaceSummary struct {
-	Slug      string        `json:"slug"`
-	Name      string        `json:"name"`
-	Address   string        `json:"address,omitempty"`
-	URL       string        `json:"url"`
-	Status    string        `json:"status"`
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+	Address string `json:"address,omitempty"`
+	URL     string `json:"url"`
+	Status  string `json:"status"`
 	// Owner is "operator" or "customer" (RFC-0078).
-	Owner string        `json:"owner,omitempty"`
-	Plan  *store.Limits `json:"plan,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// Plan is the billing plan the workspace is metered against (RFC-0075);
+	// empty when none, always empty for the operator's own.
+	Plan      string        `json:"plan,omitempty"`
+	Limits    *store.Limits `json:"limits,omitempty"`
 	Usage     *Usage        `json:"usage,omitempty"`
 	Owners    []string      `json:"owners"`
 	CreatedAt time.Time     `json:"createdAt"`

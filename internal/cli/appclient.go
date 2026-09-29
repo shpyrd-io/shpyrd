@@ -624,7 +624,7 @@ func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {
 	// (controller-runtime client) still need a kubeconfig; they will return
 	// an error explaining what is missing.
 	sessions := loadSessions()
-	explicitCluster := g.kubeconfig != "" || g.kubeCtx != ""
+	explicitCluster := g.kubeconfig != "" || g.kubeCtx != "" || preferKubeconfig
 	if !explicitCluster {
 		if os.Getenv("SHPYRD_TOKEN") != "" || sessions.active() != nil {
 			// Signed in through the API: commands that still talk to the

@@ -36,7 +36,7 @@ list, suspend and resume workspaces and set their plans.
   shpyrd-ctl workspaces suspend acme
   shpyrd-ctl workspaces resume acme`,
 	}
-	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesListCmd(g), newWorkspacesPlanCmd(g), newWorkspacesStatusCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesStatusCmd(g, "resume", store.WorkspaceActive))
+	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesListCmd(g), newWorkspacesLimitsCmd(g), newWorkspacesStatusCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesStatusCmd(g, "resume", store.WorkspaceActive))
 	return cmd
 }
 
@@ -60,9 +60,9 @@ func requireWorkspaces(ctx context.Context, ac *appClient) error {
 }
 
 func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
-	var name, address, owner string
+	var name, address, owner, plan string
 	var operator bool
-	var plan planFlags
+	var limits limitFlags
 	cmd := &cobra.Command{
 		Use:   "create <slug>",
 		Short: "Create a workspace with its first owner",
@@ -76,6 +76,9 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if owner == "" && !operator {
 				return errors.New("--owner <email> is required: a workspace is enforced from birth and needs a first owner (or --operator: the platform admins own it)")
 			}
+			if plan != "" && operator {
+				return errors.New("--plan does not apply to an operator workspace: the operator's own are never invoiced")
+			}
 			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
 				return err
@@ -83,7 +86,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if err := requireWorkspaces(ctx, ac); err != nil {
 				return err
 			}
-			req := api.CreateWorkspaceRequest{Slug: slug, Name: firstNonEmpty(name, slug), Address: address, Owner: owner, OperatorOwned: operator, Plan: plan.limits()}
+			req := api.CreateWorkspaceRequest{Slug: slug, Name: firstNonEmpty(name, slug), Address: address, Owner: owner, OperatorOwned: operator, Plan: plan, Limits: limits.limits()}
 			body, _ := json.Marshal(req)
 			raw, err := serverRequest(ctx, ac.k, "POST", "api/workspaces", body, "application/json")
 			if err != nil {
@@ -97,15 +100,21 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 				fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
 			} else {
 				fmt.Fprintf(out, "%s is its first owner; the front door and certificate follow within a minute.\n", owner)
+				if ws.Plan != "" {
+					fmt.Fprintf(out, "Metered against the %s plan from now on.\n", ws.Plan)
+				} else {
+					fmt.Fprintf(out, "No billing plan yet: its usage is not priced until `shpyrd-ctl plans assign <plan> --workspace %s`.\n", ws.Slug)
+				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the slug)")
+	cmd.Flags().StringVar(&plan, "plan", "", "billing plan the workspace is metered against from birth (see `shpyrd-ctl plans list`); not for --operator")
 	cmd.Flags().StringVar(&address, "address", "", "host of the workspace's dashboard; apps live one label under it (default: <slug>.<the platform's workspaces domain>)")
 	cmd.Flags().StringVar(&owner, "owner", "", "email of the workspace's first owner")
 	cmd.Flags().BoolVar(&operator, "operator", false, "one of the platform operator's own workspaces: never invoiced, owned by every platform admin (RFC-0078)")
-	plan.bind(cmd)
+	limits.bind(cmd)
 	return cmd
 }
 
@@ -138,22 +147,24 @@ func newWorkspacesListCmd(g *globalFlags) *cobra.Command {
 
 func printWorkspaces(out io.Writer, list []api.WorkspaceSummary) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKSPACE\tNAME\tADDRESS\tSTATUS\tPLAN\tOWNERS")
+	fmt.Fprintln(w, "WORKSPACE\tNAME\tADDRESS\tSTATUS\tPLAN\tLIMITS\tOWNERS")
 	for _, ws := range list {
-		plan := "-"
-		if ws.Plan != nil {
-			plan = planString(ws.Plan)
+		limits := "-"
+		if ws.Limits != nil {
+			limits = limitsString(ws.Limits)
 		}
+		plan := firstNonEmpty(ws.Plan, "-")
 		owners := strings.Join(ws.Owners, ",")
 		if ws.Owner == store.WorkspaceOwnerOperator {
 			owners = firstNonEmpty(owners, "(platform admins)")
+			plan = "(operator)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, ws.Address, ws.Status, plan, owners)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, ws.Address, ws.Status, plan, limits, owners)
 	}
 	w.Flush()
 }
 
-func planString(l *store.Limits) string {
+func limitsString(l *store.Limits) string {
 	var parts []string
 	if l.Projects > 0 {
 		parts = append(parts, fmt.Sprintf("%d projects", l.Projects))
@@ -176,41 +187,46 @@ func planString(l *store.Limits) string {
 	return strings.Join(parts, ", ")
 }
 
-// planFlags are the ceilings of a plan as flags.
-type planFlags struct {
+// limitFlags are a workspace's ceilings as flags. Not the billing plan:
+// that is `shpyrd-ctl plans`, and --plan on create.
+type limitFlags struct {
 	projects, instances  int
 	cpu, memory, storage string
 }
 
-func (p *planFlags) bind(cmd *cobra.Command) {
-	cmd.Flags().IntVar(&p.projects, "projects", 0, "plan: maximum projects (0 = no ceiling)")
-	cmd.Flags().IntVar(&p.instances, "instances", 0, "plan: maximum instances across projects")
-	cmd.Flags().StringVar(&p.cpu, "cpu", "", "plan: maximum CPU requests, e.g. 8")
-	cmd.Flags().StringVar(&p.memory, "memory", "", "plan: maximum memory requests, e.g. 16Gi")
-	cmd.Flags().StringVar(&p.storage, "storage", "", "plan: maximum storage, e.g. 100Gi")
+func (p *limitFlags) bind(cmd *cobra.Command) {
+	cmd.Flags().IntVar(&p.projects, "projects", 0, "limit: maximum projects (0 = no ceiling)")
+	cmd.Flags().IntVar(&p.instances, "instances", 0, "limit: maximum instances across projects")
+	cmd.Flags().StringVar(&p.cpu, "cpu", "", "limit: maximum CPU requests, e.g. 8")
+	cmd.Flags().StringVar(&p.memory, "memory", "", "limit: maximum memory requests, e.g. 16Gi")
+	cmd.Flags().StringVar(&p.storage, "storage", "", "limit: maximum storage, e.g. 100Gi")
 }
 
-func (p *planFlags) set() bool {
+func (p *limitFlags) set() bool {
 	return p.projects > 0 || p.instances > 0 || p.cpu != "" || p.memory != "" || p.storage != ""
 }
 
-func (p *planFlags) limits() *store.Limits {
+func (p *limitFlags) limits() *store.Limits {
 	if !p.set() {
 		return nil
 	}
 	return &store.Limits{Projects: p.projects, Instances: p.instances, CPU: p.cpu, Memory: p.memory, Storage: p.storage}
 }
 
-func newWorkspacesPlanCmd(g *globalFlags) *cobra.Command {
-	var plan planFlags
+func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
+	var limits limitFlags
 	var clear bool
 	cmd := &cobra.Command{
-		Use:   "plan <slug>",
-		Short: "Set a workspace's ceilings (those not given keep their value; --clear removes all)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "limits <slug>",
+		Aliases: []string{"plan"}, // the name until v0.9.56; plan is the billing plan now
+		Short:   "Set a workspace's ceilings (those not given keep their value; --clear removes all)",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			if !clear && !plan.set() {
+			if cmd.CalledAs() == "plan" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "note: `workspaces plan` is now `workspaces limits`; the billing plan is `shpyrd-ctl plans`.")
+			}
+			if !clear && !limits.set() {
 				return errors.New("give at least one ceiling (--projects, --instances, --cpu, --memory, --storage) or --clear")
 			}
 			ac, err := newAppClient(g, cmd.OutOrStdout())
@@ -220,7 +236,7 @@ func newWorkspacesPlanCmd(g *globalFlags) *cobra.Command {
 			if err := requireWorkspaces(ctx, ac); err != nil {
 				return err
 			}
-			req := api.UpdateWorkspaceRequest{Plan: plan.limits(), ClearPlan: clear}
+			req := api.UpdateWorkspaceRequest{Limits: limits.limits(), ClearLimits: clear}
 			body, _ := json.Marshal(req)
 			raw, err := serverRequest(ctx, ac.k, "PATCH", "api/workspaces/"+args[0], body, "application/json")
 			if err != nil {
@@ -228,15 +244,15 @@ func newWorkspacesPlanCmd(g *globalFlags) *cobra.Command {
 			}
 			var ws api.WorkspaceSummary
 			_ = json.Unmarshal(raw, &ws)
-			if ws.Plan == nil {
+			if ws.Limits == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s has no ceilings.\n", ws.Slug)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s: %s\n", ws.Slug, planString(ws.Plan))
+				fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s: %s\n", ws.Slug, limitsString(ws.Limits))
 			}
 			return nil
 		},
 	}
-	plan.bind(cmd)
+	limits.bind(cmd)
 	cmd.Flags().BoolVar(&clear, "clear", false, "remove every ceiling")
 	return cmd
 }
