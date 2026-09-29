@@ -499,3 +499,36 @@ func TestWorkspaceCertIssuerDefaultsToPlatformIssuer(t *testing.T) {
 		t.Errorf("no DNS provider: workspace issuer = %q, platform issuer = %q", got, local.vars[VarPlatformIssuer])
 	}
 }
+
+
+// The console Ingress fronts `shpyrd deploy` uploads: the API takes
+// archives up to 512 MiB, nginx defaults to 1 MiB. The first real project
+// on the first production cluster got a 413 page (1.3 MiB of source).
+func TestConsoleIngressAllowsSourceUploads(t *testing.T) {
+	for _, profile := range []string{"local", "oci"} {
+		vars := map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"}
+		auth := "https://auth.example.test:8443"
+		if profile == "oci" {
+			vars = map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com"}
+			auth = "https://auth.oci.example.com"
+		}
+		eng := testProfileRenders(t, profile, vars, auth)
+		objs, err := eng.renderComponent(eng.components["shpyrd"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, o := range objs {
+			if o.GetKind() != "Ingress" || o.GetName() != "shpyrd-server" {
+				continue
+			}
+			found = true
+			if got := o.GetAnnotations()["nginx.ingress.kubernetes.io/proxy-body-size"]; got != "512m" {
+				t.Errorf("%s: console ingress proxy-body-size = %q, want 512m (pkg/api maxSourceSize)", profile, got)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no console ingress rendered", profile)
+		}
+	}
+}

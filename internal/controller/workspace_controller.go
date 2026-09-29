@@ -143,6 +143,27 @@ func workspaceHostFrontDoorName(slug, host string) string {
 	return workspaceFrontDoorName(slug) + "-h-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// FrontDoorBodySize is the request body nginx lets through to the platform
+// on the console and on workspace front doors: `shpyrd deploy` uploads
+// the source archive there, and the API accepts up to 512 MiB
+// (pkg/api/sources.go maxSourceSize). nginx's default, 1 MiB, answered
+// every real project with a 413 page.
+const FrontDoorBodySize = "512m"
+
+// frontDoorAnnotations are the ingress-nginx settings of every Ingress
+// that fronts the platform's server (the console's Ingress, rendered from
+// deploy/components/shpyrd/base/ingress.yaml, carries the same).
+func frontDoorAnnotations() map[string]string {
+	return map[string]string{
+		"nginx.ingress.kubernetes.io/ssl-redirect": "true",
+		// Streams (build logs, log follow, the terminal) may stay
+		// silent longer than nginx's 60s default.
+		"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+		"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+		"nginx.ingress.kubernetes.io/proxy-body-size":    FrontDoorBodySize,
+	}
+}
+
 // ensureHostFrontDoor keeps the Ingress and certificate of a custom domain
 // (the host alone: its apps have Ingresses of their own with certificates
 // per host) or of a moved address (the host and one label under it, so
@@ -186,11 +207,7 @@ func (r *WorkspaceReconciler) ensureHostFrontDoor(ctx context.Context, ws *store
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Config.SystemNamespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 		ing.Labels = mergeMaps(ing.Labels, labels)
-		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
-			"nginx.ingress.kubernetes.io/ssl-redirect":       "true",
-			"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-		})
+		ing.Annotations = mergeMaps(ing.Annotations, frontDoorAnnotations())
 		ing.Spec.IngressClassName = &class
 		ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: hosts, SecretName: name + "-tls"}}
 		ing.Spec.Rules = nil
@@ -255,13 +272,7 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Config.SystemNamespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 		ing.Labels = mergeMaps(ing.Labels, labels)
-		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
-			"nginx.ingress.kubernetes.io/ssl-redirect": "true",
-			// Streams (build logs, log follow, the terminal) may stay
-			// silent longer than nginx's 60s default.
-			"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-			"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-		})
+		ing.Annotations = mergeMaps(ing.Annotations, frontDoorAnnotations())
 		ing.Spec.IngressClassName = &class
 		ing.Spec.TLS = []networkingv1.IngressTLS{tls}
 		ing.Spec.Rules = []networkingv1.IngressRule{{

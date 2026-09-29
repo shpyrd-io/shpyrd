@@ -15,7 +15,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// maxSourceSize bounds uploaded source archives.
+// maxSourceSize bounds uploaded source archives. The Ingresses in front of
+// the server allow the same (deploy/components/shpyrd/base/ingress.yaml,
+// controller.FrontDoorBodySize); nginx would otherwise stop uploads at
+// 1 MiB with a 413 page before they reach this handler.
 const maxSourceSize = 512 << 20
 
 // SourcesPort is where the server serves source archives to build pods

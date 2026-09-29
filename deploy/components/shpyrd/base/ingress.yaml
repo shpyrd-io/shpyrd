@@ -21,6 +21,10 @@ metadata:
     # would cut them.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # `shpyrd deploy` uploads the source archive through here; the API
+    # accepts up to 512 MiB (pkg/api/sources.go maxSourceSize). nginx's
+    # default is 1 MiB: a 413 page instead of a build for any real project.
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
 spec:
   ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
   tls:

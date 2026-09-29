@@ -48,6 +48,11 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 	if ing.Spec.Rules[0].Host != "acme.shpyrd.test" || *ing.Spec.IngressClassName != "nginx" || ing.Spec.TLS[0].SecretName != "workspace-acme-tls" {
 		t.Errorf("acme ingress = %+v", ing.Spec)
 	}
+	// `shpyrd deploy` against the workspace host uploads the source archive
+	// through this Ingress: nginx must let the API's maximum through.
+	if got := ing.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"]; got != FrontDoorBodySize || FrontDoorBodySize != "512m" {
+		t.Errorf("acme front door proxy-body-size = %q, want 512m (pkg/api maxSourceSize)", got)
+	}
 	if svc := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service; svc.Name != "shpyrd-server" || svc.Port.Name != "http" {
 		t.Errorf("acme backend = %+v", svc)
 	}
