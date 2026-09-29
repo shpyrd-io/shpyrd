@@ -358,7 +358,11 @@ func (s *Server) deps() ext.Deps {
 	if s.kube != nil && s.kube.Namespace != "" {
 		ns = s.kube.Namespace
 	}
-	return ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged, Mail: s.mailer}
+	d := ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged, Mail: s.mailer}
+	if s.store != nil {
+		d.Invite = s.inviteHook
+	}
+	return d
 }
 
 // routeGroups implements ext.Router.

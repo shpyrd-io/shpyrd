@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -36,7 +38,7 @@ list, suspend and resume workspaces and set their plans.
   shpyrd-ctl workspaces suspend acme
   shpyrd-ctl workspaces resume acme`,
 	}
-	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesListCmd(g), newWorkspacesLimitsCmd(g), newWorkspacesStatusCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesStatusCmd(g, "resume", store.WorkspaceActive))
+	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesListCmd(g), newWorkspacesInviteCmd(g), newWorkspacesLimitsCmd(g), newWorkspacesStatusCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesStatusCmd(g, "resume", store.WorkspaceActive))
 	return cmd
 }
 
@@ -92,14 +94,16 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var ws api.WorkspaceSummary
-			_ = json.Unmarshal(raw, &ws)
+			var created api.CreatedWorkspace
+			_ = json.Unmarshal(raw, &created)
+			ws := created.WorkspaceSummary
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Created workspace %s (%s) at %s\n", ws.Slug, ws.Name, ws.URL)
 			if operator {
 				fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
 			} else {
 				fmt.Fprintf(out, "%s is its first owner; the front door and certificate follow within a minute.\n", owner)
+				printOwnerInvitation(out, owner, ws.URL, created.OwnerInvitation)
 				if ws.Plan != "" {
 					fmt.Fprintf(out, "Metered against the %s plan from now on.\n", ws.Plan)
 				} else {
@@ -115,6 +119,70 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&owner, "owner", "", "email of the workspace's first owner")
 	cmd.Flags().BoolVar(&operator, "operator", false, "one of the platform operator's own workspaces: never invoiced, owned by every platform admin (RFC-0078)")
 	limits.bind(cmd)
+	return cmd
+}
+
+// printOwnerInvitation says how the first owner gets in: by the email
+// the platform sent, or by a link the operator passes on (shown once).
+func printOwnerInvitation(out io.Writer, owner, door string, inv *ext.InviteOutcome) {
+	switch {
+	case inv == nil:
+		fmt.Fprintf(out, "No invitation was sent: %s holds the owner role and signs in at %s with a method the workspace offers.\n", owner, door)
+	case inv.Error != "":
+		fmt.Fprintf(out, "Could not invite %s: %s. They hold the owner role; invite them again from the workspace's People page.\n", owner, inv.Error)
+	case inv.Applied:
+		fmt.Fprintf(out, "%s is known to the platform already and can sign in at %s now.\n", owner, door)
+	case inv.Emailed:
+		fmt.Fprintf(out, "Invitation emailed to %s: the link opens %s, where they set a password (or sign in with a method the workspace offers).\n", owner, door)
+	default:
+		fmt.Fprintf(out, "Mail is not configured, so nothing was sent. Pass this invitation link on to %s (shown once, valid until %s):\n  %s\n", owner, inv.ExpiresAt.Local().Format("Jan 2, 15:04"), inv.Link)
+		if inv.MailError != "" {
+			fmt.Fprintf(out, "  (the email failed: %s)\n", inv.MailError)
+		}
+	}
+}
+
+func newWorkspacesInviteCmd(g *globalFlags) *cobra.Command {
+	var role string
+	cmd := &cobra.Command{
+		Use:   "invite <slug> <email>",
+		Short: "Invite a person into a workspace (the role is theirs at once; the link stands on the workspace's door and is emailed when mail is configured)",
+		Long: `Invite a person into a workspace: as when the first owner's email never
+arrived, or a second owner is named. The role is granted at once; the
+invitation is how the person learns of it and gets a way in — a link on
+the workspace's own door, emailed when the mail extension is configured,
+printed once otherwise.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := signalContext()
+			slug, email := args[0], strings.ToLower(strings.TrimSpace(args[1]))
+			if !strings.Contains(email, "@") {
+				return errors.New("give the person's email address")
+			}
+			if !store.ValidWorkspaceRole(role) {
+				return errors.New("--role must be owner, admin or member")
+			}
+			ac, err := newAppClient(g, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			if err := requireWorkspaces(ctx, ac); err != nil {
+				return err
+			}
+			body, _ := json.Marshal(api.InviteRequest{Email: email, Role: role})
+			raw, err := serverRequest(ctx, ac.k, "POST", "api/workspaces/"+url.PathEscape(slug)+"/invitations", body, "application/json")
+			if err != nil {
+				return err
+			}
+			var inv ext.InviteOutcome
+			_ = json.Unmarshal(raw, &inv)
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "%s is %s %s of workspace %s.\n", email, article(role), role, slug)
+			printOwnerInvitation(out, email, "the workspace's door", &inv)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&role, "role", store.WorkspaceRoleOwner, "workspace role: owner, admin or member")
 	return cmd
 }
 

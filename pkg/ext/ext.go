@@ -7,8 +7,8 @@ package ext
 
 import (
 	"context"
-	"time"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
@@ -121,6 +121,29 @@ type Deps struct {
 	// extension provides it so the server can check lockout and set passwords
 	// during reset/invite flows. Nil when auth-local is not enabled.
 	LocalAccounts LocalAccountStore
+	// Invite brings a person into a workspace with a role (RFC-0033): one
+	// the workspace knows holds the role at once; anyone else gets an
+	// invitation whose link, and the set-password link of a pending local
+	// account (RFC-0014), stand on the workspace's own door and go out by
+	// email when the mail extension is configured. Nil without a store.
+	Invite func(c *gin.Context, workspace, email, role string) (*InviteOutcome, error)
+}
+
+// InviteOutcome is what Invite produced.
+type InviteOutcome struct {
+	// Applied says the person was known already and holds the role now;
+	// there is no link.
+	Applied bool `json:"applied"`
+	// Link is the invitation link, shown once; empty when Applied.
+	Link      string    `json:"link,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// Emailed says the link went out by email; MailError says why not
+	// (empty when mail is not configured: the inviter passes the link on).
+	Emailed   bool   `json:"emailed"`
+	MailError string `json:"mailError,omitempty"`
+	// Error is set when the invitation itself could not be made; the role
+	// the caller granted stands regardless.
+	Error string `json:"error,omitempty"`
 }
 
 // LocalAccountStore is the interface the server uses from the auth-local

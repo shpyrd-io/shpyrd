@@ -146,6 +146,24 @@ export type LoginMethods = {
 };
 
 /** One workspace as the console lists them (RFC-0033 phase 8). */
+/** What became of an invitation (RFC-0033, RFC-0014). */
+export type InviteOutcome = {
+  /** The person was known already and holds the role now; no link. */
+  applied: boolean;
+  /** The invitation link, shown once; on the workspace's own door. */
+  link?: string;
+  expiresAt?: string;
+  emailed: boolean;
+  mailError?: string;
+  /** The invitation could not be made; the role granted stands. */
+  error?: string;
+};
+
+/** POST /api/workspaces: the workspace and its first owner's invitation. */
+export type CreatedWorkspace = WorkspaceSummary & {
+  ownerInvitation?: InviteOutcome;
+};
+
 export type WorkspaceSummary = {
   slug: string;
   name: string;
@@ -217,7 +235,12 @@ export type InviteResult = {
 
 /** What the holder of an invitation link sees (public). */
 export type InvitationPublic = {
-  workspace: { slug: string; name: string; address?: string; ownedByOperator?: boolean };
+  workspace: {
+    slug: string;
+    name: string;
+    address?: string;
+    ownedByOperator?: boolean;
+  };
   email: string;
   role: WorkspaceRole;
   team?: string;
@@ -909,12 +932,12 @@ export const api = {
     operatorOwned?: boolean;
     /** Billing plan name; refused for operator workspaces. */
     plan?: string;
-  }) => request<WorkspaceSummary>("/api/workspaces", json("POST", body)),
+  }) => request<CreatedWorkspace>("/api/workspaces", json("POST", body)),
   /** Billing plans (RFC-0075; cluster admins). */
   plans: () =>
-    request<{ id: string; name: string; currency: string; minMonthly: number }[]>(
-      "/api/cluster/plans",
-    ),
+    request<
+      { id: string; name: string; currency: string; minMonthly: number }[]
+    >("/api/cluster/plans"),
   /** Cluster-wide settings (RFC-0078, RFC-0080). */
   patchClusterSettings: (body: {
     defaultWorkspaceId?: string;

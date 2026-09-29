@@ -194,6 +194,7 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const [owner, setOwner] = useState("");
   const [operator, setOperator] = useState(false);
   const [plan, setPlan] = useState<string | undefined>(undefined);
+  const [link, setLink] = useState("");
   const plans = useQuery({ queryKey: ["plans"], queryFn: api.plans });
   // A customer workspace is priced from birth: the first plan is
   // preselected when the operator has defined any.
@@ -209,12 +210,72 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
         plan: operator || !chosenPlan ? undefined : chosenPlan,
       }),
     onSuccess: (w) => {
-      toast.success(`Workspace ${w.slug} created at ${w.address}`);
       qc.invalidateQueries({ queryKey: ["workspaces"] });
-      onClose();
+      const inv = w.ownerInvitation;
+      if (!inv) {
+        toast.success(`Workspace ${w.slug} created at ${w.address}`);
+        onClose();
+        return;
+      }
+      if (inv.error) {
+        toast.warning(
+          `Workspace ${w.slug} created; the owner could not be invited`,
+          {
+            description: `${inv.error}. They hold the owner role; invite again with shpyrd-ctl workspaces invite.`,
+          },
+        );
+        onClose();
+        return;
+      }
+      if (inv.emailed || inv.applied) {
+        toast.success(`Workspace ${w.slug} created at ${w.address}`, {
+          description: inv.applied
+            ? `${owner.trim()} is known to the platform and can sign in now.`
+            : `Invitation emailed to ${owner.trim()}.`,
+        });
+        onClose();
+        return;
+      }
+      // Mail is not configured: the link is shown once, here.
+      setLink(inv.link ?? "");
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  if (link) {
+    return (
+      <Dialog open onOpenChange={(o) => !o && onClose()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Workspace {slug.trim()} created</DialogTitle>
+            <DialogDescription>
+              Mail is not configured, so nothing was sent. Pass this invitation
+              link on to {owner.trim()}; it is shown once and opens their
+              workspace, where they set a password or sign in with a method the
+              workspace offers.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            readOnly
+            value={link}
+            onFocus={(e) => e.currentTarget.select()}
+            className="font-mono text-xs"
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void navigator.clipboard?.writeText(link);
+                toast.success("Link copied");
+              }}
+            >
+              Copy link
+            </Button>
+            <Button onClick={onClose}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>

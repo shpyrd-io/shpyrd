@@ -188,35 +188,58 @@ func (s *Server) createInvitation(c *gin.Context) {
 			return
 		}
 	}
-	result := InviteResult{Email: email, Role: role, Team: team}
-
-	// Someone the workspace knows (and has not suspended) gets the role now.
+	// Someone the workspace knows (and has not suspended) gets the role
+	// now; taking an owner's role needs an owner.
 	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Status != store.StatusSuspended {
 		snap, _ := s.authz.SnapshotFor(ctx, ws.Slug)
 		if snap != nil && snap.WorkspaceRole(email) == store.WorkspaceRoleOwner && !roles.Can(authz.WorkspaceOwner, "") {
 			abort(c, http.StatusForbidden, denial(roles, authz.WorkspaceOwner, ""))
 			return
 		}
-		if err := s.applyRole(c, ws.Slug, email, role, team, "invited"); err != nil {
-			storeErr(c, err, "person")
+	}
+	result, status, err := s.invite(c, ws, email, role, team, me)
+	if err != nil {
+		if status == 0 {
+			storeErr(c, err, "invitation")
 			return
 		}
-		result.Applied = true
+		abort(c, status, err)
+		return
+	}
+	if result.Applied {
 		c.JSON(http.StatusOK, result)
 		return
+	}
+	c.JSON(http.StatusCreated, result)
+}
+
+// invite brings email into ws with a role (and a team): a person the
+// workspace knows holds the role at once; anyone else gets an invitation
+// whose link stands on the workspace's own door and goes out by email
+// when mail is configured, together with the set-password link of a
+// pending local account (RFC-0014). The caller has checked permissions.
+// A non-zero status is the HTTP status of the error; zero means a store
+// error for storeErr to classify.
+func (s *Server) invite(c *gin.Context, ws *store.Workspace, email, role, team string, by ext.Identity) (*InviteResult, int, error) {
+	ctx := c.Request.Context()
+	result := &InviteResult{Email: email, Role: role, Team: team}
+	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Status != store.StatusSuspended {
+		if err := s.applyRole(c, ws.Slug, email, role, team, "invited"); err != nil {
+			return nil, 0, err
+		}
+		result.Applied = true
+		return result, 0, nil
 	}
 
 	token, hash, err := newInvitationToken()
 	if err != nil {
-		abort(c, http.StatusInternalServerError, err)
-		return
+		return nil, http.StatusInternalServerError, err
 	}
 	inv, err := s.store.CreateInvitation(ctx, ws.Slug, store.Invitation{
-		Email: email, Role: role, Team: team, InvitedBy: strings.ToLower(me.Email), ExpiresAt: time.Now().Add(InvitationTTL),
+		Email: email, Role: role, Team: team, InvitedBy: strings.ToLower(by.Email), ExpiresAt: time.Now().Add(InvitationTTL),
 	}, hash)
 	if err != nil {
-		storeErr(c, err, "invitation")
-		return
+		return nil, 0, err
 	}
 	view := invitationView(*inv)
 	result.Invitation = &view
@@ -224,7 +247,7 @@ func (s *Server) createInvitation(c *gin.Context) {
 	s.audit(c, "", "workspace.invitation.create", email, "role "+role+teamDetail(team))
 
 	if s.mailer != nil && s.mailer.Configured(ctx) {
-		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, me, result.Link)); err != nil {
+		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, by, result.Link)); err != nil {
 			result.MailError = err.Error()
 			s.log.Warn("invitation email failed", "to", email, "err", err.Error())
 			s.audit(c, "", "workspace.invitation.mail_failed", email, err.Error())
@@ -232,14 +255,41 @@ func (s *Server) createInvitation(c *gin.Context) {
 			result.Emailed = true
 		}
 	}
-	// RFC-0014: if auth-local is enabled and the person has no local account
-	// yet, create a pending account and send the set-password link alongside
-	// (or in place of) the workspace invite. A single shpyrd invite email
-	// covers both workspace membership and local account creation.
-	if err := s.inviteUser(c, email, strings.SplitN(email, "@", 2)[0]); err != nil {
+	// RFC-0014: with auth-local, a pending account whose set-password link
+	// stands on the same door, so the accept link has somewhere to go.
+	if err := s.inviteUser(c, email, strings.SplitN(email, "@", 2)[0], firstNonEmpty(ws.Name, ws.Slug), s.dashboardURLOf(ws)); err != nil {
 		s.log.Warn("invite: could not create pending local account", "email", email, "err", err.Error())
 	}
-	c.JSON(http.StatusCreated, result)
+	return result, 0, nil
+}
+
+// inviteHook is ext.Deps.Invite: extensions that create workspaces bring
+// the first owner in through the same door as any invitation.
+func (s *Server) inviteHook(c *gin.Context, wsSlug, email, role string) (*ext.InviteOutcome, error) {
+	if s.store == nil {
+		return nil, errors.New("no control-plane store")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if !validEmail(email) {
+		return nil, errors.New("that is not an email address")
+	}
+	if !store.ValidWorkspaceRole(role) {
+		return nil, errors.New("role must be owner, admin or member")
+	}
+	ws, err := s.store.Workspace(c.Request.Context(), wsSlug)
+	if err != nil {
+		return nil, err
+	}
+	by, _ := ext.IdentityFrom(c)
+	res, _, err := s.invite(c, ws, email, role, "", by)
+	if err != nil {
+		return nil, err
+	}
+	out := &ext.InviteOutcome{Applied: res.Applied, Link: res.Link, Emailed: res.Emailed, MailError: res.MailError}
+	if res.Invitation != nil {
+		out.ExpiresAt = res.Invitation.ExpiresAt
+	}
+	return out, nil
 }
 
 func teamDetail(team string) string {

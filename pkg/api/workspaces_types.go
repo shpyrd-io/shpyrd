@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -33,6 +34,14 @@ type CreateWorkspaceRequest struct {
 	Plan string `json:"plan,omitempty"`
 	// Limits sets the workspace's ceilings; nil means none.
 	Limits *store.Limits `json:"limits,omitempty"`
+}
+
+// CreatedWorkspace is what POST /api/workspaces answers: the workspace,
+// and what became of its first owner's invitation (RFC-0033, RFC-0014):
+// emailed, or a link to pass on, shown once.
+type CreatedWorkspace struct {
+	WorkspaceSummary
+	OwnerInvitation *ext.InviteOutcome `json:"ownerInvitation,omitempty"`
 }
 
 // UpdateWorkspaceRequest is PATCH /api/workspaces/:slug; every field is

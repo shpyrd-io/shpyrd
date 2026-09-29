@@ -84,8 +84,11 @@ v0.9.45:
 | `shpyrd invite` hook: also calls `inviteUser` when auth-local is enabled, creating a pending account and sending the set-password link alongside the workspace invitation | done |
 | `shpyrd-ctl users add --invite`: creates a pending account; `shpyrd-ctl users list` shows STATUS and VERIFIED columns | done |
 | Deployed on OKE (v0.9.45): reset endpoint and pages verified | applied |
+| v0.9.57 — links stand on doors (RFC-0080): the reset link is built on the door the request came in on, the set-password link on the door of the workspace the person was invited to (both were `https://shpyrd.<domain>`, a host two doors did away with); the set-password mail names the workspace. Creating a workspace with a first owner (`shpyrd-ctl workspaces create --owner`, the console) invites them the same way, and `shpyrd-ctl workspaces invite <slug> <email>` does it again when the mail was lost | done |
 
 Known gaps (not started):
+
+- **Two emails per invitation** (the invitation, and the set-password link) where one would do; the second is what a password-only door needs, the first what an SSO door needs.
 
 - **Email templates** are plain text + minimal HTML; branded templates are a follow-up.
 - **`/account/reset` link in the sign-in UI**: the login page shows no "Forgot password" link yet — a UI change deferred until the React app is touched.

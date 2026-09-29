@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/authlocal"
-	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
 // resetRequestRateLimit caps requests per IP per 10 minutes.
@@ -79,35 +79,21 @@ func (s *Server) requestReset(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "if an account with that email exists, a reset link was sent"})
 }
 
-func (s *Server) resetLink(c *gin.Context, code string) string {
-	base := install.BaseURL(map[string]string{
-		install.VarDomain:    s.opts.Public.Domain,
-		install.VarHTTPSPort: s.opts.Public.HTTPSPort,
-	})("shpyrd")
-	if base == "" {
-		// Fallback: use the request host.
-		scheme := "https"
-		if c.Request.TLS == nil {
-			scheme = "http"
-		}
-		base = scheme + "://" + c.Request.Host
-	}
-	return base + "/account/reset?token=" + code
+// doorURL is the door this request came in on: a person who asks for a
+// reset at acme.shpyrd.app is sent back there, never to another host
+// (RFC-0080: the platform has several doors, and none is "the" dashboard).
+func doorURL(c *gin.Context) string {
+	return requestScheme(c) + "://" + c.Request.Host
 }
 
-func (s *Server) inviteLink(c *gin.Context, code string) string {
-	base := install.BaseURL(map[string]string{
-		install.VarDomain:    s.opts.Public.Domain,
-		install.VarHTTPSPort: s.opts.Public.HTTPSPort,
-	})("shpyrd")
-	if base == "" {
-		scheme := "https"
-		if c.Request.TLS == nil {
-			scheme = "http"
-		}
-		base = scheme + "://" + c.Request.Host
-	}
-	return base + "/account/set-password?token=" + code
+func (s *Server) resetLink(c *gin.Context, code string) string {
+	return doorURL(c) + "/account/reset?token=" + code
+}
+
+// setPasswordLink is where an invited person chooses a password: on the
+// door they were invited to.
+func setPasswordLink(door, code string) string {
+	return strings.TrimSuffix(door, "/") + "/account/set-password?token=" + code
 }
 
 // accountPage renders one of the two password-setting pages.
@@ -250,25 +236,29 @@ func (s *Server) handleSetPassword(c *gin.Context) {
 	c.Redirect(http.StatusFound, "/?activated=ok")
 }
 
-// sendInviteEmail sends the set-password link to a newly invited user.
-func (s *Server) sendInviteEmail(c *gin.Context, email, name, code string) {
+// sendInviteEmail sends the set-password link to a newly invited user:
+// where names what they were invited to, door is where the link stands.
+func (s *Server) sendInviteEmail(c *gin.Context, email, where, door, code string) {
 	if s.deps().Mail == nil {
 		return
 	}
-	link := s.inviteLink(c, code)
+	link := setPasswordLink(door, code)
+	host := strings.TrimPrefix(strings.TrimPrefix(door, "https://"), "http://")
 	_ = s.deps().Mail.Send(c.Request.Context(), ext.Message{
 		To:      []string{email},
-		Subject: "You have been invited",
-		Text:    "You have been invited to " + s.opts.Public.Domain + ".\n\nSet your password:\n\n" + link + "\n\nThis link expires in 24 hours.",
-		HTML:    fmt.Sprintf(`<p>You have been invited to %s.</p><p><a href="%s">Set your password</a></p><p>This link expires in 24 hours.</p>`, s.opts.Public.Domain, link),
+		Subject: "Set your password for " + where,
+		Text:    "You have been invited to " + where + " (" + host + ").\n\nSet your password to sign in:\n\n" + link + "\n\nThis link expires in 24 hours.",
+		HTML:    fmt.Sprintf(`<p>You have been invited to <strong>%s</strong> (%s).</p><p><a href="%s">Set your password</a> to sign in.</p><p>This link expires in 24 hours.</p>`, html.EscapeString(where), html.EscapeString(host), link),
 	})
 }
 
-// inviteUser is called from the users API when a local-account invite is
-// sent: creates (or re-creates) the pending account and emails the link.
-func (s *Server) inviteUser(c *gin.Context, email, name string) error {
+// inviteUser gives an invited person a pending local account (RFC-0014)
+// and emails the set-password link, standing on the door they were
+// invited to. Nothing to do without auth-local: the workspace invitation
+// (RFC-0033) and the door's other methods carry the sign-in.
+func (s *Server) inviteUser(c *gin.Context, email, name, where, door string) error {
 	if s.localAccounts == nil {
-		return nil // no auth-local; workspace invite (RFC-0033) handles the rest
+		return nil
 	}
 	ctx := c.Request.Context()
 	if err := s.localAccounts.CreatePending(ctx, email, name); err != nil {
@@ -278,7 +268,6 @@ func (s *Server) inviteUser(c *gin.Context, email, name string) error {
 	if err != nil {
 		return err
 	}
-	s.sendInviteEmail(c, email, name, code)
+	s.sendInviteEmail(c, email, where, door, code)
 	return nil
 }
-
