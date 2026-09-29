@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { api, type EconomicsRow } from "@/lib/api";
 import { ErrorBoundary } from "@/components/error-boundary";
 import {
   Card,
@@ -88,87 +88,172 @@ function EconomicsCardInner() {
           )}
         {econ.data && (
           <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Workspace</TableHead>
-                  <TableHead className="text-right">Revenue</TableHead>
-                  <TableHead className="text-right">Direct</TableHead>
-                  <TableHead className="text-right">Shared</TableHead>
-                  <TableHead className="text-right">Idle</TableHead>
-                  <TableHead className="text-right">Total COGS</TableHead>
-                  <TableHead className="text-right">Margin</TableHead>
-                  <TableHead className="text-right">Margin %</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {econ.data.workspaces?.map((r) => (
-                  <TableRow key={r.workspace}>
-                    <TableCell className="font-mono text-xs">
-                      {r.workspace}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(r.revenue)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(r.directCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(r.sharedCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(r.idleCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(r.totalCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(r.grossMargin)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(r.marginPct, 1)}%
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {econ.data.totals && (
-                  <TableRow className="font-semibold">
-                    <TableCell>Total</TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(econ.data.totals.revenue)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(econ.data.totals.directCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(econ.data.totals.sharedCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                      {money(econ.data.totals.idleCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(econ.data.totals.totalCogs)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(econ.data.totals.grossMargin)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {money(econ.data.totals.marginPct, 1)}%
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+            <EconomicsTable
+              title="Customers"
+              rows={(econ.data.workspaces ?? []).filter(
+                (r) => r.owner !== "operator",
+              )}
+              totals={customerTotals(econ.data.workspaces ?? [])}
+              empty="No customer workspace yet."
+            />
+            <EconomicsTable
+              title="Operating expenses"
+              hint="The operator's own workspaces (RFC-0078): their costs are the platform's, they are never invoiced."
+              rows={(econ.data.workspaces ?? []).filter(
+                (r) => r.owner === "operator",
+              )}
+              totals={operatorTotals(econ.data.workspaces ?? [])}
+              expenses
+              empty="No operator workspace."
+            />
             <p className="mt-2 text-xs text-muted-foreground">
-              Period: {econ.data.month}. Revenue = plan prices × usage.{" "}
-              Direct = pods in the workspace's namespaces.{" "}
-              Shared = proportional share of ingress, monitoring and platform
-              infrastructure.{" "}
-              Idle = proportional share of unused node capacity (shrinks when
+              Period: {econ.data.month}. Revenue = plan prices × usage. Direct =
+              pods in the workspace's namespaces. Shared = proportional share of
+              ingress, monitoring and platform infrastructure. Idle =
+              proportional share of unused node capacity (shrinks when
               autoscaling removes nodes).
             </p>
           </>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** Sums of the customer rows: revenue, COGS and margin. */
+function customerTotals(rows: EconomicsRow[]): EconomicsRow | undefined {
+  const c = rows.filter((r) => r.owner !== "operator");
+  if (c.length === 0) return undefined;
+  const sum = (k: keyof EconomicsRow) =>
+    c.reduce((a, r) => a + ((r[k] as number) || 0), 0);
+  const revenue = sum("revenue");
+  const totalCogs = sum("totalCogs");
+  return {
+    workspace: "Customer totals",
+    revenue,
+    directCogs: sum("directCogs"),
+    sharedCogs: sum("sharedCogs"),
+    idleCogs: sum("idleCogs"),
+    totalCogs,
+    grossMargin: revenue - totalCogs,
+    marginPct: revenue > 0 ? ((revenue - totalCogs) / revenue) * 100 : 0,
+  };
+}
+
+/** Sums of the operator rows: costs only. */
+function operatorTotals(rows: EconomicsRow[]): EconomicsRow | undefined {
+  const o = rows.filter((r) => r.owner === "operator");
+  if (o.length === 0) return undefined;
+  const sum = (k: keyof EconomicsRow) =>
+    o.reduce((a, r) => a + ((r[k] as number) || 0), 0);
+  return {
+    workspace: "Operating expenses",
+    revenue: 0,
+    directCogs: sum("directCogs"),
+    sharedCogs: sum("sharedCogs"),
+    idleCogs: sum("idleCogs"),
+    totalCogs: sum("totalCogs"),
+    grossMargin: 0,
+    marginPct: 0,
+  };
+}
+
+/**
+ * One economics table: customers carry revenue and margin; the operator's
+ * workspaces are expenses and show costs only (the CLI's
+ * `shpyrd-ctl economics` draws the same two blocks).
+ */
+function EconomicsTable({
+  title,
+  hint,
+  rows,
+  totals,
+  expenses = false,
+  empty,
+}: {
+  title: string;
+  hint?: string;
+  rows: EconomicsRow[];
+  totals?: EconomicsRow;
+  expenses?: boolean;
+  empty: string;
+}) {
+  return (
+    <div className="mt-4 first:mt-0">
+      <div className="mb-2">
+        <div className="text-sm font-medium">{title}</div>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{empty}</p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Workspace</TableHead>
+              {!expenses && (
+                <TableHead className="text-right">Revenue</TableHead>
+              )}
+              <TableHead className="text-right">Direct</TableHead>
+              <TableHead className="text-right">Shared</TableHead>
+              <TableHead className="text-right">Idle</TableHead>
+              <TableHead className="text-right">
+                {expenses ? "Total cost" : "Total COGS"}
+              </TableHead>
+              {!expenses && (
+                <TableHead className="text-right">Margin</TableHead>
+              )}
+              {!expenses && (
+                <TableHead className="text-right">Margin %</TableHead>
+              )}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <EconomicsRowView key={r.workspace} r={r} expenses={expenses} />
+            ))}
+            {totals && (
+              <EconomicsRowView r={totals} expenses={expenses} total />
+            )}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+function EconomicsRowView({
+  r,
+  expenses,
+  total = false,
+}: {
+  r: EconomicsRow;
+  expenses: boolean;
+  total?: boolean;
+}) {
+  const cell = "text-right font-mono text-xs";
+  return (
+    <TableRow className={total ? "font-semibold" : undefined}>
+      <TableCell className={total ? "" : "font-mono text-xs"}>
+        {r.workspace}
+      </TableCell>
+      {!expenses && <TableCell className={cell}>{money(r.revenue)}</TableCell>}
+      <TableCell className={cell + " text-muted-foreground"}>
+        {money(r.directCogs)}
+      </TableCell>
+      <TableCell className={cell + " text-muted-foreground"}>
+        {money(r.sharedCogs)}
+      </TableCell>
+      <TableCell className={cell + " text-muted-foreground"}>
+        {money(r.idleCogs)}
+      </TableCell>
+      <TableCell className={cell}>{money(r.totalCogs)}</TableCell>
+      {!expenses && (
+        <TableCell className={cell}>{money(r.grossMargin)}</TableCell>
+      )}
+      {!expenses && (
+        <TableCell className={cell}>{money(r.marginPct, 1)}%</TableCell>
+      )}
+    </TableRow>
   );
 }

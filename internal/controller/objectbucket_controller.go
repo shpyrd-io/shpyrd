@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
@@ -61,10 +62,37 @@ type ObjectBucketReconciler struct {
 }
 
 func (r *ObjectBucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.Add(manager.RunnableFunc(r.warm)); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&shpyrdv1.ObjectBucket{}).
 		Owns(&corev1.Secret{}).
 		Complete(r)
+}
+
+// warm connects to the store at start and gives its node a role, so a
+// fresh install is usable (the console lists buckets, backups can start)
+// before the first bucket is ever asked for. Garage may still be coming up:
+// retried with backoff until it answers, then done — later buckets connect
+// through Store as before.
+func (r *ObjectBucketReconciler) warm(ctx context.Context) error {
+	delay := 5 * time.Second
+	for {
+		if _, err := r.Store(ctx); err == nil {
+			return nil
+		} else {
+			log.FromContext(ctx).V(1).Info("object storage not ready yet, will retry", "in", delay.String(), "error", err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+		if delay < time.Minute {
+			delay *= 2
+		}
+	}
 }
 
 // Store returns the connected store, connecting on first use.

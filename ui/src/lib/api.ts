@@ -295,6 +295,8 @@ export type Connection = {
 /** RFC-0075: one workspace's economics row. */
 export type EconomicsRow = {
   workspace?: string;
+  /** "operator" or "customer" (RFC-0078): the operator's workspaces are expenses, never revenue. */
+  owner?: string;
   revenue: number;
   directCogs: number;
   sharedCogs: number;
