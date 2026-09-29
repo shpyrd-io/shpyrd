@@ -2,6 +2,7 @@
   "name": "shpyrd-web",
   "private": true,
   "workspaces": [
-    "design/ui"
+    "design/ui",
+    "apps/example-next"
   ]
 }

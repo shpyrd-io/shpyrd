@@ -1,0 +1,31 @@
+{
+  "name": "@shpyrd/example-next",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --port 4324",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "lint": "oxlint src app",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@markdoc/markdoc": "^0.5.10",
+    "@shpyrd/ui": "*",
+    "@tailwindcss/postcss": "^4.3.3",
+    "lucide-react": "^1.47.0",
+    "next": "^16.3.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.2"
+  }
+}

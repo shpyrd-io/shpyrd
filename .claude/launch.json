@@ -11,6 +11,17 @@
         "dev"
       ],
       "port": 4323
+    },
+    {
+      "name": "example-next",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/example-next",
+        "run",
+        "dev"
+      ],
+      "port": 4324
     }
   ]
 }
