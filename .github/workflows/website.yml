@@ -1,0 +1,51 @@
+# The shpyrd.io website (Next.js + Markdoc) lives in apps/website/ and deploys from
+# there on Vercel. This job is the pre-merge check; the Vercel preview is the
+# visual one.
+#
+# Path-filtered, so it does not run on Go-only pull requests and reports no
+# status on them. Do not mark "website / Build" as a required status check while
+# that is true - it would leave every Go-only pull request waiting on a status
+# that never arrives. See the same warning in ci.yml.
+name: website
+
+on:
+  push:
+    branches: [main]
+    # Repeated under pull_request below: GitHub Actions does not support YAML
+    # anchors, so the two lists have to be kept in sync by hand.
+    paths:
+      - 'apps/website/**'
+      - '.github/workflows/website.yml'
+  pull_request:
+    paths:
+      - 'apps/website/**'
+      - '.github/workflows/website.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        # Load-bearing: next, the Markdoc loader and src/markdoc/search.mjs
+        # all resolve config and content relative to the process working
+        # directory, so a build from the repository root fails outright.
+        working-directory: apps/website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/website/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run build

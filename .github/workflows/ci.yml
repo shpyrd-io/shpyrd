@@ -1,12 +1,36 @@
 # CI (RFC-0045): Go tests and vet, the dashboard tests, build and lint, the
 # manifests render test, and an end-to-end run on a kind cluster that
 # deploys the sample projects with buildpacks and a Dockerfile.
+#
+# paths-ignore: prose-only changes (apps/website/, rfcs/, docs/, *.md) run neither
+# this workflow nor website.yml, so such a pull request reports no checks at
+# all. That is fine while main is unprotected.
+#
+# Do NOT mark any job here, or website / Build, as a required status check while
+# these path filters exist. A workflow that is not triggered reports no status,
+# so a required check would leave the other side's pull requests stuck on
+# "Expected - waiting for status" forever: a required job from this workflow
+# blocks every website-only PR, and a required website / Build blocks every
+# Go-only PR. To require checks, first replace both filters with a
+# dorny/paths-filter gate job that always reports a conclusion.
 name: ci
 
 on:
   push:
     branches: [main]
+    # Repeated under pull_request below: GitHub Actions does not support YAML
+    # anchors, so the two lists have to be kept in sync by hand.
+    paths-ignore:
+      - 'apps/website/**'
+      - 'rfcs/**'
+      - 'docs/**'
+      - '*.md'
   pull_request:
+    paths-ignore:
+      - 'apps/website/**'
+      - 'rfcs/**'
+      - 'docs/**'
+      - '*.md'
 
 permissions:
   contents: read

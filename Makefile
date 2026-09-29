@@ -3,8 +3,9 @@ CLUSTER      ?= shpyrd
 SERVER_IMAGE ?= shpyrd-server:dev
 LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
-.PHONY: all build cli server ui image dev-image generate test vet lint clean \
-        dev-cluster dev-load dev-deploy dev-destroy installclint commitlint
+.PHONY: all build cli server ui website website-dev image dev-image generate \
+        test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
+        installclint commitlint
 
 all: build
 
@@ -25,6 +26,14 @@ server:
 ## Build the dashboard into ui/dist (embedded by `make server`)
 ui:
 	cd ui && npm ci --no-audit --no-fund && npm run build
+
+## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
+website:
+	cd apps/website && npm ci --no-audit --no-fund && npm run build
+
+## Serve the website locally on http://localhost:3000
+website-dev:
+	cd apps/website && npm install && npm run dev
 
 ## Build the server container image (full multi-stage build)
 image:
