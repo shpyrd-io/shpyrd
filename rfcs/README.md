@@ -105,6 +105,7 @@ declare what they depend on.
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
 | [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep scaffolding) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
 | [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44) | 0033, 0059, 0075 |
+| [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.46) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 
@@ -128,6 +129,7 @@ declare what they depend on.
 | M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep |
 
 | O | 0077 | node pools: fixed platform pool, autoscaled apps pool; the node side of scaling next to RFC-0047's pod side |
+| P | 0079 | Node.js builds: pnpm, Next.js 16 on buildpacks — the builder's Node group and what the `next` profile knows |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
 keeps dependencies satisfied.
