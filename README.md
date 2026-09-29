@@ -324,7 +324,7 @@ pkg/authz             roles and actions (RFC-0008); pkg/audit the audit trail
 pkg/api               HTTP API, OIDC relying party and sessions, dashboard serving
 deploy/               components and profiles embedded in the binary (incl. extension components such as dex)
 ui/                   dashboard (Vite + React 19 + Tailwind 4 + shadcn/ui)
-website/              shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see website/LICENSE
+apps/website/         shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see apps/website/LICENSE
 examples/             sample projects: shop (Go, web + worker, Postgres + Redis), blog (Node, volume), api (Python Dockerfile), hello, hello-docker
 rfcs/                 design documents
 ```
@@ -342,8 +342,8 @@ in one terminal, `cd ui && npm run dev` in another (Vite proxies `/api`).
 
 The website is a separate Next.js project: `make website-dev` serves
 [shpyrd.io](https://shpyrd.io) on http://localhost:3000. Documentation pages are
-Markdown under `website/src/pages/docs/`; see
-[website/README.md](website/README.md).
+Markdown under `apps/website/src/pages/docs/`; see
+[apps/website/README.md](apps/website/README.md).
 
 CI runs `go vet`, `go test`, the dashboard lint, tests and build, and an
 end-to-end job on a kind cluster (`.github/workflows/ci.yml`); the website
@@ -362,7 +362,7 @@ sign-off (`git commit -s`).
 
 ## License
 
-[MPL-2.0](LICENSE), with one exception: `website/` is built on the commercial
+[MPL-2.0](LICENSE), with one exception: `apps/website/` is built on the commercial
 Tailwind UI *Syntax* template and is governed by
-[`website/LICENSE`](website/LICENSE) instead. Everything else — the platform,
+[`apps/website/LICENSE`](apps/website/LICENSE) instead. Everything else — the platform,
 the CLI, the dashboard, the examples and the RFCs — is MPL-2.0.

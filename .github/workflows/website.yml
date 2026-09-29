@@ -1,4 +1,4 @@
-# The shpyrd.io website (Next.js + Markdoc) lives in website/ and deploys from
+# The shpyrd.io website (Next.js + Markdoc) lives in apps/website/ and deploys from
 # there on Vercel. This job is the pre-merge check; the Vercel preview is the
 # visual one.
 #
@@ -14,11 +14,11 @@ on:
     # Repeated under pull_request below: GitHub Actions does not support YAML
     # anchors, so the two lists have to be kept in sync by hand.
     paths:
-      - 'website/**'
+      - 'apps/website/**'
       - '.github/workflows/website.yml'
   pull_request:
     paths:
-      - 'website/**'
+      - 'apps/website/**'
       - '.github/workflows/website.yml'
 
 permissions:
@@ -38,14 +38,14 @@ jobs:
         # Load-bearing: next, the Markdoc loader and src/markdoc/search.mjs
         # all resolve config and content relative to the process working
         # directory, so a build from the repository root fails outright.
-        working-directory: website
+        working-directory: apps/website
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: apps/website/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run build

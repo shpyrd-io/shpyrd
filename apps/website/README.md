@@ -9,7 +9,7 @@ product documentation. Built with [Next.js](https://nextjs.org) and
 **This directory is not covered by the repository's MPL 2.0 licence.** The site
 is built on the commercial Tailwind UI *Syntax* template and is governed by
 [`LICENSE`](LICENSE) in this directory. The rest of the repository is
-[MPL-2.0](../LICENSE).
+[MPL-2.0](../../LICENSE).
 
 In practice: you may read it, and you may not redistribute the template or
 derivatives of it separately from this site. For contributions the line falls

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Relocate the `shpyrd-io/shpyrd-docs` website into `website/` in this repository with its git history intact, its licence carved out of MPL 2.0, and CI building it without slowing Go work down.
+**Goal:** Relocate the `shpyrd-io/shpyrd-docs` website into `apps/website/` in this repository with its git history intact, its licence carved out of MPL 2.0, and CI building it without slowing Go work down.
 
 **Architecture:** A `git subtree add` brings the site in as a two-parent merge commit, so `git blame` keeps resolving to the original authors and the pre-move commits stay reachable through the merge's second parent. A second commit applies the only four deliberate changes (licence filename, README, package name, `.gitignore`) and prunes two paths. The licensing boundary is declared in prose because the root MPL text must stay pristine. CI splits into two path-filtered workflows rather than adding per-job filters, since no status check is required to merge.
 
@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- This is a **lift-and-shift**. Nothing under `website/src/` or `website/public/` may be modified — those paths are what `shpyrd.io` serves today.
+- This is a **lift-and-shift**. Nothing under `apps/website/src/` or `apps/website/public/` may be modified — those paths are what `shpyrd.io` serves today.
 - The root `LICENSE` file is **never edited**. Its MPL 2.0 text must stay byte-identical so automated licence detection keeps working.
-- `website/LICENSE` carries the Tailwind UI licence text **verbatim** from `shpyrd-docs/LICENSE.md`. Only the filename changes.
-- Every command that builds the site runs with the working directory set to `website/`. `src/markdoc/search.mjs:53` calls `path.resolve('./src/pages')`, and Next and the Markdoc loader resolve their config the same way, so a build launched from the repository root **fails outright** (verified: lint reports `Cannot find module 'next/babel'`; with `--no-lint`, the Markdoc loader errors).
-- Node version in CI is **24**, matching the existing `ui` job and `website/package.json`'s `engines` field.
+- `apps/website/LICENSE` carries the Tailwind UI licence text **verbatim** from `shpyrd-docs/LICENSE.md`. Only the filename changes.
+- Every command that builds the site runs with the working directory set to `apps/website/`. `src/markdoc/search.mjs:53` calls `path.resolve('./src/pages')`, and Next and the Markdoc loader resolve their config the same way, so a build launched from the repository root **fails outright** (verified: lint reports `Cannot find module 'next/babel'`; with `--no-lint`, the Markdoc loader errors).
+- Node version in CI is **24**, matching the existing `ui` job and `apps/website/package.json`'s `engines` field.
 - No `--squash` on the subtree add, and the resulting pull request is merged with a **merge commit**, not squashed. Squashing discards the second parent and the history with it.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org) and need a DCO sign-off: use `git commit -s`.
 - Work happens on the existing branch `chore/website-monorepo`. Nothing is pushed to `main`, and no repository is deleted or archived.
@@ -36,12 +36,12 @@ Five failure modes the spec implies that no obvious task step would catch. Each 
 ## Task 1: Bring the site in with its history
 
 **Files:**
-- Create: `website/` (93 files, imported wholesale from `shpyrd-io/shpyrd-docs@main`; 91 after Task 2's prune)
-- Modify: nothing outside `website/`
+- Create: `apps/website/` (93 files, imported wholesale from `shpyrd-io/shpyrd-docs@main`; 91 after Task 2's prune)
+- Modify: nothing outside `apps/website/`
 
 **Interfaces:**
 - Consumes: nothing; this is the first task.
-- Produces: `website/` populated with the `shpyrd-docs` tree at its `main` commit, and a merge commit whose second parent is that commit. Later tasks edit files inside `website/`.
+- Produces: `apps/website/` populated with the `shpyrd-docs` tree at its `main` commit, and a merge commit whose second parent is that commit. Later tasks edit files inside `apps/website/`.
 
 - [ ] **Step 1: Confirm the starting state**
 
@@ -66,7 +66,7 @@ Expected: the fetch succeeds. The tip was `9503858 docs(roadmap): RFC-0075 in pr
 - [ ] **Step 3: Import the tree with its history**
 
 ```bash
-git subtree add --prefix=website website-src main
+git subtree add --prefix=apps/website website-src main
 ```
 
 Expected: `git subtree` prints `Added dir 'website'` and creates a merge commit. No `--squash` — that flag is what this whole task exists to avoid.
@@ -81,12 +81,12 @@ git log --oneline HEAD^2 -- src/pages/docs/cli.md | wc -l
 
 Expected: ~100 commits reachable through the second parent, the newest being the `shpyrd-docs` tip, and ~27 of them touching `src/pages/docs/cli.md`. `HEAD^2` failing means the import was squashed — reset with `git reset --hard HEAD~1` and redo Step 3 without `--squash`.
 
-Do **not** assert on `git log --oneline -- website/`: it prints 1, and that is correct. Path-limiting matches paths as each commit spells them, and the pre-move commits spell theirs at the repository root (`src/pages/...`), so the filter cannot reach them. `--follow` returns 0 for the same reason.
+Do **not** assert on `git log --oneline -- apps/website/`: it prints 1, and that is correct. Path-limiting matches paths as each commit spells them, and the pre-move commits spell theirs at the repository root (`src/pages/...`), so the filter cannot reach them. `--follow` returns 0 for the same reason.
 
 - [ ] **Step 5: Verify blame resolves to the original authors**
 
 ```bash
-git blame -L 1,3 --porcelain website/src/pages/docs/cli.md | grep -m2 '^author '
+git blame -L 1,3 --porcelain apps/website/src/pages/docs/cli.md | grep -m2 '^author '
 ```
 
 Expected: a real author name, not the name of whoever is running this plan.
@@ -119,39 +119,39 @@ Expected: empty. Do not amend the subtree commit — its parents are the point.
 
 ---
 
-## Task 2: Rename, rewrite and prune inside `website/`
+## Task 2: Rename, rewrite and prune inside `apps/website/`
 
 **Files:**
-- Rename: `website/LICENSE.md` → `website/LICENSE`
-- Modify: `website/README.md` (full rewrite), `website/package.json:2` (the `name` field), `website/.gitignore`
-- Delete: `website/.devcontainer/` (this repository has its own), `website/tmp/Hero.jsx` (stray scratch file)
+- Rename: `apps/website/LICENSE.md` → `apps/website/LICENSE`
+- Modify: `apps/website/README.md` (full rewrite), `apps/website/package.json:2` (the `name` field), `apps/website/.gitignore`
+- Delete: `apps/website/.devcontainer/` (this repository has its own), `apps/website/tmp/Hero.jsx` (stray scratch file)
 
 **Interfaces:**
-- Consumes: `website/` from Task 1.
-- Produces: `website/LICENSE` at the path Task 3's prose points at, and a `website/` that builds. Task 5's `Makefile` targets depend on `website/package.json` keeping its `dev` and `build` scripts — only the `name` field changes.
+- Consumes: `apps/website/` from Task 1.
+- Produces: `apps/website/LICENSE` at the path Task 3's prose points at, and a `apps/website/` that builds. Task 5's `Makefile` targets depend on `apps/website/package.json` keeping its `dev` and `build` scripts — only the `name` field changes.
 
 - [ ] **Step 1: Rename the licence so the boundary is a conventional filename**
 
 ```bash
 cd /home/nkr/Projects/shpyrd
-git mv website/LICENSE.md website/LICENSE
+git mv apps/website/LICENSE.md apps/website/LICENSE
 ```
 
 - [ ] **Step 2: Verify the stray file is unreferenced, then prune both paths**
 
 ```bash
-grep -rn "tmp/Hero\|tmp'" website/src website/next.config.mjs website/jsconfig.json
+grep -rn "tmp/Hero\|tmp'" apps/website/src apps/website/next.config.mjs apps/website/jsconfig.json
 ```
 
-Expected: no output. `website/src/components/Hero.jsx` is the real component and stays; `website/tmp/Hero.jsx` is scratch. If this grep *does* print a match, stop and ask rather than deleting.
+Expected: no output. `apps/website/src/components/Hero.jsx` is the real component and stays; `apps/website/tmp/Hero.jsx` is scratch. If this grep *does* print a match, stop and ask rather than deleting.
 
 ```bash
-git rm -r --quiet website/.devcontainer website/tmp
+git rm -r --quiet apps/website/.devcontainer apps/website/tmp
 ```
 
 - [ ] **Step 3: Rename the npm package**
 
-The package is still named after the template it was bought as. In `website/package.json`, change line 2:
+The package is still named after the template it was bought as. In `apps/website/package.json`, change line 2:
 
 ```json
   "name": "shpyrd-website",
@@ -165,9 +165,9 @@ from:
 
 Leave `version`, `private`, every script, and all dependencies exactly as they are.
 
-- [ ] **Step 4: Trim `website/.gitignore` to what the root does not already cover**
+- [ ] **Step 4: Trim `apps/website/.gitignore` to what the root does not already cover**
 
-The root `.gitignore` already ignores `node_modules`, `coverage`, `*.pem` and `.DS_Store` repository-wide, so the imported file is mostly duplication. Replace the whole contents of `website/.gitignore` with:
+The root `.gitignore` already ignores `node_modules`, `coverage`, `*.pem` and `.DS_Store` repository-wide, so the imported file is mostly duplication. Replace the whole contents of `apps/website/.gitignore` with:
 
 ```gitignore
 # Next.js build output
@@ -186,22 +186,22 @@ The root `.gitignore` already ignores `node_modules`, `coverage`, `*.pem` and `.
 This is Review Focus items 2 and 4. Compare against the source commit rather than trusting the import:
 
 ```bash
-git diff --stat website-src/main:public HEAD:website/public
-sha256sum website/public/install.sh
+git diff --stat website-src/main:public HEAD:apps/website/public
+sha256sum apps/website/public/install.sh
 git show website-src/main:public/install.sh | sha256sum
-ls website/public/screenshots | wc -l
-ls website/public/fonts | wc -l
-file website/public/fonts/Inter-roman.var.woff2
+ls apps/website/public/screenshots | wc -l
+ls apps/website/public/fonts | wc -l
+file apps/website/public/fonts/Inter-roman.var.woff2
 ```
 
 Expected: the `git diff --stat` prints nothing; the two checksums match; `18` screenshots; `4` font files; and `file` reports `Web Open Font Format (Version 2)`, not ASCII text.
 
-- [ ] **Step 6: Verify the site still installs, lints and builds — from inside `website/`**
+- [ ] **Step 6: Verify the site still installs, lints and builds — from inside `apps/website/`**
 
 This is Review Focus item 1: the `cd` is load-bearing, not incidental.
 
 ```bash
-cd website
+cd apps/website
 npm ci --no-audit --no-fund
 npm run lint
 npm run build
@@ -218,9 +218,9 @@ cd /home/nkr/Projects/shpyrd/website
 grep -ro 'docs/installation' .next/static/chunks | head -1
 ```
 
-Expected: a match. No match means `search.mjs` globbed an empty directory — check that Step 6 ran with `website/` as the working directory.
+Expected: a match. No match means `search.mjs` globbed an empty directory — check that Step 6 ran with `apps/website/` as the working directory.
 
-- [ ] **Step 8: Rewrite `website/README.md`**
+- [ ] **Step 8: Rewrite `apps/website/README.md`**
 
 It is currently the Tailwind *Syntax* template's own README ("# Syntax", "You can start editing this template..."). Replace the whole file with:
 
@@ -291,7 +291,7 @@ git add -A website
 git status --short
 ```
 
-Expected: the build exits 0. `git status` shows the rename, the two deletions, and the three modified files — and **nothing under `website/src/` or `website/public/`**. If it shows a change under either, revert that file: this task may not touch served content.
+Expected: the build exits 0. `git status` shows the rename, the two deletions, and the three modified files — and **nothing under `apps/website/src/` or `apps/website/public/`**. If it shows a change under either, revert that file: this task may not touch served content.
 
 ```bash
 git commit -s -m "chore(website): name the package, prune template scratch, rewrite the README
@@ -318,7 +318,7 @@ byte-identical."
 - Never modify: `LICENSE`
 
 **Interfaces:**
-- Consumes: `website/LICENSE` from Task 2.
+- Consumes: `apps/website/LICENSE` from Task 2.
 - Produces: the prose boundary. Task 5 edits different sections of the same `README.md`, so if these tasks are done out of order, expect to re-read the file rather than apply a stale line range.
 
 - [ ] **Step 1: Verify the root licence is untouched**
@@ -346,9 +346,9 @@ Replace that section with:
 ```markdown
 ## License
 
-[MPL-2.0](LICENSE), with one exception: `website/` is built on the commercial
+[MPL-2.0](LICENSE), with one exception: `apps/website/` is built on the commercial
 Tailwind UI *Syntax* template and is governed by
-[`website/LICENSE`](website/LICENSE) instead. Everything else — the platform,
+[`apps/website/LICENSE`](apps/website/LICENSE) instead. Everything else — the platform,
 the CLI, the dashboard, the examples and the RFCs — is MPL-2.0.
 ```
 
@@ -369,9 +369,9 @@ shpyrd is [MPL 2.0 licensed](LICENSE) and accepts contributions via GitHub
 pull requests. This document outlines some of the conventions to make it
 easier to get your contribution accepted.
 
-One directory is licensed differently: the website in [`website/`](website) is
+One directory is licensed differently: the website in [`apps/website/`](website) is
 built on the commercial Tailwind UI *Syntax* template and is governed by
-[`website/LICENSE`](website/LICENSE). Documentation and content contributions
+[`apps/website/LICENSE`](apps/website/LICENSE). Documentation and content contributions
 to the site are welcome on those terms.
 ```
 
@@ -379,17 +379,17 @@ to the site are welcome on those terms.
 
 ```bash
 grep -rn "MPL" README.md CONTRIBUTING.md | grep -v "^README.md:11"
-ls website/LICENSE
-head -1 website/LICENSE
+ls apps/website/LICENSE
+head -1 apps/website/LICENSE
 ```
 
-Expected: both MPL mentions now carry the `website/` exception, `website/LICENSE` exists, and its first line is `# Tailwind UI License`.
+Expected: both MPL mentions now carry the `apps/website/` exception, `apps/website/LICENSE` exists, and its first line is `# Tailwind UI License`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add README.md CONTRIBUTING.md
-git commit -s -m "docs: scope MPL 2.0 to everything but website/
+git commit -s -m "docs: scope MPL 2.0 to everything but apps/website/
 
 The site is built on the commercial Tailwind UI Syntax template, whose licence
 forbids redistributing the template separately from the product it is part of.
@@ -398,7 +398,7 @@ boundary is stated where a reader meets the licence claim: the README's License
 section and CONTRIBUTING's opening paragraph.
 
 The LICENSE file itself is deliberately untouched, so its MPL text stays
-byte-identical and licence detection keeps working. website/LICENSE holds the
+byte-identical and licence detection keeps working. apps/website/LICENSE holds the
 Tailwind terms, the same slot enterprise/LICENSE will occupy later."
 ```
 
@@ -411,7 +411,7 @@ Tailwind terms, the same slot enterprise/LICENSE will occupy later."
 - Modify: `.github/workflows/ci.yml:6-9` (the `on:` block)
 
 **Interfaces:**
-- Consumes: `website/package-lock.json` and the `lint`/`build` scripts from Task 2.
+- Consumes: `apps/website/package-lock.json` and the `lint`/`build` scripts from Task 2.
 - Produces: two independent workflows. No job in either depends on the other.
 
 - [ ] **Step 1: Confirm no status check is required to merge**
@@ -445,13 +445,13 @@ on:
     # Repeated under pull_request below: GitHub Actions does not support YAML
     # anchors, so the two lists have to be kept in sync by hand.
     paths-ignore:
-      - 'website/**'
+      - 'apps/website/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'
   pull_request:
     paths-ignore:
-      - 'website/**'
+      - 'apps/website/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'
@@ -485,7 +485,7 @@ Expected: both lists print as the same four patterns, `match: True`, jobs `['go'
 Create `.github/workflows/website.yml`, mirroring the existing `ui` job. There is no test script in this project, so there is no test step.
 
 ```yaml
-# The shpyrd.io website (Next.js + Markdoc) lives in website/ and deploys from
+# The shpyrd.io website (Next.js + Markdoc) lives in apps/website/ and deploys from
 # there on Vercel. This job is the pre-merge check; the Vercel preview is the
 # visual one.
 name: website
@@ -496,11 +496,11 @@ on:
     # Repeated under pull_request below: GitHub Actions does not support YAML
     # anchors, so the two lists have to be kept in sync by hand.
     paths:
-      - 'website/**'
+      - 'apps/website/**'
       - '.github/workflows/website.yml'
   pull_request:
     paths:
-      - 'website/**'
+      - 'apps/website/**'
       - '.github/workflows/website.yml'
 
 permissions:
@@ -519,14 +519,14 @@ jobs:
         # Load-bearing: src/markdoc/search.mjs resolves ./src/pages from the
         # process working directory, so a build from the repository root
         # produces an empty search index without failing.
-        working-directory: website
+        working-directory: apps/website
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: apps/website/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run build
@@ -558,15 +558,15 @@ This is Review Focus item 3 — the consequence is invisible until someone adds 
 | A pull request touching | Runs `ci.yml` | Runs `website.yml` |
 | --- | --- | --- |
 | `pkg/**` only | yes | no |
-| `website/**` only | no | yes |
+| `apps/website/**` only | no | yes |
 | `rfcs/**` or `*.md` only | no | no |
 | `pkg/**` and `README.md` | yes | no |
-| `pkg/**` and `website/**` | yes | yes |
+| `pkg/**` and `apps/website/**` | yes | yes |
 
 Row 3 means a documentation-only pull request reports **no checks at all**. That is intended while `main` is unprotected. Add this note to `.github/workflows/ci.yml` directly under the existing header comment, so whoever enables branch protection finds it:
 
 ```yaml
-# paths-ignore: prose-only changes (website/, rfcs/, docs/, *.md) run neither
+# paths-ignore: prose-only changes (apps/website/, rfcs/, docs/, *.md) run neither
 # this workflow nor website.yml, so such a pull request reports no checks at
 # all. That is fine while main is unprotected. If a required status check is
 # ever added, replace these filters with a dorny/paths-filter gate job that
@@ -601,8 +601,8 @@ to do if that ever changes."
 - Modify: `Makefile:6-7` (the `.PHONY` line) and after `Makefile:28` (after the `ui:` target), `README.md` (the `## Layout` and `## Developing` sections)
 
 **Interfaces:**
-- Consumes: `website/package.json`'s `dev` and `build` scripts from Task 2.
-- Produces: `make website` and `make website-dev`, referenced by `website/README.md` from Task 2.
+- Consumes: `apps/website/package.json`'s `dev` and `build` scripts from Task 2.
+- Produces: `make website` and `make website-dev`, referenced by `apps/website/README.md` from Task 2.
 
 - [ ] **Step 1: Add the Make targets next to the existing `ui:` target**
 
@@ -624,24 +624,24 @@ with:
 Then insert immediately after the existing `ui:` target (after the line `cd ui && npm ci --no-audit --no-fund && npm run build`):
 
 ```make
-## Build the website (shpyrd.io); deployed from website/ on Vercel
+## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
 website:
-	cd website && npm ci --no-audit --no-fund && npm run build
+	cd apps/website && npm ci --no-audit --no-fund && npm run build
 
 ## Serve the website locally on http://localhost:3000
 website-dev:
-	cd website && npm install && npm run dev
+	cd apps/website && npm install && npm run dev
 ```
 
 The `cd` is what makes the search index build correctly — see the constraint at the top of this plan.
 
-- [ ] **Step 2: Add `website/` to the README's Layout section**
+- [ ] **Step 2: Add `apps/website/` to the README's Layout section**
 
 In the `## Layout` code block, insert a row after the `ui/` row so the two front ends sit together:
 
 ```
 ui/                   dashboard (Vite + React 19 + Tailwind 4 + shadcn/ui)
-website/              shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see website/LICENSE
+apps/website/              shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see apps/website/LICENSE
 ```
 
 - [ ] **Step 3: Tell contributors how to run the site, in the Developing section**
@@ -651,8 +651,8 @@ In `## Developing`, after the paragraph beginning "The UI can be developed again
 ```markdown
 The website is a separate Next.js project: `make website-dev` serves
 [shpyrd.io](https://shpyrd.io) on http://localhost:3000. Documentation pages are
-Markdown under `website/src/pages/docs/`; see
-[website/README.md](website/README.md).
+Markdown under `apps/website/src/pages/docs/`; see
+[apps/website/README.md](apps/website/README.md).
 ```
 
 Then update the CI sentence in the same section. Replace:
@@ -679,16 +679,16 @@ A tag `vX.Y.Z` releases:
 ```bash
 cd /home/nkr/Projects/shpyrd
 make website 2>&1 | tail -5
-grep -ro 'docs/installation' website/.next/static/chunks | head -1
+grep -ro 'docs/installation' apps/website/.next/static/chunks | head -1
 make -n website-dev
 ```
 
-Expected: `make website` exits 0 with the Next route table; the `grep` finds a match, proving the search index is populated; `make -n website-dev` prints the `cd website && npm install && npm run dev` command without running it.
+Expected: `make website` exits 0 with the Next route table; the `grep` finds a match, proving the search index is populated; `make -n website-dev` prints the `cd apps/website && npm install && npm run dev` command without running it.
 
 - [ ] **Step 5: Verify the README's own links resolve**
 
 ```bash
-for p in website/LICENSE website/README.md LICENSE CONTRIBUTING.md; do
+for p in apps/website/LICENSE apps/website/README.md LICENSE CONTRIBUTING.md; do
   test -e "$p" && echo "ok   $p" || echo "MISSING $p"
 done
 ```
@@ -702,10 +702,10 @@ git add Makefile README.md
 git commit -s -m "chore: make targets and README for the website in-tree
 
 make website builds the site the way CI does and make website-dev serves it,
-both cd-ing into website/ because search.mjs resolves ./src/pages from the
+both cd-ing into apps/website/ because search.mjs resolves ./src/pages from the
 process working directory.
 
-The README's Layout section gains a website/ row next to ui/ noting the
+The README's Layout section gains a apps/website/ row next to ui/ noting the
 separate licence, and Developing says how to run the site and that the two
 workflows are path-filtered."
 ```
@@ -733,8 +733,8 @@ Expected: exactly `.github/workflows/ci.yml`, `.github/workflows/website.yml`, `
 - [ ] **Step 2: Verify no served content changed**
 
 ```bash
-git diff --stat website-src/main:src HEAD:website/src
-git diff --stat website-src/main:public HEAD:website/public
+git diff --stat website-src/main:src HEAD:apps/website/src
+git diff --stat website-src/main:public HEAD:apps/website/public
 ```
 
 Expected: no output from either. This is the lift-and-shift guarantee, and it is the single most important check in the plan.
@@ -742,7 +742,7 @@ Expected: no output from either. This is the lift-and-shift guarantee, and it is
 - [ ] **Step 3: Verify the route list is complete**
 
 ```bash
-cd website && npm run build 2>&1 > /tmp/rb.log
+cd apps/website && npm run build 2>&1 > /tmp/rb.log
 grep -cE '^[├└] ● /docs/' /tmp/rb.log      # docs pages
 grep -cE '^[┌├└] [●○]' /tmp/rb.log         # all routes
 grep -E '^┌ ● /  |^├ ○ /404' /tmp/rb.log
@@ -756,10 +756,10 @@ Expected: `22` docs routes and `24` route lines in total (22 docs + `/` + `/404`
 cd /home/nkr/Projects/shpyrd
 git cat-file -p $(git rev-list --merges -1 HEAD) | grep -c '^parent '
 git log --oneline HEAD^2 2>/dev/null | wc -l || git log --oneline $(git rev-list --merges -1 HEAD)^2 | wc -l
-git blame --porcelain website/src/pages/docs/cli.md | grep -c '^author Patrick Negri'
+git blame --porcelain apps/website/src/pages/docs/cli.md | grep -c '^author Patrick Negri'
 ```
 
-Expected: `2` parents, ~100 commits reachable through the merge's second parent, and blame still crediting the original author. Do **not** assert on `git log --oneline -- website/`: it prints 1, because path-limiting matches paths as each commit spells them and the pre-move commits used `src/pages/...` at the repository root.
+Expected: `2` parents, ~100 commits reachable through the merge's second parent, and blame still crediting the original author. Do **not** assert on `git log --oneline -- apps/website/`: it prints 1, because path-limiting matches paths as each commit spells them and the pre-move commits used `src/pages/...` at the repository root.
 
 - [ ] **Step 5: Confirm before pushing**
 
@@ -776,7 +776,7 @@ Then ask whether to push and open the pull request. **Wait for an explicit yes.*
 git push -u origin chore/website-monorepo
 gh pr create --repo shpyrd-io/shpyrd --base main --head chore/website-monorepo \
   --title "chore(website): move shpyrd.io into the monorepo" --body "$(cat <<'BODY'
-Moves the site from `shpyrd-io/shpyrd-docs` into `website/`, the first step of
+Moves the site from `shpyrd-io/shpyrd-docs` into `apps/website/`, the first step of
 the [repository reorganization proposal](https://gist.github.com/paezao/c078584b5946b409dd58b0c13c84bdb6).
 Design: `docs/superpowers/specs/2026-09-27-website-monorepo-design.md`.
 
@@ -790,24 +790,24 @@ repository's squash convention.
 
 ## What this does
 
-- brings `website/` in with its 102 commits of history intact
+- brings `apps/website/` in with its 102 commits of history intact
 - renames `LICENSE.md` to `LICENSE`, text unchanged, and declares the boundary
   in the root `README.md` and `CONTRIBUTING.md`: MPL 2.0 everywhere except
-  `website/`, which is governed by the commercial Tailwind UI licence
+  `apps/website/`, which is governed by the commercial Tailwind UI licence
 - renames the npm package from `tailwindui-syntax` to `shpyrd-website`, rewrites
   the template's README, drops `.devcontainer/` and a stray `tmp/Hero.jsx`
-- splits CI: `website.yml` builds the site on `website/**`; `ci.yml` now ignores
+- splits CI: `website.yml` builds the site on `apps/website/**`; `ci.yml` now ignores
   prose paths, so a docs typo no longer runs the 45-minute kind e2e
 - adds `make website` and `make website-dev`
 
-**Nothing under `website/src/` or `website/public/` changed**, so `/`, the 22
+**Nothing under `apps/website/src/` or `apps/website/public/` changed**, so `/`, the 22
 `/docs/*` pages, `/install.sh` and `/screenshots/*.png` serve byte-identical
 content.
 
 ## Still to do after this merges
 
 The Vercel cutover, which needs dashboard access: a project against this
-repository with Root Directory `website`, Ignored Build Step
+repository with Root Directory `apps/website`, Ignored Build Step
 `git diff --quiet HEAD^ HEAD ./`, verified on its `*.vercel.app` URL before
 `shpyrd.io` and `www.shpyrd.io` move over. `shpyrd-docs` then gets a pointer in
 its README and its git integration disconnected. It is not deleted or archived.
@@ -825,18 +825,18 @@ BODY
 sleep 45 && gh pr checks --repo shpyrd-io/shpyrd chore/website-monorepo
 ```
 
-Expected: **both** workflows run. `website.yml` is triggered by `website/**`; `ci.yml` is triggered by `.github/workflows/*.yml` and `Makefile`, neither of which matches a `paths-ignore` pattern — correct, since both affect the Go build. The filters themselves are proven by simulating GitHub's matching rules in Task 4 Step 6, not by this one pull request.
+Expected: **both** workflows run. `website.yml` is triggered by `apps/website/**`; `ci.yml` is triggered by `.github/workflows/*.yml` and `Makefile`, neither of which matches a `paths-ignore` pattern — correct, since both affect the Go build. The filters themselves are proven by simulating GitHub's matching rules in Task 4 Step 6, not by this one pull request.
 
 - [ ] **Step 8: Hand the Vercel cutover over**
 
 Report the pull request URL and restate what only the maintainer can do, in order:
 
 1. merge this pull request **with a merge commit**, not a squash;
-2. the four Vercel steps from the spec's "Vercel cutover" section — new project, Root Directory `website`, Ignored Build Step `git diff --quiet HEAD^ HEAD ./`, verify on `*.vercel.app`, then move `shpyrd.io` and `www.shpyrd.io`.
+2. the four Vercel steps from the spec's "Vercel cutover" section — new project, Root Directory `apps/website`, Ignored Build Step `git diff --quiet HEAD^ HEAD ./`, verify on `*.vercel.app`, then move `shpyrd.io` and `www.shpyrd.io`.
 
-Do not attempt either. Then name the follow-up pull request this move makes necessary, which is deliberately **not** part of this one because the lift-and-shift constraint forbids touching `website/src/`:
+Do not attempt either. Then name the follow-up pull request this move makes necessary, which is deliberately **not** part of this one because the lift-and-shift constraint forbids touching `apps/website/src/`:
 
-- `website/src/pages/docs/how-to-contribute.md` line 6 tells readers the project is "MPL-2.0" with no exception, and line 48 says "This site lives in shpyrd-io/shpyrd-docs". Line 48 becomes false the moment this merges, and line 6 is the published page a prospective contributor or redistributor is most likely to read — it must name `shpyrd-io/shpyrd` + `website/` and state the `website/` exception. This should be the **next** pull request, not held for the domain cutover.
+- `apps/website/src/pages/docs/how-to-contribute.md` line 6 tells readers the project is "MPL-2.0" with no exception, and line 48 says "This site lives in shpyrd-io/shpyrd-docs". Line 48 becomes false the moment this merges, and line 6 is the published page a prospective contributor or redistributor is most likely to read — it must name `shpyrd-io/shpyrd` + `apps/website/` and state the `apps/website/` exception. This should be the **next** pull request, not held for the domain cutover.
 
 Then note the follow-up that is deliberately deferred until after the domain moves: `shpyrd-docs` gets a README banner pointing at `shpyrd-io/shpyrd/website` and its Vercel git integration disconnected. Adding that banner while the old project still serves the live domain would advertise a move that has not happened yet, so it waits. The repository is not deleted and not archived; whether to archive it is a separate, later decision.
 

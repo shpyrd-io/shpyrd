@@ -2,7 +2,7 @@
 # manifests render test, and an end-to-end run on a kind cluster that
 # deploys the sample projects with buildpacks and a Dockerfile.
 #
-# paths-ignore: prose-only changes (website/, rfcs/, docs/, *.md) run neither
+# paths-ignore: prose-only changes (apps/website/, rfcs/, docs/, *.md) run neither
 # this workflow nor website.yml, so such a pull request reports no checks at
 # all. That is fine while main is unprotected.
 #
@@ -21,13 +21,13 @@ on:
     # Repeated under pull_request below: GitHub Actions does not support YAML
     # anchors, so the two lists have to be kept in sync by hand.
     paths-ignore:
-      - 'website/**'
+      - 'apps/website/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'
   pull_request:
     paths-ignore:
-      - 'website/**'
+      - 'apps/website/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'

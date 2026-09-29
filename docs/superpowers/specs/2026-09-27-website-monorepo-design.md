@@ -13,7 +13,7 @@ pull request: implementation, tests, SDK, examples and the documentation that
 describes them all move together.
 
 This spec covers only the first step: relocating the public website and
-documentation from `shpyrd-io/shpyrd-docs` into `website/` in this repository,
+documentation from `shpyrd-io/shpyrd-docs` into `apps/website/` in this repository,
 with nothing about the site itself changed. It is deliberately a move and not a
 redesign. The proposal's information architecture, its Cloud-first positioning
 and the `enterprise/` boundary are later phases, each needing its own design.
@@ -61,7 +61,7 @@ Relevant facts:
 Four choices shape the work. Each was taken deliberately over a named
 alternative.
 
-**A pure lift-and-shift, not a restructure.** `website/` becomes the current
+**A pure lift-and-shift, not a restructure.** `apps/website/` becomes the current
 site verbatim. Reshaping the information architecture at the same time would put
 every live `/docs/*` URL at risk in the same change that relocates the files,
 making a regression impossible to attribute. Restructuring is a later phase that
@@ -69,7 +69,7 @@ can add redirects as its own reviewable concern.
 
 **History preserved through a subtree merge.** `git blame` keeps resolving to
 the original authors and `git log HEAD^2` reaches the imported commits.
-(Path-limited `git log -- website/` does not list them — the pre-move commits
+(Path-limited `git log -- apps/website/` does not list them — the pre-move commits
 spell their paths at the repository root, so the filter cannot match.) The cost is
 a merge commit with two parents, which the repository's squash-merge convention
 would discard; this one pull request is therefore merged with a merge commit.
@@ -88,6 +88,14 @@ framework (Starlight, Nextra, Fumadocs) would give a uniform MPL tree but
 discards paid work and rewrites layout, navigation and search for no phase-1
 benefit.
 
+**The site lands at `apps/website/`, not `website/`.** `main` grew an `apps/`
+directory while this work was in review, so the site goes there rather than
+adding a second convention at the repository root. `ui/`, the dashboard embedded
+in the server binary, stays where it is: it is built into the Go binary by
+`make server` and moving it is a separate change with its own blast radius.
+`apps/` therefore holds the website alongside `apps/design-system/`, and the
+dashboard remains at the root until someone decides to move it deliberately.
+
 **The Vercel cutover runs as a new project, verified before the domain moves.**
 Repointing the existing project in place is fewer steps but verifies on the live
 domain. A parallel project is checked on its `*.vercel.app` URL first.
@@ -98,7 +106,7 @@ domain. A parallel project is checked on its `*.vercel.app` URL first.
 
 ```text
 shpyrd/
-├── website/
+├── apps/website/
 │   ├── LICENSE              LICENSE.md renamed; Tailwind UI text unchanged
 │   ├── README.md            rewritten; today it is Tailwind "Syntax" boilerplate
 │   ├── package.json         name: tailwindui-syntax → shpyrd-website
@@ -108,7 +116,7 @@ shpyrd/
 │   ├── public/              favicon.ico, install.sh, fonts/, screenshots/
 │   └── src/                 components/, images/, markdoc/, pages/, styles/
 ├── LICENSE                  unchanged MPL 2.0 text
-└── README.md                + website/ in the layout, + a License section
+└── README.md                + apps/website/ in the layout, + a License section
 ```
 
 Two paths are dropped in the move: `.devcontainer/`, because this repository has
@@ -118,10 +126,10 @@ Nothing under `src/` or `public/` is modified. `/`, the 22 `/docs/*` pages,
 `/install.sh` and `/screenshots/*.png` therefore serve byte-identical content
 after the move.
 
-`website/.gitignore` is trimmed to the entries that matter here — `/.next`,
+`apps/website/.gitignore` is trimmed to the entries that matter here — `/.next`,
 `/out`, `.vercel` and `.env*.local` — because the root already ignores
 `node_modules`, `coverage`, `*.pem` and `.DS_Store` unanchored, so those cover
-`website/` too. The trim also drops `/.pnp`, `.pnp.js`, `/build` and the
+`apps/website/` too. The trim also drops `/.pnp`, `.pnp.js`, `/build` and the
 `npm-debug.log*`/`yarn-*.log*` patterns, which the root does *not* cover: npm 7
 and later write debug logs under `~/.npm/_logs`, and Next produces neither pnp
 files nor `/build`. Keeping the file local to the directory rather than folding it
@@ -129,7 +137,7 @@ into the root keeps the paths relative and the website self-contained.
 
 ### Licensing boundary
 
-`website/LICENSE` carries the Tailwind UI licence text verbatim. The root
+`apps/website/LICENSE` carries the Tailwind UI licence text verbatim. The root
 `LICENSE` is not edited — modifying the MPL text would make the repository's
 licence non-standard and defeat automated licence detection.
 
@@ -137,10 +145,10 @@ The boundary is declared in prose instead, everywhere a reader meets a licence
 claim:
 
 - a **License** section in the root `README.md`: the repository is MPL 2.0
-  except `website/`, which is governed by `website/LICENSE`;
+  except `apps/website/`, which is governed by `apps/website/LICENSE`;
 - a paragraph in `CONTRIBUTING.md`, whose opening line otherwise calls the whole
   project MPL 2.0;
-- a matching note at the top of `website/README.md`.
+- a matching note at the top of `apps/website/README.md`.
 
 This is the slot `enterprise/LICENSE` will occupy in a later phase, so the
 pattern is established once here.
@@ -155,7 +163,7 @@ proceeds on.
 git checkout -b chore/website-monorepo
 git remote add website-src git@github.com:shpyrd-io/shpyrd-docs.git
 git fetch website-src main
-git subtree add --prefix=website website-src main    # merge commit, two parents
+git subtree add --prefix=apps/website website-src main    # merge commit, two parents
 # a second commit applies the renames, rewrites and deletions under Target layout
 ```
 
@@ -169,15 +177,15 @@ a gate job. With no required status checks to protect, splitting the workflow is
 simpler and has the same effect.
 
 - `ci.yml` gains a workflow-level
-  `paths-ignore: ['website/**', 'rfcs/**', 'docs/**', '*.md']`, so a
+  `paths-ignore: ['apps/website/**', 'rfcs/**', 'docs/**', '*.md']`, so a
   documentation-only pull request no longer runs the 45-minute kind e2e. GitHub
   skips a workflow only when *every* changed path matches an ignore pattern, so
   a Go change that also touches a README still runs the full suite.
 - a new `website.yml` mirrors the existing `ui` job — `actions/setup-node@v4`
-  with node 24, `cache-dependency-path: website/package-lock.json`,
+  with node 24, `cache-dependency-path: apps/website/package-lock.json`,
   `npm ci --no-audit --no-fund`, `npm run lint`, `npm run build`, and
-  `working-directory: website` — filtered to
-  `paths: ['website/**', '.github/workflows/website.yml']`. The project defines
+  `working-directory: apps/website` — filtered to
+  `paths: ['apps/website/**', '.github/workflows/website.yml']`. The project defines
   no test script, so there is no test step. `working-directory` is load-bearing:
   a build launched from the repository root fails outright, because Next, the
   Markdoc loader and the search-index builder all resolve config and content
@@ -191,9 +199,9 @@ Executed by the maintainer after the pull request lands, because it needs
 dashboard access this work cannot reach.
 
 1. Create a Vercel project against `shpyrd-io/shpyrd` with **Root Directory
-   `website`**, framework preset Next.js, node 24.
+   `apps/website`**, framework preset Next.js, node 24.
 2. Set the Ignored Build Step to `git diff --quiet HEAD^ HEAD ./`. With the root
-   directory set, this skips builds for commits that do not touch `website/` —
+   directory set, this skips builds for commits that do not touch `apps/website/` —
    which matters now that the site shares a repository with a public Go project
    taking pull requests.
 3. Verify the production-branch deploy on its `*.vercel.app` URL: the homepage,
@@ -210,17 +218,17 @@ decision.
 
 ## Verification
 
-- `cd website && npm ci && npm run lint && npm run build` succeeds locally.
+- `cd apps/website && npm ci && npm run lint && npm run build` succeeds locally.
 - the merge commit has two parents, `git log HEAD^2` reaches the imported
-  history, and `git blame website/src/pages/docs/cli.md` attributes lines to
-  their original authors. Path-limited `git log -- website/` does *not* list
+  history, and `git blame apps/website/src/pages/docs/cli.md` attributes lines to
+  their original authors. Path-limited `git log -- apps/website/` does *not* list
   them: the pre-move commits spell their paths at the repository root, so the
   filter cannot match them.
 - The built route list contains `/`, all 22 `/docs/*` paths and the 404 page;
-  `website/public/install.sh` and the 18 screenshots are present and unmodified
+  `apps/website/public/install.sh` and the 18 screenshots are present and unmodified
   (compare against `shpyrd-docs` at the merged commit).
 - A Go-only pull request runs `ci.yml` and not `website.yml`; a
-  `website/`-only pull request runs the reverse.
+  `apps/website/`-only pull request runs the reverse.
 - The Vercel preview renders the homepage, a docs page, search and
   `/install.sh` before any domain is moved.
 
@@ -250,8 +258,8 @@ live in its own repository named `homebrew-*`, so `homebrew-tap` survives
 consolidation. The realistic end state is `shpyrd` + `shpyrd-cloud` +
 `homebrew-tap`.
 
-**`website/` will not subdivide into `marketing/`, `docs/`, `blog/` and
+**`apps/website/` will not subdivide into `marketing/`, `docs/`, `blog/` and
 `changelog/` as drawn in the proposal.** Markdoc resolves pages from
-`src/pages`, so the site's own routing dictates the layout inside `website/`.
+`src/pages`, so the site's own routing dictates the layout inside `apps/website/`.
 The proposal already defers to "Shpyrd's existing technology and build system
 rather than forcing a particular monorepo convention".

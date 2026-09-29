@@ -27,13 +27,13 @@ server:
 ui:
 	cd ui && npm ci --no-audit --no-fund && npm run build
 
-## Build the website (shpyrd.io); deployed from website/ on Vercel
+## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
 website:
-	cd website && npm ci --no-audit --no-fund && npm run build
+	cd apps/website && npm ci --no-audit --no-fund && npm run build
 
 ## Serve the website locally on http://localhost:3000
 website-dev:
-	cd website && npm install && npm run dev
+	cd apps/website && npm install && npm run dev
 
 ## Build the server container image (full multi-stage build)
 image:
