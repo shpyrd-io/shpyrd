@@ -500,10 +500,11 @@ func TestWorkspaceCertIssuerDefaultsToPlatformIssuer(t *testing.T) {
 	}
 }
 
-
-// The console Ingress fronts `shpyrd deploy` uploads: the API takes
-// archives up to 512 MiB, nginx defaults to 1 MiB. The first real project
-// on the first production cluster got a 413 page (1.3 MiB of source).
+// `shpyrd deploy` uploads through POST /api/sources: the API takes
+// archives up to 512 MiB, nginx defaults to 1 MiB, and the first real
+// project on the first production cluster got a 413 page (1.3 MiB of
+// source). The larger body belongs to that path alone, on a companion
+// Ingress; the console's own stays at the default.
 func TestConsoleIngressAllowsSourceUploads(t *testing.T) {
 	for _, profile := range []string{"local", "oci"} {
 		vars := map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"}
@@ -517,18 +518,34 @@ func TestConsoleIngressAllowsSourceUploads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		found := false
+		var console, sources bool
 		for _, o := range objs {
-			if o.GetKind() != "Ingress" || o.GetName() != "shpyrd-server" {
+			if o.GetKind() != "Ingress" {
 				continue
 			}
-			found = true
-			if got := o.GetAnnotations()["nginx.ingress.kubernetes.io/proxy-body-size"]; got != "512m" {
-				t.Errorf("%s: console ingress proxy-body-size = %q, want 512m (pkg/api maxSourceSize)", profile, got)
+			ann := o.GetAnnotations()
+			switch o.GetName() {
+			case "shpyrd-server":
+				console = true
+				if got, ok := ann["nginx.ingress.kubernetes.io/proxy-body-size"]; ok {
+					t.Errorf("%s: console ingress sets proxy-body-size %q; uploads have their own Ingress", profile, got)
+				}
+			case "shpyrd-server-sources":
+				sources = true
+				if ann["nginx.ingress.kubernetes.io/proxy-body-size"] != "512m" || ann["nginx.ingress.kubernetes.io/proxy-request-buffering"] != "off" {
+					t.Errorf("%s: sources ingress annotations = %v", profile, ann)
+				}
+				rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "rules")
+				paths, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "http", "paths")
+				path, _, _ := unstructured.NestedString(paths[0].(map[string]interface{}), "path")
+				pathType, _, _ := unstructured.NestedString(paths[0].(map[string]interface{}), "pathType")
+				if len(rules) != 1 || len(paths) != 1 || path != "/api/sources" || pathType != "Exact" {
+					t.Errorf("%s: sources ingress path = %s %s (%d rules, %d paths)", profile, pathType, path, len(rules), len(paths))
+				}
 			}
 		}
-		if !found {
-			t.Errorf("%s: no console ingress rendered", profile)
+		if !console || !sources {
+			t.Errorf("%s: console/sources ingress rendered: %v/%v", profile, console, sources)
 		}
 	}
 }

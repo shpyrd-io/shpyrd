@@ -90,6 +90,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 			continue
 		}
 		wanted[workspaceFrontDoorName(ws.Slug)] = true
+		wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
 		if err := r.ensureFrontDoor(ctx, ws); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -107,6 +108,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 				continue
 			}
 			wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
+			if h.Kind == store.HostCustom {
+				wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
+			}
 			if err := r.ensureHostFrontDoor(ctx, ws, h); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -143,16 +147,11 @@ func workspaceHostFrontDoorName(slug, host string) string {
 	return workspaceFrontDoorName(slug) + "-h-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// FrontDoorBodySize is the request body nginx lets through to the platform
-// on the console and on workspace front doors: `shpyrd deploy` uploads
-// the source archive there, and the API accepts up to 512 MiB
-// (pkg/api/sources.go maxSourceSize). nginx's default, 1 MiB, answered
-// every real project with a 413 page.
-const FrontDoorBodySize = "512m"
-
 // frontDoorAnnotations are the ingress-nginx settings of every Ingress
 // that fronts the platform's server (the console's Ingress, rendered from
-// deploy/components/shpyrd/base/ingress.yaml, carries the same).
+// deploy/components/shpyrd/base/ingress.yaml, carries the same). Request
+// bodies keep nginx's 1 MiB default: the API is JSON, and nginx buffers a
+// body before the server sees it. The one upload has its own Ingress.
 func frontDoorAnnotations() map[string]string {
 	return map[string]string{
 		"nginx.ingress.kubernetes.io/ssl-redirect": "true",
@@ -160,8 +159,57 @@ func frontDoorAnnotations() map[string]string {
 		// silent longer than nginx's 60s default.
 		"nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
 		"nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-		"nginx.ingress.kubernetes.io/proxy-body-size":    FrontDoorBodySize,
 	}
+}
+
+// SourcesPath is where `shpyrd deploy` uploads the source archive (and
+// `shpyrd cluster restore` its archives): the one request body of any size
+// the platform's server takes, up to SourcesBodySize (pkg/api/sources.go
+// maxSourceSize). It gets an Ingress of its own per front door so the
+// larger body applies to that path alone; nginx folds it into the same
+// server as a second location. Streaming (no request buffering) lets the
+// server refuse an unauthenticated upload before the body is read.
+const (
+	SourcesPath     = "/api/sources"
+	SourcesBodySize = "512m"
+)
+
+func sourcesFrontDoorAnnotations() map[string]string {
+	return map[string]string{
+		"nginx.ingress.kubernetes.io/ssl-redirect":            "true",
+		"nginx.ingress.kubernetes.io/proxy-read-timeout":      "3600",
+		"nginx.ingress.kubernetes.io/proxy-send-timeout":      "3600",
+		"nginx.ingress.kubernetes.io/proxy-body-size":         SourcesBodySize,
+		"nginx.ingress.kubernetes.io/proxy-request-buffering": "off",
+	}
+}
+
+// sourcesFrontDoorName names the companion Ingress of a front door.
+func sourcesFrontDoorName(frontDoor string) string { return frontDoor + "-sources" }
+
+// ensureSourcesFrontDoor keeps the companion Ingress of the front door
+// `name`: the same host and TLS, one exact path (SourcesPath), the upload
+// settings. Labelled as a front door so the reconcile loop removes it with
+// its workspace or host.
+func (r *WorkspaceReconciler) ensureSourcesFrontDoor(ctx context.Context, name string, labels map[string]string, host string, tls networkingv1.IngressTLS, class string) error {
+	pathType := networkingv1.PathTypeExact
+	backend := networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}}
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: sourcesFrontDoorName(name), Namespace: r.Config.SystemNamespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
+		ing.Labels = mergeMaps(ing.Labels, labels)
+		ing.Annotations = mergeMaps(ing.Annotations, sourcesFrontDoorAnnotations())
+		ing.Spec.IngressClassName = &class
+		ing.Spec.TLS = []networkingv1.IngressTLS{tls}
+		ing.Spec.Rules = []networkingv1.IngressRule{{
+			Host:             host,
+			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Path: SourcesPath, PathType: &pathType, Backend: backend}}}},
+		}}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("sources front door for %s: %w", host, err)
+	}
+	return nil
 }
 
 // ensureHostFrontDoor keeps the Ingress and certificate of a custom domain
@@ -221,6 +269,11 @@ func (r *WorkspaceReconciler) ensureHostFrontDoor(ctx context.Context, ws *store
 	})
 	if err != nil {
 		return fmt.Errorf("front door for %s: %w", h.Host, err)
+	}
+	// Deploys can target a custom domain (`shpyrd login --url`); a moved
+	// address only redirects, so it needs no upload path.
+	if h.Kind == store.HostCustom {
+		return r.ensureSourcesFrontDoor(ctx, name, labels, h.Host, networkingv1.IngressTLS{Hosts: hosts, SecretName: name + "-tls"}, class)
 	}
 	return nil
 }
@@ -298,5 +351,5 @@ func (r *WorkspaceReconciler) ensureFrontDoor(ctx context.Context, ws *store.Wor
 	if err != nil {
 		return fmt.Errorf("front door for workspace %s: %w", ws.Slug, err)
 	}
-	return nil
+	return r.ensureSourcesFrontDoor(ctx, name, labels, ws.Address, tls, class)
 }

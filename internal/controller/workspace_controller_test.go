@@ -48,10 +48,30 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 	if ing.Spec.Rules[0].Host != "acme.shpyrd.test" || *ing.Spec.IngressClassName != "nginx" || ing.Spec.TLS[0].SecretName != "workspace-acme-tls" {
 		t.Errorf("acme ingress = %+v", ing.Spec)
 	}
-	// `shpyrd deploy` against the workspace host uploads the source archive
-	// through this Ingress: nginx must let the API's maximum through.
-	if got := ing.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"]; got != FrontDoorBodySize || FrontDoorBodySize != "512m" {
-		t.Errorf("acme front door proxy-body-size = %q, want 512m (pkg/api maxSourceSize)", got)
+	// The dashboard's Ingress keeps nginx's 1 MiB body default (a JSON API,
+	// and nginx buffers before the server sees anything)...
+	if got, ok := ing.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"]; ok {
+		t.Errorf("acme front door sets proxy-body-size %q; uploads have their own Ingress", got)
+	}
+	// ...and `shpyrd deploy` uploads through a companion for the one path,
+	// streamed, up to the API's maximum (pkg/api maxSourceSize).
+	src := &networkingv1.Ingress{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-acme-sources"}, src); err != nil {
+		t.Fatalf("acme sources ingress: %v", err)
+	}
+	if got := src.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"]; got != SourcesBodySize || SourcesBodySize != "512m" {
+		t.Errorf("acme sources proxy-body-size = %q, want 512m", got)
+	}
+	if got := src.Annotations["nginx.ingress.kubernetes.io/proxy-request-buffering"]; got != "off" {
+		t.Errorf("acme sources request buffering = %q, want off", got)
+	}
+	if len(src.Spec.Rules) != 1 || src.Spec.Rules[0].Host != "acme.shpyrd.test" || src.Spec.TLS[0].SecretName != "workspace-acme-tls" {
+		t.Errorf("acme sources ingress = %+v", src.Spec)
+	} else if p := src.Spec.Rules[0].HTTP.Paths[0]; p.Path != SourcesPath || *p.PathType != networkingv1.PathTypeExact || p.Backend.Service.Name != "shpyrd-server" {
+		t.Errorf("acme sources path = %+v", p)
+	}
+	if src.Labels["shpyrd.io/workspace-front-door"] != "true" || src.Labels[shpyrdv1.LabelWorkspace] != "acme" {
+		t.Errorf("acme sources labels = %v (must be collected with the workspace)", src.Labels)
 	}
 	if svc := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service; svc.Name != "shpyrd-server" || svc.Port.Name != "http" {
 		t.Errorf("acme backend = %+v", svc)
@@ -96,8 +116,14 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-acme"}, ing); err == nil {
 		t.Error("acme's front door survived its workspace")
 	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-acme-sources"}, ing); err == nil {
+		t.Error("acme's sources front door survived its workspace")
+	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-beta"}, ing); err != nil {
 		t.Errorf("beta's front door must stay: %v", err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-beta-sources"}, ing); err != nil {
+		t.Errorf("beta's sources front door must stay: %v", err)
 	}
 }
 

@@ -21,10 +21,9 @@ metadata:
     # would cut them.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    # `shpyrd deploy` uploads the source archive through here; the API
-    # accepts up to 512 MiB (pkg/api/sources.go maxSourceSize). nginx's
-    # default is 1 MiB: a 413 page instead of a build for any real project.
-    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    # Request bodies stay at nginx's 1 MiB default: this is a JSON API and
+    # nginx buffers a body before the server sees it. The one upload, the
+    # source archive of `shpyrd deploy`, has its own Ingress below.
 spec:
   ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
   tls:
@@ -37,6 +36,41 @@ spec:
         paths:
           - path: /
             pathType: Prefix
+            backend:
+              service:
+                name: shpyrd-server
+                port:
+                  name: http
+---
+# POST /api/sources takes the source archive `shpyrd deploy` uploads (and
+# `shpyrd cluster restore` its archives): up to 512 MiB, pkg/api/sources.go
+# maxSourceSize. ingress-nginx folds this Ingress into the same server as
+# the one above as a second location, so the larger body applies to that
+# path alone, streamed (not buffered) so the server can refuse an
+# unauthenticated upload before reading it. Workspace front doors get the
+# same companion from the controller (internal/controller, ensureSourcesFrontDoor).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shpyrd-server-sources
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+spec:
+  ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
+  tls:
+    - hosts:
+        - ${SHPYRD_CONSOLE_HOST}
+      secretName: shpyrd-tls
+  rules:
+    - host: ${SHPYRD_CONSOLE_HOST}
+      http:
+        paths:
+          - path: /api/sources
+            pathType: Exact
             backend:
               service:
                 name: shpyrd-server
