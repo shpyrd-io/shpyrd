@@ -153,6 +153,8 @@ export type InviteOutcome = {
   /** The invitation link, shown once; on the workspace's own door. */
   link?: string;
   expiresAt?: string;
+  /** Where a person without a password chooses one (24 hours). */
+  setPasswordLink?: string;
   emailed: boolean;
   mailError?: string;
   /** The invitation could not be made; the role granted stands. */

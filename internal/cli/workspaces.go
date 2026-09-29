@@ -136,6 +136,9 @@ func printOwnerInvitation(out io.Writer, owner, door string, inv *ext.InviteOutc
 		fmt.Fprintf(out, "Invitation emailed to %s: the link opens %s, where they set a password (or sign in with a method the workspace offers).\n", owner, door)
 	default:
 		fmt.Fprintf(out, "Mail is not configured, so nothing was sent. Pass this invitation link on to %s (shown once, valid until %s):\n  %s\n", owner, inv.ExpiresAt.Local().Format("Jan 2, 15:04"), inv.Link)
+		if inv.SetPasswordLink != "" {
+			fmt.Fprintf(out, "They have no password yet; this link lets them choose one (24 hours):\n  %s\n", inv.SetPasswordLink)
+		}
 		if inv.MailError != "" {
 			fmt.Fprintf(out, "  (the email failed: %s)\n", inv.MailError)
 		}

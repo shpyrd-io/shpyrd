@@ -86,9 +86,9 @@ v0.9.45:
 | Deployed on OKE (v0.9.45): reset endpoint and pages verified | applied |
 | v0.9.57 — links stand on doors (RFC-0080): the reset link is built on the door the request came in on, the set-password link on the door of the workspace the person was invited to (both were `https://shpyrd.<domain>`, a host two doors did away with); the set-password mail names the workspace. Creating a workspace with a first owner (`shpyrd-ctl workspaces create --owner`, the console) invites them the same way, and `shpyrd-ctl workspaces invite <slug> <email>` does it again when the mail was lost | done |
 
-Known gaps (not started):
+| v0.9.58 — one email per invitation: its call to action is to choose a password when the person has no local account (or a pending one), the invitation link being the other way in; someone with a password gets the invitation alone and their account is left untouched (`LocalAccountStore.Status`; before, a re-invite marked an active account pending). `InviteResult.setPasswordLink` lets the CLI and the console pass both links on when mail is off | done |
 
-- **Two emails per invitation** (the invitation, and the set-password link) where one would do; the second is what a password-only door needs, the first what an SSO door needs.
+Known gaps (not started):
 
 - **Email templates** are plain text + minimal HTML; branded templates are a follow-up.
 - **`/account/reset` link in the sign-in UI**: the login page shows no "Forgot password" link yet — a UI change deferred until the React app is touched.

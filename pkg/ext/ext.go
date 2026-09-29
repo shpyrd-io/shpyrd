@@ -137,6 +137,9 @@ type InviteOutcome struct {
 	// Link is the invitation link, shown once; empty when Applied.
 	Link      string    `json:"link,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// SetPasswordLink is where a person without a password chooses one
+	// (RFC-0014; 24 hours); empty when they have one or auth-local is off.
+	SetPasswordLink string `json:"setPasswordLink,omitempty"`
 	// Emailed says the link went out by email; MailError says why not
 	// (empty when mail is not configured: the inviter passes the link on).
 	Emailed   bool   `json:"emailed"`
@@ -155,7 +158,16 @@ type LocalAccountStore interface {
 	ActivateFromInvite(ctx context.Context, email, password string) error
 	SetPasswordAndVerify(ctx context.Context, email, password string) error
 	CreatePending(ctx context.Context, email, name string) error
+	// Status is active, pending or locked; "" when there is no account.
+	Status(ctx context.Context, email string) (string, error)
 }
+
+// Account states a LocalAccountStore reports.
+const (
+	AccountActive  = "active"
+	AccountPending = "pending"
+	AccountLocked  = "locked"
+)
 
 // Var reads an install variable, "" when none is configured.
 func (d Deps) Var(name string) string {
