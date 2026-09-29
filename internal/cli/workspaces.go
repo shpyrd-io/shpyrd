@@ -110,7 +110,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the slug)")
-	cmd.Flags().StringVar(&plan, "plan", "", "billing plan the workspace is metered against from birth (see `shpyrd-ctl plans list`); not for --operator")
+	cmd.Flags().StringVar(&plan, "plan", "", "billing plan the workspace is metered against from birth (one of: shpyrd-ctl plans list); not for --operator")
 	cmd.Flags().StringVar(&address, "address", "", "host of the workspace's dashboard; apps live one label under it (default: <slug>.<the platform's workspaces domain>)")
 	cmd.Flags().StringVar(&owner, "owner", "", "email of the workspace's first owner")
 	cmd.Flags().BoolVar(&operator, "operator", false, "one of the platform operator's own workspaces: never invoiced, owned by every platform admin (RFC-0078)")
