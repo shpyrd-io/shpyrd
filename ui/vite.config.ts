@@ -18,9 +18,19 @@ export default defineConfig({
     },
   },
   build: {
-    // Embedded into the server binary by ui/embed.go.
+    // Embedded into the server binary by ui/embed.go. Two applications
+    // (RFC-0080): the console and the workspace one, each its own entry;
+    // the server serves dist/apps/console/index.html at the console host
+    // and dist/apps/workspace/index.html everywhere else. Chunks are
+    // shared under dist/assets.
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        console: path.resolve(import.meta.dirname, 'apps/console/index.html'),
+        workspace: path.resolve(import.meta.dirname, 'apps/workspace/index.html'),
+      },
+    },
   },
   test: {
     // Pure-logic unit tests (parsers, formatters); no DOM needed.

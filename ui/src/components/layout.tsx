@@ -10,11 +10,9 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { getToken, setToken } from "@/lib/auth";
-import { usePerms } from "@/lib/me";
 import { useTheme, type Theme } from "@/lib/theme";
 import { LogoMark, Wordmark } from "@/components/brand";
 import { PageBoundary } from "@/components/error-boundary";
-import { useUserOnly } from "@/pages/apps";
 import { useBrandColor } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,21 +27,37 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
-export function Layout() {
+/** One entry of an application's navigation. */
+export type NavEntry = { to: string; label: string; show?: boolean };
+
+/**
+ * The shell both applications share (RFC-0080): brand, navigation, theme,
+ * the signed-in person. The console and the workspace application each
+ * pass their own navigation; the workspace one also passes the way to the
+ * console when the workspace is the operator's and the person a platform
+ * admin.
+ */
+export function Layout({
+  nav,
+  grafana = false,
+  consoleUrl,
+  tag,
+}: {
+  nav: NavEntry[];
+  /** Show the Grafana link (the console). */
+  grafana?: boolean;
+  /** Link back to the console (an operator workspace, a platform admin). */
+  consoleUrl?: string;
+  /** A word next to the brand naming the application ("console"). */
+  tag?: string;
+}) {
   const config = useQuery({
     queryKey: ["config"],
     queryFn: api.config,
     staleTime: 60_000,
   });
-  const perms = usePerms();
-  const userOnly = useUserOnly(perms);
   const brand = config.data?.workspace?.branding;
   useBrandColor(brand?.color);
-  // The cluster is the operator's: only the console (the implicit
-  // workspace's dashboard) shows it (RFC-0033 phase 6).
-  const console = config.data?.workspace?.implicit !== false;
-  const usersEnabled =
-    config.data?.extensions?.includes("auth-local") && perms.clusterAdmin;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -67,19 +81,30 @@ export function Layout() {
                 <LogoMark className="size-7 sm:hidden" />
               </>
             )}
+            {tag && (
+              <span className="rounded-md border px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                {tag}
+              </span>
+            )}
           </Link>
           <nav className="flex items-center gap-1 text-sm">
-            <NavItem to="/">Apps</NavItem>
-            {!userOnly && <NavItem to="/projects">Projects</NavItem>}
-            {(perms.clusterAdmin || usersEnabled) && (
-              <NavItem to="/workspace">Workspace</NavItem>
-            )}
-            {perms.clusterView && console && (
-              <NavItem to="/cluster">Cluster</NavItem>
-            )}
+            {nav
+              .filter((n) => n.show !== false)
+              .map((n) => (
+                <NavItem key={n.to} to={n.to}>
+                  {n.label}
+                </NavItem>
+              ))}
           </nav>
           <div className="ml-auto flex items-center gap-1 text-sm text-muted-foreground">
-            {config.data?.grafanaUrl && console && (
+            {consoleUrl && (
+              <Button variant="ghost" size="sm" asChild>
+                <a href={consoleUrl}>
+                  Console <ExternalLink data-icon="inline-end" />
+                </a>
+              </Button>
+            )}
+            {config.data?.grafanaUrl && grafana && (
               <Button variant="ghost" size="sm" asChild>
                 <a
                   href={config.data.grafanaUrl}

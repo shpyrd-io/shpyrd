@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -757,5 +758,42 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 	}
 	if rec := at(t, s, host, "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"url":"https://acme-corp.shpyrd.test"`) {
 		t.Errorf("after delete: %s", rec.Body.String())
+	}
+}
+
+// TestTwoApplicationsByHost: the console host gets the console application,
+// a workspace host the workspace one; assets are shared (RFC-0080).
+func TestTwoApplicationsByHost(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	s.opts.UI = fstest.MapFS{
+		"apps/console/index.html":   {Data: []byte("<html>console</html>")},
+		"apps/workspace/index.html": {Data: []byte("<html>workspace</html>")},
+		"assets/app.js":             {Data: []byte("js")},
+	}
+	s.engine.NoRoute(s.serveUI())
+	body := func(host, path string) string {
+		rec := at(t, s, host, "GET", path, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s%s = %d", host, path, rec.Code)
+		}
+		return rec.Body.String()
+	}
+	if got := body("shpyrd.example.test", "/"); got != "<html>console</html>" {
+		t.Errorf("console host = %q", got)
+	}
+	if got := body("shpyrd.example.test", "/workspaces"); got != "<html>console</html>" {
+		t.Errorf("console route = %q", got)
+	}
+	if got := body("acme.shpyrd.test", "/"); got != "<html>workspace</html>" {
+		t.Errorf("workspace host = %q", got)
+	}
+	if got := body("example.test", "/projects/shop"); got != "<html>workspace</html>" {
+		t.Errorf("default workspace host = %q", got)
+	}
+	if got := body("localhost:8080", "/"); got != "<html>console</html>" {
+		t.Errorf("internal host = %q (the operator's door)", got)
+	}
+	if got := body("acme.shpyrd.test", "/assets/app.js"); got != "js" {
+		t.Errorf("asset = %q", got)
 	}
 }

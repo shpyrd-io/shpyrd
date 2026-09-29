@@ -20,7 +20,6 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TeamsPage } from "@/pages/teams";
-import { UsersPage } from "@/pages/users";
 import { PeopleCard } from "@/components/people-card";
 import { AddressField, DomainsCard } from "@/components/workspace-names";
 import { BrandingCard } from "@/components/branding-card";
@@ -45,13 +44,8 @@ export function WorkspacePage() {
     staleTime: 60_000,
   });
   const ws = useQuery({ queryKey: ["workspace"], queryFn: api.workspace });
-  // The console is the implicit workspace's dashboard: accounts and login
-  // methods are managed there, for the whole platform (RFC-0033 phase 6).
-  const console = config.data?.workspace?.implicit !== false;
-  const usersEnabled =
-    config.data?.extensions?.includes("auth-local") &&
-    perms.clusterAdmin &&
-    console;
+  // Accounts and the console's sign-in methods live in the console
+  // application (RFC-0080); this page is the workspace's own.
   const current = tab ?? "overview";
 
   return (
@@ -66,8 +60,7 @@ export function WorkspacePage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             The workspace: the people who sign in here, the teams projects grant
-            roles to
-            {usersEnabled ? ", the accounts it manages" : ""}.
+            roles to.
             {ws.data?.domain ? (
               <>
                 {" "}
@@ -93,7 +86,6 @@ export function WorkspacePage() {
           {perms.clusterAdmin && config.data?.authRequired && (
             <TabsTrigger value="teams">Teams</TabsTrigger>
           )}
-          {usersEnabled && <TabsTrigger value="users">Accounts</TabsTrigger>}
           {perms.clusterAdmin && (
             <TabsTrigger value="signin">Sign-in</TabsTrigger>
           )}
@@ -115,13 +107,9 @@ export function WorkspacePage() {
         <TabsContent value="teams" className="mt-4">
           <TeamsPage />
         </TabsContent>
-        <TabsContent value="users" className="mt-4">
-          <UsersPage />
-        </TabsContent>
         <TabsContent value="signin" className="mt-4">
           <SignInSettings
             authLocal={!!config.data?.extensions?.includes("auth-local")}
-            console={console}
           />
         </TabsContent>
         <TabsContent value="tokens" className="mt-4">
@@ -199,7 +187,7 @@ function WorkspaceCard({ readOnly }: { readOnly: boolean }) {
                 <dt className="text-xs text-muted-foreground">Identifier</dt>
                 <dd className="font-mono text-xs">
                   {ws.data.slug}
-                  {ws.data.implicit ? " (implicit)" : ""}
+                  {ws.data.ownedByOperator ? " (the operator's)" : ""}
                 </dd>
               </div>
               {ws.data.domain && (

@@ -59,7 +59,7 @@ export function LauncherPage() {
           )}
           <div>
             <h1 className="text-2xl font-semibold">
-              {ws && !ws.implicit ? ws.name : "Your apps"}
+              {ws?.name ?? "Your apps"}
             </h1>
             <p className="text-sm text-muted-foreground">
               {userOnly

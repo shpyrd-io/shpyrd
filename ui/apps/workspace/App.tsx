@@ -2,14 +2,20 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useToken } from "@/lib/auth";
+import { usePerms } from "@/lib/me";
+import { basename } from "@/bootstrap";
 import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
-import { AppsPage } from "@/pages/apps";
+import { AppsPage, useUserOnly } from "@/pages/apps";
 import { LauncherPage } from "@/pages/launcher";
 import { AppDetailPage } from "@/pages/app-detail";
-import { ClusterPage } from "@/pages/cluster";
 import { WorkspacePage } from "@/pages/workspace";
 import { InvitePage } from "@/pages/invite";
+
+// The workspace application (RFC-0080): what answers at a workspace's
+// address and hosts. Projects, deploys, the workspace's people, teams,
+// tokens and its own sign-in methods. Nothing of the cluster: that is the
+// console, another host and another application.
 
 // inviteToken is the token of an invitation link (/invite/<token>), or
 // "". The page is reachable signed out, so it is handled before the
@@ -47,19 +53,14 @@ export default function App() {
   if (invite) return <InvitePage token={invite} me={me.data ?? undefined} />;
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename("workspace")}>
       <Routes>
-        <Route element={<Layout />}>
+        <Route element={<Shell />}>
           <Route path="/" element={<LauncherPage />} />
           <Route path="/projects" element={<AppsPage />} />
           <Route path="/projects/:slug" element={<AppDetailPage />} />
-          <Route path="/cluster" element={<ClusterPage />} />
           <Route path="/workspace" element={<WorkspacePage />} />
           <Route path="/workspace/:tab" element={<WorkspacePage />} />
-          <Route
-            path="/users"
-            element={<Navigate to="/workspace/users" replace />}
-          />
           <Route
             path="/teams"
             element={<Navigate to="/workspace/teams" replace />}
@@ -68,5 +69,32 @@ export default function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+  );
+}
+
+// Shell is the workspace application's navigation. An operator workspace
+// shows a platform admin the way to the console — the one place the two
+// doors acknowledge each other (RFC-0080).
+function Shell() {
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: api.config,
+    staleTime: 60_000,
+  });
+  const perms = usePerms();
+  const userOnly = useUserOnly(perms);
+  const consoleUrl =
+    config.data?.workspace?.ownedByOperator && perms.me?.console
+      ? config.data.consoleUrl
+      : undefined;
+  return (
+    <Layout
+      nav={[
+        { to: "/", label: "Apps" },
+        { to: "/projects", label: "Projects", show: !userOnly },
+        { to: "/workspace", label: "Workspace", show: perms.clusterAdmin },
+      ]}
+      consoleUrl={consoleUrl}
+    />
   );
 }

@@ -906,3 +906,29 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 	defaultWS, _ := s.store.GetSetting(ctx, store.SettingDefaultWorkspaceID)
 	c.JSON(http.StatusOK, gin.H{"defaultWorkspaceId": defaultWS, "consolePasswordSignIn": s.consolePasswordSignIn(ctx)})
 }
+
+// listWorkspacesCore is GET /api/workspaces on the open-source platform: the
+// workspaces this cluster hosts, as the console lists them (RFC-0080). The
+// cloud layer replaces it with the full workspace routes.
+func (s *Server) listWorkspacesCore(c *gin.Context) {
+	ctx := c.Request.Context()
+	all, err := s.store.ListWorkspaces(ctx)
+	if err != nil {
+		storeErr(c, err, "workspaces")
+		return
+	}
+	out := make([]WorkspaceSummary, 0, len(all))
+	for i := range all {
+		w := &all[i]
+		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Plan: w.Settings.Limits, Owners: []string{}, CreatedAt: w.CreatedAt}
+		if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
+			for _, m := range roles {
+				if m.Role == store.WorkspaceRoleOwner {
+					sum.Owners = append(sum.Owners, m.Email)
+				}
+			}
+		}
+		out = append(out, sum)
+	}
+	c.JSON(http.StatusOK, out)
+}

@@ -1,15 +1,19 @@
 <!doctype html>
+<!-- Development only: the Vite dev server serves the two applications at
+     /apps/console/ and /apps/workspace/ (RFC-0080). The shpyrd server picks
+     one by host and never serves this file. -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-    <meta name="theme-color" content="#0f172a" />
-    <title>shpyrd</title>
-    <script src="/theme.js"></script>
+    <title>shpyrd (dev)</title>
+    <script>
+      fetch("/api/config")
+        .then((r) => r.json())
+        .then((c) => {
+          location.replace(c.door === "console" ? "/apps/console/" : "/apps/workspace/");
+        })
+        .catch(() => location.replace("/apps/workspace/"));
+    </script>
   </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+  <body></body>
 </html>

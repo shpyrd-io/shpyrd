@@ -157,7 +157,7 @@ export function DomainsCard() {
     onSuccess: refresh,
     onError: (e: Error) => toast.error(e.message),
   });
-  if (ws.data && (ws.data.implicit || !ws.data.address)) return null;
+  if (ws.data && !ws.data.address) return null;
 
   return (
     <Card>

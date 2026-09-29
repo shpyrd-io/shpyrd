@@ -519,6 +519,11 @@ func (s *Server) routes() error {
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
 	api.PUT("/sizes", console, s.require(authz.ClusterAdmin), s.putSizes)
 	api.PATCH("/cluster/settings", console, s.require(authz.ClusterAdmin), s.patchClusterSettings) // RFC-0078
+	if !s.hasCapability("workspaces") {
+		// The console lists the workspaces it hosts (RFC-0080); with the
+		// workspaces capability the cloud layer serves the full routes.
+		api.GET("/workspaces", console, s.require(authz.ClusterAdmin), s.listWorkspacesCore)
+	}
 	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals)                      // RFC-0016
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
 	// Cluster log drains: every project's lines (RFC-0023).
@@ -757,8 +762,33 @@ func (s *Server) config(c *gin.Context) {
 	c.JSON(http.StatusOK, pub)
 }
 
-// serveUI serves the embedded SPA. Unknown non-API paths fall back to
-// index.html so client-side routing works.
+// The two applications (RFC-0080), as the UI build lays them out.
+const (
+	uiConsoleIndex   = "apps/console/index.html"
+	uiWorkspaceIndex = "apps/workspace/index.html"
+)
+
+// uiIndex is the HTML entry of the application this host answers with: the
+// console at the console host (and for internal callers), the workspace
+// application everywhere else. A build from before the split has one
+// index.html for both.
+func (s *Server) uiIndex(c *gin.Context) string {
+	entry := uiWorkspaceIndex
+	if s.atConsole(c) {
+		entry = uiConsoleIndex
+	}
+	if _, err := fs.Stat(s.opts.UI, entry); err == nil {
+		return entry
+	}
+	if _, err := fs.Stat(s.opts.UI, "index.html"); err == nil {
+		return "index.html"
+	}
+	return ""
+}
+
+// serveUI serves the embedded applications: static assets by path, and
+// for every other non-API path the entry of the host's application, so
+// client-side routing works.
 func (s *Server) serveUI() gin.HandlerFunc {
 	fileServer := http.FileServer(http.FS(s.opts.UI))
 	return func(c *gin.Context) {
@@ -770,17 +800,24 @@ func (s *Server) serveUI() gin.HandlerFunc {
 			return
 		}
 		p := strings.TrimPrefix(c.Request.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
-		}
-		if _, err := fs.Stat(s.opts.UI, p); err != nil {
-			if _, err := fs.Stat(s.opts.UI, "index.html"); err != nil {
-				c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
+		if p != "" && !strings.HasSuffix(p, ".html") {
+			if st, err := fs.Stat(s.opts.UI, p); err == nil && !st.IsDir() {
+				fileServer.ServeHTTP(c.Writer, c.Request)
 				return
 			}
-			c.Request.URL.Path = "/"
 		}
-		fileServer.ServeHTTP(c.Writer, c.Request)
+		entry := s.uiIndex(c)
+		if entry == "" {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
+			return
+		}
+		body, err := fs.ReadFile(s.opts.UI, entry)
+		if err != nil {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
+			return
+		}
+		c.Header("Cache-Control", "no-cache")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", body)
 	}
 }
 

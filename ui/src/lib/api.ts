@@ -17,23 +17,35 @@ export type PublicConfig = {
       id: string;
       label: string;
       kind?: string;
+      /** The door the method belongs to (RFC-0080): console, platform or workspace. */
+      realm?: string;
       workspace?: string;
     }[];
     /** Provider behind the email/password form, when one is enabled. */
-    password?: { id: string; label: string };
+    password?: { id: string; label: string; realm?: string };
     /** The workspace claimed email domains that route to a method: ask for the email first. */
     companyDomains?: boolean;
   };
   extensions: string[];
   /** What this server offers beyond the core ("workspaces", ...); empty on the open-source platform. */
   capabilities?: string[];
-  /** The workspace answering at this host, with its look (RFC-0033). */
+  /** The workspace answering at this host, with its look (RFC-0033); absent at the console. */
   workspace?: {
     slug: string;
     name: string;
-    implicit: boolean;
+    /** Where its dashboard answers; apps one label under (RFC-0080). */
+    address?: string;
+    /** One of the platform operator's own workspaces (RFC-0078). */
+    ownedByOperator?: boolean;
     branding?: { logoUrl?: string; color?: string };
   };
+  /** Which application answers at this host (RFC-0080): "console" or "workspace". */
+  door?: "console" | "workspace";
+  /** The console's URL: the way back from an operator workspace. */
+  consoleUrl?: string;
+  /** Slug of the operator's default workspace (RFC-0078). */
+  defaultWorkspaceId?: string;
+  consoleHost?: string;
   /** Storage rules of this cluster's profile (RFC-0060). */
   volumes?: { minSize?: string; snapshots: boolean };
 };
@@ -45,6 +57,8 @@ export type Identity = {
   groups?: string[];
   provider: string;
   admin: boolean;
+  /** A platform admin by the console's roles (RFC-0080): an operator workspace shows the way to the console. */
+  console?: boolean;
   roles?: {
     /** The person's role in the workspace (RFC-0033); absent without one. */
     workspace?: WorkspaceRole | "";
@@ -65,10 +79,11 @@ export const WORKSPACE_ROLES: WorkspaceRole[] = ["owner", "admin", "member"];
 export type WorkspaceInfo = {
   slug: string;
   name: string;
-  implicit: boolean;
+  /** One of the platform operator's own workspaces (RFC-0078, RFC-0080). */
+  ownedByOperator: boolean;
   /** Apps live one label under it. */
   domain?: string;
-  /** Host of an explicit workspace's dashboard; absent for the implicit one. */
+  /** Host of the workspace's dashboard (RFC-0080: every workspace has one). */
   address?: string;
   /** Where this workspace's dashboard answers. */
   url?: string;
@@ -124,8 +139,25 @@ export type LoginMethods = {
   }[];
   kinds: string[];
   callback: string;
-  /** The workspace whose own methods these are; absent for the platform's. */
+  /** The door these methods belong to (RFC-0080): console, platform or workspace. */
+  realm?: string;
+  /** The workspace (short id) whose own methods these are. */
   workspace?: string;
+};
+
+/** One workspace as the console lists them (RFC-0033 phase 8). */
+export type WorkspaceSummary = {
+  slug: string;
+  name: string;
+  address?: string;
+  url: string;
+  status: string;
+  /** "operator" or "customer" (RFC-0078). */
+  owner?: string;
+  plan?: WorkspaceInfo["limits"];
+  usage?: WorkspaceInfo["usage"];
+  owners: string[];
+  createdAt: string;
 };
 
 export type ConnectorRequest = {
@@ -183,7 +215,7 @@ export type InviteResult = {
 
 /** What the holder of an invitation link sees (public). */
 export type InvitationPublic = {
-  workspace: { slug: string; name: string; implicit: boolean };
+  workspace: { slug: string; name: string; address?: string; ownedByOperator?: boolean };
   email: string;
   role: WorkspaceRole;
   team?: string;
@@ -863,6 +895,24 @@ export function shellSocketURL(
 export const api = {
   config: () => request<PublicConfig>("/api/config"),
   me: () => request<Identity>("/api/me"),
+  /** The workspaces this platform hosts (the console; RFC-0033 phase 8, RFC-0080). */
+  workspaces: () => request<WorkspaceSummary[]>("/api/workspaces"),
+  createWorkspace: (body: {
+    slug: string;
+    name?: string;
+    address?: string;
+    owner?: string;
+    operatorOwned?: boolean;
+  }) => request<WorkspaceSummary>("/api/workspaces", json("POST", body)),
+  /** Cluster-wide settings (RFC-0078, RFC-0080). */
+  patchClusterSettings: (body: {
+    defaultWorkspaceId?: string;
+    consolePasswordSignIn?: boolean;
+  }) =>
+    request<{ defaultWorkspaceId: string; consolePasswordSignIn: boolean }>(
+      "/api/cluster/settings",
+      json("PATCH", body),
+    ),
   logout: () =>
     request<{ redirect: string }>("/api/auth/logout", { method: "POST" }),
   /** Email/password sign-in on our own page (RFC-0012). Errors keep the

@@ -46,36 +46,19 @@ import {
  * methods, who may join on first sign-in, and the email domains the company
  * owns.
  */
-export function SignInSettings({
-  authLocal,
-  console = true,
-}: {
-  authLocal: boolean;
-  /** False at an explicit workspace: login methods are the platform operator's. */
-  console?: boolean;
-}) {
+export function SignInSettings({ authLocal }: { authLocal: boolean }) {
   return (
     <div className="grid gap-6">
       {authLocal ? (
-        <LoginMethodsCard scope={console ? "platform" : "workspace"} />
+        <LoginMethodsCard scope="workspace" />
       ) : (
         <Card>
           <CardHeader>
             <CardTitle>Login methods</CardTitle>
             <CardDescription>
-              {console ? (
-                <>
-                  Enable the <code>auth-local</code> extension to manage sign-in
-                  methods here (
-                  <code>shpyrd-ctl extensions enable auth-local</code>).
-                </>
-              ) : (
-                <>
-                  The platform operator has not enabled sign-in methods
-                  management; ask them to enable the <code>auth-local</code>{" "}
-                  extension.
-                </>
-              )}
+              The platform operator has not enabled sign-in methods
+              management; ask them to enable the <code>auth-local</code>{" "}
+              extension.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -86,6 +69,9 @@ export function SignInSettings({
   );
 }
 
+/** The scopes a sign-in methods card manages (RFC-0080). */
+export type LoginMethodsScope = "console" | "platform" | "workspace";
+
 const kindLabels: Record<string, string> = {
   google: "Google",
   microsoft: "Microsoft",
@@ -94,18 +80,22 @@ const kindLabels: Record<string, string> = {
 };
 
 /**
- * The sign-in methods: the platform's at the console (offered to every
- * workspace), a workspace's own at its host (RFC-0033 per-workspace SSO:
- * the company's Google, Microsoft, GitHub or OpenID Connect provider, shown
- * on that workspace's login page only, with a switch to stop offering the
- * platform's methods once the company's SSO is in place).
+ * The sign-in methods of one door (RFC-0080): the console's own, the
+ * platform's defaults every workspace offers, or a workspace's own at its
+ * host (RFC-0033 per-workspace SSO: the company's Google, Microsoft, GitHub
+ * or OpenID Connect provider, shown on that workspace's login page only,
+ * with a switch to stop offering the platform's defaults once the
+ * company's SSO is in place).
  */
-function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
+export function LoginMethodsCard({ scope }: { scope: LoginMethodsScope }) {
   const qc = useQueryClient();
   const workspaceScope = scope === "workspace";
+  // The console's own methods and a workspace's own both go through the
+  // door-scoped route; the platform's defaults through the platform one.
+  const scoped = scope !== "platform";
   const methods = useQuery({
     queryKey: ["login-methods", scope],
-    queryFn: workspaceScope ? api.workspaceLoginMethods : api.loginMethods,
+    queryFn: scoped ? api.workspaceLoginMethods : api.loginMethods,
     retry: false,
   });
   const ws = useQuery({
@@ -125,9 +115,7 @@ function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
   };
   const remove = useMutation({
     mutationFn: (id: string) =>
-      workspaceScope
-        ? api.removeWorkspaceConnector(id)
-        : api.removeConnector(id),
+      scoped ? api.removeWorkspaceConnector(id) : api.removeConnector(id),
     onSuccess: (_, id) => {
       toast.success(`Removed ${id}`);
       refresh();
@@ -150,19 +138,21 @@ function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
   // The platform's methods, as the login page of this workspace shows them
   // (those the workspace did not add itself).
   const platformMethods = (config.data?.auth?.providers ?? []).filter(
-    (p) => !p.workspace,
+    (p) => (p.realm ?? "platform") === "platform",
   );
   const hasOwn = (methods.data?.connectors.length ?? 0) > 0;
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          {workspaceScope
+          {scope === "workspace"
             ? "Sign-in methods of this workspace"
-            : "Login methods"}
+            : scope === "console"
+              ? "Sign-in methods of this console"
+              : "Default sign-in methods for workspaces"}
         </CardTitle>
         <CardDescription>
-          {workspaceScope ? (
+          {scope === "workspace" ? (
             <>
               How people sign in to this workspace and to every app behind
               sign-in. Add your company's identity provider — Google Workspace,
@@ -171,12 +161,19 @@ function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
               map to teams. These methods appear on this workspace's login page
               only.
             </>
+          ) : scope === "console" ? (
+            <>
+              Who may sign in here, to administer the platform. Add your
+              organisation's identity provider — Google Workspace restricted to
+              your domain, for instance — then switch the password form off in
+              Settings, and the console has exactly these doors. Nothing here
+              is offered to workspaces.
+            </>
           ) : (
             <>
-              The ways people sign in to this workspace — and to every app
-              behind sign-in. Add your company's identity provider so nobody
-              needs another password; groups of the provider map to teams.
-              Methods added here are offered to every workspace.
+              The ways people sign in to workspaces that have not brought their
+              own identity provider — and to every app behind sign-in. Every
+              workspace's login page offers these until it hides them.
             </>
           )}
         </CardDescription>
@@ -288,7 +285,7 @@ function LoginMethodsCard({ scope }: { scope: "platform" | "workspace" }) {
           <AddConnectorDialog
             kinds={methods.data.kinds}
             callback={methods.data.callback}
-            add={workspaceScope ? api.addWorkspaceConnector : api.addConnector}
+            add={scoped ? api.addWorkspaceConnector : api.addConnector}
             onDone={refresh}
           />
         )}

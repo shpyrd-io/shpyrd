@@ -615,11 +615,14 @@ func (s *Server) foreignHost(c *gin.Context) bool {
 	if h == "" || h == "localhost" || net.ParseIP(h) != nil || !strings.Contains(h, ".") {
 		return false
 	}
-	ws, err := s.tenant(c)
+	t, err := s.door(c)
 	if err != nil {
 		return true
 	}
-	return h != hostOnly(s.dashboardHostOf(ws))
+	if t.Workspace == nil {
+		return false // the console host (RFC-0080)
+	}
+	return h != hostOnly(s.dashboardHostOf(t.Workspace))
 }
 
 func wantsJSON(c *gin.Context) bool {

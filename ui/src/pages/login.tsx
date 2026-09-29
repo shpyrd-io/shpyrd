@@ -73,9 +73,11 @@ export function LoginPage() {
           <CardDescription>
             {accounts ? (
               <>
-                {config.data?.workspace && !config.data.workspace.implicit
-                  ? `Sign in to ${config.data.workspace.name}`
-                  : `Sign in to shpyrd${config.data?.domain ? ` on ${config.data.domain}` : ""}`}
+                {config.data?.door === "console"
+                  ? `Sign in to the console${config.data?.domain ? ` of ${config.data.domain}` : ""}`
+                  : config.data?.workspace
+                    ? `Sign in to ${config.data.workspace.name}`
+                    : `Sign in to shpyrd${config.data?.domain ? ` on ${config.data.domain}` : ""}`}
                 .
               </>
             ) : !tokenAllowed ? (

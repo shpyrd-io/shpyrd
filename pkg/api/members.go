@@ -614,8 +614,8 @@ func workspaceOnlyPath(p string) bool {
 	if p == "/api/workspace" || p == "/mcp" {
 		return true
 	}
-	if p == "/api/workspace/import" {
-		return false // the console recreates a workspace from its dump (RFC-0033)
+	if p == "/api/workspace/import" || strings.HasPrefix(p, "/api/workspace/login-methods") {
+		return false // the console recreates a workspace from its dump (RFC-0033); its own sign-in methods use the scoped route (RFC-0080)
 	}
 	for _, prefix := range []string{"/api/projects", "/api/teams", "/api/tokens", "/api/launcher", "/api/invitations", "/api/sources", "/api/workspace/", "/oauth/", "/.shpyrd/", "/.well-known/oauth-protected-resource"} {
 		if strings.HasPrefix(p, prefix) {
