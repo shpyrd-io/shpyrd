@@ -1238,8 +1238,9 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 
 func newClusterDestroyCmd(g *globalFlags) *cobra.Command {
 	var (
-		name string
-		yes  bool
+		name        string
+		yes         bool
+		keepCluster bool
 	)
 	cmd := &cobra.Command{
 		Use:   "destroy",
@@ -1253,8 +1254,23 @@ confirm each step: every project (apps, databases, caches and volumes, with
 their data), the load balancers, then the remaining disks (registry, server
 data, monitoring). It ends with the command that removes the cluster and its
 network, which belong to the infrastructure tooling (Terraform for Oracle
-Cloud, see contrib/oci).`,
+Cloud, see contrib/oci).
+
+With --keep-cluster: removes the platform from the cluster and leaves the
+cluster, for a fresh cluster init. Projects first, while their operators
+still run; then the system namespace, the aggregated APIs and webhooks,
+the Helm releases, every cluster-scoped object the components rendered,
+the components' namespaces, their custom resource definitions, and what
+the hooks left in kube-system. Calico stays. A namespace that stalls has
+the finalizers of its remaining objects cleared, and each one is printed:
+that is a bug to report, not a step to repeat by hand.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if keepCluster {
+				if g.kubeCtx == "" || isKindContext(g.kubeCtx) {
+					return errors.New("--keep-cluster is for a cloud cluster: give --context")
+				}
+				return destroyPlatform(signalContext(), cmd, g, yes)
+			}
 			if g.kubeCtx != "" && !isKindContext(g.kubeCtx) {
 				return destroyCloud(signalContext(), cmd, g, yes)
 			}
@@ -1288,6 +1304,7 @@ Cloud, see contrib/oci).`,
 	}
 	cmd.Flags().StringVar(&name, "name", defaultClusterName, "kind cluster name")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask for confirmation")
+	cmd.Flags().BoolVar(&keepCluster, "keep-cluster", false, "remove the platform, keep the cluster (for a fresh cluster init)")
 	return cmd
 }
 

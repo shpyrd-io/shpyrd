@@ -18,6 +18,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // destroyCloud removes what the platform created in the cloud through
@@ -47,9 +48,15 @@ func runDestroyCloud(ctx context.Context, out io.Writer, k *kube.Client, c clien
 	if err := c.List(ctx, &apps); err != nil {
 		return err
 	}
+	// The App's namespace is authoritative (RFC-0076: p-<id>, or the
+	// legacy app-<slug>); deriving it from the name would miss every
+	// project named by its id.
 	var projects []string
+	namespaces := map[string]string{}
 	for _, a := range apps.Items {
-		projects = append(projects, a.Name)
+		slug := project.SlugOf(&a)
+		projects = append(projects, slug)
+		namespaces[slug] = a.Namespace
 	}
 	sort.Strings(projects)
 	lbs, err := loadBalancerServices(ctx, k)
@@ -77,14 +84,14 @@ func runDestroyCloud(ctx context.Context, out io.Writer, k *kube.Client, c clien
 	if len(projects) > 0 {
 		fmt.Fprintf(out, "Deleting %d project(s)...\n", len(projects))
 		for _, slug := range projects {
-			if err := k.Kube.CoreV1().Namespaces().Delete(ctx, appNamespace(slug), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			if err := k.Kube.CoreV1().Namespaces().Delete(ctx, namespaces[slug], metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete project %s: %w", slug, err)
 			}
 		}
 		if err := waitFor(ctx, out, 10*time.Minute, "projects", func() (int, error) {
 			left := 0
 			for _, slug := range projects {
-				if _, err := k.Kube.CoreV1().Namespaces().Get(ctx, appNamespace(slug), metav1.GetOptions{}); err == nil {
+				if _, err := k.Kube.CoreV1().Namespaces().Get(ctx, namespaces[slug], metav1.GetOptions{}); err == nil {
 					left++
 				}
 			}
@@ -296,3 +303,56 @@ func claimsTotal(pvcs []corev1.PersistentVolumeClaim) string {
 // isKindContext reports whether a kubeconfig context name is the one kind
 // gives its clusters.
 func isKindContext(ctx string) bool { return strings.HasPrefix(ctx, "kind-") }
+
+// destroyPlatform is `shpyrd cluster destroy --keep-cluster`: the platform
+// goes, the cluster stays, for a fresh `cluster init`.
+func destroyPlatform(ctx context.Context, cmd *cobra.Command, g *globalFlags, yes bool) error {
+	k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+	if err != nil {
+		return err
+	}
+	info, err := install.ReadInstallInfo(ctx, k, "")
+	if err != nil {
+		return fmt.Errorf("context %s does not run shpyrd (no install record): nothing to destroy here", g.kubeCtx)
+	}
+	extComps, err := extensionComponents(splitList(info.Vars[install.VarExtensions]))
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	eng, err := install.New(k, install.Options{Profile: info.Profile, Vars: info.Vars, Version: info.Version, Extensions: extComps, Reporter: &lineReporter{out: out}})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Cluster %s (profile %s, shpyrd %s) on context %s\n", info.Vars[install.VarCluster], info.Profile, info.Version, g.kubeCtx)
+	fmt.Fprintln(out, "This removes the platform and every project with its data; the cluster, its nodes,")
+	fmt.Fprintln(out, "Calico, the load balancer address and the buckets stay. cluster init brings it back.")
+	if !confirm(cmd, yes, "Remove the platform from this cluster?", false) {
+		return fmt.Errorf("aborted")
+	}
+	start := time.Now()
+	cleared, err := eng.Destroy(ctx, install.DestroyOptions{Keep: []string{"network-policy"}})
+	if len(cleared) > 0 {
+		fmt.Fprintf(out, "\n%d finalizer(s) had to be cleared by hand — each is a bug worth reporting:\n", len(cleared))
+		for _, f := range cleared {
+			fmt.Fprintln(out, "  "+f.String())
+		}
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "\nThe platform is gone (%s). The cluster is ready for cluster init.\n", time.Since(start).Round(time.Second))
+	return nil
+}
+
+// lineReporter prints the destroy's steps one per line.
+type lineReporter struct{ out io.Writer }
+
+func (r *lineReporter) Runlevel(string, []string) {}
+func (r *lineReporter) Step(component, message string) {
+	fmt.Fprintf(r.out, "  %-16s %s\n", component, message)
+}
+func (r *lineReporter) Done(string, time.Duration) {}
+func (r *lineReporter) Failed(component string, err error) {
+	fmt.Fprintf(r.out, "  %-16s failed: %v\n", component, err)
+}
