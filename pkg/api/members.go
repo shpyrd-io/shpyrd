@@ -60,10 +60,20 @@ func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
 	if err != nil {
 		return roles, err
 	}
-	if ws.OwnedByOperator() && roles.Workspace == "" && !roles.Suspended && s.authz.ConsoleAdmin(ctx, id) {
-		roles.Workspace = store.WorkspaceRoleOwner
-		roles.Platform = shpyrdv1.RolePlatformAdmin
-		roles.Enforced = true
+	if ws.OwnedByOperator() && roles.Workspace == "" && !roles.Suspended {
+		// The operator's workspaces follow the console's roles, bootstrap
+		// included: on a fresh cluster the first person through the
+		// operator's doors is its admin everywhere, until the first role
+		// is written — the same rule the console applies to itself.
+		console, err := s.authz.RolesIn(ctx, "", id)
+		if err != nil {
+			return roles, err
+		}
+		if console.Platform == shpyrdv1.RolePlatformAdmin {
+			roles.Workspace = store.WorkspaceRoleOwner
+			roles.Platform = shpyrdv1.RolePlatformAdmin
+			roles.Enforced = console.Enforced
+		}
 	}
 	return roles, nil
 }

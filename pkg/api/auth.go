@@ -757,7 +757,11 @@ func (s *Server) me(c *gin.Context) {
 		return
 	}
 	id.Admin = roles.Platform == shpyrdv1.RolePlatformAdmin
-	console := s.atConsole(c) && id.Admin
+	// Console: a platform admin by the console's roles. At the console that
+	// is the admin flag; at an operator workspace the same rule gave the
+	// person the owner role (rolesAt); elsewhere the console's enforced
+	// roles decide.
+	console := id.Admin && (s.atConsole(c) || s.ownedByOperator(c))
 	if !console && s.authz != nil {
 		console = s.authz.ConsoleAdmin(c.Request.Context(), id)
 	}
@@ -905,4 +909,10 @@ func (s *Server) admitAt(c *gin.Context, id ext.Identity) error {
 		return s.admitConsole(c.Request.Context(), id)
 	}
 	return s.admitSignIn(c.Request.Context(), t.Workspace.Slug, id)
+}
+
+// ownedByOperator says the request's workspace is one of the operator's.
+func (s *Server) ownedByOperator(c *gin.Context) bool {
+	ws, err := s.tenant(c)
+	return err == nil && ws.OwnedByOperator()
 }

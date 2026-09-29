@@ -401,6 +401,21 @@ func TestPerHostSignIn(t *testing.T) {
 		t.Errorf("operator people = %+v (a workspace sign-in must not reach the console's people)", people)
 	}
 
+	// 1b. On a fresh cluster the operator's workspace follows the console's
+	// bootstrap: the first person through its door is its owner, until the
+	// first role is written. A customer workspace (acme) never does.
+	if _, err := st.CreateWorkspace(context.Background(), store.Workspace{Slug: "platform", Name: "Platform", Address: "platform.shpyrd.test", Owner: store.WorkspaceOwnerOperator}); err != nil {
+		t.Fatal(err)
+	}
+	s.workspacesChanged()
+	rec, osid := signInAt("platform.shpyrd.test", "test")
+	if rec.Code != http.StatusFound || osid == "" {
+		t.Fatalf("platform callback -> %d %s", rec.Code, rec.Body.String())
+	}
+	if code, body := me("platform.shpyrd.test", osid); code != 200 || !strings.Contains(body, `"workspace":"owner"`) || !strings.Contains(body, `"enforced":false`) || !strings.Contains(body, `"console":true`) {
+		t.Errorf("first person at the operator's workspace on a fresh cluster = %d %s (bootstrap owner)", code, body)
+	}
+
 	// 2. At the console: the platform default is not offered; the console's
 	// own is, and the first person through it is the platform admin
 	// (bootstrap applies to the console realm alone).
