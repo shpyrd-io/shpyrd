@@ -143,3 +143,12 @@ Audited on 2026-09-25 against the code. What the text promises but the platform 
   are listed, added and removed from the Workspace page (`/api/auth/connectors`) and take
   effect without a server restart; a verified company domain can require its accounts to
   use one connector (RFC-0033).
+- **Superseded (v0.9.55): the `auth-oidc` extension is removed.** It connected an issuer
+  straight to shpyrd's relying party, outside Dex, so it could not be scoped to a realm
+  (RFC-0080) or managed from the dashboard. Connectors of kind `oidc` do the same job
+  through the bundled issuer: `shpyrd auth connector add oidc --issuer https://<org>.okta.com
+  --client-id ... --client-secret-file ...` (add `--realm console|platform` for the
+  operator's doors) or the Sign-in card. An install record that still lists `auth-oidc`
+  initialises with a note; `shpyrd-ctl extensions disable auth-oidc` drops it. Providers set
+  with `shpyrd auth oidc set` must be added again as connectors; the Okta callback URL
+  changes to `https://auth.<platform domain>/callback`.

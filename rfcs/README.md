@@ -86,7 +86,7 @@ declare what they depend on.
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
 | [0056](0056-tracing-backend.md) | Tracing backend (Jaeger) | implementable | 0029, 0015 |
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |
-| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app), gaps | 0012 |
+| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app), gaps; `auth-oidc` retired in favour of `oidc` connectors | 0012 |
 | [0059](0059-in-cluster-registry-on-cloud.md) | In-cluster registry as the default on every profile | implemented, gaps | 0035, 0060 |
 | [0060](0060-volumes-on-cloud-profiles.md) | Volumes on cloud profiles: storage classes, provider minimums, snapshots | implemented | 0006, 0035, 0041 |
 | [0061](0061-dns-providers.md) | DNS providers: automatic records and wildcard certificates | implemented (OCI DNS), gaps | 0035, 0036 |

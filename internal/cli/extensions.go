@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -35,6 +36,10 @@ func extensionComponents(names []string) ([]install.ExtensionComponent, error) {
 		seen[name] = true
 		x := ext.Find(all.All(), name)
 		if x == nil {
+			if why, retired := all.Retired[name]; retired {
+				fmt.Fprintf(os.Stderr, "Extension %s is retired (%s); skipping. Run `shpyrd-ctl extensions disable %s` to drop it from the record.\n", name, why, name)
+				continue
+			}
 			return nil, fmt.Errorf("unknown extension %q (available: %s)", name, strings.Join(ext.Names(all.All()), ", "))
 		}
 		comps := x.Components()
@@ -184,6 +189,9 @@ func newExtensionsEnableCmd(g *globalFlags) *cobra.Command {
 			name := args[0]
 			x := ext.Find(all.All(), name)
 			if x == nil {
+				if why, retired := all.Retired[name]; retired {
+					return fmt.Errorf("extension %s is retired: %s", name, why)
+				}
 				return fmt.Errorf("unknown extension %q (available: %s)", name, strings.Join(ext.Names(all.All()), ", "))
 			}
 			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
@@ -237,7 +245,8 @@ func newExtensionsDisableCmd(g *globalFlags) *cobra.Command {
 			ctx := signalContext()
 			name := args[0]
 			x := ext.Find(all.All(), name)
-			if x == nil {
+			_, retired := all.Retired[name]
+			if x == nil && !retired {
 				return fmt.Errorf("unknown extension %q", name)
 			}
 			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
@@ -247,6 +256,19 @@ func newExtensionsDisableCmd(g *globalFlags) *cobra.Command {
 			recorded := recordedExtensions(ctx, k)
 			if !contains(recorded, name) {
 				return fmt.Errorf("extension %s is not enabled on this cluster", name)
+			}
+			if retired {
+				// Nothing installed to remove: the binaries no longer
+				// carry it. Rewrite the record and the server without it.
+				after, err := extensionEngine(ctx, cmd, k, mergeExtensions(recorded, nil, []string{name}), []string{"shpyrd"}, set)
+				if err != nil {
+					return err
+				}
+				if err := after.Apply(ctx); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRetired extension %s dropped from the record.\n", name)
+				return nil
 			}
 			if in, err := resourcesInUse(ctx, k, x); err != nil {
 				return err

@@ -19,7 +19,7 @@ import (
 )
 
 // newAuthConnectorCmd returns `shpyrd auth` with the `connector`
-// subcommand; the CLI merges it with the `auth` command of auth-oidc.
+// subcommand.
 func newAuthConnectorCmd(g ext.CLIGlobals) *cobra.Command {
 	auth := &cobra.Command{
 		Use:   "auth",
