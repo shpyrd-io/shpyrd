@@ -49,3 +49,6 @@ contrib/oci/terraform/backups/shpyrd-dev-registry.env
 contrib/oci/terraform/backups/tfplan
 /pg-gateway
 contrib/oci/terraform/tfplan_autoscaler
+
+# a design session keeps its notes here (design/DESIGN_FOR_AGENT.md)
+/tmp/
