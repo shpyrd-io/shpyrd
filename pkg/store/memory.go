@@ -226,6 +226,9 @@ func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, er
 	if w.Status == "" {
 		w.Status = WorkspaceActive
 	}
+	if w.Owner == "" {
+		w.Owner = WorkspaceOwnerCustomer
+	}
 	c := w
 	m.workspaces[w.Slug] = &c
 	m.teams = append(m.teams, Team{ID: newID(), WorkspaceID: c.ID, Name: TeamEveryone, Description: "Everyone who has signed in", Members: []string{}, Groups: []string{}, Everyone: true, CreatedAt: t, UpdatedAt: t})

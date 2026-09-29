@@ -7,8 +7,8 @@ import (
 )
 
 // Payloads of the console's workspace routes (RFC-0033 phase 8). The
-// open-source platform has one implicit workspace and serves none of these
-// routes; a server that offers the "workspaces" capability mounts them at
+// open-source platform has one workspace and serves none of these routes;
+// a server that offers the "workspaces" capability mounts them at
 // /api/workspaces, and the CLI (`shpyrd-ctl workspaces ...`) speaks them.
 // The types live here so both sides agree.
 
@@ -19,9 +19,14 @@ type CreateWorkspaceRequest struct {
 	// Address is the host of the workspace's dashboard; its apps live one
 	// label under it. Empty: <slug>.<the platform's workspaces domain>.
 	Address string `json:"address,omitempty"`
-	// Owner is the email of the first platform admin of the workspace: an
-	// explicit workspace is enforced from birth, so it must have one.
-	Owner string `json:"owner" binding:"required"`
+	// Owner is the email of the first owner of the workspace: a workspace
+	// is enforced from birth, so it must have one — unless it is the
+	// operator's (OperatorOwned), which every platform admin owns.
+	Owner string `json:"owner,omitempty"`
+	// OperatorOwned marks one of the platform operator's own workspaces
+	// (RFC-0078, RFC-0080): its costs are the operator's, it is never
+	// invoiced, platform admins own it and see the way to the console.
+	OperatorOwned bool `json:"operatorOwned,omitempty"`
 	// Plan sets the workspace's ceilings; nil means none.
 	Plan *store.Limits `json:"plan,omitempty"`
 }
@@ -44,8 +49,9 @@ type WorkspaceSummary struct {
 	Address   string        `json:"address,omitempty"`
 	URL       string        `json:"url"`
 	Status    string        `json:"status"`
-	Implicit  bool          `json:"implicit"`
-	Plan      *store.Limits `json:"plan,omitempty"`
+	// Owner is "operator" or "customer" (RFC-0078).
+	Owner string        `json:"owner,omitempty"`
+	Plan  *store.Limits `json:"plan,omitempty"`
 	Usage     *Usage        `json:"usage,omitempty"`
 	Owners    []string      `json:"owners"`
 	CreatedAt time.Time     `json:"createdAt"`

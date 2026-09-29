@@ -333,8 +333,8 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 		}
 	}
 	id := newID()
-	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings) VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, w.Slug, w.Name, address, status, settings); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings, owner) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, w.Slug, w.Name, address, status, settings, w.Owner); err != nil {
 		if isUnique(err) {
 			return nil, ErrConflict
 		}

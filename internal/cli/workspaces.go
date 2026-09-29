@@ -61,6 +61,7 @@ func requireWorkspaces(ctx context.Context, ac *appClient) error {
 
 func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 	var name, address, owner string
+	var operator bool
 	var plan planFlags
 	cmd := &cobra.Command{
 		Use:   "create <slug>",
@@ -72,8 +73,8 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if err := project.ValidateWorkspaceSlug(slug); err != nil {
 				return err
 			}
-			if owner == "" {
-				return errors.New("--owner <email> is required: an explicit workspace is enforced from birth and needs a first platform admin")
+			if owner == "" && !operator {
+				return errors.New("--owner <email> is required: a workspace is enforced from birth and needs a first owner (or --operator: the platform admins own it)")
 			}
 			ac, err := newAppClient(g, cmd.OutOrStdout())
 			if err != nil {
@@ -82,7 +83,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if err := requireWorkspaces(ctx, ac); err != nil {
 				return err
 			}
-			req := api.CreateWorkspaceRequest{Slug: slug, Name: firstNonEmpty(name, slug), Address: address, Owner: owner, Plan: plan.limits()}
+			req := api.CreateWorkspaceRequest{Slug: slug, Name: firstNonEmpty(name, slug), Address: address, Owner: owner, OperatorOwned: operator, Plan: plan.limits()}
 			body, _ := json.Marshal(req)
 			raw, err := serverRequest(ctx, ac.k, "POST", "api/workspaces", body, "application/json")
 			if err != nil {
@@ -92,13 +93,18 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			_ = json.Unmarshal(raw, &ws)
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Created workspace %s (%s) at %s\n", ws.Slug, ws.Name, ws.URL)
-			fmt.Fprintf(out, "%s is its first platform admin; the front door and certificate follow within a minute.\n", owner)
+			if operator {
+				fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
+			} else {
+				fmt.Fprintf(out, "%s is its first owner; the front door and certificate follow within a minute.\n", owner)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the slug)")
 	cmd.Flags().StringVar(&address, "address", "", "host of the workspace's dashboard; apps live one label under it (default: <slug>.<the platform's workspaces domain>)")
-	cmd.Flags().StringVar(&owner, "owner", "", "email of the first platform admin")
+	cmd.Flags().StringVar(&owner, "owner", "", "email of the workspace's first owner")
+	cmd.Flags().BoolVar(&operator, "operator", false, "one of the platform operator's own workspaces: never invoiced, owned by every platform admin (RFC-0078)")
 	plan.bind(cmd)
 	return cmd
 }
@@ -138,11 +144,11 @@ func printWorkspaces(out io.Writer, list []api.WorkspaceSummary) {
 		if ws.Plan != nil {
 			plan = planString(ws.Plan)
 		}
-		address := ws.Address
-		if ws.Implicit {
-			address = "(platform)"
+		owners := strings.Join(ws.Owners, ",")
+		if ws.Owner == store.WorkspaceOwnerOperator {
+			owners = firstNonEmpty(owners, "(platform admins)")
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, address, ws.Status, plan, strings.Join(ws.Owners, ","))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, ws.Address, ws.Status, plan, owners)
 	}
 	w.Flush()
 }
