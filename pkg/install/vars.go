@@ -48,6 +48,7 @@ const (
 	VarWorkspacesDomain        = "SHPYRD_WORKSPACES_DOMAIN"         // domain tenant workspaces live under (cloud layer)
 	VarDefaultWorkspace        = "SHPYRD_DEFAULT_WORKSPACE"         // slug of the operator's default workspace (RFC-0078); "default"
 	VarDefaultWorkspaceAddress = "SHPYRD_DEFAULT_WORKSPACE_ADDRESS" // derived: where its dashboard answers (RFC-0080)
+	VarDefaultWorkspaceName    = "SHPYRD_DEFAULT_WORKSPACE_NAME"    // its display name; the domain when unset
 	VarWorkspaceCertIssuer     = "SHPYRD_WORKSPACE_CERT_ISSUER"     // DNS-01 issuer for workspace front-door certs (cloud layer)
 	// Cloud profiles (RFC-0034/0035 counterparts).
 	VarClusterIssuer    = "SHPYRD_CLUSTER_ISSUER"    // cert-manager ClusterIssuer for every certificate (shpyrd-ca locally, letsencrypt on cloud)
@@ -254,6 +255,7 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		VarConsoleHost:             consoleHost,
 		VarDefaultWorkspace:        defaultSlug,
 		VarDefaultWorkspaceAddress: defaultAddress,
+		VarDefaultWorkspaceName:    vars[VarDefaultWorkspaceName],
 		VarExtensions:              strings.Join(names, ","),
 		VarURLPort:                 URLPort(vars),
 		VarForwardedHeaders:        "false",

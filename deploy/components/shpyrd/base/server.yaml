@@ -115,6 +115,8 @@ spec:
               value: "${SHPYRD_DEFAULT_WORKSPACE}"
             - name: SHPYRD_DEFAULT_WORKSPACE_ADDRESS
               value: "${SHPYRD_DEFAULT_WORKSPACE_ADDRESS}"
+            - name: SHPYRD_DEFAULT_WORKSPACE_NAME
+              value: "${SHPYRD_DEFAULT_WORKSPACE_NAME}"
             - name: SHPYRD_WORKSPACE_CERT_ISSUER
               value: "${SHPYRD_WORKSPACE_CERT_ISSUER}"
             - name: SHPYRD_INGRESS_CLASS_EXTERNAL
