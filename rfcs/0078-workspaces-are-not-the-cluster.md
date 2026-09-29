@@ -10,6 +10,8 @@ stable identifiers)
 **Amends:** RFC-0033 (implicit workspace, console host), RFC-0035 (cloud profiles:
 cluster init creates the first workspace)
 
+**Amended by:** RFC-0080 (the default workspace is explicit with an address; the console is not a workspace; realms are hosts)
+
 **Creation date:** 2026-09-28
 
 **Last update:** 2026-09-28 (implemented)

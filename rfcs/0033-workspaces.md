@@ -6,6 +6,8 @@
 
 **Depends on:** RFC-0008 (implemented), RFC-0016
 
+**Amended by:** RFC-0080 (the implicit workspace is removed; sign-in realms are hosts; per-host callbacks replace the console handoff)
+
 **Creation date:** 2026-09-22
 
 **Last update:** 2026-09-27
