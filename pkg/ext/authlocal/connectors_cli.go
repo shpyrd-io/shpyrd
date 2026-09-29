@@ -118,6 +118,7 @@ func newConnectorAddCmd(g ext.CLIGlobals) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&spec.Realm, "realm", "platform", "whose login page: console (the operator's door) or platform (the defaults every workspace offers)")
 	cmd.Flags().StringVar(&spec.ID, "id", "", "connector id (default: the type)")
 	cmd.Flags().StringVar(&spec.Name, "label", "", "button text on the sign-in page (default: the provider's name)")
 	cmd.Flags().StringVar(&spec.ClientID, "client-id", "", "OAuth application client id")
@@ -151,9 +152,9 @@ func newConnectorListCmd(g ext.CLIGlobals) *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL\tWORKSPACE")
+			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL\tREALM\tWORKSPACE")
 			for _, c := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail, firstNonEmpty(c.Workspace, "(platform)"))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail, c.Realm, c.Workspace)
 			}
 			return tw.Flush()
 		},
@@ -161,7 +162,8 @@ func newConnectorListCmd(g ext.CLIGlobals) *cobra.Command {
 }
 
 func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
-	return &cobra.Command{
+	var realm string
+	cmd := &cobra.Command{
 		Use:     "remove <id>",
 		Short:   "Remove a connector",
 		Aliases: []string{"rm"},
@@ -172,7 +174,7 @@ func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := d.store.Remove(ctx, "", args[0]); err != nil {
+			if err := d.store.Remove(ctx, realm, "", args[0]); err != nil {
 				return err
 			}
 			d.audit(ctx, "auth.connector.remove", args[0], "")
@@ -180,6 +182,8 @@ func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
 			return d.restartServer(ctx)
 		},
 	}
+	cmd.Flags().StringVar(&realm, "realm", "platform", "whose login page the connector is on: console or platform")
+	return cmd
 }
 
 func firstNonEmpty(vals ...string) string {

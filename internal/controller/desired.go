@@ -58,6 +58,7 @@ type Config struct {
 	// is not known yet: image repositories are keyed by it. Nil: no store,
 	// as in tests, and repositories fall back to the slug.
 	WorkspaceID func(slug string) string
+
 	// Projects is the store's project registry (RFC-0076): the controller
 	// mirrors every App into it and marks deletions. Nil: no store (tests).
 	Projects store.Projects
@@ -320,7 +321,8 @@ func identityLabels(app *shpyrdv1.App) map[string]string {
 }
 
 // workspaceOf is the workspace an App belongs to, from its authoritative
-// label; Apps from before RFC-0033 carry none and are the implicit one.
+// label; Apps from before RFC-0033 carry none and are the default
+// workspace's (slug "default": the only slug an install that old has).
 func workspaceOf(app *shpyrdv1.App) string {
 	if ws := app.Labels[shpyrdv1.LabelWorkspace]; ws != "" {
 		return ws
@@ -328,20 +330,32 @@ func workspaceOf(app *shpyrdv1.App) string {
 	return project.DefaultWorkspace
 }
 
-// suspended says the app's workspace is suspended (RFC-0033).
+// DefaultWorkspace answers the slug of the operator's default workspace
+// (RFC-0078): the one apps without a workspace label belong to, the one
+// global vars reach, the one that is never suspended. The server points it
+// at the setting; alone, it is the constant every install started with.
+var DefaultWorkspace = func() string { return project.DefaultWorkspace }
+
+// isDefault says the slug is the operator's default workspace.
+func (c Config) isDefault(ws string) bool { return ws == DefaultWorkspace() }
+
+// suspended says the app's workspace is suspended (RFC-0033). The
+// operator's default workspace never is.
 func (c Config) suspended(app *shpyrdv1.App) bool {
 	if c.WorkspaceSuspended == nil {
 		return false
 	}
 	ws := workspaceOf(app)
-	return ws != project.DefaultWorkspace && c.WorkspaceSuspended(ws)
+	return !c.isDefault(ws) && c.WorkspaceSuspended(ws)
 }
 
 // appsDomain is the domain the app's default host sits one label under:
-// the platform domain, or the address of the app's explicit workspace.
+// its workspace's (RFC-0080: every workspace has an address; the default
+// one's is the platform domain in the open-source layout), the platform
+// domain when the workspace is not known yet.
 func (c Config) appsDomain(app *shpyrdv1.App) string {
-	if ws := workspaceOf(app); ws != project.DefaultWorkspace && c.WorkspaceDomain != nil {
-		if d := c.WorkspaceDomain(ws); d != "" {
+	if c.WorkspaceDomain != nil {
+		if d := c.WorkspaceDomain(workspaceOf(app)); d != "" {
 			return d
 		}
 	}
@@ -374,8 +388,8 @@ func (c Config) url(app *shpyrdv1.App) string {
 // issuer is the iss of the JWTs the edge hands the app: its workspace's
 // dashboard URL, where /.well-known/jwks.json publishes the keys.
 func (c Config) issuer(app *shpyrdv1.App) string {
-	if ws := workspaceOf(app); ws != project.DefaultWorkspace && c.WorkspaceDomain != nil {
-		if address := c.WorkspaceDomain(ws); address != "" {
+	if c.WorkspaceDomain != nil {
+		if address := c.WorkspaceDomain(workspaceOf(app)); address != "" {
 			u := "https://" + address
 			if c.HTTPSPort != "" && c.HTTPSPort != "443" {
 				u += ":" + c.HTTPSPort
@@ -835,7 +849,7 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 	// Fully qualified: nginx resolves the name itself, without the pod's
 	// search domains.
 	server := fmt.Sprintf("http://shpyrd-server.%s.svc.cluster.local/edge/auth?project=%s&mode=%s", c.SystemNamespace, projectSlug(app), mode)
-	if ws := workspaceOf(app); ws != project.DefaultWorkspace {
+	if ws := app.Labels[shpyrdv1.LabelWorkspace]; ws != "" {
 		server += "&workspace=" + ws
 	}
 	ann := map[string]string{

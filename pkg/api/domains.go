@@ -84,7 +84,7 @@ func (s *Server) addDomain(c *gin.Context) {
 		return
 	}
 	// A host under another workspace's address is theirs to give.
-	if owner, err := s.tenancy.Resolve(c.Request.Context(), host); err == nil && ws != nil && owner.ID != ws.ID {
+	if owner, err := s.tenancy.Resolve(c.Request.Context(), host); err == nil && ws != nil && owner.Workspace != nil && owner.Workspace.ID != ws.ID {
 		abort(c, http.StatusConflict, fmt.Errorf("%s belongs to another workspace", host))
 		return
 	}

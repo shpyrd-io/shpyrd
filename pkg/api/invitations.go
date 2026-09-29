@@ -339,7 +339,7 @@ func (s *Server) getInvitation(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, InvitationPublicView{
-		Workspace: WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Implicit: ws.Implicit()},
+		Workspace: WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator()},
 		Email:     inv.Email, Role: inv.Role, Team: inv.Team, InvitedBy: inv.InvitedBy,
 		ExpiresAt: inv.ExpiresAt, Expired: inv.Expired(time.Now()), URL: s.dashboardURLOf(ws),
 	})

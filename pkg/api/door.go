@@ -1,0 +1,246 @@
+package api
+
+import (
+	"context"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
+)
+
+// Two doors (RFC-0080): the console at its host, workspaces at theirs.
+// This file holds what both need: the default workspace's slug, the
+// console's URL, the request's own callback URL, and the identity
+// provider's list of callbacks.
+
+// defaultSlug is the operator's default workspace's slug (RFC-0078), read
+// from the settings with a short cache.
+func (s *Server) defaultSlug(ctx context.Context) string {
+	s.defaultSlugMu.Lock()
+	defer s.defaultSlugMu.Unlock()
+	if s.defaultSlugVal != "" && time.Since(s.defaultSlugAt) < 10*time.Second {
+		return s.defaultSlugVal
+	}
+	s.defaultSlugVal, s.defaultSlugAt = store.DefaultWorkspaceSlug(ctx, s.store), time.Now()
+	return s.defaultSlugVal
+}
+
+// forgetDefaultSlug drops the cached default: the setting changed.
+func (s *Server) forgetDefaultSlug() {
+	s.defaultSlugMu.Lock()
+	s.defaultSlugVal = ""
+	s.defaultSlugMu.Unlock()
+}
+
+// workspaceOfApp is the workspace an App belongs to, from its
+// authoritative label; Apps from before RFC-0033 carry none and are the
+// default workspace's.
+func (s *Server) workspaceOfApp(ctx context.Context, app interface{ GetLabels() map[string]string }) string {
+	if ws := app.GetLabels()["shpyrd.io/workspace"]; ws != "" {
+		return ws
+	}
+	return s.defaultSlug(ctx)
+}
+
+// consoleURL is where the console answers (SHPYRD_DASHBOARD_URL).
+func (s *Server) consoleURL() string {
+	return strings.TrimSuffix(s.opts.Public.DashboardURL, "/")
+}
+
+// requestScheme is the scheme the browser used: TLS here, or the front
+// door's word for it.
+func requestScheme(c *gin.Context) string {
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		return "https"
+	}
+	return "http"
+}
+
+// callbackURL is this request's own OpenID Connect redirect URI: sign-in
+// returns to the host it started from (RFC-0080), never to another door.
+func (s *Server) callbackURL(c *gin.Context) string {
+	scheme := requestScheme(c)
+	if scheme == "http" && strings.HasPrefix(s.opts.Public.DashboardURL, "https://") {
+		// Behind the front door without X-Forwarded-Proto: the platform is
+		// HTTPS everywhere the browser is concerned.
+		scheme = "https"
+	}
+	return scheme + "://" + c.Request.Host + "/api/auth/callback"
+}
+
+// ---- the identity provider's callbacks --------------------------------------
+
+// OAuth2ClientGVR is Dex's client resource (read live from its Kubernetes
+// storage): the server owns the one client the platform uses and keeps
+// its redirect URIs current (RFC-0080).
+var OAuth2ClientGVR = schema.GroupVersionResource{Group: "dex.coreos.com", Version: "v1", Resource: "oauth2clients"}
+
+// oidcClientID is the client the dashboard and workspaces use at Dex.
+const oidcClientID = "shpyrd"
+
+// oidcClientChanged asks for the redirect URIs to be reconciled soon, off
+// the request's path.
+func (s *Server) oidcClientChanged() {
+	if s.kube == nil || s.kube.Dynamic == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.reconcileOIDCClient(ctx); err != nil {
+			s.log.Warn("identity provider client: redirect URIs not updated", "error", err)
+		}
+	}()
+}
+
+// redirectURIs lists every host a sign-in may return to: the console, every
+// workspace address, every verified custom host.
+func (s *Server) redirectURIs(ctx context.Context) ([]string, error) {
+	set := map[string]bool{}
+	add := func(u string) {
+		if u != "" {
+			set[u] = true
+		}
+	}
+	if u := s.consoleURL(); u != "" {
+		add(u + "/api/auth/callback")
+	}
+	all, err := s.store.ListWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		ws := &all[i]
+		if ws.Address == "" || ws.Status == store.WorkspaceSuspended {
+			continue
+		}
+		add("https://" + s.withPort(ws.Address) + "/api/auth/callback")
+		hosts, err := s.store.ListWorkspaceHosts(ctx, ws.Slug)
+		if err != nil {
+			continue
+		}
+		for j := range hosts {
+			if hosts[j].Kind == store.HostCustom && tenancy.HostServes(&hosts[j]) {
+				add("https://" + s.withPort(hosts[j].Host) + "/api/auth/callback")
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for u := range set {
+		out = append(out, u)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// reconcileOIDCClient writes Dex's OAuth2Client for the platform: id,
+// secret (from the installer's Secret) and the current redirect URIs. Dex
+// creates the resource kind when it starts; until then this returns an
+// error the caller retries.
+func (s *Server) reconcileOIDCClient(ctx context.Context) error {
+	if s.kube == nil || s.kube.Dynamic == nil || s.kube.Kube == nil {
+		return nil
+	}
+	ns := s.kube.Namespace
+	sec, err := s.kube.Kube.CoreV1().Secrets(ns).Get(ctx, install.OIDCClientSecretName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	secret := string(sec.Data["client-secret"])
+	id := string(sec.Data["client-id"])
+	if id == "" {
+		id = oidcClientID
+	}
+	uris, err := s.redirectURIs(ctx)
+	if err != nil {
+		return err
+	}
+	list := make([]interface{}, 0, len(uris))
+	for _, u := range uris {
+		list = append(list, u)
+	}
+	res := s.kube.Dynamic.Resource(OAuth2ClientGVR).Namespace(ns)
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "dex.coreos.com/v1",
+		"kind":       "OAuth2Client",
+		"metadata": map[string]interface{}{
+			"name":      id,
+			"namespace": ns,
+			"labels":    map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"},
+		},
+		"id":           id,
+		"name":         "shpyrd",
+		"secret":       secret,
+		"redirectURIs": list,
+	}}
+	existing, err := res.Get(ctx, id, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		_, err = res.Create(ctx, obj, metav1.CreateOptions{})
+		if err == nil {
+			s.log.Info("identity provider client created", "redirectURIs", len(uris))
+		}
+		return err
+	case err != nil:
+		return err
+	}
+	cur, _, _ := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
+	curSecret, _, _ := unstructured.NestedString(existing.Object, "secret")
+	if curSecret == secret && equalStrings(cur, uris) {
+		return nil
+	}
+	obj.SetResourceVersion(existing.GetResourceVersion())
+	if _, err := res.Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		return err
+	}
+	s.log.Info("identity provider client updated", "redirectURIs", len(uris))
+	return nil
+}
+
+// keepOIDCClient reconciles the client at start and retries while Dex is
+// still creating its resource kinds, then stops: later changes come from
+// workspacesChanged.
+func (s *Server) keepOIDCClient(ctx context.Context) {
+	if s.kube == nil || s.kube.Dynamic == nil {
+		return
+	}
+	delay := 2 * time.Second
+	for {
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := s.reconcileOIDCClient(rctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		s.log.Info("identity provider client: not yet, retrying", "in", delay.String(), "error", err.Error())
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		if delay < time.Minute {
+			delay *= 2
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -35,6 +35,11 @@ func newTenantServer(t *testing.T) (*Server, client.Client, store.Store) {
 	t.Helper()
 	ctx := context.Background()
 	st := store.NewMemory()
+	// The operator's default workspace answers at the platform domain
+	// (RFC-0080, open-source layout); the console at shpyrd.example.test.
+	if _, err := st.UpdateWorkspaceAddress(ctx, store.DefaultWorkspace, "example.test"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +65,7 @@ func newTenantServer(t *testing.T) (*Server, client.Client, store.Store) {
 	public := PublicConfig{Domain: "example.test", DashboardURL: "https://shpyrd.example.test"}
 	s, err := newServer(k, Options{
 		Token: testToken, Apps: cr, Store: st, Public: public,
-		Tenancy:      &tenancy.ByAddress{Store: st, Domain: public.Domain, DashboardHost: "shpyrd.example.test"},
+		Tenancy:      &tenancy.ByAddress{Store: st, Domain: public.Domain, ConsoleHost: "shpyrd.example.test"},
 		Capabilities: []string{"workspaces"},
 	}, nil)
 	if err != nil {
@@ -100,15 +105,19 @@ func slugsOf(t *testing.T, rec *httptest.ResponseRecorder) []string {
 func TestTenancyByHost(t *testing.T) {
 	s, cr, _ := newTenantServer(t)
 
-	// Each host sees its own projects only.
-	if got := slugsOf(t, at(t, s, "shpyrd.example.test", "GET", "/api/projects", "")); len(got) != 1 || got[0] != "shop" {
+	// Each host sees its own projects only. The console is not a workspace:
+	// project routes there are not found (RFC-0080).
+	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/projects", ""); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "console is not a workspace") {
+		t.Errorf("projects at the console = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := slugsOf(t, at(t, s, "example.test", "GET", "/api/projects", "")); len(got) != 1 || got[0] != "shop" {
 		t.Errorf("default projects = %v", got)
 	}
 	if got := slugsOf(t, at(t, s, "acme.shpyrd.test", "GET", "/api/projects", "")); len(got) != 2 || got[0] != "shop" || got[1] != "wiki" {
 		t.Errorf("acme projects = %v", got)
 	}
 	// The same slug at two hosts is two different Apps.
-	def := at(t, s, "shpyrd.example.test", "GET", "/api/projects/shop", "")
+	def := at(t, s, "example.test", "GET", "/api/projects/shop", "")
 	acme := at(t, s, "acme.shpyrd.test", "GET", "/api/projects/shop", "")
 	if def.Code != 200 || acme.Code != 200 {
 		t.Fatalf("get shop: %d %d", def.Code, acme.Code)
@@ -117,10 +126,11 @@ func TestTenancyByHost(t *testing.T) {
 		t.Errorf("wrong app for host: default=%s acme=%s", def.Body.String(), acme.Body.String())
 	}
 	// A project of one workspace is not found from another.
-	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/projects/wiki", ""); rec.Code != http.StatusNotFound {
+	if rec := at(t, s, "example.test", "GET", "/api/projects/wiki", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("wiki from default = %d", rec.Code)
 	}
-	// Internal hosts are the operator's: the implicit workspace.
+	// Internal hosts are the operator's door with the default workspace as
+	// tenant: project commands over a kubeconfig keep working.
 	if got := slugsOf(t, at(t, s, "localhost:8080", "GET", "/api/projects", "")); len(got) != 1 || got[0] != "shop" {
 		t.Errorf("localhost projects = %v", got)
 	}
@@ -139,20 +149,29 @@ func TestTenancyByHost(t *testing.T) {
 	var view WorkspaceView
 	rec := at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "")
 	_ = json.Unmarshal(rec.Body.Bytes(), &view)
-	if view.Slug != "acme" || view.Implicit || view.Address != "acme.shpyrd.test" || view.URL != "https://acme.shpyrd.test" || view.Domain != "acme.shpyrd.test" {
+	if view.Slug != "acme" || view.OwnedByOperator || view.Address != "acme.shpyrd.test" || view.URL != "https://acme.shpyrd.test" || view.Domain != "acme.shpyrd.test" {
 		t.Errorf("acme view = %+v", view)
 	}
-	rec = at(t, s, "shpyrd.example.test", "GET", "/api/workspace", "")
+	// The default workspace is the operator's, at its own address.
+	rec = at(t, s, "example.test", "GET", "/api/workspace", "")
 	_ = json.Unmarshal(rec.Body.Bytes(), &view)
-	if !view.Implicit || view.URL != "https://shpyrd.example.test" || view.Domain != "example.test" {
+	if !view.OwnedByOperator || view.URL != "https://example.test" || view.Domain != "example.test" || view.Address != "example.test" {
 		t.Errorf("default view = %+v", view)
 	}
-	// The admin token is never offered at a workspace host, only at the console.
-	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":false`) {
-		t.Errorf("acme config offers the admin token: %s", rec.Body.String())
+	// The console has no workspace view.
+	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/workspace", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("workspace view at the console = %d", rec.Code)
 	}
-	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":true`) {
-		t.Errorf("console config must offer the admin token: %s", rec.Body.String())
+	// The admin token is never offered at a workspace host, only at the
+	// console; /api/config names the door.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":false`) || !strings.Contains(rec.Body.String(), `"door":"workspace"`) {
+		t.Errorf("acme config: %s", rec.Body.String())
+	}
+	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"token":true`) || !strings.Contains(rec.Body.String(), `"door":"console"`) || strings.Contains(rec.Body.String(), `"workspace":{`) {
+		t.Errorf("console config: %s", rec.Body.String())
+	}
+	if rec := at(t, s, "example.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"ownedByOperator":true`) || !strings.Contains(rec.Body.String(), `"consoleUrl":"https://shpyrd.example.test"`) {
+		t.Errorf("default workspace config: %s", rec.Body.String())
 	}
 	// Capabilities reach the dashboard.
 	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"capabilities":["workspaces"]`) {
@@ -183,8 +202,8 @@ func TestTenancyByHost(t *testing.T) {
 	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/projects/billing", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"slug":"billing"`) {
 		t.Errorf("get billing at acme = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/projects/billing", ""); rec.Code != http.StatusNotFound {
-		t.Errorf("billing must not resolve in the implicit workspace: %d", rec.Code)
+	if rec := at(t, s, "example.test", "GET", "/api/projects/billing", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("billing must not resolve in the default workspace: %d", rec.Code)
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"Billing"}`); rec.Code != http.StatusConflict {
 		t.Errorf("duplicate slug in the workspace = %d %s", rec.Code, rec.Body.String())
@@ -201,8 +220,8 @@ func TestTenancyByHost(t *testing.T) {
 	if rec := at(t, s, "long.shpyrd.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusCreated {
 		t.Errorf("long slug in explicit workspace = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusCreated {
-		t.Errorf("long slug in implicit workspace = %d %s", rec.Code, rec.Body.String())
+	if rec := at(t, s, "example.test", "POST", "/api/projects", `{"name":"`+strings.Repeat("a", 40)+`"}`); rec.Code != http.StatusCreated {
+		t.Errorf("long slug in the default workspace = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -223,8 +242,11 @@ func TestTenancyIsolation(t *testing.T) {
 		}
 	}
 	s.authz.Invalidate()
-	mariaSID, _ := s.rp.sessions.create(ctx, store.DefaultWorkspace, ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
-	anaSID, _ := s.rp.sessions.create(ctx, "acme", ext.Identity{Email: "ana@acme.test", Provider: "local"}, "")
+	// Maria's console session (RFC-0080); a workspace session of hers at the
+	// default workspace's own host; Ana's at acme.
+	mariaSID, _ := s.rp.sessions.create(ctx, store.RealmConsole, "", ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
+	mariaWS, _ := s.rp.sessions.create(ctx, store.RealmWorkspace, store.DefaultWorkspace, ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
+	anaSID, _ := s.rp.sessions.create(ctx, store.RealmWorkspace, "acme", ext.Identity{Email: "ana@acme.test", Provider: "local"}, "")
 
 	me := func(host, sid string) (int, string) {
 		req := httptest.NewRequest("GET", "https://"+host+"/api/me", nil)
@@ -234,22 +256,32 @@ func TestTenancyIsolation(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec.Code, rec.Body.String()
 	}
-	// Sessions work at their own workspace's host...
-	if code, body := me("shpyrd.example.test", mariaSID.ID); code != 200 || !strings.Contains(body, "platform-admin") {
-		t.Errorf("maria at home = %d %s", code, body)
+	// Sessions work at their own door...
+	if code, body := me("shpyrd.example.test", mariaSID.ID); code != 200 || !strings.Contains(body, "platform-admin") || !strings.Contains(body, `"console":true`) {
+		t.Errorf("maria at the console = %d %s", code, body)
 	}
-	if code, body := me("acme.shpyrd.test", anaSID.ID); code != 200 || !strings.Contains(body, "platform-admin") {
+	// ...a platform admin owns the operator's workspace without a membership...
+	if code, body := me("example.test", mariaWS.ID); code != 200 || !strings.Contains(body, `"workspace":"owner"`) || !strings.Contains(body, `"console":true`) {
+		t.Errorf("maria at the default workspace = %d %s", code, body)
+	}
+	if code, body := me("acme.shpyrd.test", anaSID.ID); code != 200 || !strings.Contains(body, "platform-admin") || strings.Contains(body, `"console":true`) {
 		t.Errorf("ana at home = %d %s", code, body)
 	}
-	// ...and are no session at all at another's: a replayed cookie is anonymous.
+	// ...and are no session at all at another door: a replayed cookie is anonymous.
 	if code, _ := me("acme.shpyrd.test", mariaSID.ID); code != http.StatusUnauthorized {
-		t.Errorf("maria's cookie at acme = %d, want 401", code)
+		t.Errorf("maria's console cookie at acme = %d, want 401", code)
+	}
+	if code, _ := me("example.test", mariaSID.ID); code != http.StatusUnauthorized {
+		t.Errorf("maria's console cookie at her own workspace = %d, want 401 (realms do not share sessions)", code)
+	}
+	if code, _ := me("shpyrd.example.test", mariaWS.ID); code != http.StatusUnauthorized {
+		t.Errorf("maria's workspace cookie at the console = %d, want 401", code)
 	}
 	if code, _ := me("shpyrd.example.test", anaSID.ID); code != http.StatusUnauthorized {
-		t.Errorf("ana's cookie at default = %d, want 401", code)
+		t.Errorf("ana's cookie at the console = %d, want 401", code)
 	}
-	// Teams are per workspace: acme's ops team is invisible from the platform host.
-	if rec := at(t, s, "shpyrd.example.test", "GET", "/api/teams", ""); strings.Contains(rec.Body.String(), "ana@acme.test") {
+	// Teams are per workspace: acme's ops team is invisible from the default workspace.
+	if rec := at(t, s, "example.test", "GET", "/api/teams", ""); strings.Contains(rec.Body.String(), "ana@acme.test") {
 		t.Errorf("acme's team leaked into default: %s", rec.Body.String())
 	}
 
@@ -289,14 +321,18 @@ func TestTenancyIsolation(t *testing.T) {
 	}
 }
 
-// TestConsoleHandoff walks the sign-in of an explicit workspace: its host
-// sends the browser to the console, the console completes OpenID Connect,
-// applies the workspace's admission and hands a one-time code back; the
-// workspace host mints its own session. The console keeps no session.
-func TestConsoleHandoff(t *testing.T) {
+// TestPerHostSignIn walks a workspace's sign-in (RFC-0080): its host starts
+// OpenID Connect naming its own callback, the issuer returns there, the
+// workspace's admission runs and its session is minted at its host. The
+// console is not involved and its methods are its own.
+func TestPerHostSignIn(t *testing.T) {
 	issuer := newFakeIssuer(t)
 	s, _, st := newTenantServer(t)
-	if err := s.rp.AddOIDC(context.Background(), ext.OIDCProvider{ID: "test", Label: "Test login", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret"}); err != nil {
+	// A platform default (offered to workspaces) and the console's own.
+	if err := s.rp.AddOIDC(context.Background(), ext.OIDCProvider{ID: "test", Label: "Test login", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Realm: ext.RealmPlatform}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.rp.AddOIDC(context.Background(), ext.OIDCProvider{ID: "console-test", Label: "Operators", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Realm: ext.RealmConsole}); err != nil {
 		t.Fatal(err)
 	}
 	get := func(host, path string) *httptest.ResponseRecorder {
@@ -306,44 +342,38 @@ func TestConsoleHandoff(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec
 	}
+	signInAt := func(host, provider string) (*httptest.ResponseRecorder, string) {
+		rec := get(host, "/api/auth/login?provider="+provider+"&next=/projects")
+		authURL, _ := url.Parse(rec.Header().Get("Location"))
+		if rec.Code != http.StatusFound || !strings.HasPrefix(authURL.String(), issuer.srv.URL+"/auth?") {
+			t.Fatalf("%s login -> %d %s %s", host, rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		}
+		// The authorization request names this host's own callback.
+		if got := authURL.Query().Get("redirect_uri"); got != "https://"+host+"/api/auth/callback" {
+			t.Fatalf("%s redirect_uri = %q", host, got)
+		}
+		resp, err := http.DefaultTransport.RoundTrip(mustRequest(t, "GET", authURL.String()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		back, _ := url.Parse(resp.Header.Get("Location"))
+		if back.Host != host {
+			t.Fatalf("issuer sent the browser to %s, want %s", back.Host, host)
+		}
+		rec = get(host, back.RequestURI())
+		return rec, cookieValue(rec, sessionCookie)
+	}
 
-	// 1. At acme, login goes to the console naming the workspace.
-	rec := get("acme.shpyrd.test", "/api/auth/login?provider=test&next=/projects")
-	loc, _ := url.Parse(rec.Header().Get("Location"))
-	if rec.Code != http.StatusFound || loc.Host != "shpyrd.example.test" || loc.Path != "/api/auth/login" || loc.Query().Get("workspace") != "acme" || loc.Query().Get("next") != "/projects" {
-		t.Fatalf("acme login -> %d %s", rec.Code, rec.Header().Get("Location"))
+	// 1. At acme: the platform default is offered, the console's is not.
+	if rec := get("acme.shpyrd.test", "/api/auth/login?provider=console-test"); rec.Code != http.StatusBadRequest {
+		t.Errorf("console method at acme = %d %s", rec.Code, rec.Body.String())
 	}
-	// 2. The console starts the flow with the issuer.
-	rec = get("shpyrd.example.test", loc.RequestURI())
-	authURL, _ := url.Parse(rec.Header().Get("Location"))
-	if rec.Code != http.StatusFound || !strings.HasPrefix(authURL.String(), issuer.srv.URL+"/auth?") {
-		t.Fatalf("console login -> %d %s", rec.Code, rec.Header().Get("Location"))
-	}
-	resp, err := http.DefaultTransport.RoundTrip(mustRequest(t, "GET", authURL.String()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	back, _ := url.Parse(resp.Header.Get("Location"))
-	// 3. The console's callback hands off to acme with a code; no console cookie.
-	rec = get("shpyrd.example.test", back.RequestURI())
-	hand, _ := url.Parse(rec.Header().Get("Location"))
-	if rec.Code != http.StatusFound || hand.Host != "acme.shpyrd.test" || hand.Path != "/.shpyrd/session" || hand.Query().Get("code") == "" || hand.Query().Get("rd") != "/projects" {
-		t.Fatalf("callback -> %d %s %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
-	}
-	if cookieValue(rec, sessionCookie) != "" {
-		t.Error("the console must not open a session for a workspace sign-in")
-	}
-	// 4. acme redeems the code into its own session, for its own host only.
-	if rec := get("shpyrd.example.test", hand.RequestURI()); rec.Code != http.StatusNotFound {
-		t.Errorf("session code at the console = %d", rec.Code)
-	}
-	rec = get("acme.shpyrd.test", hand.RequestURI())
-	sid := cookieValue(rec, sessionCookie)
+	rec, sid := signInAt("acme.shpyrd.test", "test")
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/projects" || sid == "" {
-		t.Fatalf("session handoff -> %d %s cookies=%v", rec.Code, rec.Header().Get("Location"), rec.Result().Cookies())
+		t.Fatalf("acme callback -> %d %s cookies=%v", rec.Code, rec.Header().Get("Location"), rec.Result().Cookies())
 	}
-	me := func(host string) (int, string) {
+	me := func(host string, sid string) (int, string) {
 		req := httptest.NewRequest("GET", "https://"+host+"/api/me", nil)
 		req.Host = host
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
@@ -351,49 +381,60 @@ func TestConsoleHandoff(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec.Code, rec.Body.String()
 	}
-	if code, body := me("acme.shpyrd.test"); code != 200 || !strings.Contains(body, "ada@example.test") {
+	if code, body := me("acme.shpyrd.test", sid); code != 200 || !strings.Contains(body, "ada@example.test") {
 		t.Errorf("me at acme = %d %s", code, body)
 	}
-	if code, _ := me("shpyrd.example.test"); code != http.StatusUnauthorized {
+	if code, _ := me("shpyrd.example.test", sid); code != http.StatusUnauthorized {
 		t.Errorf("acme's session at the console = %d, want 401", code)
 	}
-	// A fresh explicit workspace is enforced from birth: Ada, its first
-	// person, is nobody there until the workspace's creator names owners.
-	if code, body := me("acme.shpyrd.test"); code != 200 || strings.Contains(body, "platform-admin") || !strings.Contains(body, `"enforced":true`) {
-		t.Errorf("first person in a fresh explicit workspace = %d %s (bootstrap mode must not apply)", code, body)
+	// A fresh workspace is enforced from birth: Ada, its first person, is
+	// nobody there until the workspace's creator names owners.
+	if code, body := me("acme.shpyrd.test", sid); code != 200 || strings.Contains(body, "platform-admin") || !strings.Contains(body, `"enforced":true`) {
+		t.Errorf("first person in a fresh workspace = %d %s (bootstrap mode must not apply)", code, body)
 	}
 	// Ada is a person of acme now, and of no other workspace.
 	if people, _ := st.ListIdentities(context.Background(), "acme"); len(people) != 1 || people[0].Email != "ada@example.test" {
 		t.Errorf("acme people = %+v", people)
 	}
 	if people, _ := st.ListIdentities(context.Background(), store.DefaultWorkspace); len(people) != 0 {
-		t.Errorf("console people = %+v (the console must not record workspace sign-ins)", people)
-	}
-	// The code was single use.
-	if rec := get("acme.shpyrd.test", hand.RequestURI()); rec.Code != http.StatusBadRequest {
-		t.Errorf("replayed session code = %d", rec.Code)
+		t.Errorf("operator people = %+v (a workspace sign-in must not reach the console's people)", people)
 	}
 
-	// 5. The workspace's admission applies at the console: a listed-only
-	// workspace refuses strangers before any code is minted.
+	// 2. At the console: the platform default is not offered; the console's
+	// own is, and the first person through it is the platform admin
+	// (bootstrap applies to the console realm alone).
+	if rec := get("shpyrd.example.test", "/api/auth/login?provider=test"); rec.Code != http.StatusBadRequest {
+		t.Errorf("platform default at the console = %d %s", rec.Code, rec.Body.String())
+	}
+	rec, csid := signInAt("shpyrd.example.test", "console-test")
+	if rec.Code != http.StatusFound || csid == "" {
+		t.Fatalf("console callback -> %d %s", rec.Code, rec.Body.String())
+	}
+	if code, body := me("shpyrd.example.test", csid); code != 200 || !strings.Contains(body, "platform-admin") || !strings.Contains(body, `"console":true`) {
+		t.Errorf("me at the console = %d %s", code, body)
+	}
+	if code, _ := me("acme.shpyrd.test", csid); code != http.StatusUnauthorized {
+		t.Errorf("console session at acme = %d, want 401", code)
+	}
+	if code, _ := me("example.test", csid); code != http.StatusUnauthorized {
+		t.Errorf("console session at the operator's workspace host = %d, want 401", code)
+	}
+
+	// 3. A listed-only workspace refuses strangers at its own callback and
+	// sends them to its own login page.
 	if _, err := st.UpdateWorkspaceSettings(context.Background(), "acme", store.WorkspaceSettings{JoinPolicy: store.JoinListed}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DeleteIdentity(context.Background(), "acme", "ada@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	rec = get("shpyrd.example.test", "/api/auth/login?provider=test&workspace=acme&next=/")
-	authURL, _ = url.Parse(rec.Header().Get("Location"))
-	resp, _ = http.DefaultTransport.RoundTrip(mustRequest(t, "GET", authURL.String()))
-	resp.Body.Close()
-	back, _ = url.Parse(resp.Header.Get("Location"))
-	rec = get("shpyrd.example.test", back.RequestURI())
-	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://acme.shpyrd.test/?login_error=") {
-		t.Errorf("stranger at a listed-only workspace = %d %s (must land on acme's login page)", rec.Code, rec.Header().Get("Location"))
+	rec, sid = signInAt("acme.shpyrd.test", "test")
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/?login_error=") || sid != "" {
+		t.Errorf("stranger at a listed-only workspace = %d %s (must land on acme's login page, no session)", rec.Code, rec.Header().Get("Location"))
 	}
 	// A suspended workspace cannot be signed into at all.
-	if rec := get("shpyrd.example.test", "/api/auth/login?provider=test&workspace=closed"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "suspended") {
-		t.Errorf("login for a suspended workspace = %d %s", rec.Code, rec.Body.String())
+	if rec := get("closed.shpyrd.test", "/api/auth/login?provider=test"); rec.Code != http.StatusForbidden {
+		t.Errorf("login at a suspended workspace = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -441,9 +482,9 @@ func TestPlanLimits(t *testing.T) {
 	if view.Limits == nil || view.Limits.Instances != 3 || view.Usage == nil || view.Usage.Instances != 3 || view.Usage.Projects != 2 || view.Usage.Storage != "5Gi" {
 		t.Errorf("view = limits %+v usage %+v", view.Limits, view.Usage)
 	}
-	// No plan, no ceiling: the implicit workspace scales freely.
-	if rec := at(t, s, "shpyrd.example.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":50}`); rec.Code != http.StatusOK {
-		t.Errorf("implicit scale = %d %s", rec.Code, rec.Body.String())
+	// No plan, no ceiling: the operator's workspace scales freely.
+	if rec := at(t, s, "example.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":50}`); rec.Code != http.StatusOK {
+		t.Errorf("default workspace scale = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -456,7 +497,7 @@ func TestAllowListStaysInTheWorkspace(t *testing.T) {
 	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/projects/shop/allow", `[{"project":"wiki"}]`); rec.Code != http.StatusOK {
 		t.Fatalf("acme shop allows acme wiki: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, "shpyrd.example.test", "PUT", "/api/projects/shop/allow", `[{"project":"wiki"}]`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `in this workspace`) {
+	if rec := at(t, s, "example.test", "PUT", "/api/projects/shop/allow", `[{"project":"wiki"}]`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `in this workspace`) {
 		t.Errorf("default shop allowing acme's wiki = %d %s, want 400", rec.Code, rec.Body.String())
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "PUT", "/api/projects/shop/allow", `[{"project":"shop"}]`); rec.Code != http.StatusBadRequest {
@@ -537,21 +578,25 @@ func TestCustomDomainResolvesToTheAppsWorkspace(t *testing.T) {
 	}
 }
 
-// Per-workspace SSO (RFC-0033): a workspace's own login methods show on
-// its login page only; the platform's show everywhere until a workspace
-// hides them, which it may do only once it has a method of its own.
+// Per-workspace SSO (RFC-0033, RFC-0080): a workspace's own login methods
+// show on its login page only; the platform's defaults show on every
+// workspace's until it hides them, which it may do only once it has a
+// method of its own; the console's are the console's alone.
 func TestPerWorkspaceLoginMethods(t *testing.T) {
 	issuer := newFakeIssuer(t)
-	s, _, _ := newTenantServer(t)
+	s, _, st := newTenantServer(t)
 	ctx := context.Background()
-	add := func(id, ws string) {
-		if err := s.rp.AddOIDC(ctx, ext.OIDCProvider{ID: id, Label: id, Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Workspace: ws}); err != nil {
+	add := func(id, realm, ws string) {
+		if err := s.rp.AddOIDC(ctx, ext.OIDCProvider{ID: id, Label: id, Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Realm: realm, Workspace: ws}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	add("github", "")
-	add("ws-acme-okta", "acme")
-	add("ws-closed-google", "closed")
+	acme, _ := st.Workspace(ctx, "acme")
+	closed, _ := st.Workspace(ctx, "closed")
+	add("github", ext.RealmPlatform, "")
+	add("console-google", ext.RealmConsole, "")
+	add("ws-acme-okta", ext.RealmWorkspace, ids.Short(acme.ID))
+	add("ws-closed-google", ext.RealmWorkspace, ids.Short(closed.ID))
 	providers := func(host string) []string {
 		rec := at(t, s, host, "GET", "/api/config", "")
 		var cfg struct {
@@ -566,11 +611,14 @@ func TestPerWorkspaceLoginMethods(t *testing.T) {
 		}
 		return ids
 	}
-	if got := providers("shpyrd.example.test"); strings.Join(got, ",") != "github,ws-acme-okta,ws-closed-google" {
-		t.Errorf("console shows everything: %v", got)
+	if got := providers("shpyrd.example.test"); strings.Join(got, ",") != "console-google" {
+		t.Errorf("console shows its own methods only: %v", got)
 	}
 	if got := providers("acme.shpyrd.test"); strings.Join(got, ",") != "github,ws-acme-okta" {
-		t.Errorf("acme shows the platform's and its own: %v", got)
+		t.Errorf("acme shows the platform's defaults and its own: %v", got)
+	}
+	if got := providers("example.test"); strings.Join(got, ",") != "github" {
+		t.Errorf("the operator's workspace shows the platform's defaults, not the console's: %v", got)
 	}
 	// The console starts a workspace's own method for that workspace, and
 	// refuses another workspace's.
@@ -597,8 +645,8 @@ func TestPerWorkspaceLoginMethods(t *testing.T) {
 	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login?provider=github", ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("hidden platform method at acme: %d", rec.Code)
 	}
-	if rec := wsToken("shpyrd.example.test", `{"ownMethodsOnly":true}`); rec.Code != http.StatusBadRequest {
-		t.Errorf("the console cannot hide: %d", rec.Code)
+	if rec := wsToken("shpyrd.example.test", `{"ownMethodsOnly":true}`); rec.Code != http.StatusNotFound {
+		t.Errorf("the console has no workspace settings: %d", rec.Code)
 	}
 }
 

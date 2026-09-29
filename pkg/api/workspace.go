@@ -20,6 +20,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -30,9 +31,11 @@ import (
 
 // WorkspaceView is GET /api/workspace.
 type WorkspaceView struct {
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	Implicit bool   `json:"implicit"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	// OwnedByOperator marks the platform operator's own workspace (RFC-0078,
+	// RFC-0080): platform admins own it and see the way to the console.
+	OwnedByOperator bool `json:"ownedByOperator"`
 	// Domain is where the workspace's apps live, one label under it.
 	Domain string `json:"domain,omitempty"`
 	// Address is the host of an explicit workspace's dashboard (RFC-0033
@@ -120,7 +123,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 		}
 	}
 	return WorkspaceView{
-		Slug: w.Slug, Name: w.Name, Implicit: w.Implicit(),
+		Slug: w.Slug, Name: w.Name, OwnedByOperator: w.OwnedByOperator(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
 		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",
@@ -193,10 +196,6 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		changes = append(changes, "join policy: "+*req.JoinPolicy)
 	}
 	if req.OwnMethodsOnly != nil && *req.OwnMethodsOnly != w.Settings.OwnMethodsOnly {
-		if w.Implicit() {
-			abort(c, http.StatusBadRequest, errors.New("the platform's own workspace offers every method"))
-			return
-		}
 		if *req.OwnMethodsOnly && !s.hasOwnMethod(w) {
 			abort(c, http.StatusBadRequest, errors.New("add a sign-in method of this workspace first, or nobody could sign in"))
 			return
@@ -350,12 +349,15 @@ func (s *Server) hasOwnMethod(w *store.Workspace) bool {
 	if s.rp == nil {
 		return false
 	}
+	own := func(realm, owner string) bool {
+		return realm == ext.RealmWorkspace && (owner == ids.Short(w.ID) || owner == w.Slug)
+	}
 	for _, p := range s.rp.providerList() {
-		if p.Workspace == w.Slug {
+		if own(p.Realm, p.Workspace) {
 			return true
 		}
 	}
-	if p := s.rp.passwordProvider(); p != nil && p.Workspace == w.Slug {
+	if p := s.rp.passwordProvider(); p != nil && own(p.Realm, p.Workspace) {
 		return true
 	}
 	return false
@@ -478,13 +480,33 @@ func (s *Server) deleteDomainClaim(c *gin.Context) {
 // first time must satisfy the workspace's join policy, unless they were
 // invited or already hold a role. Operators (token, kubeconfig) are not
 // people and always pass.
+// admitConsole is the console's admission (RFC-0080): the console's
+// methods decide who reaches it and its roles what they may do; the one
+// refusal is a person the operator suspended.
+func (s *Server) admitConsole(ctx context.Context, id ext.Identity) error {
+	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" {
+		return nil
+	}
+	people, err := s.store.ListIdentities(ctx, s.defaultSlug(ctx))
+	if err != nil {
+		return nil // the store is down: sign-in must not depend on it
+	}
+	email := strings.ToLower(id.Email)
+	for i := range people {
+		if people[i].Email == email && people[i].Status == store.StatusSuspended {
+			return errors.New("your access is suspended; ask an administrator")
+		}
+	}
+	return nil
+}
+
 func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) error {
 	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" {
 		return nil
 	}
 	email := strings.ToLower(id.Email)
 	if ws == "" {
-		ws = store.DefaultWorkspace
+		ws = s.defaultSlug(ctx)
 	}
 	people, err := s.store.ListIdentities(ctx, ws)
 	if err != nil {
@@ -739,7 +761,11 @@ func (s *Server) recordSignIn(c *gin.Context, id ext.Identity) *store.Identity {
 	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
 		return nil
 	}
-	person, err := s.store.TouchIdentity(c.Request.Context(), s.workspace(c), store.Identity{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups})
+	ws := s.workspace(c)
+	if ws == "" {
+		ws = s.defaultSlug(c.Request.Context()) // the console: the operator's people
+	}
+	person, err := s.store.TouchIdentity(c.Request.Context(), ws, store.Identity{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups})
 	if err != nil {
 		s.log.Warn("could not record sign-in", "email", id.Email, "err", err.Error())
 		return nil
@@ -821,6 +847,10 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func (s *Server) patchClusterSettings(c *gin.Context) {
 	var req struct {
 		DefaultWorkspaceID *string `json:"defaultWorkspaceId"`
+		// ConsolePasswordSignIn keeps the password form on the console's
+		// login page (RFC-0080); off once an identity provider is the
+		// console's door. Refused while the console has no other method.
+		ConsolePasswordSignIn *bool `json:"consolePasswordSignIn"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -833,7 +863,8 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 			abort(c, http.StatusBadRequest, errors.New("defaultWorkspaceId must not be empty"))
 			return
 		}
-		if _, err := s.store.Workspace(ctx, slug); err != nil {
+		ws, err := s.store.Workspace(ctx, slug)
+		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				abort(c, http.StatusBadRequest, fmt.Errorf("workspace %q not found", slug))
 				return
@@ -841,13 +872,37 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 			storeErr(c, err, "workspace")
 			return
 		}
+		if !ws.OwnedByOperator() {
+			abort(c, http.StatusBadRequest, fmt.Errorf("workspace %q is a customer's; the default workspace is one of the operator's", slug))
+			return
+		}
 		if err := s.store.SetSetting(ctx, store.SettingDefaultWorkspaceID, slug); err != nil {
 			storeErr(c, err, "setting")
 			return
 		}
+		s.forgetDefaultSlug()
+		s.forgetTenants()
+		s.audit(c, "", "cluster.settings", "default_workspace", slug)
 	}
-	c.JSON(http.StatusOK, gin.H{"defaultWorkspaceId": func() string {
-		v, _ := s.store.GetSetting(ctx, store.SettingDefaultWorkspaceID)
-		return v
-	}()})
+	if req.ConsolePasswordSignIn != nil {
+		if !*req.ConsolePasswordSignIn {
+			hasOther := false
+			for _, p := range s.authConfig().Providers {
+				if p.Realm == ext.RealmConsole {
+					hasOther = true
+				}
+			}
+			if !hasOther {
+				abort(c, http.StatusBadRequest, errors.New("add a sign-in method for the console first (shpyrd auth connector add --realm console), or nobody could sign in"))
+				return
+			}
+		}
+		if err := s.store.SetSetting(ctx, SettingConsolePasswordSignIn, strconv.FormatBool(*req.ConsolePasswordSignIn)); err != nil {
+			storeErr(c, err, "setting")
+			return
+		}
+		s.audit(c, "", "cluster.settings", "console_password_signin", strconv.FormatBool(*req.ConsolePasswordSignIn))
+	}
+	defaultWS, _ := s.store.GetSetting(ctx, store.SettingDefaultWorkspaceID)
+	c.JSON(http.StatusOK, gin.H{"defaultWorkspaceId": defaultWS, "consolePasswordSignIn": s.consolePasswordSignIn(ctx)})
 }

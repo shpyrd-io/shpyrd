@@ -24,7 +24,7 @@ import (
 // signIn creates a session for a user and returns its cookie and CSRF token.
 func signIn(t *testing.T, s *Server, id ext.Identity) (string, string) {
 	t.Helper()
-	sess, err := s.rp.sessions.create(context.Background(), store.DefaultWorkspace, id, "")
+	sess, err := s.rp.sessions.create(context.Background(), store.RealmWorkspace, store.DefaultWorkspace, id, "")
 	if err != nil {
 		t.Fatal(err)
 	}

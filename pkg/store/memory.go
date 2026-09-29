@@ -51,20 +51,36 @@ type Memory struct {
 // NewMemory returns an empty store with the implicit workspace.
 func NewMemory() *Memory {
 	m := &Memory{workspaces: map[string]*Workspace{}, sessions: map[string]*Session{}, codes: map[string]*Code{}, now: func() time.Time { return time.Now().UTC() }}
-	_ = m.Migrate(context.Background(), "shpyrd")
+	_ = m.Migrate(context.Background(), DefaultWorkspaceSpec{Slug: DefaultWorkspace, Name: "shpyrd"})
 	return m
 }
 
 func newID() string { return uuid.NewString() }
 
-func (m *Memory) Migrate(_ context.Context, defaultName string) error {
+func (m *Memory) Migrate(_ context.Context, def DefaultWorkspaceSpec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.workspaces[DefaultWorkspace]; !ok {
-		t := m.now()
-		m.workspaces[DefaultWorkspace] = &Workspace{ID: newID(), Slug: DefaultWorkspace, Name: defaultName, Status: WorkspaceActive, CreatedAt: t, UpdatedAt: t}
+	if def.Slug == "" {
+		def.Slug = DefaultWorkspace
 	}
-	w := m.workspaces[DefaultWorkspace]
+	if def.Name == "" {
+		def.Name = def.Slug
+	}
+	if _, ok := m.workspaces[def.Slug]; !ok {
+		t := m.now()
+		m.workspaces[def.Slug] = &Workspace{ID: newID(), Slug: def.Slug, Name: def.Name, Address: def.Address, Owner: WorkspaceOwnerOperator, Status: WorkspaceActive, CreatedAt: t, UpdatedAt: t}
+	}
+	w := m.workspaces[def.Slug]
+	if w.Address == "" && def.Address != "" {
+		w.Address = def.Address
+	}
+	w.Owner = WorkspaceOwnerOperator
+	if m.settings == nil {
+		m.settings = map[string]string{}
+	}
+	if m.settings[SettingDefaultWorkspaceID] == "" {
+		m.settings[SettingDefaultWorkspaceID] = def.Slug
+	}
 	found := false
 	for _, t := range m.teams {
 		if t.WorkspaceID == w.ID && t.Everyone {
@@ -785,11 +801,15 @@ func dedupe(in []string) []string {
 func (m *Memory) PutSession(_ context.Context, ws string, sess Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	w, err := m.ws(ws)
-	if err != nil {
-		return err
+	if ws == "" {
+		sess.WorkspaceID, sess.Realm = "", RealmConsole
+	} else {
+		w, err := m.ws(ws)
+		if err != nil {
+			return err
+		}
+		sess.WorkspaceID, sess.Realm = w.ID, RealmWorkspace
 	}
-	sess.WorkspaceID = w.ID
 	c := sess
 	m.sessions[sess.ID] = &c
 	return nil

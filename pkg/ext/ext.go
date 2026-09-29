@@ -74,6 +74,17 @@ const WorkspaceContextKey = "shpyrd.workspace"
 
 // WorkspaceFrom returns the slug of the request's workspace, "" when the
 // request is not scoped to one (or the API has not resolved it).
+// WorkspaceObjectFrom is the request's workspace, nil at the console
+// (RFC-0080) or when unresolved.
+func WorkspaceObjectFrom(c *gin.Context) *store.Workspace {
+	if v, ok := c.Get(WorkspaceContextKey); ok {
+		if ws, ok := v.(*store.Workspace); ok {
+			return ws
+		}
+	}
+	return nil
+}
+
 func WorkspaceFrom(c *gin.Context) string {
 	if v, ok := c.Get(WorkspaceContextKey); ok {
 		if ws, ok := v.(*store.Workspace); ok && ws != nil {
@@ -186,11 +197,22 @@ type OIDCProvider struct {
 	// ConnectorID preselects a Dex connector (connector_id in the
 	// authorization request) so Dex's chooser is skipped (RFC-0058).
 	ConnectorID string
-	// Workspace is the slug of the workspace this method belongs to
-	// (RFC-0033): shown on its login page only. Empty means the platform's,
-	// offered to every workspace unless the workspace hides them.
+	// Realm is the door the method belongs to (RFC-0080): RealmConsole for
+	// the console's own login page, RealmPlatform for the defaults every
+	// workspace offers unless it hides them, RealmWorkspace for one
+	// workspace's own method. Empty means RealmPlatform.
+	Realm string
+	// Workspace is the short id (RFC-0076) of the workspace a
+	// RealmWorkspace method belongs to.
 	Workspace string
 }
+
+// Realms of a login method (RFC-0080).
+const (
+	RealmConsole   = "console"
+	RealmPlatform  = "platform"
+	RealmWorkspace = "workspace"
+)
 
 // CLIGlobals gives extension commands access to the CLI's connection flags.
 // Audience of an extension's CLI command: which binary carries it

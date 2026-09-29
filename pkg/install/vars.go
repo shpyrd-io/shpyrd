@@ -43,10 +43,12 @@ const (
 	// VarConsoleName is the subdomain of the platform domain the console
 	// answers at (RFC-0078): "shpyrd" → shpyrd.<domain>; "" → the apex.
 	// Default "shpyrd" keeps existing installs unchanged.
-	VarConsoleName         = "SHPYRD_CONSOLE_NAME"
-	VarServerImage         = "SHPYRD_SERVER_IMAGE"          // server image; derived from the version unless set
-	VarWorkspacesDomain    = "SHPYRD_WORKSPACES_DOMAIN"     // domain tenant workspaces live under (cloud layer)
-	VarWorkspaceCertIssuer = "SHPYRD_WORKSPACE_CERT_ISSUER" // DNS-01 issuer for workspace front-door certs (cloud layer)
+	VarConsoleName             = "SHPYRD_CONSOLE_NAME"
+	VarServerImage             = "SHPYRD_SERVER_IMAGE"              // server image; derived from the version unless set
+	VarWorkspacesDomain        = "SHPYRD_WORKSPACES_DOMAIN"         // domain tenant workspaces live under (cloud layer)
+	VarDefaultWorkspace        = "SHPYRD_DEFAULT_WORKSPACE"         // slug of the operator's default workspace (RFC-0078); "default"
+	VarDefaultWorkspaceAddress = "SHPYRD_DEFAULT_WORKSPACE_ADDRESS" // derived: where its dashboard answers (RFC-0080)
+	VarWorkspaceCertIssuer     = "SHPYRD_WORKSPACE_CERT_ISSUER"     // DNS-01 issuer for workspace front-door certs (cloud layer)
 	// Cloud profiles (RFC-0034/0035 counterparts).
 	VarClusterIssuer    = "SHPYRD_CLUSTER_ISSUER"    // cert-manager ClusterIssuer for every certificate (shpyrd-ca locally, letsencrypt on cloud)
 	VarACMEEmail        = "SHPYRD_ACME_EMAIL"        // Let's Encrypt account email (cloud profiles)
@@ -225,14 +227,36 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if u, err := url.Parse(dashboardURL); err == nil && u.Host != "" {
 		consoleHost = u.Hostname() // no port: certificates and Ingress hosts carry none
 	}
+	// The operator's default workspace (RFC-0080): the platform domain
+	// when the console is shpyrd.<domain> (project URLs stay
+	// <project>.<domain>); <slug>.<workspaces domain> when the console
+	// holds the apex.
+	defaultSlug := vars[VarDefaultWorkspace]
+	if defaultSlug == "" {
+		defaultSlug = "default"
+	}
+	defaultAddress := vars[VarDefaultWorkspaceAddress]
+	if defaultAddress == "" {
+		if consoleHost == vars[VarDomain] {
+			wsDomain := vars[VarWorkspacesDomain]
+			if wsDomain == "" {
+				wsDomain = vars[VarDomain]
+			}
+			defaultAddress = defaultSlug + "." + wsDomain
+		} else {
+			defaultAddress = vars[VarDomain]
+		}
+	}
 	out := map[string]string{
-		VarDashboardURL:     dashboardURL,
-		VarAuthURL:          authURL,
-		VarAuthHost:         authHost,
-		VarConsoleHost:      consoleHost,
-		VarExtensions:       strings.Join(names, ","),
-		VarURLPort:          URLPort(vars),
-		VarForwardedHeaders: "false",
+		VarDashboardURL:            dashboardURL,
+		VarAuthURL:                 authURL,
+		VarAuthHost:                authHost,
+		VarConsoleHost:             consoleHost,
+		VarDefaultWorkspace:        defaultSlug,
+		VarDefaultWorkspaceAddress: defaultAddress,
+		VarExtensions:              strings.Join(names, ","),
+		VarURLPort:                 URLPort(vars),
+		VarForwardedHeaders:        "false",
 	}
 	if vars[VarFrontDoor] == FrontDoorCaddy {
 		out[VarForwardedHeaders] = "true"

@@ -45,7 +45,7 @@ type hostsEntry struct {
 
 // hostsOf lists a workspace's host records, cached for ten seconds.
 func (s *Server) hostsOf(ctx context.Context, ws *store.Workspace) []store.WorkspaceHost {
-	if ws == nil || ws.Implicit() {
+	if ws == nil {
 		return nil
 	}
 	now := time.Now()
@@ -82,7 +82,7 @@ func (s *Server) forgetHosts() {
 // primaryDomainOf is the domain a workspace's URLs use: its primary custom
 // domain when verified, its address otherwise.
 func (s *Server) primaryDomainOf(ctx context.Context, ws *store.Workspace) string {
-	if ws == nil || ws.Implicit() {
+	if ws == nil {
 		return ""
 	}
 	for _, h := range s.hostsOf(ctx, ws) {
@@ -96,7 +96,7 @@ func (s *Server) primaryDomainOf(ctx context.Context, ws *store.Workspace) strin
 // appsDomainsOf lists every domain a workspace's apps answer under, the
 // primary first.
 func (s *Server) appsDomainsOf(ctx context.Context, ws *store.Workspace) []string {
-	if ws == nil || ws.Implicit() {
+	if ws == nil || ws.Address == "" {
 		return []string{s.opts.Public.Domain}
 	}
 	primary := s.primaryDomainOf(ctx, ws)
@@ -123,10 +123,11 @@ func (s *Server) movedTarget(c *gin.Context) string {
 	if s.tenancy == nil || tenancy.Internal(host) || strings.HasPrefix(c.Request.URL.Path, "/edge/") {
 		return ""
 	}
-	ws, err := s.tenancy.Resolve(c.Request.Context(), host)
-	if err != nil || ws == nil || ws.Implicit() {
+	t, err := s.tenancy.Resolve(c.Request.Context(), host)
+	if err != nil || t == nil || t.Workspace == nil || t.Workspace.Address == "" {
 		return ""
 	}
+	ws := t.Workspace
 	if host == ws.Address || oneLabelUnder(host, ws.Address) {
 		return ""
 	}
@@ -175,8 +176,8 @@ func (s *Server) changeAddress(c *gin.Context, w *store.Workspace, want string) 
 	if !roles.Can(authz.WorkspaceOwner, "") {
 		return nil, &apiError{http.StatusForbidden, denial(roles, authz.WorkspaceOwner, "").Error()}
 	}
-	if w.Implicit() || w.Address == "" {
-		return nil, &apiError{http.StatusBadRequest, "this workspace answers at the platform's address; it has no address of its own to change"}
+	if w.Address == "" {
+		return nil, &apiError{http.StatusBadRequest, "this workspace has no address yet"}
 	}
 	want = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(want), "."))
 	_, parent, ok := strings.Cut(w.Address, ".")
@@ -298,8 +299,8 @@ func (s *Server) addWorkspaceDomain(c *gin.Context) {
 		storeErr(c, err, "workspace")
 		return
 	}
-	if ws.Implicit() || ws.Address == "" {
-		abort(c, http.StatusBadRequest, errors.New("custom domains are for workspaces with an address of their own"))
+	if ws.Address == "" {
+		abort(c, http.StatusBadRequest, errors.New("custom domains are for workspaces with an address"))
 		return
 	}
 	if host == ws.Address || strings.HasSuffix(host, "."+ws.Address) || host == s.opts.Public.Domain || strings.HasSuffix(host, "."+s.opts.Public.Domain) {

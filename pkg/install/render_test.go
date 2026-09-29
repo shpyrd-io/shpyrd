@@ -290,13 +290,14 @@ func TestNetworkPolicyRendersForOKE(t *testing.T) {
 // DNS-01 cannot write into a zone the platform's DNS user does not own.
 func TestOCIProfileApexConsoleAndExternalAuth(t *testing.T) {
 	eng := testProfileRenders(t, "oci", map[string]string{
-		VarDomain:      "operator.shpyrd.example",
-		VarACMEEmail:   "ops@shpyrd.example",
-		VarConsoleName: "apex",
-		VarAuthURL:     "https://auth.shpyrd.example",
-		VarDNSProvider: "oci",
-		VarDNSZoneID:   "ocid1.dns-zone.oc1..x",
-		VarDNSRegion:   "us-ashburn-1",
+		VarDomain:           "operator.shpyrd.example",
+		VarACMEEmail:        "ops@shpyrd.example",
+		VarConsoleName:      "apex",
+		VarWorkspacesDomain: "shpyrd.example",
+		VarAuthURL:          "https://auth.shpyrd.example",
+		VarDNSProvider:      "oci",
+		VarDNSZoneID:        "ocid1.dns-zone.oc1..x",
+		VarDNSRegion:        "us-ashburn-1",
 	}, "https://auth.shpyrd.example")
 	v := eng.vars
 	if v[VarDashboardURL] != "https://operator.shpyrd.example" || v[VarConsoleHost] != "operator.shpyrd.example" {
@@ -304,6 +305,11 @@ func TestOCIProfileApexConsoleAndExternalAuth(t *testing.T) {
 	}
 	if v[VarAuthHost] != "auth.shpyrd.example" {
 		t.Errorf("auth host = %s", v[VarAuthHost])
+	}
+	// The console holds the apex, so the operator's default workspace needs
+	// an address of its own under the workspaces domain (RFC-0080).
+	if v[VarDefaultWorkspace] != "default" || v[VarDefaultWorkspaceAddress] != "default.shpyrd.example" {
+		t.Errorf("default workspace: slug=%s address=%s", v[VarDefaultWorkspace], v[VarDefaultWorkspaceAddress])
 	}
 	// With a DNS provider the platform's certificates are DNS-01; the
 	// external auth host is not, because DNS-01 cannot reach it.
@@ -352,6 +358,11 @@ func TestOCIProfileDefaultConsoleAndAuth(t *testing.T) {
 	v := eng.vars
 	if v[VarConsoleHost] != "shpyrd.oci.example.com" || v[VarAuthHost] != "auth.oci.example.com" {
 		t.Errorf("hosts: console=%s auth=%s", v[VarConsoleHost], v[VarAuthHost])
+	}
+	// The default workspace's address is the platform domain: project URLs
+	// stay <project>.<domain> (RFC-0080).
+	if v[VarDefaultWorkspaceAddress] != "oci.example.com" {
+		t.Errorf("default workspace address = %s", v[VarDefaultWorkspaceAddress])
 	}
 	if v[VarAuthIssuer] != v[VarPlatformIssuer] || v[VarAuthIssuer] != "letsencrypt-dns01" {
 		t.Errorf("auth under the domain uses the platform issuer: auth=%s platform=%s", v[VarAuthIssuer], v[VarPlatformIssuer])

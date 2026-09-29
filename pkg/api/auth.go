@@ -25,7 +25,6 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // The server is an OpenID Connect relying party (RFC-0007): extensions
@@ -46,8 +45,11 @@ type ProviderInfo struct {
 	Label string `json:"label"`
 	// Kind picks the icon: "oidc", "github", "google".
 	Kind string `json:"kind,omitempty"`
-	// Workspace is the slug of the workspace that owns the method
-	// (RFC-0033); empty for the platform's methods.
+	// Realm is the door the method belongs to (RFC-0080): "console",
+	// "platform" (the defaults workspaces offer) or "workspace".
+	Realm string `json:"realm,omitempty"`
+	// Workspace is the short id of the workspace that owns a "workspace"
+	// method (RFC-0033, RFC-0076).
 	Workspace string `json:"workspace,omitempty"`
 }
 
@@ -90,11 +92,10 @@ type pendingLogin struct {
 	nonce    string
 	verifier string
 	next     string
-	// workspace is the slug the login is on behalf of when the console
-	// signs someone in for an explicit workspace (RFC-0033 phase 6); ""
-	// for the console's own.
-	workspace string
-	created   time.Time
+	// redirect is the redirect URI the authorization request named: the
+	// host the login started at, where it completes (RFC-0080).
+	redirect string
+	created  time.Time
 }
 
 // relyingParty holds providers, in-flight logins and sessions.
@@ -104,7 +105,7 @@ type relyingParty struct {
 	order     []string
 	pending   map[string]pendingLogin
 	sessions  *sessionStore
-	baseURL   string // external dashboard URL, redirect URIs are built on it
+	baseURL   string // the console's URL; the redirect URI of each login is its own host's (RFC-0080)
 	domain    string
 	ingress   string // cluster-internal address reaching the ingress controller
 	caPEM     []byte
@@ -124,7 +125,8 @@ func newRelyingParty(sessions *sessionStore, baseURL, domain, ingress string, lo
 	}
 }
 
-// redirectURI is where issuers send users back.
+// redirectURI is the console's callback, the client's registered default;
+// each login names its own host's (RFC-0080).
 func (rp *relyingParty) redirectURI() string { return rp.baseURL + "/api/auth/callback" }
 
 // AddOIDC implements ext.AuthRegistry: discover the issuer and keep its
@@ -219,7 +221,7 @@ func (rp *relyingParty) providerList() []ProviderInfo {
 	out := make([]ProviderInfo, 0, len(rp.order))
 	for _, id := range rp.order {
 		if p := rp.providers[id]; !p.Password {
-			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Workspace: p.Workspace})
+			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Realm: firstNonEmpty(p.Realm, ext.RealmPlatform), Workspace: p.Workspace})
 		}
 	}
 	return out
@@ -343,8 +345,9 @@ func (rp *relyingParty) endSessionURL(sess *session) string {
 }
 
 // begin starts the authorization code flow and returns the issuer URL.
-// workspace names the explicit workspace the login is for, or "".
-func (rp *relyingParty) begin(providerID, next, workspace string) (string, error) {
+// redirect is the callback of the host the login started at ("" keeps
+// the console's).
+func (rp *relyingParty) begin(providerID, next, redirect string) (string, error) {
 	rp.mu.Lock()
 	p, ok := rp.providers[providerID]
 	if !ok && providerID == "" && len(rp.order) == 1 {
@@ -371,9 +374,12 @@ func (rp *relyingParty) begin(providerID, next, workspace string) (string, error
 			delete(rp.pending, k)
 		}
 	}
-	rp.pending[state] = pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), workspace: workspace, created: now}
+	rp.pending[state] = pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), redirect: redirect, created: now}
 	rp.mu.Unlock()
 	opts := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if redirect != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("redirect_uri", redirect))
+	}
 	if p.ConnectorID != "" {
 		// Dex: go straight to this connector instead of its chooser.
 		opts = append(opts, oauth2.SetAuthURLParam("connector_id", p.ConnectorID))
@@ -392,7 +398,11 @@ func (rp *relyingParty) complete(ctx context.Context, state, code string) (ext.I
 	if !ok || p == nil || rp.now().Sub(pl.created) > loginTTL {
 		return ext.Identity{}, "", pl, errors.New("login expired or unknown; start again")
 	}
-	tok, err := p.oauth.Exchange(oidc.ClientContext(ctx, p.client), code, oauth2.VerifierOption(pl.verifier))
+	exchange := []oauth2.AuthCodeOption{oauth2.VerifierOption(pl.verifier)}
+	if pl.redirect != "" {
+		exchange = append(exchange, oauth2.SetAuthURLParam("redirect_uri", pl.redirect))
+	}
+	tok, err := p.oauth.Exchange(oidc.ClientContext(ctx, p.client), code, exchange...)
 	if err != nil {
 		return ext.Identity{}, "", pl, fmt.Errorf("token exchange: %w", err)
 	}
@@ -430,7 +440,7 @@ func (s *Server) authConfig() AuthConfig {
 	if s.rp != nil {
 		cfg.Providers = s.rp.providerList()
 		if p := s.rp.passwordProvider(); p != nil {
-			cfg.Password = &ProviderInfo{ID: p.ID, Label: p.Label, Workspace: p.Workspace}
+			cfg.Password = &ProviderInfo{ID: p.ID, Label: p.Label, Realm: firstNonEmpty(p.Realm, ext.RealmPlatform), Workspace: p.Workspace}
 		}
 	}
 	return cfg
@@ -499,9 +509,9 @@ func (s *Server) authPassword(c *gin.Context) {
 		return
 	}
 	// The password grant needs no browser round trip, so it works at any
-	// workspace host directly, when the workspace offers it.
-	if ws, err := s.tenant(c); err == nil && !s.offers(c.Request.Context(), ws, s.rp.passwordProvider().ID) {
-		abort(c, http.StatusNotFound, errors.New("this workspace does not offer password sign-in"))
+	// door directly, when that door offers it (RFC-0080).
+	if !s.offersAt(c, s.rp.passwordProvider().ID) {
+		abort(c, http.StatusNotFound, errors.New("password sign-in is not offered here"))
 		return
 	}
 	// RFC-0014 lockout: check durable lock first, then in-memory rate limit.
@@ -540,7 +550,7 @@ func (s *Server) authPassword(c *gin.Context) {
 	if s.localAccounts != nil {
 		_ = s.localAccounts.Lock(c.Request.Context(), email, time.Time{}) // unlock
 	}
-	if err := s.admitSignIn(c.Request.Context(), s.workspace(c), id); err != nil {
+	if err := s.admitAt(c, id); err != nil {
 		s.auditFailure(c, "auth.refused", id.Email, err.Error())
 		abort(c, http.StatusForbidden, err)
 		return
@@ -574,7 +584,7 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	}
 	// An invitation for this address is accepted by signing in (RFC-0033).
 	s.acceptPendingInvitation(c, id)
-	sess, err := s.rp.sessions.create(c.Request.Context(), s.workspace(c), id, idToken)
+	sess, err := s.rp.sessions.create(c.Request.Context(), s.realmAt(c), s.workspace(c), id, idToken)
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return "", false
@@ -586,43 +596,24 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	return "/", true
 }
 
-// authLogin redirects the browser to the issuer. At an explicit
-// workspace's host it goes through the console first (RFC-0033 phase 6):
-// the console is the issuer's one relying party and hands the sign-in
-// back with a one-time code.
+// authLogin redirects the browser to the issuer, for a method this door
+// offers, naming this host's callback: the sign-in completes where it
+// started (RFC-0080). No door signs in on another's behalf.
 func (s *Server) authLogin(c *gin.Context) {
 	if s.rp == nil {
 		abort(c, http.StatusNotFound, errors.New("no login provider configured"))
 		return
 	}
 	provider, next := c.Query("provider"), c.Query("next")
-	here, err := s.tenant(c)
-	if err != nil {
+	if _, err := s.door(c); err != nil {
 		abort(c, http.StatusNotFound, err)
 		return
 	}
-	if !s.atConsole(c) {
-		if !s.offers(c.Request.Context(), here, provider) {
-			abort(c, http.StatusBadRequest, fmt.Errorf("this workspace does not offer login method %q", provider))
-			return
-		}
-		c.Redirect(http.StatusFound, s.consoleLoginURL(provider, here, next))
+	if !s.offersAt(c, provider) {
+		abort(c, http.StatusBadRequest, fmt.Errorf("login method %q is not offered here", provider))
 		return
 	}
-	target := ""
-	if slug := c.Query("workspace"); slug != "" && slug != consoleWorkspace {
-		ws, err := s.handoffTarget(c.Request.Context(), slug)
-		if err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
-		}
-		if !s.offers(c.Request.Context(), ws, provider) {
-			abort(c, http.StatusBadRequest, fmt.Errorf("workspace %s does not offer login method %q", ws.Slug, provider))
-			return
-		}
-		target = ws.Slug
-	}
-	u, err := s.rp.begin(provider, next, target)
+	u, err := s.rp.begin(provider, next, s.callbackURL(c))
 	if err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
@@ -647,17 +638,14 @@ func (s *Server) authCallback(c *gin.Context) {
 		s.loginFailed(c, err)
 		return
 	}
-	if pl.workspace != "" && pl.workspace != consoleWorkspace {
-		// On behalf of an explicit workspace: no session here, a code there.
-		target, err := s.handoffTarget(c.Request.Context(), pl.workspace)
-		if err != nil {
-			s.loginFailed(c, err)
-			return
-		}
-		s.handoff(c, target, id, idToken, pl.next)
+	if p := s.rp.provider(id.Provider); p == nil || !s.offersAt(c, p.ID) {
+		// The method is not this door's: a callback replayed at another
+		// host mints nothing.
+		s.auditFailure(c, "auth.refused", id.Email, "login method not offered at "+c.Request.Host)
+		s.loginFailed(c, errors.New("this sign-in method is not offered here"))
 		return
 	}
-	if err := s.admitSignIn(c.Request.Context(), s.workspace(c), id); err != nil {
+	if err := s.admitAt(c, id); err != nil {
 		s.auditFailure(c, "auth.refused", id.Email, err.Error())
 		s.loginFailed(c, err)
 		return
@@ -686,7 +674,7 @@ func (s *Server) authTicket(c *gin.Context) {
 		return
 	}
 	id := ext.Identity{Subject: "kubeconfig:" + actor, Name: actor, Provider: "kubeconfig", Admin: true}
-	sess, err := s.rp.sessions.create(c.Request.Context(), s.workspace(c), id, "")
+	sess, err := s.rp.sessions.create(c.Request.Context(), s.realmAt(c), s.workspace(c), id, "")
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -702,18 +690,21 @@ func (s *Server) loginFailed(c *gin.Context, err error) {
 	c.Redirect(http.StatusFound, "/?login_error="+url.QueryEscape(err.Error()))
 }
 
-// loginFailedAt sends the browser to a workspace's own login page with the
-// error: a sign-in the console handled on its behalf fails where it began.
-func (s *Server) loginFailedAt(c *gin.Context, ws *store.Workspace, err error) {
-	c.Redirect(http.StatusFound, s.dashboardURLOf(ws)+"/?login_error="+url.QueryEscape(err.Error()))
+// secureCookies says the cookies of this request are Secure: the browser
+// reached us over HTTPS (directly or through the front door), or the
+// platform is HTTPS by configuration.
+func (s *Server) secureCookies(c *gin.Context) bool {
+	return requestScheme(c) == "https" || s.platformHTTPS()
 }
 
-func (s *Server) secureCookies() bool {
+// platformHTTPS says the platform is HTTPS by configuration: what the edge
+// cookie's name (__Host-) must decide once, not per request.
+func (s *Server) platformHTTPS() bool {
 	return strings.HasPrefix(s.opts.Public.DashboardURL, "https://")
 }
 
 func (s *Server) setSessionCookies(c *gin.Context, sess *session) {
-	secure := s.secureCookies()
+	secure := s.secureCookies(c)
 	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookie, Value: sess.ID, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(sessionAbsolute.Seconds())})
 	// Readable by the dashboard, echoed in X-Shpyrd-CSRF on mutations.
 	http.SetCookie(c.Writer, &http.Cookie{Name: csrfCookie, Value: sess.CSRF, Path: "/", Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(sessionAbsolute.Seconds())})
@@ -721,7 +712,7 @@ func (s *Server) setSessionCookies(c *gin.Context, sess *session) {
 
 func (s *Server) clearSessionCookies(c *gin.Context) {
 	for _, name := range []string{sessionCookie, csrfCookie} {
-		http.SetCookie(c.Writer, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == sessionCookie, Secure: s.secureCookies(), SameSite: http.SameSiteLaxMode})
+		http.SetCookie(c.Writer, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == sessionCookie, Secure: s.secureCookies(c), SameSite: http.SameSiteLaxMode})
 	}
 }
 
@@ -732,7 +723,7 @@ func (s *Server) authLogout(c *gin.Context) {
 	redirect := "/"
 	if s.rp != nil {
 		if sid, err := c.Cookie(sessionCookie); err == nil && sid != "" {
-			if sess, ok := s.rp.sessions.getIn(sid, s.workspaceID(c)); ok {
+			if sess, ok := s.rp.sessions.getIn(sid, s.realmAt(c), s.workspaceID(c)); ok {
 				if u := s.rp.endSessionURL(sess); u != "" {
 					redirect = u
 				}
@@ -748,6 +739,10 @@ func (s *Server) authLogout(c *gin.Context) {
 type Me struct {
 	ext.Identity
 	Roles authz.Roles `json:"roles"`
+	// Console says the person is a platform admin by the console's roles
+	// (RFC-0080): a workspace owned by the operator shows them the way to
+	// the console.
+	Console bool `json:"console,omitempty"`
 }
 
 // me returns the caller's identity and roles.
@@ -762,7 +757,11 @@ func (s *Server) me(c *gin.Context) {
 		return
 	}
 	id.Admin = roles.Platform == shpyrdv1.RolePlatformAdmin
-	c.JSON(http.StatusOK, Me{Identity: id, Roles: roles})
+	console := s.atConsole(c) && id.Admin
+	if !console && s.authz != nil {
+		console = s.authz.ConsoleAdmin(c.Request.Context(), id)
+	}
+	c.JSON(http.StatusOK, Me{Identity: id, Roles: roles, Console: console})
 }
 
 // securityHeaders hardens every response (RFC-0008). The dashboard is a
@@ -791,7 +790,7 @@ func (s *Server) sessionAuth(c *gin.Context) (bool, error) {
 	if err != nil || sid == "" {
 		return false, nil
 	}
-	sess, ok := s.rp.sessions.getIn(sid, s.workspaceID(c))
+	sess, ok := s.rp.sessions.getIn(sid, s.realmAt(c), s.workspaceID(c))
 	if !ok {
 		s.clearSessionCookies(c)
 		return false, nil
@@ -891,4 +890,19 @@ func (r *rateLimiter) middleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// admitAt runs the admission of the request's door: a workspace's join
+// policy, claimed domains and suspensions at a workspace host; at the
+// console, suspension of the operator's people only — the console's
+// methods decide who reaches it, its roles what they may do (RFC-0080).
+func (s *Server) admitAt(c *gin.Context, id ext.Identity) error {
+	t, err := s.door(c)
+	if err != nil {
+		return err
+	}
+	if t.Workspace == nil {
+		return s.admitConsole(c.Request.Context(), id)
+	}
+	return s.admitSignIn(c.Request.Context(), t.Workspace.Slug, id)
 }

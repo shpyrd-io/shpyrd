@@ -33,9 +33,6 @@ data:
         absoluteLifetime: 720h
     # Local accounts (Password objects managed with `shpyrd users`).
     enablePasswordDB: true
-    staticClients:
-      - id: shpyrd
-        name: shpyrd dashboard
-        secretEnv: SHPYRD_OIDC_CLIENT_SECRET
-        redirectURIs:
-          - ${SHPYRD_DASHBOARD_URL}/api/auth/callback
+    # The platform's client is an OAuth2Client resource the server keeps
+    # (RFC-0080): its redirect URIs are the console's and every workspace's
+    # callback. Nothing static here.

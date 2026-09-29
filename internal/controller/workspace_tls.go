@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
-	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // WorkspaceTLSSecretName is the copy, in a project namespace, of its
@@ -32,9 +31,6 @@ func workspaceTLSSource(slug string) string { return workspaceFrontDoorName(slug
 // domain, primary or not, has certificates per host.)
 func (c Config) underWorkspaceDomain(app *shpyrdv1.App, host string) bool {
 	ws := workspaceOf(app)
-	if ws == project.DefaultWorkspace {
-		return false
-	}
 	address := ""
 	if c.WorkspaceAddress != nil {
 		address = c.WorkspaceAddress(ws)
@@ -59,7 +55,9 @@ func oneLabelUnder(host, domain string) bool {
 func (r *AppReconciler) reconcileWorkspaceTLS(ctx context.Context, app *shpyrdv1.App) (bool, error) {
 	ws := workspaceOf(app)
 	copyRef := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: WorkspaceTLSSecretName, Namespace: app.Namespace}}
-	if ws == project.DefaultWorkspace {
+	// A workspace whose address is the platform domain (the open-source
+	// default) is covered by the platform wildcard: nothing to copy.
+	if address := r.Config.workspaceAddress(ws); address == "" || address == r.Config.Domain {
 		if err := r.deleteIfExists(ctx, copyRef); err != nil {
 			return false, err
 		}
@@ -114,4 +112,18 @@ func (r *AppReconciler) workspaceTLSToApps(ctx context.Context, obj client.Objec
 		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
 	}
 	return out
+}
+
+// workspaceAddress is a workspace's address, "" when unknown (its apps
+// domain when only that is wired, as in tests).
+func (c Config) workspaceAddress(ws string) string {
+	if c.WorkspaceAddress != nil {
+		if a := c.WorkspaceAddress(ws); a != "" {
+			return a
+		}
+	}
+	if c.WorkspaceDomain != nil {
+		return c.WorkspaceDomain(ws)
+	}
+	return ""
 }

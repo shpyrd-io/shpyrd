@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
-	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // Custom domains (RFC-0034). A project is always served at
@@ -70,8 +69,8 @@ func (c Config) customDomains(app *shpyrdv1.App) []string {
 		seen[h] = true
 		out = append(out, h)
 	}
-	if ws := workspaceOf(app); ws != project.DefaultWorkspace && c.WorkspaceExtraDomains != nil {
-		for _, d := range c.WorkspaceExtraDomains(ws) {
+	if c.WorkspaceExtraDomains != nil {
+		for _, d := range c.WorkspaceExtraDomains(workspaceOf(app)) {
 			add(projectSlug(app) + "." + d)
 		}
 	}

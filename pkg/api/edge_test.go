@@ -300,7 +300,7 @@ func TestEdgeSigninAndStart(t *testing.T) {
 	}
 	if ws, err := s.store.Workspace(context.Background(), store.DefaultWorkspace); err != nil {
 		t.Fatal(err)
-	} else if _, ok := s.rp.sessions.getIn(sid, ws.ID); ok {
+	} else if _, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID); ok {
 		t.Error("the dashboard session must be gone after signing out of an app")
 	}
 	if rec := doCookie(t, s, "GET", "/api/me", "", sid, ""); rec.Code != http.StatusUnauthorized {

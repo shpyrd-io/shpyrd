@@ -26,7 +26,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 				t.Fatal(err)
 			}
 			dropAll(t, p) // a clean slate per test
-			if err := p.Migrate(ctx, "test platform"); err != nil {
+			if err := p.Migrate(ctx, DefaultWorkspaceSpec{Slug: DefaultWorkspace, Name: "test platform", Address: "example.test"}); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(p.Close)
@@ -53,7 +53,7 @@ func TestStoreConformance(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
-			if err := s.Migrate(ctx, "ignored on second run"); err != nil {
+			if err := s.Migrate(ctx, DefaultWorkspaceSpec{Name: "ignored on second run"}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -651,8 +651,15 @@ func TestSessionsAndCodes(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := s.GetSession(ctx, "sid-1")
-			if err != nil || got.CSRF != "c1" || got.WorkspaceID == "" || !strings.Contains(string(got.Identity), "maria") {
+			if err != nil || got.CSRF != "c1" || got.WorkspaceID == "" || got.Realm != RealmWorkspace || !strings.Contains(string(got.Identity), "maria") {
 				t.Fatalf("get: %v %+v", err, got)
+			}
+			// A console session has no workspace (RFC-0080).
+			if err := s.PutSession(ctx, "", Session{ID: "sid-console", Identity: json.RawMessage(`{"email":"op@shpyrd.test"}`), CSRF: "c2", CreatedAt: now, LastSeenAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := s.GetSession(ctx, "sid-console"); err != nil || got.Realm != RealmConsole || got.WorkspaceID != "" {
+				t.Fatalf("console session: %v %+v", err, got)
 			}
 			if err := s.TouchSession(ctx, "sid-1", now.Add(time.Minute)); err != nil {
 				t.Fatal(err)
@@ -787,12 +794,17 @@ func TestWorkspaces(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
+			// The default workspace is the operator's, with an address of its
+			// own (RFC-0080); Migrate gave it the one the installer derived.
 			def, _ := s.Workspace(ctx, DefaultWorkspace)
-			if !def.Implicit() || def.Address != "" || def.Status != WorkspaceActive {
-				t.Fatalf("implicit workspace: %+v", def)
+			if def == nil || !def.OwnedByOperator() || def.Status != WorkspaceActive {
+				t.Fatalf("default workspace: %+v", def)
+			}
+			if DefaultWorkspaceSlug(ctx, s) != DefaultWorkspace {
+				t.Errorf("default slug setting = %q", DefaultWorkspaceSlug(ctx, s))
 			}
 			acme, err := s.CreateWorkspace(ctx, Workspace{Slug: "acme", Name: "Acme", Address: "Acme.shpyrd.app"})
-			if err != nil || acme.ID == "" || acme.Address != "acme.shpyrd.app" || acme.Status != WorkspaceActive || acme.Implicit() {
+			if err != nil || acme.ID == "" || acme.Address != "acme.shpyrd.app" || acme.Status != WorkspaceActive || acme.OwnedByOperator() {
 				t.Fatalf("create: %+v %v", acme, err)
 			}
 			// Slug and address are unique.
@@ -886,7 +898,7 @@ func TestMigrateBridgesLegacyRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.Migrate(ctx, "platform"); err != nil {
+	if err := p.Migrate(ctx, DefaultWorkspaceSpec{Name: "platform"}); err != nil {
 		t.Fatalf("bridge + migrate: %v", err)
 	}
 	version, dirty, err := p.SchemaVersion()
@@ -912,7 +924,7 @@ func TestMigrateBridgesLegacyRunner(t *testing.T) {
 	if _, err := p.Workspace(ctx, DefaultWorkspace); err != nil {
 		t.Errorf("default workspace: %v", err)
 	}
-	if err := p.Migrate(ctx, "platform"); err != nil {
+	if err := p.Migrate(ctx, DefaultWorkspaceSpec{Name: "platform"}); err != nil {
 		t.Errorf("second migrate: %v", err)
 	}
 	// The store keeps working on uuid columns: ids in, ids out.

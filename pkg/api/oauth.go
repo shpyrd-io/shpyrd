@@ -388,7 +388,7 @@ func (s *Server) oauthDecide(c *gin.Context) {
 	// The form carries the session's CSRF token as a field (a plain HTML
 	// form sets no header): checked here, the way sessionAuth checks the
 	// header on API calls.
-	sess, found := s.rp.sessions.getIn(sessionIDOf(c), s.workspaceID(c))
+	sess, found := s.rp.sessions.getIn(sessionIDOf(c), s.realmAt(c), s.workspaceID(c))
 	if !found {
 		q := c.Request.PostForm
 		q.Del("csrf")

@@ -40,10 +40,17 @@ rules:
   - apiGroups: [dex.coreos.com]
     resources: [passwords]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Connectors (GitHub, Google) become sign-in buttons (RFC-0058).
+  # Connectors (GitHub, Google) become sign-in buttons (RFC-0058); the
+  # Sign-in pages add and remove them, and the server rekeys them once
+  # (RFC-0080).
   - apiGroups: [dex.coreos.com]
     resources: [connectors]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # The one OAuth2 client the platform uses: the server keeps its redirect
+  # URIs current, one per door (RFC-0080).
+  - apiGroups: [dex.coreos.com]
+    resources: [oauth2clients]
+    verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

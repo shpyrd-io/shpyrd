@@ -39,12 +39,28 @@ func TestInternal(t *testing.T) {
 
 func TestSingle(t *testing.T) {
 	st := store.NewMemory()
-	r := &Single{Store: st}
-	for _, h := range []string{"shpyrd.example.com:8443", "anything.at.all", "10.0.0.1", ""} {
-		ws, err := r.Resolve(context.Background(), h)
-		if err != nil || !ws.Implicit() {
-			t.Errorf("Single(%q) = %+v %v", h, ws, err)
+	r := &Single{Store: st, ConsoleHost: "shpyrd.example.com:8443"}
+	// The console host is the console: no workspace (RFC-0080).
+	if tn, err := r.Resolve(context.Background(), "shpyrd.example.com:8443"); err != nil || !tn.AtConsole() || tn.Workspace != nil {
+		t.Errorf("console host = %+v %v", tn, err)
+	}
+	// Internal hosts are the operator's door with the default workspace as
+	// tenant, so project commands over a kubeconfig keep working.
+	if tn, err := r.Resolve(context.Background(), "10.0.0.1"); err != nil || !tn.AtConsole() || tn.ConsoleHost() || !tn.Internal || tn.Workspace == nil || tn.Workspace.Slug != store.DefaultWorkspace {
+		t.Errorf("internal host = %+v %v", tn, err)
+	}
+	// Every other host is the one workspace.
+	for _, h := range []string{"example.com", "anything.at.all", "hello.example.com"} {
+		tn, err := r.Resolve(context.Background(), h)
+		if err != nil || tn.AtConsole() || tn.Workspace == nil || tn.Workspace.Slug != store.DefaultWorkspace {
+			t.Errorf("Single(%q) = %+v %v", h, tn, err)
 		}
+	}
+	// No console host configured (development, tests): one door, the
+	// operator's, with the workspace as tenant.
+	one := &Single{Store: st}
+	if tn, err := one.Resolve(context.Background(), "anything.example.com"); err != nil || !tn.AtConsole() || tn.ConsoleHost() || tn.Workspace == nil {
+		t.Errorf("one door = %+v %v", tn, err)
 	}
 }
 
@@ -57,7 +73,12 @@ func TestByAddress(t *testing.T) {
 	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "intranet", Name: "Acme intranet", Address: "intranet.acme.com"}); err != nil {
 		t.Fatal(err)
 	}
-	r := &ByAddress{Store: st, Domain: "shpyrd.app", DashboardHost: "console.shpyrd.io", TTL: time.Minute}
+	// The operator's default workspace has an address like any other
+	// (RFC-0080): here the platform domain itself, the open-source layout.
+	if _, err := st.UpdateWorkspaceAddress(ctx, store.DefaultWorkspace, "shpyrd.app"); err != nil {
+		t.Fatal(err)
+	}
+	r := &ByAddress{Store: st, Domain: "shpyrd.app", ConsoleHost: "console.shpyrd.io", Reserved: []string{"auth.shpyrd.app", "grafana.shpyrd.app"}, TTL: time.Minute}
 
 	cases := map[string]string{
 		// workspace addresses, exact and one label under
@@ -66,22 +87,31 @@ func TestByAddress(t *testing.T) {
 		"shop.acme.shpyrd.app":   "acme",
 		"intranet.acme.com":      "intranet",
 		"wiki.intranet.acme.com": "intranet",
-		// the platform's own names
-		"shpyrd.app":             store.DefaultWorkspace,
-		"hello.shpyrd.app":       store.DefaultWorkspace,
-		"console.shpyrd.io":      store.DefaultWorkspace,
-		"CONSOLE.shpyrd.io:8443": store.DefaultWorkspace,
-		"localhost:8080":         store.DefaultWorkspace,
-		"10.244.0.7":             store.DefaultWorkspace,
-		"shpyrd-server.shpyrd-system.svc.cluster.local": store.DefaultWorkspace,
+		// the default workspace: its address and one label under
+		"shpyrd.app":       store.DefaultWorkspace,
+		"hello.shpyrd.app": store.DefaultWorkspace,
 	}
 	for host, want := range cases {
-		ws, err := r.Resolve(ctx, host)
-		if err != nil || ws.Slug != want {
-			t.Errorf("Resolve(%q) = %v %v, want %s", host, ws, err, want)
+		tn, err := r.Resolve(ctx, host)
+		if err != nil || tn.Workspace == nil || tn.Workspace.Slug != want || tn.AtConsole() {
+			t.Errorf("Resolve(%q) = %v %v, want workspace %s", host, tn, err, want)
 		}
 	}
-	for _, host := range []string{"acme.com", "deep.shop.acme.shpyrd.app", "evil.example.com", "shpyrd.io", "app.shpyrd.io"} {
+	// The console host is the console, whatever addresses exist; internal
+	// hosts are the console with the default workspace as tenant.
+	for _, host := range []string{"console.shpyrd.io", "CONSOLE.shpyrd.io:8443"} {
+		if tn, err := r.Resolve(ctx, host); err != nil || !tn.ConsoleHost() {
+			t.Errorf("Resolve(%q) = %v %v, want the console", host, tn, err)
+		}
+	}
+	for _, host := range []string{"localhost:8080", "10.244.0.7", "shpyrd-server.shpyrd-system.svc.cluster.local"} {
+		if tn, err := r.Resolve(ctx, host); err != nil || !tn.AtConsole() || tn.ConsoleHost() || !tn.Internal || tn.Workspace == nil || tn.Workspace.Slug != store.DefaultWorkspace {
+			t.Errorf("Resolve(%q) = %v %v, want internal console", host, tn, err)
+		}
+	}
+	// Reserved platform names are nobody's, even one label under the
+	// default workspace's address.
+	for _, host := range []string{"acme.com", "deep.shop.acme.shpyrd.app", "evil.example.com", "shpyrd.io", "app.shpyrd.io", "auth.shpyrd.app", "grafana.shpyrd.app"} {
 		if _, err := r.Resolve(ctx, host); !errors.Is(err, ErrUnknownHost) {
 			t.Errorf("Resolve(%q) = %v, want ErrUnknownHost", host, err)
 		}
@@ -95,7 +125,7 @@ func TestByAddress(t *testing.T) {
 		t.Errorf("negative result not cached: %v", err)
 	}
 	r.Forget("evil.example.com")
-	if ws, err := r.Resolve(ctx, "evil.example.com"); err != nil || ws.Slug != "beta" {
-		t.Errorf("after Forget: %v %v", ws, err)
+	if tn, err := r.Resolve(ctx, "evil.example.com"); err != nil || tn.Workspace == nil || tn.Workspace.Slug != "beta" {
+		t.Errorf("after Forget: %v %v", tn, err)
 	}
 }

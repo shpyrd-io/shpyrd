@@ -166,7 +166,11 @@ func run(o runOptions, logger *slog.Logger) error {
 	// The control-plane store (RFC-0033): teams, grants, people, the
 	// workspace. Postgres from SHPYRD_DATABASE_URL (the control-plane-db
 	// component or a managed database); memory only for development.
-	st, err := openStore(logger, k, domain)
+	// The operator's default workspace (RFC-0078, RFC-0080): slug and
+	// address from the installer; the address is the platform domain in the
+	// open-source layout, <slug>.<workspaces domain> when the console holds
+	// the apex.
+	st, err := openStore(logger, k, defaultWorkspaceFromEnv(domain, dashboard))
 	if err != nil {
 		return err
 	}
@@ -189,6 +193,8 @@ func run(o runOptions, logger *slog.Logger) error {
 	case os.Getenv("SHPYRD_DEV_TENANCY") == "address":
 		resolver = ByAddress(st, domain, dashboard)
 		logger.Info("tenancy: workspaces resolved from the request host (development switch)")
+	default:
+		resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
 	}
 
 	srv, err := api.New(k, api.Options{
@@ -304,7 +310,7 @@ func run(o runOptions, logger *slog.Logger) error {
 
 // openStore connects to the control-plane database, migrates it, and
 // imports the Team and ProjectMember objects of installs that predate it.
-func openStore(logger *slog.Logger, k *kube.Client, domain string) (store.Store, error) {
+func openStore(logger *slog.Logger, k *kube.Client, def store.DefaultWorkspaceSpec) (store.Store, error) {
 	url := strings.TrimSpace(os.Getenv("SHPYRD_DATABASE_URL"))
 	if url == "" {
 		if os.Getenv("SHPYRD_DEV_MEMORY_STORE") == "" {
@@ -332,11 +338,11 @@ func openStore(logger *slog.Logger, k *kube.Client, domain string) (store.Store,
 		case <-time.After(5 * time.Second):
 		}
 	}
-	if err := st.Migrate(ctx, domain); err != nil {
+	if err := st.Migrate(ctx, def); err != nil {
 		st.Close()
 		return nil, fmt.Errorf("control-plane database: %w", err)
 	}
-	if teams, grants, err := store.ImportCRDs(ctx, k.Dynamic, st, store.DefaultWorkspace); err != nil {
+	if teams, grants, err := store.ImportCRDs(ctx, k.Dynamic, st, def.Slug); err != nil {
 		logger.Warn("importing teams and members from Kubernetes objects failed; they stay where they are", "err", err.Error())
 	} else if teams+grants > 0 {
 		logger.Info("imported teams and members into the control-plane database", "teams", teams, "grants", grants)
@@ -377,7 +383,13 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	for _, t := range all.BindableTypes(enabledExts) {
 		bindable = append(bindable, schema.GroupVersionKind{Group: t.Group, Version: t.Version, Kind: t.Kind})
 	}
-	workspaceCache := &tenancy.Addresses{Store: memberships.Store}
+	workspaceCache := &tenancy.Addresses{Store: memberships.Store, DefaultSlug: defaultSlugOf(memberships.Store)}
+	controller.DefaultWorkspace = func() string {
+		if ws := workspaceCache.Workspace(""); ws != nil {
+			return ws.Slug
+		}
+		return store.DefaultWorkspace
+	}
 	rec := &controller.AppReconciler{
 		BindableTypes: bindable,
 		Client:        mgr.GetClient(),
@@ -524,13 +536,28 @@ func registryInsecure(flag, host string) bool {
 }
 
 // ByAddress is the host-based resolver over the platform's names: the
-// building block of a multi-workspace binary.
+// building block of a multi-workspace binary. The console host is the
+// console; the platform's other names (sign-in, Grafana) are nobody's.
 func ByAddress(st store.Store, domain, dashboardURL string) tenancy.Resolver {
-	dashboardHost := dashboardURL
-	if u, err := url.Parse(dashboardURL); err == nil && u.Host != "" {
-		dashboardHost = u.Host
+	reserved := []string{"auth." + domain, "grafana." + domain, "registry." + domain}
+	if u, err := url.Parse(envOr("SHPYRD_AUTH_URL", "")); err == nil && u.Host != "" {
+		reserved = append(reserved, u.Host)
 	}
-	return &tenancy.ByAddress{Store: st, Domain: domain, DashboardHost: dashboardHost}
+	return &tenancy.ByAddress{Store: st, Domain: domain, ConsoleHost: hostOf(dashboardURL), Reserved: reserved, DefaultSlug: defaultSlugOf(st)}
+}
+
+// hostOf is the host (with port) of a URL, or the string itself.
+func hostOf(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rawURL
+}
+
+// defaultSlugOf answers the default workspace's slug from the settings
+// (RFC-0078), for resolvers and caches.
+func defaultSlugOf(st store.Store) tenancy.DefaultSlugFunc {
+	return func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, st) }
 }
 
 // trustedProxies is the pod range the ingress controllers live in: with the
@@ -542,4 +569,24 @@ func trustedProxies(podCIDR string) []string {
 		return nil
 	}
 	return []string{strings.TrimSpace(podCIDR)}
+}
+
+// defaultWorkspaceFromEnv is the operator's default workspace as the
+// installer described it (RFC-0078, RFC-0080): slug and address. Without
+// an address, the platform domain when the console is not at the apex
+// (apps stay at <project>.<domain>), else <slug>.<workspaces domain>.
+func defaultWorkspaceFromEnv(domain, dashboard string) store.DefaultWorkspaceSpec {
+	def := store.DefaultWorkspaceSpec{
+		Slug:    envOr("SHPYRD_DEFAULT_WORKSPACE", store.DefaultWorkspace),
+		Name:    envOr("SHPYRD_DEFAULT_WORKSPACE_NAME", domain),
+		Address: os.Getenv("SHPYRD_DEFAULT_WORKSPACE_ADDRESS"),
+	}
+	if def.Address == "" {
+		if u, err := url.Parse(dashboard); err == nil && u.Hostname() == domain {
+			def.Address = def.Slug + "." + envOr("SHPYRD_WORKSPACES_DOMAIN", domain)
+		} else {
+			def.Address = domain
+		}
+	}
+	return def
 }

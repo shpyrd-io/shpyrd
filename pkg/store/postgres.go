@@ -62,7 +62,13 @@ func (p *Postgres) Close() { p.pool.Close() }
 // schema_migrations table of file names) is bridged once: its applied
 // files are counted and the tool is told that version. The implicit
 // workspace and its built-in team are seeded afterwards.
-func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
+func (p *Postgres) Migrate(ctx context.Context, def DefaultWorkspaceSpec) error {
+	if def.Slug == "" {
+		def.Slug = DefaultWorkspace
+	}
+	if def.Name == "" {
+		def.Name = def.Slug
+	}
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -87,22 +93,32 @@ func (p *Postgres) Migrate(ctx context.Context, defaultName string) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name, owner) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING`, newID(), DefaultWorkspace, defaultName, WorkspaceOwnerOperator); err != nil {
+	// The operator's default workspace (RFC-0078), with an address of its
+	// own (RFC-0080). An install from before two doors has the row without
+	// an address: it receives the one the installer derived.
+	if _, err := p.pool.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, owner) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slug) DO NOTHING`, newID(), def.Slug, def.Name, def.Address, WorkspaceOwnerOperator); err != nil {
 		return err
 	}
-	// The built-in team of the implicit workspace.
+	if def.Address != "" {
+		if _, err := p.pool.Exec(ctx, `UPDATE workspaces SET address = $1, updated_at = now() WHERE slug = $2 AND address = ''`, def.Address, def.Slug); err != nil {
+			return err
+		}
+	}
+	if _, err := p.pool.Exec(ctx, `UPDATE workspaces SET owner = $1 WHERE slug = $2 AND owner <> $1`, WorkspaceOwnerOperator, def.Slug); err != nil {
+		return err
+	}
+	// Its built-in team.
 	if _, err = p.pool.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind)
 		SELECT $1, id, $2, 'Everyone who has signed in', 'everyone' FROM workspaces WHERE slug = $3
-		ON CONFLICT (workspace_id, name) DO UPDATE SET kind = 'everyone'`, newID(), TeamEveryone, DefaultWorkspace); err != nil {
+		ON CONFLICT (workspace_id, name) DO UPDATE SET kind = 'everyone'`, newID(), TeamEveryone, def.Slug); err != nil {
 		return err
 	}
-	// Set default_workspace_id if not already set (RFC-0078); the default
-	// workspace's slug is always "default" at init, the operator may rename
-	// it later through the settings API.
+	// Record it as the default unless the operator already chose another
+	// (PATCH /api/cluster/settings, RFC-0078).
 	var existing string
 	err = p.pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, SettingDefaultWorkspaceID).Scan(&existing)
 	if errors.Is(err, pgx.ErrNoRows) || existing == "" {
-		_, err = p.pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, SettingDefaultWorkspaceID, DefaultWorkspace)
+		_, err = p.pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, SettingDefaultWorkspaceID, def.Slug)
 	} else {
 		err = nil
 	}
@@ -782,9 +798,15 @@ func (p *Postgres) Import(ctx context.Context, ws string, d *Dump, overwrite boo
 // ---- sessions and codes ------------------------------------------------------
 
 func (p *Postgres) PutSession(ctx context.Context, ws string, sess Session) error {
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return err
+	// A console session has no workspace (RFC-0080).
+	var wsID *string
+	realm := RealmConsole
+	if ws != "" {
+		id, err := p.wsID(ctx, p.pool, ws)
+		if err != nil {
+			return err
+		}
+		wsID, realm = &id, RealmWorkspace
 	}
 	if sess.CreatedAt.IsZero() {
 		sess.CreatedAt = time.Now()
@@ -796,17 +818,17 @@ func (p *Postgres) PutSession(ctx context.Context, ws string, sess Session) erro
 	if len(identity) == 0 {
 		identity = json.RawMessage("{}")
 	}
-	_, err = p.pool.Exec(ctx, `INSERT INTO sessions (id, workspace_id, identity, csrf, id_token, created_at, last_seen_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	_, err := p.pool.Exec(ctx, `INSERT INTO sessions (id, workspace_id, realm, identity, csrf, id_token, created_at, last_seen_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET identity = EXCLUDED.identity, csrf = EXCLUDED.csrf, id_token = EXCLUDED.id_token, last_seen_at = EXCLUDED.last_seen_at`,
-		sess.ID, wsID, identity, sess.CSRF, sess.IDToken, sess.CreatedAt, sess.LastSeenAt)
+		sess.ID, wsID, realm, identity, sess.CSRF, sess.IDToken, sess.CreatedAt, sess.LastSeenAt)
 	return err
 }
 
 func (p *Postgres) GetSession(ctx context.Context, id string) (*Session, error) {
 	var s Session
-	err := p.pool.QueryRow(ctx, `SELECT id, workspace_id, identity, csrf, id_token, created_at, last_seen_at FROM sessions WHERE id = $1`, id).
-		Scan(&s.ID, &s.WorkspaceID, &s.Identity, &s.CSRF, &s.IDToken, &s.CreatedAt, &s.LastSeenAt)
+	err := p.pool.QueryRow(ctx, `SELECT id, COALESCE(workspace_id::text, ''), realm, identity, csrf, id_token, created_at, last_seen_at FROM sessions WHERE id = $1`, id).
+		Scan(&s.ID, &s.WorkspaceID, &s.Realm, &s.Identity, &s.CSRF, &s.IDToken, &s.CreatedAt, &s.LastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

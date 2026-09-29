@@ -109,6 +109,12 @@ spec:
             # an explicit address live under (acme.shpyrd.app).
             - name: SHPYRD_WORKSPACES_DOMAIN
               value: "${SHPYRD_WORKSPACES_DOMAIN}"
+            # The operator's default workspace (RFC-0078, RFC-0080): its
+            # slug and the address its dashboard answers at.
+            - name: SHPYRD_DEFAULT_WORKSPACE
+              value: "${SHPYRD_DEFAULT_WORKSPACE}"
+            - name: SHPYRD_DEFAULT_WORKSPACE_ADDRESS
+              value: "${SHPYRD_DEFAULT_WORKSPACE_ADDRESS}"
             - name: SHPYRD_WORKSPACE_CERT_ISSUER
               value: "${SHPYRD_WORKSPACE_CERT_ISSUER}"
             - name: SHPYRD_INGRESS_CLASS_EXTERNAL

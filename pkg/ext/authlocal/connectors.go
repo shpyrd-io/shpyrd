@@ -14,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -42,25 +44,44 @@ type Connector struct {
 	Name   string `json:"name"`
 	// Detail summarises the configuration (organisation, hosted domain).
 	Detail string `json:"detail,omitempty"`
-	// Workspace is the slug of the workspace that owns the method
-	// (RFC-0033 per-workspace SSO); empty for the platform's.
+	// Realm is the door the method belongs to (RFC-0080): "console" for
+	// the console's own login page, "platform" for the defaults every
+	// workspace offers, "workspace" for one workspace's own.
+	Realm string `json:"realm"`
+	// Workspace is the short id (RFC-0076) of the workspace that owns a
+	// "workspace" method.
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// LabelWorkspace marks a connector as a workspace's own.
+// LabelWorkspace marked a connector as a workspace's own by slug, before
+// RFC-0080; such connectors are rekeyed to the id form at start.
 const LabelWorkspace = "shpyrd.io/workspace"
 
-// workspacePrefix starts the full id of a workspace's connector.
-const workspacePrefix = "ws-"
+// LabelRealm and LabelWorkspaceID say whose a connector is (RFC-0080).
+const (
+	LabelRealm       = "shpyrd.io/realm"
+	LabelWorkspaceID = "shpyrd.io/workspace-id"
+)
 
-// FullConnectorID is Dex's id for a connector: the platform's keep their
-// id, a workspace's is prefixed with the workspace so two workspaces may
-// both have "google".
-func FullConnectorID(workspace, id string) string {
-	if workspace == "" {
-		return id
+// Prefixes of full connector ids by realm.
+const (
+	workspacePrefix = "ws-"
+	consolePrefix   = "console-"
+)
+
+// FullConnectorID is Dex's id for a connector, unique on the platform: the
+// platform's defaults keep their id ("google"), the console's are
+// prefixed ("console-google"), a workspace's carry the workspace's short
+// id ("ws-1p1c19fh1amxymmq1yqv87q0j-google") so two workspaces may both
+// have "google".
+func FullConnectorID(realm, workspace, id string) string {
+	switch realm {
+	case ext.RealmConsole:
+		return consolePrefix + id
+	case ext.RealmWorkspace:
+		return workspacePrefix + workspace + "-" + id
 	}
-	return workspacePrefix + workspace + "-" + id
+	return id
 }
 
 // ConnectorSpec is what the CLI collects for a new connector.
@@ -68,8 +89,10 @@ type ConnectorSpec struct {
 	Type string
 	ID   string
 	Name string
-	// Workspace scopes the connector to one workspace's login page; empty
-	// is the platform's, offered everywhere.
+	// Realm is the door the connector belongs to (RFC-0080); empty means
+	// the platform's defaults. Workspace is the short id of the workspace
+	// for RealmWorkspace.
+	Realm        string
 	Workspace    string
 	ClientID     string
 	ClientSecret string
@@ -161,7 +184,7 @@ func (spec *ConnectorSpec) Validate() error {
 	if spec.Workspace == "" && strings.HasPrefix(spec.ID, workspacePrefix) {
 		return fmt.Errorf("connector ids starting with %q belong to workspaces", workspacePrefix)
 	}
-	if len(FullConnectorID(spec.Workspace, spec.ID)) > 63 {
+	if len(FullConnectorID(spec.realm(), spec.Workspace, spec.ID)) > 63 {
 		return errors.New("connector id too long")
 	}
 	if spec.Name == "" {
@@ -218,10 +241,11 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 	if err != nil {
 		return false, err
 	}
-	full := FullConnectorID(spec.Workspace, spec.ID)
-	labels := map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd"}
-	if spec.Workspace != "" {
-		labels[LabelWorkspace] = spec.Workspace
+	realm := spec.realm()
+	full := FullConnectorID(realm, spec.Workspace, spec.ID)
+	labels := map[string]interface{}{"app.kubernetes.io/managed-by": "shpyrd", LabelRealm: realm}
+	if realm == ext.RealmWorkspace {
+		labels[LabelWorkspaceID] = spec.Workspace
 	}
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": ConnectorGVR.Group + "/" + ConnectorGVR.Version,
@@ -269,32 +293,58 @@ func (s *ConnectorStore) List(ctx context.Context) ([]Connector, error) {
 	return out, nil
 }
 
-// ListFor returns one scope's connectors: the platform's ("") or a
-// workspace's.
-func (s *ConnectorStore) ListFor(ctx context.Context, workspace string) ([]Connector, error) {
+// ListFor returns one scope's connectors: the console's, the platform's
+// defaults, or one workspace's (by short id).
+func (s *ConnectorStore) ListFor(ctx context.Context, realm, workspace string) ([]Connector, error) {
 	all, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if realm == "" {
+		realm = ext.RealmPlatform
+	}
 	out := make([]Connector, 0, len(all))
 	for _, c := range all {
-		if c.Workspace == workspace {
+		if c.Realm == realm && (realm != ext.RealmWorkspace || c.Workspace == workspace) {
 			out = append(out, c)
 		}
 	}
 	return out, nil
 }
 
+// realm is the spec's realm, the platform's defaults when unset.
+func (s ConnectorSpec) realm() string {
+	if s.Realm == "" {
+		if s.Workspace != "" {
+			return ext.RealmWorkspace
+		}
+		return ext.RealmPlatform
+	}
+	return s.Realm
+}
+
 func connectorOf(u unstructured.Unstructured) Connector {
 	full, _, _ := unstructured.NestedString(u.Object, "id")
 	typ, _, _ := unstructured.NestedString(u.Object, "type")
 	name, _, _ := unstructured.NestedString(u.Object, "name")
-	ws := u.GetLabels()[LabelWorkspace]
-	id := full
-	if ws != "" {
-		id = strings.TrimPrefix(full, workspacePrefix+ws+"-")
+	labels := u.GetLabels()
+	realm, ws := labels[LabelRealm], labels[LabelWorkspaceID]
+	if realm == "" {
+		// Before RFC-0080: a workspace's by slug, else the platform's.
+		if slug := labels[LabelWorkspace]; slug != "" {
+			realm, ws = ext.RealmWorkspace, slug
+		} else {
+			realm = ext.RealmPlatform
+		}
 	}
-	c := Connector{ID: id, FullID: full, Type: typ, Name: name, Workspace: ws}
+	id := full
+	switch realm {
+	case ext.RealmWorkspace:
+		id = strings.TrimPrefix(full, workspacePrefix+ws+"-")
+	case ext.RealmConsole:
+		id = strings.TrimPrefix(full, consolePrefix)
+	}
+	c := Connector{ID: id, FullID: full, Type: typ, Name: name, Realm: realm, Workspace: ws}
 	if enc, _, _ := unstructured.NestedString(u.Object, "config"); enc != "" {
 		if raw, err := base64.StdEncoding.DecodeString(enc); err == nil {
 			var cfg struct {
@@ -319,15 +369,65 @@ func connectorOf(u unstructured.Unstructured) Connector {
 	return c
 }
 
-// Remove deletes a connector of a scope (the platform's when workspace is
-// "").
-func (s *ConnectorStore) Remove(ctx context.Context, workspace, id string) error {
-	if workspace == "" && strings.HasPrefix(id, workspacePrefix) {
+// Remove deletes a connector of a scope.
+func (s *ConnectorStore) Remove(ctx context.Context, realm, workspace, id string) error {
+	if realm != ext.RealmWorkspace && strings.HasPrefix(id, workspacePrefix) {
 		return fmt.Errorf("connector %q belongs to a workspace; remove it from that workspace's Sign-in page", id)
 	}
-	err := s.res().Delete(ctx, FullConnectorID(workspace, id), metav1.DeleteOptions{})
+	err := s.res().Delete(ctx, FullConnectorID(realm, workspace, id), metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("no connector %q; see `shpyrd auth connector list`", id)
 	}
 	return wrap(err)
+}
+
+// Rekey moves connectors keyed by workspace slug (before RFC-0080) to the
+// id form: a new resource under ws-<short id>-<id> with the same config,
+// the old one removed. slugToID answers "" for an unknown slug, whose
+// connectors are left alone. Returns how many moved.
+func (s *ConnectorStore) Rekey(ctx context.Context, slugToID func(slug string) string) (int, error) {
+	list, err := s.res().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, wrap(err)
+	}
+	moved := 0
+	for _, u := range list.Items {
+		labels := u.GetLabels()
+		if labels[LabelRealm] != "" {
+			continue // already keyed the new way
+		}
+		slug := labels[LabelWorkspace]
+		if slug == "" {
+			// The platform's defaults: label the realm, keep the id.
+			cp := u.DeepCopy()
+			l := cp.GetLabels()
+			l[LabelRealm] = ext.RealmPlatform
+			cp.SetLabels(l)
+			if _, err := s.res().Update(ctx, cp, metav1.UpdateOptions{}); err != nil {
+				return moved, wrap(err)
+			}
+			continue
+		}
+		id := slugToID(slug)
+		if id == "" {
+			continue
+		}
+		oldFull, _, _ := unstructured.NestedString(u.Object, "id")
+		short := strings.TrimPrefix(oldFull, workspacePrefix+slug+"-")
+		newFull := FullConnectorID(ext.RealmWorkspace, id, short)
+		cp := u.DeepCopy()
+		cp.SetName(newFull)
+		cp.SetResourceVersion("")
+		cp.SetUID("")
+		cp.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "shpyrd", LabelRealm: ext.RealmWorkspace, LabelWorkspaceID: id})
+		_ = unstructured.SetNestedField(cp.Object, newFull, "id")
+		if _, err := s.res().Create(ctx, cp, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return moved, wrap(err)
+		}
+		if err := s.res().Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return moved, wrap(err)
+		}
+		moved++
+	}
+	return moved, nil
 }

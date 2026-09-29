@@ -22,16 +22,16 @@ var (
 	ErrConflict = errors.New("already exists")
 )
 
-// Workspace is the tenant. The OSS has exactly one, the implicit
-// workspace, which answers at the platform domain. Explicit workspaces
-// (RFC-0033 phase 6) answer at an Address of their own: the dashboard and
-// sign-in at <Address>, apps at <app>.<Address>.
+// Workspace is the tenant. Every workspace answers at an Address of its
+// own (RFC-0080): the dashboard and sign-in at <Address>, apps at
+// <app>.<Address>. The default workspace, created at install, is one of
+// them; in the open-source layout its address is the platform domain.
 type Workspace struct {
-	ID        string            `json:"id"`
-	Slug      string            `json:"slug"`
-	Name      string            `json:"name"`
-	Address   string            `json:"address,omitempty"`
-	Status    string            `json:"status"` // WorkspaceActive or WorkspaceSuspended
+	ID      string `json:"id"`
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+	Address string `json:"address,omitempty"`
+	Status  string `json:"status"` // WorkspaceActive or WorkspaceSuspended
 	// Owner distinguishes operator workspaces (COGS, never invoiced) from
 	// customer workspaces (revenue). RFC-0078.
 	Owner     string            `json:"owner,omitempty"` // "operator" | "customer"
@@ -52,8 +52,37 @@ const (
 	WorkspaceOwnerCustomer = "customer"
 )
 
-// Implicit reports whether this is the one workspace every install has.
-func (w *Workspace) Implicit() bool { return w.Slug == DefaultWorkspace }
+// OwnedByOperator reports whether the workspace is the platform operator's
+// (RFC-0078): its costs are the operator's, it is never invoiced, and
+// platform admins own it without a membership (RFC-0080).
+func (w *Workspace) OwnedByOperator() bool { return w.Owner == WorkspaceOwnerOperator }
+
+// Realms of a session (RFC-0080): the console (the operator's door, at the
+// console host) and workspaces (at their addresses and hosts). A session
+// answers only in the realm it was opened in.
+const (
+	RealmConsole   = "console"
+	RealmWorkspace = "workspace"
+)
+
+// DefaultWorkspaceSpec is the workspace every install has, created by
+// Migrate: the operator's, the default one (settings.default_workspace_id).
+type DefaultWorkspaceSpec struct {
+	Slug    string // "default" unless the operator chose a name
+	Name    string // display name
+	Address string // where its dashboard answers; apps one label under
+}
+
+// DefaultWorkspaceSlug is the slug of the default workspace: the setting
+// when set (RFC-0078), else the constant every install started with.
+func DefaultWorkspaceSlug(ctx context.Context, st Settings) string {
+	if st != nil {
+		if v, err := st.GetSetting(ctx, SettingDefaultWorkspaceID); err == nil && v != "" {
+			return v
+		}
+	}
+	return DefaultWorkspace
+}
 
 // Join policies: who becomes a person on first sign-in.
 const (
@@ -603,7 +632,7 @@ type Grant struct {
 type Store interface {
 	// Migrate brings the schema to the current version and ensures the
 	// implicit workspace exists.
-	Migrate(ctx context.Context, defaultName string) error
+	Migrate(ctx context.Context, def DefaultWorkspaceSpec) error
 	Close()
 
 	Workspace(ctx context.Context, slug string) (*Workspace, error)
@@ -674,8 +703,11 @@ type Store interface {
 // Session is a signed-in browser (RFC-0007), kept here so restarts and
 // replicas share it. Identity is the server's identity type as JSON.
 type Session struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspaceId"`
+	ID string `json:"id"`
+	// Realm is where the session was opened (RealmConsole or
+	// RealmWorkspace); WorkspaceID is set for workspace sessions only.
+	Realm       string          `json:"realm"`
+	WorkspaceID string          `json:"workspaceId,omitempty"`
 	Identity    json.RawMessage `json:"identity"`
 	CSRF        string          `json:"csrf"`
 	IDToken     string          `json:"idToken,omitempty"`
@@ -693,6 +725,8 @@ type Code struct {
 
 // Sessions is the part of the store the sign-in machinery uses.
 type Sessions interface {
+	// PutSession stores a session in a workspace (slug), or in the console
+	// realm when ws is "" (RFC-0080).
 	PutSession(ctx context.Context, ws string, s Session) error
 	GetSession(ctx context.Context, id string) (*Session, error)
 	// TouchSession moves last_seen_at forward.

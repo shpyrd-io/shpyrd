@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -39,9 +40,12 @@ const (
 
 type session struct {
 	ID string `json:"id"`
-	// WorkspaceID is the workspace the session was opened in: a cookie is
-	// bound to its host, and the host to a workspace, so a session never
-	// answers for another workspace (RFC-0033 phase 6).
+	// Realm is the door the session was opened at (RFC-0080): the console
+	// or a workspace. A cookie is bound to its host, the host to a realm
+	// and a workspace, so a session never answers at another door.
+	Realm string `json:"realm,omitempty"`
+	// WorkspaceID is the workspace the session was opened in, "" for the
+	// console's.
 	WorkspaceID string       `json:"workspaceId,omitempty"`
 	CSRF        string       `json:"csrf"`
 	Identity    ext.Identity `json:"identity"`
@@ -66,7 +70,7 @@ type sessionStore struct {
 	mu    sync.Mutex
 	cache map[string]*cachedSession
 	store store.Store
-	ws    string               // the implicit workspace: where the legacy mirror is imported
+	ws    string               // the default workspace: where the legacy mirror is imported
 	kube  kubernetes.Interface // nil: no Secret to import from (tests)
 	ns    string
 	log   *slog.Logger
@@ -116,17 +120,18 @@ func (st *sessionStore) load(ctx context.Context) {
 
 func toStoreSession(s *session) store.Session {
 	id, _ := json.Marshal(s.Identity)
-	return store.Session{ID: s.ID, Identity: id, CSRF: s.CSRF, IDToken: s.IDToken, CreatedAt: s.CreatedAt, LastSeenAt: s.LastSeen}
+	return store.Session{ID: s.ID, Realm: s.Realm, Identity: id, CSRF: s.CSRF, IDToken: s.IDToken, CreatedAt: s.CreatedAt, LastSeenAt: s.LastSeen}
 }
 
 func fromStoreSession(s *store.Session) *session {
-	out := &session{ID: s.ID, WorkspaceID: s.WorkspaceID, CSRF: s.CSRF, IDToken: s.IDToken, CreatedAt: s.CreatedAt, LastSeen: s.LastSeenAt}
+	out := &session{ID: s.ID, Realm: firstNonEmpty(s.Realm, store.RealmWorkspace), WorkspaceID: s.WorkspaceID, CSRF: s.CSRF, IDToken: s.IDToken, CreatedAt: s.CreatedAt, LastSeen: s.LastSeenAt}
 	_ = json.Unmarshal(s.Identity, &out.Identity)
 	return out
 }
 
-// create opens a session in a workspace (slug; "" means the implicit one).
-func (st *sessionStore) create(ctx context.Context, ws string, id ext.Identity, idToken string) (*session, error) {
+// create opens a session at a door: the console (realm console, no
+// workspace) or a workspace (slug).
+func (st *sessionStore) create(ctx context.Context, realm, ws string, id ext.Identity, idToken string) (*session, error) {
 	sid, err := randomToken(32)
 	if err != nil {
 		return nil, err
@@ -135,11 +140,13 @@ func (st *sessionStore) create(ctx context.Context, ws string, id ext.Identity, 
 	if err != nil {
 		return nil, err
 	}
-	if ws == "" {
-		ws = st.ws
+	if realm == store.RealmConsole {
+		ws = ""
+	} else if ws == "" {
+		return nil, errors.New("a workspace session needs a workspace")
 	}
 	now := st.now()
-	s := &session{ID: sid, CSRF: csrf, Identity: id, CreatedAt: now, LastSeen: now, IDToken: idToken}
+	s := &session{ID: sid, Realm: realm, CSRF: csrf, Identity: id, CreatedAt: now, LastSeen: now, IDToken: idToken}
 	if err := st.store.PutSession(ctx, ws, toStoreSession(s)); err != nil {
 		return nil, fmt.Errorf("store session: %w", err)
 	}
@@ -158,11 +165,18 @@ func (st *sessionStore) create(ctx context.Context, ws string, id ext.Identity, 
 	return s, nil
 }
 
-// getIn is get restricted to sessions of one workspace (by id): a cookie
-// presented at the wrong host is no session at all.
-func (st *sessionStore) getIn(id, workspaceID string) (*session, bool) {
+// getIn is get restricted to sessions of one door: the realm must match
+// and, for a workspace, the workspace too. A cookie presented at the
+// wrong host is no session at all (RFC-0080).
+func (st *sessionStore) getIn(id, realm, workspaceID string) (*session, bool) {
 	s, ok := st.get(id)
-	if !ok || (workspaceID != "" && s.WorkspaceID != "" && s.WorkspaceID != workspaceID) {
+	if !ok {
+		return nil, false
+	}
+	if firstNonEmpty(s.Realm, store.RealmWorkspace) != realm {
+		return nil, false
+	}
+	if realm == store.RealmWorkspace && workspaceID != "" && s.WorkspaceID != "" && s.WorkspaceID != workspaceID {
 		return nil, false
 	}
 	return s, true

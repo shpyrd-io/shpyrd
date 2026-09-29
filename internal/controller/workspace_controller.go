@@ -86,8 +86,8 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	wanted := map[string]bool{} // front door Ingress names to keep
 	for i := range all {
 		ws := &all[i]
-		if ws.Implicit() || ws.Address == "" {
-			continue
+		if ws.Address == "" {
+			continue // no address yet: nothing to publish (RFC-0080: every workspace gets one)
 		}
 		wanted[workspaceFrontDoorName(ws.Slug)] = true
 		wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -123,6 +124,12 @@ type PublicConfig struct {
 	DefaultWorkspaceID string `json:"defaultWorkspaceId,omitempty"`
 	// ConsoleHost is the hostname the console dashboard answers at.
 	ConsoleHost string `json:"consoleHost,omitempty"`
+	// ConsoleURL is the console's URL, for the way back from an operator
+	// workspace (RFC-0080).
+	ConsoleURL string `json:"consoleUrl,omitempty"`
+	// Door is which application answers at this host (RFC-0080):
+	// "console" or "workspace".
+	Door string `json:"door,omitempty"`
 	// Volumes describes the profile's storage rules (RFC-0060).
 	Volumes VolumesConfig `json:"volumes"`
 }
@@ -138,9 +145,14 @@ type VolumesConfig struct {
 // Server is the shpyrd API server.
 // WorkspaceRef names a workspace in public payloads.
 type WorkspaceRef struct {
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	Implicit bool   `json:"implicit"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	// Address is where the workspace's dashboard answers; apps one label
+	// under it (RFC-0080: every workspace has one).
+	Address string `json:"address,omitempty"`
+	// OwnedByOperator marks the platform operator's own workspaces
+	// (RFC-0078): they show platform admins the way to the console.
+	OwnedByOperator bool `json:"ownedByOperator,omitempty"`
 	// Branding is the workspace's look, for the login page and the
 	// launcher (RFC-0033): the logo's URL when one is set, the colour.
 	Branding *BrandingView `json:"branding,omitempty"`
@@ -191,6 +203,10 @@ type Server struct {
 	passwordFailures *rateLimiter
 	// resetRateLimit throttles POST /api/auth/reset per IP (RFC-0014).
 	resetRateLimit *rateLimiter
+	// defaultSlug's cache (RFC-0078): the operator's default workspace.
+	defaultSlugMu  sync.Mutex
+	defaultSlugVal string
+	defaultSlugAt  time.Time
 	// localAccounts is the authlocal user store (RFC-0014): set by the
 	// auth-local extension; used for lockout, reset and invite.
 	localAccounts ext.LocalAccountStore
@@ -271,7 +287,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		opts.Store = store.NewMemory()
 	}
 	if opts.Tenancy == nil {
-		opts.Tenancy = &tenancy.Single{Store: opts.Store}
+		opts.Tenancy = &tenancy.Single{Store: opts.Store, ConsoleHost: consoleHostOf(opts.Public.DashboardURL), DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	}
 	if opts.Realms == nil {
 		opts.Realms = allMethods{}
@@ -280,7 +296,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		opts.Public.Capabilities = append([]string{}, opts.Capabilities...)
 	}
 	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
-	s.authz = &authz.Resolver{Store: opts.Store}
+	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
 	s.passwordFailures = newRateLimiter(10)
 	s.resetRateLimit = newRateLimiter(resetRequestsPerMinute)
@@ -346,9 +362,12 @@ func (s *Server) deps() ext.Deps {
 }
 
 // routeGroups implements ext.Router.
-type routeGroups struct{ pub, api, wsAdmin, admin gin.IRouter; s *Server }
+type routeGroups struct {
+	pub, api, wsAdmin, admin gin.IRouter
+	s                        *Server
+}
 
-func (r routeGroups) Public() gin.IRouter         { return r.pub }
+func (r routeGroups) Public() gin.IRouter { return r.pub }
 func (r routeGroups) SetLocalAccounts(la ext.LocalAccountStore) {
 	if r.s != nil {
 		r.s.localAccounts = la
@@ -372,6 +391,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// The edge's signing key rotates on schedule (RFC-0033); replicas
 	// follow each other through the Secret.
 	go s.edgeKeys.Run(ctx)
+	go s.keepOIDCClient(ctx) // the identity provider's redirect URIs (RFC-0080)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -429,7 +449,6 @@ func (s *Server) routes() error {
 	s.engine.GET(edgePathPrefix+"start", tenant, s.edgeStart)
 	s.engine.GET(edgePathPrefix+"callback", tenant, s.edgeCallback)
 	s.engine.GET(edgePathPrefix+"logout", tenant, s.edgeLogout)
-	s.engine.GET(edgePathPrefix+"session", tenant, s.edgeSession) // console → workspace sign-in handoff
 
 	s.engine.GET("/api/healthz", s.healthz)
 	// Account self-service pages (RFC-0014): no session required.
@@ -455,7 +474,7 @@ func (s *Server) routes() error {
 	pub.GET("/auth/callback", login, s.authCallback)
 	pub.GET("/auth/ticket", login, s.authTicket)
 	pub.POST("/auth/password", login, s.authPassword)      // RFC-0012
-	pub.POST("/auth/reset", s.requestReset)                 // RFC-0014: send reset link (public)
+	pub.POST("/auth/reset", s.requestReset)                // RFC-0014: send reset link (public)
 	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
 	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
 	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
@@ -500,7 +519,7 @@ func (s *Server) routes() error {
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
 	api.PUT("/sizes", console, s.require(authz.ClusterAdmin), s.putSizes)
 	api.PATCH("/cluster/settings", console, s.require(authz.ClusterAdmin), s.patchClusterSettings) // RFC-0078
-	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016
+	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals)                      // RFC-0016
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
@@ -713,8 +732,14 @@ func (s *Server) auth() gin.HandlerFunc {
 func (s *Server) config(c *gin.Context) {
 	pub := s.opts.Public
 	pub.Auth = s.authConfigFor(c)
-	if ws, err := s.tenant(c); err == nil {
-		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Implicit: ws.Implicit(), Branding: brandingView(ws)}
+	pub.Door = tenancy.RealmWorkspace
+	if s.atConsole(c) {
+		pub.Door = tenancy.RealmConsole // the console application, at the console host and for internal callers
+	}
+	pub.ConsoleURL = s.consoleURL()
+	if t, err := s.door(c); err == nil && t.Workspace != nil {
+		ws := t.Workspace
+		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws)}
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
 	}
@@ -782,3 +807,11 @@ const placeholderHTML = `<!doctype html><html><head><title>shpyrd</title></head>
 <body style="font-family:system-ui;background:#111;color:#eee;padding:2rem">
 <h1>shpyrd</h1><p>The UI has not been built into this binary. Run <code>make ui</code> and rebuild,
 or use the API at <code>/api/healthz</code>.</p></body></html>`
+
+// consoleHostOf is the host (with port) of the console's URL.
+func consoleHostOf(dashboardURL string) string {
+	if u, err := url.Parse(dashboardURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return dashboardURL
+}

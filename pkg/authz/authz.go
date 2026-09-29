@@ -159,11 +159,11 @@ type Snapshot struct {
 	Memberships []store.Membership
 	// Suspended lists the emails of people whose access is switched off.
 	Suspended map[string]bool
-	// Explicit marks a workspace other than the implicit one (RFC-0033
-	// phase 6): it is enforced from birth. Bootstrap mode, where everyone
-	// who signs in is an admin, exists so a fresh self-hosted cluster is
-	// usable; in a fresh explicit workspace it would hand the workspace to
-	// whoever signs in first. Its creator names the owner instead.
+	// Explicit says bootstrap mode does not apply: the snapshot is
+	// enforced from birth. Bootstrap mode, where everyone who signs in is
+	// an admin, exists so a fresh cluster is usable; it applies to the
+	// console realm only (RFC-0080), never to a workspace host, where it
+	// would hand the workspace to whoever signs in first.
 	Explicit bool
 }
 
@@ -318,8 +318,10 @@ func (s *Snapshot) RoleForTeams(project string, teams []string) string {
 	return role
 }
 
-// Load reads the teams and grants of the workspace.
-func Load(ctx context.Context, st store.Store, workspace string) (*Snapshot, error) {
+// Load reads the teams and grants of the workspace. bootstrap says the
+// snapshot may be in bootstrap mode: true for the console realm's view of
+// the operator's default workspace, false at any workspace host.
+func Load(ctx context.Context, st store.Store, workspace string, bootstrap bool) (*Snapshot, error) {
 	teams, err := st.ListTeams(ctx, workspace)
 	if err != nil {
 		return nil, err
@@ -332,7 +334,7 @@ func Load(ctx context.Context, st store.Store, workspace string) (*Snapshot, err
 	if err != nil {
 		return nil, err
 	}
-	snap := &Snapshot{Teams: teams, Grants: grants, Memberships: memberships, Suspended: map[string]bool{}, Explicit: workspace != "" && workspace != store.DefaultWorkspace}
+	snap := &Snapshot{Teams: teams, Grants: grants, Memberships: memberships, Suspended: map[string]bool{}, Explicit: !bootstrap}
 	if people, err := st.ListIdentities(ctx, workspace); err == nil {
 		for _, p := range people {
 			if p.Status == store.StatusSuspended {
@@ -347,8 +349,12 @@ func Load(ctx context.Context, st store.Store, workspace string) (*Snapshot, err
 // four queries at most every TTL.
 type Resolver struct {
 	Store     store.Store
-	Workspace string // slug Snapshot and Roles use; empty means the implicit workspace
+	Workspace string // slug Snapshot and Roles use; empty means the default workspace
 	TTL       time.Duration
+	// DefaultSlug names the operator's default workspace (RFC-0078), whose
+	// owners and admins are the platform admins; nil means
+	// store.DefaultWorkspace.
+	DefaultSlug func(ctx context.Context) string
 
 	mu    sync.Mutex
 	snaps map[string]cached
@@ -366,7 +372,10 @@ func (r *Resolver) Snapshot(ctx context.Context) (*Snapshot, error) {
 	return r.SnapshotFor(ctx, r.Workspace)
 }
 
-// SnapshotFor returns a recent membership snapshot of a workspace.
+// SnapshotFor returns a recent membership snapshot of a workspace. ""
+// is the console realm (RFC-0080): the operator's default workspace, in
+// bootstrap mode until its first role exists. A slug, the default's
+// included, is a workspace host's view: enforced from birth.
 func (r *Resolver) SnapshotFor(ctx context.Context, ws string) (*Snapshot, error) {
 	now := time.Now
 	if r.now != nil {
@@ -376,17 +385,22 @@ func (r *Resolver) SnapshotFor(ctx context.Context, ws string) (*Snapshot, error
 	if ttl == 0 {
 		ttl = 5 * time.Second
 	}
-	if ws == "" {
-		ws = store.DefaultWorkspace
+	bootstrap := ws == ""
+	if bootstrap {
+		ws = r.defaultSlug(ctx)
+	}
+	key := ws
+	if bootstrap {
+		key = "\x00console:" + ws
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c, ok := r.snaps[ws]; ok && now().Sub(c.fetched) < ttl {
+	if c, ok := r.snaps[key]; ok && now().Sub(c.fetched) < ttl {
 		return c.snap, nil
 	}
-	snap, err := Load(ctx, r.Store, ws)
+	snap, err := Load(ctx, r.Store, ws, bootstrap)
 	if err != nil {
-		if c, ok := r.snaps[ws]; ok {
+		if c, ok := r.snaps[key]; ok {
 			return c.snap, nil // stale beats down
 		}
 		return nil, err
@@ -394,8 +408,32 @@ func (r *Resolver) SnapshotFor(ctx context.Context, ws string) (*Snapshot, error
 	if r.snaps == nil {
 		r.snaps = map[string]cached{}
 	}
-	r.snaps[ws] = cached{snap: snap, fetched: now()}
+	r.snaps[key] = cached{snap: snap, fetched: now()}
 	return snap, nil
+}
+
+func (r *Resolver) defaultSlug(ctx context.Context) string {
+	if r.DefaultSlug != nil {
+		if s := r.DefaultSlug(ctx); s != "" {
+			return s
+		}
+	}
+	return store.DefaultWorkspace
+}
+
+// ConsoleAdmin says the identity is a platform admin by the console's
+// roles, bootstrap excluded: an owner or admin of the operator's default
+// workspace, or the operator's own credentials. Used at workspace hosts to
+// let platform admins own operator workspaces (RFC-0080).
+func (r *Resolver) ConsoleAdmin(ctx context.Context, id ext.Identity) bool {
+	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
+		return true
+	}
+	snap, err := r.SnapshotFor(ctx, "")
+	if err != nil || !snap.Enforced() {
+		return false
+	}
+	return snap.RolesFor(id).Platform == shpyrdv1.RolePlatformAdmin
 }
 
 // Invalidate drops every cached snapshot (after membership changes

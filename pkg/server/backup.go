@@ -33,7 +33,8 @@ func runBackup(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	st, err := openStore(logger, k, os.Getenv(install.VarDomain))
+	domain := os.Getenv(install.VarDomain)
+	st, err := openStore(logger, k, defaultWorkspaceFromEnv(domain, envOr("SHPYRD_DASHBOARD_URL", "https://shpyrd."+domain)))
 	if err != nil {
 		return err
 	}

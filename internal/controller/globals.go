@@ -18,7 +18,6 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
-	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
 // Global config vars (RFC-0016): a platform admin keeps them in Secret
@@ -128,10 +127,10 @@ func globalHash(mirror *corev1.Secret) string {
 
 // globalsDisabled says the app takes no global vars at all, so its
 // Deployments do not even reference the mirror. Global vars are the
-// operator's (RFC-0016) and reach the operator's own projects: apps of
-// explicit workspaces (RFC-0033 phase 6) never receive them.
+// operator's (RFC-0016) and reach the operator's default workspace's
+// projects: apps of other workspaces never receive them.
 func globalsDisabled(app *shpyrdv1.App) bool {
-	if workspaceOf(app) != project.DefaultWorkspace {
+	if workspaceOf(app) != DefaultWorkspace() {
 		return true
 	}
 	return app.Spec.Globals != nil && app.Spec.Globals.Disabled

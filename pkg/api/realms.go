@@ -3,51 +3,57 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // Realms decides which login methods a workspace offers (RFC-0033's
 // RealmProvider). DefaultRealms serves the open-source platform and the
-// cloud: a workspace shows its own methods and the platform's (unless it
-// hides them); a console pool as a realm of its own comes with
-// collaborators.
+// cloud: a workspace shows its own methods and the platform's defaults
+// (unless it hides them). The console's realm is not a workspace's and is
+// decided here, not by Realms (RFC-0080).
 type Realms interface {
-	// Methods filters the platform's login methods for a workspace. The
-	// password form (auth-local) is listed among them by id when enabled.
+	// Methods filters the login methods for a workspace. The password form
+	// (auth-local) is listed among them by id when enabled.
 	Methods(ctx context.Context, ws *store.Workspace, all AuthConfig) AuthConfig
 }
 
 // DefaultRealms is the Realms the core ships and the cloud uses too: a
 // workspace's login page shows the methods the workspace configured
-// itself (RFC-0033 per-workspace SSO) and the platform's, unless the
-// workspace hides the platform's (settings.ownMethodsOnly). The implicit
-// workspace is the platform: it shows everything.
+// itself (RFC-0033 per-workspace SSO) and the platform's defaults, unless
+// the workspace hides them (settings.ownMethodsOnly). Console methods are
+// never a workspace's.
 type DefaultRealms struct{}
 
 // Methods implements Realms.
 func (DefaultRealms) Methods(_ context.Context, ws *store.Workspace, all AuthConfig) AuthConfig {
-	if ws == nil || ws.Implicit() {
-		return all
+	if ws == nil {
+		return AuthConfig{Providers: []ProviderInfo{}}
 	}
-	offered := func(owner string) bool {
-		return owner == ws.Slug || (owner == "" && !ws.Settings.OwnMethodsOnly)
+	offered := func(realm, owner string) bool {
+		switch realm {
+		case ext.RealmWorkspace:
+			return owner == ids.Short(ws.ID) || owner == ws.Slug // slug: connectors from before RFC-0080's rekey
+		case ext.RealmConsole:
+			return false
+		default: // the platform's defaults
+			return !ws.Settings.OwnMethodsOnly
+		}
 	}
-	out := AuthConfig{Token: all.Token, Providers: []ProviderInfo{}}
+	out := AuthConfig{Providers: []ProviderInfo{}}
 	for _, p := range all.Providers {
-		if offered(p.Workspace) {
+		if offered(p.Realm, p.Workspace) {
 			out.Providers = append(out.Providers, p)
 		}
 	}
-	if all.Password != nil && offered(all.Password.Workspace) {
+	if all.Password != nil && offered(all.Password.Realm, all.Password.Workspace) {
 		out.Password = all.Password
 	}
 	return out
@@ -56,19 +62,53 @@ func (DefaultRealms) Methods(_ context.Context, ws *store.Workspace, all AuthCon
 // allMethods is DefaultRealms under its old name.
 type allMethods = DefaultRealms
 
-// authConfigFor is the sign-in configuration the request's workspace shows.
-// The admin token is the operator's break-glass: it is never offered at an
-// explicit workspace's host (it still authenticates there, for the CLI).
+// consoleMethods are the methods the console's login page offers: the
+// connectors of the console realm, the password form when the operator
+// keeps it on (settings console.password_signin, default on so a fresh
+// install is usable), and the admin token. Platform defaults and
+// workspace methods are not among them (RFC-0080).
+func (s *Server) consoleMethods(ctx context.Context, all AuthConfig) AuthConfig {
+	out := AuthConfig{Token: all.Token, Providers: []ProviderInfo{}}
+	for _, p := range all.Providers {
+		if p.Realm == ext.RealmConsole {
+			out.Providers = append(out.Providers, p)
+		}
+	}
+	if all.Password != nil && s.consolePasswordSignIn(ctx) {
+		out.Password = all.Password
+	}
+	return out
+}
+
+// SettingConsolePasswordSignIn is the cluster setting that keeps the
+// password form on the console's login page ("true" unless the operator
+// turned it off after adding an identity provider).
+const SettingConsolePasswordSignIn = "console.password_signin"
+
+// consolePasswordSignIn reads the setting; on by default.
+func (s *Server) consolePasswordSignIn(ctx context.Context) bool {
+	v, err := s.store.GetSetting(ctx, SettingConsolePasswordSignIn)
+	if err != nil || v == "" {
+		return true
+	}
+	return v != "false" && v != "0" && v != "off"
+}
+
+// authConfigFor is the sign-in configuration the request's door shows.
+// The admin token is the operator's break-glass: offered at the console
+// only (it still authenticates at internal hosts, for the CLI).
 func (s *Server) authConfigFor(c *gin.Context) AuthConfig {
 	all := s.authConfig()
-	ws, err := s.tenant(c)
+	t, err := s.door(c)
 	if err != nil {
-		return all
+		return AuthConfig{Providers: []ProviderInfo{}}
 	}
+	if t.ConsoleHost() {
+		return s.consoleMethods(c.Request.Context(), all)
+	}
+	ws := t.Workspace
 	cfg := s.realms.Methods(c.Request.Context(), ws, all)
-	if !ws.Implicit() {
-		cfg.Token = false
-	}
+	cfg.Token = t.Internal && all.Token // the operator's break-glass, at internal hosts only
 	if claims, err := s.store.ListDomainClaims(c.Request.Context(), ws.Slug); err == nil {
 		for _, d := range claims {
 			if d.VerifiedAt != nil && d.Connector != "" && s.offersIn(cfg, d.Connector) {
@@ -124,48 +164,25 @@ func (s *Server) authRoute(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// offers reports whether a workspace lists a login method ("" means the
-// only one, when there is exactly one).
-func (s *Server) offers(ctx context.Context, ws *store.Workspace, providerID string) bool {
-	cfg := s.realms.Methods(ctx, ws, s.authConfig())
+// offersAt reports whether the request's door lists a login method (""
+// means the only one, when there is exactly one).
+func (s *Server) offersAt(c *gin.Context, providerID string) bool {
+	cfg := s.authConfigFor(c)
 	if providerID == "" {
 		return len(cfg.Providers) == 1 || cfg.Password != nil
 	}
-	if cfg.Password != nil && cfg.Password.ID == providerID {
-		return true
-	}
-	for _, p := range cfg.Providers {
-		if p.ID == providerID {
-			return true
-		}
-	}
-	return false
+	return s.offersIn(cfg, providerID)
 }
 
-// ---- console-hosted sign-in (RFC-0033 phase 6, option 1) ------------------------
-//
-// The bundled issuer has one relying party: the console, which is the
-// implicit workspace's dashboard. A workspace at its own host cannot
-// complete an OpenID Connect flow itself, so its /api/auth/login sends the
-// browser to the console's, naming the workspace; the console signs the
-// person in, applies the *workspace's* admission (join policy, claimed
-// domains, suspension), and hands a one-time code back to the workspace
-// host, which mints the workspace's session. No console session is
-// opened for the person: the console only vouches.
-
-// consoleWorkspace is the slug of the workspace whose dashboard is the
-// relying party.
-const consoleWorkspace = store.DefaultWorkspace
-
-// atConsole says the request arrived at the console (the implicit
-// workspace's host) rather than at an explicit workspace's.
+// atConsole says the request came through the operator's door: the
+// console host, or an internal host (the kubeconfig proxy).
 func (s *Server) atConsole(c *gin.Context) bool {
-	ws, err := s.tenant(c)
-	return err == nil && ws.Slug == consoleWorkspace
+	t, err := s.door(c)
+	return err == nil && t.AtConsole()
 }
 
-// requireConsole keeps a route for the console: at an explicit workspace's
-// host it is not there.
+// requireConsole keeps a route for the console: at a workspace's host it
+// is not there.
 func (s *Server) requireConsole() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !s.atConsole(c) {
@@ -176,76 +193,26 @@ func (s *Server) requireConsole() gin.HandlerFunc {
 	}
 }
 
-// sessionHandoff is what the console hands a workspace host: who signed
-// in and how.
-type sessionHandoff struct {
-	Identity ext.Identity `json:"identity"`
-	IDToken  string       `json:"idToken,omitempty"`
-	How      string       `json:"how"`
+// requireWorkspace keeps a route for workspace hosts: at the console it is
+// not there (RFC-0080). Internal hosts pass with the default workspace.
+func (s *Server) requireWorkspace() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if _, err := s.tenant(c); errors.Is(err, errConsoleNotWorkspace) {
+			abort(c, http.StatusNotFound, err)
+			return
+		}
+		c.Next()
+	}
 }
 
-// consoleLoginURL is the console's login URL for a workspace: the browser
-// comes back to next on the workspace host afterwards.
-func (s *Server) consoleLoginURL(provider string, ws *store.Workspace, next string) string {
-	q := url.Values{"workspace": {ws.Slug}, "next": {safeNext(next)}}
-	if provider != "" {
-		q.Set("provider", provider)
+// realmAt is the realm a session at this door is opened in: the console's
+// at the console host, a workspace's everywhere else (internal hosts
+// included: their tenant is the default workspace).
+func (s *Server) realmAt(c *gin.Context) string {
+	if t, err := s.door(c); err == nil && t.Realm == tenancy.RealmConsole {
+		return tenancy.RealmConsole
 	}
-	return s.opts.Public.DashboardURL + "/api/auth/login?" + q.Encode()
-}
-
-// handoffTarget resolves the workspace a console login is on behalf of.
-func (s *Server) handoffTarget(ctx context.Context, slug string) (*store.Workspace, error) {
-	ws, err := s.store.Workspace(ctx, slug)
-	if err != nil {
-		return nil, fmt.Errorf("unknown workspace %q", slug)
-	}
-	if ws.Address == "" {
-		return nil, fmt.Errorf("workspace %q has no address of its own", slug)
-	}
-	if ws.Status == store.WorkspaceSuspended {
-		return nil, errors.New("this workspace is suspended")
-	}
-	return ws, nil
-}
-
-// handoff completes a console login made on behalf of a workspace: the
-// workspace's admission runs, then a one-time code travels to its host.
-func (s *Server) handoff(c *gin.Context, target *store.Workspace, id ext.Identity, idToken, next string) {
-	if err := s.admitSignIn(c.Request.Context(), target.Slug, id); err != nil {
-		s.auditFailure(c, "auth.refused", id.Email, err.Error()+" (workspace "+target.Slug+")")
-		s.loginFailedAt(c, target, err)
-		return
-	}
-	host := s.dashboardHostOf(target)
-	code, err := s.edgeCodes.MintJSON(c.Request.Context(), host, edge.KindSession, sessionHandoff{Identity: id, IDToken: idToken, How: "console"})
-	if err != nil {
-		abort(c, http.StatusInternalServerError, err)
-		return
-	}
-	c.Redirect(http.StatusFound, "https://"+host+edgePathPrefix+"session?"+url.Values{"code": {code}, "rd": {safeNext(next)}}.Encode())
-}
-
-// edgeSession is GET /.shpyrd/session?code=&rd= at a workspace host: the
-// console's code becomes this workspace's session.
-func (s *Server) edgeSession(c *gin.Context) {
-	if s.atConsole(c) {
-		s.edgePage(c, http.StatusNotFound, "Nothing here", "Sign in from the dashboard.", nil)
-		return
-	}
-	var h sessionHandoff
-	if err := s.edgeCodes.RedeemJSON(c.Request.Context(), c.Query("code"), c.Request.Host, edge.KindSession, &h); err != nil {
-		s.edgePage(c, http.StatusBadRequest, "Sign-in link expired", "Go back to the dashboard and sign in again.", map[string]string{"Dashboard": "/"})
-		return
-	}
-	if h.Identity.Email == "" && h.Identity.Subject == "" {
-		s.edgePage(c, http.StatusBadRequest, "Sign-in failed", "The sign-in carried no identity.", nil)
-		return
-	}
-	if _, ok := s.openSession(c, h.Identity, h.IDToken, firstNonEmpty(h.How, "console")); !ok {
-		return
-	}
-	c.Redirect(http.StatusFound, safeNext(c.Query("rd")))
+	return tenancy.RealmWorkspace
 }
 
 // hasCapability says whether this server offers a capability beyond the
@@ -260,12 +227,14 @@ func (s *Server) hasCapability(name string) bool {
 }
 
 // workspacesChanged tells the front-door reconciler a workspace appeared
-// or changed, when this replica runs one.
+// or changed, when this replica runs one, and refreshes the identity
+// provider's redirect URIs (RFC-0080).
 func (s *Server) workspacesChanged() {
 	s.forgetTenants()
 	if s.opts.WorkspacesChanged != nil {
 		s.opts.WorkspacesChanged()
 	}
+	s.oidcClientChanged()
 }
 
 // forgetTenants drops the host resolver's memory of workspaces, so a

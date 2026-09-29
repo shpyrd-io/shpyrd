@@ -1,6 +1,7 @@
 package authlocal
 
 import (
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -58,36 +59,47 @@ func TestConnectorStore(t *testing.T) {
 	// A workspace's own connector (RFC-0033 per-workspace SSO): prefixed
 	// Dex id, labelled, listed in its scope only, removed from its scope
 	// only.
-	if existed, err := s.Add(ctx, ConnectorSpec{Type: "google", Workspace: "acme", ClientID: "g2", ClientSecret: "gs2", HostedDomain: "acme.com"}); err != nil || existed {
+	// A workspace's connector is keyed by the workspace's short id (RFC-0080).
+	if existed, err := s.Add(ctx, ConnectorSpec{Type: "google", Realm: ext.RealmWorkspace, Workspace: "1p1c19fh1amxymmq1yqv87q0j", ClientID: "g2", ClientSecret: "gs2", HostedDomain: "acme.com"}); err != nil || existed {
 		t.Fatalf("add workspace connector: %v %v", existed, err)
 	}
-	u, err = dyn.Resource(ConnectorGVR).Namespace("shpyrd-system").Get(ctx, "ws-acme-google", metav1.GetOptions{})
-	if err != nil || u.GetLabels()[LabelWorkspace] != "acme" {
+	u, err = dyn.Resource(ConnectorGVR).Namespace("shpyrd-system").Get(ctx, "ws-1p1c19fh1amxymmq1yqv87q0j-google", metav1.GetOptions{})
+	if err != nil || u.GetLabels()[LabelWorkspaceID] != "1p1c19fh1amxymmq1yqv87q0j" || u.GetLabels()[LabelRealm] != ext.RealmWorkspace {
 		t.Fatalf("workspace connector object: %v labels=%v", err, u.GetLabels())
 	}
-	if all, _ := s.List(ctx); len(all) != 3 {
+	// The console's own methods are a scope apart (RFC-0080).
+	if _, err := s.Add(ctx, ConnectorSpec{Type: "google", Realm: ext.RealmConsole, ClientID: "g3", ClientSecret: "gs3", HostedDomain: "shpyrd.io"}); err != nil {
+		t.Fatalf("add console connector: %v", err)
+	}
+	if all, _ := s.List(ctx); len(all) != 4 {
 		t.Errorf("list all = %+v", all)
 	}
-	acme, _ := s.ListFor(ctx, "acme")
-	if len(acme) != 1 || acme[0].ID != "google" || acme[0].FullID != "ws-acme-google" || acme[0].Workspace != "acme" || acme[0].Detail != "domain acme.com" {
+	acme, _ := s.ListFor(ctx, ext.RealmWorkspace, "1p1c19fh1amxymmq1yqv87q0j")
+	if len(acme) != 1 || acme[0].ID != "google" || acme[0].FullID != "ws-1p1c19fh1amxymmq1yqv87q0j-google" || acme[0].Workspace != "1p1c19fh1amxymmq1yqv87q0j" || acme[0].Detail != "domain acme.com" {
 		t.Errorf("acme's = %+v", acme)
 	}
-	if platform, _ := s.ListFor(ctx, ""); len(platform) != 2 || platform[0].Workspace != "" {
+	if platform, _ := s.ListFor(ctx, ext.RealmPlatform, ""); len(platform) != 2 || platform[0].Workspace != "" || platform[0].Realm != ext.RealmPlatform {
 		t.Errorf("platform's = %+v", platform)
 	}
-	if err := s.Remove(ctx, "", "ws-acme-google"); err == nil {
+	if console, _ := s.ListFor(ctx, ext.RealmConsole, ""); len(console) != 1 || console[0].FullID != "console-google" || console[0].ID != "google" || console[0].Detail != "domain shpyrd.io" {
+		t.Errorf("console's = %+v", console)
+	}
+	if err := s.Remove(ctx, ext.RealmPlatform, "", "ws-1p1c19fh1amxymmq1yqv87q0j-google"); err == nil {
 		t.Error("the platform scope must not remove a workspace's connector by its full id")
 	}
-	if err := s.Remove(ctx, "acme", "google"); err != nil {
+	if err := s.Remove(ctx, ext.RealmWorkspace, "1p1c19fh1amxymmq1yqv87q0j", "google"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(ctx, ext.RealmConsole, "", "google"); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&ConnectorSpec{Type: "github", ID: "ws-x", ClientID: "a", ClientSecret: "b"}).Validate(); err == nil {
 		t.Error("a platform id with the workspace prefix was accepted")
 	}
-	if err := s.Remove(ctx, "", "google"); err != nil {
+	if err := s.Remove(ctx, ext.RealmPlatform, "", "google"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Remove(ctx, "", "google"); err == nil {
+	if err := s.Remove(ctx, ext.RealmPlatform, "", "google"); err == nil {
 		t.Error("removing twice must fail")
 	}
 	if err := (&ConnectorSpec{Type: "okta", ClientID: "a", ClientSecret: "b"}).Validate(); err == nil {

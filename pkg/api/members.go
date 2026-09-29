@@ -13,8 +13,8 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
-	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	project_ "github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
@@ -37,11 +37,34 @@ func (s *Server) rolesOf(c *gin.Context) (authz.Roles, error) {
 		// Authentication disabled: everything is allowed.
 		id = ext.Identity{Subject: "admin-token", Provider: "token", Admin: true}
 	}
-	roles, err := s.authz.RolesIn(c.Request.Context(), s.workspace(c), id)
+	roles, err := s.rolesAt(c, id)
 	if err != nil {
 		return authz.Roles{}, err
 	}
 	c.Set(rolesKey, roles)
+	return roles, nil
+}
+
+// rolesAt resolves an identity's roles for the request's door (RFC-0080).
+// The console realm reads the operator's default workspace in bootstrap
+// mode; a workspace host reads that workspace, enforced from birth, and
+// platform admins own operator workspaces without a membership.
+func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
+	ctx := c.Request.Context()
+	t, err := s.door(c)
+	if err != nil || t.AtConsole() {
+		return s.authz.RolesIn(ctx, "", id)
+	}
+	ws := t.Workspace
+	roles, err := s.authz.RolesIn(ctx, ws.Slug, id)
+	if err != nil {
+		return roles, err
+	}
+	if ws.OwnedByOperator() && roles.Workspace == "" && !roles.Suspended && s.authz.ConsoleAdmin(ctx, id) {
+		roles.Workspace = store.WorkspaceRoleOwner
+		roles.Platform = shpyrdv1.RolePlatformAdmin
+		roles.Enforced = true
+	}
 	return roles, nil
 }
 
@@ -151,35 +174,68 @@ var dnsName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 // ctxWorkspace is the gin context key of the resolved workspace.
 const ctxWorkspace = ext.WorkspaceContextKey
 
-// tenant is the workspace the request's host belongs to (RFC-0033 phase
-// 6), resolved once per request. The open-source platform resolves every
-// host to the implicit workspace; a multi-workspace resolver may answer
-// tenancy.ErrUnknownHost.
-func (s *Server) tenant(c *gin.Context) (*store.Workspace, error) {
-	if v, ok := c.Get(ctxWorkspace); ok {
-		return v.(*store.Workspace), nil
+// ctxDoor is the gin context key of the resolved door.
+const ctxDoor = "shpyrd.door"
+
+// errConsoleNotWorkspace answers workspace routes reached at the console
+// host (RFC-0080): the console is not a workspace.
+var errConsoleNotWorkspace = errors.New("the console is not a workspace: open this at your workspace's address")
+
+// door is which door the request came through (RFC-0080): the console at
+// the console host, a workspace at its address or hosts, the console with
+// the default workspace as tenant at internal hosts. Resolved once per
+// request; a multi-workspace resolver may answer tenancy.ErrUnknownHost.
+func (s *Server) door(c *gin.Context) (*tenancy.Tenant, error) {
+	if v, ok := c.Get(ctxDoor); ok {
+		return v.(*tenancy.Tenant), nil
 	}
-	ws, err := s.tenancy.Resolve(c.Request.Context(), c.Request.Host)
+	if v, ok := c.Get(ctxWorkspace); ok {
+		// The edge's subrequests resolved their workspace from the app host
+		// nginx reported (edgeWorkspace): that is the door, not the
+		// server's own name the subrequest arrived at.
+		if ws, ok := v.(*store.Workspace); ok && ws != nil {
+			t := &tenancy.Tenant{Realm: tenancy.RealmWorkspace, Workspace: ws}
+			c.Set(ctxDoor, t)
+			return t, nil
+		}
+	}
+	t, err := s.tenancy.Resolve(c.Request.Context(), c.Request.Host)
 	if errors.Is(err, tenancy.ErrUnknownHost) {
 		// A project's custom domain (RFC-0034) is a host the resolver
 		// cannot know: the app that claims it says whose it is, so sign-in
 		// and the edge's callbacks work there too.
 		if app, aerr := s.appByHost(c, c.Request.Host); aerr == nil {
-			if w, werr := s.store.Workspace(c.Request.Context(), workspaceOf(app)); werr == nil {
-				ws, err = w, nil
+			if w, werr := s.store.Workspace(c.Request.Context(), s.workspaceOfApp(c.Request.Context(), app)); werr == nil {
+				t, err = &tenancy.Tenant{Realm: tenancy.RealmWorkspace, Workspace: w}, nil
 			}
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
-	c.Set(ctxWorkspace, ws)
-	return ws, nil
+	c.Set(ctxDoor, t)
+	if t.Workspace != nil {
+		c.Set(ctxWorkspace, t.Workspace)
+	}
+	return t, nil
 }
 
-// workspace is the slug the request is scoped to. Routes behind
-// requireTenant always have one; elsewhere an unresolvable host yields ""
-// and every store call answers not found.
+// tenant is the workspace the request is scoped to: the workspace at a
+// workspace host, the default workspace at an internal host. At the
+// console host there is none: errConsoleNotWorkspace.
+func (s *Server) tenant(c *gin.Context) (*store.Workspace, error) {
+	t, err := s.door(c)
+	if err != nil {
+		return nil, err
+	}
+	if t.Workspace == nil {
+		return nil, errConsoleNotWorkspace
+	}
+	return t.Workspace, nil
+}
+
+// workspace is the slug the request is scoped to: "" at the console and
+// for an unresolvable host, where every store call answers not found.
 func (s *Server) workspace(c *gin.Context) string {
 	ws, err := s.tenant(c)
 	if err != nil {
@@ -188,7 +244,7 @@ func (s *Server) workspace(c *gin.Context) string {
 	return ws.Slug
 }
 
-// workspaceID is the id of the request's workspace, "" when unresolved.
+// workspaceID is the id of the request's workspace, "" at the console.
 func (s *Server) workspaceID(c *gin.Context) string {
 	ws, err := s.tenant(c)
 	if err != nil {
@@ -197,11 +253,21 @@ func (s *Server) workspaceID(c *gin.Context) string {
 	return ws.ID
 }
 
-// requireTenant answers for hosts no workspace claims and for suspended
-// workspaces, so handlers behind it can count on s.tenant(c).
+// realm is the request's realm; the console's when the host is unknown,
+// which only matters for error pages.
+func (s *Server) realm(c *gin.Context) string {
+	if t, err := s.door(c); err == nil {
+		return t.Realm
+	}
+	return tenancy.RealmConsole
+}
+
+// requireTenant answers for hosts nobody claims and for suspended
+// workspaces, so handlers behind it can count on s.door(c). The console
+// host passes: its routes have no workspace.
 func (s *Server) requireTenant() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ws, err := s.tenant(c)
+		t, err := s.door(c)
 		asJSON := strings.HasPrefix(c.Request.URL.Path, "/api/") || wantsJSON(c)
 		switch {
 		case errors.Is(err, tenancy.ErrUnknownHost):
@@ -215,7 +281,18 @@ func (s *Server) requireTenant() gin.HandlerFunc {
 		case err != nil:
 			abort(c, http.StatusBadGateway, fmt.Errorf("resolve workspace: %w", err))
 			return
-		case ws.Status == store.WorkspaceSuspended:
+		case t.Workspace == nil && workspaceOnlyPath(c.Request.URL.Path):
+			// The console is not a workspace (RFC-0080).
+			if asJSON {
+				abort(c, http.StatusNotFound, errConsoleNotWorkspace)
+			} else {
+				s.edgePage(c, http.StatusNotFound, "Nothing here", "The console is not a workspace: open this at your workspace's address.", nil)
+				c.Abort()
+			}
+			return
+		case t.Workspace == nil:
+			// The console's own routes.
+		case t.Workspace.Status == store.WorkspaceSuspended && !t.Internal:
 			if asJSON {
 				abort(c, http.StatusForbidden, errors.New("this workspace is suspended"))
 			} else {
@@ -528,4 +605,22 @@ func compact(in []string) []string {
 		}
 	}
 	return out
+}
+
+// workspaceOnlyPath says a path belongs to workspaces and has no meaning
+// at the console host (RFC-0080): projects and everything under them, the
+// workspace's own pages, sign-in for apps, MCP.
+func workspaceOnlyPath(p string) bool {
+	if p == "/api/workspace" || p == "/mcp" {
+		return true
+	}
+	if p == "/api/workspace/import" {
+		return false // the console recreates a workspace from its dump (RFC-0033)
+	}
+	for _, prefix := range []string{"/api/projects", "/api/teams", "/api/tokens", "/api/launcher", "/api/invitations", "/api/sources", "/api/workspace/", "/oauth/", "/.shpyrd/", "/.well-known/oauth-protected-resource"} {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -170,7 +170,7 @@ func TestOIDCLoginFlow(t *testing.T) {
 
 	// The login page learns the providers from /api/config.
 	rec := do(t, s, "GET", "/api/config", "", false)
-	if !strings.Contains(rec.Body.String(), `"providers":[{"id":"test","label":"Test login","kind":"oidc"}]`) || !strings.Contains(rec.Body.String(), `"token":true`) {
+	if !strings.Contains(rec.Body.String(), `"providers":[{"id":"test","label":"Test login","kind":"oidc","realm":"platform"}]`) || !strings.Contains(rec.Body.String(), `"token":true`) {
 		t.Fatalf("config = %s", rec.Body.String())
 	}
 
@@ -180,7 +180,9 @@ func TestOIDCLoginFlow(t *testing.T) {
 		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
 	}
 	authURL, _ := url.Parse(rec.Header().Get("Location"))
-	if !strings.HasPrefix(authURL.String(), issuer.srv.URL+"/auth?") || authURL.Query().Get("redirect_uri") != "/api/auth/callback" {
+	// The callback is this host's own (RFC-0080): the request came to
+	// example.com over plain HTTP, so that is where the issuer returns.
+	if !strings.HasPrefix(authURL.String(), issuer.srv.URL+"/auth?") || authURL.Query().Get("redirect_uri") != "http://example.com/api/auth/callback" {
 		t.Fatalf("authorize URL = %s", authURL)
 	}
 
@@ -405,7 +407,7 @@ func TestPasswordSignIn(t *testing.T) {
 	// /api/config: the password provider is advertised as the form, the
 	// other as a button.
 	rec := do(t, s, "GET", "/api/config", "", false)
-	if !strings.Contains(rec.Body.String(), `"providers":[{"id":"okta","label":"Okta","kind":"oidc"}]`) || !strings.Contains(rec.Body.String(), `"password":{"id":"local","label":"Email and password"}`) {
+	if !strings.Contains(rec.Body.String(), `"providers":[{"id":"okta","label":"Okta","kind":"oidc","realm":"platform"}]`) || !strings.Contains(rec.Body.String(), `"password":{"id":"local","label":"Email and password","realm":"platform"}`) {
 		t.Fatalf("config = %s", rec.Body.String())
 	}
 
@@ -544,7 +546,7 @@ func TestConnectorProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := do(t, s, "GET", "/api/config", "", false)
-	if !strings.Contains(rec.Body.String(), `{"id":"github","label":"GitHub","kind":"github"}`) {
+	if !strings.Contains(rec.Body.String(), `{"id":"github","label":"GitHub","kind":"github","realm":"platform"}`) {
 		t.Fatalf("config = %s", rec.Body.String())
 	}
 	rec = do(t, s, "GET", "/api/auth/login?provider=github", "", false)

@@ -22,6 +22,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // The edge (RFC-0033): ingress-nginx asks /edge/auth about every request to
@@ -44,7 +45,7 @@ const (
 
 // edgeCookieName depends on HTTPS: the __Host- prefix needs Secure.
 func (s *Server) edgeCookieName() string {
-	if s.secureCookies() {
+	if s.platformHTTPS() {
 		return edgeCookieSecure
 	}
 	return edgeCookieInsecure
@@ -229,7 +230,7 @@ func (s *Server) edgeIdentify(c *gin.Context, project string) (*edgeCaller, erro
 	if s.rp == nil {
 		return nil, nil
 	}
-	sess, ok := s.rp.sessions.getIn(claims.SessionID, s.workspaceID(c))
+	sess, ok := s.rp.sessions.getIn(claims.SessionID, store.RealmWorkspace, s.workspaceID(c))
 	if !ok {
 		return nil, nil // signed out, or a session of another workspace
 	}
@@ -248,10 +249,19 @@ func (s *Server) edgeWorkspace(c *gin.Context) (*store.Workspace, error) {
 	var err error
 	if slug := c.Query("workspace"); slug != "" {
 		ws, err = s.store.Workspace(c.Request.Context(), slug)
-	} else if u, perr := url.Parse(c.GetHeader("X-Original-URL")); perr == nil && u.Host != "" {
-		ws, err = s.tenancy.Resolve(c.Request.Context(), u.Host)
 	} else {
-		ws, err = s.tenancy.Resolve(c.Request.Context(), c.Request.Host)
+		host := c.Request.Host
+		if u, perr := url.Parse(c.GetHeader("X-Original-URL")); perr == nil && u.Host != "" {
+			host = u.Host
+		}
+		var t *tenancy.Tenant
+		if t, err = s.tenancy.Resolve(c.Request.Context(), host); err == nil {
+			if t.Workspace == nil {
+				err = errConsoleNotWorkspace
+			} else {
+				ws = t.Workspace
+			}
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -497,7 +507,7 @@ func (s *Server) edgeCallback(c *gin.Context) {
 		return
 	}
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name: s.edgeCookieName(), Value: value, Path: "/", HttpOnly: true, Secure: s.secureCookies(),
+		Name: s.edgeCookieName(), Value: value, Path: "/", HttpOnly: true, Secure: s.platformHTTPS(),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(edge.CookieTTL.Seconds()),
 	})
 	c.Redirect(http.StatusFound, safeNext(c.Query("rd")))
@@ -516,7 +526,7 @@ func (s *Server) edgeLogout(c *gin.Context) {
 	app, appErr := s.appByHost(c, c.Request.Host)
 	if raw, err := c.Cookie(s.edgeCookieName()); err == nil && raw != "" && s.rp != nil && appErr == nil {
 		if claims, err := s.edgeKeys.VerifyCookie(raw, project.SlugOf(app)); err == nil && claims.SessionID != "" {
-			if sess, ok := s.rp.sessions.getIn(claims.SessionID, s.workspaceID(c)); ok {
+			if sess, ok := s.rp.sessions.getIn(claims.SessionID, store.RealmWorkspace, s.workspaceID(c)); ok {
 				if u := s.rp.endSessionURL(sess); u != "" {
 					redirect = u
 				}
@@ -524,7 +534,7 @@ func (s *Server) edgeLogout(c *gin.Context) {
 			}
 		}
 	}
-	http.SetCookie(c.Writer, &http.Cookie{Name: s.edgeCookieName(), Value: "", Path: "/", HttpOnly: true, Secure: s.secureCookies(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	http.SetCookie(c.Writer, &http.Cookie{Name: s.edgeCookieName(), Value: "", Path: "/", HttpOnly: true, Secure: s.platformHTTPS(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	c.Redirect(http.StatusFound, redirect)
 }
 

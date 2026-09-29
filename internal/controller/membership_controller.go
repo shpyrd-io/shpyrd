@@ -95,9 +95,12 @@ func (r *MembershipReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (c
 	logger := log.FromContext(ctx)
 	ws := r.Workspace
 	if ws == "" {
-		ws = store.DefaultWorkspace
+		ws = store.DefaultWorkspaceSlug(ctx, r.Store)
 	}
-	snap, err := authz.Load(ctx, r.Store, ws)
+	// The mirror is the console realm's view (RFC-0080): kubectl access is
+	// the operator's, bootstrap included, so a fresh cluster's first admin
+	// can use kubectl before any role exists.
+	snap, err := authz.Load(ctx, r.Store, ws, true)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

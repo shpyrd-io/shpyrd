@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
@@ -206,8 +208,24 @@ func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, se
 	if deps.Kube.Dynamic == nil {
 		return nil
 	}
-	store := &ConnectorStore{Dynamic: deps.Kube.Dynamic, Namespace: deps.SystemNamespace, Issuer: issuer}
-	list, err := store.List(ctx)
+	cs := &ConnectorStore{Dynamic: deps.Kube.Dynamic, Namespace: deps.SystemNamespace, Issuer: issuer}
+	// Connectors from before RFC-0080 are keyed by workspace slug: move
+	// them to the id form once, so a workspace rename cannot orphan them.
+	if deps.Store != nil {
+		moved, err := cs.Rekey(ctx, func(slug string) string {
+			if ws, err := deps.Store.Workspace(ctx, slug); err == nil {
+				return ids.Short(ws.ID)
+			}
+			return ""
+		})
+		if err != nil && !errors.Is(err, ErrNotEnabled) {
+			return fmt.Errorf("rekey connectors: %w", err)
+		}
+		if moved > 0 {
+			slog.Info("workspace connectors rekeyed to workspace ids (RFC-0080)", "moved", moved)
+		}
+	}
+	list, err := cs.List(ctx)
 	if err != nil {
 		if errors.Is(err, ErrNotEnabled) {
 			return nil // Dex has not created its CRDs yet; nothing to register
@@ -217,7 +235,7 @@ func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, se
 	for _, c := range list {
 		if err := deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
 			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, Issuer: issuer,
-			ClientID: clientID, ClientSecret: secret, Workspace: c.Workspace,
+			ClientID: clientID, ClientSecret: secret, Realm: c.Realm, Workspace: c.Workspace,
 		}); err != nil {
 			return fmt.Errorf("connector %s: %w", c.FullID, err)
 		}
