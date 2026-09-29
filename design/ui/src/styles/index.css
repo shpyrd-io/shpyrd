@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "./prose.css";
 
 /* The classes the components use are found here, whoever imports this file. */
 @source "../";
@@ -19,6 +20,10 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-chart-error: var(--chart-error);
+  --color-chart-warning: var(--chart-warning);
+  --color-chart-info: var(--chart-info);
+  --color-chart-success: var(--chart-success);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
@@ -27,6 +32,13 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -67,14 +79,35 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  /* How something is, by name: it went well, it is to be known, it asks
+     for care. An error is `destructive`. Each name is the colour to write
+     with, and to wash and outline with when it is made thinner; its
+     `foreground` is what is written over it when it is solid. */
+  --success: oklch(0.508 0.118 165.612);
+  --success-foreground: oklch(0.985 0 0);
+  --info: oklch(0.5 0.134 242.749);
+  --info-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.66 0.22 38 / 60%);
-  --chart-1: oklch(0.7 0.2 38);
-  --chart-2: oklch(0.68 0.15 232);
-  --chart-3: oklch(0.79 0.13 200);
-  --chart-4: oklch(0.66 0.16 275);
-  --chart-5: oklch(0.72 0.17 150);
+  /* The colours of charts. Their order is what keeps neighbours apart for
+     who does not tell every colour from another: the brand orange, blue,
+     green, violet, and grey for "the others". They were checked as a set,
+     in this order, against this surface; a change has to be checked again. */
+  --chart-1: oklch(0.66 0.22 38);
+  --chart-2: oklch(0.588 0.158 241.966);
+  --chart-3: oklch(0.596 0.145 163.225);
+  --chart-4: oklch(0.541 0.281 293.009);
+  --chart-5: var(--muted-foreground);
+  /* What a series means, when it means something: never the colour of a
+     series that means nothing. */
+  --chart-success: oklch(0.596 0.145 163.225);
+  --chart-info: oklch(0.588 0.158 241.966);
+  --chart-warning: oklch(0.681 0.162 75.834);
+  --chart-error: oklch(0.577 0.245 27.325);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -102,14 +135,25 @@
   --accent: oklch(0.27 0.03 262);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.2 0.05 22);
+  --success: oklch(0.765 0.177 163.223);
+  --success-foreground: oklch(0.2 0.04 165);
+  --info: oklch(0.746 0.16 232.661);
+  --info-foreground: oklch(0.2 0.04 240);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.2 0.04 70);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.7 0.21 38 / 60%);
-  --chart-1: oklch(0.74 0.19 40);
-  --chart-2: oklch(0.72 0.14 232);
-  --chart-3: oklch(0.82 0.12 200);
-  --chart-4: oklch(0.7 0.15 275);
-  --chart-5: oklch(0.75 0.16 150);
+  --chart-1: oklch(0.66 0.22 38);
+  --chart-2: oklch(0.588 0.158 241.966);
+  --chart-3: oklch(0.596 0.145 163.225);
+  --chart-4: oklch(0.606 0.25 292.717);
+  --chart-5: var(--muted-foreground);
+  --chart-success: oklch(0.596 0.145 163.225);
+  --chart-info: oklch(0.588 0.158 241.966);
+  --chart-warning: oklch(0.66 0.157 75.834);
+  --chart-error: oklch(0.577 0.245 27.325);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.7 0.21 38);

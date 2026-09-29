@@ -1,7 +1,15 @@
 import * as React from "react";
 import { cn } from "cn";
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"table"> & {
+  // `secondary` draws lines only between the rows of the body: none under
+  // the header, none over the footer.
+  variant?: "default" | "secondary";
+}) {
   return (
     <div
       data-slot="table-container"
@@ -9,7 +17,11 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        data-variant={variant}
+        className={cn(
+          "w-full caption-bottom text-sm data-[variant=secondary]:[&_tfoot]:border-t-0 data-[variant=secondary]:[&_thead_tr]:border-b-0",
+          className,
+        )}
         {...props}
       />
     </div>

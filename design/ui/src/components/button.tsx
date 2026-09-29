@@ -45,10 +45,17 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  icon,
+  iconEnd,
+  children,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    // An icon before the text, or by itself with one of the icon sizes.
+    icon?: React.ReactElement;
+    // An icon after the text.
+    iconEnd?: React.ReactElement;
   }) {
   const Comp = asChild ? Slot.Root : "button";
 
@@ -59,7 +66,11 @@ function Button({
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
-    />
+    >
+      {icon && <Slot.Root data-icon="inline-start">{icon}</Slot.Root>}
+      <Slot.Slottable>{children}</Slot.Slottable>
+      {iconEnd && <Slot.Root data-icon="inline-end">{iconEnd}</Slot.Root>}
+    </Comp>
   );
 }
 

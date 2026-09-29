@@ -1,17 +1,29 @@
 import * as React from "react";
 import { cn } from "cn";
+import { Slot } from "radix-ui";
 
 function Card({
   className,
   size = "default",
+  variant = "default",
+  asChild = false,
   ...props
-}: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
+}: React.ComponentProps<"div"> & {
+  size?: "default" | "sm";
+  // `secondary` lifts the card from the page with a shadow.
+  variant?: "default" | "secondary";
+  // The card becomes its child: a link, and it answers to the pointer.
+  asChild?: boolean;
+}) {
+  const Comp = asChild ? Slot.Root : "div";
+
   return (
-    <div
+    <Comp
       data-slot="card"
       data-size={size}
+      data-variant={variant}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 outline-none [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 data-[variant=secondary]:shadow-md dark:data-[variant=secondary]:shadow-black/50 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl [a]:transition-shadow [a]:hover:ring-primary [a]:focus-visible:ring-2 [a]:focus-visible:ring-primary",
         className,
       )}
       {...props}

@@ -10,7 +10,7 @@ person says when each moment starts.
 | Folder | What it holds |
 |---|---|
 | `design/brand` | the logo, the colours, the fonts |
-| `design/ui` | the components (`src/`) and the gallery that shows them (`app/`) |
+| `design/ui` | the components (`src/`) and the gallery that shows them (`app/`), a page for each |
 | `content/` | what is written: documentation, pages, texts |
 | `apps/` | the applications, which use `design/ui` and `content/` |
 
@@ -63,7 +63,7 @@ seen: http://localhost:4323/, light and dark
 owed: test card · gallery card with action
 ```
 
-What may be owed: `test`, `gallery` (a section for the component),
+What may be owed: `test`, `gallery` (a page for the component),
 `extract` (markup that belongs in `design/ui`), `token` (a colour written
 by hand), `mock` (data a screen needs), `copy` (wording).
 
@@ -85,6 +85,32 @@ design").
 
 A session is not finished while a gate fails.
 
+## The gallery
+
+The gallery is made of the library itself: a `PageLayout` with a `NavList`
+at its side. Each component has a page of its own, in one of four
+categories.
+
+| Category | Folder in `app/` | What it holds |
+|---|---|---|
+| Foundations | `foundations/` | the smallest building blocks: colours, typography, icons, a button |
+| Structures | `structures/` | reusable combinations, like forms and cards |
+| Blueprints | `blueprints/` | complex interactive components, like a navigation |
+| Layouts & Pages | `layouts/` | the placement of a page, and whole views |
+
+A page is made in two steps: the file `app/<category>/<name>/page.tsx`, and
+its line in `app/catalog.ts`, which is what the navigation and the overview
+are drawn from. Moving a component to another category is moving its
+folder and its line.
+
+What a page shows is made up, and made the same way every time
+(`app/samples.ts`): the gallery is drawn when it is built and again in the
+browser, and both have to draw the same thing.
+
+**When a new page looks half drawn**, it is the build cache. Classes used
+only in files made while the server was running may never be written.
+Stop the server, remove `design/ui/.next`, start it again.
+
 ## Rules of the library
 
 - **Nothing of an application**: no router, no API call, no data fetching.
@@ -94,6 +120,29 @@ A session is not finished while a gate fails.
 - **Nothing reads the browser while rendering.** A page may be rendered
   when the application is built, where there is no `localStorage` and no
   `window`; read them in an effect or an event.
-- **Every component has a section in the gallery.**
+- **Every component has a page in the gallery**, and a line in
+  `app/catalog.ts`.
+- **A part of a component is a prop, not a child that is looked for.** A
+  component that finds its heading or its action among its children stops
+  working when the page is rendered on the server, and while the code is
+  reloaded. `heading`, `icon`, `action` are given by name.
+- **A colour has a name.** None from the palette is written in a
+  component: `success`, `info`, `warning` and `destructive` say how
+  something is, each with its `-foreground`; `chart-1` to `chart-5` and
+  `chart-success`, `chart-info`, `chart-warning`, `chart-error` are the
+  inks of charts. The inks were checked as a set, in their order; a change
+  to one has to be checked again.
+- **What changes with the room looks at its own room**, not at the
+  window: a layout, a table, a chart may be in a narrow column of a wide
+  window.
+- **Names that repeat.** An icon before the text is `icon`, after it
+  `iconEnd`. The other look of a component is `variant="secondary"`.
+  What makes a component another element is `asChild`.
+- **Tabs go along a line; a list down the side is a `NavList`.** They
+  look alike and do different things: tabs change a panel, a list goes to
+  another page.
+- **A link in a text is written as a link.** There is no component for
+  it: a text that comes from a document brings its own links, and `Prose`
+  gives them their look.
 - **Tests** are vitest files beside the source, named as sentences about
   what the thing does.
