@@ -138,7 +138,6 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_DNS_REGION=${var.dns_zone != "" ? var.region : ""}
     SHPYRD_DNS_USER=${local.dns_key ? oci_identity_user.dns[0].id : ""}
     SHPYRD_WORKSPACES_DOMAIN=${var.workspaces_zone}
-    SHPYRD_WORKSPACE_CERT_ISSUER=${var.workspaces_zone != "" ? "letsencrypt-dns01" : ""}
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_ENDPOINT=${var.backup_bucket != "" ? "https://${data.oci_objectstorage_namespace.this.namespace}.compat.objectstorage.${var.region}.oraclecloud.com" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}

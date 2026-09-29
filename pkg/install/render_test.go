@@ -474,3 +474,28 @@ func TestExternalDNSFiltersIncludeWorkspacesDomain(t *testing.T) {
 		t.Errorf("workspaces domain equal to the platform's: %v", got)
 	}
 }
+
+// Workspace certificates are wildcards; without an explicit issuer they
+// follow the platform's, which is DNS-01 whenever a DNS provider exists.
+func TestWorkspaceCertIssuerDefaultsToPlatformIssuer(t *testing.T) {
+	withDNS := testProfileRenders(t, "oci", map[string]string{
+		VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com",
+		VarDNSProvider: "oci", VarDNSZoneID: "ocid1.dns-zone.oc1..x", VarDNSRegion: "sa-saopaulo-1",
+		VarWorkspaceCertIssuer: "", // the vars file writes an empty value when there is no workspaces zone
+	}, "https://auth.oci.example.com")
+	if got := withDNS.vars[VarWorkspaceCertIssuer]; got != "letsencrypt-dns01" {
+		t.Errorf("with a DNS provider: workspace issuer = %q, want letsencrypt-dns01", got)
+	}
+	explicit := testProfileRenders(t, "oci", map[string]string{
+		VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com",
+		VarDNSProvider: "oci", VarDNSZoneID: "ocid1.dns-zone.oc1..x", VarDNSRegion: "sa-saopaulo-1",
+		VarWorkspaceCertIssuer: "my-issuer",
+	}, "https://auth.oci.example.com")
+	if got := explicit.vars[VarWorkspaceCertIssuer]; got != "my-issuer" {
+		t.Errorf("explicit issuer overridden: %q", got)
+	}
+	local := testProfileRenders(t, "local", map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"}, "https://auth.example.test:8443")
+	if got := local.vars[VarWorkspaceCertIssuer]; got == "" || got != local.vars[VarPlatformIssuer] {
+		t.Errorf("no DNS provider: workspace issuer = %q, platform issuer = %q", got, local.vars[VarPlatformIssuer])
+	}
+}

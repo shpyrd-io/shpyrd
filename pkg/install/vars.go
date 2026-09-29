@@ -274,8 +274,12 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if _, ok := vars[VarWorkspacesDomain]; !ok {
 		out[VarWorkspacesDomain] = ""
 	}
-	if _, ok := vars[VarWorkspaceCertIssuer]; !ok {
-		out[VarWorkspaceCertIssuer] = ""
+	// A workspace's certificate covers <address> and *.<address>, which
+	// only DNS-01 can issue; unless the operator names an issuer, it is
+	// the platform's (DNS-01 with a DNS provider). The cluster issuer
+	// (HTTP-01) would fail on the wildcard without a word in the console.
+	if vars[VarWorkspaceCertIssuer] == "" {
+		out[VarWorkspaceCertIssuer] = out[VarPlatformIssuer]
 	}
 	// ExternalDNS publishes hosts under the platform domain and, when the
 	// cloud layer gives workspaces their own domain, under that one too:
