@@ -28,14 +28,20 @@ import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 export default function config(phase: string): NextConfig {
   if (phase === PHASE_DEVELOPMENT_SERVER) {
     return {
+      agentRules: false,
       rewrites: async () => [
         { source: "/api/:path*", destination: "http://localhost:8080/api/:path*" },
       ],
     };
   }
-  return { output: "export" };
+  return { output: "export", agentRules: false };
 }
 ```
+
+`agentRules: false` goes in the development branch too: Next would write
+an `AGENTS.md` and a `CLAUDE.md` into the folder on every start. Next 16
+differs from earlier versions; its documentation ships with it, in
+`node_modules/next/dist/docs`, for when something is in doubt.
 
 `app/[[...slug]]/page.tsx`, the entry, and `client.tsx` beside it:
 
@@ -109,6 +115,20 @@ function pick(): Promise<Api> {
 - **What a screen changes** is kept in `localStorage`, so it survives a
   reload. The Mock answers after a short wait, so loading states show.
 - **Errors** are `ApiError`, with the status and the message of the server.
+
+## Development and production
+
+**Development** is `npm run design` (Mock) or `npm run dev` (Backend):
+Next's development server, which shows a saved file at once. It is what a
+design session uses, from start to end.
+
+**Production** is `npm run build`, which writes static files to `out/`.
+The Go server embeds them and serves them with no route declared: a file
+of the build by its path, then the page built for the address, then
+`index.html`. Next writes scripts into every page, so the server reads
+each page it embeds when it starts and sends the hashes of those scripts
+in its Content-Security-Policy. The plan has the details (step 6); none of
+it exists in `pkg/` yet.
 
 ## Tests
 

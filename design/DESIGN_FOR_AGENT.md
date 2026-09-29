@@ -37,8 +37,19 @@ a component that is not there yet. It is one session and one changelog.
 
 ## While designing
 
-- Change the screen and look at it. Hot reload is the feedback.
-- No tests, no lint, no type-check, no build, no commit unless asked.
+- **The server is started once and stays up for the whole session.** A
+  saved file is on the screen in about a tenth of a second, in the same
+  page: measured, 86 ms from saving a component of `design/ui` to seeing
+  it in the gallery.
+- **To show a change: save the file and look at the tab that is open.** No
+  build, no restart, no reload, no second server.
+- The server is restarted only when what it reads at start changed (a
+  dependency installed, `next.config.ts`, `package.json`, a new member of
+  the workspace), or when a new page looks half drawn (The gallery, below).
+- The build, the static export and the Go server are how the application
+  reaches production (`apps/AGENTS.md`). They have no part in looking at
+  a change.
+- No tests, no lint, no type-check, no commit unless asked.
 - Use what `design/ui` has; look at the gallery before writing markup.
 - Something generic that is missing is written where it is quickest and
   noted as owed.
