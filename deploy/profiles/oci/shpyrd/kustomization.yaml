@@ -1,9 +1,25 @@
-# OCI profile overlay for the shpyrd component: adds the OCIR pull secret
-# so the cloud server image (gru.ocir.io/…) can be pulled by the nodes.
+# OCI profile overlay for the shpyrd component: the cloud server image lives
+# in OCIR, so everything that runs it needs the pull secret ocir-pull
+# (created by the image-pull-secret hook from --image-pull-secret-file).
+#
+# The secret goes on the ServiceAccount: the admission controller copies a
+# ServiceAccount's imagePullSecrets onto every pod that uses it and names
+# none itself, so the backup CronJob, the on-demand backup Jobs the API
+# creates from its template and anything added later are covered without a
+# patch each. Patching only the Deployment is how the backup Job on the
+# first production cluster ended in ImagePullBackOff.
 resources:
   - ../../../components/shpyrd/base
 
 patches:
+  - target:
+      kind: ServiceAccount
+      name: shpyrd-server
+    patch: |
+      - op: add
+        path: /imagePullSecrets
+        value:
+          - name: ocir-pull
   - target:
       kind: Deployment
       name: shpyrd-server

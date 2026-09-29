@@ -357,3 +357,78 @@ func TestOCIProfileDefaultConsoleAndAuth(t *testing.T) {
 		t.Errorf("auth under the domain uses the platform issuer: auth=%s platform=%s", v[VarAuthIssuer], v[VarPlatformIssuer])
 	}
 }
+
+// On the cloud profile the server image is private (OCIR). Every pod that
+// runs it, whatever creates the pod, must be able to pull it: the pull
+// secret therefore sits on the ServiceAccount the pod uses, not only on the
+// Deployment. The backup CronJob (and the Jobs the API clones from it) is
+// what this catches; it ran as shpyrd-server with no pull secret on the
+// first production cluster and never started.
+func TestOCIProfileServerImagePullsThroughServiceAccount(t *testing.T) {
+	eng := testProfileRenders(t, "oci", map[string]string{
+		VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com",
+		VarBackupTarget: "s3://bucket/prefix",
+	}, "https://auth.oci.example.com")
+	image := eng.vars[VarServerImage]
+	if image == "" {
+		t.Fatal("no server image")
+	}
+	// Pass 1: ServiceAccounts carrying the pull secret, across components.
+	pulls := map[string]bool{}
+	type workload struct{ component, kind, name, sa string }
+	var runners []workload
+	for _, c := range eng.components {
+		if c.Kustomize == nil {
+			continue
+		}
+		objs, err := eng.renderComponent(c)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		for _, o := range objs {
+			// Manifests may leave the namespace to the component.
+			ns := o.GetNamespace()
+			if ns == "" {
+				ns = c.Namespace
+			}
+			var podSpec map[string]interface{}
+			switch o.GetKind() {
+			case "ServiceAccount":
+				secrets, _, _ := unstructured.NestedSlice(o.Object, "imagePullSecrets")
+				for _, s := range secrets {
+					if name, _, _ := unstructured.NestedString(s.(map[string]interface{}), "name"); name == ImagePullSecretName {
+						pulls[ns+"/"+o.GetName()] = true
+					}
+				}
+				continue
+			case "Deployment", "StatefulSet", "DaemonSet", "Job":
+				podSpec, _, _ = unstructured.NestedMap(o.Object, "spec", "template", "spec")
+			case "CronJob":
+				podSpec, _, _ = unstructured.NestedMap(o.Object, "spec", "jobTemplate", "spec", "template", "spec")
+			default:
+				continue
+			}
+			containers, _, _ := unstructured.NestedSlice(podSpec, "containers")
+			for _, ctr := range containers {
+				if img, _, _ := unstructured.NestedString(ctr.(map[string]interface{}), "image"); img == image {
+					sa, _, _ := unstructured.NestedString(podSpec, "serviceAccountName")
+					runners = append(runners, workload{c.Name, o.GetKind(), o.GetName(), ns + "/" + sa})
+				}
+			}
+		}
+	}
+	// The server and the backup CronJob are always there (pg-gateway joins
+	// with the postgres extension); the check must not pass vacuously.
+	seen := map[string]bool{}
+	for _, r := range runners {
+		seen[r.kind+"/"+r.name] = true
+	}
+	if !seen["Deployment/shpyrd-server"] || !seen["CronJob/platform-backup"] {
+		t.Fatalf("expected the server and the backup CronJob to run %s, found %v", image, runners)
+	}
+	for _, r := range runners {
+		if !pulls[r.sa] {
+			t.Errorf("%s: %s/%s runs the server image as %s, which has no imagePullSecret %s", r.component, r.kind, r.name, r.sa, ImagePullSecretName)
+		}
+	}
+}

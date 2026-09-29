@@ -1,9 +1,19 @@
 # OCI profile overlay for the pg-gateway component: it runs the server image
-# (gru.ocir.io/…), so it needs the same OCIR pull secret as the server.
+# (OCIR), so it needs the same pull secret as the server. On the
+# ServiceAccount as well as the Deployment, for the same reason as in
+# ../shpyrd: every pod under this identity is covered.
 resources:
   - ../../../components/pg-gateway
 
 patches:
+  - target:
+      kind: ServiceAccount
+      name: pg-gateway
+    patch: |
+      - op: add
+        path: /imagePullSecrets
+        value:
+          - name: ocir-pull
   - target:
       kind: Deployment
       name: pg-gateway
