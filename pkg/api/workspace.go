@@ -409,6 +409,14 @@ func (s *Server) putDomainClaim(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("that is not a domain name (acme.com)"))
 		return
 	}
+	// A claim may route only to a method this workspace's login page offers:
+	// routing to a method that does not exist would lock the domain out.
+	if connector := strings.TrimSpace(req.Connector); connector != "" {
+		if !s.offersAt(c, connector) {
+			abort(c, http.StatusBadRequest, fmt.Errorf("%q is not a sign-in method of this workspace; add it first (Sign-in › methods), or leave the method empty", connector))
+			return
+		}
+	}
 	d, err := s.store.PutDomainClaim(c.Request.Context(), s.workspace(c), domain, strings.TrimSpace(req.Connector))
 	if err != nil {
 		storeErr(c, err, "domain claim")
@@ -533,13 +541,16 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 		}
 	}
 	if claimed != nil && claimed.Connector != "" && id.Provider != claimed.Connector {
-		label := claimed.Connector
 		if s.rp != nil {
 			if p := s.rp.provider(claimed.Connector); p != nil {
-				label = p.Label
+				return fmt.Errorf("accounts of %s sign in with %s", emailDomain, p.Label)
 			}
 		}
-		return fmt.Errorf("accounts of %s sign in with %s", emailDomain, label)
+		// The method the claim routes to does not exist any more. The rule
+		// stays (an SSO claim fails closed), and the message says who can
+		// undo it: the operator over a kubeconfig, or a workspace owner
+		// with a token — sessions of this domain cannot open.
+		return fmt.Errorf("accounts of %s are routed to a sign-in method that no longer exists (%s); a workspace owner must update the domain claim (Sign-in › Company domains)", emailDomain, claimed.Connector)
 	}
 	if known != nil {
 		return nil

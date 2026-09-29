@@ -2,6 +2,7 @@ package authlocal
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -142,6 +143,33 @@ func (h *connectorHandlers) remove(c *gin.Context) {
 	if h.deps.Kube == nil || h.deps.Kube.Dynamic == nil {
 		c.JSON(http.StatusNotImplemented, gin.H{"error": "no cluster"})
 		return
+	}
+	// A workspace that hides the platform's methods keeps at least one of
+	// its own: removing the last one would leave a login page with no
+	// door at all (RFC-0033; the switch itself is guarded the same way).
+	if realm == ext.RealmWorkspace {
+		if wso := ext.WorkspaceObjectFrom(c); wso != nil {
+			if wso.Settings.OwnMethodsOnly {
+				own, err := h.store().ListFor(c.Request.Context(), realm, ws)
+				if err == nil && len(own) <= 1 {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "this is the workspace's only sign-in method and the platform's are switched off; offer the platform's methods again first (Sign-in › Also offer the platform's methods), or add another method before removing this one"})
+					return
+				}
+			}
+			// A claimed email domain routed to this method would lock its
+			// accounts out: the claim must point elsewhere first.
+			if h.deps.Store != nil {
+				full := FullConnectorID(realm, ws, id)
+				if claims, err := h.deps.Store.ListDomainClaims(c.Request.Context(), wso.Slug); err == nil {
+					for _, d := range claims {
+						if d.Connector == full {
+							c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("accounts of %s are routed to this method (Sign-in › Company domains); route the domain to another method or to any first", d.Domain)})
+							return
+						}
+					}
+				}
+			}
+		}
 	}
 	if err := h.store().Remove(c.Request.Context(), realm, ws, id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

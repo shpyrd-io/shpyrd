@@ -39,6 +39,14 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	ctx := context.Background()
 	records := map[string][]string{}
 	s.lookupTXT = func(_ context.Context, name string) ([]string, error) { return records[name], nil }
+	// The method the claim routes to must be one the login page offers.
+	if rec := adminJSON(t, s, "POST", "/api/workspace/domain-claims", `{"domain":"Acme.com","connector":"google"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("claim routed to an unknown method = %d %s", rec.Code, rec.Body.String())
+	}
+	issuer := newFakeIssuer(t)
+	if err := s.rp.AddOIDC(ctx, ext.OIDCProvider{ID: "google", Label: "Google", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Kind: "google"}); err != nil {
+		t.Fatal(err)
+	}
 
 	rec := adminJSON(t, s, "POST", "/api/workspace/domain-claims", `{"domain":"Acme.com","connector":"google"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"record":"_shpyrd-verify.acme.com"`) || !strings.Contains(rec.Body.String(), `"verified":false`) {
