@@ -28,14 +28,21 @@ function words(node: RenderableTreeNode | RenderableTreeNode[]): string {
   return "";
 }
 
-/** A name for an address, made of the words of a heading. */
-export function slug(text: string): string {
-  return text
+/**
+ * A name for an address, made of the words of a heading. Two headings of the
+ * same words in one document get different names: the second is "-2".
+ */
+export function slug(text: string, seen?: Map<string, number>): string {
+  const base = text
     .toLowerCase()
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+  if (!seen) return base;
+  const n = (seen.get(base) ?? 0) + 1;
+  seen.set(base, n);
+  return n === 1 ? base : `${base}-${n}`;
 }
 
 /** The front matter of these files is `key: value` lines, nothing more. */
@@ -49,59 +56,62 @@ export function meta(front: string | undefined): Record<string, string> {
 }
 
 // The tags and nodes of the texts, each drawn by a component of design/ui
-// (app/markdoc.tsx says which).
-const config: Config = {
-  tags: {
-    callout: {
-      render: "Callout",
-      attributes: {
-        title: { type: String },
-        type: { type: String, default: "note", matches: ["note", "warning"] },
+// (app/markdoc.tsx says which). Built per document, because the names of the
+// headings are counted within one.
+function configFor(seen: Map<string, number>): Config {
+  return {
+    tags: {
+      callout: {
+        render: "Callout",
+        attributes: {
+          title: { type: String },
+          type: { type: String, default: "note", matches: ["note", "warning"] },
+        },
+      },
+      "quick-links": { render: "QuickLinks" },
+      "quick-link": {
+        render: "QuickLink",
+        selfClosing: true,
+        attributes: {
+          title: { type: String },
+          description: { type: String },
+          icon: { type: String },
+          href: { type: String },
+        },
       },
     },
-    "quick-links": { render: "QuickLinks" },
-    "quick-link": {
-      render: "QuickLink",
-      selfClosing: true,
-      attributes: {
-        title: { type: String },
-        description: { type: String },
-        icon: { type: String },
-        href: { type: String },
+    nodes: {
+      fence: {
+        render: "Fence",
+        attributes: { language: { type: String }, content: { type: String } },
       },
-    },
-  },
-  nodes: {
-    fence: {
-      render: "Fence",
-      attributes: { language: { type: String }, content: { type: String } },
-    },
-    heading: {
-      children: ["inline"],
-      attributes: { level: { type: Number, required: true, default: 1 } },
-      transform(node, cfg) {
-        const children = node.transformChildren(cfg);
-        return new Tag(
-          `h${node.attributes.level}`,
-          { ...node.transformAttributes(cfg), id: slug(words(children)) },
-          children,
-        );
+      heading: {
+        children: ["inline"],
+        attributes: { level: { type: Number, required: true, default: 1 } },
+        transform(node, cfg) {
+          const children = node.transformChildren(cfg);
+          return new Tag(
+            `h${node.attributes.level}`,
+            { ...node.transformAttributes(cfg), id: slug(words(children), seen) },
+            children,
+          );
+        },
       },
-    },
-    image: {
-      attributes: { src: { type: String }, alt: { type: String }, title: { type: String } },
-      transform(node) {
-        const { src, alt, title } = node.attributes;
-        return new Tag("img", {
-          src: String(src).startsWith("/") ? site + src : src,
-          alt,
-          title,
-          loading: "lazy",
-        });
+      image: {
+        attributes: { src: { type: String }, alt: { type: String }, title: { type: String } },
+        transform(node) {
+          const { src, alt, title } = node.attributes;
+          return new Tag("img", {
+            src: String(src).startsWith("/") ? site + src : src,
+            alt,
+            title,
+            loading: "lazy",
+          });
+          },
+        },
       },
-    },
-  },
-};
+  };
+}
 
 function headings(
   node: RenderableTreeNode | RenderableTreeNode[],
@@ -122,7 +132,7 @@ function headings(
 export function read(name: string): Text {
   const ast = Markdoc.parse(fs.readFileSync(path.join(dir, `${name}.md`), "utf8"));
   const m = meta(ast.attributes.frontmatter);
-  const content = Markdoc.transform(ast, config);
+  const content = Markdoc.transform(ast, configFor(new Map()));
   return {
     title: m.title ?? name,
     description: m.description,

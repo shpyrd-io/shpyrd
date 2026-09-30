@@ -24,4 +24,26 @@ describe("the texts of the site", () => {
     const { headings } = read("getting-started");
     expect(headings.map((h) => h.id)).toContain("what-you-get");
   });
+
+  it("gives every document a title and a description", () => {
+    for (const name of documents()) {
+      const text = read(name);
+      expect(text.title, `${name} has no title`).toBeTruthy();
+      expect(text.description, `${name} has no description`).toBeTruthy();
+    }
+  });
+
+  it("gives two headings of the same words two different names", () => {
+    const seen = new Map<string, number>();
+    expect(slug("Status", seen)).toBe("status");
+    expect(slug("Status", seen)).toBe("status-2");
+    expect(slug("Status", seen)).toBe("status-3");
+  });
+
+  it("never names two headings of one document the same", () => {
+    for (const name of documents()) {
+      const ids = read(name).headings.map((h) => h.id);
+      expect(new Set(ids).size, `${name} repeats a heading name`).toBe(ids.length);
+    }
+  });
 });
