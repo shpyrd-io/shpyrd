@@ -183,6 +183,14 @@ uses the kubeconfig; the API enforces `cluster.admin`).
   - Syslog uses Vector's `socket` sink with a VRL remap composing the RFC 5424 line; TLS when
     the URL is `syslog+tls://`.
 
+- 2026-09-30: a third scope, the **workspace drain**: a LogDrain of the system namespace
+  labelled `shpyrd.io/workspace=<slug>` and named `<slug>-<name>`, receiving the lines
+  the agent labels with that workspace (`.workspace == "<slug>"`). Its admins add them at
+  `GET/POST/DELETE /api/workspace/drains` on the workspace's door, on the workspace's Log
+  drains page, or with `shpyrd drains --workspace <slug>` over a kubeconfig. The cluster
+  scope stays for the operator (`/api/drains`, `--cluster`); its page left the console,
+  as log storage for the platform is a cluster drain's job (RFC-0022b), not a page's.
+
 ## Implementation status
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.

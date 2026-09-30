@@ -36,20 +36,21 @@ A drain forwards lines as they are written ([RFC-0023](https://github.com/shpyrd
 | HTTPS (Datadog, Better Stack, Axiom, your own collector) | `https://...` | JSON, one object per line, batched, with the headers you set (API keys) |
 | Syslog (Papertrail, rsyslog, a SIEM) | `syslog://host:port` or `syslog+tls://host:port` | RFC 5424 over TCP: the project as APP-NAME, the instance as PROCID, the level as severity |
 
-And two scopes:
+And three scopes:
 
 - a **project drain** receives that project's lines; project admins add them on the project page or with `--project`;
-- a **cluster drain** receives every project's lines, labelled with the project; platform admins add them on the Cluster page or with `--cluster`.
+- a **workspace drain** receives every project's lines of the workspace, labelled with the project; workspace admins add them on the workspace's Log drains page or with `--workspace`;
+- a **cluster drain** receives every project's lines of the platform; the operator adds them over a kubeconfig with `--cluster`.
 
 ```shell
 shpyrd drains add https://in.logs.betterstack.com/ --header "Authorization: Bearer ..." --project shop
 shpyrd drains add https://http-intake.logs.datadoghq.com/api/v2/logs --header "DD-API-KEY: ..." --processes web --project shop
-shpyrd drains add syslog+tls://logs.papertrailapp.com:6514 --cluster
+shpyrd drains add syslog+tls://logs.papertrailapp.com:6514 --workspace acme
 shpyrd drains list --project shop
 shpyrd drains remove in-logs-betterstack-com --project shop
 ```
 
-The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. Both cards show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` event visible in the project's activity.
+The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. The pages show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` event visible in the project's activity.
 
 {% callout title="Storage and history" %}
 Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md), an optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.

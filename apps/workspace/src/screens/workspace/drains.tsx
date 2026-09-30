@@ -18,18 +18,19 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
 import type { CreateDrain } from "@/api/types";
-import { ago, Failed, Loading } from "./shared";
+import { ago } from "@/lib/project";
+import { Failed, Loading } from "../project/shared";
 
-// Every project's lines, labelled with the project, sent as they are
-// written to a service of the operator's own.
+// Every project's lines of the workspace, labelled with the project, sent
+// as they are written to a service of the workspace's own.
 export function Drains() {
   const queries = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const agent = config.data?.extensions.includes("logs-agent") ?? true;
-  const drains = useQuery({ queryKey: ["drains"], queryFn: api.drains, refetchInterval: 15_000 });
+  const drains = useQuery({ queryKey: ["drains"], queryFn: api.workspaceDrains, refetchInterval: 15_000 });
   const refresh = () => queries.invalidateQueries({ queryKey: ["drains"] });
   const remove = useMutation({
-    mutationFn: (name: string) => api.removeDrain(name),
+    mutationFn: (name: string) => api.removeWorkspaceDrain(name),
     onSuccess: () => {
       refresh();
       toast.success("Drain removed");
@@ -42,14 +43,14 @@ export function Drains() {
         <Alert variant="warning">
           <AlertTitle>Nothing is forwarded</AlertTitle>
           <AlertDescription>
-            The logs-agent extension is off. Drains start sending once it is on: <InlineCode>shpyrd extensions enable logs-agent</InlineCode>.
+            The logs-agent extension is off. Drains start sending once the operator runs <InlineCode>shpyrd extensions enable logs-agent</InlineCode>.
           </AlertDescription>
         </Alert>
       )}
       <Card>
         <CardHeader>
-          <CardTitle>Cluster log drains</CardTitle>
-          <CardDescription>Every project's lines, labelled with the project, sent as they are written: JSON over HTTPS or syslog. A project's own drains are on its page. The values of the headers are never read back.</CardDescription>
+          <CardTitle>Log drains</CardTitle>
+          <CardDescription>Every project's lines of the workspace, labelled with the project, sent as they are written: JSON over HTTPS or syslog. A project's own drains are on its page. The values of the headers are never read back.</CardDescription>
           <CardAction>
             <AddDrain onDone={refresh} />
           </CardAction>
@@ -61,7 +62,7 @@ export function Drains() {
             <Failed what="the drains" error={drains.error} />
           ) : (drains.data ?? []).length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              None. <InlineCode>shpyrd-ctl drains add &lt;url&gt;</InlineCode> does the same from the CLI.
+              None. <InlineCode>shpyrd drains add &lt;url&gt; --workspace</InlineCode> does the same from the CLI.
             </p>
           ) : (
             <Table>
@@ -137,7 +138,7 @@ function AddDrain({ onDone }: { onDone: () => void }) {
       const body: CreateDrain = { name: name || undefined, url: url.trim(), format: format === "auto" ? undefined : format };
       const sent = Object.fromEntries(headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value]));
       if (Object.keys(sent).length) body.headers = sent;
-      return api.addDrain(body);
+      return api.addWorkspaceDrain(body);
     },
     onSuccess: (d) => {
       onDone();

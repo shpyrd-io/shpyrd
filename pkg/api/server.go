@@ -532,6 +532,9 @@ func (s *Server) routes() error {
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
 	api.GET("/workspace/globals", s.require(authz.ClusterAdmin), s.getWorkspaceGlobals) // RFC-0016: the workspace's own
 	api.PUT("/workspace/globals", s.require(authz.ClusterAdmin), s.putWorkspaceGlobals)
+	api.GET("/workspace/drains", s.require(authz.ClusterAdmin), s.listWorkspaceDrains) // RFC-0023: the workspace's own
+	api.POST("/workspace/drains", s.require(authz.ClusterAdmin), s.createWorkspaceDrain)
+	api.DELETE("/workspace/drains/:name", s.require(authz.ClusterAdmin), s.deleteWorkspaceDrain)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)

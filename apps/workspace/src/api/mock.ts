@@ -58,6 +58,7 @@ type Things = {
   teams: Team[];
   tokens: APIToken[];
   workspaceDomains: WorkspaceDomain[];
+  workspaceDrains: Drain[];
   loginMethods: LoginMethods;
   domainClaims: DomainClaim[];
   sizes: SizeCatalog;
@@ -569,6 +570,21 @@ export const mock: Api = {
   removeDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     p.domains.domains = p.domains.domains.filter((d) => d.host !== host);
+    await thingsOf.set(all);
+  },
+  workspaceDrains: async () => (await thingsOf.get()).workspaceDrains,
+  addWorkspaceDrain: async (body) => {
+    const all = await thingsOf.get();
+    const name = body.name || new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.replace(/\./g, "-");
+    if (all.workspaceDrains.some((d) => d.name === name)) throw new ApiError(409, `a drain named ${name} exists`);
+    const drain: Drain = { name, url: body.url, format: body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"), processes: body.processes, headers: Object.keys(body.headers ?? {}), workspace: "acme", phase: "Pending", sent: 0, errors: 0, createdAt: now() };
+    all.workspaceDrains.push(drain);
+    await thingsOf.set(all);
+    return drain;
+  },
+  removeWorkspaceDrain: async (name) => {
+    const all = await thingsOf.get();
+    all.workspaceDrains = all.workspaceDrains.filter((d) => d.name !== name);
     await thingsOf.set(all);
   },
   drains: async (slug) => (await ofProject(slug))[1].drains,

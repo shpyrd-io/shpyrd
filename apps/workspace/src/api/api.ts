@@ -140,6 +140,10 @@ export type Api = {
   domains: (slug: string) => Promise<{ target: string; domains: DomainStatus[] }>;
   addDomain: (slug: string, host: string) => Promise<DomainStatus>;
   removeDomain: (slug: string, host: string) => Promise<void>;
+  // The drains of the workspace: every project's lines, labelled with it.
+  workspaceDrains: () => Promise<Drain[]>;
+  addWorkspaceDrain: (body: CreateDrain) => Promise<Drain>;
+  removeWorkspaceDrain: (name: string) => Promise<void>;
   drains: (slug: string) => Promise<Drain[]>;
   addDrain: (slug: string, body: CreateDrain) => Promise<Drain>;
   removeDrain: (slug: string, name: string) => Promise<void>;

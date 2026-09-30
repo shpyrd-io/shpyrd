@@ -2,12 +2,13 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CreditCard, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound } from "lucide-react";
+import { CreditCard, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
 import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
 import { Connections } from "./connections";
+import { Drains } from "./drains";
 import { General } from "./general";
 import { Globals } from "./globals";
 import { People } from "./people";
@@ -26,6 +27,7 @@ const pages = [
   { group: "Access", slug: "tokens", title: "API tokens", icon: <KeyRound /> },
   { group: "Access", slug: "connections", title: "Connections", icon: <Link2 /> },
   { group: "Platform", slug: "globals", title: "Config vars", icon: <KeyRound />, needs: "admin" },
+  { group: "Platform", slug: "drains", title: "Log drains", icon: <Waves />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
   { group: "Platform", slug: "billing", title: "Billing", icon: <CreditCard />, needs: "admin", capability: "billing" },
   { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug /> },
@@ -75,6 +77,7 @@ export function WorkspacePages() {
         <Route path="tokens" element={<Tokens />} />
         <Route path="connections" element={<Connections />} />
         <Route path="globals" element={<Globals />} />
+        <Route path="drains" element={<Drains />} />
         <Route path="domains" element={<WorkspaceDomains />} />
         <Route path="billing" element={<Billing />} />
         <Route path="mcp" element={<MCP />} />

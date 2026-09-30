@@ -234,6 +234,8 @@ export type WorkspaceDomain = {
 };
 
 export type Drain = {
+  // The workspace whose lines it receives, for a drain of the workspace.
+  workspace?: string;
   name: string;
   url: string;
   format: "json" | "syslog";

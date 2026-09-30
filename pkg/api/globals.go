@@ -45,17 +45,17 @@ func (s *Server) putGlobals(c *gin.Context) { s.writeGlobals(c, store.DefaultWor
 
 // getWorkspaceGlobals is GET /api/workspace/globals: the config vars every
 // project of the request's workspace receives, names and when each was set.
-func (s *Server) getWorkspaceGlobals(c *gin.Context) { s.readGlobals(c, s.globalsWorkspace(c)) }
+func (s *Server) getWorkspaceGlobals(c *gin.Context) { s.readGlobals(c, s.doorWorkspace(c)) }
 
 // putWorkspaceGlobals is PUT /api/workspace/globals: set and unset names,
 // dotenv for bulk paste. The controller mirrors the change into every
 // project of the workspace and records a "Global config change" release
 // for each.
-func (s *Server) putWorkspaceGlobals(c *gin.Context) { s.writeGlobals(c, s.globalsWorkspace(c)) }
+func (s *Server) putWorkspaceGlobals(c *gin.Context) { s.writeGlobals(c, s.doorWorkspace(c)) }
 
-// globalsWorkspace is the workspace of the request's door; at the console,
+// doorWorkspace is the workspace of the request's door; at the console,
 // the default workspace, which is the operator's own.
-func (s *Server) globalsWorkspace(c *gin.Context) string {
+func (s *Server) doorWorkspace(c *gin.Context) string {
 	if ws := s.workspace(c); ws != "" {
 		return ws
 	}

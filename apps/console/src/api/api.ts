@@ -3,9 +3,7 @@ import type {
   ClusterMetrics,
   ClusterSettings,
   ClusterSummary,
-  CreateDrain,
   CreatedWorkspace,
-  Drain,
   Economics,
   HelmRelease,
   Identity,
@@ -52,9 +50,6 @@ export type Api = {
   economics: (month?: string) => Promise<Economics>;
   sizes: () => Promise<SizeCatalog>;
   saveSizes: (catalog: SizeCatalog) => Promise<SizeCatalog>;
-  drains: () => Promise<Drain[]>;
-  addDrain: (body: CreateDrain) => Promise<Drain>;
-  removeDrain: (name: string) => Promise<void>;
   // The accounts of the auth-local extension.
   users: () => Promise<LocalUser[]>;
   createUser: (body: { email: string; name?: string; password: string }) => Promise<LocalUser>;

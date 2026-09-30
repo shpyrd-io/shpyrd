@@ -27,7 +27,7 @@ export function Settings() {
     <Card>
       <CardHeader>
         <CardTitle>Default workspace</CardTitle>
-        <CardDescription>One of your workspaces: its owners and admins are this console's platform admins, and commands over a kubeconfig act on its projects. Sizes, global vars and drains are under Cluster.</CardDescription>
+        <CardDescription>One of your workspaces: its owners and admins are this console's platform admins, and commands over a kubeconfig act on its projects. Sizes are under Cluster; its config vars and log drains are on its own pages, as every workspace's.</CardDescription>
       </CardHeader>
       <CardContent>
         {list.isLoading ? (

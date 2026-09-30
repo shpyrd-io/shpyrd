@@ -312,22 +312,6 @@
       }
     ]
   },
-  "drains": [
-    {
-      "name": "datadog",
-      "url": "https://http-intake.logs.datadoghq.com/v1/input",
-      "format": "json",
-      "headers": [
-        "DD-API-KEY"
-      ],
-      "cluster": true,
-      "phase": "Active",
-      "lastDeliveryAt": "2026-09-30T10:59:00Z",
-      "sent": 9843120,
-      "errors": 12,
-      "createdAt": "2026-07-15T08:00:00Z"
-    }
-  ],
   "users": [
     {
       "email": "patrick@shpyrd.io",

@@ -2,7 +2,7 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, Building2, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Settings, TrendingUp, Users, Waves } from "lucide-react";
+import { Boxes, Building2, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Settings, TrendingUp, Users } from "lucide-react";
 import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
@@ -10,7 +10,6 @@ import { Frame } from "@/shell/frame";
 import { Accounts } from "./accounts";
 import { Backups } from "./backups";
 import { Components } from "./components";
-import { Drains } from "./drains";
 import { Economics } from "./economics";
 import { Mail as MailPage } from "./mail";
 import { Overview } from "./overview";
@@ -91,13 +90,6 @@ const pages: Page[] = [
     title: "Instances",
     icon: <Cpu />,
     needs: "view",
-  },
-  {
-    group: "Cluster",
-    slug: "drains",
-    title: "Drains",
-    icon: <Waves />,
-    needs: "admin",
   },
   {
     group: "Cluster",
@@ -220,7 +212,6 @@ export function Pages() {
         <Route path="economics" element={<Economics />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="sizes" element={<Sizes />} />
-        <Route path="drains" element={<Drains />} />
         <Route path="registry" element={<Registry />} />
         <Route path="storage" element={<Storage />} />
         <Route path="backups" element={<Backups />} />

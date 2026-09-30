@@ -58,9 +58,9 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd drains add <url> [--name] [--header "Name: value"]... [--processes web,worker] [--format json\|syslog] --project <slug> \| --cluster` | Forward a project's (or every project's) lines to an HTTPS or syslog receiver (extension `logs-agent`). |
-| `shpyrd drains list [--project \| --cluster]` | Drains with delivery status and last delivery. |
-| `shpyrd drains remove <name> [--project \| --cluster]` | Remove a drain and its stored headers. |
+| `shpyrd drains add <url> [--name] [--header "Name: value"]... [--processes web,worker] [--format json\|syslog] --project <slug> \| --workspace <slug> \| --cluster` | Forward a project's, a workspace's or every project's lines to an HTTPS or syslog receiver (extension `logs-agent`). |
+| `shpyrd drains list [--project \| --workspace \| --cluster]` | Drains with delivery status and last delivery. |
+| `shpyrd drains remove <name> [--project \| --workspace \| --cluster]` | Remove a drain and its stored headers. |
 
 ## Global config vars
 

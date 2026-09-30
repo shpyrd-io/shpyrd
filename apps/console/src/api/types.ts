@@ -152,21 +152,6 @@ export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: st
 export type SizeCatalog = { default: string; sizes: InstanceSize[] };
 
 
-export type Drain = {
-  name: string;
-  url: string;
-  format: "json" | "syslog";
-  processes?: string[];
-  headers?: string[];
-  cluster?: boolean;
-  phase: "Pending" | "Active" | "Failing";
-  message?: string;
-  lastDeliveryAt?: string;
-  sent: number;
-  errors: number;
-  createdAt: string;
-};
-export type CreateDrain = { name?: string; url: string; format?: "json" | "syslog"; headers?: Record<string, string> };
 
 export type LocalUser = { email: string; name?: string; createdAt: string };
 

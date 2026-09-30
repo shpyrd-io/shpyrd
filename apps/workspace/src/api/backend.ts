@@ -226,6 +226,9 @@ export const backend: Api = {
   removeDomain: async (slug, host) => {
     await request(`${project(slug)}/domains/${encodeURIComponent(host)}`, gone);
   },
+  workspaceDrains: () => request("/api/workspace/drains"),
+  addWorkspaceDrain: (body) => request("/api/workspace/drains", json("POST", body)),
+  removeWorkspaceDrain: (name) => request(`/api/workspace/drains/${encodeURIComponent(name)}`, gone),
   drains: (slug) => request(`${project(slug)}/drains`),
   addDrain: (slug, body) => request(`${project(slug)}/drains`, json("POST", body)),
   removeDrain: (slug, name) => request(`${project(slug)}/drains/${encodeURIComponent(name)}`, gone),

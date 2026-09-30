@@ -5,7 +5,6 @@ import type {
   BackupInfo,
   ClusterSettings,
   ClusterSummary,
-  Drain,
   Economics,
   HelmRelease,
   Identity,
@@ -36,7 +35,6 @@ type Things = {
   mail: MailStatus;
   economics: Economics;
   sizes: SizeCatalog;
-  drains: Drain[];
   users: LocalUser[];
   methods: { console: LoginMethods; platform: LoginMethods };
   workspaces: WorkspaceSummary[];
@@ -197,20 +195,6 @@ export const mock: Api = {
     all.sizes = catalog;
     await thingsOf.set(all);
     return catalog;
-  },
-  drains: async () => (await thingsOf.get()).drains,
-  addDrain: async (body) => {
-    const all = await thingsOf.get();
-    const name = body.name || new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.split(".")[0] || "drain";
-    const drain: Drain = { name, url: body.url, format: body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"), headers: Object.keys(body.headers ?? {}), cluster: true, phase: "Pending", sent: 0, errors: 0, createdAt: now() };
-    all.drains.push(drain);
-    await thingsOf.set(all);
-    return drain;
-  },
-  removeDrain: async (name) => {
-    const all = await thingsOf.get();
-    all.drains = all.drains.filter((d) => d.name !== name);
-    await thingsOf.set(all);
   },
 
   users: async () => (await thingsOf.get()).users,

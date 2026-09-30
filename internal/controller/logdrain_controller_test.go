@@ -26,6 +26,7 @@ func TestRenderDrains(t *testing.T) {
 		{ID: "drain_app_shop_datadog", Namespace: "app-shop", Name: "datadog", URL: "https://http-intake.logs.datadoghq.com/api/v2/logs", Format: "json",
 			Processes: []string{"web"}, Headers: map[string]string{"DD-API-KEY": "DRAIN_APP_SHOP_DATADOG_DD_API_KEY"}},
 		{ID: "drain_shpyrd_system_siem", Namespace: "shpyrd-system", Name: "siem", URL: "syslog+tls://logs.example.com:6514", Format: "syslog", Cluster: true},
+		{ID: "drain_shpyrd_system_acme_axiom", Namespace: "shpyrd-system", Name: "acme-axiom", URL: "https://api.axiom.co/v1/datasets/acme/ingest", Format: "json", Workspace: "acme"},
 	}, "shpyrd-system")
 
 	// Valid YAML with the expected components.
@@ -48,6 +49,10 @@ func TestRenderDrains(t *testing.T) {
 	if !strings.Contains(out, `"DD-API-KEY": "${DRAIN_APP_SHOP_DATADOG_DD_API_KEY}"`) {
 		t.Errorf("header must be an env var reference:\n%s", out)
 	}
+	// Workspace drain: the lines of the workspace, whatever the project.
+	if ax := doc.Transforms["drain_shpyrd_system_acme_axiom"]; ax["condition"] != `.workspace == "acme"` {
+		t.Errorf("workspace drain condition = %v", ax["condition"])
+	}
 	// Cluster drain: no project condition; syslog gets a formatting remap
 	// and a TLS socket sink fed by it.
 	siem := doc.Transforms["drain_shpyrd_system_siem"]
@@ -67,6 +72,7 @@ func TestRenderDrains(t *testing.T) {
 	}
 	// Deterministic.
 	if again := renderDrains([]renderedDrain{
+		{ID: "drain_shpyrd_system_acme_axiom", Namespace: "shpyrd-system", Name: "acme-axiom", URL: "https://api.axiom.co/v1/datasets/acme/ingest", Format: "json", Workspace: "acme"},
 		{ID: "drain_shpyrd_system_siem", Namespace: "shpyrd-system", Name: "siem", URL: "syslog+tls://logs.example.com:6514", Format: "syslog", Cluster: true},
 		{ID: "drain_app_shop_datadog", Namespace: "app-shop", Name: "datadog", URL: "https://http-intake.logs.datadoghq.com/api/v2/logs", Format: "json",
 			Processes: []string{"web"}, Headers: map[string]string{"DD-API-KEY": "DRAIN_APP_SHOP_DATADOG_DD_API_KEY"}},

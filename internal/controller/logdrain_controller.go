@@ -54,7 +54,8 @@ type LogDrainReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-	// SystemNamespace holds cluster drains (every project's lines).
+	// SystemNamespace holds the cluster drains (every project's lines) and
+	// the workspace drains (a workspace's lines, labelled with it).
 	SystemNamespace string
 	// HTTP fetches Vector's metrics; nil disables status polling (tests).
 	HTTP *http.Client
@@ -200,14 +201,21 @@ type renderedDrain struct {
 	MirrorData map[string][]byte
 	// Cluster drains receive every project.
 	Cluster bool
+	// Workspace drains receive every project of one workspace: a drain of
+	// the system namespace labelled with the workspace's slug.
+	Workspace string
 }
 
 // resolveDrain validates the spec and looks the header Secret up.
 func (r *LogDrainReconciler) resolveDrain(ctx context.Context, d *shpyrdv1.LogDrain) (renderedDrain, error) {
+	inSystem := d.Namespace == r.SystemNamespace
 	rd := renderedDrain{
 		ID: componentID(d), Namespace: d.Namespace, Name: d.Name, URL: d.Spec.URL,
-		Format: d.EffectiveFormat(), Processes: d.Spec.Processes,
-		Cluster: d.Namespace == r.SystemNamespace, Headers: map[string]string{},
+		Format: d.EffectiveFormat(), Processes: d.Spec.Processes, Headers: map[string]string{},
+	}
+	if inSystem {
+		rd.Workspace = d.Labels[shpyrdv1.LabelWorkspace]
+		rd.Cluster = rd.Workspace == ""
 	}
 	if err := ValidateDrainURL(d.Spec.URL, rd.Format); err != nil {
 		return rd, err
@@ -343,7 +351,12 @@ body = to_string(.msg) ?? to_string(.message) ?? ""
 // drainCondition is the VRL condition selecting the drain's lines.
 func drainCondition(d renderedDrain) string {
 	var parts []string
-	if !d.Cluster {
+	switch {
+	case d.Workspace != "":
+		// The agent labels every line with its workspace ("default" when
+		// the pod carries none).
+		parts = append(parts, fmt.Sprintf(".workspace == %q", d.Workspace))
+	case !d.Cluster:
 		// The namespace, not the project name: two workspaces may both have
 		// a project called shop (RFC-0033).
 		parts = append(parts, fmt.Sprintf(".namespace == %q", d.Namespace))
