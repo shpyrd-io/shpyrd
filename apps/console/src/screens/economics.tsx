@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { Input } from "@shpyrd/ui/components/input";
+import { Label } from "@shpyrd/ui/components/label";
+import { Stack } from "@shpyrd/ui/components/stack";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
 import type { EconomicsRow } from "@/api/types";
@@ -27,13 +29,15 @@ export function Economics() {
   const empty = econ.data && (econ.data.totals?.totalCogs ?? 0) === 0 && (econ.data.totals?.revenue ?? 0) === 0;
   return (
     <>
+      {/* The month, over both tables: the one shown until another is chosen. */}
+      <Stack direction="horizontal" align="center" justify="end" gap="cozy">
+        <Label htmlFor="economics-month">Month</Label>
+        <Input id="economics-month" type="month" size="sm" value={month || econ.data?.month || ""} onChange={(e) => setMonth(e.target.value)} className="w-40" />
+      </Stack>
       <Card>
         <CardHeader>
           <CardTitle>Customers</CardTitle>
           <CardDescription>Revenue at the prices of the plan, the cost of the infrastructure, and what is left. Direct is the pods in the workspace's namespaces; shared its part of the ingress, the monitoring and the platform; idle its part of the capacity nobody uses.</CardDescription>
-          <CardAction>
-            <Input type="month" size="sm" value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="w-40" />
-          </CardAction>
         </CardHeader>
         <CardContent>
           {econ.isLoading ? (
@@ -74,7 +78,7 @@ export function Economics() {
               </TableBody>
               <TableFooter>
                 <TableRow>
-                  <TableCell>{econ.data?.month}, the customers</TableCell>
+                  <TableCell>Total</TableCell>
                   <TableCell className="text-right font-mono">{money(revenue)}</TableCell>
                   <TableCell className="text-right font-mono text-muted-foreground">{money(sumOf(customers, "directCogs"))}</TableCell>
                   <TableCell className="text-right font-mono text-muted-foreground">{money(sumOf(customers, "sharedCogs"))}</TableCell>
@@ -118,7 +122,7 @@ export function Economics() {
               </TableBody>
               <TableFooter>
                 <TableRow>
-                  <TableCell>{econ.data?.month}, the platform's own</TableCell>
+                  <TableCell>Total</TableCell>
                   <TableCell className="text-right font-mono text-muted-foreground">{money(sumOf(own, "directCogs"))}</TableCell>
                   <TableCell className="text-right font-mono text-muted-foreground">{money(sumOf(own, "sharedCogs"))}</TableCell>
                   <TableCell className="text-right font-mono text-muted-foreground">{money(sumOf(own, "idleCogs"))}</TableCell>
