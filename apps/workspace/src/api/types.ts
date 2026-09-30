@@ -351,10 +351,11 @@ export type NewLoginMethod = {
 // An email domain the company owns, proved by a record.
 export type DomainClaim = { domain: string; connector?: string; verified: boolean; verifiedAt?: string; record: string; recordValue: string };
 
-export type BillingLine = { project?: string; component: string; metric: string; quantity: number; unit: string; amount: number };
-// The month so far, with where it is headed at this pace, or a month
-// that closed, as it was invoiced.
-export type Billing = { plan: string; currency: string; month: string; closed?: boolean; total: number; projection?: number; lines: BillingLine[] };
+// `price` is what one unit costs, in the currency of the billing.
+export type BillingLine = { project?: string; component: string; metric: string; quantity: number; unit: string; price: number; amount: number };
+// The usage of a month at the prices of the plan: this one so far, with
+// where it is headed at this pace, or a month that went by.
+export type Billing = { plan: string; currency: string; month: string; past?: boolean; total: number; projection?: number; lines: BillingLine[] };
 
 export type Point = [time: number, value: number];
 // `reference` is the allocation the series is measured against (what the

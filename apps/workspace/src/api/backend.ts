@@ -144,21 +144,18 @@ export const backend: Api = {
   verifyDomainClaim: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
   unclaimDomain: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}`, gone),
   billing: async (month) => {
-    const r = await request<BillingAnswer>("/api/workspace/billing/current");
-    const line = (l: BillingAnswer["lines"][number]) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, amount: l.grossAmount });
-    if (month && month !== r.period) {
-      // A month that closed: its lines as they were invoiced, none until
-      // the platform closes months. The plan and the currency are today's.
-      const closed = (await request<BillingAnswer["lines"] | null>(`/api/workspace/billing/invoices?month=${encodeURIComponent(month)}`)) ?? [];
-      return { plan: r.plan?.name ?? r.plan?.slug ?? "", currency: r.currency, month, closed: true, total: closed.reduce((sum, l) => sum + l.grossAmount, 0), lines: closed.map(line) };
-    }
+    // The usage of the month at the prices of the plan, this one without
+    // a month. A month that went by has no projection.
+    const r = await request<BillingAnswer>(`/api/workspace/billing/current${month ? `?month=${encodeURIComponent(month)}` : ""}`);
+    const past = r.period !== new Date().toISOString().slice(0, 7);
     const billing: Billing = {
       plan: r.plan?.name ?? r.plan?.slug ?? "",
       currency: r.currency,
       month: r.period,
+      past,
       total: r.total,
-      projection: r.projection,
-      lines: r.lines.map(line),
+      projection: past ? undefined : r.projection,
+      lines: r.lines.map((l) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, price: l.unitPrice, amount: l.grossAmount })),
     };
     return billing;
   },

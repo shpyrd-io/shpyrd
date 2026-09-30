@@ -16,6 +16,10 @@ export default function config(phase: string): NextConfig {
     // `dev` script hands it to Node as it starts (NODE_EXTRA_CA_CERTS).
     return {
       agentRules: false,
+      // The local Caddy may serve this development server at the door's
+      // own name, so that the browser is on the door's origin: cookies and
+      // the shell's socket are then its own.
+      allowedDevOrigins: [new URL(api).hostname],
       rewrites: async () => [
         { source: "/api/:path*", destination: `${api}/api/:path*` },
         // Server-rendered pages: password reset and invitation activation.

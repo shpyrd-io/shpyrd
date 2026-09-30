@@ -49,8 +49,8 @@ import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Failed, Loading } from "../project/shared";
 
-// The estimate of the month, at the prices of the plan; or a month that
-// closed, as it was invoiced.
+// The usage of a month at the prices of the plan: this one so far, or
+// one that went by.
 export function Billing() {
   const [month, setMonth] = useState("");
   const billing = useQuery({ queryKey: ["billing", month], queryFn: () => api.billing(month || undefined) });
@@ -58,7 +58,7 @@ export function Billing() {
   if (billing.error || !billing.data)
     return <Failed what="the billing" error={billing.error} />;
   const b = billing.data;
-  const open = !b.closed;
+  const open = !b.past;
   const money = (n: number) =>
     n.toLocaleString("en", { style: "currency", currency: b.currency || "USD" });
   return (
@@ -68,18 +68,18 @@ export function Billing() {
         <CardDescription>
           {open
             ? "Month-to-date estimate at the prices of the plan. No money is owed until the month closes."
-            : "A month that closed, as it was invoiced."}
+            : "The usage of the month, at the prices of the plan."}
         </CardDescription>
         <CardAction>
           <Stack direction="horizontal" align="center" gap="cozy">
             {b.plan && <StatusBadge type="info">{b.plan} plan</StatusBadge>}
-            <Input type="month" size="sm" value={month || b.month} max={b.month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="w-40" />
+            <Input type="month" size="sm" value={month || b.month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="w-40" />
           </Stack>
         </CardAction>
       </CardHeader>
       <CardContent>
         {b.lines.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing invoiced for {b.month}.</p>
+          <p className="text-sm text-muted-foreground">No usage recorded in {b.month}.</p>
         ) : (
         <Table>
           <TableHeader>
@@ -88,6 +88,8 @@ export function Billing() {
               <TableHead>Component</TableHead>
               <TableHead>Metric</TableHead>
               <TableHead className="text-right">Quantity</TableHead>
+              <TableHead>Unit</TableHead>
+              <TableHead className="text-right">Price ({b.currency || "USD"})</TableHead>
               <TableHead className="text-right">Amount</TableHead>
             </TableRow>
           </TableHeader>
@@ -100,7 +102,11 @@ export function Billing() {
                   {l.metric.replace(/_/g, " ")}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
-                  {l.quantity.toLocaleString("en")} {l.unit}
+                  {l.quantity.toLocaleString("en", { maximumFractionDigits: 4 })}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">{l.unit}</TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {l.price.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
                   {money(l.amount)}
@@ -110,14 +116,14 @@ export function Billing() {
           </TableBody>
           <TableFooter>
             <TableRow>
-              <TableCell colSpan={4}>{open ? `${b.month}, so far` : b.month}</TableCell>
+              <TableCell colSpan={6}>{open ? `${b.month}, so far` : b.month}</TableCell>
               <TableCell className="text-right font-mono">
                 {money(b.total)}
               </TableCell>
             </TableRow>
             {open && typeof b.projection === "number" && (
               <TableRow>
-                <TableCell colSpan={4} className="text-muted-foreground">At this pace, by the end of the month</TableCell>
+                <TableCell colSpan={6} className="text-muted-foreground">At this pace, by the end of the month</TableCell>
                 <TableCell className="text-right font-mono text-muted-foreground">{money(b.projection)}</TableCell>
               </TableRow>
             )}

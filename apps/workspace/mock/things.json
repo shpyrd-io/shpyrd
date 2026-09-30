@@ -385,40 +385,45 @@
         "component": "web",
         "metric": "instance_hours",
         "quantity": 2880,
-        "unit": "h",
-        "amount": 172.8
+        "unit": "hours",
+        "amount": 172.8,
+        "price": 0.06
       },
       {
         "project": "hello-world",
         "component": "worker",
         "metric": "instance_hours",
         "quantity": 720,
-        "unit": "h",
-        "amount": 43.2
+        "unit": "hours",
+        "amount": 43.2,
+        "price": 0.06
       },
       {
         "project": "hello-world",
         "component": "db",
         "metric": "storage_gib_hours",
         "quantity": 7200,
-        "unit": "GiB·h",
-        "amount": 36
+        "unit": "GiB-hours",
+        "amount": 36,
+        "price": 0.005
       },
       {
         "project": "billing",
         "component": "web",
         "metric": "instance_hours",
         "quantity": 1440,
-        "unit": "h",
-        "amount": 129.6
+        "unit": "hours",
+        "amount": 129.6,
+        "price": 0.09
       },
       {
         "project": "docs",
         "component": "web",
         "metric": "instance_hours",
         "quantity": 1440,
-        "unit": "h",
-        "amount": 31.1
+        "unit": "hours",
+        "amount": 31.1,
+        "price": 0.0216
       }
     ]
   },
