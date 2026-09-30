@@ -12,8 +12,8 @@ It is an example to read and to run, not the site. Delete it when
 
 ```bash
 npm install                                # at the repository root
-npm --prefix apps/example-next run dev     # http://localhost:4324
-npm --prefix apps/example-next run build   # static files in out/
+npm --prefix apps/example run dev     # http://localhost:4324
+npm --prefix apps/example run build   # static files in out/
 ```
 
 ## What draws what

@@ -4,7 +4,7 @@
   "workspaces": [
     "design/ui",
     "apps/shared",
-    "apps/example-next",
+    "apps/example",
     "apps/workspace",
     "apps/console"
   ]

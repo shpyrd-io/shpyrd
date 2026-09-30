@@ -13,11 +13,11 @@
       "port": 4323
     },
     {
-      "name": "example-next",
+      "name": "example",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "apps/example-next",
+        "apps/example",
         "run",
         "dev"
       ],
