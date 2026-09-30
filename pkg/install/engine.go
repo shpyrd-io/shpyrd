@@ -275,24 +275,52 @@ func (e *Engine) Apply(ctx context.Context) error {
 		}
 		e.rep.Runlevel(rl.Name, names)
 
+		// A runlevel's components go in parallel — except the platform
+		// server, which goes after the others of its runlevel: at start it
+		// discovers the kinds they install (KEDA's, Dex's, OpenCost's) and
+		// a server that came up first would not see them until restarted.
+		others, server := splitServer(comps)
 		g, gctx := errgroup.WithContext(ctx)
-		for _, c := range comps {
-			c := c
-			g.Go(func() error {
-				start := time.Now()
-				if err := e.applyComponent(gctx, c); err != nil {
-					e.rep.Failed(c.Name, err)
-					return fmt.Errorf("%s: %w", c.Name, err)
-				}
-				e.rep.Done(c.Name, time.Since(start))
-				return e.record(gctx, c)
-			})
+		for _, c := range others {
+			g.Go(func() error { return e.applyAndRecord(gctx, c) })
 		}
 		if err := g.Wait(); err != nil {
 			return err
 		}
+		if server != nil {
+			if err := e.applyAndRecord(ctx, server); err != nil {
+				return err
+			}
+		}
 	}
 	return e.recordProfile(ctx)
+}
+
+// ServerComponent is the platform server's component: the one that runs
+// the API and the controllers, applied last in its runlevel.
+const ServerComponent = "shpyrd"
+
+// splitServer separates the platform server from the other components of
+// a runlevel; server is nil when the runlevel has none.
+func splitServer(comps []*Component) (others []*Component, server *Component) {
+	for _, c := range comps {
+		if c.Name == ServerComponent {
+			server = c
+			continue
+		}
+		others = append(others, c)
+	}
+	return others, server
+}
+
+func (e *Engine) applyAndRecord(ctx context.Context, c *Component) error {
+	start := time.Now()
+	if err := e.applyComponent(ctx, c); err != nil {
+		e.rep.Failed(c.Name, err)
+		return fmt.Errorf("%s: %w", c.Name, err)
+	}
+	e.rep.Done(c.Name, time.Since(start))
+	return e.record(ctx, c)
 }
 
 func (e *Engine) applyComponent(ctx context.Context, c *Component) error {

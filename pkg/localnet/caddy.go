@@ -89,11 +89,29 @@ func CaddyDir() (string, error) {
 // Caddy's internal CA, plain HTTP to kind's HTTP host port, the scheme
 // forwarded so ingress-nginx neither redirects nor lies to the apps, and
 // responses flushed as they come so log streams are not buffered.
+//
+// Hosts one label deep (the console, the default workspace's apps) share a
+// wildcard certificate. Deeper ones — workspaces with their own addresses
+// under a workspaces domain, acme.ws.<domain>, and their apps one label
+// below (RFC-0080, the cloud layer on kind) — cannot: a certificate's
+// wildcard covers one label, so Caddy issues those per host at the first
+// handshake (on_demand; local CA, local names).
 func SiteFile(domain string, httpPort int) string {
 	return fmt.Sprintf(`# managed by shpyrd: the front door for *.%[1]s (RFC-0057).
 # Edits are overwritten by `+"`shpyrd cluster init`"+`; remove with `+"`shpyrd cluster destroy`"+`.
 *.%[1]s, %[1]s {
 	tls internal
+	reverse_proxy 127.0.0.1:%[2]d {
+		header_up X-Forwarded-Proto https
+		flush_interval -1
+	}
+}
+
+# Workspaces with their own address (acme.ws.%[1]s) and their apps one label under it.
+*.*.%[1]s, *.*.*.%[1]s {
+	tls internal {
+		on_demand
+	}
 	reverse_proxy 127.0.0.1:%[2]d {
 		header_up X-Forwarded-Proto https
 		flush_interval -1

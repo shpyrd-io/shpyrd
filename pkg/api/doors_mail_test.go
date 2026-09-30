@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +13,11 @@ import (
 )
 
 // fakeAccounts is a local-account store (RFC-0014) that remembers what
-// was asked of it and has every account.
-type fakeAccounts struct{ pending []string }
+// was asked of it; accounts in status have one, the rest have none.
+type fakeAccounts struct {
+	pending []string
+	status  map[string]string
+}
 
 func (f *fakeAccounts) IsLocked(context.Context, string) (bool, error)           { return false, nil }
 func (f *fakeAccounts) Lock(context.Context, string, time.Time) error            { return nil }
@@ -24,7 +28,14 @@ func (f *fakeAccounts) SetPasswordAndVerify(context.Context, string, string) err
 }
 func (f *fakeAccounts) CreatePending(_ context.Context, email, _ string) error {
 	f.pending = append(f.pending, email)
+	if f.status == nil {
+		f.status = map[string]string{}
+	}
+	f.status[email] = ext.AccountPending
 	return nil
+}
+func (f *fakeAccounts) Status(_ context.Context, email string) (string, error) {
+	return f.status[email], nil
 }
 
 // The platform has several doors (RFC-0080). A person who asks for a
@@ -51,10 +62,11 @@ func TestAccountLinksStandOnTheDoorTheyWereAskedAt(t *testing.T) {
 	}
 }
 
-// An invitation into a workspace carries two links, both on the
-// workspace's own door: the invitation (RFC-0033) and, with auth-local,
-// the set-password link of the pending account (RFC-0014).
-func TestInvitationLinksStandOnTheWorkspaceDoor(t *testing.T) {
+// An invited person receives one email. Without a password, its call to
+// action is to choose one (RFC-0014), the invitation link (RFC-0033)
+// being the other way in; with a password, it is the invitation. Both
+// links stand on the workspace's own door.
+func TestInvitationIsOneEmailWithBothWaysIn(t *testing.T) {
 	issuer := newFakeIssuer(t)
 	s, _ := newTestServer(t, nil, nil)
 	s.authz.TTL = 1
@@ -79,19 +91,30 @@ func TestInvitationLinksStandOnTheWorkspaceDoor(t *testing.T) {
 	if len(accounts.pending) != 1 || accounts.pending[0] != "new@example.test" {
 		t.Fatalf("pending account = %v", accounts.pending)
 	}
-	if len(mail.sent) != 2 {
-		t.Fatalf("want the invitation and the set-password mail, got %d: %+v", len(mail.sent), mail.sent)
-	}
+	var res InviteResult
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
 	door := s.dashboardURLOf(nil)
-	for _, m := range mail.sent {
-		if m.To[0] != "new@example.test" {
-			t.Errorf("mail to %v", m.To)
-		}
-		if !strings.Contains(m.Text, door+"/invite/") && !strings.Contains(m.Text, door+"/account/set-password?token=") {
-			t.Errorf("a link off the workspace's door %s: %q", door, m.Text)
-		}
+	if !strings.HasPrefix(res.Link, door+"/invite/") || !strings.HasPrefix(res.SetPasswordLink, door+"/account/set-password?token=") {
+		t.Fatalf("links off the workspace's door %s: %+v", door, res)
 	}
-	if !strings.Contains(mail.sent[1].Subject, "Set your password for") {
-		t.Errorf("set-password subject: %q", mail.sent[1].Subject)
+	if len(mail.sent) != 1 {
+		t.Fatalf("one email, got %d: %+v", len(mail.sent), mail.sent)
+	}
+	m := mail.sent[0]
+	if m.To[0] != "new@example.test" || !strings.Contains(m.Text, res.SetPasswordLink) || !strings.Contains(m.Text, res.Link) || !strings.Contains(m.HTML, "Choose a password") || !strings.Contains(m.Subject, "Olive Owner invited you to") {
+		t.Errorf("mail = %+v", m)
+	}
+
+	// Someone with a password already is not given a new one: the one
+	// email is the invitation, and their account is left alone.
+	accounts.status["known@example.test"] = ext.AccountActive
+	rec = doCookie(t, s, "POST", "/api/workspace/invitations", `{"email":"known@example.test","role":"member"}`, sid, csrf)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("invite known: %d %s", rec.Code, rec.Body.String())
+	}
+	var known InviteResult // fresh: json leaves absent fields as they were
+	_ = json.Unmarshal(rec.Body.Bytes(), &known)
+	if known.SetPasswordLink != "" || len(accounts.pending) != 1 || len(mail.sent) != 2 || !strings.Contains(mail.sent[1].HTML, "Accept invitation") || strings.Contains(mail.sent[1].Text, "set-password") {
+		t.Errorf("known person: %+v mails=%d pending=%v", known, len(mail.sent), accounts.pending)
 	}
 }

@@ -69,6 +69,9 @@ type InviteResult struct {
 	// (nothing when mail is not configured: the inviter sends the link).
 	Emailed   bool   `json:"emailed"`
 	MailError string `json:"mailError,omitempty"`
+	// SetPasswordLink is where a person without a password chooses one
+	// (RFC-0014; 24 hours); empty when they have one or auth-local is off.
+	SetPasswordLink string `json:"setPasswordLink,omitempty"`
 }
 
 // InvitationPublicView is GET /api/invitations/:token: what the holder of
@@ -246,19 +249,22 @@ func (s *Server) invite(c *gin.Context, ws *store.Workspace, email, role, team s
 	result.Link = s.invitationLink(ws, token)
 	s.audit(c, "", "workspace.invitation.create", email, "role "+role+teamDetail(team))
 
+	// RFC-0014: a person without a password gets a way to choose one, on
+	// the same door. One email carries both ways in.
+	setLink, err := s.passwordWayIn(ctx, email, strings.SplitN(email, "@", 2)[0], s.dashboardURLOf(ws))
+	if err != nil {
+		s.log.Warn("invite: no set-password link", "email", email, "err", err.Error())
+	}
+	result.SetPasswordLink = setLink
+
 	if s.mailer != nil && s.mailer.Configured(ctx) {
-		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, by, result.Link)); err != nil {
+		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, by, result.Link, setLink)); err != nil {
 			result.MailError = err.Error()
 			s.log.Warn("invitation email failed", "to", email, "err", err.Error())
 			s.audit(c, "", "workspace.invitation.mail_failed", email, err.Error())
 		} else {
 			result.Emailed = true
 		}
-	}
-	// RFC-0014: with auth-local, a pending account whose set-password link
-	// stands on the same door, so the accept link has somewhere to go.
-	if err := s.inviteUser(c, email, strings.SplitN(email, "@", 2)[0], firstNonEmpty(ws.Name, ws.Slug), s.dashboardURLOf(ws)); err != nil {
-		s.log.Warn("invite: could not create pending local account", "email", email, "err", err.Error())
 	}
 	return result, 0, nil
 }
@@ -285,7 +291,7 @@ func (s *Server) inviteHook(c *gin.Context, wsSlug, email, role string) (*ext.In
 	if err != nil {
 		return nil, err
 	}
-	out := &ext.InviteOutcome{Applied: res.Applied, Link: res.Link, Emailed: res.Emailed, MailError: res.MailError}
+	out := &ext.InviteOutcome{Applied: res.Applied, Link: res.Link, SetPasswordLink: res.SetPasswordLink, Emailed: res.Emailed, MailError: res.MailError}
 	if res.Invitation != nil {
 		out.ExpiresAt = res.Invitation.ExpiresAt
 	}
@@ -452,7 +458,11 @@ func (s *Server) acceptPendingInvitation(c *gin.Context, id ext.Identity) {
 }
 
 // invitationMail is the email carrying the link (RFC-0013).
-func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ext.Identity, link string) ext.Message {
+// invitationMail is the one email an invited person receives. With a
+// set-password link the call to action is to choose a password (they
+// have none), the invitation link being the other way in — signing in
+// with a method the workspace offers. Without one, it is the invitation.
+func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ext.Identity, link, setLink string) ext.Message {
 	inviter := firstNonEmpty(by.Name, by.Email, "An administrator")
 	if by.Name != "" && by.Email != "" {
 		inviter = by.Name + " (" + by.Email + ")"
@@ -463,7 +473,29 @@ func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ex
 		what += ", in team " + inv.Team
 	}
 	until := inv.ExpiresAt.UTC().Format("Jan 2, 2006")
-	text := fmt.Sprintf(`%s invited you to join %s %s.
+	door := strings.TrimPrefix(strings.TrimPrefix(s.dashboardURLOf(ws), "https://"), "http://")
+
+	var text, body string
+	if setLink != "" {
+		text = fmt.Sprintf(`%s invited you to join %s %s.
+
+Choose a password to get in (this link works for 24 hours):
+
+  %s
+
+You will then sign in at %s as %s. Prefer another way? Open the invitation and sign in with a method %s offers:
+
+  %s
+
+The invitation works until %s. If you were not expecting this, ignore it.
+`, inviter, name, what, setLink, door, inv.Email, name, link, until)
+		body = fmt.Sprintf(`<p style="font-size:16px;line-height:1.5;margin:0 0 16px"><strong>%s</strong> invited you to join <strong>%s</strong> %s.</p>
+<p style="font-size:14px;line-height:1.5;margin:0 0 24px;color:#444">Choose a password to get in; you will then sign in at <strong>%s</strong> as <strong>%s</strong>. This link works for 24 hours.</p>
+<p style="margin:0 0 24px"><a href="%s" style="display:inline-block;background:#ff4f00;color:#fff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:6px">Choose a password</a></p>
+<p style="font-size:12px;line-height:1.5;color:#777;margin:0">Prefer another way? <a href="%s" style="color:#444">Open the invitation</a> and sign in with a method %s offers. The invitation works until %s. If you were not expecting this, ignore it.</p>`,
+			html.EscapeString(inviter), html.EscapeString(name), html.EscapeString(what), html.EscapeString(door), html.EscapeString(inv.Email), setLink, link, html.EscapeString(name), until)
+	} else {
+		text = fmt.Sprintf(`%s invited you to join %s %s.
 
 Accept the invitation by opening this link and signing in as %s:
 
@@ -471,15 +503,17 @@ Accept the invitation by opening this link and signing in as %s:
 
 The link works until %s. If you were not expecting this, ignore it.
 `, inviter, name, what, inv.Email, link, until)
-	htmlBody := fmt.Sprintf(`<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111">
-<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e5e5">
-<div style="font-weight:700;font-size:20px;letter-spacing:-0.02em;color:#ff4f00;margin-bottom:24px">shpyrd</div>
-<p style="font-size:16px;line-height:1.5;margin:0 0 16px"><strong>%s</strong> invited you to join <strong>%s</strong> %s.</p>
+		body = fmt.Sprintf(`<p style="font-size:16px;line-height:1.5;margin:0 0 16px"><strong>%s</strong> invited you to join <strong>%s</strong> %s.</p>
 <p style="font-size:14px;line-height:1.5;margin:0 0 24px;color:#444">Accept by opening the link and signing in as <strong>%s</strong>.</p>
 <p style="margin:0 0 24px"><a href="%s" style="display:inline-block;background:#ff4f00;color:#fff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:6px">Accept invitation</a></p>
-<p style="font-size:12px;line-height:1.5;color:#777;margin:0">Or copy this link: <a href="%s" style="color:#444">%s</a><br>The link works until %s. If you were not expecting this, ignore it.</p>
-</div></body></html>`,
-		html.EscapeString(inviter), html.EscapeString(name), html.EscapeString(what), html.EscapeString(inv.Email), link, link, link, until)
+<p style="font-size:12px;line-height:1.5;color:#777;margin:0">Or copy this link: <a href="%s" style="color:#444">%s</a><br>The link works until %s. If you were not expecting this, ignore it.</p>`,
+			html.EscapeString(inviter), html.EscapeString(name), html.EscapeString(what), html.EscapeString(inv.Email), link, link, link, until)
+	}
+	htmlBody := `<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111">
+<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e5e5">
+<div style="font-weight:700;font-size:20px;letter-spacing:-0.02em;color:#ff4f00;margin-bottom:24px">shpyrd</div>
+` + body + `
+</div></body></html>`
 	subject := "You were invited to " + name
 	if who := firstNonEmpty(by.Name, by.Email); who != "" {
 		subject = who + " invited you to " + name

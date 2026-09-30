@@ -195,6 +195,7 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const [operator, setOperator] = useState(false);
   const [plan, setPlan] = useState<string | undefined>(undefined);
   const [link, setLink] = useState("");
+  const [setPasswordLink, setSetPasswordLink] = useState("");
   const plans = useQuery({ queryKey: ["plans"], queryFn: api.plans });
   // A customer workspace is priced from birth: the first plan is
   // preselected when the operator has defined any.
@@ -236,8 +237,9 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
         onClose();
         return;
       }
-      // Mail is not configured: the link is shown once, here.
+      // Mail is not configured: the links are shown once, here.
       setLink(inv.link ?? "");
+      setSetPasswordLink(inv.setPasswordLink ?? "");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -260,6 +262,20 @@ function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
             onFocus={(e) => e.currentTarget.select()}
             className="font-mono text-xs"
           />
+          {setPasswordLink && (
+            <>
+              <p className="text-sm text-muted-foreground">
+                They have no password yet; this link lets them choose one (24
+                hours):
+              </p>
+              <Input
+                readOnly
+                value={setPasswordLink}
+                onFocus={(e) => e.currentTarget.select()}
+                className="font-mono text-xs"
+              />
+            </>
+          )}
           <DialogFooter>
             <Button
               variant="outline"

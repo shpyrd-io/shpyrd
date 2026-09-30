@@ -14,8 +14,8 @@ package api
 // reset and 24h for invite (pkg/ext/authlocal.tokens.go).
 
 import (
+	"context"
 	"fmt"
-	"html"
 	"html/template"
 	"net/http"
 	"strings"
@@ -236,38 +236,31 @@ func (s *Server) handleSetPassword(c *gin.Context) {
 	c.Redirect(http.StatusFound, "/?activated=ok")
 }
 
-// sendInviteEmail sends the set-password link to a newly invited user:
-// where names what they were invited to, door is where the link stands.
-func (s *Server) sendInviteEmail(c *gin.Context, email, where, door, code string) {
-	if s.deps().Mail == nil {
-		return
+// passwordWayIn gives an invited person without a password a way to
+// choose one (RFC-0014): a pending account when they have none, a fresh
+// token when they are still pending; a link on the door they were
+// invited to. "" when they hold a password already (they sign in with
+// it) or auth-local is off (the door's other methods carry the sign-in).
+func (s *Server) passwordWayIn(ctx context.Context, email, name, door string) (string, error) {
+	if s.localAccounts == nil || s.kube == nil || s.kube.Kube == nil {
+		return "", nil
 	}
-	link := setPasswordLink(door, code)
-	host := strings.TrimPrefix(strings.TrimPrefix(door, "https://"), "http://")
-	_ = s.deps().Mail.Send(c.Request.Context(), ext.Message{
-		To:      []string{email},
-		Subject: "Set your password for " + where,
-		Text:    "You have been invited to " + where + " (" + host + ").\n\nSet your password to sign in:\n\n" + link + "\n\nThis link expires in 24 hours.",
-		HTML:    fmt.Sprintf(`<p>You have been invited to <strong>%s</strong> (%s).</p><p><a href="%s">Set your password</a> to sign in.</p><p>This link expires in 24 hours.</p>`, html.EscapeString(where), html.EscapeString(host), link),
-	})
-}
-
-// inviteUser gives an invited person a pending local account (RFC-0014)
-// and emails the set-password link, standing on the door they were
-// invited to. Nothing to do without auth-local: the workspace invitation
-// (RFC-0033) and the door's other methods carry the sign-in.
-func (s *Server) inviteUser(c *gin.Context, email, name, where, door string) error {
-	if s.localAccounts == nil {
-		return nil
+	status, err := s.localAccounts.Status(ctx, email)
+	if err != nil {
+		return "", err
 	}
-	ctx := c.Request.Context()
-	if err := s.localAccounts.CreatePending(ctx, email, name); err != nil {
-		return err
+	switch status {
+	case "":
+		if err := s.localAccounts.CreatePending(ctx, email, name); err != nil {
+			return "", err
+		}
+	case ext.AccountPending:
+	default:
+		return "", nil
 	}
 	code, err := authlocal.MintAccountToken(ctx, s.kube.Kube, s.deps().SystemNamespace, email, authlocal.TokenKindInvite)
 	if err != nil {
-		return err
+		return "", err
 	}
-	s.sendInviteEmail(c, email, where, door, code)
-	return nil
+	return setPasswordLink(door, code), nil
 }

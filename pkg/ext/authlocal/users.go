@@ -294,6 +294,23 @@ func (s *Store) IsLocked(ctx context.Context, email string) (bool, error) {
 	return time.Now().Before(t), nil
 }
 
+// Status is the account's state — active, pending or locked — and ""
+// when the address has no local account.
+func (s *Store) Status(ctx context.Context, email string) (string, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return "", err
+	}
+	obj, err := s.res().Get(ctx, PasswordName(email), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", wrap(err)
+	}
+	return userOf(*obj).Status, nil
+}
+
 // setAnnotation is a helper: read, patch one annotation, write back.
 func (s *Store) setAnnotation(ctx context.Context, email, key, value string) (*User, error) {
 	email, err := NormalizeEmail(email)
