@@ -22,9 +22,18 @@ import { find, navigation } from "@shpyrd/content/navigation";
 // What is around every page: the pages of the site at the side, where the
 // page is over it, and the foot. All of it is made of design/ui; a page
 // brings its content and, when it has one, the pane beside it.
+// The marketing pages are not documents: they get the wordmark and a few
+// links, not the whole documentation tree down the side.
+const marketing = [
+  { title: "How sharing works", href: "/how-sharing-works" },
+  { title: "Bring an app", href: "/bring-an-app" },
+  { title: "Docs", href: "/docs/getting-started" },
+];
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const here = find(path);
+  const isDocument = path.startsWith("/docs");
   const [theme, setTheme] = useTheme();
   const next = { light: "dark", dark: "system", system: "light" } as const;
   const [menu, setMenu] = useState(false);
@@ -56,49 +65,68 @@ export function Shell({ children }: { children: React.ReactNode }) {
       rowGap="none"
       className="min-h-svh"
     >
-      <PageLayoutSidebar
-        aria-label="Site"
-        width="small"
-        divider="line"
-        sticky
-        hidden={{ narrow: true }}
-        className="pb-4"
-      >
-        <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
-          <Link href="/" aria-label="shpyrd">
-            <Wordmark />
-          </Link>
-        </Stack>
-        {nav}
-      </PageLayoutSidebar>
+      {isDocument && (
+        <PageLayoutSidebar
+          aria-label="Site"
+          width="small"
+          divider="line"
+          sticky
+          hidden={{ narrow: true }}
+          className="pb-4"
+        >
+          <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
+            <Link href="/" aria-label="shpyrd">
+              <Wordmark />
+            </Link>
+          </Stack>
+          {nav}
+        </PageLayoutSidebar>
+      )}
 
       <PageLayoutHeader divider="line" className="px-4 py-3 @3xl/page-layout:px-6">
         <Stack direction="horizontal" align="center" gap="cozy">
-          <AnchoredOverlay
-            open={menu}
-            onOpenChange={setMenu}
-            width="small"
-            className="px-0 py-3"
-            anchor={
-              <Button
-                variant="outline"
-                size="icon"
-                icon={<Menu />}
-                aria-label="Documentation"
-                className="@3xl/page-layout:hidden"
-              />
-            }
-          >
-            {nav}
-          </AnchoredOverlay>
-          <Breadcrumbs>
-            {here && <BreadcrumbsItem>{here.group.title}</BreadcrumbsItem>}
-            {here && (
-              <BreadcrumbsItem asChild selected>
-                <Link href={here.link.href}>{here.link.title}</Link>
-              </BreadcrumbsItem>
-            )}
-          </Breadcrumbs>
+          {isDocument ? (
+            <>
+              <AnchoredOverlay
+                open={menu}
+                onOpenChange={setMenu}
+                width="small"
+                className="px-0 py-3"
+                anchor={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    icon={<Menu />}
+                    aria-label="Documentation"
+                    className="@3xl/page-layout:hidden"
+                  />
+                }
+              >
+                {nav}
+              </AnchoredOverlay>
+              <Breadcrumbs>
+                {here && <BreadcrumbsItem>{here.group.title}</BreadcrumbsItem>}
+                {here && (
+                  <BreadcrumbsItem asChild selected>
+                    <Link href={here.link.href}>{here.link.title}</Link>
+                  </BreadcrumbsItem>
+                )}
+              </Breadcrumbs>
+            </>
+          ) : (
+            <>
+              <Link href="/" aria-label="shpyrd">
+                <Wordmark />
+              </Link>
+              <Stack direction="horizontal" align="center" gap="condensed" className="ml-4">
+                {marketing.map((link) => (
+                  <Button key={link.href} variant="ghost" size="sm" asChild>
+                    <Link href={link.href}>{link.title}</Link>
+                  </Button>
+                ))}
+              </Stack>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
