@@ -413,22 +413,54 @@ func (c Config) issuer(app *shpyrdv1.App) string {
 // tells which code runs: REVISION (and SHPYRD_REVISION) is the git commit
 // the release was built from, or the archive digest when the source was
 // not a git checkout; empty for prebuilt images.
-func (c Config) platformEnv(app *shpyrdv1.App, revision string) []corev1.EnvVar {
+// platformEnv is what the platform tells every process about itself: that
+// it runs here, which project and workspace it belongs to, which process
+// it is, which release and revision it runs. `process` is the process
+// type (web, worker, release); `release` is the number of the release the
+// process belongs to, 0 while none is known.
+func (c Config) platformEnv(app *shpyrdv1.App, revision, process string, release int) []corev1.EnvVar {
 	env := []corev1.EnvVar{
+		{Name: "RUNNING_IN_SHPYRD", Value: "true"},
 		{Name: "SHPYRD_PROJECT", Value: projectSlug(app)},
+		{Name: "SHPYRD_PROJECT_NAME", Value: project.DisplayName(app)},
 		{Name: "SHPYRD_WORKSPACE", Value: workspaceOf(app)},
 		{Name: "SHPYRD_ISSUER", Value: c.issuer(app)},
 	}
 	if app.Spec.ID != "" {
 		env = append(env, corev1.EnvVar{Name: "SHPYRD_PROJECT_ID", Value: app.Spec.ID})
 	}
+	if process != "" {
+		env = append(env, corev1.EnvVar{Name: "SHPYRD_PROCESS", Value: process})
+	}
+	if release > 0 {
+		env = append(env,
+			corev1.EnvVar{Name: "SHPYRD_RELEASE", Value: fmt.Sprint(release)},
+			corev1.EnvVar{Name: "SHPYRD_RELEASE_VERSION", Value: fmt.Sprintf("v%d", release)},
+		)
+	}
 	if revision != "" {
 		env = append(env,
 			corev1.EnvVar{Name: "SHPYRD_REVISION", Value: revision},
+			corev1.EnvVar{Name: "SHPYRD_PROJECT_REVISION", Value: revision},
 			corev1.EnvVar{Name: "REVISION", Value: revision},
 		)
 	}
 	return env
+}
+
+// releaseNumber is the number of the release a rollout of `image` with
+// `hash` belongs to: the current one when nothing changed, the next one
+// otherwise. It is what recordRelease will write, known before the
+// workloads are built so that the processes can be told.
+func releaseNumber(app *shpyrdv1.App, image, hash string) int {
+	cur := app.CurrentRelease()
+	if cur == nil {
+		return 1
+	}
+	if cur.Image == image && cur.ConfigHash == hash {
+		return cur.Number
+	}
+	return cur.Number + 1
 }
 
 // SourcesPort is where the server serves source archives to build pods
@@ -597,7 +629,7 @@ func processResources(p namedProcess, catalog sizes.Catalog) (corev1.ResourceReq
 // instance count) the replica count is left to the scaler once the
 // Deployment exists; setting it on every reconcile would wake a sleeping
 // app and fight the scaler forever.
-func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash, revision string, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment, scaledExternally bool) {
+func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, configHash, revision string, release int, res corev1.ResourceRequirements, mounts []resolvedMount, d *appsv1.Deployment, scaledExternally bool) {
 	labels := processLabels(app, p.Name)
 	d.Labels = mergeMaps(d.Labels, labels)
 	if d.Spec.Selector == nil {
@@ -634,7 +666,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port, Protocol: corev1.ProtocolTCP}}
 	}
 	applyProbes(&container, p, port)
-	container.Env = append(container.Env, c.platformEnv(app, revision)...)
+	container.Env = append(container.Env, c.platformEnv(app, revision, p.Name, release)...)
 	container.Env = append(container.Env, app.Spec.Env...)
 
 	d.Spec.Template.Labels = mergeMaps(d.Spec.Template.Labels, labels)

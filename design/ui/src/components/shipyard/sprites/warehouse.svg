@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-223 -251 446 376" width="446" height="376">
+<g stroke-linejoin="round" stroke-linecap="round">
+<polygon points="-212.2,12.5 -21.7,122.5 -21.7,7.5 -212.2,-102.5" fill="#f4f4f5" stroke="#52525b" stroke-width="1.5"/>
+<polygon points="212.2,-12.5 -21.7,122.5 -21.7,7.5 212.2,-127.5" fill="#e4e4e7" stroke="#52525b" stroke-width="1.5"/>
+<polygon points="21.7,-237.5 212.2,-127.5 -21.7,7.5 -212.2,-102.5" fill="#ffffff" stroke="#52525b" stroke-width="1.5"/>
+<polygon points="-199.2,20 -155.9,45 -155.9,-35 -199.2,-60" fill="#d4d4d8" stroke="#52525b" stroke-width="1"/>
+<polygon points="-138.6,55 -95.3,80 -95.3,0 -138.6,-25" fill="#d4d4d8" stroke="#52525b" stroke-width="1"/>
+<polygon points="-77.9,90 -34.6,115 -34.6,35 -77.9,10" fill="#d4d4d8" stroke="#52525b" stroke-width="1"/>
+<polygon points="-220.8,-102.5 -21.7,12.5 -21.7,6.5 -220.8,-108.5" fill="#f4f4f5" stroke="#52525b" stroke-width="1.5"/>
+<polygon points="220.8,-127.5 -21.7,12.5 -21.7,6.5 220.8,-133.5" fill="#e4e4e7" stroke="#52525b" stroke-width="1.5"/>
+<polygon points="21.7,-248.5 220.8,-133.5 -21.7,6.5 -220.8,-108.5" fill="#ffffff" stroke="#52525b" stroke-width="1.5"/>
+<line x1="-8.7" y1="-231" x2="190.5" y2="-116" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-39" y1="-213.5" x2="160.2" y2="-98.5" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-69.3" y1="-196" x2="129.9" y2="-81" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-99.6" y1="-178.5" x2="99.6" y2="-63.5" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-129.9" y1="-161" x2="69.3" y2="-46" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-160.2" y1="-143.5" x2="39" y2="-28.5" stroke="#d4d4d8" stroke-width="1"/>
+<line x1="-190.5" y1="-126" x2="8.7" y2="-11" stroke="#d4d4d8" stroke-width="1"/>
+</g>
+</svg>

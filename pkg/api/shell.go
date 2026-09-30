@@ -162,7 +162,10 @@ func (s *Server) mintShellTicket(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("the command is too long"))
 		return
 	}
-	code, err := s.execTickets.mint(execTicket{Identity: id, Project: projectGrantKey(app), Instance: instance, Command: command})
+	// The ticket names the project by its slug, as the socket's path does
+	// and as the slot above is held: never by the grant key, which is the
+	// project's ID once it has one (RFC-0076).
+	code, err := s.execTickets.mint(execTicket{Identity: id, Project: project.SlugOf(app), Instance: instance, Command: command})
 	if errors.Is(err, errTicketsFull) {
 		// Not the caller's fault and not permanent: the store drains itself
 		// within a ticket's 30 seconds, so say so rather than reporting a fault.

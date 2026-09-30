@@ -1,0 +1,109 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "design-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "design/ui",
+        "run",
+        "dev"
+      ],
+      "port": 4323,
+      "autoPort": true
+    },
+    {
+      "name": "example",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/example",
+        "run",
+        "dev"
+      ],
+      "port": 4327
+    },
+    {
+      "name": "website",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/website",
+        "run",
+        "dev"
+      ],
+      "port": 4324
+    },
+    {
+      "name": "workspace",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "dev"
+      ],
+      "port": 4325
+    },
+    {
+      "name": "console",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/console",
+        "run",
+        "dev"
+      ],
+      "port": 4326
+    },
+    {
+      "name": "workspace-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "design"
+      ],
+      "port": 4325
+    },
+    {
+      "name": "console-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/console",
+        "run",
+        "design"
+      ],
+      "port": 4326
+    },
+    {
+      "name": "workspace-cloud",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SHPYRD_DEV_API=https://acme.ws.shpyrd.test",
+        "npm",
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "dev"
+      ],
+      "port": 4325
+    },
+    {
+      "name": "console-cloud",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SHPYRD_DEV_API=https://shpyrd.shpyrd.test",
+        "npm",
+        "--prefix",
+        "apps/console",
+        "run",
+        "dev"
+      ],
+      "port": 4326
+    }
+  ]
+}

@@ -886,3 +886,31 @@ func TestShellRefusesANamespaceAsASlug(t *testing.T) {
 		t.Errorf("the ticket was burned by a malformed path: %v", err)
 	}
 }
+
+// A ticket minted for a project with an ID (RFC-0076) opens the socket at
+// the project's slug: the two are compared by the same key.
+func TestShellTicketOpensProjectWithID(t *testing.T) {
+	f := newShellFixture(t, "hello")
+	blog := &shpyrdv1.App{}
+	if err := f.s.apps.Get(context.Background(), client.ObjectKey{Namespace: "app-blog", Name: "blog"}, blog); err != nil {
+		t.Fatal(err)
+	}
+	blog.Spec.ID = "3f2b0a6e-1d4c-4e8a-9b7f-5c6d7e8f9a0b"
+	if err := f.s.apps.Update(context.Background(), blog); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, f.s, "POST", "/api/projects/blog/shell/ticket?instance=web.1", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct{ Ticket string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	c := f.dialWith(t, "web.1", body.Ticket)
+	defer c.Close()
+	if open := readControl(t, c); open["type"] != "open" {
+		t.Fatalf("open frame = %v", open)
+	}
+}

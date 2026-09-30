@@ -4,8 +4,8 @@
 // Applications log JSON in production, which reads badly as a wall of
 // {"level":"info","msg":...}. Parse turns such a line into an Entry so
 // `shpyrd logs --pretty` can render it, and leaves anything it cannot read as
-// plain text. The dashboard does the same in ui/src/lib/logs.ts; the two are
-// kept in step deliberately, so a change here belongs there too.
+// plain text. The applications do the same in apps/shared/src/logs/logs.ts;
+// the two are kept in step deliberately, so a change here belongs there too.
 //
 // Four shapes are recognised, tried in this order because each is more
 // specific than the next:

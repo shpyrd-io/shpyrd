@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
@@ -344,13 +345,15 @@ func (r *AppReconciler) ensureSleepPage(ctx context.Context, app *shpyrdv1.App) 
 
 func sleepPageCMName(app *shpyrdv1.App) string { return app.Name + "-sleep-page" }
 
+// buildSleepPageHTML is the page KEDA's interceptor answers with while
+// the app wakes up: it opens itself again every few seconds, until the
+// app answers. It travels whole in a ConfigMap, so it is one file.
 func buildSleepPageHTML(name string) string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-		`<meta http-equiv="refresh" content="3"><title>` + name + ` — waking up</title>` +
-		`<style>body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center}` +
-		`main{max-width:28rem;padding:2.5rem;background:#1e293b;border-radius:12px;border-top:4px solid #ff4f00;text-align:center}` +
-		`h1{font-size:1.2rem;margin:0 0 .75rem}p{color:#94a3b8;margin:0}</style></head>` +
-		`<body><main><h1>Waking up — one moment</h1><p>` + name + ` is starting. This page refreshes itself.</p></main></body></html>`
+	return pages.HTML(pages.Waking, pages.Page{
+		Title:   "Waking " + name + " up.",
+		Text:    "It was asleep, as it is when nobody asks for it. It answers in a few seconds; this page goes to it by itself.",
+		Refresh: 3,
+	})
 }
 
 // deleteSleepObjects removes all KEDA sleep objects for the app.

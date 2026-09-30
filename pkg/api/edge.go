@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"html"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
@@ -656,27 +656,20 @@ func joinAnd(items []string) string {
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
-// edgePage is the small branded page the edge serves on app hosts.
+// edgePage is the page the edge serves on app hosts, where no
+// application answers the person: what it shows over the words follows
+// the status. Not allowed is a lock; not answering, a rocket and a
+// spinner; anything else, the mark.
 func (s *Server) edgePage(c *gin.Context, status int, title, text string, links map[string]string) {
-	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>`)
-	b.WriteString(html.EscapeString(title))
-	b.WriteString(`</title><style>body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center}main{max-width:32rem;padding:2.5rem;background:#1e293b;border-radius:12px;border-top:4px solid #ff4f00}h1{font-size:1.25rem;margin:0 0 .75rem}p{margin:0 0 1.25rem;color:#cbd5e1}a{color:#ff7a3d;text-decoration:none;margin-right:1.25rem}a:hover{text-decoration:underline}small{color:#64748b}</style></head><body><main><h1>`)
-	b.WriteString(html.EscapeString(title))
-	b.WriteString(`</h1><p>`)
-	b.WriteString(html.EscapeString(text))
-	b.WriteString(`</p>`)
-	keys := make([]string, 0, len(links))
-	for k := range links {
-		keys = append(keys, k)
+	kind := pages.Nothing
+	switch status {
+	case http.StatusForbidden:
+		kind = pages.NoAccess
+	case http.StatusBadGateway, http.StatusServiceUnavailable:
+		kind = pages.Waking
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		b.WriteString(`<a href="` + html.EscapeString(links[k]) + `">` + html.EscapeString(k) + `</a>`)
-	}
-	b.WriteString(`<p><small>shpyrd</small></p></main></body></html>`)
 	c.Header("Cache-Control", "no-store")
-	c.Data(status, "text/html; charset=utf-8", []byte(b.String()))
+	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(kind, pages.Page{Title: title, Text: text, Links: pages.Links(links)})))
 }
 
 // customError handles what ingress-nginx sends to its default backend:

@@ -25,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
@@ -92,6 +93,11 @@ type Options struct {
 	// so its front door is published at once; nil when this replica runs
 	// no controllers.
 	WorkspacesChanged func()
+	// SignInHost is the host of the sign-in service (Dex), whose root the
+	// Ingress sends here: the server answers it with the mark alone, so
+	// the service's own index is never seen. Empty, or the console's own
+	// host, leaves every host as it is.
+	SignInHost string
 	// Capabilities names what this server offers beyond the core
 	// ("workspaces", "billing", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
@@ -528,8 +534,13 @@ func (s *Server) routes() error {
 		// workspaces capability the cloud layer serves the full routes.
 		api.GET("/workspaces", console, s.require(authz.ClusterAdmin), s.listWorkspacesCore)
 	}
-	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals)                      // RFC-0016
+	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016: the default workspace's, for the dashboard of before
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
+	api.GET("/workspace/globals", s.require(authz.ClusterAdmin), s.getWorkspaceGlobals) // RFC-0016: the workspace's own
+	api.PUT("/workspace/globals", s.require(authz.ClusterAdmin), s.putWorkspaceGlobals)
+	api.GET("/workspace/drains", s.require(authz.ClusterAdmin), s.listWorkspaceDrains) // RFC-0023: the workspace's own
+	api.POST("/workspace/drains", s.require(authz.ClusterAdmin), s.createWorkspaceDrain)
+	api.DELETE("/workspace/drains/:name", s.require(authz.ClusterAdmin), s.deleteWorkspaceDrain)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)
@@ -767,64 +778,6 @@ func (s *Server) config(c *gin.Context) {
 }
 
 // The two applications (RFC-0080), as the UI build lays them out.
-const (
-	uiConsoleIndex   = "apps/console/index.html"
-	uiWorkspaceIndex = "apps/workspace/index.html"
-)
-
-// uiIndex is the HTML entry of the application this host answers with: the
-// console at the console host (and for internal callers), the workspace
-// application everywhere else. A build from before the split has one
-// index.html for both.
-func (s *Server) uiIndex(c *gin.Context) string {
-	entry := uiWorkspaceIndex
-	if s.atConsole(c) {
-		entry = uiConsoleIndex
-	}
-	if _, err := fs.Stat(s.opts.UI, entry); err == nil {
-		return entry
-	}
-	if _, err := fs.Stat(s.opts.UI, "index.html"); err == nil {
-		return "index.html"
-	}
-	return ""
-}
-
-// serveUI serves the embedded applications: static assets by path, and
-// for every other non-API path the entry of the host's application, so
-// client-side routing works.
-func (s *Server) serveUI() gin.HandlerFunc {
-	fileServer := http.FileServer(http.FS(s.opts.UI))
-	return func(c *gin.Context) {
-		if s.customError(c) { // ingress-nginx's error backend for app hosts
-			return
-		}
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		p := strings.TrimPrefix(c.Request.URL.Path, "/")
-		if p != "" && !strings.HasSuffix(p, ".html") {
-			if st, err := fs.Stat(s.opts.UI, p); err == nil && !st.IsDir() {
-				fileServer.ServeHTTP(c.Writer, c.Request)
-				return
-			}
-		}
-		entry := s.uiIndex(c)
-		if entry == "" {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
-			return
-		}
-		body, err := fs.ReadFile(s.opts.UI, entry)
-		if err != nil {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
-			return
-		}
-		c.Header("Cache-Control", "no-cache")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", body)
-	}
-}
-
 func (s *Server) requestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -844,10 +797,20 @@ func abort(c *gin.Context, status int, err error) {
 	c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
 }
 
-const placeholderHTML = `<!doctype html><html><head><title>shpyrd</title></head>
-<body style="font-family:system-ui;background:#111;color:#eee;padding:2rem">
-<h1>shpyrd</h1><p>The UI has not been built into this binary. Run <code>make ui</code> and rebuild,
-or use the API at <code>/api/healthz</code>.</p></body></html>`
+// atSignInHost says the request came to the sign-in service's host: the
+// root of it, which its Ingress sends here to be answered with the mark
+// alone. The console's own host is never it.
+func (s *Server) atSignInHost(c *gin.Context) bool {
+	host := hostOnly(s.opts.SignInHost)
+	return host != "" && host != hostOnly(consoleHostOf(s.opts.Public.DashboardURL)) && hostOnly(c.Request.Host) == host
+}
+
+// placeholderHTML is what a binary built without the applications
+// answers with.
+var placeholderHTML = pages.HTML(pages.Nothing, pages.Page{
+	Title: "The applications are not here.",
+	Text:  "They were not built into this binary. Run `make ui` and build it again, or use the API at /api/healthz.",
+})
 
 // consoleHostOf is the host (with port) of the console's URL.
 func consoleHostOf(dashboardURL string) string {

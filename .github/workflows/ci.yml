@@ -1,10 +1,15 @@
-# CI (RFC-0045): Go tests and vet, the dashboard tests, build and lint, the
+# CI (RFC-0045): Go tests and vet, the applications' tests, build and lint, the
 # manifests render test, and an end-to-end run on a kind cluster that
 # deploys the sample projects with buildpacks and a Dockerfile.
 #
-# paths-ignore: prose-only changes (apps/website/, rfcs/, docs/, *.md) run neither
-# this workflow nor website.yml, so such a pull request reports no checks at
-# all. That is fine while main is unprotected.
+# paths-ignore: web and prose changes (apps/, design/, content/, rfcs/, docs/,
+# *.md) run neither this workflow nor website.yml, so such a pull request
+# reports no checks at all. That is fine while main is unprotected.
+#
+# design/ and content/ are ignored here deliberately: a change to a component
+# or a paragraph used to start the end-to-end job, which takes about 45
+# minutes on a cluster it does not need. examples/ is at the repository root,
+# not under apps/, so the five the end-to-end job deploys still trigger it.
 #
 # Do NOT mark any job here, or website / Build, as a required status check while
 # these path filters exist. A workflow that is not triggered reports no status,
@@ -22,12 +27,16 @@ on:
     # anchors, so the two lists have to be kept in sync by hand.
     paths-ignore:
       - 'apps/website/**'
+      - 'design/brand/**'
+      - 'content/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'
   pull_request:
     paths-ignore:
       - 'apps/website/**'
+      - 'design/brand/**'
+      - 'content/**'
       - 'rfcs/**'
       - 'docs/**'
       - '*.md'
@@ -70,26 +79,24 @@ jobs:
           git diff --exit-code -- api deploy/components/shpyrd/base/crds
 
   ui:
-    name: Dashboard
+    name: Applications
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci --no-audit --no-fund
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build
+      - run: npm run lint --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+      - run: npm run typecheck --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+      - run: npm run test --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+      - run: make ui
       - uses: actions/upload-artifact@v4
         with:
           name: ui-dist
-          path: ui/dist
+          path: pkg/ui/dist
           retention-days: 1
 
   e2e:
@@ -106,7 +113,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ui-dist
-          path: ui/dist
+          path: pkg/ui/dist
       - name: Build the CLI and the server image
         run: |
           make cli

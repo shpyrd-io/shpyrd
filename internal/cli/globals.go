@@ -17,24 +17,29 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
-// Global config vars (RFC-0016): `shpyrd globals set|unset|list`, a platform
-// admin's counterpart of `shpyrd secrets`.
+// Global config vars (RFC-0016): `shpyrd globals set|unset|list`, a
+// workspace admin's counterpart of `shpyrd secrets`, over a kubeconfig.
 
 func newGlobalsCmd(g *globalFlags) *cobra.Command {
+	var workspace string
 	cmd := &cobra.Command{
 		Use:   "globals",
-		Short: "Manage config vars every project receives",
-		Long: `Global config vars are set once by a platform admin and injected into every
-process of every project, first in the environment so a project's own config
-var of the same name wins and attached resources win over both. Changing them
-creates a "Global config change" release in every project that has not opted
-out (shpyrd.yaml: globals: false, or globals: {exclude: [NAME]}). Values are
-write-only: they are never printed back.
+		Short: "Manage config vars every project of a workspace receives",
+		Long: `Global config vars are set once by a workspace's admins and injected into
+every process of every project of the workspace, first in the environment so a
+project's own config var of the same name wins and attached resources win over
+both. Changing them creates a "Global config change" release in every project
+of the workspace that has not opted out (shpyrd.yaml: globals: false, or
+globals: {exclude: [NAME]}). Values are write-only: they are never printed
+back. Over a kubeconfig the workspace is the default one unless --workspace
+names another.
 
   shpyrd globals set OPENAI_API_KEY=sk-... REGION=eu
+  shpyrd globals set --workspace acme SENTRY_DSN=https://...
   shpyrd globals unset REGION
   shpyrd globals list`,
 	}
+	cmd.PersistentFlags().StringVar(&workspace, "workspace", "", "workspace slug (the default workspace when empty)")
 	cmd.AddCommand(&cobra.Command{
 		Use:   "set KEY=VALUE [KEY=VALUE...]",
 		Short: "Set global config vars",
@@ -48,14 +53,14 @@ write-only: they are never printed back.
 				}
 				set[k] = v
 			}
-			return mutateGlobals(g, cmd, set, nil)
+			return mutateGlobals(g, cmd, workspace, set, nil)
 		},
 	}, &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove global config vars",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateGlobals(g, cmd, nil, args)
+			return mutateGlobals(g, cmd, workspace, nil, args)
 		},
 	}, &cobra.Command{
 		Use:     "list",
@@ -68,7 +73,7 @@ write-only: they are never printed back.
 				return err
 			}
 			sec := &corev1.Secret{}
-			if err := ac.c.Get(ctx, globalsKey(), sec); err != nil {
+			if err := ac.c.Get(ctx, globalsKey(workspace), sec); err != nil {
 				if apierrors.IsNotFound(err) {
 					fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
 					return nil
@@ -95,11 +100,20 @@ write-only: they are never printed back.
 	return cmd
 }
 
-func globalsKey() types.NamespacedName {
-	return types.NamespacedName{Namespace: install.DefaultSystemNamespace, Name: shpyrdv1.GlobalEnvSecretName}
+func globalsKey(workspace string) types.NamespacedName {
+	return types.NamespacedName{Namespace: install.DefaultSystemNamespace, Name: shpyrdv1.GlobalEnvSecretFor(workspace)}
 }
 
-func mutateGlobals(g *globalFlags, cmd *cobra.Command, set map[string]string, unset []string) error {
+// workspaceOfApp is the slug of the workspace an App belongs to: its label,
+// or the default workspace.
+func workspaceOfApp(a *shpyrdv1.App) string {
+	if ws := a.Labels[shpyrdv1.LabelWorkspace]; ws != "" {
+		return ws
+	}
+	return "default"
+}
+
+func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map[string]string, unset []string) error {
 	ctx := signalContext()
 	ac, err := newAppClient(g, cmd.OutOrStdout())
 	if err != nil {
@@ -107,13 +121,14 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, set map[string]string, un
 	}
 	sec := &corev1.Secret{}
 	create := false
-	if err := ac.c.Get(ctx, globalsKey(), sec); err != nil {
+	key := globalsKey(workspace)
+	if err := ac.c.Get(ctx, key, sec); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
 		create = true
 		sec = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: shpyrdv1.GlobalEnvSecretName, Namespace: install.DefaultSystemNamespace, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}},
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}},
 			Type:       corev1.SecretTypeOpaque,
 		}
 	}
@@ -143,8 +158,12 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, set map[string]string, un
 	var apps shpyrdv1.AppList
 	if err := ac.c.List(ctx, &apps); err == nil {
 		n := 0
+		want := workspace
+		if want == "" {
+			want = "default"
+		}
 		for _, a := range apps.Items {
-			if a.Spec.Globals == nil || !a.Spec.Globals.Disabled {
+			if workspaceOfApp(&a) == want && (a.Spec.Globals == nil || !a.Spec.Globals.Disabled) {
 				n++
 			}
 		}

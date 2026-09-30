@@ -936,6 +936,10 @@ func TestGlobals(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"vars":[]`) || !strings.Contains(rec.Body.String(), `"projects":1`) {
 		t.Fatalf("empty globals: %d %s", rec.Code, rec.Body.String())
 	}
+	// The workspace's own route answers the same at the default door.
+	if rec := do(t, s, "GET", "/api/workspace/globals", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"projects":1`) {
+		t.Fatalf("workspace globals: %d %s", rec.Code, rec.Body.String())
+	}
 	rec = do(t, s, "PUT", "/api/globals", `{"set":{"OPENAI_API_KEY":"sk-secret"},"dotenv":"REGION=eu\n"}`, true)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "sk-secret") {
 		t.Fatalf("set: %d %s", rec.Code, rec.Body.String())
@@ -1035,6 +1039,29 @@ func TestDrains(t *testing.T) {
 	rec = do(t, s, "GET", "/api/drains", "", true)
 	if !strings.Contains(rec.Body.String(), `"name":"siem"`) || strings.Contains(rec.Body.String(), "in-logs-example-com") {
 		t.Errorf("cluster list must not include project drains: %s", rec.Body.String())
+	}
+
+	// Workspace drain: kept in the system namespace beside the cluster's,
+	// named and labelled after the workspace, shown by its bare name to it.
+	rec = do(t, s, "POST", "/api/workspace/drains", `{"name":"axiom","url":"https://api.axiom.co/v1/ingest"}`, true)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"name":"axiom"`) || !strings.Contains(rec.Body.String(), `"workspace":"default"`) || strings.Contains(rec.Body.String(), `"cluster":true`) {
+		t.Fatalf("workspace drain: %d %s", rec.Code, rec.Body.String())
+	}
+	wd := &shpyrdv1.LogDrain{}
+	if err := k.Get(context.Background(), types.NamespacedName{Namespace: "shpyrd-system", Name: "default-axiom"}, wd); err != nil || wd.Labels[shpyrdv1.LabelWorkspace] != "default" {
+		t.Fatalf("workspace drain object: %v %v", err, wd.Labels)
+	}
+	if rec := do(t, s, "GET", "/api/drains", "", true); strings.Contains(rec.Body.String(), "axiom") {
+		t.Errorf("the cluster's list must not include a workspace's drains: %s", rec.Body.String())
+	}
+	if rec := do(t, s, "GET", "/api/workspace/drains", "", true); !strings.Contains(rec.Body.String(), `"name":"axiom"`) || strings.Contains(rec.Body.String(), "siem") {
+		t.Errorf("the workspace's list is its own drains alone: %s", rec.Body.String())
+	}
+	if rec := do(t, s, "DELETE", "/api/workspace/drains/siem", "", true); rec.Code != http.StatusNotFound {
+		t.Errorf("a workspace must not remove the cluster's drain: %d", rec.Code)
+	}
+	if rec := do(t, s, "DELETE", "/api/workspace/drains/axiom", "", true); rec.Code != http.StatusNoContent {
+		t.Errorf("remove the workspace's drain: %d %s", rec.Code, rec.Body.String())
 	}
 
 	// Delete removes the drain and its Secret.

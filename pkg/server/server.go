@@ -39,8 +39,8 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
+	"github.com/shpyrd-io/shpyrd/pkg/ui"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
-	"github.com/shpyrd-io/shpyrd/ui"
 )
 
 // Options is what a binary built on the core chooses (RFC-0033's open-core
@@ -201,6 +201,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		Addr:         o.addr,
 		Store:        st,
 		Tenancy:      resolver,
+		SignInHost:   hostOf(envOr("SHPYRD_AUTH_URL", "")),
 		Realms:       o.opts.Realms,
 		Capabilities: o.opts.Capabilities,
 		MembershipChanged: func() {

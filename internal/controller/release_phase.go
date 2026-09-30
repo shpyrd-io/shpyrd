@@ -132,7 +132,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), job)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := r.createReleaseJob(ctx, app, job, image, command, revision, res, target); err != nil {
+		if err := r.createReleaseJob(ctx, app, job, image, command, revision, releaseNumber(app, image, configHash), res, target); err != nil {
 			return false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
@@ -173,7 +173,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 
 // createReleaseJob renders the one-off Job: the release's image and config
 // vars, the process type's environment, no volumes, one attempt.
-func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, res corev1.ResourceRequirements, target string) error {
+func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, release int, res corev1.ResourceRequirements, target string) error {
 	labels := processLabels(app, releaseProcessType)
 	labels["shpyrd.io/release-target"] = target
 	if restart := app.Annotations[shpyrdv1.AnnotationRestartedAt]; restart != "" {
@@ -186,7 +186,7 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 		Resources:       res,
 		SecurityContext: hardenedSecurityContext(),
 		EnvFrom:         EnvSources(app),
-		Env:             append(r.Config.platformEnv(app, revision), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
+		Env:             append(r.Config.platformEnv(app, revision, releaseProcessType, release), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
 	}
 	container.Env = append(container.Env, app.Spec.Env...)
 	job.Labels = labels

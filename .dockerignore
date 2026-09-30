@@ -1,0 +1,15 @@
+# What the image never needs: installed packages (the ui stage installs
+# its own), built files (the ui stage builds them), the website (deployed
+# apart), binaries, notes.
+node_modules
+**/out
+**/.next
+**/*.tsbuildinfo
+apps/website
+pkg/ui/dist/console
+pkg/ui/dist/workspace
+# Dockerfile.dev packages the server compiled on the host
+bin/*
+!bin/shpyrd-server-linux-*
+tmp
+.git

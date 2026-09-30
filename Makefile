@@ -3,7 +3,7 @@ CLUSTER      ?= shpyrd
 SERVER_IMAGE ?= shpyrd-server:dev
 LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
-.PHONY: all build cli server ui website website-dev image dev-image generate \
+.PHONY: all build cli server ui pages website website-dev image dev-image generate \
         test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
         dev-pause dev-resume installclint commitlint
 
@@ -23,25 +23,36 @@ server:
 	mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/shpyrd-server ./cmd/shpyrd-server
 
-## Build the dashboard into ui/dist (embedded by `make server`)
+## Build the applications (apps/console, apps/workspace) into pkg/ui/dist,
+## a folder each, embedded by `make server`
 ui:
-	cd ui && npm ci --no-audit --no-fund && npm run build
+	npm ci --no-audit --no-fund
+	npm --prefix apps/console run build
+	npm --prefix apps/workspace run build
+	rm -rf pkg/ui/dist/console pkg/ui/dist/workspace
+	cp -R apps/console/out pkg/ui/dist/console
+	cp -R apps/workspace/out pkg/ui/dist/workspace
+
+## Draw the pages the server serves by itself (pkg/pages/html) from the
+## design library: design/pages/README.md
+pages:
+	npm install --no-audit --no-fund && npm --prefix design/pages run build
 
 ## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
 website:
-	cd apps/website && npm ci --no-audit --no-fund && npm run build
+	npm ci --no-audit --no-fund && npm --prefix apps/website run build
 
-## Serve the website locally on http://localhost:3000
+## Serve the website locally on http://localhost:4324
 website-dev:
-	cd apps/website && npm install && npm run dev
+	npm install && npm --prefix apps/website run dev
 
 ## Build the server container image (full multi-stage build)
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(SERVER_IMAGE) .
 
-## Fast development image: compile the server on the host (UI embedded from
-## ui/dist), then package it with Dockerfile.dev. Run `make ui` first when
-## the dashboard changed.
+## Fast development image: compile the server on the host (the applications
+## embedded from pkg/ui/dist), then package it with Dockerfile.dev. Run
+## `make ui` first when an application changed.
 GOARCH_HOST := $(shell go env GOARCH)
 dev-image:
 	mkdir -p bin
@@ -53,21 +64,24 @@ generate:
 	go tool controller-gen object paths=./api/...
 	go tool controller-gen crd paths=./api/... output:crd:dir=./deploy/components/shpyrd/base/crds
 
-## Go tests and the dashboard's unit tests (needs `npm ci` in ui/ once,
-## which `make ui` does)
+## The npm workspaces with checks of their own: the library and the
+## applications. `npm ci` at the root (which `make ui` does) installs them.
+WORKSPACES := --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+
+## Go tests and the workspaces' tests
 test:
 	go test ./...
-	cd ui && npm run test
+	npm run test $(WORKSPACES)
 
 vet:
 	go vet ./...
 
 lint: vet
-	cd ui && npm run lint
+	npm run lint $(WORKSPACES)
+	npm run typecheck $(WORKSPACES)
 
 clean:
-	rm -rf bin ui/dist/*
-	touch ui/dist/.gitkeep
+	rm -rf bin pkg/ui/dist/console pkg/ui/dist/workspace apps/console/out apps/workspace/out
 
 ## Local development loop -----------------------------------------------------
 

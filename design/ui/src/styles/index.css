@@ -1,0 +1,189 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "./prose.css";
+
+/* The classes the components use are found here, whoever imports this file. */
+@source "../";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-error: var(--chart-error);
+  --color-chart-warning: var(--chart-warning);
+  --color-chart-info: var(--chart-info);
+  --color-chart-success: var(--chart-success);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  /* How long a change takes, by what changes: `duration-fast` is for what
+     answers the pointer, `duration-normal` for what appears or leaves,
+     `duration-slow` for what moves or changes its size. */
+  --transition-duration-fast: 100ms;
+  --transition-duration-normal: 200ms;
+  --transition-duration-slow: 400ms;
+  /* How a change speeds up and slows down, by where it is going:
+     `ease-enter` arrives and settles, `ease-exit` starts slowly and is
+     gone, `ease-move` goes from one place to another. */
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.66 0.22 38);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  /* How something is, by name: it went well, it is to be known, it asks
+     for care. An error is `destructive`. Each name is the colour to write
+     with, and to wash and outline with when it is made thinner; its
+     `foreground` is what is written over it when it is solid. */
+  --success: oklch(0.508 0.118 165.612);
+  --success-foreground: oklch(0.985 0 0);
+  --info: oklch(0.5 0.134 242.749);
+  --info-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.66 0.22 38 / 60%);
+  /* The colours of charts. Their order is what keeps neighbours apart for
+     who does not tell every colour from another: the brand orange, blue,
+     green, violet, and grey for "the others". They were checked as a set,
+     in this order, against this surface; a change has to be checked again. */
+  --chart-1: oklch(0.66 0.22 38);
+  --chart-2: oklch(0.588 0.158 241.966);
+  --chart-3: oklch(0.596 0.145 163.225);
+  --chart-4: oklch(0.541 0.281 293.009);
+  --chart-5: var(--muted-foreground);
+  /* What a series means, when it means something: never the colour of a
+     series that means nothing. */
+  --chart-success: oklch(0.596 0.145 163.225);
+  --chart-info: oklch(0.588 0.158 241.966);
+  --chart-warning: oklch(0.681 0.162 75.834);
+  --chart-error: oklch(0.577 0.245 27.325);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.66 0.22 38);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.17 0.03 262);
+  --foreground: oklch(0.97 0.01 250);
+  --card: oklch(0.21 0.03 262);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.03 262);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.7 0.21 38);
+  --primary-foreground: oklch(0.13 0.02 40);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.27 0.03 262);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.27 0.03 262);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.2 0.05 22);
+  --success: oklch(0.765 0.177 163.223);
+  --success-foreground: oklch(0.2 0.04 165);
+  --info: oklch(0.746 0.16 232.661);
+  --info-foreground: oklch(0.2 0.04 240);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.2 0.04 70);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.7 0.21 38 / 60%);
+  --chart-1: oklch(0.66 0.22 38);
+  --chart-2: oklch(0.588 0.158 241.966);
+  --chart-3: oklch(0.596 0.145 163.225);
+  --chart-4: oklch(0.606 0.25 292.717);
+  --chart-5: var(--muted-foreground);
+  --chart-success: oklch(0.596 0.145 163.225);
+  --chart-info: oklch(0.588 0.158 241.966);
+  --chart-warning: oklch(0.66 0.157 75.834);
+  --chart-error: oklch(0.577 0.245 27.325);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.7 0.21 38);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

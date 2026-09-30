@@ -1,0 +1,45 @@
+{
+  "version": "v0.9.58",
+  "domain": "shpyrd.app",
+  "authRequired": true,
+  "metrics": true,
+  "grafanaUrl": "https://grafana.shpyrd.app",
+  "auth": {
+    "token": true,
+    "providers": [
+      {
+        "id": "github",
+        "label": "GitHub",
+        "kind": "github",
+        "realm": "platform"
+      }
+    ],
+    "password": {
+      "id": "local",
+      "label": "Email and password"
+    }
+  },
+  "extensions": [
+    "auth-local",
+    "postgres",
+    "redis",
+    "logs-agent",
+    "object-storage",
+    "mail",
+    "opencost"
+  ],
+  "capabilities": [
+    "workspaces",
+    "billing"
+  ],
+  "workspace": {
+    "slug": "shpyrd",
+    "name": "shpyrd",
+    "address": "shpyrd.shpyrd.app",
+    "ownedByOperator": true
+  },
+  "defaultWorkspaceId": "shpyrd",
+  "consoleHost": "console.shpyrd.app",
+  "consoleUrl": "https://console.shpyrd.app",
+  "door": "console"
+}

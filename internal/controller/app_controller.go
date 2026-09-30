@@ -713,6 +713,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	_, paused := r.sleepPause(app)
 	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
 	var webReplicas *int32 // what the web Deployment currently asks for
+	release := releaseNumber(app, image, hash)
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
@@ -725,7 +726,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
 		scaledExternally := kedaScales && p.Name == "web"
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, revision, res, mounts[p.Name], d, scaledExternally)
+			r.Config.mutateDeployment(app, p, image, hash, revision, release, res, mounts[p.Name], d, scaledExternally)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {

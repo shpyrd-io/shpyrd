@@ -175,7 +175,25 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 	ctx := c.Request.Context()
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	// ?month=2026-08 asks for a month that went by: its usage whole, at
+	// the prices of the plan, as this month is shown so far.
+	if m := c.Query("month"); m != "" {
+		t, err := time.Parse("2006-01", m)
+		if err != nil {
+			abort(c, http.StatusBadRequest, errors.New("month must be YYYY-MM"))
+			return
+		}
+		if t.After(monthStart) {
+			abort(c, http.StatusBadRequest, errors.New("the month has not begun"))
+			return
+		}
+		monthStart = t
+	}
 	monthEnd := monthStart.AddDate(0, 1, 0)
+	until := now
+	if monthEnd.Before(now) {
+		until = monthEnd
+	}
 
 	wp, _ := s.store.WorkspacePlan(ctx, ws)
 	var plan *store.Plan
@@ -184,28 +202,36 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 			plan = p
 		}
 	}
+	// A month that ended before the plan took effect had no prices, and
+	// no minimum to meet.
+	if plan != nil && !plan.EffectiveFrom.IsZero() && !plan.EffectiveFrom.Before(monthEnd) {
+		plan = nil
+	}
 
-	buckets, err := s.store.QueryBuckets(ctx, ws, "", monthStart, now)
+	buckets, err := s.store.QueryBuckets(ctx, ws, "", monthStart, until)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
 
-	lines, total, quality := computeInvoicePreview(buckets, plan, monthStart, now)
+	lines, total, quality := computeInvoicePreview(buckets, plan, monthStart, until)
 	s.nameLedgerProjects(ctx, ws, lines)
-	// Simple run-rate projection.
-	elapsed := now.Sub(monthStart).Hours()
-	total_h := monthEnd.Sub(monthStart).Hours()
-	projection := 0.0
-	if elapsed > 0 {
-		projection = total / elapsed * total_h
+	// Simple run-rate projection; a month that went by is what it was.
+	projection := total
+	if until == now {
+		elapsed := now.Sub(monthStart).Hours()
+		total_h := monthEnd.Sub(monthStart).Hours()
+		projection = 0
+		if elapsed > 0 {
+			projection = total / elapsed * total_h
+		}
 	}
 
 	if lines == nil {
 		lines = []BillingLineView{}
 	}
 	out := WorkspaceBillingView{
-		Workspace: ws, Period: now.Format("2006-01"), Total: total,
+		Workspace: ws, Period: monthStart.Format("2006-01"), Total: total,
 		Currency: "USD", Projection: projection, Quality: quality, Lines: lines,
 	}
 	if plan != nil {
@@ -353,7 +379,7 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 	}
 
 	type wsEcon struct {
-		Workspace   string  `json:"workspace"`
+		Workspace string `json:"workspace"`
 		// Owner is "operator" or "customer" (RFC-0078): operator workspaces
 		// have expenses but no revenue; Revenue and Margin are zero/empty.
 		Owner       string  `json:"owner,omitempty"`

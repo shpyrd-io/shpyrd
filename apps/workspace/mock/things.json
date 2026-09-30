@@ -1,0 +1,498 @@
+{
+  "projects": {
+    "hello-world": {
+      "configVars": [
+        {
+          "name": "DATABASE_URL",
+          "updatedAt": "2026-09-28T18:30:00Z"
+        },
+        {
+          "name": "SESSION_SECRET",
+          "updatedAt": "2026-09-28T18:30:00Z"
+        },
+        {
+          "name": "SMTP_URL",
+          "updatedAt": "2026-09-28T18:30:00Z"
+        }
+      ],
+      "builds": [
+        {
+          "name": "hello-world-48",
+          "number": 48,
+          "strategy": "buildpacks",
+          "status": "Succeeded",
+          "digest": "sha256:9f2c41ab77d1",
+          "source": "a3f9c21",
+          "startedAt": "2026-09-29T15:06:00Z",
+          "completedAt": "2026-09-29T15:09:40Z"
+        },
+        {
+          "name": "hello-world-47",
+          "number": 47,
+          "strategy": "buildpacks",
+          "status": "Succeeded",
+          "digest": "sha256:5a5a5a5a5a5a",
+          "source": "91be0d4",
+          "startedAt": "2026-09-25T16:15:00Z",
+          "completedAt": "2026-09-25T16:18:10Z"
+        },
+        {
+          "name": "hello-world-46",
+          "number": 46,
+          "strategy": "buildpacks",
+          "status": "Failed",
+          "message": "npm ci exited with status 1",
+          "source": "0badf00",
+          "startedAt": "2026-09-25T15:50:00Z",
+          "completedAt": "2026-09-25T15:52:30Z"
+        }
+      ],
+      "resources": [
+        {
+          "kind": "App",
+          "name": "hello-world",
+          "phase": "Running",
+          "attachedTo": [],
+          "data": false,
+          "createdAt": "2026-06-10T12:00:00Z",
+          "details": {
+            "size": "shared-s"
+          }
+        },
+        {
+          "kind": "Postgres",
+          "name": "db",
+          "phase": "Ready",
+          "endpoint": "db.p-hello-world:5432",
+          "attachedTo": [
+            "hello-world"
+          ],
+          "data": true,
+          "createdAt": "2026-06-10T12:20:00Z",
+          "details": {
+            "version": "16",
+            "storage": "10Gi"
+          },
+          "bindable": true
+        },
+        {
+          "kind": "Redis",
+          "name": "cache",
+          "phase": "Ready",
+          "endpoint": "cache.p-hello-world:6379",
+          "attachedTo": [
+            "hello-world"
+          ],
+          "data": true,
+          "createdAt": "2026-07-02T09:00:00Z",
+          "details": {
+            "memory": "256Mi"
+          },
+          "bindable": true
+        },
+        {
+          "kind": "Volume",
+          "name": "uploads",
+          "phase": "Bound",
+          "attachedTo": [
+            "hello-world"
+          ],
+          "data": true,
+          "createdAt": "2026-08-11T10:00:00Z",
+          "details": {
+            "size": "20Gi",
+            "mount": "/data/uploads"
+          }
+        }
+      ],
+      "domains": {
+        "target": "acme.shpyrd.app",
+        "domains": [
+          {
+            "host": "hello.acme.com",
+            "dns": "ok",
+            "target": "acme.shpyrd.app",
+            "certificate": "ready"
+          },
+          {
+            "host": "www.hello.acme.com",
+            "dns": "missing",
+            "target": "acme.shpyrd.app",
+            "certificate": "issuing",
+            "message": "CNAME not found; the certificate waits for it"
+          }
+        ]
+      },
+      "drains": [
+        {
+          "name": "datadog",
+          "url": "https://http-intake.logs.datadoghq.com/v1/input",
+          "format": "json",
+          "phase": "Active",
+          "lastDeliveryAt": "2026-09-30T04:59:00Z",
+          "sent": 128430,
+          "errors": 0,
+          "createdAt": "2026-07-15T08:00:00Z"
+        },
+        {
+          "name": "archive",
+          "url": "syslog+tls://logs.acme.internal:6514",
+          "format": "syslog",
+          "processes": [
+            "worker"
+          ],
+          "phase": "Failing",
+          "message": "connection refused",
+          "lastDeliveryAt": "2026-09-29T21:10:00Z",
+          "sent": 9021,
+          "errors": 312,
+          "createdAt": "2026-09-01T08:00:00Z"
+        }
+      ],
+      "members": [
+        {
+          "name": "ana@acme.com",
+          "user": "ana@acme.com",
+          "role": "admin"
+        },
+        {
+          "name": "marcelo@acme.com",
+          "user": "marcelo@acme.com",
+          "role": "developer"
+        },
+        {
+          "name": "team:support",
+          "team": "support",
+          "role": "user"
+        }
+      ],
+      "allow": [
+        {
+          "platform": "mcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "uploads",
+          "size": "10Gi",
+          "shared": false,
+          "phase": "Bound",
+          "mountedBy": [
+            "web"
+          ],
+          "createdAt": "2026-07-01T10:00:00Z"
+        }
+      ],
+      "snapshots": [
+        {
+          "name": "uploads-20260928",
+          "volume": "uploads",
+          "size": "10Gi",
+          "ready": true,
+          "createdAt": "2026-09-28T02:00:00Z"
+        }
+      ]
+    }
+  },
+  "people": [
+    {
+      "email": "ana@acme.com",
+      "name": "Ana Souza",
+      "provider": "github",
+      "status": "active",
+      "role": "owner",
+      "lastSeenAt": "2026-09-30T04:50:00Z"
+    },
+    {
+      "email": "marcelo@acme.com",
+      "name": "Marcelo Lima",
+      "provider": "github",
+      "status": "active",
+      "role": "admin",
+      "lastSeenAt": "2026-09-29T18:30:00Z"
+    },
+    {
+      "email": "beatriz@acme.com",
+      "name": "Beatriz Costa",
+      "provider": "local",
+      "status": "active",
+      "role": "member",
+      "lastSeenAt": "2026-09-28T11:00:00Z"
+    },
+    {
+      "email": "rafael@acme.com",
+      "name": "Rafael Alves",
+      "provider": "local",
+      "status": "suspended",
+      "role": "member",
+      "lastSeenAt": "2026-08-02T09:00:00Z"
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "client": "Claude",
+      "email": "ana@acme.com",
+      "scope": "read",
+      "createdAt": "2026-09-10T10:00:00Z",
+      "expiresAt": "2026-12-10T10:00:00Z",
+      "lastUsedAt": "2026-09-30T03:00:00Z"
+    },
+    {
+      "id": "c2",
+      "client": "GitHub Actions",
+      "email": "marcelo@acme.com",
+      "scope": "deploy",
+      "createdAt": "2026-08-01T10:00:00Z",
+      "expiresAt": "2027-08-01T10:00:00Z",
+      "lastUsedAt": "2026-09-29T15:05:00Z"
+    }
+  ],
+  "invitations": [
+    {
+      "id": "i1",
+      "email": "carla@acme.com",
+      "role": "member",
+      "invitedBy": "ana@acme.com",
+      "createdAt": "2026-09-28T12:00:00Z",
+      "expiresAt": "2026-10-05T12:00:00Z",
+      "expired": false
+    }
+  ],
+  "teams": [
+    {
+      "name": "platform",
+      "description": "Operates every project.",
+      "members": [
+        "ana@acme.com",
+        "marcelo@acme.com"
+      ],
+      "platformRole": "platform-admin"
+    },
+    {
+      "name": "support",
+      "description": "Opens the apps of the clients.",
+      "members": [
+        "beatriz@acme.com",
+        "rafael@acme.com"
+      ]
+    },
+    {
+      "name": "everyone",
+      "description": "Everyone who signs in.",
+      "members": [],
+      "everyone": true
+    }
+  ],
+  "tokens": [
+    {
+      "id": "t1",
+      "name": "ci-deploy",
+      "ownerEmail": "marcelo@acme.com",
+      "projectRoles": {
+        "hello-world": "developer",
+        "docs": "developer"
+      },
+      "createdAt": "2026-08-01T10:00:00Z",
+      "expiresAt": "2027-08-01T10:00:00Z",
+      "lastUsedAt": "2026-09-29T15:05:00Z"
+    },
+    {
+      "id": "t2",
+      "name": "reports-cron",
+      "ownerEmail": "ana@acme.com",
+      "projectRoles": {
+        "reports": "admin"
+      },
+      "createdAt": "2026-09-21T20:00:00Z",
+      "lastUsedAt": "2026-09-29T22:00:00Z"
+    }
+  ],
+  "workspaceDomains": [
+    {
+      "host": "acme.shpyrd.app",
+      "verified": true,
+      "verifiedAt": "2026-06-02T14:11:00Z",
+      "primary": true,
+      "records": [],
+      "url": "https://acme.shpyrd.app"
+    },
+    {
+      "host": "intranet.acme.com",
+      "verified": true,
+      "verifiedAt": "2026-08-10T09:00:00Z",
+      "primary": false,
+      "records": [
+        {
+          "type": "CNAME",
+          "name": "intranet.acme.com",
+          "value": "acme.shpyrd.app"
+        },
+        {
+          "type": "TXT",
+          "name": "_shpyrd.intranet.acme.com",
+          "value": "shpyrd-verify=7c1e9a"
+        }
+      ],
+      "url": "https://intranet.acme.com"
+    },
+    {
+      "host": "apps.acme.com",
+      "verified": false,
+      "primary": false,
+      "records": [
+        {
+          "type": "CNAME",
+          "name": "apps.acme.com",
+          "value": "acme.shpyrd.app"
+        },
+        {
+          "type": "TXT",
+          "name": "_shpyrd.apps.acme.com",
+          "value": "shpyrd-verify=b34f10"
+        }
+      ],
+      "url": "https://apps.acme.com"
+    }
+  ],
+  "loginMethods": {
+    "password": true,
+    "connectors": [
+      {
+        "id": "acme-google",
+        "type": "google",
+        "name": "Google (acme.com)",
+        "detail": "acme.com",
+        "workspace": "acme"
+      }
+    ],
+    "kinds": [
+      "google",
+      "microsoft",
+      "github",
+      "oidc"
+    ],
+    "callback": "https://acme.shpyrd.app/api/auth/callback"
+  },
+  "billing": {
+    "plan": "Team",
+    "currency": "BRL",
+    "month": "2026-09",
+    "total": 412.7,
+    "lines": [
+      {
+        "project": "hello-world",
+        "component": "web",
+        "metric": "instance_hours",
+        "quantity": 2880,
+        "unit": "hours",
+        "amount": 172.8,
+        "price": 0.06
+      },
+      {
+        "project": "hello-world",
+        "component": "worker",
+        "metric": "instance_hours",
+        "quantity": 720,
+        "unit": "hours",
+        "amount": 43.2,
+        "price": 0.06
+      },
+      {
+        "project": "hello-world",
+        "component": "db",
+        "metric": "storage_gib_hours",
+        "quantity": 7200,
+        "unit": "GiB-hours",
+        "amount": 36,
+        "price": 0.005
+      },
+      {
+        "project": "billing",
+        "component": "web",
+        "metric": "instance_hours",
+        "quantity": 1440,
+        "unit": "hours",
+        "amount": 129.6,
+        "price": 0.09
+      },
+      {
+        "project": "docs",
+        "component": "web",
+        "metric": "instance_hours",
+        "quantity": 1440,
+        "unit": "hours",
+        "amount": 31.1,
+        "price": 0.0216
+      }
+    ]
+  },
+  "domainClaims": [
+    {
+      "domain": "acme.com",
+      "connector": "acme-google",
+      "verified": true,
+      "verifiedAt": "2026-08-10T09:30:00Z",
+      "record": "_shpyrd.acme.com",
+      "recordValue": "shpyrd-verify=91ad2c"
+    }
+  ],
+  "sizes": {
+    "default": "shared-s",
+    "sizes": [
+      {
+        "name": "shared-s",
+        "kind": "shared",
+        "cpu": "0.5",
+        "memory": "512Mi"
+      },
+      {
+        "name": "shared-m",
+        "kind": "shared",
+        "cpu": "1",
+        "memory": "1Gi"
+      },
+      {
+        "name": "shared-l",
+        "kind": "shared",
+        "cpu": "2",
+        "memory": "2Gi"
+      },
+      {
+        "name": "dedicated-l",
+        "kind": "dedicated",
+        "cpu": "2",
+        "memory": "4Gi"
+      }
+    ]
+  },
+  "globals": {
+    "vars": [
+      {
+        "name": "SENTRY_DSN",
+        "updatedAt": "2026-08-01T10:00:00Z"
+      },
+      {
+        "name": "SMTP_URL",
+        "updatedAt": "2026-09-12T15:20:00Z"
+      }
+    ],
+    "projects": 4
+  },
+  "workspaceDrains": [
+    {
+      "name": "datadog",
+      "url": "https://http-intake.logs.datadoghq.com/v1/input",
+      "format": "json",
+      "headers": [
+        "DD-API-KEY"
+      ],
+      "workspace": "acme",
+      "phase": "Active",
+      "lastDeliveryAt": "2026-09-30T10:59:00Z",
+      "sent": 9843120,
+      "errors": 12,
+      "createdAt": "2026-07-15T08:00:00Z"
+    }
+  ]
+}

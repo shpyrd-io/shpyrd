@@ -36,7 +36,10 @@ type DrainView struct {
 	Processes []string `json:"processes,omitempty"`
 	Headers   []string `json:"headers,omitempty"`
 	// Cluster says the drain receives every project's lines.
-	Cluster        bool       `json:"cluster"`
+	Cluster bool `json:"cluster"`
+	// Workspace names the workspace whose lines the drain receives, for a
+	// drain of that scope.
+	Workspace      string     `json:"workspace,omitempty"`
 	Phase          string     `json:"phase"`
 	Message        string     `json:"message,omitempty"`
 	LastDeliveryAt *time.Time `json:"lastDeliveryAt,omitempty"`
@@ -81,9 +84,14 @@ func DrainName(given, rawURL string) (string, error) {
 }
 
 func drainView(d shpyrdv1.LogDrain, headers []string, systemNS string) DrainView {
+	inSystem := d.Namespace == systemNS
+	workspace := ""
+	if inSystem {
+		workspace = d.Labels[shpyrdv1.LabelWorkspace]
+	}
 	v := DrainView{
-		Name: d.Name, URL: d.Spec.URL, Format: d.EffectiveFormat(), Processes: d.Spec.Processes, Headers: headers,
-		Cluster: d.Namespace == systemNS, Phase: firstNonEmpty(d.Status.Phase, shpyrdv1.DrainPending), Message: d.Status.Message,
+		Name: drainBareName(d.Name, workspace), URL: d.Spec.URL, Format: d.EffectiveFormat(), Processes: d.Spec.Processes, Headers: headers,
+		Cluster: inSystem && workspace == "", Workspace: workspace, Phase: firstNonEmpty(d.Status.Phase, shpyrdv1.DrainPending), Message: d.Status.Message,
 		Sent: d.Status.Sent, Errors: d.Status.Errors, CreatedAt: d.CreationTimestamp.Time,
 	}
 	if d.Status.LastDeliveryAt != nil {
@@ -93,14 +101,36 @@ func drainView(d shpyrdv1.LogDrain, headers []string, systemNS string) DrainView
 	return v
 }
 
-// listDrainsIn lists the drains of one namespace with their header names.
-func (s *Server) listDrainsIn(ctx context.Context, ns string) ([]DrainView, error) {
+// The drains of a workspace live in the system namespace beside the
+// cluster's, told apart by the workspace label and named after it, so two
+// workspaces may both have a drain called datadog.
+func drainObjectName(name, workspace string) string {
+	if workspace == "" {
+		return name
+	}
+	return workspace + "-" + name
+}
+
+func drainBareName(name, workspace string) string {
+	if workspace == "" {
+		return name
+	}
+	return strings.TrimPrefix(name, workspace+"-")
+}
+
+// listDrainsIn lists the drains of one namespace with their header names:
+// a project's, or in the system namespace the cluster's (no workspace) or
+// one workspace's.
+func (s *Server) listDrainsIn(ctx context.Context, ns, workspace string) ([]DrainView, error) {
 	var list shpyrdv1.LogDrainList
 	if err := s.apps.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return nil, err
 	}
 	out := make([]DrainView, 0, len(list.Items))
 	for _, d := range list.Items {
+		if ns == s.kube.Namespace && d.Labels[shpyrdv1.LabelWorkspace] != workspace {
+			continue
+		}
 		out = append(out, drainView(d, s.drainHeaderNames(ctx, d), s.kube.Namespace))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -123,8 +153,9 @@ func (s *Server) drainHeaderNames(ctx context.Context, d shpyrdv1.LogDrain) []st
 	return names
 }
 
-// createDrainIn validates and writes a drain (and its header Secret).
-func (s *Server) createDrainIn(c *gin.Context, ns, project string) {
+// createDrainIn validates and writes a drain (and its header Secret): a
+// project's, the cluster's, or a workspace's.
+func (s *Server) createDrainIn(c *gin.Context, ns, project, workspace string) {
 	var req CreateDrainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -135,9 +166,13 @@ func (s *Server) createDrainIn(c *gin.Context, ns, project string) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	name = drainObjectName(name, workspace)
 	d := &shpyrdv1.LogDrain{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}},
 		Spec:       shpyrdv1.LogDrainSpec{URL: strings.TrimSpace(req.URL), Format: req.Format, Processes: req.Processes},
+	}
+	if workspace != "" {
+		d.Labels[shpyrdv1.LabelWorkspace] = workspace
 	}
 	if err := controller.ValidateDrainURL(d.Spec.URL, d.EffectiveFormat()); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -195,11 +230,17 @@ func (s *Server) createDrainIn(c *gin.Context, ns, project string) {
 }
 
 // deleteDrainIn removes a drain and its header Secret.
-func (s *Server) deleteDrainIn(c *gin.Context, ns, project, name string) {
+func (s *Server) deleteDrainIn(c *gin.Context, ns, project, workspace, name string) {
 	ctx := c.Request.Context()
 	d := &shpyrdv1.LogDrain{}
-	if err := s.apps.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, d); err != nil {
+	if err := s.apps.Get(ctx, types.NamespacedName{Namespace: ns, Name: drainObjectName(name, workspace)}, d); err != nil {
 		abortNotFound(c, err, "drain")
+		return
+	}
+	// A scope removes its own drains only: the cluster's have no workspace
+	// label, a workspace's carry its own.
+	if ns == s.kube.Namespace && d.Labels[shpyrdv1.LabelWorkspace] != workspace {
+		abortNotFound(c, apierrors.NewNotFound(shpyrdv1.GroupVersion.WithResource("logdrains").GroupResource(), name), "drain")
 		return
 	}
 	if d.Spec.HeadersFrom != nil {
@@ -220,7 +261,7 @@ func (s *Server) listProjectDrains(c *gin.Context) {
 	if !ok {
 		return
 	}
-	out, err := s.listDrainsIn(c.Request.Context(), app.Namespace)
+	out, err := s.listDrainsIn(c.Request.Context(), app.Namespace, "")
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
@@ -233,7 +274,7 @@ func (s *Server) createProjectDrain(c *gin.Context) {
 	if !ok {
 		return
 	}
-	s.createDrainIn(c, app.Namespace, project.SlugOf(app))
+	s.createDrainIn(c, app.Namespace, project.SlugOf(app), "")
 }
 
 func (s *Server) deleteProjectDrain(c *gin.Context) {
@@ -241,13 +282,16 @@ func (s *Server) deleteProjectDrain(c *gin.Context) {
 	if !ok {
 		return
 	}
-	s.deleteDrainIn(c, app.Namespace, project.SlugOf(app), c.Param("name"))
+	s.deleteDrainIn(c, app.Namespace, project.SlugOf(app), "", c.Param("name"))
 }
 
-// ---- cluster scope ------------------------------------------------------------
+// ---- workspace scope ----------------------------------------------------------
 
-func (s *Server) listClusterDrains(c *gin.Context) {
-	out, err := s.listDrainsIn(c.Request.Context(), s.kube.Namespace)
+// The drains of the request's workspace: every project's lines of it,
+// kept in the system namespace beside the cluster's.
+
+func (s *Server) listWorkspaceDrains(c *gin.Context) {
+	out, err := s.listDrainsIn(c.Request.Context(), s.kube.Namespace, s.doorWorkspace(c))
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
@@ -255,8 +299,27 @@ func (s *Server) listClusterDrains(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-func (s *Server) createClusterDrain(c *gin.Context) { s.createDrainIn(c, s.kube.Namespace, "") }
+func (s *Server) createWorkspaceDrain(c *gin.Context) {
+	s.createDrainIn(c, s.kube.Namespace, "", s.doorWorkspace(c))
+}
+
+func (s *Server) deleteWorkspaceDrain(c *gin.Context) {
+	s.deleteDrainIn(c, s.kube.Namespace, "", s.doorWorkspace(c), c.Param("name"))
+}
+
+// ---- cluster scope ------------------------------------------------------------
+
+func (s *Server) listClusterDrains(c *gin.Context) {
+	out, err := s.listDrainsIn(c.Request.Context(), s.kube.Namespace, "")
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (s *Server) createClusterDrain(c *gin.Context) { s.createDrainIn(c, s.kube.Namespace, "", "") }
 
 func (s *Server) deleteClusterDrain(c *gin.Context) {
-	s.deleteDrainIn(c, s.kube.Namespace, "", c.Param("name"))
+	s.deleteDrainIn(c, s.kube.Namespace, "", "", c.Param("name"))
 }

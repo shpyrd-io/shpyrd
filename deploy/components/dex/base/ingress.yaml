@@ -26,6 +26,16 @@ spec:
     - host: ${SHPYRD_AUTH_HOST}
       http:
         paths:
+          # The root of the sign-in host is nobody's page: Dex answers it
+          # with its own index. The platform server answers it instead,
+          # with the mark alone (pkg/pages); everything under it is Dex's.
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: shpyrd-server
+                port:
+                  name: http
           - path: /
             pathType: Prefix
             backend:

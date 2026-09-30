@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -628,10 +629,32 @@ func init() {
 // EnvSecretName is the Secret holding the app's config vars.
 func (a *App) EnvSecretName() string { return a.Name + EnvSecretSuffix }
 
-// GlobalEnvSecretName is the cluster-wide config vars Secret in the system
-// namespace and the name of its filtered mirror in every project namespace
-// (RFC-0016).
+// GlobalEnvSecretName is the config vars Secret of the default workspace in
+// the system namespace and the name of the filtered mirror in every project
+// namespace (RFC-0016).
 const GlobalEnvSecretName = "shpyrd-global-env"
+
+// GlobalEnvSecretFor is the Secret of a workspace's config vars in the
+// system namespace: the name of before for the default workspace, so
+// nothing moves on upgrade, and that name with the slug for every other.
+func GlobalEnvSecretFor(workspace string) string {
+	if workspace == "" || workspace == "default" {
+		return GlobalEnvSecretName
+	}
+	return GlobalEnvSecretName + "-" + workspace
+}
+
+// GlobalEnvWorkspace is the workspace whose config vars a Secret of the
+// system namespace holds, by its name; false for any other Secret.
+func GlobalEnvWorkspace(name string) (string, bool) {
+	if name == GlobalEnvSecretName {
+		return "default", true
+	}
+	if ws, ok := strings.CutPrefix(name, GlobalEnvSecretName+"-"); ok && ws != "" {
+		return ws, true
+	}
+	return "", false
+}
 
 // BindingsSecretSuffix: the Secret <app>-bindings holds the config vars
 // provided by attached resources; the controller owns it.

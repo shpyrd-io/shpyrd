@@ -26,18 +26,22 @@ import (
 
 func newDrainsCmd(g *globalFlags) *cobra.Command {
 	var (
-		appName string
-		cluster bool
+		appName   string
+		cluster   bool
+		workspace string
 	)
 	cmd := &cobra.Command{
 		Use:   "drains",
 		Short: "Forward logs to an external receiver (HTTPS or syslog)",
 		Long: `Log drains forward a project's log lines to a receiver as they are written:
 JSON over HTTPS (Datadog, Better Stack, Axiom, your own collector) or RFC 5424
-syslog over TCP/TLS (Papertrail, rsyslog). A cluster drain (--cluster, platform
-admins) receives every project's lines, labelled with the project.
+syslog over TCP/TLS (Papertrail, rsyslog). A workspace drain (--workspace,
+workspace admins) receives every project's lines of the workspace, labelled
+with the project; a cluster drain (--cluster, the operator, over a kubeconfig)
+receives every project's lines of the platform.
 
   shpyrd drains add https://in.logs.example.com/ingest --header "Authorization: Bearer ..." --project shop
+  shpyrd drains add syslog+tls://logs.example.com:6514 --workspace acme
   shpyrd drains add syslog+tls://logs.example.com:6514 --cluster
   shpyrd drains list --project shop
   shpyrd drains remove in-logs-example-com --project shop
@@ -54,7 +58,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			format, _ := cmd.Flags().GetString("format")
 			rawHeaders, _ := cmd.Flags().GetStringArray("header")
 			processes, _ := cmd.Flags().GetStringSlice("processes")
-			ns, project, err := drainScope(cluster, appName)
+			ns, project, err := drainScope(cluster, appName, workspace)
 			if err != nil {
 				return err
 			}
@@ -70,8 +74,16 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			if err != nil {
 				return err
 			}
+			// A workspace's drain in the system namespace is named and
+			// labelled after the workspace, as the server does it.
+			objectName := name
+			labels := map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}
+			if workspace != "" {
+				objectName = workspace + "-" + name
+				labels[shpyrdv1.LabelWorkspace] = workspace
+			}
 			d := &shpyrdv1.LogDrain{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}},
+				ObjectMeta: metav1.ObjectMeta{Name: objectName, Namespace: ns, Labels: labels},
 				Spec:       shpyrdv1.LogDrainSpec{URL: strings.TrimSpace(args[0]), Format: format, Processes: processes},
 			}
 			if err := controller.ValidateDrainURL(d.Spec.URL, d.EffectiveFormat()); err != nil {
@@ -83,10 +95,18 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				return err
 			}
 			if ac.session {
+				body, _ := json.Marshal(api.CreateDrainRequest{Name: name, URL: d.Spec.URL, Format: format, Headers: headers, Processes: processes})
+				if workspace != "" {
+					// Over a session, the workspace is the door's.
+					if _, err := ac.serverRequest(ctx, "POST", "api/workspace/drains", body, "application/json"); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to the workspace: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat())
+					return nil
+				}
 				if project == "" {
 					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
 				}
-				body, _ := json.Marshal(api.CreateDrainRequest{Name: name, URL: d.Spec.URL, Format: format, Headers: headers, Processes: processes})
 				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+project+"/drains", body, "application/json"); err != nil {
 					return err
 				}
@@ -99,7 +119,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 			}
 			if len(headers) > 0 {
-				secName := "drain-" + name + "-headers"
+				secName := "drain-" + objectName + "-headers"
 				sec := &corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{Name: secName, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}},
 					Type:       corev1.SecretTypeOpaque, Data: map[string][]byte{},
@@ -123,7 +143,10 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 				return err
 			}
-			if project == "" {
+			if workspace != "" {
+				ac.auditCluster(ctx, "drain.add", name+" -> "+d.Spec.URL, "workspace "+workspace+" drain ("+d.EffectiveFormat()+")")
+				fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to workspace %s: every project's logs -> %s (%s)\n", name, workspace, d.Spec.URL, d.EffectiveFormat())
+			} else if project == "" {
 				ac.auditCluster(ctx, "drain.add", name+" -> "+d.Spec.URL, "cluster drain ("+d.EffectiveFormat()+")")
 				fmt.Fprintf(cmd.OutOrStdout(), "Added cluster drain %s: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat())
 			} else {
@@ -146,7 +169,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 		Short:   "List drains and their delivery status",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ns, project, err := drainScope(cluster, appName)
+			ns, project, err := drainScope(cluster, appName, workspace)
 			if err != nil {
 				return err
 			}
@@ -162,10 +185,13 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			}
 			var drains shpyrdv1.LogDrainList
 			if ac.session {
-				if project == "" {
+				path := "api/projects/" + project + "/drains"
+				if workspace != "" {
+					path = "api/workspace/drains"
+				} else if project == "" {
 					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
 				}
-				raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+project+"/drains", nil, "")
+				raw, err := ac.serverRequest(ctx, "GET", path, nil, "")
 				if err != nil {
 					return err
 				}
@@ -184,6 +210,18 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 			} else if err := ac.c.List(ctx, &drains, client.InNamespace(ns)); err != nil {
 				return err
+			} else if ns == install.DefaultSystemNamespace {
+				// The system namespace holds the cluster's drains and every
+				// workspace's: keep the scope asked for, by its bare names.
+				kept := drains.Items[:0]
+				for _, d := range drains.Items {
+					if d.Labels[shpyrdv1.LabelWorkspace] != workspace {
+						continue
+					}
+					d.Name = strings.TrimPrefix(d.Name, workspace+"-")
+					kept = append(kept, d)
+				}
+				drains.Items = kept
 			}
 			if len(drains.Items) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no drains; add one with `shpyrd drains add <url>`")
@@ -216,7 +254,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 		Aliases: []string{"rm"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ns, project, err := drainScope(cluster, appName)
+			ns, project, err := drainScope(cluster, appName, workspace)
 			if err != nil {
 				return err
 			}
@@ -226,17 +264,24 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				return err
 			}
 			if ac.session {
-				if project == "" {
+				path := "api/projects/" + project + "/drains/" + url.PathEscape(args[0])
+				if workspace != "" {
+					path = "api/workspace/drains/" + url.PathEscape(args[0])
+				} else if project == "" {
 					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
 				}
-				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+project+"/drains/"+url.PathEscape(args[0]), nil, ""); err != nil {
+				if _, err := ac.serverRequest(ctx, "DELETE", path, nil, ""); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Removed drain %s\n", args[0])
 				return nil
 			}
+			objectName := args[0]
+			if workspace != "" {
+				objectName = workspace + "-" + args[0]
+			}
 			d := &shpyrdv1.LogDrain{}
-			if err := ac.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: args[0]}, d); err != nil {
+			if err := ac.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: objectName}, d); err != nil {
 				if apierrors.IsNotFound(err) {
 					return fmt.Errorf("no drain %q; see `shpyrd drains list`", args[0])
 				}
@@ -248,7 +293,9 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			if err := ac.c.Delete(ctx, d); err != nil {
 				return err
 			}
-			if project == "" {
+			if workspace != "" {
+				ac.auditCluster(ctx, "drain.remove", args[0], "workspace "+workspace)
+			} else if project == "" {
 				ac.auditCluster(ctx, "drain.remove", args[0], "")
 			} else {
 				ac.audit(ctx, project, "drain.remove", args[0], "")
@@ -260,17 +307,18 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 
 	for _, c := range []*cobra.Command{add, list, remove} {
 		appFlag(c, &appName)
-		c.Flags().BoolVar(&cluster, "cluster", false, "every project's logs (platform admins)")
+		c.Flags().BoolVar(&cluster, "cluster", false, "every project's logs of the platform (the operator, over a kubeconfig)")
+		c.Flags().StringVar(&workspace, "workspace", "", "every project's logs of a workspace, by its slug (over a session, the door's)")
 	}
 	cmd.AddCommand(add, list, remove)
 	return cmd
 }
 
-// drainScope resolves --cluster / --project into a namespace.
-func drainScope(cluster bool, appName string) (ns, project string, err error) {
-	if cluster {
-		if appName != "" {
-			return "", "", errors.New("--cluster and --project are exclusive")
+// drainScope resolves --cluster / --workspace / --project into a namespace.
+func drainScope(cluster bool, appName, workspace string) (ns, project string, err error) {
+	if cluster || workspace != "" {
+		if appName != "" || (cluster && workspace != "") {
+			return "", "", errors.New("--cluster, --workspace and --project are exclusive")
 		}
 		return install.DefaultSystemNamespace, "", nil
 	}

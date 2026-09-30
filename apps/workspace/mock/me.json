@@ -1,0 +1,8 @@
+{
+  "subject": "f5423f52-2e94-41e9-9b67-43484ac098b8",
+  "email": "ana@acme.com",
+  "name": "Ana Souza",
+  "provider": "github",
+  "admin": true,
+  "roles": { "workspace": "owner", "platform": "", "projects": {}, "enforced": true }
+}
