@@ -1,9 +1,0 @@
-# Next.js build output
-/.next/
-/out/
-
-# Vercel
-.vercel
-
-# local env files
-.env*.local
