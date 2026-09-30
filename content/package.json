@@ -6,5 +6,13 @@
   "exports": {
     "./navigation": "./navigation.ts",
     "./site/*": "./site/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.2"
   }
 }
