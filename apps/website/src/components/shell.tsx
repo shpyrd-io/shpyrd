@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, Moon, Sun } from "lucide-react";
 import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
-import { Badge } from "@shpyrd/ui/components/badge";
 import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
 import { Wordmark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
@@ -66,10 +65,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
         className="pb-4"
       >
         <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
-          <Link href="/" aria-label="Getting started">
+          <Link href="/" aria-label="shpyrd">
             <Wordmark />
           </Link>
-          <Badge variant="outline">example</Badge>
         </Stack>
         {nav}
       </PageLayoutSidebar>
@@ -119,8 +117,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         divider="line"
         className="px-4 py-4 text-sm text-muted-foreground @3xl/page-layout:px-6"
       >
-        An example of a site made of design/ui. The texts are those of shpyrd.io, read from
-        apps/website as they are.
+        shpyrd is open source under MPL-2.0, and in beta.
       </PageLayoutFooter>
     </PageLayout>
   );

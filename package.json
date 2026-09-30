@@ -9,6 +9,6 @@
     "apps/workspace",
     "apps/console",
     "content",
-    "apps/example-next"
+    "apps/website"
   ]
 }

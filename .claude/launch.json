@@ -25,6 +25,17 @@
       "port": 4324
     },
     {
+      "name": "website",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/website",
+        "run",
+        "dev"
+      ],
+      "port": 4324
+    },
+    {
       "name": "workspace",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
