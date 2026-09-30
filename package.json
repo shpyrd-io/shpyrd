@@ -3,6 +3,9 @@
   "private": true,
   "workspaces": [
     "design/ui",
-    "apps/example-next"
+    "apps/shared",
+    "apps/example-next",
+    "apps/workspace",
+    "apps/console"
   ]
 }

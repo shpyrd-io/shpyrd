@@ -1,0 +1,19 @@
+{
+  "slug": "acme",
+  "name": "Acme",
+  "ownedByOperator": false,
+  "domain": "acme.shpyrd.app",
+  "address": "acme.shpyrd.app",
+  "url": "https://acme.shpyrd.app",
+  "status": "active",
+  "limits": { "projects": 10, "instances": 20, "cpu": "8", "memory": "16Gi", "storage": "500Gi" },
+  "usage": { "projects": 6, "instances": 9, "cpu": "4.4", "memory": "8.8Gi", "storage": "120Gi" },
+  "joinPolicy": "company",
+  "ownMethodsOnly": false,
+  "branding": { "color": "#ff4f00" },
+  "mcpName": "acme",
+  "mcpUrl": "https://acme.shpyrd.app/mcp",
+  "owners": ["ana@acme.com"],
+  "createdAt": "2026-06-02T14:11:00Z",
+  "updatedAt": "2026-09-28T09:40:00Z"
+}

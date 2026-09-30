@@ -8,7 +8,9 @@ import { inks, type Tone } from "../lib/chart";
 
 // One application, as the people who open it see it: what it is, how it
 // is, where it answers. The whole card opens it; one without a web
-// process answers nowhere and only tells.
+// process answers nowhere and only tells. Every card is the same height:
+// a name is cut at its line, a description at its second, the tags at
+// their first row, and the band stays at the bottom.
 
 export type Phase = "running" | "deploying" | "failed" | "sleeping";
 export type Exposure = "public" | "internal";
@@ -115,6 +117,7 @@ function LauncherCard({
   icon,
   tone = "orange",
   url,
+  href,
   phase = "running",
   exposure = "public",
   access = "open",
@@ -129,6 +132,8 @@ function LauncherCard({
   // Where it answers. Without one it has no web process: nothing to open,
   // and the icon gives way to the bot.
   url?: string;
+  // Where the card goes; by default, https:// and the address.
+  href?: string;
   phase?: Phase;
   exposure?: Exposure;
   access?: Access;
@@ -143,7 +148,7 @@ function LauncherCard({
       data-phase={phase}
       data-worker={!opens || undefined}
       className={cn(
-        "relative h-full gap-3 [--card-spacing:--spacing(5)] transition-shadow",
+        "relative h-60 w-64 gap-3 overflow-hidden [--card-spacing:--spacing(5)] transition-shadow",
         opens && "cursor-pointer hover:ring-primary focus-within:ring-primary",
         // A worker is not a door: no ring, a border of its own colour.
         !opens && "border-2 border-(--ink)/40 bg-(--ink)/5 ring-0",
@@ -173,10 +178,10 @@ function LauncherCard({
       </div>
       <div className="grid gap-1 px-(--card-spacing)">
         <div className="truncate font-heading text-lg font-medium">{name}</div>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        {description && <p className="line-clamp-2 text-sm text-muted-foreground">{description}</p>}
       </div>
       {tags && tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 px-(--card-spacing)">
+        <div className="flex max-h-6 flex-wrap gap-1 overflow-hidden px-(--card-spacing)">
           {tags.map((tag) => (
             <Badge key={tag} variant="secondary">
               {tag}
@@ -195,7 +200,7 @@ function LauncherCard({
         {opens ? (
           // The link covers the whole card: anywhere on it opens the application.
           <a
-            href={`https://${url}`}
+            href={href ?? `https://${url}`}
             className="truncate outline-none after:absolute after:inset-0 after:rounded-xl"
           >
             {url}

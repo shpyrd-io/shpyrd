@@ -54,4 +54,17 @@ describe("LauncherCard", () => {
     expect(screen.getByText("Public")).not.toBeNull();
     expect(screen.getByText("Orders")).not.toBeNull();
   });
+
+  it("is the same height as every other card, and cuts a long description at its second line", () => {
+    const { container } = render(<LauncherCard name="Reports" url="reports.acme.app" description={"A long description ".repeat(20)} />);
+    const card = container.querySelector("[data-slot=launcher-card]")!;
+    expect(card.className).toContain("h-60");
+    expect(card.className).toContain("overflow-hidden");
+    expect(container.querySelector("p")?.className).toContain("line-clamp-2");
+  });
+
+  it("goes where it is told, when the door is not the address", () => {
+    render(<LauncherCard name="Locked" url="locked.acme.app" href="https://locked.acme.app/.shpyrd/signin?rd=%2F" />);
+    expect(screen.getByRole("link", { name: "locked.acme.app" }).getAttribute("href")).toBe("https://locked.acme.app/.shpyrd/signin?rd=%2F");
+  });
 });

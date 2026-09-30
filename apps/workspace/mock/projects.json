@@ -1,0 +1,417 @@
+[
+  {
+    "slug": "hello-world",
+    "displayName": "Hello World",
+    "description": "Operations of the day, finance and the team.",
+    "namespace": "p-hello-world",
+    "phase": "Running",
+    "url": "https://hello-world.acme.shpyrd.app",
+    "release": 12,
+    "source": "git",
+    "processes": {
+      "web": {
+        "desired": 4,
+        "ready": 4,
+        "size": "shared-s"
+      },
+      "worker": {
+        "desired": 1,
+        "ready": 1,
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-06-10T12:00:00Z",
+    "exposure": "external",
+    "access": "public",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "github.com/acme/hello-world",
+          "revision": "main"
+        }
+      },
+      "processes": {
+        "web": {
+          "size": "shared-s",
+          "replicas": 4,
+          "command": "node server.js"
+        },
+        "worker": {
+          "size": "shared-s",
+          "replicas": 1,
+          "command": "node worker.js"
+        }
+      },
+      "build": {
+        "strategy": "buildpacks"
+      },
+      "bindings": [
+        {
+          "kind": "Postgres",
+          "name": "db"
+        }
+      ],
+      "env": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        }
+      ]
+    },
+    "status": {
+      "phase": "Running",
+      "digest": "sha256:9f2c41ab77d1",
+      "url": "https://hello-world.acme.shpyrd.app",
+      "latestBuild": "48",
+      "processTypes": [
+        "web",
+        "worker"
+      ],
+      "releases": [
+        {
+          "number": 9,
+          "kind": "deploy",
+          "description": "Deploy of 91be0d4",
+          "build": "47",
+          "createdAt": "2026-09-25T16:20:00Z"
+        },
+        {
+          "number": 10,
+          "kind": "rollback",
+          "description": "Back to v8",
+          "build": "45",
+          "createdAt": "2026-09-26T10:05:00Z"
+        },
+        {
+          "number": 11,
+          "kind": "config",
+          "description": "DATABASE_URL set",
+          "build": "47",
+          "createdAt": "2026-09-28T18:30:00Z"
+        },
+        {
+          "number": 12,
+          "kind": "deploy",
+          "description": "Deploy of a3f9c21",
+          "build": "48",
+          "createdAt": "2026-09-29T15:10:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "docs",
+    "displayName": "Docs",
+    "description": "What is written about the agency, for everyone.",
+    "namespace": "p-docs",
+    "phase": "Deploying",
+    "url": "https://docs.acme.com",
+    "release": 4,
+    "source": "git",
+    "processes": {
+      "web": {
+        "desired": 2,
+        "ready": 1,
+        "updated": 1,
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-07-01T09:00:00Z",
+    "exposure": "external",
+    "access": "public",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "github.com/acme/docs",
+          "revision": "main"
+        }
+      },
+      "processes": {
+        "web": {
+          "size": "shared-s",
+          "replicas": 2
+        }
+      },
+      "build": {
+        "strategy": "buildpacks"
+      }
+    },
+    "status": {
+      "phase": "Deploying",
+      "message": "Rolling out v5",
+      "digest": "sha256:1b7e0c",
+      "url": "https://docs.acme.com",
+      "latestBuild": "12",
+      "processTypes": [
+        "web"
+      ],
+      "releases": [
+        {
+          "number": 4,
+          "kind": "deploy",
+          "description": "Deploy of 77ac10e",
+          "build": "11",
+          "createdAt": "2026-09-20T11:00:00Z"
+        },
+        {
+          "number": 5,
+          "kind": "deploy",
+          "description": "Deploy of c0ffee1",
+          "build": "12",
+          "createdAt": "2026-09-30T04:40:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "billing",
+    "displayName": "Billing",
+    "description": "Invoices, plans and what each client owes.",
+    "namespace": "p-billing",
+    "phase": "Running",
+    "url": "https://billing.acme.shpyrd.app",
+    "release": 31,
+    "source": "git",
+    "processes": {
+      "web": {
+        "desired": 2,
+        "ready": 2,
+        "size": "shared-m"
+      },
+      "worker": {
+        "desired": 2,
+        "ready": 2,
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-06-20T08:30:00Z",
+    "exposure": "external",
+    "access": "authenticated",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "github.com/acme/billing",
+          "revision": "release"
+        }
+      },
+      "processes": {
+        "web": {
+          "size": "shared-m",
+          "replicas": 2
+        },
+        "worker": {
+          "size": "shared-s",
+          "replicas": 2
+        }
+      },
+      "build": {
+        "strategy": "dockerfile",
+        "dockerfile": "Dockerfile"
+      }
+    },
+    "status": {
+      "phase": "Running",
+      "digest": "sha256:ab12cd",
+      "url": "https://billing.acme.shpyrd.app",
+      "latestBuild": "203",
+      "processTypes": [
+        "web",
+        "worker",
+        "release"
+      ],
+      "releases": [
+        {
+          "number": 30,
+          "kind": "config",
+          "description": "STRIPE_KEY set",
+          "build": "202",
+          "createdAt": "2026-09-27T13:00:00Z"
+        },
+        {
+          "number": 31,
+          "kind": "deploy",
+          "description": "Deploy of 5d1e9aa",
+          "build": "203",
+          "createdAt": "2026-09-29T09:15:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "dash-tv",
+    "displayName": "Dash TV",
+    "description": "The two business units on one screen, for the TV.",
+    "namespace": "p-dash-tv",
+    "phase": "Running",
+    "url": "https://dash.acme.internal",
+    "release": 7,
+    "source": "archive",
+    "processes": {
+      "web": {
+        "desired": 1,
+        "ready": 0,
+        "size": "shared-s",
+        "sleep": {
+          "state": "asleep",
+          "message": "asleep since 02:10, wakes on the first request"
+        }
+      }
+    },
+    "createdAt": "2026-08-14T17:45:00Z",
+    "exposure": "internal",
+    "access": "identified",
+    "spec": {
+      "source": {
+        "blob": {
+          "sha256": "e3b0c44298fc1c149afb",
+          "ref": "local checkout"
+        }
+      },
+      "processes": {
+        "web": {
+          "size": "shared-s",
+          "replicas": 1
+        }
+      },
+      "build": {
+        "strategy": "buildpacks"
+      }
+    },
+    "status": {
+      "phase": "Running",
+      "digest": "sha256:77aa11",
+      "url": "https://dash.acme.internal",
+      "latestBuild": "7",
+      "processTypes": [
+        "web"
+      ],
+      "releases": [
+        {
+          "number": 7,
+          "kind": "deploy",
+          "description": "Deploy of local checkout",
+          "build": "7",
+          "createdAt": "2026-09-12T10:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "reports",
+    "displayName": "Reports",
+    "description": "Builds the reports of the month, every night.",
+    "namespace": "p-reports",
+    "phase": "Failed",
+    "message": "worker: CrashLoopBackOff",
+    "release": 2,
+    "source": "git",
+    "processes": {
+      "worker": {
+        "desired": 1,
+        "ready": 0,
+        "failing": 1,
+        "reason": "exited with status 1",
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-09-21T20:00:00Z",
+    "exposure": "internal",
+    "access": "public",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "github.com/acme/reports",
+          "revision": "main"
+        }
+      },
+      "processes": {
+        "worker": {
+          "size": "shared-s",
+          "replicas": 1,
+          "command": "python nightly.py"
+        }
+      },
+      "build": {
+        "strategy": "buildpacks"
+      }
+    },
+    "status": {
+      "phase": "Failed",
+      "message": "worker exited with status 1 three times in a row",
+      "digest": "sha256:0d0d0d",
+      "latestBuild": "3",
+      "processTypes": [
+        "worker"
+      ],
+      "releases": [
+        {
+          "number": 1,
+          "kind": "deploy",
+          "description": "Deploy of 1a2b3c4",
+          "build": "2",
+          "createdAt": "2026-09-21T20:10:00Z"
+        },
+        {
+          "number": 2,
+          "kind": "deploy",
+          "description": "Deploy of 9e8d7c6",
+          "build": "3",
+          "createdAt": "2026-09-29T22:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "slug": "metrics",
+    "displayName": "Metrics",
+    "description": "Collects the numbers of every application, each hour.",
+    "namespace": "p-metrics",
+    "phase": "Running",
+    "release": 5,
+    "source": "git",
+    "processes": {
+      "worker": {
+        "desired": 1,
+        "ready": 1,
+        "size": "shared-s"
+      }
+    },
+    "createdAt": "2026-08-30T11:00:00Z",
+    "exposure": "internal",
+    "access": "public",
+    "spec": {
+      "source": {
+        "git": {
+          "url": "github.com/acme/metrics",
+          "revision": "main"
+        }
+      },
+      "processes": {
+        "worker": {
+          "size": "shared-s",
+          "replicas": 1
+        }
+      },
+      "build": {
+        "strategy": "buildpacks"
+      }
+    },
+    "status": {
+      "phase": "Running",
+      "digest": "sha256:5e5e5e",
+      "latestBuild": "9",
+      "processTypes": [
+        "worker"
+      ],
+      "releases": [
+        {
+          "number": 5,
+          "kind": "deploy",
+          "description": "Deploy of b4b4b4b",
+          "build": "9",
+          "createdAt": "2026-09-15T08:00:00Z"
+        }
+      ]
+    }
+  }
+]

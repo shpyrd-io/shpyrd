@@ -1,0 +1,10 @@
+{
+  "hello-world": [
+    { "at": "2026-09-29T15:10:00Z", "actor": "ana@acme.com", "action": "deploy", "detail": "v12, from a3f9c21" },
+    { "at": "2026-09-28T18:30:00Z", "actor": "marcelo@acme.com", "action": "config", "detail": "DATABASE_URL set" },
+    { "at": "2026-09-26T10:05:00Z", "actor": "ana@acme.com", "action": "rollback", "detail": "to v8" },
+    { "at": "2026-09-25T16:20:00Z", "actor": "shpyrd deploy", "action": "deploy", "detail": "v9, from 91be0d4" }
+  ],
+  "docs": [ { "at": "2026-09-30T04:40:00Z", "actor": "shpyrd deploy", "action": "deploy", "detail": "v5, from c0ffee1" } ],
+  "reports": [ { "at": "2026-09-29T22:00:00Z", "actor": "ana@acme.com", "action": "deploy", "detail": "v2, from 9e8d7c6" } ]
+}

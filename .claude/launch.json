@@ -22,6 +22,39 @@
         "dev"
       ],
       "port": 4324
+    },
+    {
+      "name": "workspace",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "dev"
+      ],
+      "port": 4325
+    },
+    {
+      "name": "console",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/console",
+        "run",
+        "dev"
+      ],
+      "port": 4326
+    },
+    {
+      "name": "workspace-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "design"
+      ],
+      "port": 4325
     }
   ]
 }

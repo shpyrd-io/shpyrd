@@ -1,0 +1,37 @@
+{
+  "version": "v0.9.58",
+  "domain": "acme.shpyrd.app",
+  "authRequired": true,
+  "metrics": true,
+  "auth": {
+    "token": false,
+    "providers": [
+      {
+        "id": "github",
+        "label": "GitHub",
+        "kind": "github"
+      }
+    ],
+    "password": {
+      "id": "local",
+      "label": "Email and password"
+    }
+  },
+  "extensions": [
+    "auth-local",
+    "postgres",
+    "redis",
+    "logs-agent",
+    "object-storage"
+  ],
+  "workspace": {
+    "slug": "acme",
+    "name": "Acme",
+    "address": "acme.shpyrd.app"
+  },
+  "door": "workspace",
+  "volumes": {
+    "minSize": "1Gi",
+    "snapshots": true
+  }
+}

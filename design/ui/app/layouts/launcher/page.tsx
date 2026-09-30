@@ -133,7 +133,7 @@ function Launcher({ apps, canCreate = true }: { apps: App[]; canCreate?: boolean
         {apps.length > 0 ? (
           <div className="flex flex-wrap justify-center gap-4">
             {apps.map((app) => (
-              <LauncherCard key={app.name} {...app} onSettings={settings} className="h-auto w-64" />
+              <LauncherCard key={app.name} {...app} onSettings={settings} />
             ))}
           </div>
         ) : canCreate ? (
