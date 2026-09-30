@@ -67,6 +67,32 @@
         "design"
       ],
       "port": 4326
+    },
+    {
+      "name": "workspace-cloud",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SHPYRD_DEV_API=https://acme.ws.shpyrd.test",
+        "npm",
+        "--prefix",
+        "apps/workspace",
+        "run",
+        "dev"
+      ],
+      "port": 4325
+    },
+    {
+      "name": "console-cloud",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SHPYRD_DEV_API=https://shpyrd.shpyrd.test",
+        "npm",
+        "--prefix",
+        "apps/console",
+        "run",
+        "dev"
+      ],
+      "port": 4326
     }
   ]
 }

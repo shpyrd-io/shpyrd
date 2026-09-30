@@ -130,6 +130,7 @@ function NewWorkspace() {
   const [operator, setOperator] = useState(false);
   const [plan, setPlan] = useState<string | undefined>(undefined);
   const [link, setLink] = useState("");
+  const [setPasswordLink, setSetPasswordLink] = useState("");
   const plans = useQuery({
     queryKey: ["plans"],
     queryFn: api.plans,
@@ -169,8 +170,9 @@ function NewWorkspace() {
         });
         return close(false);
       }
-      // No mail is set up: the link is shown once, here.
+      // No mail is set up: the links are shown once, here.
       setLink(inv.link ?? "");
+      setSetPasswordLink(inv.setPasswordLink ?? "");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -183,6 +185,7 @@ function NewWorkspace() {
       setOperator(false);
       setPlan(undefined);
       setLink("");
+      setSetPasswordLink("");
     }
   };
   return (
@@ -200,6 +203,12 @@ function NewWorkspace() {
               <DialogDescription>No mail is set up, so nothing went out. Hand this link to {owner.trim()}; it is shown once and opens their workspace, where they set a password or sign in with a method it offers.</DialogDescription>
             </DialogHeader>
             <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            {setPasswordLink && (
+              <>
+                <p className="text-sm text-muted-foreground">They have no password yet; this link lets them choose one (24 hours):</p>
+                <Input readOnly value={setPasswordLink} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              </>
+            )}
             <DialogFooter>
               <Button
                 variant="outline"

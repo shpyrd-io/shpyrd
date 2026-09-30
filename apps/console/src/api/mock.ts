@@ -110,8 +110,20 @@ export const mock: Api = {
     all.workspaces.push(made);
     await thingsOf.set(all);
     if (body.operatorOwned) return made;
-    // Mail is set up in the Mock: the first owner was emailed.
-    return { ...made, ownerInvitation: { applied: false, emailed: all.mail.configured, link: all.mail.configured ? undefined : `${made.url}/invite/${id()}`, expiresAt: new Date(Date.now() + 7 * 86400e3).toISOString() } };
+    // Mail is set up in the Mock: the first owner was emailed. Without
+    // mail, both links are handed over: the invitation, and where a
+    // person without a password chooses one.
+    const link = all.mail.configured ? undefined : `${made.url}/invite/${id()}`;
+    return {
+      ...made,
+      ownerInvitation: {
+        applied: false,
+        emailed: all.mail.configured,
+        link,
+        setPasswordLink: link && `${made.url}/account/set-password/${id()}`,
+        expiresAt: new Date(Date.now() + 7 * 86400e3).toISOString(),
+      },
+    };
   },
   plans: async () => (await thingsOf.get()).plans,
   patchSettings: async (body) => {

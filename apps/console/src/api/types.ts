@@ -50,7 +50,9 @@ export type WorkspaceSummary = {
 };
 
 // What became of the first owner's invitation when a workspace was made.
-export type InviteOutcome = { applied: boolean; link?: string; expiresAt?: string; emailed: boolean; mailError?: string; error?: string };
+// `setPasswordLink` is the other way in for someone without a password:
+// where they choose one, good for a day.
+export type InviteOutcome = { applied: boolean; link?: string; expiresAt?: string; setPasswordLink?: string; emailed: boolean; mailError?: string; error?: string };
 export type CreatedWorkspace = WorkspaceSummary & { ownerInvitation?: InviteOutcome };
 export type NewWorkspace = { slug: string; name?: string; address?: string; owner?: string; operatorOwned?: boolean; plan?: string };
 
