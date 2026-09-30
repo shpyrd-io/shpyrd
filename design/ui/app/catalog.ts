@@ -73,6 +73,7 @@ export const catalog: Category[] = [
       { slug: "launcher-card", title: "Launcher card", description: "An application as the people who open it see it: what it is, how it is, where it answers." },
       { slug: "log-view", title: "Log view", description: "The lines of a log as they come: when, from where, what, and the fields of a record." },
       { slug: "shell-view", title: "Shell view", description: "A shell into a running instance, in a terminal that follows the theme." },
+      { slug: "shipyard", title: "Shipyard", description: "A shipyard at work, for the first page: ships, a crane, trucks and containers, coming and going." },
       { slug: "ide", title: "IDE", description: "Code to be read: files in tabs, the numbers of the lines, a copy." },
     ],
   },
