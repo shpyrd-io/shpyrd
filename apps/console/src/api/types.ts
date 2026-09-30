@@ -1,5 +1,5 @@
-// The shapes the server answers with at the console door, as
-// ui/src/lib/api.ts has them, kept to what the console reads.
+// The shapes the server answers with at the console door, kept to what
+// the console reads.
 
 export type PublicConfig = {
   version: string;

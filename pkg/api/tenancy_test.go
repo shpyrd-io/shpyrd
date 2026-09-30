@@ -814,9 +814,9 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 func TestTwoApplicationsByHost(t *testing.T) {
 	s, _, _ := newTenantServer(t)
 	s.opts.UI = fstest.MapFS{
-		"apps/console/index.html":   {Data: []byte("<html>console</html>")},
-		"apps/workspace/index.html": {Data: []byte("<html>workspace</html>")},
-		"assets/app.js":             {Data: []byte("js")},
+		"console/index.html":   {Data: []byte("<html>console</html>")},
+		"workspace/index.html": {Data: []byte("<html>workspace</html>")},
+		"workspace/app.js":     {Data: []byte("js")},
 	}
 	s.engine.NoRoute(s.serveUI())
 	body := func(host, path string) string {
@@ -841,7 +841,7 @@ func TestTwoApplicationsByHost(t *testing.T) {
 	if got := body("localhost:8080", "/"); got != "<html>console</html>" {
 		t.Errorf("internal host = %q (the operator's door)", got)
 	}
-	if got := body("acme.shpyrd.test", "/assets/app.js"); got != "js" {
+	if got := body("acme.shpyrd.test", "/app.js"); got != "js" {
 		t.Errorf("asset = %q", got)
 	}
 }

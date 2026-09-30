@@ -5,12 +5,13 @@
  * which is what the two hand-mirrored test tables could not guarantee.
  *
  * Regenerate the file deliberately when the contract is meant to change. */
-// Imported with Vite's ?raw so the app's tsconfig needs no node types; the
-// path reaches out of ui/ on purpose, because the table belongs with the Go
-// parser rather than being copied here to drift.
-import table from "../../../pkg/logfmt/testdata/cases.jsonl?raw";
+// Imported with Vite's ?raw (raw.d.ts names the module) so the package
+// needs no node types; the path reaches out of apps/shared on purpose,
+// because the table belongs with the Go parser rather than being copied
+// here to drift.
+import table from "../../../../pkg/logfmt/testdata/cases.jsonl?raw";
 import { describe, expect, it } from "vitest";
-import { parseLogLine } from "@/lib/logs";
+import { parseLogLine } from "./logs";
 
 type Golden = {
   line: string;

@@ -17,7 +17,7 @@ Shpyrd is two binaries and a set of well-known open source components. The CLI i
 | [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) + an OCI DNS-01 solver (`oci` profile, optional) | publishes records for every hostname and issues the platform's wildcard certificate |
 | [kpack](https://github.com/buildpacks-community/kpack) + [Paketo buildpacks](https://paketo.io) | builds source into images inside the cluster; polls Git branches for new commits |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | Prometheus, Grafana, node-exporter, kube-state-metrics |
-| **shpyrd-server** | API for the CLI upload and the dashboard, the `App` controller, source archive store, embedded UI |
+| **shpyrd-server** | API for the CLI upload and the dashboard, the `App` controller, source archive store, the two embedded applications (the console for the operator, the workspace for its members), served by host |
 | **shpyrd** CLI | cluster bootstrap and every project operation |
 
 **Control-plane database.** Teams, project grants, the workspace and the people it has seen sign in live in PostgreSQL, not in Kubernetes objects: the `control-plane-db` component runs a single instance with a persistent volume (`SHPYRD_CONTROL_PLANE_DB_SIZE`), or `SHPYRD_DATABASE_URL` names a managed database and the component is skipped. Workloads (App, Volume, Postgres, Redis, LogDrain, ObjectBucket) stay custom resources reconciled by controllers. Every identifier is a native `uuid`; the schema is versioned with [golang-migrate](https://github.com/golang-migrate/migrate) (embedded up and down files in `pkg/store/migrations`, applied at start under an advisory lock, a dirty flag when a migration was interrupted), and the server imports the `Team`/`ProjectMember` objects of older installs once. Take a database backup before upgrading across a schema migration; `shpyrd cluster backup` carries the database's content, and `pg_dump` of the `control-plane-db` pod is the plain alternative.
@@ -61,7 +61,7 @@ Apart from the upload, the CLI never talks to the server: it reads and writes `A
 
 ```
 cmd/shpyrd            CLI
-cmd/shpyrd-server     server: API + App controller + embedded UI
+cmd/shpyrd-server     server: API + App controller + the embedded applications
 api/v1alpha1          App CRD types (kubebuilder layout; `make generate`)
 internal/controller   App reconciler
 internal/cli          CLI commands
@@ -71,7 +71,8 @@ pkg/kind              kind cluster provisioning
 pkg/localca           development root CA
 pkg/configvars        config vars (names + metadata; values are write-only)
 deploy/               components and profiles embedded in the binary
-ui/                   dashboard (Vite + React + Tailwind + shadcn/ui)
+design/ui             the component library and its gallery, shared by the applications and the site
+apps/                 the console and the workspace applications (Next, static files, embedded by pkg/ui)
 examples/hello        example project (Go, web + worker)
 rfcs/                 design documents
 ```

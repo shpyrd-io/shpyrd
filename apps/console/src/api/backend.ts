@@ -2,9 +2,8 @@ import { json, request } from "@shpyrd/shared/api/http";
 import type { Api } from "./api";
 import type { ClusterMetrics, NodeUsage, Series } from "./types";
 
-// The paths of the server at the console door, as ui/src/lib/api.ts
-// calls them. Where the server's shape is not the one the screens read,
-// it is turned into it here.
+// The paths of the server at the console door. Where the server's shape
+// is not the one the screens read, it is turned into it here.
 
 const gone = { method: "DELETE" };
 

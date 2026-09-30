@@ -196,6 +196,14 @@ One Vite build with two entries (`rollupOptions.input`), one `dist/` with
 splitting it into `packages/ui` and `packages/client` as npm workspaces is a follow-up
 once two consumers exist (the design-system site would be the second).
 
+*As built later (2026-09-30):* the two applications are `apps/console` and
+`apps/workspace`, Next applications compiled to static files, on the library
+`design/ui` (`@shpyrd/ui`, an npm workspace at the root) and `apps/shared`. Each
+build is a folder of its own in the embed, `pkg/ui/dist/console` and
+`pkg/ui/dist/workspace`, with no shared chunks; the server picks the folder by
+host and serves it with no route declared (the plan of 2026-09-29,
+`docs/superpowers/plans/2026-09-29-design-content-apps.md`).
+
 The console application gets what the API had and the UI never showed: the workspaces
 list (with owner and address; creation on the cloud), the default workspace setting,
 accounts, and the two sign-in cards ("this console" and "defaults for workspaces"). The
@@ -257,7 +265,9 @@ in `extra_vars`.
    `<domain>`; the default workspace's address then cannot be the platform domain.
    Default: **derive `<slug>.<domain>`** and warn that project URLs move one label down.
 5. **`packages/ui` as an npm workspace.** Default: **not yet**; `ui/src` is the shared
-   package until a second consumer exists.
+   package until a second consumer exists. *Done on 2026-09-30, as `design/ui`
+   (`@shpyrd/ui`): the second consumer was the site and the state pages the server
+   serves by itself; `ui/` was removed.*
 
 ## Implementation status
 
@@ -293,7 +303,6 @@ Known gaps (each stays here until done or dropped):
 
 | Gap | Where |
 | --- | --- |
-| `ui/src` is not yet an npm workspace (`packages/ui`, `packages/client`); one build, two entries, shared source | open question 5, by design until a second consumer |
 | Identity linking across connectors: a person is their email as each provider asserts it; `email_verified` is not checked and password accounts are not linked to provider accounts | open question 1 |
 | The CI end-to-end run (kind) exercises the one-door fallback, not two hosts | test matrix |
 | Google `hostedDomains` is set from one `--hosted-domain`; Dex's `groups` for Google are not mirrored | RFC-0058 |
@@ -307,3 +316,8 @@ Known gaps (each stays here until done or dropped):
 - 2026-09-29: implemented in v0.9.52; the console realm's roles are those of the
   operator's default workspace (its owners and admins are the platform admins), which is
   RFC-0078's operator workspace read from the console's door.
+- 2026-09-30: the library split that open question 5 had put off is done: `design/ui`
+  is the npm workspace `@shpyrd/ui`, the two applications are `apps/console` and
+  `apps/workspace` on Next, each built to a folder of its own in `pkg/ui/dist`,
+  served by host with the hashes of the scripts Next writes in the policy; `ui/`
+  (Vite, one build with two entries) was removed.

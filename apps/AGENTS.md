@@ -13,8 +13,8 @@ the same base (step 7 of the plan).
 - **One document.** The server answers every address with `index.html`
   and the application reads the address. The routes are those of the
   dashboard of today, with React Router.
-- **The screens come from `ui/`**, the dashboard of today: `ui/src/pages`,
-  `ui/apps/*`, and the types of `ui/src/lib/api.ts`.
+- **Two applications**, `console/` and `workspace/`, and `shared/` for
+  what both use. The dashboard they replaced is gone.
 
 ## The files of a new application
 
@@ -123,12 +123,12 @@ Next's development server, which shows a saved file at once. It is what a
 design session uses, from start to end.
 
 **Production** is `npm run build`, which writes static files to `out/`.
-The Go server embeds them and serves them with no route declared: a file
-of the build by its path, then the page built for the address, then
-`index.html`. Next writes scripts into every page, so the server reads
-each page it embeds when it starts and sends the hashes of those scripts
-in its Content-Security-Policy. The plan has the details (step 6); none of
-it exists in `pkg/` yet.
+The Go server embeds them (`pkg/ui`, a folder per application, filled by
+`make ui`) and serves them with no route declared: a file of the build by
+its path, then the page built for the address, then `index.html`. Next
+writes scripts into every page, so the server reads each page it embeds
+when it starts and sends the hashes of those scripts in its
+Content-Security-Policy (`pkg/api/ui.go`).
 
 ## Tests
 

@@ -321,9 +321,10 @@ pkg/localca           development root CA
 pkg/configvars        config vars (names + metadata, values are write-only)
 pkg/ext               extension interfaces; pkg/ext/all the registry; pkg/ext/authlocal the first extension
 pkg/authz             roles and actions (RFC-0008); pkg/audit the audit trail
-pkg/api               HTTP API, OIDC relying party and sessions, dashboard serving
+pkg/api               HTTP API, OIDC relying party and sessions, the applications served by host
 deploy/               components and profiles embedded in the binary (incl. extension components such as dex)
-ui/                   dashboard (Vite + React 19 + Tailwind 4 + shadcn/ui)
+design/               the identity: design/ui the component library and its gallery (@shpyrd/ui), design/brand the mark
+apps/                 the applications (Next, static files): apps/console, apps/workspace, apps/shared; pkg/ui embeds their builds
 apps/website/         shpyrd.io: marketing homepage and docs (Next.js + Markdoc); licensed separately, see apps/website/LICENSE
 examples/             sample projects: shop (Go, web + worker, Postgres + Redis), blog (Node, volume), api (Python Dockerfile), hello, hello-docker
 rfcs/                 design documents

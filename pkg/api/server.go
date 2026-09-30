@@ -778,69 +778,6 @@ func (s *Server) config(c *gin.Context) {
 }
 
 // The two applications (RFC-0080), as the UI build lays them out.
-const (
-	uiConsoleIndex   = "apps/console/index.html"
-	uiWorkspaceIndex = "apps/workspace/index.html"
-)
-
-// uiIndex is the HTML entry of the application this host answers with: the
-// console at the console host (and for internal callers), the workspace
-// application everywhere else. A build from before the split has one
-// index.html for both.
-func (s *Server) uiIndex(c *gin.Context) string {
-	entry := uiWorkspaceIndex
-	if s.atConsole(c) {
-		entry = uiConsoleIndex
-	}
-	if _, err := fs.Stat(s.opts.UI, entry); err == nil {
-		return entry
-	}
-	if _, err := fs.Stat(s.opts.UI, "index.html"); err == nil {
-		return "index.html"
-	}
-	return ""
-}
-
-// serveUI serves the embedded applications: static assets by path, and
-// for every other non-API path the entry of the host's application, so
-// client-side routing works.
-func (s *Server) serveUI() gin.HandlerFunc {
-	fileServer := http.FileServer(http.FS(s.opts.UI))
-	return func(c *gin.Context) {
-		if s.atSignInHost(c) {
-			c.Header("Cache-Control", "no-store")
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.Mark, pages.Page{})))
-			return
-		}
-		if s.customError(c) { // ingress-nginx's error backend for app hosts
-			return
-		}
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		p := strings.TrimPrefix(c.Request.URL.Path, "/")
-		if p != "" && !strings.HasSuffix(p, ".html") {
-			if st, err := fs.Stat(s.opts.UI, p); err == nil && !st.IsDir() {
-				fileServer.ServeHTTP(c.Writer, c.Request)
-				return
-			}
-		}
-		entry := s.uiIndex(c)
-		if entry == "" {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
-			return
-		}
-		body, err := fs.ReadFile(s.opts.UI, entry)
-		if err != nil {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
-			return
-		}
-		c.Header("Cache-Control", "no-cache")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", body)
-	}
-}
-
 func (s *Server) requestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()

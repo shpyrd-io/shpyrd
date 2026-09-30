@@ -1,5 +1,5 @@
-// The shapes the server answers with, as ui/src/lib/api.ts has them,
-// kept to what the workspace application reads.
+// The shapes the server answers with, kept to what the workspace
+// application reads.
 
 export type PublicConfig = {
   version: string;

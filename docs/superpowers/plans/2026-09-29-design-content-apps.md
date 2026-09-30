@@ -23,19 +23,19 @@ little repeated code as possible.
    bring in what repeats: one header, one page heading, one key and value
    row, one empty state, one confirmation in place of `window.confirm`,
    names for the status colours. A gallery section for each.
-2. **`design/brand`.** Move `apps/design-system/logo`; one drawing of the
+2. **`design/brand`** (done). Move `apps/design-system/logo`; one drawing of the
    mark, the copies made from it.
 3. **`content/`.** Move the Markdoc files of `apps/website/src/pages/docs`.
    Read them with Velite rather than code of our own.
-4. **`apps/shared`.** The `ApiRouter`, sign-in, permissions, the shell. The
+4. **`apps/shared`** (done). The `ApiRouter`, sign-in, permissions, the shell. The
    Mock answers from JSON files with one generic handler, and keeps what a
    screen changes in `localStorage`.
-5. **`apps/console` and `apps/workspace`** in Next: the screens of `ui/`,
+5. **`apps/console` and `apps/workspace`** (done) in Next: the screens of `ui/`,
    one document each, the routes of today.
-6. **Go.** `pkg/ui` with the embed; the serving rule and the script hashes
+6. **Go** (done). `pkg/ui` with the embed; the serving rule and the script hashes
    below; the folder of files chosen by host. `ui/` goes away.
 7. **`apps/website`** on Next 16, `design/ui` and `content/`.
-8. **The build chain**: Makefile, Dockerfile, `ci.yml`, and a note in
+8. **The build chain** (done): Makefile, Dockerfile, `ci.yml`, and a note in
    RFC-0080, which had put this split off.
 
 ## What Go has to do (step 6)
@@ -63,8 +63,17 @@ mock, were compared and removed. Next loads more JavaScript (535 kB
 against 304 kB for the application) and needs the hashes; it was chosen as
 the one framework.
 
-## To check when the step comes
+## Checked when the step came
 
-- Vercel and `apps/website`, now that a `package.json` sits at the root.
-- How the private cloud layer builds the dashboard, before `ui/` moves.
-- `ci.yml` does not know `design/` or `content/` yet.
+- Vercel and `apps/website`: `apps/website` is not in the workspace and keeps
+  its own `package.json`; the root one only lists the workspaces, so Vercel's
+  build in `apps/website` is unchanged. Still to confirm on a deploy.
+- The private cloud layer builds the server from the core's `pkg/server`,
+  which now embeds `pkg/ui`; nothing of its own imports `ui/`. Its `dev-bin`
+  target still looks for `../shpyrd/ui/dist/apps/console/index.html` before
+  building; it has to look at `pkg/ui/dist/console/index.html` when it moves
+  to a core version with this change.
+- `ci.yml`: the Applications job runs the workspaces' lint, typecheck and
+  tests and builds `pkg/ui/dist` for the end-to-end job; `design/brand/**`
+  and `content/**` are prose-only for it. `content/` (step 3) does not exist
+  yet.

@@ -201,7 +201,7 @@ func equal(a, b []logfmt.Field) bool {
 
 // Loggers occasionally emit two spellings of the same well-known key. Both
 // are consumed, the first non-empty value wins, and neither shows up as a
-// field: ui/src/lib/logs.ts behaves the same way.
+// field: apps/shared/src/logs/logs.ts behaves the same way.
 func TestParseDuplicateWellKnownKeys(t *testing.T) {
 	e := logfmt.Parse(`{"msg":"a","message":"b","level":"","severity":"warn","keep":"1"}`)
 	if e.Message != "a" {
@@ -507,7 +507,7 @@ func TestParseLogfmtGuards(t *testing.T) {
 }
 
 // The golden table in testdata is read by this test and by
-// ui/src/lib/logs.golden.test.ts, so the two parsers are held to one set of
+// apps/shared/src/logs/logs.golden.test.ts, so the two parsers are held to one set of
 // answers rather than to two hand-mirrored test tables. A change that moves
 // one parser and not the other fails here or there; regenerate the file
 // deliberately when the contract is meant to change.

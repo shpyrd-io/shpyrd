@@ -16,9 +16,6 @@ coverage
 *.lcov
 .cache
 
-# built dashboard (embedded into the server binary); keep the placeholder
-ui/dist/*
-!ui/dist/.gitkeep
 
 # exported manifests
 /shpyrd-export
@@ -29,6 +26,10 @@ ui/dist/*
 *.tfstate.*
 .terraform
 dist/
+# the built applications (embedded into the server binary); keep the placeholder
+!pkg/ui/dist/
+pkg/ui/dist/*
+!pkg/ui/dist/.gitkeep
 hack/oci/.out.env
 
 # terraform (contrib): the lock file is committed, local variables are not

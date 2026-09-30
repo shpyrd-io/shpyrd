@@ -4,9 +4,9 @@ import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
 import type { APIToken, AuditEntry, Billing, DomainStatus, Metrics, Project, ProjectSummary, Series, Team } from "./types";
 
-// The paths of the server, as ui/src/lib/api.ts calls them. Where the
-// server's shape is not the one the screens read, it is turned into it
-// here, so the Mock and the Backend answer the same thing.
+// The paths of the server. Where the server's shape is not the one the
+// screens read, it is turned into it here, so the Mock and the Backend
+// answer the same thing.
 
 const project = (slug: string) => `/api/projects/${encodeURIComponent(slug)}`;
 
