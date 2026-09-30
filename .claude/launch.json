@@ -22,7 +22,7 @@
         "run",
         "dev"
       ],
-      "port": 4324
+      "port": 4327
     },
     {
       "name": "website",
