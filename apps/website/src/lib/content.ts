@@ -8,9 +8,6 @@ import Markdoc, { Tag, type Config, type RenderableTreeNode } from "@markdoc/mar
 
 const dir = path.resolve(process.cwd(), process.env.CONTENT_DIR ?? "../../content/docs");
 
-// The pictures of the texts are served by the site itself.
-const site = "https://shpyrd.io";
-
 export type Heading = { id: string; title: string; level: number };
 
 export type Text = {
@@ -33,25 +30,48 @@ function words(node: RenderableTreeNode | RenderableTreeNode[]): string {
  * same words in one document get different names: the second is "-2".
  */
 export function slug(text: string, seen?: Map<string, number>): string {
-  const base = text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+  const base =
+    text
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "section";
   if (!seen) return base;
-  const n = (seen.get(base) ?? 0) + 1;
+  // Every name given out is recorded, not just the base: a document may have
+  // both "Status" twice and a heading of its own called "Status 2".
+  let n = seen.get(base) ?? 0;
+  let name = base;
+  while (seen.has(name)) name = `${base}-${++n + 1}`;
   seen.set(base, n);
-  return n === 1 ? base : `${base}-${n}`;
+  seen.set(name, n);
+  return name;
 }
 
-/** The front matter of these files is `key: value` lines, nothing more. */
+/**
+ * The front matter of these files is `key: value` lines, and the folded and
+ * literal scalars YAML writes as `key: >` or `key: |` with the text indented
+ * under them. A folded scalar joins its lines with a space.
+ */
 export function meta(front: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const line of (front ?? "").split("\n")) {
-    const m = /^(\w+):\s*(.*)$/.exec(line);
-    if (m) out[m[1]] = m[2].replace(/^['"]|['"]$/g, "");
+  const lines = (front ?? "").split("\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\w+):\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+
+    const [, key, rest] = m;
+    if (rest !== ">" && rest !== "|") {
+      out[key] = rest.replace(/^['"]|['"]$/g, "");
+      continue;
+    }
+
+    const block: string[] = [];
+    while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) block.push(lines[++i].trim());
+    out[key] = block.join(rest === ">" ? " " : "\n");
   }
+
   return out;
 }
 
@@ -101,15 +121,12 @@ function configFor(seen: Map<string, number>): Config {
         attributes: { src: { type: String }, alt: { type: String }, title: { type: String } },
         transform(node) {
           const { src, alt, title } = node.attributes;
-          return new Tag("img", {
-            src: String(src).startsWith("/") ? site + src : src,
-            alt,
-            title,
-            loading: "lazy",
-          });
-          },
+          // The pictures are in public/, served by this site: an absolute
+          // address would send a preview and a local build to production.
+          return new Tag("img", { src, alt, title, loading: "lazy" });
         },
       },
+    },
   };
 }
 

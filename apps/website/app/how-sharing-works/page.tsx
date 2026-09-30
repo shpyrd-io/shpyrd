@@ -1,3 +1,4 @@
+import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Blankslate } from "@shpyrd/ui/components/blankslate";
 import { Button } from "@shpyrd/ui/components/button";
@@ -11,10 +12,7 @@ export const metadata = { title: "How sharing works", description: intro.lead };
 export default function HowSharingWorks() {
   return (
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-16 py-8">
-      <Stack gap="normal">
-        <h1 className="max-w-[16ch] text-4xl font-semibold tracking-tight">{intro.title}</h1>
-        <p className="max-w-prose text-lg text-muted-foreground">{intro.lead}</p>
-      </Stack>
+      <PageHeading variant="large" title={intro.title} description={intro.lead} />
 
       {/* Four steps in the order they happen, so they are numbered. Nothing
           else on the site is. */}

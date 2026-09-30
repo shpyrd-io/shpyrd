@@ -325,7 +325,7 @@ pkg/api               HTTP API, OIDC relying party and sessions, the application
 deploy/               components and profiles embedded in the binary (incl. extension components such as dex)
 design/               the identity: design/ui the component library and its gallery (@shpyrd/ui), design/brand the mark
 apps/                 the applications (Next, static files): apps/console, apps/workspace, apps/shared; pkg/ui embeds their builds
-apps/website/         shpyrd.io: the site and the docs (Next + design/ui); licensed separately, see apps/website/LICENSE
+apps/website/         shpyrd.io: the site and the docs (Next + design/ui)
 content/              the documentation and the texts of the site
 examples/             sample projects: shop (Go, web + worker, Postgres + Redis), blog (Node, volume), api (Python Dockerfile), hello, hello-docker
 rfcs/                 design documents
@@ -379,7 +379,11 @@ sign-off (`git commit -s`).
 
 ## License
 
-[MPL-2.0](LICENSE), with one exception: `apps/website/` is built on the commercial
-Tailwind UI *Syntax* template and is governed by
-[`apps/website/LICENSE`](apps/website/LICENSE) instead. Everything else — the platform,
-the CLI, the dashboard, the examples and the RFCs — is MPL-2.0.
+[MPL-2.0](LICENSE), with one exception: `apps/website-old/`, the previous site,
+is built on the commercial Tailwind UI *Syntax* template and is governed by
+[`apps/website-old/LICENSE`](apps/website-old/LICENSE) instead. It is kept only
+until a deploy proves its replacement, and goes with the carve-out when it does.
+
+The site that replaces it, `apps/website/`, draws with `design/ui` and carries
+nothing of that template, so it is MPL-2.0 like everything else — the platform,
+the CLI, the dashboard, the examples and the RFCs.

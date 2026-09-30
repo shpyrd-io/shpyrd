@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@markdoc/markdoc": "^0.5.10",
+    "@shpyrd/content": "*",
     "@shpyrd/ui": "*",
     "@tailwindcss/postcss": "^4.3.3",
     "lucide-react": "^1.47.0",

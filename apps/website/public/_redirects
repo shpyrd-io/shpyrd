@@ -1,3 +1,0 @@
-# There is no /docs index; the getting started page is the entry point.
-# A static export emits no redirects of its own, so the host serves this one.
-/docs /docs/getting-started 308

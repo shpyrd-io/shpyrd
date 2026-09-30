@@ -53,10 +53,9 @@ exact shape.
 
 ## License
 
-**This directory is still governed by [`LICENSE`](LICENSE) rather than the
-repository's [MPL-2.0](../../LICENSE)**, because the site it replaced was built
-on the commercial Tailwind UI *Syntax* template.
+[MPL-2.0](../../LICENSE), like the rest of the repository. Every component here
+comes from `design/ui`.
 
-Nothing of that template survives: every component now comes from `design/ui`.
-Whether the carve-out is still needed is a question for the maintainers, not an
-assumption to act on, so the file stands until they decide.
+The commercial Tailwind UI *Syntax* template, and the carve-out that covered it,
+live with the previous site in `apps/website-old/` until a deploy proves this
+one and it is removed.

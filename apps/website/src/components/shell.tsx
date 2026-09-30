@@ -104,6 +104,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
               >
                 {nav}
               </AnchoredOverlay>
+              {/* The sidebar holds the wordmark, and it is hidden on a narrow
+                  screen: without this a reader who arrives on a document has
+                  no way to the rest of the site. */}
+              <Link href="/" aria-label="shpyrd" className="@3xl/page-layout:hidden">
+                <Wordmark />
+              </Link>
               <Breadcrumbs>
                 {here && <BreadcrumbsItem>{here.group.title}</BreadcrumbsItem>}
                 {here && (

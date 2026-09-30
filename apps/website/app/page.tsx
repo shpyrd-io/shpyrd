@@ -1,3 +1,4 @@
+import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Button } from "@shpyrd/ui/components/button";
 import { Stack } from "@shpyrd/ui/components/stack";
@@ -27,10 +28,11 @@ export default function Home() {
   return (
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-16 py-8">
       <Stack gap="normal">
-        <h1 className="max-w-[18ch] text-4xl font-semibold tracking-tight sm:text-5xl">
-          {active.headline}
-        </h1>
-        <p className="max-w-prose text-lg text-muted-foreground">{active.explanation}</p>
+        <PageHeading
+          variant="large"
+          title={active.headline}
+          description={active.explanation}
+        />
         <Stack direction="horizontal" gap="cozy" align="center">
           <AddToAgent />
           <Button variant="outline" asChild>

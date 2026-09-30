@@ -1,7 +1,10 @@
+import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Button } from "@shpyrd/ui/components/button";
 import { Stack } from "@shpyrd/ui/components/stack";
+import { boundaries } from "@shpyrd/content/site/boundaries";
 import { contact, offer, secondaryCta } from "@shpyrd/content/site/offer";
+import { Boundaries } from "@/components/boundaries";
 
 export const metadata = {
   title: "Bring an app to a sharing session",
@@ -12,8 +15,7 @@ export default function BringAnApp() {
   return (
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-16 py-8">
       <Stack gap="normal">
-        <h1 className="max-w-[18ch] text-4xl font-semibold tracking-tight">{offer.title}</h1>
-        <p className="max-w-prose text-lg text-muted-foreground">{offer.intro}</p>
+        <PageHeading variant="large" title={offer.title} description={offer.intro} />
         <Button asChild className="justify-self-start">
           <a href={contact.href}>{contact.label}</a>
         </Button>
@@ -66,6 +68,7 @@ export default function BringAnApp() {
             </li>
           ))}
         </ul>
+        <Boundaries items={boundaries} />
         <p className="max-w-prose">If none of those describe you, bring the app.</p>
         <Stack direction="horizontal" gap="cozy">
           <Button asChild>

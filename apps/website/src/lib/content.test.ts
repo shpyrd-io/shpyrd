@@ -46,4 +46,24 @@ describe("the texts of the site", () => {
       expect(new Set(ids).size, `${name} repeats a heading name`).toBe(ids.length);
     }
   });
+
+  it("keeps a heading name unique even when another heading spells the suffix", () => {
+    const seen = new Map<string, number>();
+    expect(slug("Status", seen)).toBe("status");
+    expect(slug("Status 2", seen)).toBe("status-2");
+    expect(slug("Status", seen)).not.toBe("status-2");
+  });
+
+  it("reads a description written as a folded scalar", () => {
+    expect(meta("title: Tour\ndescription: >\n  A long sentence\n  over two lines.")).toEqual({
+      title: "Tour",
+      description: "A long sentence over two lines.",
+    });
+  });
+
+  it("leaves the pictures of a text where the site serves them", () => {
+    const html = JSON.stringify(read("tour").content);
+    expect(html).not.toMatch(/https:\/\/shpyrd\.io/);
+    expect(html).toMatch(/\/screenshots\//);
+  });
 });
