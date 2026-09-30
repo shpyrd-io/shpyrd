@@ -1,50 +1,62 @@
-# An example of a site
+# shpyrd.io
 
-A site made of `design/ui`, in Next, compiled to static files. It shows
-what the library has for content, with texts that exist: the first page
-and the 22 documents of shpyrd.io, read from `apps/website` where they
-are. Nothing is copied.
+The site and the product documentation. A Next application compiled to static
+files, drawing with [`design/ui`](../../design/ui) and reading
+[`content/`](../../content).
 
-It is an example to read and to run, not the site. Delete it when
-`apps/website` stands on the same base (step 7 of the plan).
+## Running it
 
-## Run
+Every command runs from the repository root: the applications are members of
+one npm workspace, and Next does not import from outside its own folder
+without it.
 
-```bash
-npm install                                # at the repository root
-npm --prefix apps/example-next run dev     # http://localhost:4324
-npm --prefix apps/example-next run build   # static files in out/
+```sh
+npm install
+npm --prefix apps/website run dev        # http://localhost:4324
+npm --prefix apps/website run build      # static files in out/
+npm --prefix apps/website run lint
+npm --prefix apps/website run typecheck
+npm --prefix apps/website run test
 ```
 
-## What draws what
+Or `make website-dev` from the root.
 
-| In the page | Component of `design/ui` |
-|---|---|
-| The areas of the page: side, header, content, pane, foot | `page-layout` |
-| The pages of the site, at the side | `nav-list` |
-| Where the page is | `breadcrumbs` |
-| The title of a text and what explains it | `page-heading` |
-| The text itself: headings, lists, tables, links, pictures | `prose` |
-| A block of code, with its copy button | `ide` |
-| A note or a warning in a text (`{% callout %}`) | `alert` |
-| The links of the first page (`{% quick-link %}`) | `card` |
-| The parts of a text, beside it | `nav-list`, in a pane |
-| The mark, the theme, the menu when narrow | `brand`, `button`, `anchored-overlay` |
+## Layout
 
-## Where things are
+```
+app/page.tsx                 the marketing homepage
+app/how-sharing-works/       the builder-to-colleague journey
+app/bring-an-app/            the assisted-beta offer
+app/docs/[slug]/             every documentation page
+src/components/shell.tsx     the chrome; it branches on document or marketing page
+src/components/markdoc.tsx   which component of design/ui draws each tag
+src/lib/content.ts           reads content/docs and returns front matter, tree and headings
+public/install.sh            served at shpyrd.io/install.sh, the documented install path
+public/screenshots/          screenshots used by the docs and the root README
+public/_redirects            /docs -> /docs/getting-started; a static export emits none
+```
 
-- `src/lib/content.ts` reads a Markdoc file and says which tag is drawn by
-  what. `CONTENT_DIR` names another folder for the texts.
-- `src/components/markdoc.tsx` is the one place that ties a tag of a text
-  to a component of the library.
-- `src/components/shell.tsx` is what is around every page.
-- `src/components/text.tsx` is a text as a page.
-- `src/lib/navigation.ts` is the order of the pages, as the site has it.
+The texts are not here. Documentation is `content/docs/*.md` and the marketing
+copy is `content/site/*.ts`; see [`content/README.md`](../../content/README.md).
 
-## What it does not show
+## Adding a documentation page
 
-An application with data: the ApiRouter, the Mock, the routes read in the
-browser. `apps/AGENTS.md` says how those are made.
+Add `content/docs/<slug>.md` with `title` and `description` front matter, then
+add it to the navigation in `content/navigation.ts`. A test fails if the two
+disagree, and the route and the metadata follow automatically.
 
-The pictures of the texts come from `https://shpyrd.io`, where the site
-serves them.
+## What this must not break
+
+The root `README.md`, the install instructions and published release notes link
+to `/install.sh`, `/screenshots/*.png` and `/docs/*`. Those addresses keep their
+exact shape.
+
+## License
+
+**This directory is still governed by [`LICENSE`](LICENSE) rather than the
+repository's [MPL-2.0](../../LICENSE)**, because the site it replaced was built
+on the commercial Tailwind UI *Syntax* template.
+
+Nothing of that template survives: every component now comes from `design/ui`.
+Whether the carve-out is still needed is a question for the maintainers, not an
+assumption to act on, so the file stands until they decide.

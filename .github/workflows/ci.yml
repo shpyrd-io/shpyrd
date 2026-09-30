@@ -2,9 +2,14 @@
 # manifests render test, and an end-to-end run on a kind cluster that
 # deploys the sample projects with buildpacks and a Dockerfile.
 #
-# paths-ignore: prose-only changes (apps/website/, rfcs/, docs/, *.md) run neither
-# this workflow nor website.yml, so such a pull request reports no checks at
-# all. That is fine while main is unprotected.
+# paths-ignore: web and prose changes (apps/, design/, content/, rfcs/, docs/,
+# *.md) run neither this workflow nor website.yml, so such a pull request
+# reports no checks at all. That is fine while main is unprotected.
+#
+# design/ and content/ are ignored here deliberately: a change to a component
+# or a paragraph used to start the end-to-end job, which takes about 45
+# minutes on a cluster it does not need. examples/ is at the repository root,
+# not under apps/, so the five the end-to-end job deploys still trigger it.
 #
 # Do NOT mark any job here, or website / Build, as a required status check while
 # these path filters exist. A workflow that is not triggered reports no status,

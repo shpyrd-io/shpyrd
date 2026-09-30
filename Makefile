@@ -40,11 +40,11 @@ pages:
 
 ## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
 website:
-	cd apps/website && npm ci --no-audit --no-fund && npm run build
+	npm ci --no-audit --no-fund && npm --prefix apps/website run build
 
-## Serve the website locally on http://localhost:3000
+## Serve the website locally on http://localhost:4324
 website-dev:
-	cd apps/website && npm install && npm run dev
+	npm install && npm --prefix apps/website run dev
 
 ## Build the server container image (full multi-stage build)
 image:
