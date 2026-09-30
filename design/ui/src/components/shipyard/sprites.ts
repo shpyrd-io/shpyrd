@@ -14,6 +14,12 @@
 //           its middle hatch, for the ship), in the same units
 //   unit    how many of those units the width of a container takes in
 //           this file: what gives every piece the same scale
+//
+// The types of an imported image are Next's. Next writes them into
+// next-env.d.ts when it runs, but that file is not committed and another
+// program (the site's typecheck) compiles this file too, so they are
+// named here, where the images are imported.
+/// <reference types="next/image-types/global" />
 import container from "./sprites/container.svg";
 import craneBeam from "./sprites/crane-beam.svg";
 import craneCabin from "./sprites/crane-cabin.svg";

@@ -8,6 +8,8 @@ node_modules
 apps/website
 pkg/ui/dist/console
 pkg/ui/dist/workspace
-bin
+# Dockerfile.dev packages the server compiled on the host
+bin/*
+!bin/shpyrd-server-linux-*
 tmp
 .git
