@@ -597,7 +597,18 @@ OpenCost API windows are immutable).
 
 ## Implementation status
 
-Updated 2026-09-29 (v0.9.56).
+Updated 2026-09-30 (v0.9.59).
+
+- **v0.9.59 — sleep fixed for every project created since RFC-0076.** The sleep objects
+  named the web Deployment and Service `<app>-web`, the legacy scheme; an App named by
+  its ID has them called `web`, so KEDA answered "deployments.apps <id>-web not found",
+  the controller paused sleep and no project created since v0.9.43 ever slept. The
+  names now come from the one helper every other object uses (`workloadName`). Found
+  on the first kind cluster to enable sleep after RFC-0076 (nothing in production had
+  reached its quiet period yet). Also: the installer applies the platform server after
+  the other components of its runlevel, so a server started by `extensions enable
+  sleep` sees KEDA's kinds (before, it came up alongside `keda-http` and made no sleep
+  object until its next restart).
 
 - **v0.9.56 — a plan from birth.** `shpyrd-ctl workspaces create --plan <name>` and the
   console's New workspace dialog (first plan preselected) assign the billing plan as the

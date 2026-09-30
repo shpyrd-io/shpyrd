@@ -167,11 +167,10 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 	sp := r.webSleepSpec(app)
 	cooldown := int64(parseSleepDuration(sp.After).Seconds())
 
-	// Discover the web Service name (convention: app.Name + "-web" or app.Name).
-	webSvc := app.Name + "-web"
-	if _, err := r.webServiceName(ctx, app); err == nil {
-		webSvc, _ = r.webServiceName(ctx, app)
-	}
+	// The web Service and Deployment are named as every other object of
+	// the process is (RFC-0076: "web" in p-<id>, "<slug>-web" for a legacy
+	// App); nothing here recomputes a name from the slug.
+	webSvc := workloadName(app, "web")
 
 	// Compute max replicas from the web process.
 	maxR := int64(1)
@@ -268,7 +267,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 		so.SetLabels(mergeMaps(so.GetLabels(), map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelManagedBy: "shpyrd"}))
 		so.Object["spec"] = map[string]interface{}{
 			"scaleTargetRef": map[string]interface{}{
-				"apiVersion": "apps/v1", "kind": "Deployment", "name": app.Name + "-web",
+				"apiVersion": "apps/v1", "kind": "Deployment", "name": workloadName(app, "web"),
 			},
 			"minReplicaCount": int64(0),
 			"maxReplicaCount": maxR,
@@ -312,7 +311,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 		// Give the web process its instances back now rather than on the
 		// next event: KEDA may have scaled it to zero.
 		dep := &appsv1.Deployment{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: app.Name + "-web", Namespace: app.Namespace}, dep); err == nil {
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: workloadName(app, "web"), Namespace: app.Namespace}, dep); err == nil {
 			if dep.Spec.Replicas == nil || *dep.Spec.Replicas != int32(maxR) {
 				dep.Spec.Replicas = ptr.To(int32(maxR))
 				if err := r.Client.Update(ctx, dep); err != nil {
@@ -375,16 +374,6 @@ func (r *AppReconciler) deleteSleepObjects(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 	return nil
-}
-
-// webServiceName discovers the web Service's name.
-func (r *AppReconciler) webServiceName(ctx context.Context, app *shpyrdv1.App) (string, error) {
-	candidate := app.Name + "-web"
-	svc := &corev1.Service{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: candidate, Namespace: app.Namespace}, svc); err == nil {
-		return candidate, nil
-	}
-	return app.Name, nil
 }
 
 // kedaHTTPAvailable asks the REST mapper (kept current by discovery) whether

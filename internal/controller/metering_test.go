@@ -25,7 +25,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/prom"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -212,6 +214,73 @@ func TestSleepWorkspaceDefault(t *testing.T) {
 	app.Spec.Processes["web"] = p
 	if r.sleepEnabled(app) {
 		t.Error("no default, no policy: no sleep")
+	}
+}
+
+// An App named by its ID (RFC-0076, every project since v0.9.43) has its
+// web Deployment and Service called "web": the sleep objects must point
+// at those names, or KEDA scales nothing and the interceptor routes to a
+// Service that does not exist. (Found on the first kind cluster to enable
+// sleep after RFC-0076: "deployments.apps <id>-web not found".)
+func TestSleepObjectsFollowIDNamedWorkloads(t *testing.T) {
+	short := ids.Short(testProjectID)
+	ns := project.IDNamespace(testProjectID)
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns, Generation: 1},
+		Spec: shpyrdv1.AppSpec{
+			ID: testProjectID, Slug: "shop", Image: "ghcr.io/acme/shop:1", Access: shpyrdv1.AccessPublic,
+			Processes: map[string]shpyrdv1.Process{"web": {
+				Port:  ptr.To[int32](8080),
+				Sleep: &shpyrdv1.SleepSpec{After: "5m", Resuming: "page"},
+			}},
+		},
+	}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(app,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"}}}).
+		WithStatusSubresource(&shpyrdv1.App{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system"}.Defaults(),
+	}
+	runReconcile(t, r, app)
+
+	dep := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "web"}, dep); err != nil {
+		t.Fatalf("the web Deployment is named web: %v", err)
+	}
+	so := &unstructured.Unstructured{}
+	so.SetGroupVersionKind(ScaledObjectGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: short + "-sleep"}, so); err != nil {
+		t.Fatalf("scaledobject: %v", err)
+	}
+	if target, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name"); target != "web" {
+		t.Errorf("scaleTargetRef.name = %q, want web", target)
+	}
+	ir := &unstructured.Unstructured{}
+	ir.SetGroupVersionKind(InterceptorRouteGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: short}, ir); err != nil {
+		t.Fatalf("interceptorroute: %v", err)
+	}
+	if target, _, _ := unstructured.NestedString(ir.Object, "spec", "target", "service"); target != "web" {
+		t.Errorf("interceptor target = %q, want web", target)
+	}
+	ing := &networkingv1.Ingress{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "app"}, ing); err != nil {
+		t.Fatal(err)
+	}
+	if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != webSleepServiceName {
+		t.Errorf("backend = %q, want %s", got, webSleepServiceName)
 	}
 }
 

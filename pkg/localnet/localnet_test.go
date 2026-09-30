@@ -33,7 +33,7 @@ func TestResolverZone(t *testing.T) {
 
 func TestSiteFile(t *testing.T) {
 	s := SiteFile("shpyrd.test", 8080)
-	for _, want := range []string{"*.shpyrd.test, shpyrd.test {", "tls internal", "reverse_proxy 127.0.0.1:8080", "header_up X-Forwarded-Proto https", "flush_interval -1", "managed by shpyrd"} {
+	for _, want := range []string{"*.shpyrd.test, shpyrd.test {", "tls internal", "reverse_proxy 127.0.0.1:8080", "header_up X-Forwarded-Proto https", "flush_interval -1", "managed by shpyrd", "*.*.shpyrd.test, *.*.*.shpyrd.test {", "on_demand"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("site file lacks %q:\n%s", want, s)
 		}
