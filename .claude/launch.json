@@ -10,7 +10,8 @@
         "run",
         "dev"
       ],
-      "port": 4323
+      "port": 4323,
+      "autoPort": true
     },
     {
       "name": "example",
