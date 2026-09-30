@@ -55,6 +55,17 @@
         "design"
       ],
       "port": 4325
+    },
+    {
+      "name": "console-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/console",
+        "run",
+        "design"
+      ],
+      "port": 4326
     }
   ]
 }

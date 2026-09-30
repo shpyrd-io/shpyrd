@@ -33,5 +33,9 @@
   "volumes": {
     "minSize": "1Gi",
     "snapshots": true
-  }
+  },
+  "capabilities": [
+    "workspaces",
+    "billing"
+  ]
 }

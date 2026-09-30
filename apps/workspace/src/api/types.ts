@@ -13,6 +13,9 @@ export type PublicConfig = {
     password?: { id: string; label: string };
   };
   extensions: string[];
+  // What the server offers beyond the core: "workspaces", "billing". The
+  // open-source core adds nothing.
+  capabilities?: string[];
   workspace?: {
     slug: string;
     name: string;
