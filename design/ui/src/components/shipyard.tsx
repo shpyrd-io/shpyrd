@@ -2,14 +2,18 @@
 
 import * as React from "react";
 import { cn } from "cn";
-import { project, scene, VIEW } from "./shipyard/scene";
+import { project, scene, UNIT, VIEW } from "./shipyard/scene";
 import { sprites } from "./shipyard/sprites";
 import { createWorld, step } from "./shipyard/world";
 
 // How much time a step of the yard takes, whatever the screen does.
 const STEP = 1 / 60;
 
-const round = (n: number) => Math.round(n * 100) / 100;
+// A length of the drawing as a share of the width of the picture, which
+// is what `cqw` counts: the picture is as wide as the room it is given.
+const wide = (n: number) => `${((n / VIEW[2]) * 100).toFixed(3)}cqw`;
+const across = (x: number) => wide(x - VIEW[0]);
+const down = (y: number) => wide(y - VIEW[1]);
 
 // A shipyard at work, seen from above: ships come and go, a crane takes
 // containers off them and puts others on, trucks bring and take them. It
@@ -20,13 +24,13 @@ function Shipyard({
   seed = 1,
   paused = false,
   ...props
-}: Omit<React.ComponentProps<"svg">, "children"> & {
+}: Omit<React.ComponentProps<"div">, "children"> & {
   // The same seed gives the same yard.
   seed?: number;
   paused?: boolean;
 }) {
   const [drawn, setDrawn] = React.useState(() => scene(createWorld(seed)));
-  const ref = React.useRef<SVGSVGElement>(null);
+  const ref = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (paused || !ref.current) return;
@@ -67,45 +71,74 @@ function Shipyard({
     };
   }, [seed, paused]);
 
+  // The pieces keep their place in the page, so that the browser keeps
+  // what it has drawn of each; which is over which is said by a number.
+  const pieces = drawn.map((piece, rank) => ({ piece, rank: rank + 1 })).sort((a, b) => (a.piece.key < b.piece.key ? -1 : 1));
+
   return (
-    <svg
+    <div
       ref={ref}
       data-slot="shipyard"
       role="img"
       aria-label="A shipyard at work: a crane moves containers between a ship and trucks."
-      viewBox={VIEW.join(" ")}
       className={cn(
-        "aspect-square w-full [mask-image:radial-gradient(closest-side,black_76%,transparent_100%)] dark:hue-rotate-180 dark:invert",
+        "relative isolate aspect-square w-full overflow-hidden [container-type:inline-size] [mask-image:radial-gradient(closest-side,black_76%,transparent_100%)] dark:hue-rotate-180 dark:invert",
         className,
       )}
       {...props}
     >
-      <Piece sprite="ground" at={[0, 0, 0]} />
-      {drawn.map((piece) => {
-        if (piece.kind === "sprite") return <Piece key={piece.key} sprite={piece.sprite} at={piece.at} />;
-        const [x1, y1] = project(piece.from);
-        const [x2, y2] = project(piece.to);
-        return (
-          <line
-            key={piece.key}
-            x1={round(x1)}
-            y1={round(y1)}
-            x2={round(x2)}
-            y2={round(y2)}
-            strokeLinecap="round"
-            className={piece.tone === "barrier" ? "stroke-[#ff4f00] stroke-[5]" : "stroke-[#52525b] stroke-1"}
-          />
-        );
-      })}
-    </svg>
+      <Piece sprite="ground" at={[0, 0, 0]} rank={0} />
+      {pieces.map(({ piece, rank }) =>
+        piece.kind === "sprite" ? (
+          <Piece key={piece.key} sprite={piece.sprite} at={piece.at} rank={rank} />
+        ) : (
+          <Line key={piece.key} from={piece.from} to={piece.to} tone={piece.tone} rank={rank} />
+        ),
+      )}
+    </div>
   );
 }
 
-// A piece, its file put where the piece stands.
-function Piece({ sprite, at }: { sprite: keyof typeof sprites; at: readonly [number, number, number] }) {
-  const { src, box } = sprites[sprite];
+type Point = readonly [number, number, number];
+
+// A piece: its file, at the scale of the yard, put where the piece stands.
+function Piece({ sprite, at, rank }: { sprite: keyof typeof sprites; at: Point; rank: number }) {
+  const { src, size, stands, unit } = sprites[sprite];
+  const scale = UNIT / unit;
   const [x, y] = project(at);
-  return <image href={src} x={round(x + box[0])} y={round(y + box[1])} width={box[2]} height={box[3]} />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
+      style={{
+        width: wide(size[0] * scale),
+        transform: `translate3d(${across(x - stands[0] * scale)}, ${down(y - stands[1] * scale)}, 0)`,
+        zIndex: rank,
+      }}
+    />
+  );
+}
+
+// What is too thin and moves too much to be a file: a cable, the barrier.
+function Line({ from, to, tone, rank }: { from: Point; to: Point; tone: "cable" | "barrier"; rank: number }) {
+  const [x1, y1] = project(from);
+  const [x2, y2] = project(to);
+  return (
+    <div
+      className={cn(
+        "absolute top-0 left-0 origin-left rounded-full",
+        tone === "barrier" ? "h-[max(2px,0.4cqw)] bg-[#ff4f00]" : "h-px bg-[#52525b]",
+      )}
+      style={{
+        width: wide(Math.hypot(x2 - x1, y2 - y1)),
+        transform: `translate3d(${across(x1)}, ${down(y1)}, 0) rotate(${Math.atan2(y2 - y1, x2 - x1).toFixed(4)}rad)`,
+        zIndex: rank,
+      }}
+    />
+  );
 }
 
 export { Shipyard, sprites as shipyardSprites };
