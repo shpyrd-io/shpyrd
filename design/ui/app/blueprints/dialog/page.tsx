@@ -60,6 +60,28 @@ export default function Page() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline">With a header line</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader divider>
+                <DialogTitle>Add a domain</DialogTitle>
+                <DialogDescription>It points at the project once its record is set.</DialogDescription>
+              </DialogHeader>
+              <Field label="Domain" hint="Without the scheme: app.example.com.">
+                <Input placeholder="app.example.com" />
+              </Field>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline">Cancel</Button>
+                </DialogClose>
+                <DialogClose asChild>
+                  <Button onClick={() => setConfirmed("Add")}>Add</Button>
+                </DialogClose>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </Stack>
       </Section>
       <Section title="Confirm dialog: it asks before it acts">

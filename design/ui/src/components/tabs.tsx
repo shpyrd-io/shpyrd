@@ -4,6 +4,7 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
 import { Slot, Tabs as TabsPrimitive } from "radix-ui";
+import { CounterLabel } from "./counter-label";
 
 // Tabs go along a line, and only so: a list down the side is a `NavList`,
 // which looks the same and goes to another page.
@@ -85,13 +86,9 @@ function TabsTrigger({
       {icon && <Slot.Root data-icon="inline-start">{icon}</Slot.Root>}
       {children}
       {counter !== undefined && (
-        <span
-          data-slot="tabs-counter"
-          data-icon="inline-end"
-          className="rounded-full bg-foreground/10 px-1.5 text-xs leading-5 text-muted-foreground tabular-nums"
-        >
+        <CounterLabel data-slot="tabs-counter" data-icon="inline-end">
           {counter}
-        </span>
+        </CounterLabel>
       )}
     </TabsPrimitive.Trigger>
   );

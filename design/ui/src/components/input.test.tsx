@@ -34,4 +34,25 @@ describe("Input", () => {
     fireEvent.pointerDown(screen.getByText(".shpyrd.app"));
     expect(document.activeElement).toBe(screen.getByRole("textbox"));
   });
+
+  it("takes a size, on the field or on the box", () => {
+    const { container } = render(
+      <>
+        <Input size="lg" placeholder="alone" />
+        <Input size="lg" icon={<Icon />} placeholder="boxed" />
+      </>,
+    );
+    expect(screen.getByPlaceholderText("alone").getAttribute("data-size")).toBe("lg");
+    expect(container.querySelector("[data-slot=input-box]")?.getAttribute("data-size")).toBe("lg");
+  });
+
+  it("draws a line between the icon and the text when asked", () => {
+    const { container } = render(
+      <>
+        <Input icon={<Icon />} divider placeholder="with" />
+        <Input icon={<Icon />} placeholder="without" />
+      </>,
+    );
+    expect(container.querySelectorAll("[data-slot=input-divider]")).toHaveLength(1);
+  });
 });

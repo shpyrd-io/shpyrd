@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BookOpen, Info, LayoutDashboard, Rocket, TriangleAlert, Workflow } from "lucide-react";
+import { BookOpen, LayoutDashboard, Rocket, Workflow } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { IDE } from "@shpyrd/ui/components/ide";
@@ -18,8 +18,7 @@ function Callout({
   children: React.ReactNode;
 }) {
   return (
-    <Alert>
-      {type === "warning" ? <TriangleAlert className="text-warning" /> : <Info />}
+    <Alert variant={type === "warning" ? "warning" : "info"}>
       {title && <AlertTitle>{title}</AlertTitle>}
       <AlertDescription>{children}</AlertDescription>
     </Alert>

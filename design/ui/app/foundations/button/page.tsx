@@ -22,6 +22,7 @@ export default function Page() {
           <Button size="sm">Small</Button>
           <Button>Default</Button>
           <Button size="lg">Large</Button>
+          <Button size="xl">Extra large</Button>
           <Button disabled>Disabled</Button>
         </Stack>
       </Section>
@@ -47,6 +48,7 @@ export default function Page() {
           <Button variant="outline" size="icon" icon={<Settings />} aria-label="Settings" />
           <Button variant="ghost" size="icon-sm" icon={<Settings />} aria-label="Settings" />
           <Button size="icon-lg" icon={<Plus />} aria-label="New project" />
+          <Button variant="outline" size="icon-xl" icon={<Plus />} aria-label="New project" />
         </Stack>
       </Section>
     </>

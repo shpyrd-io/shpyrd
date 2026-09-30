@@ -2,7 +2,6 @@ import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert
 import { IDE } from "@shpyrd/ui/components/ide";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Prose } from "@shpyrd/ui/components/prose";
-import { Info } from "lucide-react";
 import { Section } from "../../section";
 import { deploy, manifest, server } from "../../code-samples";
 
@@ -42,8 +41,7 @@ export default function Page() {
             </li>
           </ul>
 
-          <Alert>
-            <Info />
+          <Alert variant="info">
             <AlertTitle>The address cannot be changed later</AlertTitle>
             <AlertDescription>It is made from the name the project is born with.</AlertDescription>
           </Alert>

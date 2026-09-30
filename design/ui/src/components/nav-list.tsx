@@ -9,8 +9,10 @@ import { Button } from "./button";
 // The level of the titles of the groups: one under the heading of the list.
 const GroupLevel = React.createContext<"h3" | "h4">("h3");
 
+// The current item: the row in grey, and half a circle of the primary
+// growing out of the edge of the list, like a bookmark.
 const row =
-  "group/nav-item relative flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 data-[current=true]:bg-muted data-[current=true]:font-medium data-[current=true]:before:absolute data-[current=true]:before:inset-y-1.5 data-[current=true]:before:-left-2 data-[current=true]:before:w-1 data-[current=true]:before:rounded-full data-[current=true]:before:bg-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+  "group/nav-item relative flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 data-[current=true]:bg-muted data-[current=true]:font-medium data-[current=true]:before:absolute data-[current=true]:before:top-1/2 data-[current=true]:before:-left-2 data-[current=true]:before:h-[9px] data-[current=true]:before:w-[5px] data-[current=true]:before:-translate-y-1/2 data-[current=true]:before:rounded-r-full data-[current=true]:before:bg-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
 
 function Before({ children }: { children?: React.ReactNode }) {
   if (!children) return null;
