@@ -1,6 +1,8 @@
 import Image from "next/image";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
+import { Pillar } from "@shpyrd/ui/components/pillar";
+import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Button } from "@shpyrd/ui/components/button";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { boundaries } from "@shpyrd/content/site/boundaries";
@@ -12,14 +14,6 @@ import { AddToAgent } from "@/components/add-to-agent";
 import { Boundaries } from "@/components/boundaries";
 import { Roster } from "@/components/roster";
 
-// The last row is the hook: the reader's own app, the one that works and that
-// nobody else can open yet.
-const workspace = [
-  { name: "Purchase requests", audience: "Finance, Operations", shared: true },
-  { name: "Onboarding checklist", audience: "People", shared: true },
-  { name: "Quote tool", audience: "Sales", shared: true },
-  { name: "Field reports", audience: "Not shared yet", shared: false },
-];
 
 export const metadata = {
   title: "shpyrd - One place to share apps with your team",
@@ -53,70 +47,50 @@ export default function Home() {
       />
 
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{situation.title}</h2>
-        {situation.body.map((paragraph) => (
-          <p key={paragraph} className="max-w-prose">
-            {paragraph}
-          </p>
-        ))}
+        <SectionIntro heading={situation.title} description={situation.body[0]} />
+        <p className="max-w-prose">{situation.body[1]}</p>
       </Stack>
 
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{pillars.title}</h2>
-        <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
-          <dl className="grid gap-8 sm:grid-cols-2">
-            {pillars.items.map((item) => (
-              <div key={item.id}>
-                <dt className="font-semibold">{item.title}</dt>
-                <dd className="mt-2 text-muted-foreground">{item.body}</dd>
-              </div>
-            ))}
-          </dl>
-          <Roster caption="Your workspace" entries={workspace} />
+        <SectionIntro heading={pillars.title} />
+        {/* Three across, with the roster under them rather than beside: as a
+            fourth column it left a hole the height of the section. */}
+        <div className="grid gap-8 sm:grid-cols-3">
+          {pillars.items.map((item) => (
+            <Pillar key={item.id} heading={item.title} description={item.body} />
+          ))}
         </div>
       </Stack>
 
+      <SectionIntro
+        heading={hosting.title}
+        description={hosting.body[0]}
+        link={
+          <Button variant="link" asChild className="px-0">
+            <a href={hosting.link.href}>{hosting.link.label}</a>
+          </Button>
+        }
+      />
+
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{hosting.title}</h2>
-        {hosting.body.map((paragraph) => (
-          <p key={paragraph} className="max-w-prose text-muted-foreground">
-            {paragraph}
-          </p>
-        ))}
-        <Button variant="link" asChild className="justify-self-start px-0">
-          <a href={hosting.link.href}>{hosting.link.label}</a>
-        </Button>
+        <SectionIntro heading={useCases.title} description={useCases.disclaimer} />
+        <Roster caption={useCases.caption} entries={useCases.apps} className="max-w-md" />
       </Stack>
 
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{useCases.title}</h2>
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {useCases.examples.map((example) => (
-            <li key={example} className="rounded-lg border px-4 py-6 font-medium">
-              {example}
-            </li>
-          ))}
-        </ul>
-        <p className="max-w-prose text-muted-foreground">{useCases.disclaimer}</p>
-      </Stack>
-
-      <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{offer.title}</h2>
-        <p className="max-w-prose text-muted-foreground">{offer.intro}</p>
-        <Button variant="outline" asChild className="justify-self-start">
+        <SectionIntro heading={offer.title} description={offer.intro} />
+        <Button variant="outline" asChild className="self-start">
           <a href="/bring-an-app">Read what a session is</a>
         </Button>
       </Stack>
 
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{boundariesSection.title}</h2>
-        <p className="max-w-prose text-muted-foreground">{boundariesSection.intro}</p>
+        <SectionIntro heading={boundariesSection.title} description={boundariesSection.intro} />
         <Boundaries items={boundaries} />
       </Stack>
 
       <Stack gap="normal">
-        <h2 className="text-2xl font-semibold">{developerSection.title}</h2>
-        <p className="max-w-prose text-muted-foreground">{developerSection.body}</p>
+        <SectionIntro heading={developerSection.title} description={developerSection.body} />
         <pre className="max-w-prose overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
           <code>{developerSection.code}</code>
         </pre>

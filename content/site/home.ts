@@ -54,11 +54,15 @@ export const hosting = {
 
 export const useCases = {
   title: 'What people put in it',
-  examples: [
-    'A request tracker',
-    'A project-status dashboard',
-    'An onboarding checklist',
-    'A quote tool for the sales team',
+  // What a colleague sees when they sign in: the apps, and who each is for.
+  // The last row is the hook - it is the reader's own app, the one that works
+  // and that nobody else can open yet.
+  caption: 'Your workspace',
+  apps: [
+    { name: 'Purchase requests', audience: 'Finance, Operations', shared: true },
+    { name: 'Onboarding checklist', audience: 'People', shared: true },
+    { name: 'Quote tool', audience: 'Sales', shared: true },
+    { name: 'Field reports', audience: 'Not shared yet', shared: false },
   ],
   disclaimer:
     "shpyrd doesn't build these. Your team does, with the tools it already " +

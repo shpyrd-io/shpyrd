@@ -53,7 +53,7 @@ export default function HowSharingWorks() {
         <h2 className="text-2xl font-semibold">{runs.title}</h2>
         <p className="max-w-prose text-muted-foreground">{runs.body}</p>
         <Boundaries items={boundariesForStep(runs.step)} />
-        <Button variant="link" asChild className="justify-self-start px-0">
+        <Button variant="link" asChild className="self-start px-0">
           <a href={runs.link.href}>{runs.link.label}</a>
         </Button>
       </Stack>

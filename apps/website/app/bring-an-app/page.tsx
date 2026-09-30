@@ -16,7 +16,7 @@ export default function BringAnApp() {
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-16 py-8">
       <Stack gap="normal">
         <PageHeading variant="large" title={offer.title} description={offer.intro} />
-        <Button asChild className="justify-self-start">
+        <Button asChild className="self-start">
           <a href={contact.href}>{contact.label}</a>
         </Button>
         <p className="text-sm text-muted-foreground">{contact.note}</p>

@@ -7,9 +7,17 @@ import { Card } from "@shpyrd/ui/components/card";
 
 export type Entry = { name: string; audience: string; shared: boolean };
 
-export function Roster({ caption, entries }: { caption: string; entries: Entry[] }) {
+export function Roster({
+  caption,
+  entries,
+  className,
+}: {
+  caption: string;
+  entries: Entry[];
+  className?: string;
+}) {
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className={`overflow-hidden p-0 ${className ?? ""}`}>
       <p className="border-b px-4 py-3 text-sm text-muted-foreground">{caption}</p>
       <ul className="divide-y">
         {entries.map((entry) => (

@@ -54,6 +54,8 @@ export const catalog: Category[] = [
       { slug: "meter", title: "Meter", description: "How much is taken, of how much there is." },
       { slug: "progress-bar", title: "Progress bar", description: "How far something has gone, or of what parts it is made." },
       { slug: "stat", title: "Stat", description: "A number that matters, and how it went lately." },
+      { slug: "pillar", title: "Pillar", description: "One of the things a section says, beside its siblings." },
+      { slug: "section-intro", title: "Section intro", description: "What opens a section: what it is about, and why." },
       { slug: "prose", title: "Prose", description: "A text that was written: headings, paragraphs, lists, tables." },
     ],
   },
