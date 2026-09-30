@@ -23,7 +23,7 @@ const [middleX, middleY] = project([2.25, -2.75, 0]);
 export const VIEW = [middleX - SIZE / 2, middleY - SIZE / 2, SIZE, SIZE] as const;
 
 // The room a piece takes in the yard: from one corner to the opposite one.
-export type Box = readonly [x0: number, y0: number, z0: number, x1: number, y1: number, z1: number];
+type Box = readonly [x0: number, y0: number, z0: number, x1: number, y1: number, z1: number];
 
 export type Drawn =
   | { kind: "sprite"; key: string; sprite: Sprite; at: Point }
@@ -60,7 +60,7 @@ const BARRIER = 2.5;
 // Whether two pieces cover each other on the drawing. What is drawn of a
 // box has six sides, in three directions; two of them are apart when
 // they are apart seen along any of the three.
-export function meet(a: Box, b: Box) {
+function meet(a: Box, b: Box) {
   return (
     a[0] - a[4] < b[3] - b[1] &&
     b[0] - b[4] < a[3] - a[1] &&
@@ -77,7 +77,7 @@ const middle = (box: Box) => box[0] + box[1] + box[2] + box[3] + box[4] + box[5]
 // Whether a is behind b, seen from where the yard is looked at: further
 // back across the quay, further back along it, or under it. It is not
 // known of two pieces that are in the same room.
-export function behind(a: Box, b: Box): boolean | undefined {
+function behind(a: Box, b: Box): boolean | undefined {
   for (const axis of [0, 1, 2]) {
     if (a[axis + 3] <= b[axis] + near) return true;
     if (b[axis + 3] <= a[axis] + near) return false;
@@ -85,7 +85,7 @@ export function behind(a: Box, b: Box): boolean | undefined {
   return undefined;
 }
 
-export type Placed = { drawn: Drawn; box: Box };
+type Placed = { drawn: Drawn; box: Box };
 
 // The pieces in the order they are drawn: each after all that it covers.
 // Two that are in the same room are told apart by their middles.
@@ -112,7 +112,7 @@ function order(pieces: Placed[]): Drawn[] {
 }
 
 // Every piece of the yard, where it stands and the room it takes.
-export function place(world: World): Placed[] {
+function place(world: World): Placed[] {
   const pieces: Placed[] = [];
   const sprite = (key: string, name: Sprite, at: Point) => {
     const room = ROOM[name];
