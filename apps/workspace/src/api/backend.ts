@@ -48,6 +48,7 @@ type DomainsAnswer = { host?: string; target: string; address?: string; domains:
 
 type BillingAnswer = {
   period: string;
+  projection?: number;
   plan?: { name?: string; slug?: string };
   lines: { project?: string; component: string; metric: string; quantity: number; unit: string; unitPrice: number; grossAmount: number }[];
   total: number;
@@ -142,14 +143,22 @@ export const backend: Api = {
   claimDomain: (domain, connector) => request("/api/workspace/domain-claims", json("POST", { domain, connector })),
   verifyDomainClaim: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
   unclaimDomain: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}`, gone),
-  billing: async () => {
+  billing: async (month) => {
     const r = await request<BillingAnswer>("/api/workspace/billing/current");
+    const line = (l: BillingAnswer["lines"][number]) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, amount: l.grossAmount });
+    if (month && month !== r.period) {
+      // A month that closed: its lines as they were invoiced, none until
+      // the platform closes months. The plan and the currency are today's.
+      const closed = (await request<BillingAnswer["lines"] | null>(`/api/workspace/billing/invoices?month=${encodeURIComponent(month)}`)) ?? [];
+      return { plan: r.plan?.name ?? r.plan?.slug ?? "", currency: r.currency, month, closed: true, total: closed.reduce((sum, l) => sum + l.grossAmount, 0), lines: closed.map(line) };
+    }
     const billing: Billing = {
       plan: r.plan?.name ?? r.plan?.slug ?? "",
       currency: r.currency,
       month: r.period,
       total: r.total,
-      lines: r.lines.map((l) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, amount: l.grossAmount })),
+      projection: r.projection,
+      lines: r.lines.map(line),
     };
     return billing;
   },

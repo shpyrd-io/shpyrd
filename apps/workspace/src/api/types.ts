@@ -352,7 +352,9 @@ export type NewLoginMethod = {
 export type DomainClaim = { domain: string; connector?: string; verified: boolean; verifiedAt?: string; record: string; recordValue: string };
 
 export type BillingLine = { project?: string; component: string; metric: string; quantity: number; unit: string; amount: number };
-export type Billing = { plan: string; currency: string; month: string; total: number; lines: BillingLine[] };
+// The month so far, with where it is headed at this pace, or a month
+// that closed, as it was invoiced.
+export type Billing = { plan: string; currency: string; month: string; closed?: boolean; total: number; projection?: number; lines: BillingLine[] };
 
 export type Point = [time: number, value: number];
 // `reference` is the allocation the series is measured against (what the

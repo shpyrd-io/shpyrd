@@ -93,7 +93,8 @@ export type Api = {
   claimDomain: (domain: string, connector: string) => Promise<DomainClaim>;
   verifyDomainClaim: (domain: string) => Promise<DomainClaim>;
   unclaimDomain: (domain: string) => Promise<void>;
-  billing: () => Promise<Billing>;
+  // This month without a month; a month that closed with one (YYYY-MM).
+  billing: (month?: string) => Promise<Billing>;
   sizes: () => Promise<SizeCatalog>;
   // The projects.
   projects: () => Promise<ProjectSummary[]>;

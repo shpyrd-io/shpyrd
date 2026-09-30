@@ -307,7 +307,11 @@ export const mock: Api = {
     all.domainClaims = all.domainClaims.filter((c) => c.domain !== domain);
     await thingsOf.set(all);
   },
-  billing: async () => (await thingsOf.get()).billing,
+  billing: async (month) => {
+    const billing = (await thingsOf.get()).billing;
+    // The Mock has this month only; another month closed with nothing.
+    return month && month !== billing.month ? { ...billing, month, closed: true, total: 0, projection: undefined, lines: [] } : billing;
+  },
   sizes: async () => (await thingsOf.get()).sizes,
 
   projects: async () => (await projectsOf.list()).map(summary),

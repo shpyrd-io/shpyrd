@@ -49,28 +49,38 @@ import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Failed, Loading } from "../project/shared";
 
-// The estimate of the month, at the prices of the plan.
+// The estimate of the month, at the prices of the plan; or a month that
+// closed, as it was invoiced.
 export function Billing() {
-  const billing = useQuery({ queryKey: ["billing"], queryFn: api.billing });
+  const [month, setMonth] = useState("");
+  const billing = useQuery({ queryKey: ["billing", month], queryFn: () => api.billing(month || undefined) });
   if (billing.isLoading) return <Loading />;
   if (billing.error || !billing.data)
     return <Failed what="the billing" error={billing.error} />;
   const b = billing.data;
+  const open = !b.closed;
   const money = (n: number) =>
-    n.toLocaleString("en", { style: "currency", currency: b.currency });
+    n.toLocaleString("en", { style: "currency", currency: b.currency || "USD" });
   return (
     <Card>
       <CardHeader>
         <CardTitle>Billing</CardTitle>
         <CardDescription>
-          Month-to-date estimate at the prices of the plan. No money is owed
-          until the month closes.
+          {open
+            ? "Month-to-date estimate at the prices of the plan. No money is owed until the month closes."
+            : "A month that closed, as it was invoiced."}
         </CardDescription>
         <CardAction>
-          {b.plan && <StatusBadge type="info">{b.plan} plan</StatusBadge>}
+          <Stack direction="horizontal" align="center" gap="cozy">
+            {b.plan && <StatusBadge type="info">{b.plan} plan</StatusBadge>}
+            <Input type="month" size="sm" value={month || b.month} max={b.month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="w-40" />
+          </Stack>
         </CardAction>
       </CardHeader>
       <CardContent>
+        {b.lines.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing invoiced for {b.month}.</p>
+        ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -100,13 +110,20 @@ export function Billing() {
           </TableBody>
           <TableFooter>
             <TableRow>
-              <TableCell colSpan={4}>{b.month}, so far</TableCell>
+              <TableCell colSpan={4}>{open ? `${b.month}, so far` : b.month}</TableCell>
               <TableCell className="text-right font-mono">
                 {money(b.total)}
               </TableCell>
             </TableRow>
+            {open && typeof b.projection === "number" && (
+              <TableRow>
+                <TableCell colSpan={4} className="text-muted-foreground">At this pace, by the end of the month</TableCell>
+                <TableCell className="text-right font-mono text-muted-foreground">{money(b.projection)}</TableCell>
+              </TableRow>
+            )}
           </TableFooter>
         </Table>
+        )}
       </CardContent>
     </Card>
   );
