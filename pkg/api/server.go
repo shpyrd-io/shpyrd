@@ -25,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
@@ -92,6 +93,11 @@ type Options struct {
 	// so its front door is published at once; nil when this replica runs
 	// no controllers.
 	WorkspacesChanged func()
+	// SignInHost is the host of the sign-in service (Dex), whose root the
+	// Ingress sends here: the server answers it with the mark alone, so
+	// the service's own index is never seen. Empty, or the console's own
+	// host, leaves every host as it is.
+	SignInHost string
 	// Capabilities names what this server offers beyond the core
 	// ("workspaces", "billing", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
@@ -801,6 +807,11 @@ func (s *Server) uiIndex(c *gin.Context) string {
 func (s *Server) serveUI() gin.HandlerFunc {
 	fileServer := http.FileServer(http.FS(s.opts.UI))
 	return func(c *gin.Context) {
+		if s.atSignInHost(c) {
+			c.Header("Cache-Control", "no-store")
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.Mark, pages.Page{})))
+			return
+		}
 		if s.customError(c) { // ingress-nginx's error backend for app hosts
 			return
 		}
@@ -849,10 +860,20 @@ func abort(c *gin.Context, status int, err error) {
 	c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
 }
 
-const placeholderHTML = `<!doctype html><html><head><title>shpyrd</title></head>
-<body style="font-family:system-ui;background:#111;color:#eee;padding:2rem">
-<h1>shpyrd</h1><p>The UI has not been built into this binary. Run <code>make ui</code> and rebuild,
-or use the API at <code>/api/healthz</code>.</p></body></html>`
+// atSignInHost says the request came to the sign-in service's host: the
+// root of it, which its Ingress sends here to be answered with the mark
+// alone. The console's own host is never it.
+func (s *Server) atSignInHost(c *gin.Context) bool {
+	host := hostOnly(s.opts.SignInHost)
+	return host != "" && host != hostOnly(consoleHostOf(s.opts.Public.DashboardURL)) && hostOnly(c.Request.Host) == host
+}
+
+// placeholderHTML is what a binary built without the applications
+// answers with.
+var placeholderHTML = pages.HTML(pages.Nothing, pages.Page{
+	Title: "The applications are not here.",
+	Text:  "They were not built into this binary. Run `make ui` and build it again, or use the API at /api/healthz.",
+})
 
 // consoleHostOf is the host (with port) of the console's URL.
 func consoleHostOf(dashboardURL string) string {

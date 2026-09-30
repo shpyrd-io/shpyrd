@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "design/ui",
+    "design/pages",
     "apps/shared",
     "apps/example",
     "apps/workspace",

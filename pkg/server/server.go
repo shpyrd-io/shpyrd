@@ -201,6 +201,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		Addr:         o.addr,
 		Store:        st,
 		Tenancy:      resolver,
+		SignInHost:   hostOf(envOr("SHPYRD_AUTH_URL", "")),
 		Realms:       o.opts.Realms,
 		Capabilities: o.opts.Capabilities,
 		MembershipChanged: func() {

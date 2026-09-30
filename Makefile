@@ -3,7 +3,7 @@ CLUSTER      ?= shpyrd
 SERVER_IMAGE ?= shpyrd-server:dev
 LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
-.PHONY: all build cli server ui website website-dev image dev-image generate \
+.PHONY: all build cli server ui pages website website-dev image dev-image generate \
         test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
         dev-pause dev-resume installclint commitlint
 
@@ -26,6 +26,11 @@ server:
 ## Build the dashboard into ui/dist (embedded by `make server`)
 ui:
 	cd ui && npm ci --no-audit --no-fund && npm run build
+
+## Draw the pages the server serves by itself (pkg/pages/html) from the
+## design library: design/pages/README.md
+pages:
+	npm install --no-audit --no-fund && npm --prefix design/pages run build
 
 ## Build the website (shpyrd.io); deployed from apps/website/ on Vercel
 website:

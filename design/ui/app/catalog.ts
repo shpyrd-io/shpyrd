@@ -89,7 +89,7 @@ export const catalog: Category[] = [
       { slug: "launcher", title: "Application launcher", description: "Where everyone lands: the applications of the workspace, centred, the settings in the corner." },
       { slug: "workspace-metrics", title: "Metrics of a workspace", description: "All the projects of a workspace together, and what the plan allows." },
       { slug: "cluster", title: "Cluster", description: "The machines under everything: what is used, what is reserved, how many there are." },
-      { slug: "state", title: "State pages", description: "A whole page that says one thing: nothing here yet, no access, waking up." },
+      { slug: "state", title: "State pages", description: "A whole page that says one thing: nothing here yet, no access, waking up, or the mark alone." },
       { slug: "application", title: "Application", description: "A whole application as the console and the workspace draw one: the frame, a list, one thing in its tabs, the settings." },
     ],
   },

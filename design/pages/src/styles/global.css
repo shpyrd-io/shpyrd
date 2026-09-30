@@ -1,0 +1,16 @@
+/* The identity comes whole from design/ui. These pages travel as one file
+   each, with no script and no font to fetch: the system's sans-serif
+   takes Geist's place (scripts/pack.mjs drops the @font-face rules on the
+   way), the dark theme is the system's, and only the classes of the few
+   components the pages use are written. */
+@import "@shpyrd/ui/styles.css";
+@source not "../../../ui/src";
+@source "../../../ui/src/components/state-page.tsx";
+@source "../../../ui/src/components/button.tsx";
+@source "../../../ui/src/components/brand.tsx";
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme inline {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
