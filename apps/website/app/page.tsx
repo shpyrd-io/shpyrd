@@ -1,4 +1,5 @@
-import { PageHeading } from "@shpyrd/ui/components/page-heading";
+import Image from "next/image";
+import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Button } from "@shpyrd/ui/components/button";
 import { Stack } from "@shpyrd/ui/components/stack";
@@ -6,6 +7,7 @@ import { boundaries } from "@shpyrd/content/site/boundaries";
 import { boundariesSection, developerSection, hosting, pillars, situation, useCases } from "@shpyrd/content/site/home";
 import { active } from "@shpyrd/content/site/messages";
 import { offer, secondaryCta } from "@shpyrd/content/site/offer";
+import shipyard from "@/images/shipyard.webp";
 import { AddToAgent } from "@/components/add-to-agent";
 import { Boundaries } from "@/components/boundaries";
 import { Roster } from "@/components/roster";
@@ -27,24 +29,28 @@ export const metadata = {
 export default function Home() {
   return (
     <PageLayoutContent width="large" padding="normal" className="grid content-start gap-16 py-8">
-      <Stack gap="normal">
-        <PageHeading
-          variant="large"
-          title={active.headline}
-          description={active.explanation}
-        />
-        <Stack direction="horizontal" gap="cozy" align="center">
-          <AddToAgent />
-          <Button variant="outline" asChild>
-            <a href={secondaryCta.href}>{secondaryCta.label}</a>
-          </Button>
-        </Stack>
-        {active.supporting && (
-          <p className="max-w-prose border-t pt-4 text-sm text-muted-foreground">
-            {active.supporting}
-          </p>
-        )}
-      </Stack>
+      <Hero
+        heading={active.headline}
+        description={active.explanation}
+        actions={
+          <>
+            <AddToAgent />
+            <Button variant="outline" asChild>
+              <a href={secondaryCta.href}>{secondaryCta.label}</a>
+            </Button>
+          </>
+        }
+        note={active.supporting}
+        image={
+          <Image
+            src={shipyard}
+            alt=""
+            priority
+            sizes="(min-width: 64rem) 32rem, 90vw"
+            className="h-auto w-full"
+          />
+        }
+      />
 
       <Stack gap="normal">
         <h2 className="text-2xl font-semibold">{situation.title}</h2>

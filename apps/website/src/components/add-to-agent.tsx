@@ -55,7 +55,7 @@ export function AddToAgent() {
       <AnchoredOverlay
         open={open}
         onOpenChange={onOpenChange}
-        width="medium"
+        width="large"
         anchor={
           <Button aria-label={`${addToAgent.label} ${agents[index].name}`}>
             {addToAgent.label}
@@ -76,8 +76,12 @@ export function AddToAgent() {
           </Button>
         }
       >
-        <Tabs value={client} onValueChange={setClient}>
-          <TabsList>
+        <Tabs value={client} onValueChange={setClient} className="min-w-0">
+          {/* Five names do not fit on a narrow screen, so the list scrolls
+              sideways rather than widening the overlay. The vertical axis is
+              pinned: setting one axis to anything but visible makes the other
+              compute to auto, which drew a scrollbar over a fixed-height row. */}
+          <TabsList className="max-w-full overflow-x-auto overflow-y-hidden">
             {agents.map((agent) => (
               <TabsTrigger key={agent.id} value={agent.id}>
                 {agent.name}
@@ -85,9 +89,13 @@ export function AddToAgent() {
             ))}
           </TabsList>
           {agents.map((agent) => (
-            <TabsContent key={agent.id} value={agent.id} className="grid gap-2">
+            <TabsContent key={agent.id} value={agent.id} className="grid min-w-0 gap-2">
               {agent.file && <p className="text-xs text-muted-foreground">{agent.file}</p>}
-              <pre className="overflow-x-auto rounded-lg border bg-muted p-3 text-xs">
+              {/* The command wraps rather than scrolling: a scrollbar in a
+                  panel this narrow hides half the line, and a reader has to
+                  see the whole thing to copy it. break-all because a URL and
+                  a path have nowhere else to break. */}
+              <pre className="min-w-0 rounded-lg border bg-muted p-3 text-xs whitespace-pre-wrap break-all">
                 <code>{agent.snippet}</code>
               </pre>
             </TabsContent>

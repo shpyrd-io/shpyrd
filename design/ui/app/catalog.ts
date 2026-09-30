@@ -82,6 +82,7 @@ export const catalog: Category[] = [
     title: "Layouts & Pages",
     description: "Page-level placement and final views.",
     pages: [
+      { slug: "hero", title: "Hero", description: "The banner at the top of a page: what it is, and what to do about it." },
       { slug: "page-layout", title: "Page layout", description: "The areas of a page: header, content, pane, sidebar, footer." },
       { slug: "page-heading", title: "Page heading", description: "The title of a page, what explains it and what can be done." },
       { slug: "stack", title: "Stack", description: "Things one after the other, with the same gap between them." },
