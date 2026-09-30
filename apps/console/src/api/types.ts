@@ -151,8 +151,6 @@ export type Economics = { month: string; workspaces: EconomicsRow[]; totals: Eco
 export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string };
 export type SizeCatalog = { default: string; sizes: InstanceSize[] };
 
-export type Globals = { vars: { name: string; updatedAt?: string }[]; projects: number };
-export type GlobalsChange = { set?: Record<string, string>; unset?: string[]; dotenv?: string };
 
 export type Drain = {
   name: string;

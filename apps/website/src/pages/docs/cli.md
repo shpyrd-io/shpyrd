@@ -66,7 +66,7 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd globals set KEY=VALUE...` | Set config vars every project receives (platform admins). A "Global config change" release follows in every project that has not opted out. |
+| `shpyrd globals set KEY=VALUE...` | Set config vars every project of the workspace receives (workspace admins; `--workspace` names one over a kubeconfig). A "Global config change" release follows in every project that has not opted out. |
 | `shpyrd globals unset KEY...` | Remove global config vars. |
 | `shpyrd globals list` | Names and when each was set; values are never shown. |
 

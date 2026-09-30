@@ -7,8 +7,6 @@ import type {
   CreatedWorkspace,
   Drain,
   Economics,
-  Globals,
-  GlobalsChange,
   HelmRelease,
   Identity,
   LocalUser,
@@ -54,8 +52,6 @@ export type Api = {
   economics: (month?: string) => Promise<Economics>;
   sizes: () => Promise<SizeCatalog>;
   saveSizes: (catalog: SizeCatalog) => Promise<SizeCatalog>;
-  globals: () => Promise<Globals>;
-  changeGlobals: (change: GlobalsChange) => Promise<Globals>;
   drains: () => Promise<Drain[]>;
   addDrain: (body: CreateDrain) => Promise<Drain>;
   removeDrain: (name: string) => Promise<void>;

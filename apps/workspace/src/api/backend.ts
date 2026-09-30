@@ -192,6 +192,8 @@ export const backend: Api = {
   },
   builds: (slug) => request(`${project(slug)}/builds`),
   streamBuild: (slug, build, follow, signal, onLine) => stream(`${project(slug)}/builds/${encodeURIComponent(build)}/logs?follow=${follow}`, signal, onLine),
+  globals: () => request("/api/workspace/globals"),
+  changeGlobals: (change) => request("/api/workspace/globals", json("PUT", change)),
   configVars: (slug) => request(`${project(slug)}/secrets`),
   changeConfigVars: async (slug, change) => {
     await request(`${project(slug)}/secrets`, json("PUT", change));

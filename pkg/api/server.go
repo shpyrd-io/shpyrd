@@ -528,8 +528,10 @@ func (s *Server) routes() error {
 		// workspaces capability the cloud layer serves the full routes.
 		api.GET("/workspaces", console, s.require(authz.ClusterAdmin), s.listWorkspacesCore)
 	}
-	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals)                      // RFC-0016
+	api.GET("/globals", console, s.require(authz.ClusterAdmin), s.getGlobals) // RFC-0016: the default workspace's, for the dashboard of before
 	api.PUT("/globals", console, s.require(authz.ClusterAdmin), s.putGlobals)
+	api.GET("/workspace/globals", s.require(authz.ClusterAdmin), s.getWorkspaceGlobals) // RFC-0016: the workspace's own
+	api.PUT("/workspace/globals", s.require(authz.ClusterAdmin), s.putWorkspaceGlobals)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)

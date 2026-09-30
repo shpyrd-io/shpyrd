@@ -20,23 +20,22 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 )
 
-// Global config vars (RFC-0016): a platform admin keeps them in Secret
-// shpyrd-system/shpyrd-global-env; every project namespace gets a filtered
-// mirror of the same name that the processes read first, so project vars
-// and bound vars win. The mirror is owned by nobody (it outlives app
+// Global config vars (RFC-0016): a workspace's admins keep them in a
+// Secret of the system namespace, one per workspace (GlobalEnvSecretFor);
+// every project namespace of the workspace gets a filtered mirror named
+// shpyrd-global-env that the processes read first, so project vars and
+// bound vars win. The mirror is owned by nobody (it outlives app
 // changes and dies with the namespace) and carries the per-key metadata so
 // the Config tab can show when each global was set.
 
-// globalsFor filters the cluster Secret for one app: nil when the app opts
-// out or nothing is set.
+// globalsFor filters the workspace's Secret for one app: nil when the app
+// opts out or nothing is set.
 func globalsFor(app *shpyrdv1.App, global *corev1.Secret) map[string][]byte {
 	if global == nil || len(global.Data) == 0 {
 		return nil
 	}
-	// An app that takes no globals (its own choice, or an explicit
-	// workspace's: the operator's values never reach a tenant's namespace,
-	// not even as an unreferenced Secret) gets no mirror and no release
-	// when they change.
+	// An app that takes no globals gets no mirror and no release when
+	// they change.
 	if globalsDisabled(app) {
 		return nil
 	}
@@ -63,7 +62,7 @@ func globalsFor(app *shpyrdv1.App, global *corev1.Secret) map[string][]byte {
 // returns it (nil when the project receives none).
 func (r *AppReconciler) reconcileGlobals(ctx context.Context, app *shpyrdv1.App) (*corev1.Secret, error) {
 	global := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: r.Config.SystemNamespace, Name: shpyrdv1.GlobalEnvSecretName}, global); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Namespace: r.Config.SystemNamespace, Name: shpyrdv1.GlobalEnvSecretFor(workspaceOf(app))}, global); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("get global config vars: %w", err)
 		}
@@ -126,26 +125,24 @@ func globalHash(mirror *corev1.Secret) string {
 }
 
 // globalsDisabled says the app takes no global vars at all, so its
-// Deployments do not even reference the mirror. Global vars are the
-// operator's (RFC-0016) and reach the operator's default workspace's
-// projects: apps of other workspaces never receive them.
+// Deployments do not even reference the mirror.
 func globalsDisabled(app *shpyrdv1.App) bool {
-	if workspaceOf(app) != DefaultWorkspace() {
-		return true
-	}
 	return app.Spec.Globals != nil && app.Spec.Globals.Disabled
 }
 
 // secretToApps maps Secret events to the Apps they concern: <app>-env to
-// its App, the cluster-wide global vars to every App, a project's mirror
-// to the Apps of that namespace (so a tampered mirror is repaired).
+// its App, a workspace's global vars to the Apps of that workspace, a
+// project's mirror to the Apps of that namespace (so a tampered mirror is
+// repaired), the registry credential to every App.
 func (r *AppReconciler) secretToApps(ctx context.Context, obj client.Object) []reconcile.Request {
-	if obj.GetName() != shpyrdv1.GlobalEnvSecretName && !r.registrySecretChanged(obj) {
+	inSystem := obj.GetNamespace() == r.Config.SystemNamespace
+	ws, globals := shpyrdv1.GlobalEnvWorkspace(obj.GetName())
+	if !globals && !r.registrySecretChanged(obj) {
 		return envSecretToApp(ctx, obj) // "<app>-env"; the global name ends in -env too
 	}
 	var apps shpyrdv1.AppList
 	var opts []client.ListOption
-	if obj.GetNamespace() != r.Config.SystemNamespace {
+	if !inSystem {
 		opts = append(opts, client.InNamespace(obj.GetNamespace()))
 	}
 	if err := r.List(ctx, &apps, opts...); err != nil {
@@ -153,6 +150,9 @@ func (r *AppReconciler) secretToApps(ctx context.Context, obj client.Object) []r
 	}
 	out := make([]reconcile.Request, 0, len(apps.Items))
 	for _, a := range apps.Items {
+		if globals && inSystem && workspaceOf(&a) != ws {
+			continue
+		}
 		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
 	}
 	return out

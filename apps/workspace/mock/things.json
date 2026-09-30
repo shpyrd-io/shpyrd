@@ -465,5 +465,18 @@
         "memory": "4Gi"
       }
     ]
+  },
+  "globals": {
+    "vars": [
+      {
+        "name": "SENTRY_DSN",
+        "updatedAt": "2026-08-01T10:00:00Z"
+      },
+      {
+        "name": "SMTP_URL",
+        "updatedAt": "2026-09-12T15:20:00Z"
+      }
+    ],
+    "projects": 4
   }
 }

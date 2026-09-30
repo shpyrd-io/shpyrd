@@ -9,6 +9,7 @@ import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
 import { Connections } from "./connections";
 import { General } from "./general";
+import { Globals } from "./globals";
 import { People } from "./people";
 import { Billing, MCP, WorkspaceDomains } from "./platform";
 import { SignIn } from "./sign-in";
@@ -24,6 +25,7 @@ const pages = [
   { group: "Access", slug: "sign-in", title: "Sign-in", icon: <LogIn />, needs: "admin" },
   { group: "Access", slug: "tokens", title: "API tokens", icon: <KeyRound /> },
   { group: "Access", slug: "connections", title: "Connections", icon: <Link2 /> },
+  { group: "Platform", slug: "globals", title: "Config vars", icon: <KeyRound />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
   { group: "Platform", slug: "billing", title: "Billing", icon: <CreditCard />, needs: "admin", capability: "billing" },
   { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug /> },
@@ -72,6 +74,7 @@ export function WorkspacePages() {
         <Route path="sign-in" element={<SignIn />} />
         <Route path="tokens" element={<Tokens />} />
         <Route path="connections" element={<Connections />} />
+        <Route path="globals" element={<Globals />} />
         <Route path="domains" element={<WorkspaceDomains />} />
         <Route path="billing" element={<Billing />} />
         <Route path="mcp" element={<MCP />} />

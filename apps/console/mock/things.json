@@ -1,27 +1,135 @@
 {
   "usage": {
-    "total": { "name": "total", "cpuUsedPct": 41, "memoryUsedPct": 58, "cpuRequestedPct": 63, "memoryRequestedPct": 71, "cpuCores": 12, "memoryBytes": 77309411328, "pods": 96, "podCapacity": 330 },
+    "total": {
+      "name": "total",
+      "cpuUsedPct": 41,
+      "memoryUsedPct": 58,
+      "cpuRequestedPct": 63,
+      "memoryRequestedPct": 71,
+      "cpuCores": 12,
+      "memoryBytes": 77309411328,
+      "pods": 96,
+      "podCapacity": 330
+    },
     "nodes": [
-      { "name": "10.0.10.21", "cpuUsedPct": 52, "memoryUsedPct": 66, "cpuRequestedPct": 75, "memoryRequestedPct": 80, "cpuCores": 4, "memoryBytes": 25769803776, "pods": 41, "podCapacity": 110 },
-      { "name": "10.0.10.22", "cpuUsedPct": 46, "memoryUsedPct": 61, "cpuRequestedPct": 70, "memoryRequestedPct": 74, "cpuCores": 4, "memoryBytes": 25769803776, "pods": 38, "podCapacity": 110 },
-      { "name": "10.0.10.23", "cpuUsedPct": 25, "memoryUsedPct": 47, "cpuRequestedPct": 44, "memoryRequestedPct": 59, "cpuCores": 4, "memoryBytes": 25769803776, "pods": 17, "podCapacity": 110 }
+      {
+        "name": "10.0.10.21",
+        "cpuUsedPct": 52,
+        "memoryUsedPct": 66,
+        "cpuRequestedPct": 75,
+        "memoryRequestedPct": 80,
+        "cpuCores": 4,
+        "memoryBytes": 25769803776,
+        "pods": 41,
+        "podCapacity": 110
+      },
+      {
+        "name": "10.0.10.22",
+        "cpuUsedPct": 46,
+        "memoryUsedPct": 61,
+        "cpuRequestedPct": 70,
+        "memoryRequestedPct": 74,
+        "cpuCores": 4,
+        "memoryBytes": 25769803776,
+        "pods": 38,
+        "podCapacity": 110
+      },
+      {
+        "name": "10.0.10.23",
+        "cpuUsedPct": 25,
+        "memoryUsedPct": 47,
+        "cpuRequestedPct": 44,
+        "memoryRequestedPct": 59,
+        "cpuCores": 4,
+        "memoryBytes": 25769803776,
+        "pods": 17,
+        "podCapacity": 110
+      }
     ]
   },
   "helm": [
-    { "name": "ingress-nginx", "namespace": "ingress-nginx", "chart": "ingress-nginx", "chartVersion": "4.13.0", "appVersion": "1.13.0", "status": "deployed", "revision": 3, "updatedAt": "2026-09-26T08:12:00Z" },
-    { "name": "cert-manager", "namespace": "cert-manager", "chart": "cert-manager", "chartVersion": "v1.18.2", "appVersion": "v1.18.2", "status": "deployed", "revision": 2, "updatedAt": "2026-09-26T08:12:00Z" },
-    { "name": "kube-prometheus-stack", "namespace": "monitoring", "chart": "kube-prometheus-stack", "chartVersion": "75.2.0", "appVersion": "v0.83.0", "status": "deployed", "revision": 5, "updatedAt": "2026-09-26T08:14:00Z" },
-    { "name": "opencost", "namespace": "opencost", "chart": "opencost", "chartVersion": "2.1.4", "status": "failed", "revision": 1, "updatedAt": "2026-09-28T16:40:00Z" }
+    {
+      "name": "ingress-nginx",
+      "namespace": "ingress-nginx",
+      "chart": "ingress-nginx",
+      "chartVersion": "4.13.0",
+      "appVersion": "1.13.0",
+      "status": "deployed",
+      "revision": 3,
+      "updatedAt": "2026-09-26T08:12:00Z"
+    },
+    {
+      "name": "cert-manager",
+      "namespace": "cert-manager",
+      "chart": "cert-manager",
+      "chartVersion": "v1.18.2",
+      "appVersion": "v1.18.2",
+      "status": "deployed",
+      "revision": 2,
+      "updatedAt": "2026-09-26T08:12:00Z"
+    },
+    {
+      "name": "kube-prometheus-stack",
+      "namespace": "monitoring",
+      "chart": "kube-prometheus-stack",
+      "chartVersion": "75.2.0",
+      "appVersion": "v0.83.0",
+      "status": "deployed",
+      "revision": 5,
+      "updatedAt": "2026-09-26T08:14:00Z"
+    },
+    {
+      "name": "opencost",
+      "namespace": "opencost",
+      "chart": "opencost",
+      "chartVersion": "2.1.4",
+      "status": "failed",
+      "revision": 1,
+      "updatedAt": "2026-09-28T16:40:00Z"
+    }
   ],
   "registry": {
     "mode": "in-cluster",
     "host": "registry.shpyrd.svc:5000",
     "tls": true,
     "ready": true,
-    "storage": { "usedBytes": 38654705664, "capacityBytes": 107374182400, "size": "100Gi" },
-    "images": { "repositories": 14, "tags": 212, "largest": [{ "name": "apps/acme/shop", "tags": 48 }, { "name": "apps/acme/hello-world", "tags": 41 }, { "name": "apps/globex/erp", "tags": 33 }] },
-    "certificate": { "issuer": "shpyrd platform CA", "notAfter": "2027-03-01T00:00:00Z" },
-    "gc": { "schedule": "0 4 * * 0", "nextRun": "2026-10-04T04:00:00Z", "running": false, "lastRun": "2026-09-27T04:00:00Z", "lastResult": "ok", "lastDuration": "3m12s", "reclaimedBytes": 6442450944, "usedBytes": 38654705664 }
+    "storage": {
+      "usedBytes": 38654705664,
+      "capacityBytes": 107374182400,
+      "size": "100Gi"
+    },
+    "images": {
+      "repositories": 14,
+      "tags": 212,
+      "largest": [
+        {
+          "name": "apps/acme/shop",
+          "tags": 48
+        },
+        {
+          "name": "apps/acme/hello-world",
+          "tags": 41
+        },
+        {
+          "name": "apps/globex/erp",
+          "tags": 33
+        }
+      ]
+    },
+    "certificate": {
+      "issuer": "shpyrd platform CA",
+      "notAfter": "2027-03-01T00:00:00Z"
+    },
+    "gc": {
+      "schedule": "0 4 * * 0",
+      "nextRun": "2026-10-04T04:00:00Z",
+      "running": false,
+      "lastRun": "2026-09-27T04:00:00Z",
+      "lastResult": "ok",
+      "lastDuration": "3m12s",
+      "reclaimedBytes": 6442450944,
+      "usedBytes": 38654705664
+    }
   },
   "storage": {
     "endpoint": "https://s3.shpyrd.app",
@@ -29,9 +137,33 @@
     "usedBytes": 141733920768,
     "measuredAt": "2026-09-30T10:00:00Z",
     "buckets": [
-      { "namespace": "shpyrd", "name": "platform-backups", "bucket": "platform-backups-7f1e", "phase": "Ready", "usedBytes": 21474836480, "objects": 42, "retentionDays": 30 },
-      { "namespace": "p-shop", "name": "db-backups", "bucket": "p-shop-db-9a4c", "phase": "Ready", "usedBytes": 96636764160, "objects": 1210, "retentionDays": 14 },
-      { "namespace": "p-erp", "name": "db-backups", "bucket": "p-erp-db-0c21", "phase": "Pending", "message": "the credential is being made", "usedBytes": 0, "objects": 0 }
+      {
+        "namespace": "shpyrd",
+        "name": "platform-backups",
+        "bucket": "platform-backups-7f1e",
+        "phase": "Ready",
+        "usedBytes": 21474836480,
+        "objects": 42,
+        "retentionDays": 30
+      },
+      {
+        "namespace": "p-shop",
+        "name": "db-backups",
+        "bucket": "p-shop-db-9a4c",
+        "phase": "Ready",
+        "usedBytes": 96636764160,
+        "objects": 1210,
+        "retentionDays": 14
+      },
+      {
+        "namespace": "p-erp",
+        "name": "db-backups",
+        "bucket": "p-erp-db-0c21",
+        "phase": "Pending",
+        "message": "the credential is being made",
+        "usedBytes": 0,
+        "objects": 0
+      }
     ]
   },
   "backups": {
@@ -44,57 +176,311 @@
     "lastScheduled": "2026-09-30T03:30:00Z",
     "lastSuccessful": "2026-09-30T03:34:10Z",
     "runs": [
-      { "name": "backup-20260930", "status": "succeeded", "started": "2026-09-30T03:30:00Z", "finished": "2026-09-30T03:34:10Z" },
-      { "name": "backup-20260929", "status": "succeeded", "started": "2026-09-29T03:30:00Z", "finished": "2026-09-29T03:33:52Z" },
-      { "name": "backup-20260928", "status": "failed", "started": "2026-09-28T03:30:00Z", "finished": "2026-09-28T03:31:05Z", "message": "the object store did not answer" }
+      {
+        "name": "backup-20260930",
+        "status": "succeeded",
+        "started": "2026-09-30T03:30:00Z",
+        "finished": "2026-09-30T03:34:10Z"
+      },
+      {
+        "name": "backup-20260929",
+        "status": "succeeded",
+        "started": "2026-09-29T03:30:00Z",
+        "finished": "2026-09-29T03:33:52Z"
+      },
+      {
+        "name": "backup-20260928",
+        "status": "failed",
+        "started": "2026-09-28T03:30:00Z",
+        "finished": "2026-09-28T03:31:05Z",
+        "message": "the object store did not answer"
+      }
     ],
     "archives": [
-      { "name": "shpyrd-20260930T033000Z.tar.age", "size": 1503238553, "modified": "2026-09-30T03:34:10Z" },
-      { "name": "shpyrd-20260929T033000Z.tar.age", "size": 1498000000, "modified": "2026-09-29T03:33:52Z" },
-      { "name": "shpyrd-20260927T033000Z.tar.age", "size": 1471000000, "modified": "2026-09-27T03:33:40Z" }
+      {
+        "name": "shpyrd-20260930T033000Z.tar.age",
+        "size": 1503238553,
+        "modified": "2026-09-30T03:34:10Z"
+      },
+      {
+        "name": "shpyrd-20260929T033000Z.tar.age",
+        "size": 1498000000,
+        "modified": "2026-09-29T03:33:52Z"
+      },
+      {
+        "name": "shpyrd-20260927T033000Z.tar.age",
+        "size": 1471000000,
+        "modified": "2026-09-27T03:33:40Z"
+      }
     ]
   },
-  "mail": { "configured": true, "host": "smtp.postmarkapp.com", "port": 587, "from": "shpyrd <no-reply@shpyrd.app>", "security": "starttls", "auth": true },
+  "mail": {
+    "configured": true,
+    "host": "smtp.postmarkapp.com",
+    "port": 587,
+    "from": "shpyrd <no-reply@shpyrd.app>",
+    "security": "starttls",
+    "auth": true
+  },
   "economics": {
     "month": "2026-09",
     "workspaces": [
-      { "workspace": "acme", "owner": "customer", "revenue": 412.7, "directCogs": 121.3, "sharedCogs": 38.2, "idleCogs": 19.9, "totalCogs": 179.4, "grossMargin": 233.3, "marginPct": 56.5 },
-      { "workspace": "globex", "owner": "customer", "revenue": 890.0, "directCogs": 302.1, "sharedCogs": 71.6, "idleCogs": 40.2, "totalCogs": 413.9, "grossMargin": 476.1, "marginPct": 53.5 },
-      { "workspace": "initech", "owner": "customer", "revenue": 96.0, "directCogs": 61.8, "sharedCogs": 12.4, "idleCogs": 8.1, "totalCogs": 82.3, "grossMargin": 13.7, "marginPct": 14.3 },
-      { "workspace": "shpyrd", "owner": "operator", "revenue": 0, "directCogs": 88.0, "sharedCogs": 24.0, "idleCogs": 11.0, "totalCogs": 123.0, "grossMargin": 0, "marginPct": 0 }
+      {
+        "workspace": "acme",
+        "owner": "customer",
+        "revenue": 412.7,
+        "directCogs": 121.3,
+        "sharedCogs": 38.2,
+        "idleCogs": 19.9,
+        "totalCogs": 179.4,
+        "grossMargin": 233.3,
+        "marginPct": 56.5
+      },
+      {
+        "workspace": "globex",
+        "owner": "customer",
+        "revenue": 890.0,
+        "directCogs": 302.1,
+        "sharedCogs": 71.6,
+        "idleCogs": 40.2,
+        "totalCogs": 413.9,
+        "grossMargin": 476.1,
+        "marginPct": 53.5
+      },
+      {
+        "workspace": "initech",
+        "owner": "customer",
+        "revenue": 96.0,
+        "directCogs": 61.8,
+        "sharedCogs": 12.4,
+        "idleCogs": 8.1,
+        "totalCogs": 82.3,
+        "grossMargin": 13.7,
+        "marginPct": 14.3
+      },
+      {
+        "workspace": "shpyrd",
+        "owner": "operator",
+        "revenue": 0,
+        "directCogs": 88.0,
+        "sharedCogs": 24.0,
+        "idleCogs": 11.0,
+        "totalCogs": 123.0,
+        "grossMargin": 0,
+        "marginPct": 0
+      }
     ],
-    "totals": { "workspace": "total", "revenue": 1398.7, "directCogs": 573.2, "sharedCogs": 146.2, "idleCogs": 79.2, "totalCogs": 798.6, "grossMargin": 600.1, "marginPct": 42.9 }
+    "totals": {
+      "workspace": "total",
+      "revenue": 1398.7,
+      "directCogs": 573.2,
+      "sharedCogs": 146.2,
+      "idleCogs": 79.2,
+      "totalCogs": 798.6,
+      "grossMargin": 600.1,
+      "marginPct": 42.9
+    }
   },
   "sizes": {
     "default": "shared-s",
     "sizes": [
-      { "name": "shared-s", "kind": "shared", "cpu": "0.5", "memory": "512Mi", "description": "Small sites and APIs" },
-      { "name": "shared-m", "kind": "shared", "cpu": "1", "memory": "1Gi" },
-      { "name": "shared-l", "kind": "shared", "cpu": "2", "memory": "2Gi" },
-      { "name": "dedicated-l", "kind": "dedicated", "cpu": "2", "memory": "4Gi", "description": "Whole cores, for what cannot share" }
+      {
+        "name": "shared-s",
+        "kind": "shared",
+        "cpu": "0.5",
+        "memory": "512Mi",
+        "description": "Small sites and APIs"
+      },
+      {
+        "name": "shared-m",
+        "kind": "shared",
+        "cpu": "1",
+        "memory": "1Gi"
+      },
+      {
+        "name": "shared-l",
+        "kind": "shared",
+        "cpu": "2",
+        "memory": "2Gi"
+      },
+      {
+        "name": "dedicated-l",
+        "kind": "dedicated",
+        "cpu": "2",
+        "memory": "4Gi",
+        "description": "Whole cores, for what cannot share"
+      }
     ]
   },
-  "globals": { "vars": [{ "name": "SENTRY_DSN", "updatedAt": "2026-08-01T10:00:00Z" }, { "name": "SMTP_URL", "updatedAt": "2026-09-12T15:20:00Z" }], "projects": 14 },
   "drains": [
-    { "name": "datadog", "url": "https://http-intake.logs.datadoghq.com/v1/input", "format": "json", "headers": ["DD-API-KEY"], "cluster": true, "phase": "Active", "lastDeliveryAt": "2026-09-30T10:59:00Z", "sent": 9843120, "errors": 12, "createdAt": "2026-07-15T08:00:00Z" }
+    {
+      "name": "datadog",
+      "url": "https://http-intake.logs.datadoghq.com/v1/input",
+      "format": "json",
+      "headers": [
+        "DD-API-KEY"
+      ],
+      "cluster": true,
+      "phase": "Active",
+      "lastDeliveryAt": "2026-09-30T10:59:00Z",
+      "sent": 9843120,
+      "errors": 12,
+      "createdAt": "2026-07-15T08:00:00Z"
+    }
   ],
   "users": [
-    { "email": "patrick@shpyrd.io", "name": "Patrick Negri", "createdAt": "2026-06-01T09:00:00Z" },
-    { "email": "ops@shpyrd.io", "name": "Operations", "createdAt": "2026-06-14T11:30:00Z" }
+    {
+      "email": "patrick@shpyrd.io",
+      "name": "Patrick Negri",
+      "createdAt": "2026-06-01T09:00:00Z"
+    },
+    {
+      "email": "ops@shpyrd.io",
+      "name": "Operations",
+      "createdAt": "2026-06-14T11:30:00Z"
+    }
   ],
   "methods": {
-    "console": { "password": true, "connectors": [{ "id": "shpyrd-google", "type": "google", "name": "Google (shpyrd.io)", "detail": "shpyrd.io" }], "kinds": ["google", "microsoft", "github", "oidc"], "callback": "https://console.shpyrd.app/api/auth/callback" },
-    "platform": { "password": true, "connectors": [{ "id": "github", "type": "github", "name": "GitHub" }], "kinds": ["google", "microsoft", "github", "oidc"], "callback": "https://shpyrd.app/api/auth/callback" }
+    "console": {
+      "password": true,
+      "connectors": [
+        {
+          "id": "shpyrd-google",
+          "type": "google",
+          "name": "Google (shpyrd.io)",
+          "detail": "shpyrd.io"
+        }
+      ],
+      "kinds": [
+        "google",
+        "microsoft",
+        "github",
+        "oidc"
+      ],
+      "callback": "https://console.shpyrd.app/api/auth/callback"
+    },
+    "platform": {
+      "password": true,
+      "connectors": [
+        {
+          "id": "github",
+          "type": "github",
+          "name": "GitHub"
+        }
+      ],
+      "kinds": [
+        "google",
+        "microsoft",
+        "github",
+        "oidc"
+      ],
+      "callback": "https://shpyrd.app/api/auth/callback"
+    }
   },
   "workspaces": [
-    { "slug": "shpyrd", "name": "shpyrd", "address": "shpyrd.shpyrd.app", "url": "https://shpyrd.shpyrd.app", "status": "active", "owner": "operator", "owners": ["patrick@shpyrd.io"], "createdAt": "2026-06-01T09:00:00Z", "usage": { "projects": 3, "instances": 5, "cpu": "1.5", "memory": "3Gi", "storage": "20Gi" } },
-    { "slug": "acme", "name": "Acme", "address": "acme.shpyrd.app", "url": "https://acme.shpyrd.app", "status": "active", "owner": "customer", "plan": "Team", "owners": ["ana@acme.com"], "createdAt": "2026-06-02T14:11:00Z", "limits": { "projects": 10, "instances": 20, "cpu": "8", "memory": "16Gi", "storage": "500Gi" }, "usage": { "projects": 6, "instances": 9, "cpu": "4.4", "memory": "8.8Gi", "storage": "120Gi" } },
-    { "slug": "globex", "name": "Globex", "address": "globex.shpyrd.app", "url": "https://globex.shpyrd.app", "status": "active", "owner": "customer", "plan": "Business", "owners": ["hank@globex.com", "cto@globex.com"], "createdAt": "2026-07-19T10:00:00Z", "limits": { "projects": 30, "instances": 60, "cpu": "24", "memory": "48Gi", "storage": "2Ti" }, "usage": { "projects": 4, "instances": 22, "cpu": "12.1", "memory": "31Gi", "storage": "810Gi" } },
-    { "slug": "initech", "name": "Initech", "address": "initech.shpyrd.app", "url": "https://initech.shpyrd.app", "status": "suspended", "owner": "customer", "owners": ["bill@initech.com"], "createdAt": "2026-08-30T16:45:00Z" }
+    {
+      "slug": "shpyrd",
+      "name": "shpyrd",
+      "address": "shpyrd.shpyrd.app",
+      "url": "https://shpyrd.shpyrd.app",
+      "status": "active",
+      "owner": "operator",
+      "owners": [
+        "patrick@shpyrd.io"
+      ],
+      "createdAt": "2026-06-01T09:00:00Z",
+      "usage": {
+        "projects": 3,
+        "instances": 5,
+        "cpu": "1.5",
+        "memory": "3Gi",
+        "storage": "20Gi"
+      }
+    },
+    {
+      "slug": "acme",
+      "name": "Acme",
+      "address": "acme.shpyrd.app",
+      "url": "https://acme.shpyrd.app",
+      "status": "active",
+      "owner": "customer",
+      "plan": "Team",
+      "owners": [
+        "ana@acme.com"
+      ],
+      "createdAt": "2026-06-02T14:11:00Z",
+      "limits": {
+        "projects": 10,
+        "instances": 20,
+        "cpu": "8",
+        "memory": "16Gi",
+        "storage": "500Gi"
+      },
+      "usage": {
+        "projects": 6,
+        "instances": 9,
+        "cpu": "4.4",
+        "memory": "8.8Gi",
+        "storage": "120Gi"
+      }
+    },
+    {
+      "slug": "globex",
+      "name": "Globex",
+      "address": "globex.shpyrd.app",
+      "url": "https://globex.shpyrd.app",
+      "status": "active",
+      "owner": "customer",
+      "plan": "Business",
+      "owners": [
+        "hank@globex.com",
+        "cto@globex.com"
+      ],
+      "createdAt": "2026-07-19T10:00:00Z",
+      "limits": {
+        "projects": 30,
+        "instances": 60,
+        "cpu": "24",
+        "memory": "48Gi",
+        "storage": "2Ti"
+      },
+      "usage": {
+        "projects": 4,
+        "instances": 22,
+        "cpu": "12.1",
+        "memory": "31Gi",
+        "storage": "810Gi"
+      }
+    },
+    {
+      "slug": "initech",
+      "name": "Initech",
+      "address": "initech.shpyrd.app",
+      "url": "https://initech.shpyrd.app",
+      "status": "suspended",
+      "owner": "customer",
+      "owners": [
+        "bill@initech.com"
+      ],
+      "createdAt": "2026-08-30T16:45:00Z"
+    }
   ],
   "plans": [
-    { "id": "p1", "name": "Team", "currency": "BRL", "minMonthly": 99 },
-    { "id": "p2", "name": "Business", "currency": "BRL", "minMonthly": 499 }
+    {
+      "id": "p1",
+      "name": "Team",
+      "currency": "BRL",
+      "minMonthly": 99
+    },
+    {
+      "id": "p2",
+      "name": "Business",
+      "currency": "BRL",
+      "minMonthly": 499
+    }
   ],
-  "settings": { "defaultWorkspaceId": "shpyrd", "consolePasswordSignIn": true }
+  "settings": {
+    "defaultWorkspaceId": "shpyrd",
+    "consolePasswordSignIn": true
+  }
 }

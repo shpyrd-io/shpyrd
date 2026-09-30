@@ -7,7 +7,6 @@ import type {
   ClusterSummary,
   Drain,
   Economics,
-  Globals,
   HelmRelease,
   Identity,
   LocalUser,
@@ -37,7 +36,6 @@ type Things = {
   mail: MailStatus;
   economics: Economics;
   sizes: SizeCatalog;
-  globals: Globals;
   drains: Drain[];
   users: LocalUser[];
   methods: { console: LoginMethods; platform: LoginMethods };
@@ -199,18 +197,6 @@ export const mock: Api = {
     all.sizes = catalog;
     await thingsOf.set(all);
     return catalog;
-  },
-  globals: async () => (await thingsOf.get()).globals,
-  changeGlobals: async (change) => {
-    const all = await thingsOf.get();
-    for (const name of Object.keys(change.set ?? {})) {
-      const v = all.globals.vars.find((x) => x.name === name);
-      if (v) v.updatedAt = now();
-      else all.globals.vars.push({ name, updatedAt: now() });
-    }
-    for (const name of change.unset ?? []) all.globals.vars = all.globals.vars.filter((v) => v.name !== name);
-    await thingsOf.set(all);
-    return all.globals;
   },
   drains: async () => (await thingsOf.get()).drains,
   addDrain: async (body) => {

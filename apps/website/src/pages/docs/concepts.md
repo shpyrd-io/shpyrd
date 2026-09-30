@@ -73,7 +73,7 @@ When an image has a `release` process type (a `Procfile` line `release: bundle e
 
 Config vars are environment variables for every process. Three sources, in increasing priority:
 
-1. **Global vars** — set once by a platform admin with `shpyrd globals set`; every project receives them.
+1. **Global vars** — set once by a workspace admin, on the workspace's Config vars page or with `shpyrd globals set`; every project of the workspace receives them.
 2. **`env:` in `shpyrd.yaml`** — plain, non-secret vars committed with the code (`RACK_ENV`, `NODE_ENV`). Travels with the deploy; wins over globals.
 3. **Secrets** — written with `shpyrd secrets set`, stored in Secret `<app>-env`. Write-only: names and timestamps are shown, values never. Wins over `env:`.
 4. **Bound vars** — injected by attached resources (`DATABASE_URL`, `REDIS_URL`); win over secrets of the same name.

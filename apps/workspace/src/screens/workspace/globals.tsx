@@ -12,22 +12,23 @@ import { Input } from "@shpyrd/ui/components/input";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
-import type { GlobalsChange } from "@/api/types";
-import { ago, Failed, Loading } from "./shared";
+import type { ConfigChange } from "@/api/types";
+import { ago } from "@/lib/project";
+import { Failed, Loading } from "../project/shared";
 
 const validName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
-// Config vars every project receives, first in the environment so a
-// project's own var wins. Values are write-only. A change is a release
-// in every project, so it asks first.
+// Config vars every project of the workspace receives, first in the
+// environment so a project's own var wins. Values are write-only. A change
+// is a release in every project, so it asks first.
 export function Globals() {
   const queries = useQueryClient();
   const globals = useQuery({ queryKey: ["globals"], queryFn: api.globals });
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
-  const [pending, setPending] = useState<GlobalsChange | null>(null);
+  const [pending, setPending] = useState<ConfigChange | null>(null);
   const save = useMutation({
-    mutationFn: (c: GlobalsChange) => api.changeGlobals(c),
+    mutationFn: (c: ConfigChange) => api.changeGlobals(c),
     onSuccess: (r, c) => {
       toast.success(c.set ? `${Object.keys(c.set).join(", ")} set` : `${c.unset?.join(", ")} removed`, { description: `Releasing to ${r.projects} ${r.projects === 1 ? "project" : "projects"}.` });
       queries.setQueryData(["globals"], r);
@@ -42,9 +43,9 @@ export function Globals() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Global config vars</CardTitle>
+        <CardTitle>Config vars</CardTitle>
         <CardDescription>
-          Injected into every process of every project, {projects} {projects === 1 ? "project" : "projects"} today. A project's own var of the same name wins, and what an attached resource provides wins over both. Values are never shown; a change is a release in each project.
+          Injected into every process of every project of the workspace, {projects} {projects === 1 ? "project" : "projects"} today. A project's own var of the same name wins, and what an attached resource provides wins over both. Values are never shown; a change is a release in each project.
         </CardDescription>
       </CardHeader>
       <CardContent>

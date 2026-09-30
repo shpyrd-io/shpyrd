@@ -127,23 +127,29 @@ func TestGlobalHashAndConfigHashIncludeGlobals(t *testing.T) {
 	}
 }
 
-// Global vars are the operator's: an app of an explicit workspace gets no
-// mirror in its namespace (not even unreferenced), no envFrom, and no
-// release when the operator changes them.
-func TestGlobalsNeverReachExplicitWorkspaces(t *testing.T) {
+// Global vars are a workspace's: an app of the acme workspace receives
+// acme's vars and none of the default workspace's, and releases when
+// acme's change, not when the default's do.
+func TestGlobalsAreTheWorkspaces(t *testing.T) {
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop"), Generation: 1},
 		Spec:       shpyrdv1.AppSpec{Image: "registry.test/shop@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 	}
-	r, c := newTestReconciler(t, app, globalSecret(map[string]string{"OPENAI_API_KEY": "sk-1"}))
+	acme := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: shpyrdv1.GlobalEnvSecretFor("acme"), Namespace: "shpyrd-system"}, Type: corev1.SecretTypeOpaque}
+	_ = configvars.Apply(acme, map[string]string{"SENTRY_DSN": "https://acme"}, nil, metav1.Now().Time)
+	r, c := newTestReconciler(t, app, globalSecret(map[string]string{"OPENAI_API_KEY": "sk-1"}), acme)
 	got := runReconcile(t, r, app)
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-shop", Name: shpyrdv1.GlobalEnvSecretName}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
-		t.Errorf("the operator's globals were mirrored into a tenant's namespace: %v", err)
+	mirror := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-acme-shop", Name: shpyrdv1.GlobalEnvSecretName}, mirror); err != nil {
+		t.Fatalf("acme's globals were not mirrored into its project: %v", err)
 	}
-	if ef := EnvSources(got); len(ef) != 2 || ef[0].SecretRef.Name != "shop-env" {
-		t.Errorf("envFrom for a tenant app = %+v", ef)
+	if string(mirror.Data["SENTRY_DSN"]) != "https://acme" || len(mirror.Data) != 1 {
+		t.Errorf("the mirror holds %v, want acme's SENTRY_DSN alone", mirror.Data)
 	}
-	// The operator changes a global: nothing happens to the tenant's app.
+	if ef := EnvSources(got); len(ef) != 3 || ef[0].SecretRef.Name != shpyrdv1.GlobalEnvSecretName {
+		t.Errorf("envFrom for an acme app = %+v", ef)
+	}
+	// The default workspace changes its globals: nothing happens to acme's app.
 	sec := globalSecret(map[string]string{"OPENAI_API_KEY": "sk-2", "REGION": "eu"})
 	if err := c.Update(context.Background(), sec); err != nil {
 		t.Fatal(err)
@@ -151,6 +157,23 @@ func TestGlobalsNeverReachExplicitWorkspaces(t *testing.T) {
 	before := len(got.Status.Releases)
 	got = runReconcile(t, r, got)
 	if len(got.Status.Releases) != before {
-		t.Errorf("a global change released a tenant's app: %+v", got.Status.Releases)
+		t.Errorf("the default workspace's change released acme's app: %+v", got.Status.Releases)
+	}
+	// acme changes its own: a release.
+	acme.Data = nil
+	_ = configvars.Apply(acme, map[string]string{"SENTRY_DSN": "https://acme-2"}, nil, metav1.Now().Time)
+	if err := c.Update(context.Background(), acme); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if len(got.Status.Releases) != before+1 {
+		t.Errorf("acme's change did not release its app: %+v", got.Status.Releases)
+	}
+	// The event of acme's Secret concerns acme's apps, not the default's.
+	if reqs := r.secretToApps(context.Background(), acme); len(reqs) != 1 || reqs[0].Name != "shop" {
+		t.Errorf("acme's Secret maps to %v", reqs)
+	}
+	if reqs := r.secretToApps(context.Background(), sec); len(reqs) != 0 {
+		t.Errorf("the default workspace's Secret maps to acme's apps: %v", reqs)
 	}
 }

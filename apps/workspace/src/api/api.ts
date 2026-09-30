@@ -8,6 +8,7 @@ import type {
   BuildInfo,
   ConfigChange,
   ConfigVars,
+  Globals,
   Connection,
   CreateDrain,
   DeployRequest,
@@ -117,6 +118,10 @@ export type Api = {
   builds: (slug: string) => Promise<BuildInfo[]>;
   // What a build printed, line by line, following it while it builds.
   streamBuild: (slug: string, build: string, follow: boolean, signal: AbortSignal, onLine: (line: string) => void) => Promise<void>;
+  // The config vars of the workspace, which every project receives; a
+  // change is a release in each.
+  globals: () => Promise<Globals>;
+  changeGlobals: (change: ConfigChange) => Promise<Globals>;
   configVars: (slug: string) => Promise<ConfigVars>;
   changeConfigVars: (slug: string, change: ConfigChange) => Promise<void>;
   resources: (slug: string) => Promise<ResourceInfo[]>;

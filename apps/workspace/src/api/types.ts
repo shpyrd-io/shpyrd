@@ -161,6 +161,9 @@ export type ConfigVar = { name: string; updatedAt?: string };
 // (read-only, over its own), and the cluster's (under its own).
 export type ConfigVars = { vars: ConfigVar[]; bound?: { name: string; provider: string }[]; global?: ConfigVar[] };
 export type ConfigChange = { set?: Record<string, string>; unset?: string[]; dotenv?: string };
+// The config vars every project of the workspace receives: names and when
+// each was set, never values, and how many projects receive them.
+export type Globals = { vars: { name: string; updatedAt?: string }[]; projects: number };
 
 export type BuildInfo = {
   name: string;

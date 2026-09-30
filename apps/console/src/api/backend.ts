@@ -51,8 +51,6 @@ export const backend: Api = {
   economics: (month) => request(`/api/cluster/economics${month ? `?month=${encodeURIComponent(month)}` : ""}`),
   sizes: () => request("/api/sizes"),
   saveSizes: (catalog) => request("/api/sizes", json("PUT", catalog)),
-  globals: () => request("/api/globals"),
-  changeGlobals: (change) => request("/api/globals", json("PUT", change)),
   drains: () => request("/api/drains"),
   addDrain: (body) => request("/api/drains", json("POST", body)),
   removeDrain: (name) => request(`/api/drains/${encodeURIComponent(name)}`, gone),

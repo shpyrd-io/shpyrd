@@ -2,6 +2,7 @@ import { ApiError } from "@shpyrd/shared/api/error";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
 import type { Api } from "./api";
 import type {
+  Globals,
   AllowEntry,
   APIToken,
   AuditEntry,
@@ -61,6 +62,7 @@ type Things = {
   domainClaims: DomainClaim[];
   sizes: SizeCatalog;
   billing: Billing;
+  globals: Globals;
 };
 
 // The shape of the files changes with the application: what a browser
@@ -306,6 +308,21 @@ export const mock: Api = {
     const all = await thingsOf.get();
     all.domainClaims = all.domainClaims.filter((c) => c.domain !== domain);
     await thingsOf.set(all);
+  },
+  globals: async () => (await thingsOf.get()).globals,
+  changeGlobals: async (change) => {
+    const all = await thingsOf.get();
+    for (const [name, value] of Object.entries(change.set ?? {})) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new ApiError(400, `${name} is not a name`);
+      if (value === "") throw new ApiError(400, `${name} has no value`);
+      const v = all.globals.vars.find((x) => x.name === name);
+      if (v) v.updatedAt = now();
+      else all.globals.vars.push({ name, updatedAt: now() });
+    }
+    for (const name of change.unset ?? []) all.globals.vars = all.globals.vars.filter((v) => v.name !== name);
+    all.globals.vars.sort((a, b) => a.name.localeCompare(b.name));
+    await thingsOf.set(all);
+    return all.globals;
   },
   billing: async (month) => {
     const billing = (await thingsOf.get()).billing;

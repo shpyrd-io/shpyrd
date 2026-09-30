@@ -80,3 +80,11 @@ Shared credentials and settings are copied into each project by hand today and d
   - Dashboard: a Global config vars card on the Cluster page (platform admins) with a
     confirmation naming the number of projects that will release; the Config tab shows
     cluster-provided rows and an "overrides global" marker.
+- 2026-09-30: the globals are a workspace's, not the cluster's. Each workspace keeps its
+  own Secret in the system namespace (`shpyrd-global-env` for the default workspace, so
+  nothing moves on upgrade; `shpyrd-global-env-<slug>` for the others), set by its admins
+  at `GET/PUT /api/workspace/globals` on its own door, and mirrored into its projects
+  only; `shpyrd globals` takes `--workspace` over a kubeconfig. The console's
+  `/api/globals` stays as the default workspace's, for the dashboard of before. The
+  page moved from the console's Cluster group to the workspace's settings, as Config
+  vars.

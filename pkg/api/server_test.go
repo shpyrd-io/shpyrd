@@ -936,6 +936,10 @@ func TestGlobals(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"vars":[]`) || !strings.Contains(rec.Body.String(), `"projects":1`) {
 		t.Fatalf("empty globals: %d %s", rec.Code, rec.Body.String())
 	}
+	// The workspace's own route answers the same at the default door.
+	if rec := do(t, s, "GET", "/api/workspace/globals", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"projects":1`) {
+		t.Fatalf("workspace globals: %d %s", rec.Code, rec.Body.String())
+	}
 	rec = do(t, s, "PUT", "/api/globals", `{"set":{"OPENAI_API_KEY":"sk-secret"},"dotenv":"REGION=eu\n"}`, true)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "sk-secret") {
 		t.Fatalf("set: %d %s", rec.Code, rec.Body.String())
