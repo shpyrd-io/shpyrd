@@ -79,7 +79,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
       columns: [
         {
           label: "For",
-          links: solutions.map((l) => ({ link: link(l), description: l.description, icon: l.icon })),
+          // The column is headed "For", so its items do not say it again.
+          links: solutions.map((l) => ({
+            link: link({ ...l, title: l.title.replace(/^For /, "") }),
+            description: l.description,
+            icon: l.icon,
+          })),
         },
         {
           label: "What you're shipping",
