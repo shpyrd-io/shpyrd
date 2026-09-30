@@ -78,8 +78,8 @@ export const runs = {
   step: 'runs',
   title: 'Where all of this runs',
   body:
-    'On a Kubernetes cluster your company controls: locally on kind while you ' +
-    'try it, on Oracle Cloud (OKE) or AWS (EKS) when it matters. The cluster ' +
-    'needs an owner, and working out who that is part of the conversation.',
+    'On shpyrd cloud, with nothing to run. Or on a Kubernetes cluster your ' +
+    'company controls: locally on kind while you try it, on Oracle Cloud (OKE) ' +
+    'or AWS (EKS) when it matters. A cluster of your own needs an owner.',
   link: { label: 'Installation and cloud setup', href: '/docs/installation' },
 }

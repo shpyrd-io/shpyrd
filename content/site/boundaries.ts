@@ -39,7 +39,8 @@ export const boundaries: Boundary[] = [
   },
   {
     id: 'data',
-    claim: "Running in your own cluster isn't the same as your data never leaving.",
+    claim:
+      "Running on shpyrd cloud, or in your own cluster, isn't the same as your data never leaving.",
     limit: 'An app that calls an external API still calls it.',
     step: 'runs',
   },

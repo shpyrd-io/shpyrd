@@ -1,73 +1,95 @@
-// The homepage, in the order the positioning research argues for: the outcome,
-// then a situation the reader recognises, then what they get, then where it
-// runs, then what goes in it, then the offer, then the limits.
+// The homepage: what the builder built, what we do with it, the questions that
+// keep an app on a laptop, the way from the laptop to the team, and the other
+// people who choose shpyrd. The page draws these in that order
+// (apps/website/src/components/home.tsx); the icons are the page's, matched by id.
 
-export const situation = {
-  title: 'The part nobody plans for',
-  body: [
-    'Say your operations team has built a purchase-request tracker. It fits how ' +
-      'the team works, and the first version works. Now Finance needs access. ' +
-      'Someone has to decide where it runs. And somebody will be responsible ' +
-      'for the next update.',
-    'shpyrd is where that app goes next.',
-  ],
+export const hero = {
+  heading: 'You built it. We ship it.',
+  description:
+    'AI got your app working. We take it from there: we put it online behind a ' +
+    'sign-in, and give it everything it needs to run, from its database to its backups.',
 }
 
-export const pillars = {
-  title: 'Three things you get',
+export const gap = {
+  label: 'The part nobody plans for',
+  heading: 'Working and used are two different things',
+  description:
+    'Building the app was the part you knew how to ask for. The questions after it ' +
+    'are the ones that keep it on your laptop.',
   items: [
     {
-      id: 'available',
-      title: 'Make it available.',
+      id: 'where',
+      title: 'Where does it live?',
       body:
-        'Deploy a compatible app from the code your team already has. It gets ' +
-        'a URL, TLS, and sign-in in front of it.',
+        'Not on your laptop, and not on a free host under your personal card. On shpyrd ' +
+        'cloud, or on a cluster your company controls, at an address your colleagues can open.',
     },
     {
-      id: 'access',
-      title: 'Choose who can use it.',
+      id: 'who',
+      title: 'Who can open it?',
       body:
-        'Share an app with Finance, Operations or another selected group — and ' +
-        'keep permission to use an app separate from permission to update or ' +
-        'administer it.',
+        'Finance and Operations, after signing in with their company account. Everyone ' +
+        'else meets a sign-in page, not your app.',
     },
     {
-      id: 'manage',
-      title: 'Manage it over time.',
+      id: 'break',
+      title: 'What if I break it?',
       body:
-        'Every deploy, config change and rollback is a numbered release. When ' +
-        'an update breaks something people depend on, restore the previous one.',
+        'Every change is a numbered release. When an update breaks something people ' +
+        'depend on, go back to the one before.',
     },
   ],
 }
 
-export const hosting = {
-  title: 'Where it runs, and who runs it',
-  body: [
-    'shpyrd runs on a Kubernetes cluster your company controls — locally on ' +
-      'kind, on Oracle Cloud (OKE), or on AWS (EKS).',
-    'Someone has to own that cluster. During the beta, that is a conversation ' +
-      'we have with you rather than a box you tick.',
+export const route = {
+  heading: 'From your laptop to your team',
+  description: 'The same agent that built the app takes it the rest of the way.',
+  steps: [
+    {
+      id: 'connect',
+      title: 'Connect your agent to your workspace.',
+      body: 'One line in Claude Code, Codex or Cursor.',
+    },
+    {
+      id: 'deploy',
+      title: 'Deploy the app.',
+      body: 'It gets an address, TLS, and a sign-in in front of it. Nobody gets in yet.',
+    },
+    {
+      id: 'share',
+      title: 'Share it with the people it is for.',
+      body: 'A team, or named colleagues. They find it among their apps the next time they sign in.',
+    },
+    {
+      id: 'change',
+      title: 'Keep changing it.',
+      body:
+        'Each update is a release your colleagues get without asking; a bad one is undone ' +
+        'in one step.',
+    },
   ],
-  link: { label: 'Read the deployment docs', href: '/docs/installation' },
 }
 
-export const useCases = {
-  title: 'What people put in it',
-  // What a colleague sees when they sign in: the apps, and who each is for.
-  // The last row is the hook - it is the reader's own app, the one that works
-  // and that nobody else can open yet.
-  caption: 'Your workspace',
-  apps: [
-    { name: 'Purchase requests', audience: 'Finance, Operations', shared: true },
-    { name: 'Onboarding checklist', audience: 'People', shared: true },
-    { name: 'Quote tool', audience: 'Sales', shared: true },
-    { name: 'Field reports', audience: 'Not shared yet', shared: false },
+export const also = {
+  label: 'Also for',
+  heading: 'Not the one who built it?',
+  items: [
+    {
+      href: '/for/developers',
+      title: 'Developers',
+      body: 'A CLI, releases and rollback, on shpyrd cloud or on your own cluster.',
+    },
+    {
+      href: '/for/it',
+      title: 'IT teams',
+      body: 'One accepted place for the apps your people build, behind your sign-in.',
+    },
+    {
+      href: '/for/fde-partners',
+      title: 'FDE partners',
+      body: 'The same setup behind every client delivery, and a clean handover.',
+    },
   ],
-  disclaimer:
-    "shpyrd doesn't build these. Your team does, with the tools it already " +
-    'uses. shpyrd runs them, decides who gets in, and gives colleagues one ' +
-    'place to find them.',
 }
 
 export const boundariesSection = {
@@ -86,9 +108,7 @@ export const developerSection = {
   code: `brew install shpyrd-io/tap/shpyrd
 shpyrd cluster create
 shpyrd cluster dashboard`,
-  links: [
-    { label: 'Quick start', href: '/docs/getting-started' },
-    { label: 'GitHub', href: 'https://github.com/shpyrd-io/shpyrd' },
-    { label: 'Discord', href: 'https://discord.gg/AxWMXXW7' },
-  ],
+  // GitHub and Discord are in the header, on every page; saying them again at
+  // the foot of this one was noise.
+  links: [{ label: 'Quick start', href: '/docs/getting-started' }],
 }

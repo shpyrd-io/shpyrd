@@ -23,6 +23,8 @@ export function Text({ text }: { text: TextOf }) {
           position="end"
           width="small"
           sticky
+          // The site header stays at the top too: 3.5rem and its line.
+          offsetHeader="calc(3.5rem + 1px)"
           hidden={{ narrow: true }}
           className="py-6 pr-4"
         >
