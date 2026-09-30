@@ -78,7 +78,7 @@ Config vars are environment variables for every process. Three sources, in incre
 3. **Secrets** — written with `shpyrd secrets set`, stored in Secret `<app>-env`. Write-only: names and timestamps are shown, values never. Wins over `env:`.
 4. **Bound vars** — injected by attached resources (`DATABASE_URL`, `REDIS_URL`); win over secrets of the same name.
 
-Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `SHPYRD_PROJECT`, `SHPYRD_WORKSPACE`, `SHPYRD_ISSUER`) that cannot be overridden from `shpyrd.yaml`.
+Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `RUNNING_IN_SHPYRD`, `SHPYRD_PROJECT`, `SHPYRD_PROJECT_ID`, `SHPYRD_PROJECT_NAME`, `SHPYRD_WORKSPACE`, `SHPYRD_PROCESS`, `SHPYRD_RELEASE`, `SHPYRD_ISSUER`) that cannot be overridden from `shpyrd.yaml`.
 
 ## Domains and TLS
 

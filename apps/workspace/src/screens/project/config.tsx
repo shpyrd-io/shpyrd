@@ -206,18 +206,24 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
                 </TableCell>
                 <TableCell className="text-muted-foreground">The port the web process has to answer on.</TableCell>
               </TableRow>
-              <TableRow>
-                <TableCell>
-                  <InlineCode>SHPYRD_PROCESS</InlineCode>
-                </TableCell>
-                <TableCell className="text-muted-foreground">The name of the process the instance runs: web, worker.</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>
-                  <InlineCode>SHPYRD_RELEASE</InlineCode>
-                </TableCell>
-                <TableCell className="text-muted-foreground">The number of the release the instance belongs to.</TableCell>
-              </TableRow>
+              {[
+                ["RUNNING_IN_SHPYRD", "true: the process runs on shpyrd."],
+                ["SHPYRD_PROJECT", "The slug of the project."],
+                ["SHPYRD_PROJECT_ID", "The id of the project, which never changes."],
+                ["SHPYRD_PROJECT_NAME", "The name of the project, as it is shown."],
+                ["SHPYRD_WORKSPACE", "The slug of the workspace."],
+                ["SHPYRD_PROCESS", "The name of the process the instance runs: web, worker, release."],
+                ["SHPYRD_RELEASE", "The number of the release the instance belongs to; SHPYRD_RELEASE_VERSION is the same with a v: v5."],
+                ["SHPYRD_REVISION", "The git commit the release was built from, or the digest of the archive; SHPYRD_PROJECT_REVISION and REVISION are the same. Absent for a prebuilt image."],
+                ["SHPYRD_ISSUER", "Where the tokens of visitors are signed, for an app that checks who opens it."],
+              ].map(([name, what]) => (
+                <TableRow key={name}>
+                  <TableCell>
+                    <InlineCode>{name}</InlineCode>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{what}</TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </CardContent>

@@ -62,7 +62,7 @@ exposure: external
 | Field | Meaning |
 | --- | --- |
 | `project` | The project's slug (`my-shop`, not "My Shop"); used when `--project` is not given. `shpyrd projects create "<name>" --save` writes this file. `app` is accepted as an alias. |
-| `env` | Plain environment variables for every process, committed with the code (`RACK_ENV`, `NODE_ENV`, feature flags). The key is authoritative when present: `env: {}` removes all of them. Secrets go through `shpyrd secrets set`, never here. `PORT`, `REVISION`, `SHPYRD_PROJECT`, `SHPYRD_WORKSPACE` and `SHPYRD_ISSUER` are set by the platform and cannot be declared. |
+| `env` | Plain environment variables for every process, committed with the code (`RACK_ENV`, `NODE_ENV`, feature flags). The key is authoritative when present: `env: {}` removes all of them. Secrets go through `shpyrd secrets set`, never here. `PORT`, `REVISION`, `RUNNING_IN_SHPYRD` and the `SHPYRD_*` variables are set by the platform and cannot be declared. |
 | `globals` | `false` leaves every [global config var](/docs/deploying#global-config-vars) out of the project; `{exclude: [NAME, ...]}` leaves out only those. Default: all globals. |
 | `processes.<type>.port` | Port the process listens on. `web` defaults to 8080 and is published through the URL; other types get no port unless set. `PORT` is injected. |
 | `processes.<type>.replicas` | Pin the number of instances. Without it, `shpyrd scale` values are kept across deploys (default 1). |
@@ -101,7 +101,12 @@ Every process receives these read-only variables from the platform:
 | Variable | Value |
 | --- | --- |
 | `PORT` | Port the process should listen on (web processes only). |
+| `RUNNING_IN_SHPYRD` | `true`: the process runs on shpyrd. |
 | `SHPYRD_PROJECT` | The project slug. |
+| `SHPYRD_PROJECT_ID` | The project's id, which never changes. |
+| `SHPYRD_PROJECT_NAME` | The project's name, as it is shown. |
 | `SHPYRD_WORKSPACE` | The workspace slug. |
+| `SHPYRD_PROCESS` | The process type the instance runs: `web`, `worker`, `release`. |
+| `SHPYRD_RELEASE` / `SHPYRD_RELEASE_VERSION` | The number of the release the instance belongs to: `5`, and `v5`. |
 | `SHPYRD_ISSUER` | JWT issuer URL; `<issuer>/.well-known/jwks.json` holds the signing keys for verifying visitor identity (see [App access](/docs/app-access)). |
-| `REVISION` / `SHPYRD_REVISION` | The git commit the release was built from (short SHA), or the archive digest for a `shpyrd deploy` from a working tree. Follows the image on rollback. Empty for prebuilt images (`--image`). |
+| `REVISION` / `SHPYRD_REVISION` / `SHPYRD_PROJECT_REVISION` | The git commit the release was built from (short SHA), or the archive digest for a `shpyrd deploy` from a working tree. Follows the image on rollback. Empty for prebuilt images (`--image`). |
