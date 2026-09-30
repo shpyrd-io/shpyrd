@@ -337,8 +337,23 @@ make dev-deploy      # build the server image, load it into the cluster, apply t
 make test vet
 ```
 
-The UI can be developed against a local server: `go run ./cmd/shpyrd-server`
-in one terminal, `cd ui && npm run dev` in another (Vite proxies `/api`).
+The UI is developed without rebuilding or uploading anything: `cd ui && npm run
+dev` serves it with hot reload and proxies the API to a shpyrd server. Point it
+at a cluster's server with `SHPYRD_DEV_API`:
+
+```sh
+shpyrd-ctl cluster create --name dev --enable auth-local,postgres,redis   # once
+cd ui && SHPYRD_DEV_API=https://shpyrd.127.0.0.1.nip.io npm run dev       # http://localhost:5173
+```
+
+The server sees the target's host, so the door follows the URL: the console's
+host opens the console application, a workspace address the workspace one. Sign
+in with email and password or the admin token (`shpyrd-ctl cluster token`);
+sign-in through an external provider redirects back to the real host. Without
+`SHPYRD_DEV_API` the proxy targets a `go run ./cmd/shpyrd-server` on
+localhost:8080. A local cluster is switched off and on with `make dev-pause
+CLUSTER=dev` / `make dev-resume CLUSTER=dev` (the kind nodes stop in place, state
+kept) and deleted with `shpyrd-ctl cluster destroy --name dev --yes`.
 
 The website is a separate Next.js project: `make website-dev` serves
 [shpyrd.io](https://shpyrd.io) on http://localhost:3000. Documentation pages are

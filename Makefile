@@ -5,7 +5,7 @@ LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
 .PHONY: all build cli server ui website website-dev image dev-image generate \
         test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
-        installclint commitlint
+        dev-pause dev-resume installclint commitlint
 
 all: build
 
@@ -106,6 +106,19 @@ dev-deploy: cli dev-load
 
 dev-destroy: cli
 	./bin/shpyrd cluster destroy --name $(CLUSTER) --yes
+
+## Switch the local cluster off and on without losing it: the kind nodes
+## are containers, stopped and started in place (state stays on their
+## disks; the platform is back within a minute of `dev-resume`).
+dev-pause:
+	@nodes=$$(docker ps -q --filter "label=io.x-k8s.kind.cluster=$(CLUSTER)"); \
+	if [ -z "$$nodes" ]; then echo "no running kind cluster named $(CLUSTER)" >&2; exit 1; fi; \
+	docker stop $$nodes >/dev/null && echo "Cluster $(CLUSTER) paused (make dev-resume CLUSTER=$(CLUSTER) brings it back)."
+
+dev-resume:
+	@nodes=$$(docker ps -aq --filter "label=io.x-k8s.kind.cluster=$(CLUSTER)"); \
+	if [ -z "$$nodes" ]; then echo "no kind cluster named $(CLUSTER); run 'shpyrd-ctl cluster create --name $(CLUSTER)'" >&2; exit 1; fi; \
+	docker start $$nodes >/dev/null && echo "Cluster $(CLUSTER) resuming; 'shpyrd-ctl cluster status --context kind-$(CLUSTER)' shows when it is ready."
 
 ## Tooling ---------------------------------------------------------------------
 
