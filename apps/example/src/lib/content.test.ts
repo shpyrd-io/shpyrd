@@ -21,7 +21,7 @@ describe("the texts of the site", () => {
   });
 
   it("lists the headings of a text, each with a name for its address", () => {
-    const { headings } = read("index");
+    const { headings } = read("docs/getting-started");
     expect(headings.map((h) => h.id)).toContain("what-you-get");
   });
 });
