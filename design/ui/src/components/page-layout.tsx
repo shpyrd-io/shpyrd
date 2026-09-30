@@ -14,7 +14,9 @@ type Width = "small" | "medium" | "large";
 const containerWidths = {
   full: "max-w-none",
   medium: "max-w-3xl",
-  large: "max-w-5xl",
+  // 1080px: wide enough for three columns and a picture beside a hero,
+  // narrow enough that a big screen still reads as one page.
+  large: "max-w-[67.5rem]",
   xlarge: "max-w-7xl",
 } as const;
 
