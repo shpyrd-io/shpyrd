@@ -18,6 +18,7 @@ export const catalog: Category[] = [
       { slug: "brand", title: "Brand", description: "The mark and the wordmark." },
       { slug: "colours", title: "Colours", description: "The colours by name, in both themes." },
       { slug: "typography", title: "Typography", description: "The fonts and the sizes of text." },
+      { slug: "motion", title: "Motion", description: "How long a change takes, and how it speeds up and slows down." },
       { slug: "icons", title: "Icons", description: "Where the icons come from, the marks of the AI tools, and how big they are." },
       { slug: "button", title: "Button", description: "Something to press, with or without an icon." },
       { slug: "avatar", title: "Avatar", description: "The picture of someone, or of something that is not a person." },

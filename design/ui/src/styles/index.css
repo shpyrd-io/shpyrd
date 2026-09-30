@@ -61,6 +61,18 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  /* How long a change takes, by what changes: `duration-fast` is for what
+     answers the pointer, `duration-normal` for what appears or leaves,
+     `duration-slow` for what moves or changes its size. */
+  --transition-duration-fast: 100ms;
+  --transition-duration-normal: 200ms;
+  --transition-duration-slow: 400ms;
+  /* How a change speeds up and slows down, by where it is going:
+     `ease-enter` arrives and settles, `ease-exit` starts slowly and is
+     gone, `ease-move` goes from one place to another. */
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 :root {
