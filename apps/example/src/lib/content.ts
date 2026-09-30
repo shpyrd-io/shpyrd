@@ -3,10 +3,10 @@ import path from "node:path";
 import Markdoc, { Tag, type Config, type RenderableTreeNode } from "@markdoc/markdoc";
 
 // The texts of the site, read where they are today and as they are: the
-// Markdoc files of apps/website. Nothing is copied. CONTENT_DIR names
-// another folder, relative to this application.
+// Markdoc files of content/. Nothing is copied. CONTENT_DIR names another
+// folder, relative to this application.
 
-const dir = path.resolve(process.cwd(), process.env.CONTENT_DIR ?? "../website/src/pages");
+const dir = path.resolve(process.cwd(), process.env.CONTENT_DIR ?? "../../content");
 
 // The pictures of the texts are served by the site itself.
 const site = "https://shpyrd.io";
@@ -118,7 +118,7 @@ function headings(
   return out;
 }
 
-/** A text by the name of its file: "index", or "docs/installation". */
+/** A text by the name of its file: "docs/getting-started", or "docs/installation". */
 export function read(name: string): Text {
   const ast = Markdoc.parse(fs.readFileSync(path.join(dir, `${name}.md`), "utf8"));
   const m = meta(ast.attributes.frontmatter);

@@ -64,4 +64,18 @@ describe("languageOf", () => {
     expect(languageOf("Dockerfile")).toBe("dockerfile");
     expect(languageOf("README")).toBe("txt");
   });
+
+  it("knows the names a writer actually types for a shell", () => {
+    for (const name of ["shell", "console", "zsh", "shell-session"]) {
+      const comment = tokens("# a note", name).find((t) => t.kind === "comment");
+      expect(comment, `${name} highlights nothing`).toBeTruthy();
+    }
+  });
+
+  it("knows python and hcl by their long names", () => {
+    for (const name of ["python", "hcl", "tf"]) {
+      const comment = tokens("# a note", name).find((t) => t.kind === "comment");
+      expect(comment, `${name} highlights nothing`).toBeTruthy();
+    }
+  });
 });

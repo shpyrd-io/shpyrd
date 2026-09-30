@@ -4,13 +4,16 @@ shpyrd is [MPL 2.0 licensed](LICENSE) and accepts contributions via GitHub
 pull requests. This document outlines some of the conventions to make it
 easier to get your contribution accepted.
 
-One directory is licensed differently: the website in [`apps/website/`](apps/website) is
-built on the commercial Tailwind UI *Syntax* template and is governed by
-[`apps/website/LICENSE`](apps/website/LICENSE). Content contributions are welcome on those
-terms — Markdown under `apps/website/src/pages/` is ordinary documentation. Changes to
-the template itself, meaning the components and styles under
-`apps/website/src/components/` and `apps/website/src/styles/`, need your own Tailwind UI
-licence, because a derivative of the template stays under the template's terms.
+One directory is licensed differently: [`apps/website-old/`](apps/website-old), the
+previous site, is built on the commercial Tailwind UI *Syntax* template and is governed
+by [`apps/website-old/LICENSE`](apps/website-old/LICENSE). Nothing needs changing there —
+it is kept only until a deploy proves its replacement.
+
+The site itself is [`apps/website/`](apps/website), which draws with
+[`design/ui`](design/ui) and is MPL-2.0 like the rest of the repository.
+Documentation is Markdown under [`content/docs/`](content/docs) and contributions to it
+are welcome; [`content/README.md`](content/README.md) says where each kind of text
+lives.
 
 Design changes go through the [RFC process](rfcs/README.md); see
 [RFC-0001](rfcs/0001-mvp-local-platform.md) for the current architecture.

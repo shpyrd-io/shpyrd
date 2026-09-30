@@ -1,4 +1,4 @@
-# The shpyrd.io website (Next.js + Markdoc) lives in apps/website/ and deploys from
+# The shpyrd.io website (Next + design/ui + content) lives in apps/website/ and deploys from
 # there on Vercel. This job is the pre-merge check; the Vercel preview is the
 # visual one.
 #
@@ -15,10 +15,18 @@ on:
     # anchors, so the two lists have to be kept in sync by hand.
     paths:
       - 'apps/website/**'
+      - 'design/ui/**'
+      - 'content/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/website.yml'
   pull_request:
     paths:
       - 'apps/website/**'
+      - 'design/ui/**'
+      - 'content/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/website.yml'
 
 permissions:
@@ -33,19 +41,21 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        # Load-bearing: next, the Markdoc loader and src/markdoc/search.mjs
-        # all resolve config and content relative to the process working
-        # directory, so a build from the repository root fails outright.
-        working-directory: apps/website
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/website/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci --no-audit --no-fund
-      - run: npm run lint
-      - run: npm run build
+      - run: npm --prefix content run test
+      - run: npm --prefix content run typecheck
+      - run: npm --prefix design/ui run lint
+      - run: npm --prefix design/ui run typecheck
+      - run: npm --prefix design/ui run test
+      - run: npm --prefix design/ui run build
+      - run: npm --prefix apps/website run lint
+      - run: npm --prefix apps/website run typecheck
+      - run: npm --prefix apps/website run test
+      - run: npm --prefix apps/website run build

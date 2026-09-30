@@ -42,6 +42,10 @@ const none: Family = { quotes: [], words: [] };
 const families: Record<string, Family> = {
   js: c, jsx: c, ts: c, tsx: c, go: c, java: c, c, css: c, scss: c, json: c, rs: c,
   py: hash, sh: hash, bash: hash, yml: hash, yaml: hash, toml: hash, rb: hash, dockerfile: hash, env: hash,
+  // The names a writer types in a fence, beside the extensions above.
+  shell: hash, console: hash, zsh: hash, "shell-session": hash, python: hash, ruby: hash,
+  hcl: hash, tf: hash, ini: hash, conf: hash,
+  javascript: c, typescript: c, golang: c, rust: c,
   sql,
   html: markup, xml: markup, md: markup,
   txt: none,

@@ -1,60 +1,61 @@
 # shpyrd.io
 
-The source of [shpyrd.io](https://shpyrd.io): the marketing homepage and the
-product documentation. Built with [Next.js](https://nextjs.org) and
-[Markdoc](https://markdoc.io), deployed on Vercel from this directory.
-
-## License
-
-**This directory is not covered by the repository's MPL 2.0 licence.** The site
-is built on the commercial Tailwind UI *Syntax* template and is governed by
-[`LICENSE`](LICENSE) in this directory. The rest of the repository is
-[MPL-2.0](../../LICENSE).
-
-In practice: you may read it, and you may not redistribute the template or
-derivatives of it separately from this site. For contributions the line falls
-inside this directory — Markdown under `src/pages/` is ordinary documentation and
-changes to it are welcome, while changes to the template itself (`src/components/`,
-`src/styles/`) need your own Tailwind UI licence, since a derivative of the
-template stays under the template's terms.
+The site and the product documentation. A Next application compiled to static
+files, drawing with [`design/ui`](../../design/ui) and reading
+[`content/`](../../content).
 
 ## Running it
 
+Every command runs from the repository root: the applications are members of
+one npm workspace, and Next does not import from outside its own folder
+without it.
+
 ```sh
 npm install
-npm run dev      # http://localhost:3000
+npm --prefix apps/website run dev        # http://localhost:4324
+npm --prefix apps/website run build      # static files in out/
+npm --prefix apps/website run lint
+npm --prefix apps/website run typecheck
+npm --prefix apps/website run test
 ```
 
-Or from the repository root: `make website-dev`.
-
-Every command must run with this directory as the working directory. Next, the
-Markdoc loader and `src/markdoc/search.mjs` all resolve their config and content
-relative to the process working directory, so a build started from the repository
-root fails — at lint with `Cannot find module 'next/babel'`, or, with lint
-skipped, in the Markdoc loader. That is why `make website` and the CI job both
-`cd` in first.
+Or `make website-dev` from the root.
 
 ## Layout
 
 ```
-src/pages/index.md        the homepage
-src/pages/docs/*.md       the documentation, one file per page, URL follows the filename
-src/components/Layout.jsx the page shell and the documentation navigation tree
-src/components/           navigation, search, callouts, code fences
-src/markdoc/              Markdoc tags, nodes, and the search index builder
-src/styles/               Tailwind entrypoint, fonts, syntax highlighting
-public/install.sh         served at shpyrd.io/install.sh, the documented install path
-public/screenshots/       screenshots used by the docs and the root README
+app/page.tsx                 the marketing homepage
+app/how-sharing-works/       the builder-to-colleague journey
+app/bring-an-app/            the assisted-beta offer
+app/docs/[slug]/             every documentation page
+src/components/shell.tsx     the chrome; it branches on document or marketing page
+src/components/markdoc.tsx   which component of design/ui draws each tag
+src/lib/content.ts           reads content/docs and returns front matter, tree and headings
+public/install.sh            served at shpyrd.io/install.sh, the documented install path
+public/screenshots/          screenshots used by the docs and the root README
+public/_redirects            /docs -> /docs/getting-started; a static export emits none
 ```
+
+The texts are not here. Documentation is `content/docs/*.md` and the marketing
+copy is `content/site/*.ts`; see [`content/README.md`](../../content/README.md).
 
 ## Adding a documentation page
 
-Add `src/pages/docs/<slug>.md` with `title` and `description` front matter, then
-add it to the `navigation` tree in `src/components/Layout.jsx`. The search index
-picks it up automatically on the next build.
+Add `content/docs/<slug>.md` with `title` and `description` front matter, then
+add it to the navigation in `content/navigation.ts`. A test fails if the two
+disagree, and the route and the metadata follow automatically.
 
-## URLs that must not move
+## What this must not break
 
 The root `README.md`, the install instructions and published release notes link
-to `/install.sh`, `/screenshots/*.png` and `/docs/*`. Add a redirect in
-`next.config.mjs` if a path has to change.
+to `/install.sh`, `/screenshots/*.png` and `/docs/*`. Those addresses keep their
+exact shape.
+
+## License
+
+[MPL-2.0](../../LICENSE), like the rest of the repository. Every component here
+comes from `design/ui`.
+
+The commercial Tailwind UI *Syntax* template, and the carve-out that covered it,
+live with the previous site in `apps/website-old/` until a deploy proves this
+one and it is removed.

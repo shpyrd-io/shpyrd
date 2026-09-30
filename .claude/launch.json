@@ -22,6 +22,17 @@
         "run",
         "dev"
       ],
+      "port": 4327
+    },
+    {
+      "name": "website",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/website",
+        "run",
+        "dev"
+      ],
       "port": 4324
     },
     {

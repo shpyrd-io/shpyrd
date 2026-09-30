@@ -1,7 +1,6 @@
 # Applications
 
-What an application here is made of. `website/` is apart until it moves to
-the same base (step 7 of the plan).
+What an application here is made of.
 
 ## What an application is
 

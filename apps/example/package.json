@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --port 4324",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --port 4327",
     "build": "NEXT_TELEMETRY_DISABLED=1 next build",
     "lint": "oxlint src app",
     "typecheck": "tsc --noEmit",

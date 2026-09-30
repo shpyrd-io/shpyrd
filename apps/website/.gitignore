@@ -1,9 +1,5 @@
-# Next.js build output
-/.next/
-/out/
-
-# Vercel
-.vercel
-
-# local env files
-.env*.local
+node_modules
+.next
+out
+next-env.d.ts
+*.tsbuildinfo

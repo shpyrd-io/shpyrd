@@ -1,0 +1,19 @@
+{
+  "name": "@shpyrd/content",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./navigation": "./navigation.ts",
+    "./site/*": "./site/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.2"
+  }
+}
