@@ -66,14 +66,15 @@ type Catalog struct {
 }
 
 // Defaults is the catalog seeded at install time. Memory steps follow Fly
-// and Render; the smallest entries suit Go and static sites, JVM and Node
-// apps usually need shared-m or larger.
+// and Render from 64 MiB up: the smallest entry suits Go services and
+// static sites, JVM and Node apps usually need shared-m or larger. Memory
+// is billed as reserved while an instance is awake (RFC-0075), so the
+// smallest size is also the smallest bill.
 func Defaults() Catalog {
 	return Catalog{
 		Default: "shared-s",
 		Sizes: []Size{
-			{Name: "shared-xs", Kind: Shared, CPU: "0.25", Memory: "32Mi", Description: "Tiny: static sites, Go services"},
-			{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Description: "Default"},
+			{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Description: "Default: static sites, Go services"},
 			{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Description: "Node.js, Python, Ruby"},
 			{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Description: "JVM, heavier web apps"},
 			{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi"},

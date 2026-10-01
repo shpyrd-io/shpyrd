@@ -28,6 +28,7 @@ shpyrd login --url https://acme.shpyrd.app --token @token.txt
 
 | Command | What it does |
 | --- | --- |
+| `shpyrd login --signup` | Create an account and your first workspace on shpyrd cloud from the terminal: the browser opens the signup with a code; you prove your email and name the workspace there, and when its door answers the CLI is signed in to it. `shpyrd login` with no URL at a terminal asks which of the two you want. `--signup-url` (or `SHPYRD_SIGNUP_URL`) points at another signup. |
 | `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.app`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd whoami` | Who you are at the current workspace, checked live; fails when the token expired or was revoked. |
@@ -107,8 +108,10 @@ Self-hosted: platform-level, for the operator:
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD] [--sleep-after 15m --sleep-resuming page]` | Define the unit prices a workspace is billed at, and optionally the plan's default sleep policy: projects on the plan sleep after the quiet period unless they set their own (`shpyrd sleep <project> --after off` opts out). |
-| `shpyrd-ctl plans list` | Plans and their prices. |
+| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD] [--free] [--sleep-after 15m --sleep-resuming page] [--postgres-sleep-after 10m] [--monthly-budget 10] [--cost-budget 0.50] [--self-serve] [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi]` | Define the unit prices a workspace is billed at, and optionally: `--free` (nothing to pay; the Billing card shows the consumption alone); the plan's default sleep for projects (they sleep after the quiet period unless they set their own; `shpyrd sleep <project> --after off` opts out) and for databases (`shpyrd pg sleep` the same way); two monthly caps, `--monthly-budget` at the plan's prices and `--cost-budget` on what the workspace costs the platform (OpenCost; the operator's number, shown nowhere), either of which warns the owners at 80% and pauses the workspace at 100% until the month ends; whether people may pick the plan when they sign up; and the ceilings a workspace starts with. |
+| `shpyrd-ctl plans update <name> [--effective-from YYYY-MM-DD] [the flags of create]` | Change a plan's prices or settings from a date on: a new version is written, and every five minutes of use is priced at the version in force at its time, so past months keep theirs. Only the flags given change. |
+| `shpyrd-ctl plans history <name>` | A plan's versions, oldest first. |
+| `shpyrd-ctl plans list` | Plans and their prices, the version in force of each. |
 | `shpyrd-ctl plans assign <plan> --workspace <slug>` | Bill a workspace at a plan (its history is kept). |
 | `shpyrd-ctl economics [--month YYYY-MM]` | Revenue at plan prices, infrastructure cost from OpenCost (extension `opencost`) and gross margin per workspace. Operator-only; customers see usage and their plan's prices, never cost. |
 
@@ -158,7 +161,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd pg list\|info\|psql\|delete` | Manage databases; `psql <name> -- <args>` opens psql on the primary; delete is refused while attached (`--force`). |
 | `shpyrd pg backups enable\|disable\|list <name>` | Backups of a database (needs extension `object-storage`): continuous WAL archiving and a scheduled base backup (`--retention 14d`, `--schedule "0 2 * * *"`); list shows the base backups and the recovery window. |
 | `shpyrd pg backup <name>` | Take a base backup now. |
-| `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables. Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
+| `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables — also when the workspace's plan has a default for databases. Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
 | `shpyrd pg suspend <name>`, `shpyrd pg resume <name>` | Stop a database now and refuse connections until resumed (data kept), and bring it back. |
 | `shpyrd pg restore <name> --as <new> [--to <RFC 3339>]` | Restore into a new database at a point in time (latest when omitted); attach the app to it when ready. |
 | `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size`, `--persistent`, `--storage`. |

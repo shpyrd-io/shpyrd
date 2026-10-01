@@ -362,7 +362,7 @@ func describeConfigChange(prev, cur map[string][]byte) string {
 }
 
 // describeSizeChange names processes whose instance size changed:
-// "Resize web to shared-m, worker to shared-xs".
+// "Resize web to shared-m, worker to shared-s".
 func describeSizeChange(prev, cur map[string]string) string {
 	if prev == nil {
 		return ""

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 
@@ -267,6 +268,17 @@ func (s *Server) invite(c *gin.Context, ws *store.Workspace, email, role, team s
 		}
 	}
 	return result, 0, nil
+}
+
+// inviteBackgroundHook is ext.Deps.InviteBackground: the same invitation,
+// made by a loop rather than a request (a first owner invited once their
+// workspace's door answers). The platform is the inviter: the audit entry
+// and the email say so.
+func (s *Server) inviteBackgroundHook(ctx context.Context, wsSlug, email, role string) (*ext.InviteOutcome, error) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/workspaces/"+wsSlug+"/invitations", nil).WithContext(ctx)
+	ext.SetIdentity(c, ext.Identity{Subject: "platform", Name: "the platform", Provider: "system"})
+	return s.inviteHook(c, wsSlug, email, role)
 }
 
 // inviteHook is ext.Deps.Invite: extensions that create workspaces bring

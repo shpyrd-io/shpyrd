@@ -40,8 +40,12 @@ type WorkspaceReconciler struct {
 	Scheme *runtime.Scheme
 	Store  store.Store
 	Config Config
+	// LookupLB finds the public front door's address when Config did not
+	// know it at start (a first install), for the readiness checks.
+	LookupLB func(ctx context.Context) string
 
-	events chan event.GenericEvent
+	events  chan event.GenericEvent
+	checker readinessChecker
 }
 
 const workspaceSync = 2 * time.Minute
@@ -84,6 +88,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: workspaceSync}, err
 	}
 	wanted := map[string]bool{} // front door Ingress names to keep
+	pending := false            // a workspace whose door does not answer yet
 	for i := range all {
 		ws := &all[i]
 		if ws.Address == "" {
@@ -93,6 +98,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
 		if err := r.ensureFrontDoor(ctx, ws); err != nil {
 			return ctrl.Result{}, err
+		}
+		// What the door looks like from outside, recorded on the
+		// workspace; a door not yet answering is looked at again soon.
+		if ws.Status != store.WorkspaceSuspended && !r.checkReadiness(ctx, ws) {
+			pending = true
 		}
 		// The workspace's other names (RFC-0033 names): a verified custom
 		// domain gets a front door with its own certificate (HTTP-01: the
@@ -136,6 +146,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 			}
 			logger.Info("workspace front door removed", "ingress", ing.Name, "workspace", ing.Labels[shpyrdv1.LabelWorkspace])
 		}
+	}
+	if pending {
+		return ctrl.Result{RequeueAfter: readinessRetry}, nil
 	}
 	return ctrl.Result{RequeueAfter: workspaceSync}, nil
 }

@@ -380,16 +380,24 @@ func (m *MeteringLoop) cpuBuckets(ctx context.Context, start, end time.Time, nsM
 	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricCPUUsed, store.UnitCoreSeconds, nsMap, false)
 }
 
-// memoryBuckets writes memory_used (GiB-seconds) per (namespace, component).
+// memoryBuckets writes memory_reserved (GiB-seconds) per (namespace,
+// component): the memory requests of the containers of running pods,
+// summed over the window in 30-second steps, so an instance that lived
+// for half the window counts for half. Memory is never overcommitted
+// (request equals limit, pkg/sizes), so this is what the instance took
+// from its node, and what the customer is billed for: a sleeping process
+// has no pod and reserves nothing. Until the switch the ledger carried
+// memory_used, the working set; old months keep it.
 func (m *MeteringLoop) memoryBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
 	dur := end.Sub(start).Seconds()
 	q := fmt.Sprintf(
 		`sum by (namespace, `+podLabels+`) (`+
-			`avg_over_time(container_memory_working_set_bytes{container!="",container!="POD",namespace=~"(app|p)-.*"}[%ds]) `+
-			podJoin+`) * %.6f / (1024*1024*1024)`,
-		int(dur)+30, dur, // avg × duration = GiB-seconds
+			`sum_over_time((kube_pod_container_resource_requests{resource="memory",container!="",namespace=~"(app|p)-.*"} `+
+			`and on (namespace, pod) (kube_pod_status_phase{phase="Running"} == 1))[%ds:30s]) `+
+			podJoin+`) * 30 / (1024*1024*1024)`,
+		int(dur), // one sample per 30 s, each worth 30 s of the reservation
 	)
-	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricMemoryUsed, store.UnitGiBSeconds, nsMap, false)
+	return m.queryBuckets(ctx, start, end, q, componentOfPod, store.MetricMemoryReserved, store.UnitGiBSeconds, nsMap, false)
 }
 
 // storageBuckets writes storage (GiB-seconds) per (namespace, claim

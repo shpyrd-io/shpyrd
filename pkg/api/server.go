@@ -372,26 +372,36 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	return s, nil
 }
 
+// Deps is what extensions get from the server: the controller manager
+// hands the same to their Register, so a loop has what a route has.
+func (s *Server) Deps() ext.Deps { return s.deps() }
+
 // deps is what extensions get from the server.
 func (s *Server) deps() ext.Deps {
 	ns := install.DefaultSystemNamespace
 	if s.kube != nil && s.kube.Namespace != "" {
 		ns = s.kube.Namespace
 	}
-	d := ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.opts.WorkspacesChanged, Mail: s.mailer}
+	// An extension that creates or changes a workspace needs everything
+	// the server itself does after one: the front-door reconciler poked,
+	// the host resolver's memory dropped, the identity provider's
+	// callbacks refreshed (RFC-0080) — not the controller poke alone.
+	d := ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.workspacesChanged, Mail: s.mailer}
 	if s.store != nil {
 		d.Invite = s.inviteHook
+		d.InviteBackground = s.inviteBackgroundHook
 	}
 	return d
 }
 
 // routeGroups implements ext.Router.
 type routeGroups struct {
-	pub, api, wsAdmin, admin gin.IRouter
-	s                        *Server
+	pub, api, wsAdmin, admin, platform gin.IRouter
+	s                                  *Server
 }
 
-func (r routeGroups) Public() gin.IRouter { return r.pub }
+func (r routeGroups) Public() gin.IRouter   { return r.pub }
+func (r routeGroups) Platform() gin.IRouter { return r.platform }
 func (r routeGroups) SetLocalAccounts(la ext.LocalAccountStore) {
 	if r.s != nil {
 		r.s.localAccounts = la
@@ -587,6 +597,8 @@ func (s *Server) routes() error {
 	api.GET("/cluster/plans", console, s.require(authz.ClusterAdmin), s.listPlans)
 	api.POST("/cluster/plans", console, s.require(authz.ClusterAdmin), s.createPlan)
 	api.POST("/cluster/plans/:name/assign", console, s.require(authz.ClusterAdmin), s.assignPlan)
+	api.GET("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.listPlanVersions)
+	api.POST("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.addPlanVersion)
 	api.GET("/cluster/economics", console, s.require(authz.ClusterAdmin), s.clusterEconomics)
 	api.GET("/workspace/connections", s.listConnections) // the caller's connected assistants (RFC-0032)
 	api.DELETE("/workspace/connections/:id", s.deleteConnection)
@@ -689,7 +701,7 @@ func (s *Server) routes() error {
 	for _, x := range s.opts.Extensions {
 		// Extensions manage cluster-level things (accounts, connectors,
 		// storage): the operator's, so the console's.
-		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin)), s: s}, deps); err != nil {
+		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin)), platform: s.engine.Group("/api"), s: s}, deps); err != nil {
 			return fmt.Errorf("extension %s: %w", x.Name(), err)
 		}
 	}

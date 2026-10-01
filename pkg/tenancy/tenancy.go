@@ -511,7 +511,7 @@ func (a *Addresses) SleepDefault(slug string) (after, resuming string) {
 	defer cancel()
 	var e sleepEntry
 	if wp, err := a.Store.WorkspacePlan(ctx, slug); err == nil && wp != nil {
-		if p, err := a.Store.GetPlan(ctx, wp.PlanID); err == nil && p != nil {
+		if p, err := a.Store.GetPlan(ctx, wp.PlanName); err == nil && p != nil {
 			e.after, e.resuming = p.SleepAfter, p.SleepResuming
 		}
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {

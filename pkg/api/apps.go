@@ -1064,7 +1064,19 @@ func restoreSizes(a *shpyrdv1.App, rel *shpyrdv1.Release) {
 // mutateApp applies a read-modify-write with conflict retries and writes the
 // HTTP error itself; callers only check err != nil.
 func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*shpyrdv1.App, error) {
-	key := s.projectKey(c)
+	// The project named in the path, in the request's workspace: an
+	// unknown one is a 404 here, not an empty name handed to Kubernetes
+	// ("resource name may not be empty").
+	found, err := s.projectApp(c)
+	if errors.Is(err, store.ErrNotFound) || apierrors.IsNotFound(err) {
+		abort(c, http.StatusNotFound, errors.New("project not found"))
+		return nil, err
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return nil, err
+	}
+	key := types.NamespacedName{Namespace: found.Namespace, Name: found.Name}
 	for attempt := 0; attempt < 5; attempt++ {
 		app := &shpyrdv1.App{}
 		if err := s.apps.Get(c.Request.Context(), key, app); err != nil {
@@ -1098,7 +1110,7 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 			return nil, err
 		}
 	}
-	err := errors.New("too many conflicts")
+	err = errors.New("too many conflicts")
 	abort(c, http.StatusConflict, err)
 	return nil, err
 }

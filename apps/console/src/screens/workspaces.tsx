@@ -17,6 +17,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Switch } from "@shpyrd/ui/components/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
+import { doorState } from "@/api/types";
 import { ago, Failed, Loading } from "./shared";
 
 // The workspaces the platform hosts: the operator's own and the
@@ -62,6 +63,7 @@ export function Workspaces() {
                   <TableHead>Owner</TableHead>
                   {priced && <TableHead>Plan</TableHead>}
                   <TableHead>State</TableHead>
+                  <TableHead>Ready</TableHead>
                   <TableHead>Made</TableHead>
                   <TableHead className="text-right" />
                 </TableRow>
@@ -89,6 +91,15 @@ export function Workspaces() {
                     )}
                     <TableCell>
                       <StatusBadge type={w.status === "active" ? "success" : "error"}>{w.status}</StatusBadge>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {doorState(w).ready ? (
+                        <StatusBadge type="success">yes</StatusBadge>
+                      ) : (
+                        <StatusBadge type="warning" title={doorState(w).text}>
+                          not yet
+                        </StatusBadge>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{ago(w.createdAt)}</TableCell>
                     <TableCell className="text-right">
@@ -152,9 +163,17 @@ function NewWorkspace() {
     onSuccess: (w) => {
       queries.invalidateQueries({ queryKey: ["workspaces"] });
       const inv = w.ownerInvitation;
+      if (w.ownerInvitationPending) {
+        // Mail is set up: the invitation goes out once the door answers,
+        // so its link leads somewhere (the Door column says when).
+        toast.success(`${w.slug} made`, {
+          description: `The door at ${w.address} takes a few minutes; the invitation to ${owner.trim()} goes out by email once it answers.`,
+        });
+        return close(false);
+      }
       if (!inv) {
         toast.success(`${w.slug} made`, {
-          description: `It answers at ${w.address}.`,
+          description: `It answers at ${w.address} once its door is ready.`,
         });
         return close(false);
       }

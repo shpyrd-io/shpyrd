@@ -28,7 +28,7 @@ processes:
       - name: data      # a volume of the project (shpyrd volumes create data --size 5Gi)
         path: /data
   worker:
-    size: shared-xs
+    size: shared-s
     replicas: 2         # pin the instance count
     command: ["/cnb/process/worker"]   # override the entrypoint (required for non-web types of Dockerfile images)
     args: ["--queue", "default"]

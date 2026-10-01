@@ -53,6 +53,7 @@ type BillingAnswer = {
   lines: { project?: string; component: string; metric: string; quantity: number; unit: string; unitPrice: number; grossAmount: number }[];
   total: number;
   currency: string;
+  free?: boolean;
 };
 
 // `17:04:12` from the time a record carries, or nothing.
@@ -153,6 +154,7 @@ export const backend: Api = {
       currency: r.currency,
       month: r.period,
       past,
+      free: r.free,
       total: r.total,
       projection: past ? undefined : r.projection,
       lines: r.lines.map((l) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, price: l.unitPrice, amount: l.grossAmount })),

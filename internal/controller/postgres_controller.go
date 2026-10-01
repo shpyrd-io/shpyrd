@@ -40,6 +40,11 @@ type PostgresReconciler struct {
 	Storage StorageProfile
 	// PlatformPool is the node pool databases run on (RFC-0077); "" = any.
 	PlatformPool string
+	// PlanSleepDefault answers the default idle period before a database
+	// of the project namespace hibernates, from its workspace's plan
+	// (RFC-0075); "" when there is none. A database with a policy of its
+	// own does not ask. Nil: no plan defaults.
+	PlanSleepDefault func(ctx context.Context, namespace string) string
 }
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
@@ -218,7 +223,7 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		if ready < int64(instances(pg)) {
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
-		if pg.Spec.Sleep != nil {
+		if after, _, _ := r.effectiveSleep(ctx, pg); after > 0 || pg.Spec.Sleep != nil {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil // the idle clock (RFC-0075)
 		}
 		if pg.Spec.Backups != nil {
@@ -416,9 +421,15 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 	get := func(k string) string { return string(sec.Data[k]) }
 	// With a sleep policy apps connect through the shpyrd-owned Service
 	// "<name>": it points at the primary while awake and at the wake proxy
-	// while asleep (RFC-0075). Without one, CNPG's "-rw" as always.
+	// while asleep (RFC-0075). Without one, CNPG's "-rw" as always. The
+	// policy may be the database's own or its workspace plan's default;
+	// the Service exists exactly when one applies, so it is what is asked.
 	host := firstNonEmpty(get("host"), name+"-rw")
 	sleeps := sleepAfterDuration(pg.Spec.Sleep) > 0 || (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended)
+	if !sleeps {
+		svc := &corev1.Service{}
+		sleeps = c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, svc) == nil
+	}
 	if sleeps {
 		host = name
 	}

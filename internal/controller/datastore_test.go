@@ -57,7 +57,7 @@ func TestPostgresReconcile(t *testing.T) {
 		t.Errorf("cluster spec = %v", cluster.Object["spec"])
 	}
 	// Small sizes are raised to the PostgreSQL minimum.
-	small := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "tiny", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-xs"}}
+	small := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "tiny", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
 	if err := c.Create(context.Background(), small); err != nil {
 		t.Fatal(err)
 	}

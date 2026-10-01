@@ -10,7 +10,7 @@ processes:
     # Default: shared-s (0.5 CPU burstable, 64Mi). This Go app fits in it.
     # size: shared-m
   worker:
-    size: shared-xs
+    size: shared-s
 
 build:
   env:

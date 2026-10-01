@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS plans_name_effective;
+ALTER TABLE plans ADD CONSTRAINT plans_name_key UNIQUE (name);
+ALTER TABLE plans DROP COLUMN IF EXISTS cost_budget;
+ALTER TABLE plans DROP COLUMN IF EXISTS free;
+ALTER TABLE plans DROP COLUMN IF EXISTS limits;
+ALTER TABLE plans DROP COLUMN IF EXISTS self_serve;
+ALTER TABLE plans DROP COLUMN IF EXISTS monthly_budget;
+ALTER TABLE plans DROP COLUMN IF EXISTS postgres_sleep_after;
+ALTER TABLE workspaces DROP COLUMN IF EXISTS owner_invite_pending;
+ALTER TABLE workspaces DROP COLUMN IF EXISTS ready_at;
+ALTER TABLE workspaces DROP COLUMN IF EXISTS readiness;

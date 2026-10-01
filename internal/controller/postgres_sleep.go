@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -51,6 +52,25 @@ func sleepAfterDuration(spec *shpyrdv1.PostgresSleepSpec) time.Duration {
 	return parseSleepDuration(spec.After)
 }
 
+// planDefaultNote marks a status message of a database sleeping by its
+// workspace's plan rather than a policy of its own.
+const planDefaultNote = "(workspace plan default)"
+
+// effectiveSleep is the database's sleep policy as it applies: its own
+// when it has one (an explicit "off" is a policy too, and opts out of the
+// plan's default), else the workspace's plan default, else none. The third
+// result says the plan's default applies.
+func (r *PostgresReconciler) effectiveSleep(ctx context.Context, pg *shpyrdv1.Postgres) (after time.Duration, suspended bool, fromPlan bool) {
+	if pg.Spec.Sleep != nil {
+		return sleepAfterDuration(pg.Spec.Sleep), pg.Spec.Sleep.Suspended, false
+	}
+	if r.PlanSleepDefault == nil {
+		return 0, false, false
+	}
+	after = parseSleepDuration(r.PlanSleepDefault(ctx, pg.Namespace))
+	return after, false, after > 0
+}
+
 // activityStaleAfter is how old the activity check may be before the
 // reconciler refuses to hibernate: without a fresh signal (Prometheus down,
 // metering loop not leader) a busy database must never be put to sleep.
@@ -74,8 +94,14 @@ const (
 //	waking ──(CNPG primary ready)──▶ awake
 //	any ──(spec.sleep.suspended)──▶ suspended ──(resume)──▶ waking
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
-	after := sleepAfterDuration(pg.Spec.Sleep)
-	suspended := pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended
+	after, suspended, fromPlan := r.effectiveSleep(ctx, pg)
+	defer func() {
+		// The status says where the policy comes from when it is not the
+		// database's own, as a web process's does.
+		if fromPlan && pg.Status.Sleep != nil && pg.Status.Sleep.State == pgAwake && pg.Status.Sleep.Message != "" && !strings.Contains(pg.Status.Sleep.Message, planDefaultNote) {
+			pg.Status.Sleep.Message += " " + planDefaultNote
+		}
+	}()
 
 	// No policy, or an HA database (never sleeps): make sure it is awake
 	// and carry no Service of ours.

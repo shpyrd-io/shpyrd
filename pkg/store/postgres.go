@@ -254,12 +254,12 @@ func (p *Postgres) wsID(ctx context.Context, q interface {
 	return id, err
 }
 
-const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at`
+const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at, readiness, ready_at, owner_invite_pending`
 
 func scanWorkspace(row pgx.Row) (*Workspace, error) {
 	var w Workspace
-	var settings []byte
-	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt)
+	var settings, readiness []byte
+	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt, &readiness, &w.ReadyAt, &w.OwnerInvitePending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -267,6 +267,13 @@ func scanWorkspace(row pgx.Row) (*Workspace, error) {
 		return nil, err
 	}
 	_ = json.Unmarshal(settings, &w.Settings)
+	// '{}' is the column's default: no look yet.
+	if len(readiness) > 2 {
+		var r WorkspaceReadiness
+		if json.Unmarshal(readiness, &r) == nil {
+			w.Readiness = &r
+		}
+	}
 	return &w, nil
 }
 
@@ -353,6 +360,30 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 
 func (p *Postgres) SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error) {
 	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET status = $2, updated_at = now() WHERE slug = $1`, slug, status)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return p.Workspace(ctx, slug)
+}
+
+func (p *Postgres) SetWorkspaceReadiness(ctx context.Context, slug string, r WorkspaceReadiness) (*Workspace, error) {
+	raw, _ := json.Marshal(r)
+	// ready_at is written once, the first time the door answers.
+	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET readiness = $2, ready_at = CASE WHEN $3 AND ready_at IS NULL THEN now() ELSE ready_at END WHERE slug = $1`, slug, raw, r.Ready)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return p.Workspace(ctx, slug)
+}
+
+func (p *Postgres) SetWorkspaceOwnerInvitePending(ctx context.Context, slug, email string) (*Workspace, error) {
+	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET owner_invite_pending = $2 WHERE slug = $1`, slug, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		return nil, err
 	}
@@ -1501,14 +1532,51 @@ func (p *Postgres) DeleteOAuthToken(ctx context.Context, ws, id string) error {
 // ---- billing (RFC-0075) -------------------------------------------------------
 
 func (p *Postgres) CreatePlan(ctx context.Context, pl Plan) (*Plan, error) {
+	var n int
+	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM plans WHERE name = $1`, pl.Name).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, ErrConflict
+	}
+	return p.insertPlan(ctx, pl)
+}
+
+// AddPlanVersion adds a version of an existing plan, later than every
+// version it has.
+func (p *Postgres) AddPlanVersion(ctx context.Context, pl Plan) (*Plan, error) {
+	var n int
+	var latest *time.Time
+	if err := p.pool.QueryRow(ctx, `SELECT count(*), max(effective_from) FROM plans WHERE name = $1`, pl.Name).Scan(&n, &latest); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrNotFound
+	}
+	if latest != nil && !pl.EffectiveFrom.After(*latest) {
+		return nil, ErrConflict
+	}
+	return p.insertPlan(ctx, pl)
+}
+
+func (p *Postgres) insertPlan(ctx context.Context, pl Plan) (*Plan, error) {
 	if pl.Currency == "" {
 		pl.Currency = "USD"
 	}
+	if pl.EffectiveFrom.IsZero() {
+		pl.EffectiveFrom = time.Now().UTC()
+	}
 	var out Plan
-	err := p.pool.QueryRow(ctx, `INSERT INTO plans (name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, sleep_after, sleep_resuming)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+planColumns,
-		pl.Name, pl.CPUHour, pl.MemoryGiBHour, pl.StorageGiBMonth, pl.EgressGiB, pl.MinMonthly, pl.Currency, pl.EffectiveFrom, pl.SleepAfter, pl.SleepResuming).
-		Scan(planFields(&out)...)
+	var limits []byte
+	if pl.Limits != nil {
+		limits, _ = json.Marshal(pl.Limits)
+	}
+	var row planRow
+	err := p.pool.QueryRow(ctx, `INSERT INTO plans (name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, sleep_after, sleep_resuming, postgres_sleep_after, monthly_budget, self_serve, limits, free, cost_budget)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING `+planColumns,
+		pl.Name, pl.CPUHour, pl.MemoryGiBHour, pl.StorageGiBMonth, pl.EgressGiB, pl.MinMonthly, pl.Currency, pl.EffectiveFrom, pl.SleepAfter, pl.SleepResuming, pl.PostgresSleepAfter, pl.MonthlyBudget, pl.SelfServe, limits, pl.Free, pl.CostBudget).
+		Scan(row.fields(&out)...)
+	row.finish(&out)
 	if isUnique(err) {
 		return nil, ErrConflict
 	}
@@ -1517,14 +1585,55 @@ func (p *Postgres) CreatePlan(ctx context.Context, pl Plan) (*Plan, error) {
 
 // planColumns and planFields keep the plan's SELECT list and Scan targets
 // in one place.
-const planColumns = `id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at, sleep_after, sleep_resuming`
+const planColumns = `id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at, sleep_after, sleep_resuming, postgres_sleep_after, monthly_budget, self_serve, limits, free, cost_budget`
 
-func planFields(pl *Plan) []any {
-	return []any{&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt, &pl.SleepAfter, &pl.SleepResuming}
+// planRow holds what a plan's row carries that is not scanned straight
+// into the Plan: the limits, JSON or null.
+type planRow struct{ limits []byte }
+
+func (r *planRow) fields(pl *Plan) []any {
+	return []any{&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt, &pl.SleepAfter, &pl.SleepResuming, &pl.PostgresSleepAfter, &pl.MonthlyBudget, &pl.SelfServe, &r.limits, &pl.Free, &pl.CostBudget}
 }
 
+func (r *planRow) finish(pl *Plan) {
+	if len(r.limits) > 0 {
+		var l Limits
+		if json.Unmarshal(r.limits, &l) == nil {
+			pl.Limits = &l
+		}
+	}
+}
+
+// ListPlans answers the version in force of every plan.
 func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
-	rows, err := p.pool.Query(ctx, `SELECT `+planColumns+` FROM plans ORDER BY name`)
+	all, err := p.queryPlans(ctx, `SELECT `+planColumns+` FROM plans ORDER BY name, effective_from`)
+	if err != nil {
+		return nil, err
+	}
+	return currentPlans(all, time.Now()), nil
+}
+
+// currentPlans keeps the version in force of each name, in name order.
+func currentPlans(all []Plan, now time.Time) []Plan {
+	var out []Plan
+	byName := map[string][]Plan{}
+	var names []string
+	for _, pl := range all {
+		if _, seen := byName[pl.Name]; !seen {
+			names = append(names, pl.Name)
+		}
+		byName[pl.Name] = append(byName[pl.Name], pl)
+	}
+	for _, name := range names {
+		if cur := PlanAt(byName[name], now); cur != nil {
+			out = append(out, *cur)
+		}
+	}
+	return out
+}
+
+func (p *Postgres) queryPlans(ctx context.Context, sql string, args ...any) ([]Plan, error) {
+	rows, err := p.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1532,21 +1641,56 @@ func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
 	var out []Plan
 	for rows.Next() {
 		var pl Plan
-		if err := rows.Scan(planFields(&pl)...); err != nil {
+		var row planRow
+		if err := rows.Scan(row.fields(&pl)...); err != nil {
 			return nil, err
 		}
+		row.finish(&pl)
 		out = append(out, pl)
 	}
 	return out, rows.Err()
 }
+
+// GetPlan finds a version by id, or a plan's version in force by name.
 func (p *Postgres) GetPlan(ctx context.Context, nameOrID string) (*Plan, error) {
 	var pl Plan
-	err := p.pool.QueryRow(ctx, `SELECT `+planColumns+` FROM plans WHERE id::text = $1 OR name = $1`, nameOrID).
-		Scan(planFields(&pl)...)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var row planRow
+	err := p.pool.QueryRow(ctx, `SELECT `+planColumns+` FROM plans WHERE id::text = $1`, nameOrID).Scan(row.fields(&pl)...)
+	if err == nil {
+		row.finish(&pl)
+		return &pl, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) && !isInvalidUUID(err) {
+		return nil, err
+	}
+	versions, err := p.PlanVersions(ctx, nameOrID)
+	if err != nil {
+		return nil, err
+	}
+	cur := PlanAt(versions, time.Now())
+	if cur == nil {
 		return nil, ErrNotFound
 	}
-	return &pl, err
+	return cur, nil
+}
+
+// PlanVersions lists a plan's versions, oldest first.
+func (p *Postgres) PlanVersions(ctx context.Context, name string) ([]Plan, error) {
+	out, err := p.queryPlans(ctx, `SELECT `+planColumns+` FROM plans WHERE name = $1 ORDER BY effective_from`, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+	return out, nil
+}
+
+// isInvalidUUID says Postgres refused a text that is not a uuid (an id
+// lookup given a name).
+func isInvalidUUID(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "22P02"
 }
 func (p *Postgres) AssignPlan(ctx context.Context, ws, nameOrID string) (*WorkspacePlan, error) {
 	plan, err := p.GetPlan(ctx, nameOrID)

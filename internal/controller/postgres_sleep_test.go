@@ -220,3 +220,35 @@ func TestPostgresSleepHANeverSleeps(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A database without a policy of its own takes its workspace plan's default
+// (RFC-0075); an explicit "off" on the database opts out of it; a policy of
+// its own wins over the plan.
+func TestPostgresSleepFollowsThePlanDefault(t *testing.T) {
+	ctx := context.Background()
+	r := &PostgresReconciler{PlanSleepDefault: func(_ context.Context, namespace string) string {
+		if namespace == "p-free" {
+			return "10m0s"
+		}
+		return ""
+	}}
+	own := func(sleep *shpyrdv1.PostgresSleepSpec, ns string) *shpyrdv1.Postgres {
+		return &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: ns}, Spec: shpyrdv1.PostgresSpec{Sleep: sleep}}
+	}
+	if after, _, fromPlan := r.effectiveSleep(ctx, own(nil, "p-free")); after != 10*time.Minute || !fromPlan {
+		t.Errorf("no policy of its own on a plan with a default: %s fromPlan=%v", after, fromPlan)
+	}
+	if after, _, fromPlan := r.effectiveSleep(ctx, own(nil, "p-paid")); after != 0 || fromPlan {
+		t.Errorf("no policy and no plan default: %s fromPlan=%v", after, fromPlan)
+	}
+	if after, _, fromPlan := r.effectiveSleep(ctx, own(&shpyrdv1.PostgresSleepSpec{After: "off"}, "p-free")); after != 0 || fromPlan {
+		t.Errorf("an explicit off opts out of the plan's default: %s fromPlan=%v", after, fromPlan)
+	}
+	if after, _, fromPlan := r.effectiveSleep(ctx, own(&shpyrdv1.PostgresSleepSpec{After: "30m"}, "p-free")); after != 30*time.Minute || fromPlan {
+		t.Errorf("its own policy wins: %s fromPlan=%v", after, fromPlan)
+	}
+	// Without the lookup there are no plan defaults at all.
+	if after, _, _ := (&PostgresReconciler{}).effectiveSleep(ctx, own(nil, "p-free")); after != 0 {
+		t.Errorf("no lookup, no default: %s", after)
+	}
+}

@@ -276,7 +276,7 @@ func run(o runOptions, logger *slog.Logger) error {
 
 	if o.controller {
 		runControllers := func() error {
-			mgr, err := newManager(k, o, memberships, workspaces)
+			mgr, err := newManager(k, o, memberships, workspaces, srv.Deps())
 			if err != nil {
 				return err
 			}
@@ -369,7 +369,7 @@ func openStore(logger *slog.Logger, k *kube.Client, def store.DefaultWorkspaceSp
 	return st, nil
 }
 
-func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler) (ctrl.Manager, error) {
+func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler, apiDeps ext.Deps) (ctrl.Manager, error) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, err
@@ -445,6 +445,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			IngressClassInternal:  envOr("SHPYRD_INGRESS_CLASS_INTERNAL", "nginx-internal"),
 			InternalLBAddress:     internalLBAddress(k),
 			ExternalLBAddress:     externalLBAddress(k),
+			PublicChecks:          publishesNames(os.Getenv(install.VarDNSProvider)),
 		},
 		// The external address may not exist yet at start (first install):
 		// look it up when a custom domain needs it.
@@ -471,14 +472,26 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	}
 	// Front doors of explicit workspaces (RFC-0033 phase 6); nothing to do
 	// while there is one workspace.
-	workspaces.Client, workspaces.Scheme, workspaces.Config = mgr.GetClient(), mgr.GetScheme(), rec.Config
+	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}
 	if err := mgr.Add(workspaces); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}
-	deps := ext.Deps{Kube: k, Client: mgr.GetClient(), SystemNamespace: k.Namespace, Vars: os.Getenv, Store: memberships.Store, WorkspacesChanged: workspaces.Notify}
+	// Extensions' controllers get what their routes got from the API
+	// server — the store, the mailer, the invitation hooks, the full
+	// workspacesChanged — with the manager's cached client in place of the
+	// API's: a loop that invites or mails runs in the same process as the
+	// routes that do, whichever replica leads.
+	deps := apiDeps
+	deps.Kube, deps.Client, deps.SystemNamespace, deps.Vars = k, mgr.GetClient(), k.Namespace, os.Getenv
+	if deps.Store == nil {
+		deps.Store = memberships.Store
+	}
+	if deps.WorkspacesChanged == nil {
+		deps.WorkspacesChanged = workspaces.Notify
+	}
 	for _, x := range enabledExts {
 		if err := x.Register(mgr, deps); err != nil {
 			return nil, fmt.Errorf("extension %s: %w", x.Name(), err)
@@ -608,4 +621,11 @@ func defaultWorkspaceFromEnv(domain, dashboard string) store.DefaultWorkspaceSpe
 		}
 	}
 	return def
+}
+
+// publishesNames says the install writes its names to public DNS (a DNS
+// provider other than none), so what it publishes can be checked from
+// outside (RFC-0061).
+func publishesNames(provider string) bool {
+	return provider != "" && provider != "none"
 }

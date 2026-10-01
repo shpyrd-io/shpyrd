@@ -565,7 +565,7 @@ func TestSizesAndResize(t *testing.T) {
 
 func TestApplyProcesses(t *testing.T) {
 	s, cr := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
-	rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"size":"shared-m","replicas":3},"worker":{"size":"shared-xs"}}}`, true)
+	rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"size":"shared-m","replicas":3},"worker":{"size":"shared-s"}}}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown process worker must fail: %d %s", rec.Code, rec.Body.String())
 	}

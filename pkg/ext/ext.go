@@ -78,12 +78,15 @@ type Shellable interface {
 // session), protected (any signed-in identity), workspace-admin (the
 // cluster.admin action at any workspace host: owners and admins of the
 // request's workspace, RFC-0033) and admin (the same action at the console
-// only: the operator's).
+// only: the operator's). Platform routes belong to no door: they answer at
+// any host, resolve no workspace and carry no session, so the extension
+// authenticates them itself (a key only its own caller holds).
 type Router interface {
 	Public() gin.IRouter
 	Protected() gin.IRouter
 	WorkspaceAdmin() gin.IRouter
 	Admin() gin.IRouter
+	Platform() gin.IRouter
 }
 
 // WorkspaceContextKey is where the API keeps the request's workspace
@@ -145,6 +148,10 @@ type Deps struct {
 	// account (RFC-0014), stand on the workspace's own door and go out by
 	// email when the mail extension is configured. Nil without a store.
 	Invite func(c *gin.Context, workspace, email, role string) (*InviteOutcome, error)
+	// InviteBackground is Invite for a caller with no request: a loop
+	// that sends a first owner's invitation once their workspace is ready.
+	// The platform itself is the inviter.
+	InviteBackground func(ctx context.Context, workspace, email, role string) (*InviteOutcome, error)
 }
 
 // InviteOutcome is what Invite produced.

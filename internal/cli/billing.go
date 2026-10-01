@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -126,7 +127,7 @@ Plans are platform-level; the cloud assigns them to workspaces.
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return plansList(cmd, g) },
 	}
-	cmd.AddCommand(newPlansListCmd(g), newPlansCreateCmd(g), newPlansAssignCmd(g))
+	cmd.AddCommand(newPlansListCmd(g), newPlansCreateCmd(g), newPlansUpdateCmd(g), newPlansHistoryCmd(g), newPlansAssignCmd(g))
 	return cmd
 }
 
@@ -149,13 +150,29 @@ func plansList(cmd *cobra.Command, g *globalFlags) error {
 			return
 		}
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tCURRENCY\tSLEEP DEFAULT")
+		fmt.Fprintln(tw, "NAME\tFREE\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tBUDGET/MO\tCOST BUDGET/MO\tCURRENCY\tSLEEP DEFAULT\tDB SLEEP\tSELF-SERVE\tLIMITS")
 		for _, p := range plans {
 			sleep := "-"
 			if p.SleepAfter != "" {
 				sleep = p.SleepAfter + " " + firstNonEmpty(p.SleepResuming, "wait")
 			}
-			fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\t%s\n", p.Name, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency, sleep)
+			budget, costBudget, selfServe, free, limits := "-", "-", "no", "no", "-"
+			if p.MonthlyBudget > 0 {
+				budget = fmt.Sprintf("%.2f", p.MonthlyBudget)
+			}
+			if p.CostBudget > 0 {
+				costBudget = fmt.Sprintf("%.2f", p.CostBudget)
+			}
+			if p.Free {
+				free = "yes"
+			}
+			if p.SelfServe {
+				selfServe = "yes"
+			}
+			if p.Limits != nil {
+				limits = limitsString(p.Limits)
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.Name, free, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, budget, costBudget, p.Currency, sleep, firstNonEmpty(p.PostgresSleepAfter, "-"), selfServe, limits)
 		}
 		_ = tw.Flush()
 	})
@@ -169,19 +186,34 @@ func newPlansListCmd(g *globalFlags) *cobra.Command {
 }
 
 func newPlansCreateCmd(g *globalFlags) *cobra.Command {
-	var cpuHour, memGiBHour, storageGiBMonth, egressGiB, minMonthly float64
-	var currency, effectiveFrom, sleepAfter, sleepResuming string
+	var cpuHour, memGiBHour, storageGiBMonth, egressGiB, minMonthly, monthlyBudget, costBudget float64
+	var currency, effectiveFrom, sleepAfter, sleepResuming, pgSleepAfter string
+	var selfServe, free bool
+	var limits limitFlags
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a billing plan",
-		Long: `Create a billing plan: the unit prices a workspace is charged at, and the
-plan's default sleep policy for HTTP apps (RFC-0075). Projects on a plan
-with --sleep-after inherit it unless they set their own policy;
-'shpyrd sleep <project> --after off' opts a project out.
+		Long: `Create a billing plan: the unit prices a workspace is charged at, the plan's
+default sleep for HTTP apps and for databases (RFC-0075), a monthly budget, the
+ceilings a workspace starts with, and whether people may pick the plan when
+they sign up. Projects on a plan with --sleep-after inherit it unless they set
+their own policy ('shpyrd sleep <project> --after off' opts out); databases
+inherit --postgres-sleep-after the same way ('shpyrd pg sleep'). With a
+budget, the workspace's owners are warned at 80% of it and the workspace is
+paused at 100% until the month ends.
 
   shpyrd-ctl plans create starter --cpu-hour 0.02 --memory-gib-hour 0.005 \
       --storage-gib-month 0.10 --egress-gib 0.05 \
-      --sleep-after 15m --sleep-resuming page`,
+      --sleep-after 15m --sleep-resuming page
+  shpyrd-ctl plans create free --free --cost-budget 0.50 --self-serve \
+      --projects 1 --instances 1 --memory 256Mi \
+      --sleep-after 10m --sleep-resuming page --postgres-sleep-after 10m
+
+A free plan (--free) charges nothing: the Billing card shows the consumption
+with nothing to pay. --cost-budget caps what a workspace on the plan may cost
+the platform in a month (OpenCost's cost, the operator's number, shown
+nowhere); --monthly-budget caps the month at the plan's prices. Either cap
+warns the owners at 80% and pauses the workspace at 100% until the month ends.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
@@ -195,6 +227,10 @@ with --sleep-after inherit it unless they set their own policy;
 				"storageGibMonth": storageGiBMonth, "egressGib": egressGiB,
 				"minMonthly": minMonthly, "currency": firstNonEmpty(currency, "USD"),
 				"sleepAfter": sleepAfter, "sleepResuming": sleepResuming,
+				"postgresSleepAfter": pgSleepAfter, "monthlyBudget": monthlyBudget, "costBudget": costBudget, "selfServe": selfServe, "free": free,
+			}
+			if l := limits.limits(); l != nil {
+				body["limits"] = l
 			}
 			if effectiveFrom != "" {
 				t, err := time.Parse("2006-01-02", effectiveFrom)
@@ -208,10 +244,27 @@ with --sleep-after inherit it unless they set their own policy;
 				return err
 			}
 			return g.print(cmd, p, func(w io.Writer) {
+				fmt.Fprintf(w, "Plan %s created.\n", p.Name)
 				if p.SleepAfter != "" {
-					fmt.Fprintf(w, "Plan %s created; its projects sleep after %s (%s mode) unless they say otherwise.\n", p.Name, p.SleepAfter, firstNonEmpty(p.SleepResuming, "wait"))
-				} else {
-					fmt.Fprintf(w, "Plan %s created.\n", p.Name)
+					fmt.Fprintf(w, "Its projects sleep after %s (%s mode) unless they say otherwise.\n", p.SleepAfter, firstNonEmpty(p.SleepResuming, "wait"))
+				}
+				if p.PostgresSleepAfter != "" {
+					fmt.Fprintf(w, "Its databases sleep after %s idle unless they say otherwise.\n", p.PostgresSleepAfter)
+				}
+				if p.Free {
+					fmt.Fprintln(w, "A free plan: nothing to pay; the Billing card shows the consumption alone.")
+				}
+				if p.MonthlyBudget > 0 {
+					fmt.Fprintf(w, "A month is capped at %.2f %s at the plan's prices: owners are warned at 80%%, the workspace is paused at 100%% until the month ends.\n", p.MonthlyBudget, p.Currency)
+				}
+				if p.CostBudget > 0 {
+					fmt.Fprintf(w, "A month is capped at a cost of %.2f %s to the platform (OpenCost); the same warning and pause. Shown nowhere.\n", p.CostBudget, p.Currency)
+				}
+				if p.SelfServe {
+					fmt.Fprintln(w, "People may pick it when they sign up.")
+				}
+				if p.Limits != nil {
+					fmt.Fprintf(w, "Workspaces start with: %s.\n", limitsString(p.Limits))
 				}
 			})
 		},
@@ -225,6 +278,12 @@ with --sleep-after inherit it unless they set their own policy;
 	cmd.Flags().StringVar(&effectiveFrom, "effective-from", "", "date the plan is effective from (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&sleepAfter, "sleep-after", "", "default quiet period before projects on this plan sleep, 5m to 24h (empty: no default)")
 	cmd.Flags().StringVar(&sleepResuming, "sleep-resuming", "page", "default resuming mode for the plan's projects: page or wait")
+	cmd.Flags().StringVar(&pgSleepAfter, "postgres-sleep-after", "", "default idle period before databases on this plan hibernate, 5m to 24h (empty: no default)")
+	cmd.Flags().Float64Var(&monthlyBudget, "monthly-budget", 0, "cap for a month at plan prices: warn owners at 80%, pause the workspace at 100% until the month ends (0: none)")
+	cmd.Flags().BoolVar(&selfServe, "self-serve", false, "people may pick this plan for themselves when they sign up")
+	cmd.Flags().BoolVar(&free, "free", false, "a plan that charges nothing: the bill shows consumption with nothing to pay")
+	cmd.Flags().Float64Var(&costBudget, "cost-budget", 0, "cap for a month on what a workspace may cost the platform (OpenCost's cost): warn owners at 80%, pause at 100% until the month ends; shown nowhere (0: none)")
+	limits.bind(cmd)
 	return cmd
 }
 
@@ -360,6 +419,131 @@ Requires the opencost extension to be enabled for the COGS column.
 				_ = tw.Flush()
 			}
 			return nil
+		},
+	}
+}
+
+// newPlansUpdateCmd is `shpyrd-ctl plans update <name>`: the plan's prices
+// and settings from a date on. A new version is written and the months
+// before it keep the version they were priced at; only the flags given
+// change, the rest stays as in the version in force.
+func newPlansUpdateCmd(g *globalFlags) *cobra.Command {
+	var cpuHour, memGiBHour, storageGiBMonth, egressGiB, minMonthly, monthlyBudget, costBudget float64
+	var currency, effectiveFrom, sleepAfter, sleepResuming, pgSleepAfter string
+	var selfServe, free, clearLimits bool
+	var limits limitFlags
+	cmd := &cobra.Command{
+		Use:   "update <name> [--effective-from YYYY-MM-DD] [the flags of create]",
+		Short: "Change a plan's prices or settings from a date on (a new version; past months keep theirs)",
+		Long: `Add a version of a plan: its prices and settings from --effective-from
+(today when not given) on. The ledger prices every five minutes of use at the
+version in force at that time, so an old month is never rewritten. Only the
+flags given change; everything else stays as in the version in force.
+
+  shpyrd-ctl plans update starter --cpu-hour 0.04 --memory-gib-hour 0.03 --min-monthly 0 --effective-from 2026-11-01
+  shpyrd-ctl plans history starter`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := signalContext()
+			t, err := newTeamsAPI(g)
+			if err != nil {
+				return err
+			}
+			fields := map[string]string{
+				"cpu-hour": "cpuHour", "memory-gib-hour": "memoryGibHour", "storage-gib-month": "storageGibMonth",
+				"egress-gib": "egressGib", "min-monthly": "minMonthly", "currency": "currency",
+				"sleep-after": "sleepAfter", "sleep-resuming": "sleepResuming", "postgres-sleep-after": "postgresSleepAfter",
+				"monthly-budget": "monthlyBudget", "cost-budget": "costBudget", "self-serve": "selfServe", "free": "free",
+			}
+			values := map[string]any{
+				"cpu-hour": cpuHour, "memory-gib-hour": memGiBHour, "storage-gib-month": storageGiBMonth,
+				"egress-gib": egressGiB, "min-monthly": minMonthly, "currency": currency,
+				"sleep-after": sleepAfter, "sleep-resuming": sleepResuming, "postgres-sleep-after": pgSleepAfter,
+				"monthly-budget": monthlyBudget, "cost-budget": costBudget, "self-serve": selfServe, "free": free,
+			}
+			body := map[string]any{}
+			for flag, field := range fields {
+				if cmd.Flags().Changed(flag) {
+					body[field] = values[flag]
+				}
+			}
+			if clearLimits {
+				body["clearLimits"] = true
+			} else if l := limits.limits(); l != nil {
+				body["limits"] = l
+			}
+			if len(body) == 0 {
+				return errors.New("give what changes: a price, a budget, a sleep default, --free, --self-serve or the limits")
+			}
+			if effectiveFrom != "" {
+				day, err := time.Parse("2006-01-02", effectiveFrom)
+				if err != nil {
+					return fmt.Errorf("--effective-from: %w", err)
+				}
+				body["effectiveFrom"] = day
+			}
+			var p api.PlanView
+			if err := t.call(ctx, "POST", "api/cluster/plans/"+url.PathEscape(args[0])+"/versions", body, &p); err != nil {
+				return err
+			}
+			return g.print(cmd, p, func(w io.Writer) {
+				fmt.Fprintf(w, "Plan %s changes from %s: %.6f per core-hour, %.6f per GiB-hour reserved, %.6f per GiB-month, %.6f per GiB egress, floor %.2f %s.\n",
+					p.Name, p.EffectiveFrom.Format("2006-01-02"), p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency)
+				fmt.Fprintln(w, "Months before that date keep the prices they were billed at.")
+			})
+		},
+	}
+	cmd.Flags().Float64Var(&cpuHour, "cpu-hour", 0, "price per core-hour of actual CPU use")
+	cmd.Flags().Float64Var(&memGiBHour, "memory-gib-hour", 0, "price per GiB-hour of reserved memory while awake")
+	cmd.Flags().Float64Var(&storageGiBMonth, "storage-gib-month", 0, "price per GiB-month of provisioned storage")
+	cmd.Flags().Float64Var(&egressGiB, "egress-gib", 0, "price per GiB of HTTP egress")
+	cmd.Flags().Float64Var(&minMonthly, "min-monthly", 0, "minimum charge per month (workspace floor); 0 removes it")
+	cmd.Flags().StringVar(&currency, "currency", "", "three-letter currency code")
+	cmd.Flags().StringVar(&effectiveFrom, "effective-from", "", "the date the version takes effect (YYYY-MM-DD; default today)")
+	cmd.Flags().StringVar(&sleepAfter, "sleep-after", "", "default quiet period before projects sleep, 5m to 24h; off removes the default")
+	cmd.Flags().StringVar(&sleepResuming, "sleep-resuming", "", "default resuming mode: page or wait")
+	cmd.Flags().StringVar(&pgSleepAfter, "postgres-sleep-after", "", "default idle period before databases hibernate, 5m to 24h; off removes it")
+	cmd.Flags().Float64Var(&monthlyBudget, "monthly-budget", 0, "cap for a month at plan prices (0: none)")
+	cmd.Flags().Float64Var(&costBudget, "cost-budget", 0, "cap for a month on what a workspace may cost the platform (0: none); shown nowhere")
+	cmd.Flags().BoolVar(&selfServe, "self-serve", false, "people may pick the plan when they sign up")
+	cmd.Flags().BoolVar(&free, "free", false, "the plan charges nothing")
+	limits.bind(cmd)
+	cmd.Flags().BoolVar(&clearLimits, "clear-limits", false, "workspaces start with no ceilings")
+	return cmd
+}
+
+// newPlansHistoryCmd is `shpyrd-ctl plans history <name>`: its versions.
+func newPlansHistoryCmd(g *globalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "history <name>",
+		Short: "List a plan's versions, oldest first",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := signalContext()
+			t, err := newTeamsAPI(g)
+			if err != nil {
+				return err
+			}
+			var versions []api.PlanView
+			if err := t.call(ctx, "GET", "api/cluster/plans/"+url.PathEscape(args[0])+"/versions", nil, &versions); err != nil {
+				return err
+			}
+			return g.print(cmd, versions, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "FROM\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tBUDGET/MO\tCOST BUDGET/MO\tFREE\tSLEEP DEFAULT\tDB SLEEP")
+				for _, p := range versions {
+					sleep := "-"
+					if p.SleepAfter != "" {
+						sleep = p.SleepAfter + " " + firstNonEmpty(p.SleepResuming, "wait")
+					}
+					free := "no"
+					if p.Free {
+						free = "yes"
+					}
+					fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%.2f\t%.2f\t%s\t%s\t%s\n", p.EffectiveFrom.Format("2006-01-02"), p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.MonthlyBudget, p.CostBudget, free, sleep, firstNonEmpty(p.PostgresSleepAfter, "-"))
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }

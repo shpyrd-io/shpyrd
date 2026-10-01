@@ -285,3 +285,25 @@ for agents follows in later releases; the full text is published when it settles
 - 2026-09-27: address change with redirects, custom workspace domains in CNAME mode with a
   primary; the launcher for everyone with search, featured apps and descriptions; workspace
   branding (v0.9.16).
+- 2026-10-01: **workspace readiness.** A workspace is a row the moment it is created and its
+  address answers minutes later; the invitation used to go out in between, and a browser
+  that followed it early cached "no such name" for as long as the zone said. The front-door
+  reconciler now records on the workspace what it sees at the door — the Ingress, the
+  certificate's Secret, and, where the platform publishes names, the name at the zone's own
+  servers and the door over HTTPS — and the moment every check first passed (`readiness`,
+  `ready_at`; migration 000018). `GET /api/workspaces[/:slug]` carries it;
+  `shpyrd-ctl workspaces status <slug> [--wait]` shows it and exits non-zero until the door
+  answers; `workspaces list` has a READY column; `workspaces create --wait`. The first owner's
+  invitation waits for that moment on the cloud (`owner_invite_pending`;
+  `ext.Deps.InviteBackground`), unless mail is not configured, when the link is returned at
+  once as before. Extensions that change workspaces now get the server's full
+  `workspacesChanged` (front doors, host cache, the identity provider's callbacks), which the
+  cloud's create route had been missing. `ext.Router.Platform()` is a route group of no door,
+  for routes an extension authenticates itself (the cloud's signup API).
+- 2026-10-01: **sign-up, both entrances.** The cloud's signup API (`/api/signup/*`, behind a
+  key only the signup application holds): plans a person may pick, slug availability, an
+  emailed code that proves the email, one workspace per email on a self-serve plan, and a
+  status that hands over the way in once the door answers. The CLI's entrance (`shpyrd login
+  --signup`, or `shpyrd login` with no URL at a terminal) is a device flow against the signup:
+  the page approves the code by creating the workspace, and the CLI holds a session token for
+  it the moment the door answers. Run end to end on the kind cluster on this date.
