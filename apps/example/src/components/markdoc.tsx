@@ -5,6 +5,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/compone
 import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
 import { IDE } from "@shpyrd/ui/components/ide";
+import { addToAgent, agents } from "@shpyrd/content/site/agents";
 
 // What draws each tag and node of a text. A text names what it wants
 // ("callout", a fenced block of code); which component of design/ui draws
@@ -121,4 +122,23 @@ function Message({
   );
 }
 
-export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message };
+// How to add shpyrd to each agent. The site shows them as tabs; here each is
+// listed with what to paste.
+function AgentSetup() {
+  return (
+    <div className="not-prose my-6 grid gap-4">
+      {agents.map((agent) => (
+        <div key={agent.id} className="grid gap-2">
+          <p className="text-sm font-medium">
+            {agent.name}
+            {agent.file && <span className="text-muted-foreground"> · {agent.file}</span>}
+          </p>
+          <IDE code={agent.snippet} language="txt" showLineNumbers={false} />
+        </div>
+      ))}
+      <p className="text-sm text-muted-foreground">{addToAgent.note}</p>
+    </div>
+  );
+}
+
+export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message, AgentSetup };

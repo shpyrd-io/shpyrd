@@ -84,6 +84,8 @@ function configFor(seen: Map<string, number>): Config {
       // A conversation with an agent, drawn as the agent's own window: a
       // `chat`, holding a `message` for each turn. An agent's turn may list
       // what it did before it answered, in `steps`.
+      // How to add shpyrd to each agent: a tab for each.
+      "agent-setup": { render: "AgentSetup", selfClosing: true },
       chat: {
         render: "Chat",
         attributes: { title: { type: String, default: "Your agent" }, detail: { type: String } },

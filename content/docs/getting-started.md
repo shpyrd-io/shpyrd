@@ -12,16 +12,9 @@ Sign up for shpyrd cloud and give your workspace a name. It answers at its own a
 
 ## 2. Add shpyrd to your agent
 
-Your workspace is a connector for AI assistants, at `https://acme.shpyrd.app/mcp` (use your workspace's address). Add it once:
+Your workspace is a connector for AI assistants, at your workspace's address followed by `/mcp` - like `https://acme.shpyrd.app/mcp`. Pick the agent you use and add it once:
 
-- **Claude Code** - in a terminal:
-
-  ```shell
-  claude mcp add --transport http shpyrd https://acme.shpyrd.app/mcp
-  ```
-
-- **Claude** - **Settings › Connectors › Add custom connector**, and paste the address.
-- **Codex, Cursor, VS Code and others** - add the same address as an MCP server; [AI assistants](/docs/mcp) has each one's settings.
+{% agent-setup /%}
 
 The first time, your agent sends you to your workspace to sign in and **Allow** it. It works as you, and never with more than your roles allow.
 

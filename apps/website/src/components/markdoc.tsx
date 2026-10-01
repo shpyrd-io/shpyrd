@@ -5,6 +5,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/compone
 import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
 import { IDE } from "@shpyrd/ui/components/ide";
+import { AgentSetup } from "@/components/agent-setup";
 
 // What draws each tag and node of a text. A text names what it wants
 // ("callout", a fenced block of code); which component of design/ui draws
@@ -122,4 +123,4 @@ function Message({
   );
 }
 
-export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message };
+export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message, AgentSetup };
