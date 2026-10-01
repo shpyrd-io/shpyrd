@@ -51,6 +51,8 @@ shpyrd-ctl mail test you@example.com
 
 STARTTLS on port 587 is the default; `--tls` speaks TLS from the first byte (port 465); `--plain` is for a relay on a private network only — credentials are never sent unencrypted anywhere else. PLAIN and LOGIN authentication are supported. The test message is sent by the server from inside the cluster, so it proves the settings, the network path and the sender address at once; the **Cluster** page's Email card shows the status and sends the same test. Deliveries to one address are rate limited (five in ten minutes), and every test and failure is in the audit trail. Without a sender, invitations show their link to whoever invites, to pass along.
 
+Any SMTP relay works, and the two kinds differ in one thing. A commercial provider (Mailgun, SES, Postmark, Resend...) keeps a suppression list per sending domain on every plan: addresses that bounced, complained or unsubscribed are refused from then on, over SMTP as much as over its API, and the list is yours to edit in its panel. A relay of your own does not, and the platform keeps no such list either: its volume is invitations and alerts to people an administrator named, and the rate limit above is the only guard. Either way the platform learns only what the relay answers during delivery; a failure the relay discovers later is in the provider's log, not in the audit trail.
+
 ## Signing in with an account
 
 Out of the box the dashboard is protected by the **admin token** (`shpyrd cluster token`), which is right for one developer and for automation (and can be switched off later, see [the admin token](/docs/access#the-admin-token)). With the `auth-local` extension, people get their own accounts:

@@ -91,7 +91,7 @@ shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
 shpyrd-ctl mail test you@example.com
 ```
 
-The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along.
+The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along. A commercial relay refuses addresses that bounced or complained on its own; with a relay of your own, an unreachable address is yours to notice (see [Email](/docs/extensions#email)).
 
 ## Kubernetes RBAC mirror
 
