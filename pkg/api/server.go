@@ -390,6 +390,7 @@ func (s *Server) deps() ext.Deps {
 	if s.store != nil {
 		d.Invite = s.inviteHook
 		d.InviteBackground = s.inviteBackgroundHook
+		d.SetSignupPassword = s.setSignupPasswordHook
 	}
 	return d
 }

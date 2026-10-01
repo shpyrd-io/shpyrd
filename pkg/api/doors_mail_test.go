@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,5 +117,29 @@ func TestInvitationIsOneEmailWithBothWaysIn(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &known)
 	if known.SetPasswordLink != "" || len(accounts.pending) != 1 || len(mail.sent) != 2 || !strings.Contains(mail.sent[1].HTML, "Accept invitation") || strings.Contains(mail.sent[1].Text, "set-password") {
 		t.Errorf("known person: %+v mails=%d pending=%v", known, len(mail.sent), accounts.pending)
+	}
+}
+
+// The password a person chose at signup is set on the local sign-in at
+// once, with no set-password step: a new person is created and activated;
+// one who has a password keeps it; without local sign-in there is nothing
+// to set.
+func TestSignupPasswordActivatesTheAccount(t *testing.T) {
+	s, _ := newTestServer(t, nil, nil)
+	accounts := &fakeAccounts{status: map[string]string{"has@person.test": ext.AccountActive}}
+	s.localAccounts = accounts
+	ctx := context.Background()
+	if err := s.setSignupPasswordHook(ctx, " New@Person.test ", "new", "correct horse"); err != nil {
+		t.Fatalf("new person: %v", err)
+	}
+	if len(accounts.pending) != 1 || accounts.pending[0] != "new@person.test" {
+		t.Errorf("the account is created first: %v", accounts.pending)
+	}
+	if err := s.setSignupPasswordHook(ctx, "has@person.test", "has", "another one"); !errors.Is(err, ext.ErrAccountHasPassword) {
+		t.Errorf("a person with a password: %v", err)
+	}
+	s.localAccounts = nil
+	if err := s.setSignupPasswordHook(ctx, "x@person.test", "x", "correct horse"); err == nil {
+		t.Error("without local sign-in the password cannot be set")
 	}
 }
