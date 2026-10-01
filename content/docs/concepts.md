@@ -3,11 +3,11 @@ title: Concepts
 description: Projects, processes, builds, releases and config vars - the vocabulary shpyrd shares with Heroku and Fly.
 ---
 
-Shpyrd borrows the vocabulary of Heroku and Fly and maps it onto Kubernetes objects you can always inspect with `kubectl`. {% .lead %}
+shpyrd borrows the vocabulary of Heroku and Fly. On shpyrd cloud you work with these through the dashboard and the CLI; underneath, each maps onto Kubernetes objects, which you can inspect with `kubectl` on a cluster you run yourself. {% .lead %}
 
 ## Project and resources
 
-A project is what you deploy to: a name, a domain, config vars and a set of **resources**. It has a display name ("My Shop") and a **slug** derived from it (`my-shop`) that identifies it everywhere precise: `--project`, `shpyrd.yaml`, the dashboard URL `/projects/my-shop` and the hostname `my-shop.<domain>`. The name can change; the slug cannot. Resource types today are the **app** (your code with its process types) and **volumes** (persistent disks); databases and caches follow (see [Resources](/docs/resources) and the [roadmap](/docs/roadmap)). A project without a web process is a worker or an agent; no separate type is needed. Under the hood the project is a namespace, `app-<slug>` (label `shpyrd.io/project`), holding an `App` custom resource (`shpyrd.io/v1alpha1`), the `Volume` resources and everything the controller creates for them. `kubectl get apps,volumes.shpyrd.io -A` lists them all; `shpyrd projects info` and the dashboard's Resources card show the same list with status and what uses each resource.
+A project is what you deploy to: a name, a domain, config vars and a set of **resources**. It has a display name ("My Shop") and a **slug** derived from it (`my-shop`) that identifies it everywhere precise: `--project`, `shpyrd.yaml`, the dashboard URL `/projects/my-shop` and the hostname `my-shop.<domain>`. The name can change; the slug cannot. Resource types today are the **app** (your code with its process types) and **volumes** (persistent disks); databases and caches follow (see [Resources](/docs/resources) and the [roadmap](/docs/roadmap)). A project without a web process is a worker or an agent; no separate type is needed. Under the hood (what you see with `kubectl` on a cluster you run yourself) the project is a namespace, `app-<slug>` (label `shpyrd.io/project`), holding an `App` custom resource (`shpyrd.io/v1alpha1`), the `Volume` resources and everything the controller creates for them. `kubectl get apps,volumes.shpyrd.io -A` lists them all; `shpyrd projects info` and the dashboard's Resources card show the same list with status and what uses each resource.
 
 ```yaml
 apiVersion: shpyrd.io/v1alpha1
@@ -82,15 +82,15 @@ Changing any of these creates a release and rolls the processes. The platform al
 
 ## Domains and TLS
 
-A project's `web` process is published at `https://<name>.<cluster domain>` (additional `domains` can be declared). Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
+A project's `web` process is published at `https://<name>.<workspace domain>` - on shpyrd cloud, `https://<name>.acme.shpyrd.app`; on a cluster you run yourself, under its own domain (additional `domains` can be declared). Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
 
 ## Extensions
 
-Optional capabilities are **extensions**: compiled into shpyrd, switched on per cluster with `shpyrd extensions enable`, each bringing its installer component, resource types and commands. `auth-local` (accounts for the dashboard) is the first; databases and caches follow. See [Extensions and sign-in](/docs/extensions).
+Self-hosted: optional capabilities are **extensions**, compiled into shpyrd, switched on per cluster with `shpyrd extensions enable`, each bringing its installer component, resource types and commands. `auth-local` (accounts for the dashboard) is the first; databases and caches follow. See [Extensions and sign-in](/docs/extensions).
 
 ## Environment profile
 
-The **profile** chosen at install time (`local` today) says how load balancing, DNS, TLS and the registry are provided; see [Installation](/docs/installation#environment-profiles).
+Self-hosted: the **profile** chosen at install time (`local`, `oci` or `aws`) says how load balancing, DNS, TLS and the registry are provided; see [Installation](/docs/installation#environment-profiles).
 
 ## Phases
 

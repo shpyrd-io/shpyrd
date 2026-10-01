@@ -3,11 +3,11 @@ title: AI assistants (MCP)
 description: Every workspace is a remote MCP server. Add it to Claude, sign in through the workspace, and ask about your projects.
 ---
 
-Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
+Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.app/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
 
 ## Connecting Claude
 
-1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp`).
+1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp` - on shpyrd cloud, `https://acme.shpyrd.app/mcp`).
 2. In Claude: **Settings › Connectors › Add custom connector**, paste the URL, **Connect**.
 3. Claude sends you to your workspace's sign-in; sign in as usual and **Allow** the connection. The consent page names the assistant and what it may do.
 4. In a conversation, enable the connector and ask. The server's name — what Claude shows — is set by a workspace admin on the same card; by default it is *"<workspace> on shpyrd"*.
@@ -23,7 +23,7 @@ Any MCP client that speaks Streamable HTTP with OAuth 2.1 works the same way: th
 | `get_logs` | the most recent log lines (how many, which process) |
 | `get_metrics` | requests, latency, errors, CPU and memory over a range, summarised (latest, average, peak) |
 
-Everything is **read-only** and **within your roles**: a project you cannot open does not exist to the assistant; an owner's connection is a viewer's. Tools that change things (deploy, scale, config vars) come in a later release behind an explicit permission the consent page will name.
+Everything is **read-only** today and **within your roles**: a project you cannot open does not exist to the assistant; an owner's connection is a viewer's. Tools that change things (deploy, scale, config vars) come in a later release behind an explicit permission the consent page will name.
 
 ## Connections and revocation
 
@@ -31,4 +31,4 @@ Your connected assistants are listed on the same card with what they may do and 
 
 ## For the platform operator
 
-Nothing to configure: the OAuth server and the MCP endpoint answer at every workspace's address, with the workspace's dashboard as the token issuer and the platform's signing keys ([RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md)). Scripts that already hold a personal API token may call `/mcp` with it as a bearer instead of going through OAuth.
+Self-hosted only: on shpyrd cloud there is nothing for you to set up. On a cluster you run, there is nothing to configure either: the OAuth server and the MCP endpoint answer at every workspace's address, with the workspace's dashboard as the token issuer and the platform's signing keys. Scripts that already hold a personal API token may call `/mcp` with it as a bearer instead of going through OAuth.

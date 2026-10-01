@@ -3,6 +3,7 @@ import { BookOpen, Info, LayoutDashboard, Rocket, TriangleAlert, Workflow } from
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { IDE } from "@shpyrd/ui/components/ide";
+import { AgentSetup, Chat, Message } from "@/components/agent-choice";
 
 // What draws each tag and node of a text. A text names what it wants
 // ("callout", a fenced block of code); which component of design/ui draws
@@ -68,4 +69,4 @@ function Fence({ content, language }: { content: string; language?: string }) {
   return <IDE code={content.replace(/\n$/, "")} language={language} showLineNumbers={false} />;
 }
 
-export const components = { Callout, QuickLinks, QuickLink, Fence };
+export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message, AgentSetup };

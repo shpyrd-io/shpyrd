@@ -3,13 +3,13 @@ title: Tour
 description: The dashboard, feature by feature, on a local cluster running three sample projects.
 ---
 
-Screenshots from a local kind cluster running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI. {% .lead %}
+The dashboard is the same on shpyrd cloud, at your workspace's address; these screenshots come from a local kind cluster running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI. {% .lead %}
 
 ## Signing in
 
 ![Login page](/screenshots/login.png)
 
-With the `auth-local` extension enabled, people sign in with their own email and password on this page, never on a third-party screen; a wrong password is shown right here. Company identity providers (Okta or any OpenID Connect issuer) and GitHub or Google appear as buttons. The admin token is still accepted for automation, sits behind a small link, and can be switched off. `shpyrd cluster dashboard` opens the dashboard signed in as you through a one-time link, so the token never reaches the browser.
+With the `auth-local` extension enabled, people sign in with their own email and password on this page, never on a third-party screen; a wrong password is shown right here. Company identity providers (Okta or any OpenID Connect issuer) and GitHub or Google appear as buttons. On a cluster you run yourself, the admin token is still accepted for automation, sits behind a small link, and can be switched off, and `shpyrd cluster dashboard` opens the dashboard signed in as you through a one-time link, so the token never reaches the browser.
 
 ## Projects
 
@@ -87,7 +87,7 @@ Config vars are write-only: names and last-updated times are shown, values never
 
 ![Cluster page](/screenshots/cluster.png)
 
-Capacity (used versus reserved CPU and memory, per node and over time), the instance size catalog, the extensions and their state, installed components and Helm releases.
+Self-hosted: the page the platform admins of a cluster you run yourself see. Capacity (used versus reserved CPU and memory, per node and over time), the instance size catalog, the extensions and their state, installed components and Helm releases.
 
 ## Teams and users
 
@@ -97,9 +97,11 @@ Teams group users (by email or by a group from the identity provider) so project
 
 ![Users page](/screenshots/users.png)
 
-Local accounts of the `auth-local` extension: add, reset passwords, remove.
+Self-hosted: local accounts of the `auth-local` extension: add, reset passwords, remove.
 
 ## Try it yourself
+
+On a cluster you run yourself (`pg` and `redis` go through the cluster; on shpyrd cloud, add databases from the project's **Resources** card):
 
 ```shell
 shpyrd projects create shop --public && cd examples/shop && shpyrd deploy   # a public shop; without --public visitors sign in

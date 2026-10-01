@@ -3,7 +3,7 @@ title: Architecture guide
 description: How the installer, the App controller and the server turn a Kubernetes cluster into a PaaS.
 ---
 
-Shpyrd is two binaries and a set of well-known open source components. The CLI installs and operates the cluster from your machine; the server runs inside it as API, controller and dashboard. {% .lead %}
+shpyrd is two binaries and a set of well-known open source components. This guide is for running shpyrd yourself, or for knowing how it works; on shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The CLI installs and operates the cluster from your machine; the server runs inside it as API, controller and dashboard. {% .lead %}
 
 ## Components
 
@@ -32,8 +32,8 @@ Cloud profiles (`oci` today) swap the pieces that differ - a cloud load balancer
 
 Three decisions shaped the profiles:
 
-- **Registry trust.** The in-cluster registry sits on a fixed ClusterIP (`10.96.0.50:5000`) and serves TLS only, with a certificate from the platform CA whose SAN is that address, plus one generated credential. kpack has no setting for a private CA and every step of a build talks to the registry, so the server runs an admission webhook that mounts the cluster's trust bundle into each container of a build pod and sets `SSL_CERT_FILE` (every step is a Go binary); the kpack controller and BuildKit get the same bundle, and a DaemonSet writes the CA where each node's runtime reads it (containerd's `certs.d`, CRI-O's `certs.d`). TLS-only matters: go-containerregistry treats RFC 1918 addresses as insecure-eligible and races plain HTTP against HTTPS, and only a registry without a plaintext listener makes that race always end on HTTPS ([RFC-0059](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0059-in-cluster-registry-on-cloud.md)).
-- **Certificates per host.** Each hostname that needs a certificate has its own `Certificate` object owned by the App - custom domains always, the project hostname only when no platform wildcard serves it - so a domain whose DNS is not ready never blocks the others. With a DNS provider, one wildcard certificate is ingress-nginx's default certificate and project Ingresses carry none ([RFC-0061](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0061-dns-providers.md), [RFC-0034](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0034-domains-and-certificates.md)).
+- **Registry trust.** The in-cluster registry sits on a fixed ClusterIP (`10.96.0.50:5000`) and serves TLS only, with a certificate from the platform CA whose SAN is that address, plus one generated credential. kpack has no setting for a private CA and every step of a build talks to the registry, so the server runs an admission webhook that mounts the cluster's trust bundle into each container of a build pod and sets `SSL_CERT_FILE` (every step is a Go binary); the kpack controller and BuildKit get the same bundle, and a DaemonSet writes the CA where each node's runtime reads it (containerd's `certs.d`, CRI-O's `certs.d`). TLS-only matters: go-containerregistry treats RFC 1918 addresses as insecure-eligible and races plain HTTP against HTTPS, and only a registry without a plaintext listener makes that race always end on HTTPS.
+- **Certificates per host.** Each hostname that needs a certificate has its own `Certificate` object owned by the App - custom domains always, the project hostname only when no platform wildcard serves it - so a domain whose DNS is not ready never blocks the others. With a DNS provider, one wildcard certificate is ingress-nginx's default certificate and project Ingresses carry none.
 - **Multi-arch builders.** The prebuilt Paketo builder images are amd64-only, which breaks on Apple Silicon. The builder is assembled from the individual Paketo buildpackages (Go, Node.js, Java, Python, Ruby, .NET, web servers, Procfile), which ship amd64 and arm64, so kpack resolves the right architecture per node.
 
 ## The App controller
@@ -76,5 +76,3 @@ apps/                 the console and the workspace applications (Next, static f
 examples/hello        example project (Go, web + worker)
 rfcs/                 design documents
 ```
-
-The full design record, including the alternatives considered, is [RFC-0001](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0001-mvp-local-platform.md).

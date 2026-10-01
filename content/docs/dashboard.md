@@ -3,11 +3,15 @@ title: Dashboard
 description: The web UI - projects, releases, builds, logs, metrics and cluster capacity.
 ---
 
-The dashboard is served by the shpyrd server inside the cluster at `https://shpyrd.<domain>`. Everything the CLI does for projects can be done there, and it is the place to watch what is happening. {% .lead %}
+On shpyrd cloud the dashboard is your workspace's address, `https://acme.shpyrd.app`; on a cluster you run yourself, the shpyrd server serves it at `https://shpyrd.<domain>`. Everything the CLI does for projects can be done there, and it is the place to watch what is happening. {% .lead %}
 
 ## Signing in
 
+On shpyrd cloud you sign in at your workspace's address with your account, or with your company's sign-in once the workspace has one ([Teams, roles and security](/docs/access)).
+
+{% callout title="Self-hosted" %}
 `shpyrd cluster dashboard` opens the dashboard signed in with the admin token; the login page also accepts the token pasted by hand (`shpyrd cluster token`). With the `auth-local` extension enabled, the login page asks for the email and password of accounts created with `shpyrd users add` or on the **Workspace** page (Accounts tab); the header shows who is signed in and has a sign-out entry. See [Extensions and sign-in](/docs/extensions).
+{% /callout %}
 
 ## Projects
 
@@ -44,7 +48,7 @@ Grafana, linked from the header, has the same data with the pre-provisioned "shp
 
 ## Cluster
 
-The **Cluster** page shows the environment profile, the running server version, the domain and, on cloud profiles, the **front doors** (the external and internal load balancer addresses); **capacity**: CPU and memory **used** (what the machines are doing) versus **reserved** (what running processes have requested, which is what limits scheduling), in total and per node (with each node's machine shape and zone), with utilisation over time; the **Registry** card for platform admins (in-cluster or external, health, storage used, images held, the weekly garbage collection with a **Collect now** button, certificate expiry); the **instance size catalog** (add, change, delete sizes and pick the default); global config vars and cluster-wide log drains; the **extensions** with their state; the installed components with versions; and the Helm releases in the cluster.
+Self-hosted: the **Cluster** page is for the platform admins of a cluster you run yourself; on shpyrd cloud, we run the cluster. It shows the environment profile, the running server version, the domain and, on cloud profiles, the **front doors** (the external and internal load balancer addresses); **capacity**: CPU and memory **used** (what the machines are doing) versus **reserved** (what running processes have requested, which is what limits scheduling), in total and per node (with each node's machine shape and zone), with utilisation over time; the **Registry** card for platform admins (in-cluster or external, health, storage used, images held, the weekly garbage collection with a **Collect now** button, certificate expiry); the **instance size catalog** (add, change, delete sizes and pick the default); global config vars and cluster-wide log drains; the **extensions** with their state; the installed components with versions; and the Helm releases in the cluster.
 
 ## Security notes
 

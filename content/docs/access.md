@@ -3,7 +3,7 @@ title: People, teams, roles and security
 description: Who is in the workspace and what they may do, how roles map to Kubernetes RBAC, and the isolation and audit that come with every project.
 ---
 
-Identity says who you are; roles say what you may do. A person holds a **workspace role** (owner, admin or member), projects grant **project roles** to people and teams, the API enforces them, the dashboard hides what a role cannot do, and a controller mirrors the grants into Kubernetes RBAC. {% .lead %}
+Identity says who you are; roles say what you may do. A person holds a **workspace role** (owner, admin or member), projects grant **project roles** to people and teams, the API enforces them and the dashboard hides what a role cannot do. On shpyrd cloud this is all there is to it; on a cluster you run yourself, a controller also mirrors the grants into Kubernetes RBAC. {% .lead %}
 
 ## Workspace roles
 
@@ -82,7 +82,7 @@ The People tab of the Workspace page (or `shpyrd people suspend <email>`) switch
 
 ## Email
 
-Invitations carry their link by email once the platform has a sender. Enable the `mail` extension and point it at your SMTP server (STARTTLS by default; `--tls` for port 465):
+Invitations carry their link by email once the platform has a sender. Self-hosted: on a cluster you run yourself, enable the `mail` extension and point it at your SMTP server (STARTTLS by default; `--tls` for port 465):
 
 ```shell
 shpyrd-ctl extensions enable mail
@@ -91,11 +91,11 @@ shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
 shpyrd-ctl mail test you@example.com
 ```
 
-The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along.
+The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along. A commercial relay refuses addresses that bounced or complained on its own; with a relay of your own, an unreachable address is yours to notice (see [Email](/docs/extensions#email)).
 
 ## Kubernetes RBAC mirror
 
-For every project namespace the controller keeps `RoleBinding`s (`shpyrd-viewer`, `shpyrd-developer`, `shpyrd-admin`) bound to the fixed ClusterRoles `shpyrd-project-*`, with the users (by email) and groups holding each role; platform roles become `ClusterRoleBinding`s. The Kubernetes roles grant the same verbs the dashboard allows (developers can update the App and open shells in its instances; config var Secrets stay write-only), never more than shpyrd itself has.
+Self-hosted: this matters on a cluster you run yourself, where people may also use `kubectl`. For every project namespace the controller keeps `RoleBinding`s (`shpyrd-viewer`, `shpyrd-developer`, `shpyrd-admin`) bound to the fixed ClusterRoles `shpyrd-project-*`, with the users (by email) and groups holding each role; platform roles become `ClusterRoleBinding`s. The Kubernetes roles grant the same verbs the dashboard allows (developers can update the App and open shells in its instances; config var Secrets stay write-only), never more than shpyrd itself has.
 
 Configure your API server with the same OIDC issuer (`--oidc-issuer-url`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) and `kubectl` users get exactly the dashboard's view. The local kind cluster is not configured this way out of the box; the bindings are still created and visible with `kubectl get rolebindings -n app-<project>`.
 
@@ -109,7 +109,7 @@ Every project namespace gets:
 
 ## The admin token
 
-The token created at install time is a shared credential with full platform-admin rights, meant for bootstrap and automation. Obtaining it requires reading Secrets in `shpyrd-system` (`shpyrd cluster token`), which is cluster-admin access; the risk is in the copies you hand out. Keep it in check:
+Self-hosted: the token created when you install shpyrd yourself is a shared credential with full platform-admin rights, meant for bootstrap and automation. Obtaining it requires reading Secrets in `shpyrd-system` (`shpyrd cluster token`), which is cluster-admin access; the risk is in the copies you hand out. Keep it in check:
 
 - `shpyrd cluster dashboard` does **not** put the token in the browser: it mints a one-time login ticket (a hashed Secret valid for 60 seconds) that the browser redeems for a normal session, attributed to you as `user@host` in the audit trail.
 - `shpyrd cluster token --rotate` replaces it and restarts the server; update automation that used the old value.
@@ -128,4 +128,4 @@ Every mutation is recorded as `{who, what, target, detail, when, from, via}`: de
 
 ## Not yet
 
-Resource quotas per project, image signing and CVE reporting, per-user API tokens and an enforcing Pod Security mode are on the roadmap ([RFC-0008](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0008-teams-roles-and-security.md)).
+Resource quotas per project, image signing and CVE reporting, per-user API tokens and an enforcing Pod Security mode are on the roadmap.

@@ -9,8 +9,15 @@
 // operations buyer, and the research is clear that the destination has to
 // match the promise. Replace it with a monitored address or a booking link
 // before this page is promoted anywhere.
+// The project's Discord: the site links to its own /discord, which forwards to
+// the invite, so the invite can change without touching a page.
+export const discord = {
+  invite: 'https://discord.gg/RYAT4wNKfw',
+  href: '/discord',
+}
+
 export const contact = {
-  href: 'https://discord.gg/AxWMXXW7',
+  href: discord.href,
   label: 'Start the conversation',
   note: 'Conversations happen in the project Discord while shpyrd is in beta.',
 }
