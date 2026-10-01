@@ -7,6 +7,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"text/tabwriter"
@@ -183,24 +184,29 @@ that opens only that bucket. This lists them.`,
 			if err := c.List(ctx, &list); err != nil {
 				return err
 			}
-			if len(list.Items) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No buckets yet. Extensions create them when they need storage (Postgres backups, platform backups).")
-				return nil
+			if list.Items == nil {
+				list.Items = []shpyrdv1.ObjectBucket{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAMESPACE\tNAME\tBUCKET\tUSED\tOBJECTS\tRETENTION\tSTATUS")
-			for _, b := range list.Items {
-				retention := "-"
-				if b.Spec.RetentionDays > 0 {
-					retention = fmt.Sprintf("%dd", b.Spec.RetentionDays)
+			return ext.Print(g, cmd, list.Items, func(w io.Writer) {
+				if len(list.Items) == 0 {
+					fmt.Fprintln(w, "No buckets yet. Extensions create them when they need storage (Postgres backups, platform backups).")
+					return
 				}
-				status := firstNonEmpty(b.Status.Phase, shpyrdv1.BucketPending)
-				if b.Status.Message != "" {
-					status += ": " + b.Status.Message
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAMESPACE\tNAME\tBUCKET\tUSED\tOBJECTS\tRETENTION\tSTATUS")
+				for _, b := range list.Items {
+					retention := "-"
+					if b.Spec.RetentionDays > 0 {
+						retention = fmt.Sprintf("%dd", b.Spec.RetentionDays)
+					}
+					status := firstNonEmpty(b.Status.Phase, shpyrdv1.BucketPending)
+					if b.Status.Message != "" {
+						status += ": " + b.Status.Message
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", b.Namespace, b.Name, b.Status.Bucket, humanBytes(b.Status.UsedBytes), b.Status.Objects, retention, status)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", b.Namespace, b.Name, b.Status.Bucket, humanBytes(b.Status.UsedBytes), b.Status.Objects, retention, status)
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 	cmd.AddCommand(list)

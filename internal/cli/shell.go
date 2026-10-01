@@ -49,7 +49,7 @@ process type with --process; the default is the first web instance.`,
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -189,7 +189,7 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

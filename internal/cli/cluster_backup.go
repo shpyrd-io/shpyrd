@@ -135,6 +135,9 @@ func newClusterBackupsCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if g.out.Machine() {
+				return g.print(cmd, info, nil)
+			}
 			if !info.Enabled {
 				fmt.Fprintln(out, "Platform backups are not set up. Give `shpyrd cluster init` a target:")
 				fmt.Fprintln(out, "  --backup-target s3://bucket/prefix [--backup-credentials-file <name>-backups.env]")

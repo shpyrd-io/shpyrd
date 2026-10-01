@@ -156,12 +156,16 @@ func newTeamsCreateCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			verb := "Created"
 			if existed {
-				fmt.Fprintf(cmd.OutOrStdout(), "Updated team %s%s\n", name, describeTeam(team))
-				return nil
+				verb = "Updated"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created team %s%s\n", name, describeTeam(team))
-			first := true
+			if err := g.print(cmd, team, func(w io.Writer) {
+				fmt.Fprintf(w, "%s team %s%s\n", verb, name, describeTeam(team))
+			}); err != nil {
+				return err
+			}
+			first := !existed
 			for _, e := range before {
 				if !e.Everyone {
 					first = false
@@ -228,19 +232,24 @@ func newTeamsListCmd(g *globalFlags) *cobra.Command {
 					real++
 				}
 			}
-			if real == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No teams yet (besides the built-in `everyone`): every signed-in user is a platform admin. Create one with `shpyrd teams create platform --platform-role platform-admin --member you@example.com`.")
+			if teams == nil {
+				teams = []api.TeamView{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tMEMBERS\tGROUPS\tPLATFORM ROLE")
-			for _, team := range teams {
-				members := firstNonEmpty(strings.Join(team.Members, ", "), "-")
-				if team.Everyone {
-					members = "(every person who signs in)"
+			return g.print(cmd, teams, func(w io.Writer) {
+				if real == 0 {
+					fmt.Fprintln(w, "No teams yet (besides the built-in `everyone`): every signed-in user is a platform admin. Create one with `shpyrd teams create platform --platform-role platform-admin --member you@example.com`.")
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", team.Name, members, firstNonEmpty(strings.Join(team.Groups, ", "), "-"), firstNonEmpty(team.PlatformRole, "-"))
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tMEMBERS\tGROUPS\tPLATFORM ROLE")
+				for _, team := range teams {
+					members := firstNonEmpty(strings.Join(team.Members, ", "), "-")
+					if team.Everyone {
+						members = "(every person who signs in)"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", team.Name, members, firstNonEmpty(strings.Join(team.Groups, ", "), "-"), firstNonEmpty(team.PlatformRole, "-"))
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -289,8 +298,9 @@ func newTeamsMembersCmd(g *globalFlags, add bool) *cobra.Command {
 			if !add {
 				verb = "Removed"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s in team %s; members now: %s\n", verb, strings.Join(append(emails, groups...), ", "), updated.Name, firstNonEmpty(strings.Join(updated.Members, ", "), "-"))
-			return nil
+			return g.print(cmd, updated, func(w io.Writer) {
+				fmt.Fprintf(w, "%s %s in team %s; members now: %s\n", verb, strings.Join(append(emails, groups...), ", "), updated.Name, firstNonEmpty(strings.Join(updated.Members, ", "), "-"))
+			})
 		},
 	}
 	cmd.Flags().StringSliceVar(&groups, "group", nil, "identity provider group names")
@@ -316,8 +326,9 @@ func newTeamsDeleteCmd(g *globalFlags) *cobra.Command {
 			if err := t.call(ctx, "DELETE", "api/teams/"+url.PathEscape(args[0]), nil, nil); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted team %s\n", args[0])
-			return nil
+			return g.print(cmd, map[string]any{"team": args[0], "deleted": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleted team %s\n", args[0])
+			})
 		},
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "confirm")
@@ -384,8 +395,9 @@ func newMembersAddCmd(g *globalFlags) *cobra.Command {
 			if team != "" {
 				who = "team " + team
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s is now %s on project %s\n", who, role, project)
-			return nil
+			return g.print(cmd, out, func(w io.Writer) {
+				fmt.Fprintf(w, "%s is now %s on project %s\n", who, role, project)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "user email")
@@ -414,16 +426,21 @@ func newMembersListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(rows) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No project roles granted. Add one with `shpyrd members add <project> --user <email> --role developer`.")
-				return nil
+			if rows == nil {
+				rows = []api.MemberView{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "PROJECT\tROLE\tUSER\tTEAM")
-			for _, m := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Project, m.Role, firstNonEmpty(m.User, "-"), firstNonEmpty(m.Team, "-"))
-			}
-			return tw.Flush()
+			return g.print(cmd, rows, func(w io.Writer) {
+				if len(rows) == 0 {
+					fmt.Fprintln(w, "No project roles granted. Add one with `shpyrd members add <project> --user <email> --role developer`.")
+					return
+				}
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "PROJECT\tROLE\tUSER\tTEAM")
+				for _, m := range rows {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Project, m.Role, firstNonEmpty(m.User, "-"), firstNonEmpty(m.Team, "-"))
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -461,8 +478,9 @@ func newMembersRemoveCmd(g *globalFlags) *cobra.Command {
 			if removed == 0 {
 				return fmt.Errorf("no roles of %s on project %s", firstNonEmpty(user, "team "+team), args[0])
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %d role(s) of %s on project %s\n", removed, firstNonEmpty(user, "team "+team), args[0])
-			return nil
+			return g.print(cmd, map[string]any{"project": args[0], "user": user, "team": team, "removed": removed}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed %d role(s) of %s on project %s\n", removed, firstNonEmpty(user, "team "+team), args[0])
+			})
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "user email")

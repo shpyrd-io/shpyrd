@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -302,6 +303,9 @@ type CLIGlobals interface {
 	// commands that speak the API work for tenants of a hosted platform;
 	// those that need the cluster (exec into a database) do not.
 	API() APIClient
+	// Output is how a command prints its result: text for people, JSON
+	// under --json or --jq (see cliout.Printer).
+	Output() *cliout.Printer
 }
 
 // APIClient sends requests to the workspace API.
@@ -367,4 +371,17 @@ func IdentityFrom(c *gin.Context) (Identity, bool) {
 	}
 	id, ok := v.(Identity)
 	return id, ok
+}
+
+// Print writes the result of an extension command the way the person or
+// program asked for: v as JSON under --json or --jq, otherwise what human
+// writes (see cliout.Printer).
+func Print(g CLIGlobals, cmd *cobra.Command, v any, human func(w io.Writer)) error {
+	return g.Output().Print(cmd.OutOrStdout(), v, human)
+}
+
+// Progress is where an extension command narrates what it is doing: stdout,
+// or stderr under --json so the JSON document stays alone on stdout.
+func Progress(g CLIGlobals, cmd *cobra.Command) io.Writer {
+	return g.Output().Progress(cmd.OutOrStdout(), cmd.ErrOrStderr())
 }

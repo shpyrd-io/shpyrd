@@ -43,24 +43,24 @@ type User struct {
 	Name      string    `json:"name,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	// Status is "active", "pending" (invited, no password yet) or "locked".
-	Status    string    `json:"status,omitempty"`
+	Status string `json:"status,omitempty"`
 	// Verified reports whether the email address has been confirmed.
-	Verified  bool      `json:"verified"`
+	Verified bool `json:"verified"`
 }
 
 // Account status values.
 const (
 	StatusActive  = "active"
-	StatusPending = "pending"  // invited; no usable password
-	StatusLocked  = "locked"   // locked after repeated failures
+	StatusPending = "pending" // invited; no usable password
+	StatusLocked  = "locked"  // locked after repeated failures
 )
 
 // Annotation keys on Password objects.
 const (
-	AnnotationInvited  = "shpyrd.io/invited"   // "true" = pending invitation
-	AnnotationVerified = "shpyrd.io/verified"  // "true" = email verified
-	AnnotationLocked   = "shpyrd.io/locked"    // RFC3339 lock expiry or ""
-	AnnotationFailures = "shpyrd.io/failures"  // JSON: count + window start
+	AnnotationInvited  = "shpyrd.io/invited"  // "true" = pending invitation
+	AnnotationVerified = "shpyrd.io/verified" // "true" = email verified
+	AnnotationLocked   = "shpyrd.io/locked"   // RFC3339 lock expiry or ""
+	AnnotationFailures = "shpyrd.io/failures" // JSON: count + window start
 )
 
 // nameEncoding is the alphabet Dex uses to turn ids into object names.
@@ -131,11 +131,11 @@ func userOf(u unstructured.Unstructured) User {
 		}
 	}
 	return User{
-		Email:    email,
-		Name:     name,
+		Email:     email,
+		Name:      name,
 		CreatedAt: u.GetCreationTimestamp().Time,
-		Status:   status,
-		Verified: ann[AnnotationVerified] == "true",
+		Status:    status,
+		Verified:  ann[AnnotationVerified] == "true",
 	}
 }
 

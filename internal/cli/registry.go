@@ -39,8 +39,7 @@ func newClusterRegistryCmd(g *globalFlags) *cobra.Command {
 			if err := json.Unmarshal(raw, &info); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
-			printRegistry(cmd.OutOrStdout(), &info)
-			return nil
+			return g.print(cmd, info, func(w io.Writer) { printRegistry(w, &info) })
 		},
 	}
 	var wait bool

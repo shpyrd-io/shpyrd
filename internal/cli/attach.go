@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -54,7 +55,7 @@ detach is a release that can be rolled back.
 			if prefix != "" && !prefixRe.MatchString(prefix) {
 				return errors.New("--prefix must be letters, digits and underscores")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -74,9 +75,10 @@ detach is a release that can be rolled back.
 					return err
 				}
 				p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(k)))
-				fmt.Fprintf(cmd.OutOrStdout(), "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", k, args[0], name, p, p)
-				fmt.Fprintln(cmd.OutOrStdout(), "Releasing with the new configuration (the app waits while the resource is still provisioning).")
-				return nil
+				return g.print(cmd, map[string]string{"project": name, "kind": k, "name": args[0], "prefix": p}, func(w io.Writer) {
+					fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", k, args[0], name, p, p)
+					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
+				})
 			}
 			app, err := ac.getApp(ctx, name)
 			if err != nil {
@@ -104,11 +106,12 @@ detach is a release that can be rolled back.
 			}
 			ac.audit(ctx, name, "attach", t.Kind+" "+args[0], prefix)
 			p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(t.Kind)))
-			fmt.Fprintf(cmd.OutOrStdout(), "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", t.Kind, args[0], name, p, p)
-			if app.Status.Image != "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "Releasing with the new configuration (the app waits while the resource is still provisioning).")
-			}
-			return nil
+			return g.print(cmd, map[string]string{"project": name, "kind": t.Kind, "name": args[0], "prefix": p}, func(w io.Writer) {
+				fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", t.Kind, args[0], name, p, p)
+				if app.Status.Image != "" {
+					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
+				}
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -132,7 +135,7 @@ func newDetachCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -158,8 +161,9 @@ func newDetachCmd(g *globalFlags) *cobra.Command {
 				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/bindings/"+url.PathEscape(k)+"/"+url.PathEscape(args[0]), nil, ""); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Detached %s %s from %s; releasing without its config vars.\n", k, args[0], name)
-				return nil
+				return g.print(cmd, map[string]string{"project": name, "kind": k, "name": args[0]}, func(w io.Writer) {
+					fmt.Fprintf(w, "Detached %s %s from %s; releasing without its config vars.\n", k, args[0], name)
+				})
 			}
 			var removed *shpyrdv1.Binding
 			if _, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
@@ -190,8 +194,9 @@ func newDetachCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			ac.audit(ctx, name, "detach", removed.Kind+" "+removed.Name, "")
-			fmt.Fprintf(cmd.OutOrStdout(), "Detached %s %s from %s; its config vars are removed in the next release.\n", removed.Kind, removed.Name, name)
-			return nil
+			return g.print(cmd, map[string]string{"project": name, "kind": removed.Kind, "name": removed.Name}, func(w io.Writer) {
+				fmt.Fprintf(w, "Detached %s %s from %s; its config vars are removed in the next release.\n", removed.Kind, removed.Name, name)
+			})
 		},
 	}
 	appFlag(cmd, &appName)

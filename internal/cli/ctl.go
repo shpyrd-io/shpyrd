@@ -24,6 +24,7 @@ func NewCtl() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "path to the kubeconfig file")
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
+	addOutputFlags(root, g)
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// The operator's tool speaks to the cluster it is pointed at, never
 		// through a saved `shpyrd login` session: those are a developer's

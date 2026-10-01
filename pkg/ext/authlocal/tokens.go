@@ -66,8 +66,8 @@ func MintAccountToken(ctx context.Context, k kubernetes.Interface, ns, email, ki
 			Name:      "shpyrd-acctok-" + hex.EncodeToString(suffix),
 			Namespace: ns,
 			Labels: map[string]string{
-				AccountTokenLabel:               kind,
-				"app.kubernetes.io/managed-by":  "shpyrd",
+				AccountTokenLabel:              kind,
+				"app.kubernetes.io/managed-by": "shpyrd",
 			},
 		},
 		Data: map[string][]byte{

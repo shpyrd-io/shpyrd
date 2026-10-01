@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"text/tabwriter"
 
@@ -94,17 +95,19 @@ func newSizesListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
-			for _, s := range cat.Sorted() {
-				res := s.Resources()
-				name := s.Name
-				if s.Name == cat.Default {
-					name += " (default)"
+			return g.print(cmd, cat, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
+				for _, s := range cat.Sorted() {
+					res := s.Resources()
+					name := s.Name
+					if s.Name == cat.Default {
+						name += " (default)"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -146,8 +149,9 @@ func newSizesSetCmd(g *globalFlags) *cobra.Command {
 			if !exists {
 				verb = "Added"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s size %s (%s, %s cpu, %s memory). Processes using it are being resized.\n", verb, size.Name, size.Kind, size.CPU, size.Memory)
-			return nil
+			return g.print(cmd, size, func(w io.Writer) {
+				fmt.Fprintf(w, "%s size %s (%s, %s cpu, %s memory). Processes using it are being resized.\n", verb, size.Name, size.Kind, size.CPU, size.Memory)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "shared or dedicated")
@@ -179,8 +183,9 @@ func newSizesDeleteCmd(g *globalFlags) *cobra.Command {
 			if err := saveCatalog(ctx, k, cm, cat); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed size %s\n", args[0])
-			return nil
+			return g.print(cmd, map[string]any{"size": args[0], "removed": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed size %s\n", args[0])
+			})
 		},
 	}
 }
@@ -207,8 +212,9 @@ func newSizesDefaultCmd(g *globalFlags) *cobra.Command {
 			if err := saveCatalog(ctx, k, cm, cat); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Default size is now %s\n", args[0])
-			return nil
+			return g.print(cmd, map[string]string{"default": args[0]}, func(w io.Writer) {
+				fmt.Fprintf(w, "Default size is now %s\n", args[0])
+			})
 		},
 	}
 }
@@ -227,13 +233,14 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
 			if ac.session {
 				// Through the API: the server knows the catalog and the plan.
 				var parts []string
+				sizesOf := map[string]string{}
 				for _, kv := range args {
 					proc, size, ok := strings.Cut(kv, "=")
 					if !ok {
@@ -244,9 +251,11 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 						return err
 					}
 					parts = append(parts, kv)
+					sizesOf[proc] = size
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Resizing %s: %s\n", name, strings.Join(parts, " "))
-				return nil
+				return g.print(cmd, map[string]any{"project": name, "processes": sizesOf}, func(w io.Writer) {
+					fmt.Fprintf(w, "Resizing %s: %s\n", name, strings.Join(parts, " "))
+				})
 			}
 			cat, _, err := loadCatalog(ctx, ac.k)
 			if err != nil {
@@ -282,9 +291,10 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 			for proc, size := range changes {
 				parts = append(parts, proc+"="+size)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Resizing %s: %s (new release, rolling restart)\n", name, strings.Join(parts, " "))
 			ac.audit(ctx, name, "resize", name, strings.Join(args, " "))
-			return nil
+			return g.print(cmd, map[string]any{"project": name, "processes": changes}, func(w io.Writer) {
+				fmt.Fprintf(w, "Resizing %s: %s (new release, rolling restart)\n", name, strings.Join(parts, " "))
+			})
 		},
 	}
 	appFlag(cmd, &appName)

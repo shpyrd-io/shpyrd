@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -75,7 +76,7 @@ func newVolumesCreateCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -97,18 +98,19 @@ func newVolumesCreateCmd(g *globalFlags) *cobra.Command {
 			if shared {
 				kind = "shared"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created %s volume %s (%s) in project %s\n", kind, args[0], view.Size, name)
-			if view.Note != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Note: %s.\n", view.Note)
-			}
-			if fromSnapshot != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "The data comes from snapshot %s.\n", fromSnapshot)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Mount it in shpyrd.yaml under processes.<type>.volumes: [{name: %s, path: /data}] and deploy.\n", args[0])
-			if shared {
-				fmt.Fprintln(cmd.OutOrStdout(), "Note: shared volumes need a ReadWriteMany provisioner and are unsafe for SQLite.")
-			}
-			return nil
+			return g.print(cmd, view, func(w io.Writer) {
+				fmt.Fprintf(w, "Created %s volume %s (%s) in project %s\n", kind, args[0], view.Size, name)
+				if view.Note != "" {
+					fmt.Fprintf(w, "Note: %s.\n", view.Note)
+				}
+				if fromSnapshot != "" {
+					fmt.Fprintf(w, "The data comes from snapshot %s.\n", fromSnapshot)
+				}
+				fmt.Fprintf(w, "Mount it in shpyrd.yaml under processes.<type>.volumes: [{name: %s, path: /data}] and deploy.\n", args[0])
+				if shared {
+					fmt.Fprintln(w, "Note: shared volumes need a ReadWriteMany provisioner and are unsafe for SQLite.")
+				}
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -132,7 +134,7 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -152,31 +154,36 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 					return lerr
 				}
 			}
-			if len(list.Items) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "No volumes in project %s. Create one with `shpyrd volumes create data --size 5Gi`.\n", name)
-				return nil
+			if list.Items == nil {
+				list.Items = []shpyrdv1.Volume{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSIZE\tMODE\tSTATUS\tMOUNTED BY\tAGE")
-			for _, v := range list.Items {
-				mode := "single-instance"
-				if v.Shared() {
-					mode = "shared"
+			return g.print(cmd, list.Items, func(w io.Writer) {
+				if len(list.Items) == 0 {
+					fmt.Fprintf(w, "No volumes in project %s. Create one with `shpyrd volumes create data --size 5Gi`.\n", name)
+					return
 				}
-				status := firstNonEmpty(v.Status.Phase, "Pending")
-				if v.Status.Message != "" {
-					status += ": " + v.Status.Message
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tSIZE\tMODE\tSTATUS\tMOUNTED BY\tAGE")
+				for _, v := range list.Items {
+					mode := "single-instance"
+					if v.Shared() {
+						mode = "shared"
+					}
+					status := firstNonEmpty(v.Status.Phase, "Pending")
+					if v.Status.Message != "" {
+						status += ": " + v.Status.Message
+					}
+					if v.Status.RestoredFrom != "" && v.Status.Phase == shpyrdv1.VolumeBound {
+						status += " (restored from " + v.Status.RestoredFrom + ")"
+					}
+					size := v.Spec.Size.String()
+					if v.Status.Capacity != "" && v.Status.Capacity != size {
+						size = v.Status.Capacity + " -> " + size
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, size, mode, status, firstNonEmpty(strings.Join(v.Status.MountedBy, ", "), "-"), age(v.CreationTimestamp))
 				}
-				if v.Status.RestoredFrom != "" && v.Status.Phase == shpyrdv1.VolumeBound {
-					status += " (restored from " + v.Status.RestoredFrom + ")"
-				}
-				size := v.Spec.Size.String()
-				if v.Status.Capacity != "" && v.Status.Capacity != size {
-					size = v.Status.Capacity + " -> " + size
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, size, mode, status, firstNonEmpty(strings.Join(v.Status.MountedBy, ", "), "-"), age(v.CreationTimestamp))
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -202,7 +209,7 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -225,13 +232,14 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 				if _, err := ac.serverRequest(ctx, "PUT", "api/projects/"+name+"/volumes/"+args[0], body, "application/json"); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Resizing volume %s to %s...\n", args[0], qty.String())
-				return nil
+				return g.print(cmd, map[string]any{"project": name, "volume": args[0], "size": qty.String()}, func(w io.Writer) {
+					fmt.Fprintf(w, "Resizing volume %s to %s...\n", args[0], qty.String())
+				})
 			}
 			if err := ac.c.Update(ctx, vol); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Resizing volume %s to %s...\n", args[0], qty.String())
+			fmt.Fprintf(g.progress(cmd), "Resizing volume %s to %s...\n", args[0], qty.String())
 			// The controller reports quickly whether the class allows it.
 			deadline := time.Now().Add(20 * time.Second)
 			for time.Now().Before(deadline) {
@@ -248,11 +256,13 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 				if cur.Status.Phase == shpyrdv1.VolumeFailed {
 					return errors.New(cur.Status.Message)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Volume %s: %s%s\n", args[0], cur.Status.Phase, suffixMsg(cur.Status.Message))
-				return nil
+				return g.print(cmd, cur, func(w io.Writer) {
+					fmt.Fprintf(w, "Volume %s: %s%s\n", args[0], cur.Status.Phase, suffixMsg(cur.Status.Message))
+				})
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Resize requested. Check with `shpyrd volumes list`.")
-			return nil
+			return g.print(cmd, vol, func(w io.Writer) {
+				fmt.Fprintln(w, "Resize requested. Check with `shpyrd volumes list`.")
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -278,7 +288,7 @@ func newVolumesDeleteCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -296,15 +306,15 @@ func newVolumesDeleteCmd(g *globalFlags) *cobra.Command {
 				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/volumes/"+args[0], nil, ""); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Deleted volume %s from project %s\n", args[0], name)
-				return nil
+			} else {
+				if err := ac.c.Delete(ctx, vol); client.IgnoreNotFound(err) != nil {
+					return err
+				}
+				ac.audit(ctx, name, "volume.delete", args[0], "")
 			}
-			if err := ac.c.Delete(ctx, vol); client.IgnoreNotFound(err) != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted volume %s from project %s\n", args[0], name)
-			ac.audit(ctx, name, "volume.delete", args[0], "")
-			return nil
+			return g.print(cmd, map[string]any{"project": name, "volume": args[0], "deleted": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleted volume %s from project %s\n", args[0], name)
+			})
 		},
 	}
 	appFlag(cmd, &appName)

@@ -60,20 +60,22 @@ Local clusters and providers without CSI snapshots say so.`,
 			if err := json.Unmarshal(raw, &snap); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Taking snapshot %s of volume %s...\n", snap.Name, args[0])
+			fmt.Fprintf(g.progress(cmd), "Taking snapshot %s of volume %s...\n", snap.Name, args[0])
 			if noWait {
-				return nil
+				return g.print(cmd, snap, silent)
 			}
 			ready, err := waitSnapshotReady(ctx, k, name, args[0], snap.Name, 3*time.Minute)
 			if err != nil {
 				return err
 			}
 			if ready == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Still in progress; check with `shpyrd volumes snapshots %s --project %s`.\n", args[0], name)
-				return nil
+				return g.print(cmd, snap, func(w io.Writer) {
+					fmt.Fprintf(w, "Still in progress; check with `shpyrd volumes snapshots %s --project %s`.\n", args[0], name)
+				})
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Snapshot %s ready%s. Restore with `shpyrd volumes restore %s --from %s [--to <new-volume>]`.\n", ready.Name, sizeSuffix(ready.Size), args[0], ready.Name)
-			return nil
+			return g.print(cmd, ready, func(w io.Writer) {
+				fmt.Fprintf(w, "Snapshot %s ready%s. Restore with `shpyrd volumes restore %s --from %s [--to <new-volume>]`.\n", ready.Name, sizeSuffix(ready.Size), args[0], ready.Name)
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -113,12 +115,16 @@ func newVolumesSnapshotListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(snaps) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "No snapshots of volume %s. Take one with `shpyrd volumes snapshot %s --project %s`.\n", args[0], args[0], name)
-				return nil
+			if snaps == nil {
+				snaps = []api.SnapshotView{}
 			}
-			printSnapshots(cmd.OutOrStdout(), snaps)
-			return nil
+			return g.print(cmd, snaps, func(w io.Writer) {
+				if len(snaps) == 0 {
+					fmt.Fprintf(w, "No snapshots of volume %s. Take one with `shpyrd volumes snapshot %s --project %s`.\n", args[0], args[0], name)
+					return
+				}
+				printSnapshots(w, snaps)
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -151,8 +157,9 @@ func newVolumesSnapshotDeleteCmd(g *globalFlags) *cobra.Command {
 			if _, err := serverRequest(ctx, k, "DELETE", "api/projects/"+name+"/volumes/"+args[0]+"/snapshots/"+args[1], nil, ""); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted snapshot %s of volume %s\n", args[1], args[0])
-			return nil
+			return g.print(cmd, map[string]any{"project": name, "volume": args[0], "snapshot": args[1], "deleted": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleted snapshot %s of volume %s\n", args[1], args[0])
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -185,7 +192,7 @@ snapshot first if you may want it back.`,
 			if to != "" && !volumeNameRe.MatchString(to) {
 				return errors.New("new volume names use lowercase letters, digits and dashes (max 40 chars)")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -209,11 +216,12 @@ snapshot first if you may want it back.`,
 			if err := json.Unmarshal(raw, &res); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			if !res.InPlace {
-				fmt.Fprintf(out, "Created volume %s (%s) from snapshot %s.\n", res.Volume.Name, res.Volume.Size, from)
-				fmt.Fprintf(out, "Mount it in shpyrd.yaml under processes.<type>.volumes: [{name: %s, path: /data}] and deploy.\n", res.Volume.Name)
-				return nil
+				return g.print(cmd, res, func(w io.Writer) {
+					fmt.Fprintf(w, "Created volume %s (%s) from snapshot %s.\n", res.Volume.Name, res.Volume.Size, from)
+					fmt.Fprintf(w, "Mount it in shpyrd.yaml under processes.<type>.volumes: [{name: %s, path: /data}] and deploy.\n", res.Volume.Name)
+				})
 			}
 			fmt.Fprintf(out, "Restoring volume %s from snapshot %s in place...\n", args[0], from)
 			// Follow the controller until the volume is bound again.
@@ -239,19 +247,21 @@ snapshot first if you may want it back.`,
 				case cur.Status.RestoredFrom == from:
 					// Request cleared: the new disk carries the snapshot and the
 					// processes are coming back (the disk binds when they mount it).
-					fmt.Fprintf(out, "Volume %s restored from snapshot %s", args[0], from)
-					if len(cur.Status.MountedBy) > 0 {
-						fmt.Fprintf(out, "; %s starting again", strings.Join(cur.Status.MountedBy, ", "))
-					}
-					fmt.Fprintln(out, ".")
-					return nil
+					return g.print(cmd, cur, func(w io.Writer) {
+						fmt.Fprintf(w, "Volume %s restored from snapshot %s", args[0], from)
+						if len(cur.Status.MountedBy) > 0 {
+							fmt.Fprintf(w, "; %s starting again", strings.Join(cur.Status.MountedBy, ", "))
+						}
+						fmt.Fprintln(w, ".")
+					})
 				default:
 					// The controller dropped the request without restoring.
 					return fmt.Errorf("restore cancelled: %s", firstNonEmpty(cur.Status.Message, "see `shpyrd volumes list`"))
 				}
 			}
-			fmt.Fprintln(out, "Still restoring; follow it with `shpyrd volumes list`.")
-			return nil
+			return g.print(cmd, res, func(w io.Writer) {
+				fmt.Fprintln(w, "Still restoring; follow it with `shpyrd volumes list`.")
+			})
 		},
 	}
 	appFlag(cmd, &appName)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -68,19 +69,22 @@ func ssoList(cmd *cobra.Command, g ext.CLIGlobals) error {
 	if err := ssoCall(ctx, g, "GET", "api/workspace/login-methods", nil, &out); err != nil {
 		return err
 	}
-	w := cmd.OutOrStdout()
-	if len(out.Connectors) == 0 {
-		fmt.Fprintln(w, "This workspace has no sign-in method of its own yet; the platform's are offered.")
-	} else {
-		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tRESTRICTION")
-		for _, c := range out.Connectors {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, firstNonEmpty(c.Detail, "-"))
-		}
-		_ = tw.Flush()
+	if out.Connectors == nil {
+		out.Connectors = []Connector{}
 	}
-	fmt.Fprintf(w, "\nCallback URL to register at the provider: %s\n", out.Callback)
-	return nil
+	return ext.Print(g, cmd, out, func(w io.Writer) {
+		if len(out.Connectors) == 0 {
+			fmt.Fprintln(w, "This workspace has no sign-in method of its own yet; the platform's are offered.")
+		} else {
+			tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tRESTRICTION")
+			for _, c := range out.Connectors {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, firstNonEmpty(c.Detail, "-"))
+			}
+			_ = tw.Flush()
+		}
+		fmt.Fprintf(w, "\nCallback URL to register at the provider: %s\n", out.Callback)
+	})
 }
 
 func newSSOListCmd(g ext.CLIGlobals) *cobra.Command {
@@ -110,8 +114,9 @@ func newSSOAddCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := ssoCall(ctx, g, "POST", "api/workspace/login-methods", req, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Added %s (%s): the button is on this workspace's login page now.\n", out.Name, out.ID)
-			return nil
+			return ext.Print(g, cmd, out, func(w io.Writer) {
+				fmt.Fprintf(w, "Added %s (%s): the button is on this workspace's login page now.\n", out.Name, out.ID)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&req.ID, "id", "", "method id within the workspace (default: the type)")
@@ -136,8 +141,9 @@ func newSSORemoveCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := ssoCall(ctx, g, "DELETE", "api/workspace/login-methods/"+url.PathEscape(args[0]), nil, nil); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s; people signed in through it keep their sessions.\n", args[0])
-			return nil
+			return ext.Print(g, cmd, map[string]any{"id": args[0], "removed": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed %s; people signed in through it keep their sessions.\n", args[0])
+			})
 		},
 	}
 }
@@ -164,12 +170,13 @@ func newSSOPlatformCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := ssoCall(ctx, g, "PATCH", "api/workspace", map[string]bool{"ownMethodsOnly": own}, &out); err != nil {
 				return err
 			}
-			if out.OwnMethodsOnly {
-				fmt.Fprintln(cmd.OutOrStdout(), "Only this workspace's own methods are offered now.")
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "The platform's methods are offered too.")
-			}
-			return nil
+			return ext.Print(g, cmd, out, func(w io.Writer) {
+				if out.OwnMethodsOnly {
+					fmt.Fprintln(w, "Only this workspace's own methods are offered now.")
+				} else {
+					fmt.Fprintln(w, "The platform's methods are offered too.")
+				}
+			})
 		},
 	}
 }

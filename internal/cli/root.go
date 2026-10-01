@@ -7,9 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
@@ -22,6 +24,31 @@ type globalFlags struct {
 	kubeconfig string
 	kubeCtx    string
 	verbose    bool
+	out        cliout.Printer // --json and --jq
+}
+
+// Output implements ext.CLIGlobals: how the result of a command is printed.
+func (g *globalFlags) Output() *cliout.Printer { return &g.out }
+
+// print writes the result of a command the way the person or program
+// asked for (see cliout.Printer.Print).
+func (g *globalFlags) print(cmd *cobra.Command, v any, human func(w io.Writer)) error {
+	return g.out.Print(cmd.OutOrStdout(), v, human)
+}
+
+// silent is the text form of a command that already narrated what it did
+// on the way: under --json only the result prints.
+func silent(io.Writer) {}
+
+// progress is where a command narrates: stdout, or stderr under --json.
+func (g *globalFlags) progress(cmd *cobra.Command) io.Writer {
+	return g.out.Progress(cmd.OutOrStdout(), cmd.ErrOrStderr())
+}
+
+// addOutputFlags puts --json and --jq on a root command.
+func addOutputFlags(root *cobra.Command, g *globalFlags) {
+	root.PersistentFlags().BoolVar(&g.out.JSON, "json", false, "print the result as JSON on stdout, nothing else (agents and scripts: use this)")
+	root.PersistentFlags().StringVar(&g.out.JQ, "jq", "", "filter the JSON result with a jq expression (implies --json; strings print raw)")
 }
 
 // API implements ext.CLIGlobals: the workspace API over the login session
@@ -73,7 +100,7 @@ func New() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "shpyrd",
 		Short:         "Opensource Cloud PaaS",
-		Long:          "shpyrd manages applications and agents from one place, from deploy to monitoring: cluster bootstrap, buildpack builds, releases, config vars, logs and metrics on Kubernetes.",
+		Long:          "shpyrd manages applications and agents from one place, from deploy to monitoring.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -90,7 +117,9 @@ func New() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "path to the kubeconfig file")
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
+	addOutputFlags(root, g)
 	root.CompletionOptions.HiddenDefaultCmd = true
+	root.SetUsageTemplate(rootUsageTemplate(root))
 
 	root.AddCommand(newClusterCmd(g))
 	root.AddCommand(newAppsCmd(g))
@@ -168,4 +197,16 @@ func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) 
 			root.AddCommand(c)
 		}
 	}
+}
+
+// agentDocsURL is the whole CLI as one text file, for LLMs and agents that
+// drive shpyrd on a person's behalf.
+const agentDocsURL = "https://mcp.shpyrd.io/cli"
+
+// rootUsageTemplate is cobra's default usage template with the docs pointer
+// on the "Usage" line of the root command only. Subcommands inherit the
+// template, so the pointer checks for a parent.
+func rootUsageTemplate(root *cobra.Command) string {
+	return strings.Replace(root.UsageTemplate(), "Usage:",
+		"Usage{{if not .HasParent}} (LLM, IA and Agents, read the Docs: "+agentDocsURL+"){{end}}:", 1)
 }

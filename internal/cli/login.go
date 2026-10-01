@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 )
 
 // Session store (RFC-0052): a JSON file at ~/.shpyrd/sessions.json holds the
@@ -174,7 +176,7 @@ and switches; SHPYRD_URL overrides for one shell).
 Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			var expires time.Time
 			if wsURL == "" {
 				// Try to guess from --context if available.
@@ -187,6 +189,9 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			if err != nil {
 				return err
 			}
+			if token, err = cliout.ValueOrFile(token); err != nil {
+				return fmt.Errorf("--token: %w", err)
+			}
 			if token == "" {
 				// Already signed in there, and the credential still works:
 				// make it the current workspace. A dead one (expired,
@@ -196,8 +201,9 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 					if err := s.save(); err != nil {
 						return err
 					}
-					fmt.Fprintf(out, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
-					return nil
+					return g.print(cmd, map[string]any{"url": norm, "user": s.Sessions[norm].WhoAmI, "signedIn": true}, func(w io.Writer) {
+						fmt.Fprintf(w, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
+					})
 				}
 				// The browser sign-in (RFC-0052): the workspace shows a
 				// code here, the person approves it in the dashboard.
@@ -219,17 +225,18 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			if err := s.save(); err != nil {
 				return fmt.Errorf("save session: %w", err)
 			}
-			if whoAmI != "" {
-				fmt.Fprintf(out, "Signed in to %s as %s\n", norm, whoAmI)
-			} else {
-				fmt.Fprintf(out, "Signed in to %s\n", norm)
-			}
-			fmt.Fprintln(out, "Project commands work without a kubeconfig now.")
-			return nil
+			return g.print(cmd, map[string]any{"url": norm, "user": whoAmI, "signedIn": true}, func(w io.Writer) {
+				if whoAmI != "" {
+					fmt.Fprintf(w, "Signed in to %s as %s\n", norm, whoAmI)
+				} else {
+					fmt.Fprintf(w, "Signed in to %s\n", norm)
+				}
+				fmt.Fprintln(w, "Project commands work without a kubeconfig now.")
+			})
 		},
 	}
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
-	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN): a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
 	return cmd
 }
@@ -446,12 +453,12 @@ func newLogoutCmd(g *globalFlags) *cobra.Command {
 			if err := s.save(); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Signed out of %s\n", norm)
-			return nil
+			return g.print(cmd, map[string]any{"url": norm, "signedIn": false}, func(w io.Writer) {
+				fmt.Fprintf(w, "Signed out of %s\n", norm)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
-	_ = g
 	return cmd
 }
 
@@ -486,12 +493,12 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				// The admin token has no person behind it.
 				me = "admin token"
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), me)
-			return nil
+			return g.print(cmd, map[string]string{"url": norm, "user": me}, func(w io.Writer) {
+				fmt.Fprintln(w, me)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
-	_ = g
 	return cmd
 }
 
@@ -588,13 +595,13 @@ pass it to shpyrd login --token.`,
 			if err := json.Unmarshal(resp, &tok); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(resp), 200))
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, tok.Token)
-			fmt.Fprintf(out, "Token %q created (id: %s). The value above is shown once; store it safely.\n", tok.Name, tok.ID)
-			if tok.ExpiresAt != nil {
-				fmt.Fprintf(out, "Expires: %s\n", tok.ExpiresAt.Local().Format("2006-01-02"))
-			}
-			return nil
+			return g.print(cmd, tok, func(out io.Writer) {
+				fmt.Fprintln(out, tok.Token)
+				fmt.Fprintf(out, "Token %q created (id: %s). The value above is shown once; store it safely.\n", tok.Name, tok.ID)
+				if tok.ExpiresAt != nil {
+					fmt.Fprintf(out, "Expires: %s\n", tok.ExpiresAt.Local().Format("2006-01-02"))
+				}
+			})
 		},
 	}
 	createCmd.Flags().StringVar(&platformRole, "platform-role", "", "platform-viewer or platform-admin")
@@ -616,35 +623,40 @@ pass it to shpyrd login --token.`,
 			if err := json.Unmarshal(resp, &tokens); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(resp), 200))
 			}
-			if len(tokens) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No tokens. Create one with `shpyrd tokens create <name>`.")
-				return nil
+			if tokens == nil {
+				tokens = []TokenView{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tID\tROLE\tEXPIRES\tLAST USED")
-			for _, t := range tokens {
-				role := t.PlatformRole
-				for p, r := range t.ProjectRoles {
-					role = p + "=" + r
-					break
+			return g.print(cmd, tokens, func(w io.Writer) {
+				if len(tokens) == 0 {
+					fmt.Fprintln(w, "No tokens. Create one with `shpyrd tokens create <name>`.")
+					return
 				}
-				if role == "" {
-					role = "project-scoped"
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tID\tROLE\tEXPIRES\tLAST USED")
+				for _, t := range tokens {
+					role := t.PlatformRole
+					for p, r := range t.ProjectRoles {
+						role = p + "=" + r
+						break
+					}
+					if role == "" {
+						role = "project-scoped"
+					}
+					if t.Kind == "session" {
+						role = "session (your roles)"
+					}
+					expires := "never"
+					if t.ExpiresAt != nil {
+						expires = t.ExpiresAt.Local().Format("2006-01-02")
+					}
+					used := "-"
+					if t.LastUsedAt != nil {
+						used = ago(*t.LastUsedAt)
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.Name, t.ID, role, expires, used)
 				}
-				if t.Kind == "session" {
-					role = "session (your roles)"
-				}
-				expires := "never"
-				if t.ExpiresAt != nil {
-					expires = t.ExpiresAt.Local().Format("2006-01-02")
-				}
-				used := "-"
-				if t.LastUsedAt != nil {
-					used = ago(*t.LastUsedAt)
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.Name, t.ID, role, expires, used)
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 
@@ -657,8 +669,9 @@ pass it to shpyrd login --token.`,
 			if _, err := call(ctx, "DELETE", "api/tokens/"+args[0], nil); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Token %s revoked.\n", args[0])
-			return nil
+			return g.print(cmd, map[string]any{"id": args[0], "revoked": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Token %s revoked.\n", args[0])
+			})
 		},
 	}
 
@@ -682,27 +695,37 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
   shpyrd use https://acme.shpyrd.app      # switch`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			out := cmd.OutOrStdout()
 			s := loadSessions()
 			if len(args) == 0 {
-				if len(s.Sessions) == 0 {
-					fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL>")
-					return nil
-				}
 				active := s.activeURL()
 				urls := make([]string, 0, len(s.Sessions))
 				for u := range s.Sessions {
 					urls = append(urls, u)
 				}
 				sort.Strings(urls)
-				for _, u := range urls {
-					mark := "  "
-					if u == active {
-						mark = "* "
-					}
-					fmt.Fprintf(out, "%s%s  %s\n", mark, u, s.Sessions[u].WhoAmI)
+				// Never the tokens: only where and as whom.
+				type entry struct {
+					URL     string `json:"url"`
+					User    string `json:"user,omitempty"`
+					Current bool   `json:"current"`
 				}
-				return nil
+				list := make([]entry, 0, len(urls))
+				for _, u := range urls {
+					list = append(list, entry{URL: u, User: s.Sessions[u].WhoAmI, Current: u == active})
+				}
+				return g.print(cmd, list, func(out io.Writer) {
+					if len(list) == 0 {
+						fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL>")
+						return
+					}
+					for _, e := range list {
+						mark := "  "
+						if e.Current {
+							mark = "* "
+						}
+						fmt.Fprintf(out, "%s%s  %s\n", mark, e.URL, e.User)
+					}
+				})
 			}
 			norm, err := normaliseURL(args[0])
 			if err != nil {
@@ -715,10 +738,10 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 			if err := s.save(); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
-			return nil
+			return g.print(cmd, map[string]any{"url": norm, "user": s.Sessions[norm].WhoAmI, "current": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
+			})
 		},
 	}
-	_ = g
 	return cmd
 }

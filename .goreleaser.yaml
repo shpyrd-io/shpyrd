@@ -1,5 +1,5 @@
-# GoReleaser (RFC-0045): the CLI for macOS and Linux, checksums, release
-# notes from Conventional Commits and the Homebrew formula. The server image
+# GoReleaser (RFC-0045): the CLI for macOS, Linux and Windows (a zip there),
+# checksums, release notes from Conventional Commits and the Homebrew formula. The server image
 # is built by the same workflow with buildx (see .github/workflows/release.yml).
 version: 2
 
@@ -15,7 +15,7 @@ builds:
     binary: shpyrd
     env:
       - CGO_ENABLED=0
-    goos: [darwin, linux]
+    goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags:
@@ -26,7 +26,7 @@ builds:
     binary: shpyrd-ctl
     env:
       - CGO_ENABLED=0
-    goos: [darwin, linux]
+    goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags:
@@ -37,6 +37,9 @@ archives:
   - id: shpyrd
     ids: [shpyrd, shpyrd-ctl]
     formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: "shpyrd_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE

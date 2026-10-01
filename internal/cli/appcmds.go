@@ -42,22 +42,27 @@ func newSecretsCmd(g *globalFlags) *cobra.Command {
 Changing them creates a new release and restarts the processes. Values are
 write-only: they are never printed back.`,
 	}
+	var fromFile string
 	set := &cobra.Command{
-		Use:   "set KEY=VALUE [KEY=VALUE...]",
-		Short: "Set config vars",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "set [KEY=VALUE...] [--from-file <path>]",
+		Short: "Set config vars, from arguments, a dotenv or JSON file, or both",
+		Long: `Set config vars. Values come from KEY=VALUE arguments, from a file
+(--from-file: dotenv lines or a JSON object of strings, "-" for stdin), or
+both, the arguments winning.
+
+  shpyrd secrets set DATABASE_POOL=20 --project shop
+  shpyrd secrets set --from-file .env.production --project shop
+  shpyrd secrets set --from-file - --project shop < vars.json`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			set := map[string]string{}
-			for _, kv := range args {
-				k, v, ok := strings.Cut(kv, "=")
-				if !ok || k == "" {
-					return fmt.Errorf("expected KEY=VALUE, got %q", kv)
-				}
-				set[k] = v
+			set, err := varsToSet(cmd, args, fromFile)
+			if err != nil {
+				return err
 			}
 			return mutateEnvSecret(g, cmd, appName, set, nil)
 		},
 	}
+	set.Flags().StringVar(&fromFile, "from-file", "", "read KEY=VALUE lines (dotenv) or a JSON object from this file; - is stdin")
 	unset := &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove config vars",
@@ -76,7 +81,7 @@ write-only: they are never printed back.`,
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -88,30 +93,32 @@ write-only: they are never printed back.`,
 			if err2 := json.Unmarshal(raw, &resp); err2 != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
-			if len(resp.Vars) == 0 && len(resp.Bound) == 0 && len(resp.Global) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no config vars set")
-				return nil
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tUPDATED\tPROVIDED BY")
-			for _, v := range resp.Vars {
-				when := "-"
-				if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
-					when = ago(t)
+			return g.print(cmd, resp, func(w io.Writer) {
+				if len(resp.Vars) == 0 && len(resp.Bound) == 0 && len(resp.Global) == 0 {
+					fmt.Fprintln(w, "no config vars set")
+					return
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", v.Name, when, "-")
-			}
-			for _, v := range resp.Global {
-				when := "-"
-				if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
-					when = ago(t)
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tUPDATED\tPROVIDED BY")
+				for _, v := range resp.Vars {
+					when := "-"
+					if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
+						when = ago(t)
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\n", v.Name, when, "-")
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", v.Name, when, "cluster")
-			}
-			for _, b := range resp.Bound {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", b.Name, "-", firstNonEmpty(b.Provider, "binding"))
-			}
-			return tw.Flush()
+				for _, v := range resp.Global {
+					when := "-"
+					if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
+						when = ago(t)
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\n", v.Name, when, "cluster")
+				}
+				for _, b := range resp.Bound {
+					fmt.Fprintf(tw, "%s\t%s\t%s\n", b.Name, "-", firstNonEmpty(b.Provider, "binding"))
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 	for _, c := range []*cobra.Command{set, unset, list} {
@@ -130,7 +137,7 @@ func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map
 	if err != nil {
 		return err
 	}
-	ac, err := newAppClient(g, cmd.OutOrStdout())
+	ac, err := newAppClient(g, g.progress(cmd))
 	if err != nil {
 		return err
 	}
@@ -154,11 +161,12 @@ func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map
 	for _, v := range resp.Vars {
 		names = append(names, v.Name)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Config vars for %s: %s\n", name, strings.Join(names, ", "))
-	if app.Status.Image != "" {
-		fmt.Fprintln(cmd.OutOrStdout(), "Restarting processes with the new configuration...")
-	}
-	return nil
+	return g.print(cmd, resp, func(w io.Writer) {
+		fmt.Fprintf(w, "Config vars for %s: %s\n", name, strings.Join(names, ", "))
+		if app.Status.Image != "" {
+			fmt.Fprintln(w, "Restarting processes with the new configuration...")
+		}
+	})
 }
 
 // ---- scale -----------------------------------------------------------------
@@ -187,7 +195,7 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 				}
 				changes[proc] = int32(v)
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -207,8 +215,9 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 					}
 					parts = append(parts, fmt.Sprintf("%s=%d", proc, changes[proc]))
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Scaling %s: %s\n", name, strings.Join(parts, " "))
-				return nil
+				return g.print(cmd, map[string]any{"project": name, "processes": changes}, func(w io.Writer) {
+					fmt.Fprintf(w, "Scaling %s: %s\n", name, strings.Join(parts, " "))
+				})
 			}
 			app, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
 				if a.Spec.Processes == nil {
@@ -234,16 +243,19 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 			}
 			sort.Strings(names)
 			var parts []string
+			replicas := map[string]int32{}
 			for _, n := range names {
 				r := int32(1)
 				if app.Spec.Processes[n].Replicas != nil {
 					r = *app.Spec.Processes[n].Replicas
 				}
+				replicas[n] = r
 				parts = append(parts, fmt.Sprintf("%s=%d", n, r))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Scaling %s: %s\n", name, strings.Join(parts, " "))
 			ac.audit(ctx, name, "scale", name, strings.Join(args, " "))
-			return nil
+			return g.print(cmd, map[string]any{"project": name, "processes": replicas}, func(w io.Writer) {
+				fmt.Fprintf(w, "Scaling %s: %s\n", name, strings.Join(parts, " "))
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -280,7 +292,7 @@ what a tool reading the output wants.`,
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -354,7 +366,7 @@ func newReleasesCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -362,21 +374,27 @@ func newReleasesCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(app.Status.Releases) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no releases yet")
-				return nil
+			releases := app.Status.Releases
+			if releases == nil {
+				releases = []shpyrdv1.Release{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "RELEASE\tCREATED\tDIGEST\tDESCRIPTION")
-			for i := len(app.Status.Releases) - 1; i >= 0; i-- {
-				r := app.Status.Releases[i]
-				cur := ""
-				if i == len(app.Status.Releases)-1 {
-					cur = " (current)"
+			return g.print(cmd, releases, func(w io.Writer) {
+				if len(releases) == 0 {
+					fmt.Fprintln(w, "no releases yet")
+					return
 				}
-				fmt.Fprintf(tw, "v%d%s\t%s\t%s\t%s\n", r.Number, cur, r.CreatedAt.Format(time.DateTime), digest(r.Image), r.Description)
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "RELEASE\tCREATED\tDIGEST\tDESCRIPTION")
+				for i := len(releases) - 1; i >= 0; i-- {
+					r := releases[i]
+					cur := ""
+					if i == len(releases)-1 {
+						cur = " (current)"
+					}
+					fmt.Fprintf(tw, "v%d%s\t%s\t%s\t%s\n", r.Number, cur, r.CreatedAt.Format(time.DateTime), digest(r.Image), r.Description)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -402,7 +420,7 @@ config vars are restored. The source configuration is kept; the next
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -432,7 +450,20 @@ config vars are restored. The source configuration is kept; the next
 			if !force && (app.Status.Phase == shpyrdv1.PhaseDeploying || app.Status.Phase == shpyrdv1.PhaseBuilding || app.Status.ObservedGeneration < app.Generation) {
 				return fmt.Errorf("a release is still rolling out (%s); wait for it or pass --force", firstNonEmpty(app.Status.Message, app.Status.Phase))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "==> Rolling back %s to v%d (build %s, config as of v%d)\n", name, target.Number, digest(target.Image), target.Number)
+			fmt.Fprintf(g.progress(cmd), "==> Rolling back %s to v%d (build %s, config as of v%d)\n", name, target.Number, digest(target.Image), target.Number)
+			// released prints the outcome: the new release, or only what
+			// was asked when not waiting for it.
+			released := func(rel any, number int, description string) error {
+				result := map[string]any{"project": name, "rollbackTo": target.Number, "waited": !noWait}
+				if rel != nil {
+					result["release"] = rel
+				}
+				return g.print(cmd, result, func(w io.Writer) {
+					if rel != nil {
+						fmt.Fprintf(w, "\nReleased v%d: %s\n", number, description)
+					}
+				})
+			}
 			if ac.session {
 				body, _ := json.Marshal(map[string]any{"release": target.Number})
 				raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/rollback", body, "application/json")
@@ -440,7 +471,7 @@ config vars are restored. The source configuration is kept; the next
 					return err
 				}
 				if noWait {
-					return nil
+					return released(nil, 0, "")
 				}
 				var after api.AppSummary
 				_ = json.Unmarshal(raw, &after)
@@ -449,9 +480,9 @@ config vars are restored. The source configuration is kept; the next
 					return err
 				}
 				if rel := latestRelease(final); rel != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "\nReleased v%d: %s\n", rel.Number, rel.Description)
+					return released(rel, rel.Number, rel.Description)
 				}
-				return nil
+				return released(nil, 0, "")
 			}
 			ac.audit(ctx, name, "rollback", name, fmt.Sprintf("to v%d", target.Number))
 			img := target.Image
@@ -479,16 +510,16 @@ config vars are restored. The source configuration is kept; the next
 				return err
 			}
 			if noWait {
-				return nil
+				return released(nil, 0, "")
 			}
 			final, err := ac.waitRunning(ctx, name, updated.Generation, 10*time.Minute)
 			if err != nil {
 				return err
 			}
 			if rel := final.CurrentRelease(); rel != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "\nReleased v%d: %s\n", rel.Number, rel.Description)
+				return released(rel, rel.Number, rel.Description)
 			}
-			return nil
+			return released(nil, 0, "")
 		},
 	}
 	appFlag(cmd, &appName)
@@ -510,7 +541,7 @@ func newOpenCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -521,7 +552,11 @@ func newOpenCmd(g *globalFlags) *cobra.Command {
 			if app.Status.URL == "" {
 				return errors.New("the project has no URL yet (no web process deployed)")
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), app.Status.URL)
+			if err := g.print(cmd, map[string]string{"project": name, "url": app.Status.URL}, func(w io.Writer) {
+				fmt.Fprintln(w, app.Status.URL)
+			}); err != nil {
+				return err
+			}
 			return openBrowser(app.Status.URL)
 		},
 	}
@@ -604,7 +639,7 @@ failed, or with --rebuild, it builds the same source again; the release
 that results is a normal deploy.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			name, err := resolveAppName(appName)
 			if err != nil {
 				return err
@@ -618,6 +653,19 @@ that results is a normal deploy.`,
 				return err
 			}
 			action := "restart"
+			// done prints the outcome: the release that runs now, or only
+			// what was asked when not waiting for it.
+			done := func(rel any, text string) error {
+				result := map[string]any{"project": name, "action": action, "waited": !noWait}
+				if rel != nil {
+					result["release"] = rel
+				}
+				return g.print(cmd, result, func(w io.Writer) {
+					if text != "" {
+						fmt.Fprint(w, text)
+					}
+				})
+			}
 			buildFailed := app.HasSource() && app.Spec.Image == "" && meta.IsStatusConditionFalse(app.Status.Conditions, shpyrdv1.ConditionBuilt)
 			if rebuild || buildFailed {
 				action = "rebuild"
@@ -640,7 +688,7 @@ that results is a normal deploy.`,
 					fmt.Fprintf(out, "==> Restarting the instances of %s v%d\n", name, cur.Number)
 				}
 				if noWait {
-					return nil
+					return done(nil, "")
 				}
 				if action == "rebuild" {
 					if err := ac.followBuildAPI(ctx, name, app.Status.LatestBuild, 3*time.Minute); err != nil {
@@ -654,9 +702,9 @@ that results is a normal deploy.`,
 					return err
 				}
 				if rel := latestRelease(final); rel != nil {
-					fmt.Fprintf(out, "\nReleased v%d: %s\n", rel.Number, rel.Description)
+					return done(rel, fmt.Sprintf("\nReleased v%d: %s\n", rel.Number, rel.Description))
 				}
-				return nil
+				return done(nil, "")
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
 			updated, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
@@ -680,7 +728,7 @@ that results is a normal deploy.`,
 				fmt.Fprintf(out, "==> Restarting the instances of %s v%d\n", name, cur.Number)
 			}
 			if noWait {
-				return nil
+				return done(nil, "")
 			}
 			if action == "rebuild" {
 				build, err := ac.waitForNewBuild(ctx, name, app.Status.LatestBuild, time.Now().Add(-time.Minute), 3*time.Minute)
@@ -696,9 +744,9 @@ that results is a normal deploy.`,
 				return err
 			}
 			if rel := final.CurrentRelease(); rel != nil {
-				fmt.Fprintf(out, "\n%s is running v%d.\n", name, rel.Number)
+				return done(rel, fmt.Sprintf("\n%s is running v%d.\n", name, rel.Number))
 			}
-			return nil
+			return done(nil, "")
 		},
 	}
 	appFlag(cmd, &appName)
@@ -727,7 +775,7 @@ covered by the platform's wildcard.`,
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -736,13 +784,10 @@ covered by the platform's wildcard.`,
 			if err != nil {
 				return err
 			}
-			if err := json.Unmarshal(raw, &map[string]interface{}{}); err != nil {
-				if len(raw) > 0 {
-					_ = raw // response acknowledged
-				}
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s exposure set to %s\n", name, exposure)
-			return nil
+			_ = raw // response acknowledged
+			return g.print(cmd, map[string]string{"project": name, "exposure": exposure}, func(w io.Writer) {
+				fmt.Fprintf(w, "%s exposure set to %s\n", name, exposure)
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -775,7 +820,7 @@ func newAccessCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -788,28 +833,29 @@ func newAccessCmd(g *globalFlags) *cobra.Command {
 				URL    string `json:"url"`
 			}
 			_ = json.Unmarshal(raw, &detail)
-			out := cmd.OutOrStdout()
-			switch detail.Access {
-			case shpyrdv1.AccessPublic:
-				fmt.Fprintf(out, "%s is public: anyone can open %s\n", name, firstNonEmpty(detail.URL, "it"))
-			case shpyrdv1.AccessIdentified:
-				fmt.Fprintf(out, "%s is public; signed-in visitors are identified to the app\n", name)
-			default:
-				fmt.Fprintf(out, "%s asks visitors to sign in; these roles open it:\n", name)
-			}
 			members, err := serverRequest(ctx, ac.k, "GET", "api/projects/"+name+"/members", nil, "")
 			if err != nil {
 				return err
 			}
-			var grants []api.MemberView
+			grants := []api.MemberView{}
 			_ = json.Unmarshal(members, &grants)
-			if len(grants) == 0 {
-				fmt.Fprintln(out, "  (no roles granted: only platform admins and the admin token can open it)")
-			}
-			for _, m := range grants {
-				fmt.Fprintf(out, "  %-10s %s\n", m.Role, firstNonEmpty(m.User, "team "+m.Team))
-			}
-			return nil
+			result := map[string]any{"project": name, "access": firstNonEmpty(detail.Access, shpyrdv1.AccessAuthenticated), "url": detail.URL, "members": grants}
+			return g.print(cmd, result, func(out io.Writer) {
+				switch detail.Access {
+				case shpyrdv1.AccessPublic:
+					fmt.Fprintf(out, "%s is public: anyone can open %s\n", name, firstNonEmpty(detail.URL, "it"))
+				case shpyrdv1.AccessIdentified:
+					fmt.Fprintf(out, "%s is public; signed-in visitors are identified to the app\n", name)
+				default:
+					fmt.Fprintf(out, "%s asks visitors to sign in; these roles open it:\n", name)
+				}
+				if len(grants) == 0 {
+					fmt.Fprintln(out, "  (no roles granted: only platform admins and the admin token can open it)")
+				}
+				for _, m := range grants {
+					fmt.Fprintf(out, "  %-10s %s\n", m.Role, firstNonEmpty(m.User, "team "+m.Team))
+				}
+			})
 		},
 	}
 	set := &cobra.Command{
@@ -828,7 +874,7 @@ func newAccessCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -836,15 +882,16 @@ func newAccessCmd(g *globalFlags) *cobra.Command {
 			if _, err := serverRequest(ctx, ac.k, "PUT", "api/projects/"+name+"/access", body, "application/json"); err != nil {
 				return err
 			}
-			switch access {
-			case shpyrdv1.AccessPublic:
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is public now: anyone on the internet can open it.\n", name)
-			case shpyrdv1.AccessIdentified:
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is public now; signed-in visitors are identified to the app.\n", name)
-			default:
-				fmt.Fprintf(cmd.OutOrStdout(), "%s asks visitors to sign in now; grant roles with `shpyrd members add`.\n", name)
-			}
-			return nil
+			return g.print(cmd, map[string]string{"project": name, "access": access}, func(w io.Writer) {
+				switch access {
+				case shpyrdv1.AccessPublic:
+					fmt.Fprintf(w, "%s is public now: anyone on the internet can open it.\n", name)
+				case shpyrdv1.AccessIdentified:
+					fmt.Fprintf(w, "%s is public now; signed-in visitors are identified to the app.\n", name)
+				default:
+					fmt.Fprintf(w, "%s asks visitors to sign in now; grant roles with `shpyrd members add`.\n", name)
+				}
+			})
 		},
 	}
 	appFlag(set, &appName)
@@ -880,7 +927,7 @@ allow list. Changes apply within seconds; no release needed.
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -888,21 +935,21 @@ allow list. Changes apply within seconds; no release needed.
 			if err != nil {
 				return err
 			}
-			var entries []shpyrdv1.AllowEntry
+			entries := []shpyrdv1.AllowEntry{}
 			_ = json.Unmarshal(raw, &entries)
-			out := cmd.OutOrStdout()
-			if len(entries) == 0 {
-				fmt.Fprintln(out, "No allow entries: only platform infrastructure (ingress, monitoring) may reach this app. Add with `shpyrd allow add project <slug>`.")
-				return nil
-			}
-			for _, e := range entries {
-				if e.Project != "" {
-					fmt.Fprintf(out, "project: %s\n", e.Project)
-				} else {
-					fmt.Fprintf(out, "platform: %s\n", e.Platform)
+			return g.print(cmd, map[string]any{"project": name, "allow": entries}, func(out io.Writer) {
+				if len(entries) == 0 {
+					fmt.Fprintln(out, "No allow entries: only platform infrastructure (ingress, monitoring) may reach this app. Add with `shpyrd allow add project <slug>`.")
+					return
 				}
-			}
-			return nil
+				for _, e := range entries {
+					if e.Project != "" {
+						fmt.Fprintf(out, "project: %s\n", e.Project)
+					} else {
+						fmt.Fprintf(out, "platform: %s\n", e.Platform)
+					}
+				}
+			})
 		},
 	}
 	appFlag(cmd, &appName)
@@ -959,8 +1006,12 @@ allow list. Changes apply within seconds; no release needed.
 		if !add {
 			verb = "Removed"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s\n", verb, kind, value)
-		return nil
+		if updated == nil {
+			updated = []shpyrdv1.AllowEntry{}
+		}
+		return g.print(cmd, map[string]any{"project": name, "allow": updated}, func(w io.Writer) {
+			fmt.Fprintf(w, "%s %s %s\n", verb, kind, value)
+		})
 	}
 
 	addCmd := &cobra.Command{

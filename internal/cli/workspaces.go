@@ -81,7 +81,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if plan != "" && operator {
 				return errors.New("--plan does not apply to an operator workspace: the operator's own are never invoiced")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -97,11 +97,12 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			var created api.CreatedWorkspace
 			_ = json.Unmarshal(raw, &created)
 			ws := created.WorkspaceSummary
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Created workspace %s (%s) at %s\n", ws.Slug, ws.Name, ws.URL)
-			if operator {
-				fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
-			} else {
+			return g.print(cmd, created, func(out io.Writer) {
+				fmt.Fprintf(out, "Created workspace %s (%s) at %s\n", ws.Slug, ws.Name, ws.URL)
+				if operator {
+					fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
+					return
+				}
 				fmt.Fprintf(out, "%s is its first owner; the front door and certificate follow within a minute.\n", owner)
 				printOwnerInvitation(out, owner, ws.URL, created.OwnerInvitation)
 				if ws.Plan != "" {
@@ -109,8 +110,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 				} else {
 					fmt.Fprintf(out, "No billing plan yet: its usage is not priced until `shpyrd-ctl plans assign <plan> --workspace %s`.\n", ws.Slug)
 				}
-			}
-			return nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the slug)")
@@ -165,7 +165,7 @@ printed once otherwise.`,
 			if !store.ValidWorkspaceRole(role) {
 				return errors.New("--role must be owner, admin or member")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -179,10 +179,10 @@ printed once otherwise.`,
 			}
 			var inv ext.InviteOutcome
 			_ = json.Unmarshal(raw, &inv)
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "%s is %s %s of workspace %s.\n", email, article(role), role, slug)
-			printOwnerInvitation(out, email, "the workspace's door", &inv)
-			return nil
+			return g.print(cmd, map[string]any{"workspace": slug, "email": email, "role": role, "invitation": inv}, func(out io.Writer) {
+				fmt.Fprintf(out, "%s is %s %s of workspace %s.\n", email, article(role), role, slug)
+				printOwnerInvitation(out, email, "the workspace's door", &inv)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&role, "role", store.WorkspaceRoleOwner, "workspace role: owner, admin or member")
@@ -195,7 +195,7 @@ func newWorkspacesListCmd(g *globalFlags) *cobra.Command {
 		Short: "List the workspaces",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -206,12 +206,11 @@ func newWorkspacesListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var list []api.WorkspaceSummary
+			list := []api.WorkspaceSummary{}
 			if err := json.Unmarshal(raw, &list); err != nil {
 				return err
 			}
-			printWorkspaces(cmd.OutOrStdout(), list)
-			return nil
+			return g.print(cmd, list, func(w io.Writer) { printWorkspaces(w, list) })
 		},
 	}
 }
@@ -300,7 +299,7 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 			if !clear && !limits.set() {
 				return errors.New("give at least one ceiling (--projects, --instances, --cpu, --memory, --storage) or --clear")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -315,12 +314,13 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 			}
 			var ws api.WorkspaceSummary
 			_ = json.Unmarshal(raw, &ws)
-			if ws.Limits == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s has no ceilings.\n", ws.Slug)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s: %s\n", ws.Slug, limitsString(ws.Limits))
-			}
-			return nil
+			return g.print(cmd, ws, func(w io.Writer) {
+				if ws.Limits == nil {
+					fmt.Fprintf(w, "Workspace %s has no ceilings.\n", ws.Slug)
+				} else {
+					fmt.Fprintf(w, "Workspace %s: %s\n", ws.Slug, limitsString(ws.Limits))
+				}
+			})
 		},
 	}
 	limits.bind(cmd)
@@ -339,7 +339,7 @@ func newWorkspacesStatusCmd(g *globalFlags, verb, status string) *cobra.Command 
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -354,8 +354,9 @@ func newWorkspacesStatusCmd(g *globalFlags, verb, status string) *cobra.Command 
 			}
 			var ws api.WorkspaceSummary
 			_ = json.Unmarshal(raw, &ws)
-			fmt.Fprintf(cmd.OutOrStdout(), "Workspace %s is %s.\n", ws.Slug, ws.Status)
-			return nil
+			return g.print(cmd, ws, func(w io.Writer) {
+				fmt.Fprintf(w, "Workspace %s is %s.\n", ws.Slug, ws.Status)
+			})
 		},
 	}
 }

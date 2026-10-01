@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -123,20 +124,32 @@ func newExtensionsListCmd(g *globalFlags) *cobra.Command {
 					enabled[n] = true
 				}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSTATUS\tCOMPONENT\tDESCRIPTION")
-			for _, x := range all.All() {
-				status := "disabled"
-				if enabled[x.Name()] {
-					status = "enabled"
-				}
-				comp := "-"
-				if names := componentNames(x); len(names) > 0 {
-					comp = strings.Join(names, ", ")
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", x.Name(), status, comp, x.Description())
+			type row struct {
+				Name        string   `json:"name"`
+				Enabled     bool     `json:"enabled"`
+				Components  []string `json:"components,omitempty"`
+				Description string   `json:"description"`
 			}
-			return tw.Flush()
+			rows := []row{}
+			for _, x := range all.All() {
+				rows = append(rows, row{Name: x.Name(), Enabled: enabled[x.Name()], Components: componentNames(x), Description: x.Description()})
+			}
+			return g.print(cmd, rows, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tSTATUS\tCOMPONENT\tDESCRIPTION")
+				for _, r := range rows {
+					status := "disabled"
+					if r.Enabled {
+						status = "enabled"
+					}
+					comp := "-"
+					if len(r.Components) > 0 {
+						comp = strings.Join(r.Components, ", ")
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, status, comp, r.Description)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -206,15 +219,17 @@ func newExtensionsEnableCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Enabling %s: %s\n", name, x.Description())
+			fmt.Fprintf(g.progress(cmd), "Enabling %s: %s\n", name, x.Description())
 			if err := eng.Apply(ctx); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nExtension %s is enabled.\n", name)
-			for _, hint := range enableHints(x, eng.Vars()) {
-				fmt.Fprintln(cmd.OutOrStdout(), hint)
-			}
-			return nil
+			hints := enableHints(x, eng.Vars())
+			return g.print(cmd, map[string]any{"extension": name, "enabled": true, "hints": hints}, func(w io.Writer) {
+				fmt.Fprintf(w, "\nExtension %s is enabled.\n", name)
+				for _, hint := range hints {
+					fmt.Fprintln(w, hint)
+				}
+			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&set, "set", nil, "override a variable, e.g. --set SHPYRD_SERVER_IMAGE=...")
@@ -267,8 +282,9 @@ func newExtensionsDisableCmd(g *globalFlags) *cobra.Command {
 				if err := after.Apply(ctx); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "\nRetired extension %s dropped from the record.\n", name)
-				return nil
+				return g.print(cmd, map[string]any{"extension": name, "enabled": false, "retired": true}, func(w io.Writer) {
+					fmt.Fprintf(w, "\nRetired extension %s dropped from the record.\n", name)
+				})
 			}
 			if in, err := resourcesInUse(ctx, k, x); err != nil {
 				return err
@@ -286,7 +302,7 @@ func newExtensionsDisableCmd(g *globalFlags) *cobra.Command {
 			}
 			names := componentNames(x)
 			for i := len(names) - 1; i >= 0; i-- { // reverse install order
-				fmt.Fprintf(cmd.OutOrStdout(), "Removing component %s\n", names[i])
+				fmt.Fprintf(g.progress(cmd), "Removing component %s\n", names[i])
 				if err := eng.Remove(ctx, names[i]); err != nil {
 					return err
 				}
@@ -298,8 +314,9 @@ func newExtensionsDisableCmd(g *globalFlags) *cobra.Command {
 			if err := after.Apply(ctx); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nExtension %s is disabled.\n", name)
-			return nil
+			return g.print(cmd, map[string]any{"extension": name, "enabled": false}, func(w io.Writer) {
+				fmt.Fprintf(w, "\nExtension %s is disabled.\n", name)
+			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&set, "set", nil, "override a variable")

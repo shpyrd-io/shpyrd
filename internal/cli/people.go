@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"text/tabwriter"
@@ -62,24 +63,29 @@ func newPeopleListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(people) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "Nobody has signed in through an account yet (the admin token is not a person). Invite someone: `shpyrd invite ada@example.com`.")
-				return nil
+			if people == nil {
+				people = []api.PersonView{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "EMAIL\tROLE\tNAME\tSIGNED IN WITH\tLAST SEEN\tSTATUS")
-			for _, p := range people {
-				role := firstNonEmpty(p.Role, "-")
-				if p.Role == "" && p.PlatformRole != "" {
-					role = p.PlatformRole + " (team)"
+			return g.print(cmd, people, func(w io.Writer) {
+				if len(people) == 0 {
+					fmt.Fprintln(w, "Nobody has signed in through an account yet (the admin token is not a person). Invite someone: `shpyrd invite ada@example.com`.")
+					return
 				}
-				seen := "never"
-				if p.LastSeenAt != nil {
-					seen = ago(*p.LastSeenAt)
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "EMAIL\tROLE\tNAME\tSIGNED IN WITH\tLAST SEEN\tSTATUS")
+				for _, p := range people {
+					role := firstNonEmpty(p.Role, "-")
+					if p.Role == "" && p.PlatformRole != "" {
+						role = p.PlatformRole + " (team)"
+					}
+					seen := "never"
+					if p.LastSeenAt != nil {
+						seen = ago(*p.LastSeenAt)
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", p.Email, role, firstNonEmpty(p.Name, "-"), firstNonEmpty(p.Provider, "-"), seen, p.Status)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", p.Email, role, firstNonEmpty(p.Name, "-"), firstNonEmpty(p.Provider, "-"), seen, p.Status)
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -108,12 +114,13 @@ takes an owner; the last owner cannot step down.`,
 			if err := t.call(ctx, "PATCH", "api/workspace/people/"+url.PathEscape(email), map[string]string{"role": role}, &out); err != nil {
 				return err
 			}
-			if out.Role == "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s has no workspace role now (grants and teams still apply).\n", out.Email)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is %s %s of the workspace.\n", out.Email, article(out.Role), out.Role)
-			}
-			return nil
+			return g.print(cmd, out, func(w io.Writer) {
+				if out.Role == "" {
+					fmt.Fprintf(w, "%s has no workspace role now (grants and teams still apply).\n", out.Email)
+				} else {
+					fmt.Fprintf(w, "%s is %s %s of the workspace.\n", out.Email, article(out.Role), out.Role)
+				}
+			})
 		},
 	}
 }
@@ -137,12 +144,13 @@ func newPeopleStatusCmd(g *globalFlags, status string) *cobra.Command {
 			if err := t.call(ctx, "PATCH", "api/workspace/people/"+url.PathEscape(strings.ToLower(strings.TrimSpace(args[0]))), map[string]string{"status": status}, &out); err != nil {
 				return err
 			}
-			if out.Status == store.StatusSuspended {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is suspended: no role anywhere, no app opens, until reactivated.\n", out.Email)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s is active again.\n", out.Email)
-			}
-			return nil
+			return g.print(cmd, out, func(w io.Writer) {
+				if out.Status == store.StatusSuspended {
+					fmt.Fprintf(w, "%s is suspended: no role anywhere, no app opens, until reactivated.\n", out.Email)
+				} else {
+					fmt.Fprintf(w, "%s is active again.\n", out.Email)
+				}
+			})
 		},
 	}
 }
@@ -162,8 +170,9 @@ func newPeopleForgetCmd(g *globalFlags) *cobra.Command {
 			if err := t.call(ctx, "DELETE", "api/workspace/people/"+url.PathEscape(email), nil, nil); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Forgot %s; the next sign-in creates the record again.\n", email)
-			return nil
+			return g.print(cmd, map[string]any{"email": email, "forgotten": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Forgot %s; the next sign-in creates the record again.\n", email)
+			})
 		},
 	}
 }
@@ -197,28 +206,28 @@ once. Inviting the same address again makes a new link.
 			if err := t.call(ctx, "POST", "api/workspace/invitations", api.InviteRequest{Email: strings.TrimSpace(args[0]), Role: role, Team: team}, &res); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
 			where := ""
 			if res.Team != "" {
 				where = " and in team " + res.Team
 			}
-			if res.Applied {
-				fmt.Fprintf(out, "%s had signed in before: they are %s %s of the workspace now%s.\n", res.Email, article(res.Role), res.Role, where)
-				return nil
-			}
-			fmt.Fprintf(out, "Invited %s as %s %s%s.\n", res.Email, article(res.Role), res.Role, where)
-			switch {
-			case res.Emailed:
-				fmt.Fprintf(out, "The link was emailed to them; it also works from here (shown once):\n\n  %s\n", res.Link)
-			case res.MailError != "":
-				fmt.Fprintf(out, "The email could not be sent (%s). Send them this link yourself (shown once):\n\n  %s\n", res.MailError, res.Link)
-			default:
-				fmt.Fprintf(out, "This platform does not send email yet. Send them this link yourself (shown once):\n\n  %s\n", res.Link)
-			}
-			if res.Invitation != nil {
-				fmt.Fprintf(out, "\nIt works until %s. Signing in with that address accepts it.\n", res.Invitation.ExpiresAt.Local().Format("Jan 2, 2006 15:04"))
-			}
-			return nil
+			return g.print(cmd, res, func(out io.Writer) {
+				if res.Applied {
+					fmt.Fprintf(out, "%s had signed in before: they are %s %s of the workspace now%s.\n", res.Email, article(res.Role), res.Role, where)
+					return
+				}
+				fmt.Fprintf(out, "Invited %s as %s %s%s.\n", res.Email, article(res.Role), res.Role, where)
+				switch {
+				case res.Emailed:
+					fmt.Fprintf(out, "The link was emailed to them; it also works from here (shown once):\n\n  %s\n", res.Link)
+				case res.MailError != "":
+					fmt.Fprintf(out, "The email could not be sent (%s). Send them this link yourself (shown once):\n\n  %s\n", res.MailError, res.Link)
+				default:
+					fmt.Fprintf(out, "This platform does not send email yet. Send them this link yourself (shown once):\n\n  %s\n", res.Link)
+				}
+				if res.Invitation != nil {
+					fmt.Fprintf(out, "\nIt works until %s. Signing in with that address accepts it.\n", res.Invitation.ExpiresAt.Local().Format("Jan 2, 2006 15:04"))
+				}
+			})
 		},
 	}
 	cmd.Flags().StringVar(&role, "role", store.WorkspaceRoleMember, "workspace role: member, admin or owner")
@@ -262,20 +271,25 @@ func newInvitationsListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(list) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No pending invitations. Invite someone: `shpyrd invite ada@example.com`.")
-				return nil
+			if list == nil {
+				list = []api.InvitationView{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "EMAIL\tROLE\tTEAM\tINVITED BY\tEXPIRES")
-			for _, inv := range list {
-				expires := inv.ExpiresAt.Local().Format("Jan 2, 15:04")
-				if inv.Expired {
-					expires = "expired"
+			return g.print(cmd, list, func(w io.Writer) {
+				if len(list) == 0 {
+					fmt.Fprintln(w, "No pending invitations. Invite someone: `shpyrd invite ada@example.com`.")
+					return
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", inv.Email, inv.Role, firstNonEmpty(inv.Team, "-"), firstNonEmpty(inv.InvitedBy, "-"), expires)
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "EMAIL\tROLE\tTEAM\tINVITED BY\tEXPIRES")
+				for _, inv := range list {
+					expires := inv.ExpiresAt.Local().Format("Jan 2, 15:04")
+					if inv.Expired {
+						expires = "expired"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", inv.Email, inv.Role, firstNonEmpty(inv.Team, "-"), firstNonEmpty(inv.InvitedBy, "-"), expires)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -301,8 +315,9 @@ func newInvitationsRevokeCmd(g *globalFlags) *cobra.Command {
 					if err := t.call(ctx, "DELETE", "api/workspace/invitations/"+url.PathEscape(inv.ID), nil, nil); err != nil {
 						return err
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "Revoked the invitation of %s.\n", email)
-					return nil
+					return g.print(cmd, map[string]any{"email": email, "revoked": true}, func(w io.Writer) {
+						fmt.Fprintf(w, "Revoked the invitation of %s.\n", email)
+					})
 				}
 			}
 			return fmt.Errorf("no pending invitation for %s (see `shpyrd invitations`)", email)
@@ -349,12 +364,13 @@ Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 			if err := t.call(ctx, "POST", "api/projects/"+args[0]+"/processes", body, &out); err != nil {
 				return err
 			}
-			if after == "" || after == "off" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Sleep disabled for %s.\n", args[0])
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Sleep set: %s will scale to zero after %s of inactivity (%s mode).\n", args[0], after, firstNonEmpty(resuming, "wait"))
-			}
-			return nil
+			return g.print(cmd, out, func(w io.Writer) {
+				if after == "" || after == "off" {
+					fmt.Fprintf(w, "Sleep disabled for %s.\n", args[0])
+				} else {
+					fmt.Fprintf(w, "Sleep set: %s will scale to zero after %s of inactivity (%s mode).\n", args[0], after, firstNonEmpty(resuming, "wait"))
+				}
+			})
 		},
 	}
 	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' disables")
