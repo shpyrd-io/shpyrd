@@ -3,7 +3,7 @@ title: AWS (EKS)
 description: Run shpyrd on Amazon EKS - the network, cluster and VPN from Terraform, then one command for the platform.
 ---
 
-The `aws` profile installs shpyrd on Amazon EKS with Network Load Balancers for the public and the internal front door, Let's Encrypt certificates, Route 53 automation, an in-cluster registry and network policy enforcement from the VPC CNI. The reference infrastructure lives in [`contrib/aws`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/aws) as Terraform, including an AWS Client VPN as the way into private parts of the platform; the platform itself is `shpyrd cluster init` ([RFC-0035](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0035-cloud-profiles.md)). {% .lead %}
+This page is for running shpyrd yourself, in your own AWS account. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The `aws` profile installs shpyrd on Amazon EKS with Network Load Balancers for the public and the internal front door, Let's Encrypt certificates, Route 53 automation, an in-cluster registry and network policy enforcement from the VPC CNI. The reference infrastructure lives in [`contrib/aws`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/aws) as Terraform, including an AWS Client VPN as the way into private parts of the platform; the platform itself is `shpyrd cluster init`. {% .lead %}
 
 ## What you get
 

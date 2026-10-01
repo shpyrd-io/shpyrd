@@ -3,9 +3,9 @@ title: Oracle Cloud (OKE)
 description: Run shpyrd on Oracle Kubernetes Engine - the network and cluster from Terraform, then one command for the platform.
 ---
 
-The `oci` profile installs shpyrd on Oracle Kubernetes Engine (OKE) with a public load balancer, Let's Encrypt certificates, an in-cluster registry, network policy enforcement and, optionally, automatic DNS. The reference infrastructure lives in [`contrib/oci`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/oci) as Terraform; the platform itself is `shpyrd cluster init`. {% .lead %}
+This page is for running shpyrd yourself, in your own Oracle Cloud tenancy. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The `oci` profile installs shpyrd on Oracle Kubernetes Engine (OKE) with a public load balancer, Let's Encrypt certificates, an in-cluster registry, network policy enforcement and, optionally, automatic DNS. The reference infrastructure lives in [`contrib/oci`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/oci) as Terraform; the platform itself is `shpyrd cluster init`. {% .lead %}
 
-Oracle Cloud went first among the cloud profiles for cost - the free tier and cheap flexible shapes - and because it exercises the harder path: a private API endpoint, private workers, CRI-O nodes. The layout is the one shpyrd's own development cluster runs on ([RFC-0035](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0035-cloud-profiles.md)).
+Oracle Cloud went first among the cloud profiles for cost - the free tier and cheap flexible shapes - and because it exercises the harder path: a private API endpoint, private workers, CRI-O nodes. The layout is the one shpyrd's own development cluster runs on.
 
 ## What you get
 
@@ -174,7 +174,7 @@ Certificates are publicly trusted, so `https://shop.oci.example.com` opens with 
 
 ## Node pools
 
-A cloud cluster has two kinds of workload, and they scale differently. The platform's own components and every database are stateful: evicting them is a restart a customer notices, and their volumes attach to whatever node the pod lands on. Application processes, builds and one-off runs can always be moved. So the profile gives them separate node pools ([RFC-0077](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0077-node-pools.md)):
+A cloud cluster has two kinds of workload, and they scale differently. The platform's own components and every database are stateful: evicting them is a restart a customer notices, and their volumes attach to whatever node the pod lands on. Application processes, builds and one-off runs can always be moved. So the profile gives them separate node pools:
 
 | Pool | Size | Carries |
 | --- | --- | --- |
