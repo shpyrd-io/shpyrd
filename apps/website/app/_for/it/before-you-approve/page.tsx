@@ -32,7 +32,7 @@ const rows: { need: string; how: string; status: Status }[] = [
   { need: "The workspace is backed up", how: "Nightly and encrypted: projects, settings, teams and who can open what.", status: "ships" },
   { need: "The data is backed up", how: "Switch on a database's continuous backups; files on volumes need their own.", status: "yours" },
   { need: "A long-term audit record", how: "Platform changes are recorded, but kept for about an hour today.", status: "later" },
-  { need: "Password reset and account verification", how: "For people using your company's sign-in, your provider does this; for local accounts it is on the roadmap.", status: "later" },
+  { need: "Password reset and account verification", how: "For people using your company's sign-in, your provider does this; local accounts are activated from an invitation, reset a forgotten password by email and lock after repeated failures.", status: "ships" },
 ];
 
 export default function Page() {

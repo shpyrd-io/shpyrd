@@ -138,7 +138,10 @@ evaluator asks for, right after the product looking like itself (RFC-0012).
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
 
-- **Not implemented:** `shpyrd auth connector add` without auth-local shows a raw "no matches for kind Connector" error instead of saying the extension is needed.
+- **Done (2026-09-30):** `shpyrd auth connector add|list|remove` without auth-local says the
+  bundled issuer the extension installs is needed (`shpyrd extensions enable auth-local`):
+  the command reads the install record first, and the store maps the API server's 404 for
+  the missing Connector resource to the same error.
 - **Extended (v0.6.0):** Dex connectors gain `microsoft` and generic `oidc` types; connectors
   are listed, added and removed from the Workspace page (`/api/auth/connectors`) and take
   effect without a server restart; a verified company domain can require its accounts to

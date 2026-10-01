@@ -125,6 +125,12 @@ func (s *Server) resolveAPIToken(c *gin.Context, tok string) (*tokenCaller, bool
 	if !ok {
 		return nil, false
 	}
+	if apiTok.Kind == store.TokenKindSession {
+		// The CLI's own credential (RFC-0052): the person, with the roles
+		// they hold now, as a dashboard session would be. What it can do
+		// follows their grants, up and down, for as long as it lasts.
+		return &tokenCaller{identity: owner, roles: ownerRoles, owner: owner}, true
+	}
 	// Token roles are the intersection: token cannot exceed what the owner has.
 	platform := minPlatformRole(apiTok.PlatformRole, ownerRoles.Platform)
 	// A token with the owner's full platform role acts in the workspace as
@@ -204,9 +210,12 @@ func minPlatformRole(a, b string) string {
 
 // TokenView is a token as returned by the API (no secret).
 type TokenView struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	OwnerEmail   string            `json:"ownerEmail,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	OwnerEmail string `json:"ownerEmail,omitempty"`
+	// Kind is "session" for a credential `shpyrd login` minted in the
+	// browser (RFC-0052); empty for an API token with roles of its own.
+	Kind         string            `json:"kind,omitempty"`
 	PlatformRole string            `json:"platformRole,omitempty"`
 	ProjectRoles map[string]string `json:"projectRoles,omitempty"`
 	CreatedAt    time.Time         `json:"createdAt"`
@@ -221,7 +230,7 @@ type TokenCreateView struct {
 }
 
 func tokenView(t store.APIToken) TokenView {
-	return TokenView{ID: t.ID, Name: t.Name, OwnerEmail: t.OwnerEmail, PlatformRole: t.PlatformRole, ProjectRoles: t.ProjectRoles, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt}
+	return TokenView{ID: t.ID, Name: t.Name, OwnerEmail: t.OwnerEmail, Kind: t.Kind, PlatformRole: t.PlatformRole, ProjectRoles: t.ProjectRoles, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt}
 }
 
 // tokenViewResolved returns tokenView with project_roles keys translated

@@ -32,7 +32,21 @@ type execTicket struct {
 	// `shpyrd shell -- <cmd>`): through the buildpack launcher so the
 	// process sees its environment.
 	Command []string
-	expires time.Time
+	// Pod, when set, is where the session lands, chosen by the server
+	// when the ticket was minted (RFC-0052): a one-off instance, or a
+	// resource's pod (Shellable). The instance list is not consulted
+	// then. Container is the container there; the app's when empty.
+	Pod       string
+	Container string
+	// Attach says the session attaches to the pod's own process (a one-off
+	// command) instead of exec'ing into it; the pod is removed when the
+	// session ends. TTY says whether that process has a terminal.
+	Attach bool
+	TTY    bool
+	// Launcher says the command runs through the buildpack launcher when
+	// the image has one (an app's container); a resource's does not.
+	Launcher bool
+	expires  time.Time
 }
 
 // maxOpenTickets caps unredeemed tickets. Without a cap the store grows for a

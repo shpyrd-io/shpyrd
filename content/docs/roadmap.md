@@ -3,13 +3,13 @@ title: Roadmap
 description: What is coming - what is decided and what is still a proposal - with a link to the RFC behind every line.
 ---
 
-Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) that is not done yet: **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues). {% .lead %}
+Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) that is not done yet, or shipped since the roadmap was written: **done** is in the rest of these docs, **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues). {% .lead %}
 
 ## Platform
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Usage, billing and sleep: usage ledger, plans and invoices, operator economics, scale to zero for web processes and databases | [RFC-0075](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0075-usage-billing-and-sleep.md) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep opt-in since v0.9.36; OpenCost economics built, not enabled) |
+| Usage, billing and sleep: usage ledger, plans and invoices, operator economics, scale to zero for web processes and databases | [RFC-0075](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0075-usage-billing-and-sleep.md) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep opt-in since v0.9.36; OpenCost economics on shpyrd cloud) |
 | Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace; v0.9.11 keeps the edge's promises: personal tokens open apps, sign-out from an app, key rotation, JSON 401 for API clients, a NetworkPolicy for the server, denial counters; v0.9.11/v0.9.12: native `uuid` identifiers with golang-migrate, image repositories keyed by the workspace id; v0.9.13: workspace roles (owner, admin, member) and invitations accepted by signing in; v0.9.15: per-workspace SSO, the email-first login step for claimed domains, the `reader` role; v0.9.16: address change with redirects, custom workspace domains (CNAME mode), the launcher for everyone with search and featured apps, workspace branding, the MCP server — the remaining gaps (workspace delete, per-workspace login methods, custom workspace domains) are listed in the RFC) |
 
 ## Deploying
@@ -23,6 +23,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Autoscaling mode (min/max, HPA, KEDA) | [RFC-0047](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0047-autoscaling.md) | ready to implement |
 | Maintenance mode | [RFC-0020](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0020-maintenance-mode.md) | proposal |
 | Run history and scheduled tasks | [RFC-0024](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0024-runs-and-scheduled-tasks.md) | proposal |
+| Web terminal: a Shell tab on the project page | [RFC-0026](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0026-web-terminal.md) | done (gaps listed in the RFC) |
 | Builds namespace and enforce-mode Pod Security | [RFC-0043](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0043-builds-namespace-and-pod-security.md) | ready to implement |
 
 ## Data stores
@@ -37,8 +38,9 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
+| Structured (JSON) logs in the viewer and CLI | [RFC-0021](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0021-structured-logs.md) | done |
 | Log storage and history (Loki as an add-on, `--since`) | [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md) | proposal |
-| Application metrics v2 (per instance, aggregation, totals) | [RFC-0027](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0027-application-metrics-v2.md) | ready to implement |
+| Application metrics v2 (per instance, aggregation, totals) | [RFC-0027](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0027-application-metrics-v2.md) | done (gaps listed in the RFC) |
 | OpenTelemetry collector and export | [RFC-0029](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0029-opentelemetry.md) | proposal |
 | Tracing backend (Jaeger) and a Traces tab | [RFC-0056](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0056-tracing-backend.md) | ready to implement |
 | Notifications: webhook, Slack, email | [RFC-0030](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0030-notifications.md) | proposal |
@@ -50,7 +52,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | --- | --- | --- |
 | kubectl through the platform's sign-in (`shpyrd auth kubectl`) | [RFC-0062](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0062-kubectl-through-platform-sign-in.md) | proposal |
 | Dashboard access zones: public dashboard with intranet-only areas | [RFC-0063](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0063-dashboard-access-zones.md) | proposal |
-| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | proposal |
+| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | done (v0.9.45) |
 | Signed-in detection on identified apps: a signed-in person is identified from the first page, however they arrive | [RFC-0068](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0068-signed-in-detection-on-identified-apps.md) | proposal |
 | Embedded git: a repository per project the platform keeps — deploys commit, pushes deploy, agents work on it | [RFC-0069](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0069-embedded-git.md) | proposal |
 | Internal names: `http://crm.internal` between projects, with a service identity | [RFC-0070](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0070-internal-names.md) | proposal |

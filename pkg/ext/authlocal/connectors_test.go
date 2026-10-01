@@ -1,17 +1,22 @@
 package authlocal
 
 import (
-	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestConnectorStore(t *testing.T) {
@@ -107,5 +112,38 @@ func TestConnectorStore(t *testing.T) {
 	}
 	if err := (&ConnectorSpec{Type: "github", ID: "local", ClientID: "a", ClientSecret: "b"}).Validate(); err == nil {
 		t.Error("id local accepted")
+	}
+}
+
+// Without auth-local there is no Connector resource: the API server answers
+// 404 "the server could not find the requested resource" (checked against a
+// kind cluster), and the store says the extension is needed rather than
+// leaking that error (RFC-0058).
+func TestConnectorStoreWithoutAuthLocal(t *testing.T) {
+	ctx := context.Background()
+	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{ConnectorGVR: "ConnectorList"})
+	serverErr := apierrors.NewGenericServerResponse(404, "post", schema.GroupResource{Group: "dex.coreos.com", Resource: "connectors"}, "", "", 0, false)
+	dyn.PrependReactor("*", "connectors", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, serverErr
+	})
+	s := &ConnectorStore{Dynamic: dyn, Namespace: "shpyrd-system", Issuer: "https://auth.example.test"}
+
+	_, err := s.Add(ctx, ConnectorSpec{Type: "github", ClientID: "gh", ClientSecret: "s"})
+	if !errors.Is(err, ErrNotEnabled) || !strings.Contains(err.Error(), "shpyrd extensions enable auth-local") || strings.Contains(err.Error(), "could not find") {
+		t.Errorf("add without auth-local: %v", err)
+	}
+	if _, err := s.List(ctx); !errors.Is(err, ErrConnectorsNotEnabled) {
+		t.Errorf("list without auth-local: %v", err)
+	}
+	if err := s.Remove(ctx, "", "", "github"); !errors.Is(err, ErrConnectorsNotEnabled) {
+		t.Errorf("remove without auth-local: %v", err)
+	}
+
+	// The CLI reads the install record first and stops there.
+	if extensionEnabled(&install.InstallInfo{Vars: map[string]string{install.VarExtensions: "postgres,mail"}}) {
+		t.Error("auth-local reported enabled from an install record without it")
+	}
+	if !extensionEnabled(&install.InstallInfo{Vars: map[string]string{install.VarExtensions: "postgres, auth-local"}}) {
+		t.Error("auth-local not reported enabled")
 	}
 }

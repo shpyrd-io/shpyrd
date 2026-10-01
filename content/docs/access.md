@@ -91,7 +91,7 @@ shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
 shpyrd-ctl mail test you@example.com
 ```
 
-The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along.
+The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The Cluster page shows an **Email** card with the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along. A commercial relay refuses addresses that bounced or complained on its own; with a relay of your own, an unreachable address is yours to notice (see [Email](/docs/extensions#email)).
 
 ## Kubernetes RBAC mirror
 
@@ -120,7 +120,7 @@ Self-hosted: the token created when you install shpyrd yourself is a shared cred
 
 For CI, scripts and other machines, people create their own **API tokens** instead of sharing the admin token: Workspace → **API tokens** in the dashboard, or `shpyrd tokens create ci --project shop --role developer --expires 90d`. A token is `shp_<id>_<random>`, shown once and stored hashed. It carries a platform role or a role on one project, never above what its owner holds: the check runs when the token is *used*, so a demoted owner's token is demoted with them and a suspended owner's tokens stop working at once. Expiry is optional and recommended; revocation (`shpyrd tokens revoke <id>`, or the trash icon) is immediate. A token cannot create tokens.
 
-Use it with `shpyrd login --url https://shpyrd.example.com --token shp_...` on a laptop, or `SHPYRD_URL` and `SHPYRD_TOKEN` in CI. The audit trail names both the person and the token (`ana@example.com (token ci)`).
+Use it with `shpyrd login --url https://shpyrd.example.com --token shp_...` on another machine, or `SHPYRD_URL` and `SHPYRD_TOKEN` in CI. The audit trail names both the person and the token (`ana@example.com (token ci)`). On your own laptop, `shpyrd login --url https://shpyrd.example.com` without a token signs in from the browser instead: the approval mints a **session token** (listed with your API tokens as `CLI on <host>`, 30 days, revocable) that acts as you, with your roles as they change, and can create tokens like you can. Two kinds, then: an API token carries roles you chose, for a machine that is not you; a session token is you on one machine, as powerful as you, so it belongs on your laptop and never in CI.
 
 ## Audit trail
 

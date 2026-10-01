@@ -135,16 +135,27 @@ type Limits struct {
 // APIToken is a scoped, named credential (RFC-0031): shp_<id>_<random>.
 // The random part is shown once and not stored; Hash is SHA-256(random).
 type APIToken struct {
-	ID           string            `json:"id"`
-	WorkspaceID  string            `json:"workspaceId"`
-	Name         string            `json:"name"`
-	OwnerEmail   string            `json:"ownerEmail"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	Name        string `json:"name"`
+	OwnerEmail  string `json:"ownerEmail"`
+	// Kind is what the token is: "" (TokenKindToken) for an API token with
+	// roles of its own, within the owner's; TokenKindSession for the
+	// credential a `shpyrd login` approved in the browser (RFC-0052), which
+	// acts as the owner, with the owner's roles as they are now.
+	Kind         string            `json:"kind,omitempty"`
 	PlatformRole string            `json:"platformRole,omitempty"`
 	ProjectRoles map[string]string `json:"projectRoles,omitempty"`
 	CreatedAt    time.Time         `json:"createdAt"`
 	ExpiresAt    *time.Time        `json:"expiresAt,omitempty"`
 	LastUsedAt   *time.Time        `json:"lastUsedAt,omitempty"`
 }
+
+// Kinds of API token (APIToken.Kind).
+const (
+	TokenKindToken   = "token"
+	TokenKindSession = "session"
+)
 
 // Tokens is the token-management part of the Store.
 type Tokens interface {

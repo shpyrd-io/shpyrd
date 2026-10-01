@@ -35,12 +35,14 @@ rules:
     verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [pods]
-    # patch: write shpyrd.io/instance annotation for the log agent (RFC-0022a)
-    verbs: [delete, patch]
+    # patch: write shpyrd.io/instance annotation for the log agent (RFC-0022a);
+    # create: one-off instances for `shpyrd run` over the API (RFC-0052)
+    verbs: [create, delete, patch]
   # `sync` in the instances mounting a volume before its snapshot (RFC-0060);
-  # get for the WebSocket form of exec, create for SPDY.
+  # get for the WebSocket form of exec, create for SPDY. attach: the
+  # one-off instance's own process (RFC-0052).
   - apiGroups: [""]
-    resources: [pods/exec]
+    resources: [pods/exec, pods/attach]
     verbs: [get, create]
   - apiGroups: [""]
     resources: [services, configmaps, secrets, serviceaccounts]

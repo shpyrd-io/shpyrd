@@ -221,15 +221,23 @@ type Server struct {
 	// The web terminal (RFC-0026): unredeemed tickets and the live shells.
 	execTickets *ticketStore
 	shells      *shellRegistry
+	// The CLI's browser sign-in (RFC-0052): codes waiting for approval.
+	cliDevices *cliDeviceStore
 	// shellMints throttles ticket minting per actor (RFC-0026).
 	shellMints *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
 	execStream execStreamFunc
-	probeShell probeShellFunc
-	execRun    execRunFunc
-	shellIdle  time.Duration
+	// attachStream attaches to a pod's own process: a one-off command
+	// (RFC-0052). A seam like execStream.
+	attachStream attachStreamFunc
+	probeShell   probeShellFunc
+	execRun      execRunFunc
+	shellIdle    time.Duration
+	// runPoll is how often a one-off instance is looked at while it
+	// starts or ends; short in tests.
+	runPoll    time.Duration
 	shellPing  time.Duration
 	shellProbe time.Duration
 }
@@ -308,7 +316,10 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.resetRateLimit = newRateLimiter(resetRequestsPerMinute)
 	s.execTickets = newTicketStore(execTicketTTL)
 	s.shells = newShellRegistry()
+	s.cliDevices = newCLIDeviceStore()
 	s.execStream = s.streamExec
+	s.attachStream = s.streamAttach
+	s.runPoll = time.Second
 	s.probeShell = s.resolveShell
 	s.execRun = s.runKexec
 	s.shellIdle = shellIdleTimeout
@@ -499,6 +510,12 @@ func (s *Server) routes() error {
 	for _, p := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"} {
 		s.engine.GET(p, tenant, s.protectedResourceMetadata)
 	}
+	// The CLI's browser sign-in (RFC-0052): a device code the CLI polls
+	// and a page where the person approves it, with the dashboard session.
+	pub.POST("/cli/device", login, s.cliDeviceStart)
+	pub.POST("/cli/device/token", login, s.cliDevicePoll)
+	s.engine.GET("/cli/activate", tenant, login, s.cliActivatePage)
+	s.engine.POST("/cli/activate", tenant, login, s.cliActivateDecide)
 	oauth := s.engine.Group("/oauth", tenant, login)
 	oauth.POST("/register", s.oauthRegister)
 	oauth.GET("/authorize", s.oauthAuthorize)
@@ -625,6 +642,12 @@ func (s *Server) routes() error {
 	// is the cheaper check and because minting is what the socket costs: see
 	// throttleShellMints.
 	api.POST("/projects/:slug/shell/ticket", s.throttleShellMints(), s.require(authz.ProjectExec), s.mintShellTicket)
+	// One-off commands over the API (RFC-0052): the instance is created
+	// here and attached through the socket above.
+	api.POST("/projects/:slug/run", s.throttleShellMints(), s.require(authz.ProjectExec), s.runApp)
+	// A shell into a resource (`shpyrd pg psql`, `shpyrd redis cli`): the
+	// extension that owns the kind names the pod and the command.
+	api.POST("/projects/:slug/resources/:kind/:name/shell/ticket", s.throttleShellMints(), s.require(authz.ProjectExec), s.mintResourceShellTicket)
 	// Project resources (RFC-0003/0006) live in the project namespace.
 	api.GET("/projects/:slug/resources", s.require(authz.ProjectView), s.listProjectResources)
 	api.POST("/projects/:slug/resources", s.require(authz.ProjectResource), s.createResource)

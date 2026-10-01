@@ -124,6 +124,18 @@ func ExecURL(k *kube.Client, namespace, pod, container string, command []string,
 	return req.URL().String()
 }
 
+// AttachURL is the API URL of an attach stream to a container's own
+// process, for callers that bridge the stream themselves (the server's
+// one-off commands, RFC-0052). Without a TTY stderr is its own stream.
+func AttachURL(k *kube.Client, namespace, pod, container string, tty bool) string {
+	req := k.Kube.CoreV1().RESTClient().Post().
+		Resource("pods").Namespace(namespace).Name(pod).SubResource("attach").
+		VersionedParams(&corev1.PodAttachOptions{
+			Container: container, Stdin: true, Stdout: true, Stderr: !tty, TTY: tty,
+		}, scheme.ParameterCodec)
+	return req.URL().String()
+}
+
 // newExecutor builds the executor both stream entry points use: WebSocket
 // first, SPDY when the apiserver or a proxy in between cannot upgrade.
 func newExecutor(k *kube.Client, rawURL string) (remotecommand.Executor, error) {

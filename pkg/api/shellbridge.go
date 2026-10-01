@@ -14,8 +14,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/utils/ptr"
 
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
@@ -83,6 +87,17 @@ type execStreamFunc func(ctx context.Context, namespace, pod, container string, 
 
 type probeShellFunc func(ctx context.Context, namespace, pod, container string) ([]string, error)
 
+// attachStreamFunc attaches to a container's own process: a one-off
+// command's (RFC-0052). Without a TTY stderr is folded into stdout here,
+// since the socket has one output.
+type attachStreamFunc func(ctx context.Context, namespace, pod, container string, tty bool, stdin io.Reader, stdout io.Writer, sizes <-chan remotecommand.TerminalSize) error
+
+// runIdle is how long a one-off command may go without input before the
+// session is reaped: a migration prints for an hour and is typed into
+// never, so the pod's own deadline (RunDeadline) bounds it, not the
+// shell's idle timeout.
+const runIdle = time.Duration(controller.RunDeadline+60) * time.Second
+
 // execRunFunc is the one-shot exec resolveShell probes with. It is a seam of
 // its own, below probeShellFunc: tests that replace probeShell skip the
 // candidate walk entirely, and that walk — which candidate wins, and which
@@ -146,29 +161,40 @@ func (s *Server) appShell(c *gin.Context) {
 		abort(c, http.StatusForbidden, denial(roles, authz.ProjectExec, slug))
 		return
 	}
-	instances, err := s.instancesOf(c, app.Namespace, app.Name)
-	if err != nil {
-		abort(c, http.StatusBadGateway, err)
-		return
-	}
-	pod := ""
-	for _, i := range instances {
-		if i.Name == t.Instance {
-			pod = i.Pod
+	// The pod: named by the ticket when the server chose it at minting (a
+	// one-off instance, a resource's pod), else the instance's, looked up
+	// again now.
+	pod := t.Pod
+	if pod == "" {
+		instances, err := s.instancesOf(c, app.Namespace, app.Name)
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		for _, i := range instances {
+			if i.Name == t.Instance {
+				pod = i.Pod
+			}
+		}
+		if pod == "" {
+			// Routine during a rolling deploy: the instance was there when the
+			// selector loaded and is gone now.
+			abort(c, http.StatusNotFound, fmt.Errorf("instance %q is no longer running; running: %s", t.Instance, instanceList(instances)))
+			return
 		}
 	}
-	if pod == "" {
-		// Routine during a rolling deploy: the instance was there when the
-		// selector loaded and is gone now.
-		abort(c, http.StatusNotFound, fmt.Errorf("instance %q is no longer running; running: %s", t.Instance, instanceList(instances)))
-		return
-	}
 	actor := actorKey(t.Identity)
-	if !s.shells.claim(actor, project.SlugOf(app)) {
+	slot := project.SlugOf(app)
+	if t.Pod != "" {
+		// A one-off command or a database shell holds a slot of its own: a
+		// migration runs while a shell is open on the project.
+		slot += "\x00" + t.Instance
+	}
+	if !s.shells.claim(actor, slot) {
 		abort(c, http.StatusConflict, errors.New("you already have a shell open on this project; close it first"))
 		return
 	}
-	defer s.shells.release(actor, project.SlugOf(app))
+	defer s.shells.release(actor, slot)
 
 	up := websocket.Upgrader{CheckOrigin: sameOrigin}
 	conn, err := up.Upgrade(c.Writer, c.Request, nil)
@@ -186,28 +212,48 @@ func (s *Server) appShell(c *gin.Context) {
 	// registry and every other tenant's dashboard, and this route is reachable
 	// by anyone holding project.exec on a single project of their own.
 	conn.SetReadLimit(shellReadLimit)
-	s.runShell(c, conn, app.Namespace, pod, t.Instance, project.SlugOf(app), t.Command)
+	s.runShell(c, conn, app.Namespace, pod, t)
 }
 
 // runShell resolves the shell (or takes the ticket's command), then pipes
-// the socket to the pod until one end stops.
-func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, instance, project string, given []string) {
+// the socket to the pod until one end stops. A ticket that attaches
+// (RFC-0052) waits for its one-off instance to start, bridges its own
+// process, and removes the instance when the session ends.
+func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod string, t execTicket) {
 	w := &wsConn{c: conn}
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	instance, project, given := t.Instance, t.Project, t.Command
+	container := firstNonEmpty(t.Container, appContainer)
+	closeAction := "shell.close"
+	if t.Attach {
+		closeAction = "run.close"
+		// The instance goes with the session, whichever way it ends: the
+		// command finished, the person left, the server reaped it.
+		defer func() {
+			_ = s.kube.Kube.CoreV1().Pods(namespace).Delete(context.Background(), pod, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](5)})
+		}()
+	}
 
 	var command []string
 	var err error
-	if len(given) > 0 {
+	switch {
+	case t.Attach:
+		// The pod carries its command; it only has to be running (or done
+		// already) before the attach.
+		err = s.waitRunPod(ctx, namespace, pod)
+	case len(given) > 0 && t.Launcher:
 		// A command from the CLI: through the launcher when the image has
 		// one, so buildpack apps see their environment (the launcher runs
 		// whatever follows "--").
 		command = append([]string{cnbLauncher, "--"}, given...)
-		if _, perr := s.execRun(ctx, namespace, pod, appContainer, []string{"test", "-x", cnbLauncher}); perr != nil {
+		if _, perr := s.execRun(ctx, namespace, pod, container, []string{"test", "-x", cnbLauncher}); perr != nil {
 			command = given
 		}
-	} else {
-		command, err = s.probe(ctx, namespace, pod)
+	case len(given) > 0:
+		command = given
+	default:
+		command, err = s.probe(ctx, namespace, pod, container)
 	}
 	if err != nil {
 		_ = w.control(shellControl{Type: "error", Message: err.Error()})
@@ -217,15 +263,21 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 		// records nothing, so without this the whole attempt — who, which
 		// instance, and an RBAC or apiserver failure behind those four execs —
 		// would leave no trace at all.
-		s.audit(c, project, "shell.close", instance, err.Error())
+		s.audit(c, project, closeAction, instance, err.Error())
 		return
 	}
-	shell := command[len(command)-1]
-	if len(given) > 0 {
-		shell = strings.Join(given, " ")
+	shell := strings.Join(given, " ")
+	if len(given) == 0 {
+		shell = command[len(command)-1]
 	}
 	_ = w.control(shellControl{Type: "open", Instance: instance, Shell: shell})
-	s.audit(c, project, "shell.open", instance, shell)
+	if !t.Attach { // a run was recorded when its instance was created
+		s.audit(c, project, "shell.open", instance, shell)
+	}
+	idleFor := s.shellIdle
+	if t.Attach {
+		idleFor = runIdle
+	}
 
 	// stdin is a pipe so the reader goroutine can hand bytes to the exec
 	// stream, and closing it is how a closed socket ends the remote command.
@@ -238,7 +290,7 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 	// goroutine and its pipe would leak for the life of the server.
 	defer pr.Close()
 	sizes := make(chan remotecommand.TerminalSize, 4)
-	idle := time.NewTimer(s.shellIdle)
+	idle := time.NewTimer(idleFor)
 	defer idle.Stop()
 
 	// The reader goroutine is the only owner of sizes: it is the only sender,
@@ -276,7 +328,7 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 			if err != nil {
 				return
 			}
-			idle.Reset(s.shellIdle)
+			idle.Reset(idleFor)
 			switch typ {
 			case websocket.BinaryMessage, websocket.TextMessage:
 				if typ == websocket.TextMessage {
@@ -288,6 +340,15 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 						case sizes <- remotecommand.TerminalSize{Width: ctl.Cols, Height: ctl.Rows}:
 						default: // a resize storm need not be buffered
 						}
+					}
+					if err == nil && ctl.Type == "eof" && t.Attach {
+						// Piped input ran out (the CLI's `shpyrd run` with a
+						// file on stdin): the command sees its stdin close
+						// and the session goes on until it exits. Only an
+						// attached instance (StdinOnce) keeps its output
+						// after that; closing an exec session's stdin ends
+						// it, output and all, so a shell ignores the frame.
+						_ = pw.Close()
 					}
 					continue
 				}
@@ -340,7 +401,28 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 		}
 	}()
 
-	err = s.execStream(ctx, namespace, pod, appContainer, command, pr, w, sizes)
+	if t.Attach {
+		out := &kexec.CountingWriter{W: w}
+		err = s.attachStream(ctx, namespace, pod, container, t.TTY, pr, out, sizes)
+		if out.N == 0 && ctx.Err() == nil {
+			// The command finished before the attach took: what it wrote
+			// is in its log.
+			if logs, lerr := s.kube.Kube.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{Container: container}).DoRaw(ctx); lerr == nil && len(logs) > 0 {
+				_, _ = w.Write(logs)
+			}
+		}
+		// An attach stream reports no exit status: the pod does.
+		if ctx.Err() == nil {
+			if code, found := s.runExitCode(ctx, namespace, pod); found {
+				err = nil
+				if code != 0 {
+					err = &kexec.ExitError{Code: code}
+				}
+			}
+		}
+	} else {
+		err = s.execStream(ctx, namespace, pod, container, command, pr, w, sizes)
+	}
 
 	// Only an error carrying a remote status is an exit. Reporting anything
 	// else as one would tell the browser the command finished and write a
@@ -375,10 +457,10 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 		detail = "closed: server shutting down"
 		switch {
 		case signalled(idled):
-			detail = fmt.Sprintf("closed: idle for %s", s.shellIdle)
+			detail = fmt.Sprintf("closed: idle for %s", idleFor)
 			// Why, before the close: a terminal that vanishes without a word
 			// reads as a bug to the person it happens to.
-			_ = w.control(shellControl{Type: "error", Message: fmt.Sprintf("shell closed after %s idle", s.shellIdle)})
+			_ = w.control(shellControl{Type: "error", Message: fmt.Sprintf("shell closed after %s idle", idleFor)})
 		case c.Request.Context().Err() != nil, signalled(closed):
 			detail = "closed: the client disconnected"
 		}
@@ -397,7 +479,7 @@ func (s *Server) runShell(c *gin.Context, conn *websocket.Conn, namespace, pod, 
 		_ = w.control(shellControl{Type: "error", Message: detail})
 		_ = w.close(websocket.CloseInternalServerErr, detail)
 	}
-	s.audit(c, project, "shell.close", instance, detail)
+	s.audit(c, project, closeAction, instance, detail)
 }
 
 // signalled reports whether ch has been closed, without waiting for it.
@@ -417,7 +499,7 @@ func signalled(ch <-chan struct{}) bool {
 // even if the exec call underneath were to ignore its context. The goroutine
 // then finishes into the buffer with nobody listening instead of leaking on a
 // send; with the real kexec.Run it returns as soon as the deadline cancels ctx.
-func (s *Server) probe(ctx context.Context, namespace, pod string) ([]string, error) {
+func (s *Server) probe(ctx context.Context, namespace, pod, container string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.shellProbe)
 	defer cancel()
 	type result struct {
@@ -426,7 +508,7 @@ func (s *Server) probe(ctx context.Context, namespace, pod string) ([]string, er
 	}
 	done := make(chan result, 1)
 	go func() {
-		command, err := s.probeShell(ctx, namespace, pod, appContainer)
+		command, err := s.probeShell(ctx, namespace, pod, container)
 		done <- result{command, err}
 	}()
 	select {
@@ -450,6 +532,17 @@ func (s *Server) streamExec(ctx context.Context, namespace, pod, container strin
 	// rather than stdout a second time: passing a writer that can never be
 	// written to only suggests the terminal has two output paths.
 	return kexec.StreamIO(ctx, s.kube, u, true, stdin, stdout, nil, sizes)
+}
+
+// streamAttach is the real attach: the pod's own process, with the TTY it
+// was created with.
+func (s *Server) streamAttach(ctx context.Context, namespace, pod, container string, tty bool, stdin io.Reader, stdout io.Writer, sizes <-chan remotecommand.TerminalSize) error {
+	u := kexec.AttachURL(s.kube, namespace, pod, container, tty)
+	var stderr io.Writer
+	if !tty {
+		stderr = stdout // the socket has one output
+	}
+	return kexec.StreamIO(ctx, s.kube, u, tty, stdin, stdout, stderr, sizes)
 }
 
 // resolveShell reports the first candidate the image has. Each probe is a
