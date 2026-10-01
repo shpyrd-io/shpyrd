@@ -1,6 +1,6 @@
 # RFC-0033 Workspaces
 
-**Status:** in progress (definition being finalised; first pieces shipped)
+**Status:** in progress (shipped through v0.9.16; what remains is listed in Implementation status below)
 
 **Owner:** unassigned
 

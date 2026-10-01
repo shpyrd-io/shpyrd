@@ -1,6 +1,6 @@
 # RFC-0006 Persistent volumes
 
-**Status:** implemented (text partly superseded) — see Implementation status below
+**Status:** implemented (text partly superseded), gaps — see Implementation status below
 
 **Creation date:** 2026-09-22
 

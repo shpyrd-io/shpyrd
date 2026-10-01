@@ -1,6 +1,6 @@
 # RFC-0060 Volumes on cloud profiles: storage classes, provider minimums, snapshots
 
-**Status:** implemented (shared volumes on OKE: built, awaiting the tenancy's File Storage limit to verify end to end)
+**Status:** implemented, gaps (shared volumes on OKE: built, unverified end to end until the tenancy's File Storage limit lands — see Implementation History)
 
 **Owner:** unassigned
 
