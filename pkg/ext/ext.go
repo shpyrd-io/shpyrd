@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -302,6 +303,9 @@ type CLIGlobals interface {
 	// commands that speak the API work for tenants of a hosted platform;
 	// those that need the cluster (exec into a database) do not.
 	API() APIClient
+	// Output is how a command prints its result: text for people, JSON
+	// under --json or --jq (see cliout.Printer).
+	Output() *cliout.Printer
 }
 
 // APIClient sends requests to the workspace API.

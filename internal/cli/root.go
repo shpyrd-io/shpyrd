@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
@@ -23,6 +24,27 @@ type globalFlags struct {
 	kubeconfig string
 	kubeCtx    string
 	verbose    bool
+	out        cliout.Printer // --json and --jq
+}
+
+// Output implements ext.CLIGlobals: how the result of a command is printed.
+func (g *globalFlags) Output() *cliout.Printer { return &g.out }
+
+// print writes the result of a command the way the person or program
+// asked for (see cliout.Printer.Print).
+func (g *globalFlags) print(cmd *cobra.Command, v any, human func(w io.Writer)) error {
+	return g.out.Print(cmd.OutOrStdout(), v, human)
+}
+
+// progress is where a command narrates: stdout, or stderr under --json.
+func (g *globalFlags) progress(cmd *cobra.Command) io.Writer {
+	return g.out.Progress(cmd.OutOrStdout(), cmd.ErrOrStderr())
+}
+
+// addOutputFlags puts --json and --jq on a root command.
+func addOutputFlags(root *cobra.Command, g *globalFlags) {
+	root.PersistentFlags().BoolVar(&g.out.JSON, "json", false, "print the result as JSON on stdout, nothing else (agents and scripts: use this)")
+	root.PersistentFlags().StringVar(&g.out.JQ, "jq", "", "filter the JSON result with a jq expression (implies --json; strings print raw)")
 }
 
 // API implements ext.CLIGlobals: the workspace API over the login session
@@ -91,6 +113,7 @@ func New() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "path to the kubeconfig file")
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
+	addOutputFlags(root, g)
 	root.CompletionOptions.HiddenDefaultCmd = true
 	root.SetUsageTemplate(rootUsageTemplate(root))
 
