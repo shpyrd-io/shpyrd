@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"text/tabwriter"
@@ -36,19 +37,21 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
 			if err := t.call(ctx, "GET", "api/workspace", nil, &ws); err != nil {
 				return err
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintf(tw, "NAME\t%s\n", ws.Name)
-			fmt.Fprintf(tw, "IDENTIFIER\t%s\n", ws.Slug)
-			if ws.Address != "" {
-				fmt.Fprintf(tw, "ADDRESS\t%s\n", ws.Address)
-			}
-			fmt.Fprintf(tw, "DASHBOARD\t%s\n", ws.URL)
-			if ws.Domain != "" {
-				fmt.Fprintf(tw, "APPS\t<app>.%s\n", ws.Domain)
-			}
-			fmt.Fprintf(tw, "OWNERS\t%s\n", firstNonEmpty(strings.Join(ws.Owners, ", "), "-"))
-			fmt.Fprintf(tw, "JOIN POLICY\t%s\n", ws.JoinPolicy)
-			return tw.Flush()
+			return g.print(cmd, ws, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintf(tw, "NAME\t%s\n", ws.Name)
+				fmt.Fprintf(tw, "IDENTIFIER\t%s\n", ws.Slug)
+				if ws.Address != "" {
+					fmt.Fprintf(tw, "ADDRESS\t%s\n", ws.Address)
+				}
+				fmt.Fprintf(tw, "DASHBOARD\t%s\n", ws.URL)
+				if ws.Domain != "" {
+					fmt.Fprintf(tw, "APPS\t<app>.%s\n", ws.Domain)
+				}
+				fmt.Fprintf(tw, "OWNERS\t%s\n", firstNonEmpty(strings.Join(ws.Owners, ", "), "-"))
+				fmt.Fprintf(tw, "JOIN POLICY\t%s\n", ws.JoinPolicy)
+				_ = tw.Flush()
+			})
 		},
 	}
 	cmd.AddCommand(newWorkspaceAddressCmd(g), newWorkspaceDomainsCmd(g))
@@ -74,8 +77,9 @@ thirty days. People signed in sign in again at the new address.`,
 			if err := t.call(ctx, "PATCH", "api/workspace", map[string]string{"address": strings.TrimSpace(args[0])}, &ws); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "The workspace answers at %s now; apps at <app>.%s. The old address redirects for 30 days.\nSign in again: shpyrd login --url %s\n", ws.Address, ws.Domain, ws.URL)
-			return nil
+			return g.print(cmd, ws, func(w io.Writer) {
+				fmt.Fprintf(w, "The workspace answers at %s now; apps at <app>.%s. The old address redirects for 30 days.\nSign in again: shpyrd login --url %s\n", ws.Address, ws.Domain, ws.URL)
+			})
 		},
 	}
 }
@@ -113,24 +117,28 @@ func workspaceDomainsList(cmd *cobra.Command, g *globalFlags) error {
 	if err := t.call(ctx, "GET", "api/workspace/domains", nil, &list); err != nil {
 		return err
 	}
-	if len(list) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No custom domains. Add one: shpyrd workspace domains add intranet.acme.com")
-		return nil
+	if list == nil {
+		list = []api.DomainView{}
 	}
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "HOST\tSTATUS\tPRIMARY")
-	for _, d := range list {
-		status := "waiting for DNS (shpyrd workspace domains verify " + d.Host + ")"
-		if d.Verified {
-			status = "verified"
+	return g.print(cmd, list, func(w io.Writer) {
+		if len(list) == 0 {
+			fmt.Fprintln(w, "No custom domains. Add one: shpyrd workspace domains add intranet.acme.com")
+			return
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%v\n", d.Host, status, d.Primary)
-	}
-	return tw.Flush()
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "HOST\tSTATUS\tPRIMARY")
+		for _, d := range list {
+			status := "waiting for DNS (shpyrd workspace domains verify " + d.Host + ")"
+			if d.Verified {
+				status = "verified"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%v\n", d.Host, status, d.Primary)
+		}
+		_ = tw.Flush()
+	})
 }
 
-func printDomain(cmd *cobra.Command, d api.DomainView) {
-	out := cmd.OutOrStdout()
+func printDomain(out io.Writer, d api.DomainView) {
 	state := "waiting for DNS"
 	if d.Verified {
 		state = "verified"
@@ -181,11 +189,11 @@ func newWorkspaceDomainActionCmd(g *globalFlags, action, short string) *cobra.Co
 				if err := t.call(ctx, "DELETE", path, nil, nil); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Removed %s.\n", host)
-				return nil
+				return g.print(cmd, map[string]any{"host": host, "removed": true}, func(w io.Writer) {
+					fmt.Fprintf(w, "Removed %s.\n", host)
+				})
 			}
-			printDomain(cmd, d)
-			return nil
+			return g.print(cmd, d, func(w io.Writer) { printDomain(w, d) })
 		},
 	}
 }
