@@ -127,6 +127,8 @@ spec:
             # door's default; project Ingresses then carry no certificate.
             - name: SHPYRD_WILDCARD_TLS
               value: "${SHPYRD_WILDCARD_TLS}"
+            - name: SHPYRD_DNS_PROVIDER
+              value: "${SHPYRD_DNS_PROVIDER}"
             # Volumes (RFC-0060): classes, provider minimum and snapshot class.
             - name: SHPYRD_STORAGE_CLASS
               value: "${SHPYRD_STORAGE_CLASS}"
