@@ -1,6 +1,6 @@
 # RFC-0023 Log drains
 
-**Status:** implemented (with gaps) — see Implementation status below
+**Status:** implemented
 
 **Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-23
+**Last update:** 2026-09-30
 
 ## Summary
 
@@ -191,8 +191,14 @@ uses the kubeconfig; the API enforces `cluster.admin`).
   scope stays for the operator (`/api/drains`, `--cluster`); its page left the console,
   as log storage for the platform is a cluster drain's job (RFC-0022b), not a page's.
 
+- 2026-09-30: the gaps of the 2026-09-25 audit closed. `status.failingPolls` counts the
+  consecutive checks that found errors and nothing delivered; the tenth records
+  `drain.failing` in the project's audit trail (the cluster's for a workspace or cluster
+  drain), with the drain, its URL and how long it has been failing; lines flowing again
+  reset the count. The warning event stays on every failing check. The disabled-agent
+  notice of the Log drains pages links to the docs.
+
 ## Implementation status
 
-Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
-
-- **Not implemented:** The `drain.failing` audit event after ten failing polls (a Kubernetes warning event is emitted on every failure); a docs link on the disabled-agent notice.
+Audited on 2026-09-25 against the code and brought up to the text on 2026-09-30: nothing
+the text promises is missing.

@@ -1,6 +1,6 @@
 # RFC-0022a Log agent (Vector, container log limits)
 
-**Status:** implemented (with gaps) — see Implementation status below
+**Status:** implemented
 
 **Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-23
 
-**Last update:** 2026-09-23
+**Last update:** 2026-09-30
 
 ## Summary
 
@@ -121,9 +121,21 @@ install vars (domain, system namespace) and re-applied on `cluster init`.
   - logs-agent extension: Vector 0.58.0-alpine DaemonSet in logs-system; kubernetes_logs source with extra_namespace_label_selector:shpyrd.io/project; VRL remap attaches project/process/instance, parses JSON log lines; console sink; tolerates control-plane to reach build pods.
   - Verified live: shop web.1/web.2/worker.1 correctly labelled; blog JSON lines promoted to level+msg; api JSON parsed; no non-project pods in the stream.
 
+- 2026-09-30: the gaps of the 2026-09-25 audit closed.
+  - NetworkPolicy `vector` in `logs-system`, as RFC-0023 settled it: egress to the
+    internet (minus the pod CIDR and the instance metadata range) and to platform
+    namespaces, where the receivers, DNS and the API server are; never to a project.
+    Ingress on the API and metrics ports from platform namespaces and the nodes.
+  - The console sink is a file of its own (`console.yaml` in ConfigMap `vector`, a third
+    `--config`); the `aws` and `oci` profile overlays drop the key and the argument. No
+    blackhole sink: the drains are the sinks.
+  - Found on the way: the remap had not compiled since the RFC-0033 and RFC-0076 edits
+    (`get!()` cannot fail, so VRL refuses a `??` after it, and the agent crash-looped on
+    start). A missing label is read as null and tested with `if` instead. Verified on a
+    kind cluster: the agent starts with the three files, a project pod's lines come out
+    labelled, the metrics answer a platform namespace and not a project's.
+
 ## Implementation status
 
-Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
-
-- **Not implemented:** A NetworkPolicy for `logs-system` (Vector egress limited to drains and the API server).
-- **Not implemented:** The console sink off on cloud profiles (and no blackhole sink).
+Audited on 2026-09-25 against the code and brought up to the text on 2026-09-30: nothing
+the text promises is missing.

@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/audit"
 )
 
 // Log drains (RFC-0023). Every LogDrain, whatever its namespace, ends up as
@@ -46,6 +48,9 @@ const (
 	VectorMetrics = "http://vector.logs-system.svc:9598/metrics"
 	// drainStatusPeriod is how often delivery status is refreshed.
 	drainStatusPeriod = 30 * time.Second
+	// drainFailingPolls is how many consecutive failing checks (five
+	// minutes) make a drain.failing audit entry.
+	drainFailingPolls = 10
 )
 
 // LogDrainReconciler renders drains into Vector's config and reports their
@@ -59,6 +64,9 @@ type LogDrainReconciler struct {
 	SystemNamespace string
 	// HTTP fetches Vector's metrics; nil disables status polling (tests).
 	HTTP *http.Client
+	// Kube records the audit entry of a drain that keeps failing; nil
+	// skips it (tests).
+	Kube kubernetes.Interface
 }
 
 // SetupWithManager registers the controller: every LogDrain, the Secrets
@@ -178,7 +186,7 @@ func (r *LogDrainReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	default:
 		r.refreshDelivery(ctx, d)
 	}
-	if before.Phase != d.Status.Phase || before.Message != d.Status.Message || before.Sent != d.Status.Sent || before.Errors != d.Status.Errors {
+	if before.Phase != d.Status.Phase || before.Message != d.Status.Message || before.Sent != d.Status.Sent || before.Errors != d.Status.Errors || before.FailingPolls != d.Status.FailingPolls {
 		if err := r.Status().Update(ctx, d); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
@@ -510,17 +518,53 @@ func (r *LogDrainReconciler) refreshDelivery(ctx context.Context, d *shpyrdv1.Lo
 		now := metav1.Now()
 		d.Status.LastDeliveryAt = &now
 		d.Status.Message = fmt.Sprintf("%d lines delivered", sent)
+		d.Status.FailingPolls = 0
 	case errs > d.Status.Errors:
 		d.Status.Phase = shpyrdv1.DrainFailing
 		d.Status.Message = fmt.Sprintf("%d delivery errors, nothing sent since the last check", errs)
+		d.Status.FailingPolls++
 		if r.Recorder != nil {
 			r.Recorder.Event(d, corev1.EventTypeWarning, "DrainFailing", d.Status.Message)
+		}
+		// A warning event on every failing check; the audit entry once,
+		// when the receiver has been failing for a while (RFC-0023).
+		if d.Status.FailingPolls == drainFailingPolls {
+			r.auditFailing(ctx, d)
 		}
 	case d.Status.Phase == "":
 		d.Status.Phase = shpyrdv1.DrainPending
 		d.Status.Message = "configured; waiting for the first lines"
 	}
 	d.Status.Sent, d.Status.Errors = sent, errs
+}
+
+// auditFailing records drain.failing in the project's audit trail, or the
+// cluster's for the drains of the system namespace (cluster and workspace
+// drains, as their additions are).
+func (r *LogDrainReconciler) auditFailing(ctx context.Context, d *shpyrdv1.LogDrain) {
+	if r.Kube == nil {
+		return
+	}
+	ref := audit.ClusterRef(r.SystemNamespace)
+	if d.Namespace != r.SystemNamespace {
+		var apps shpyrdv1.AppList
+		if err := r.List(ctx, &apps, client.InNamespace(d.Namespace)); err == nil {
+			for i := range apps.Items {
+				if apps.Items[i].DeletionTimestamp.IsZero() {
+					ref = audit.AppRefIn(apps.Items[i].Namespace, apps.Items[i].Name)
+					break
+				}
+			}
+		}
+	}
+	since := time.Duration(d.Status.FailingPolls) * drainStatusPeriod
+	entry := audit.Entry{
+		Actor: "platform", Action: "drain.failing", Target: d.Name + " -> " + d.Spec.URL,
+		Detail: fmt.Sprintf("%s for %s", d.Status.Message, since), Via: "controller",
+	}
+	if err := audit.Record(ctx, r.Kube, ref, entry); err != nil {
+		ctrl.LoggerFrom(ctx).Info("cannot record drain.failing", "drain", client.ObjectKeyFromObject(d), "error", err)
+	}
 }
 
 // sinkCounters scrapes Vector's Prometheus metrics for one component.

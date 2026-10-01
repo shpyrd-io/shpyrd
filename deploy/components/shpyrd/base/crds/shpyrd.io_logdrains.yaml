@@ -159,6 +159,12 @@ spec:
                 description: Errors counts delivery errors since the agent started.
                 format: int64
                 type: integer
+              failingPolls:
+                description: |-
+                  FailingPolls counts the consecutive status checks that found errors
+                  and nothing delivered; back to zero when lines flow again.
+                format: int32
+                type: integer
               lastDeliveryAt:
                 description: LastDeliveryAt is when lines last reached the receiver.
                 format: date-time

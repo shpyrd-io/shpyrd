@@ -560,3 +560,58 @@ func TestConsoleIngressAllowsSourceUploads(t *testing.T) {
 		}
 	}
 }
+
+// The log agent (RFC-0022a) is fenced by a NetworkPolicy carrying the
+// profile's pod CIDR, and its console sink is a file of its own: loaded on
+// the local profile, left out by the cloud ones.
+func TestLogsAgentRenders(t *testing.T) {
+	render := func(profile string, vars map[string]string) (cm, ds, np string) {
+		t.Helper()
+		exts := []ExtensionComponent{{Extension: "logs-agent", Component: "logs-agent", Runlevel: "rc3"}}
+		eng, err := New(nil, Options{Profile: profile, Vars: vars, Extensions: exts, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		objs, err := eng.renderComponent(eng.components["logs-agent"])
+		if err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		for _, o := range objs {
+			switch o.GetKind() + "/" + o.GetName() {
+			case "ConfigMap/vector":
+				cm = mustYAML(t, o)
+			case "DaemonSet/vector":
+				ds = mustYAML(t, o)
+			case "NetworkPolicy/vector":
+				np = mustYAML(t, o)
+			}
+		}
+		if cm == "" || ds == "" || np == "" {
+			t.Fatalf("%s: ConfigMap, DaemonSet or NetworkPolicy missing", profile)
+		}
+		return cm, ds, np
+	}
+	cm, ds, np := render("local", map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"})
+	if !strings.Contains(cm, "console.yaml") || !strings.Contains(cm, "type: console") || !strings.Contains(ds, "/etc/vector/console.yaml") {
+		t.Errorf("local profile must load the console sink:\n%s\n%s", cm, ds)
+	}
+	if !strings.Contains(np, "10.244.0.0/16") || !strings.Contains(np, "169.254.0.0/16") || !strings.Contains(np, "shpyrd.io/project") {
+		t.Errorf("network policy:\n%s", np)
+	}
+	cloud := map[string]map[string]string{
+		"oci": {VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com"},
+		"aws": {VarDomain: "aws.example.com", VarACMEEmail: "ops@example.com", VarDNSProvider: "aws", VarDNSZoneID: "Z123", VarDNSRegion: "us-east-1", VarEFSID: "fs-0123", VarAWSCluster: "shpyrd-dev", VarAWSRegion: "us-east-1", VarAWSVPCID: "vpc-1", VarAWSLBEIPs: "eipalloc-1,eipalloc-2"},
+	}
+	for profile, vars := range cloud {
+		cm, ds, np := render(profile, vars)
+		if strings.Contains(cm, "console.yaml") || strings.Contains(cm, "type: console") || strings.Contains(ds, "console.yaml") {
+			t.Errorf("%s profile must not load the console sink:\n%s\n%s", profile, cm, ds)
+		}
+		if !strings.Contains(cm, "vector.yaml") || !strings.Contains(ds, "/etc/vector/vector.yaml") || !strings.Contains(ds, "/etc/vector/drains/drains.yaml") || !strings.Contains(ds, "--watch-config") {
+			t.Errorf("%s profile lost the agent's config:\n%s", profile, ds)
+		}
+		if strings.Contains(np, "${SHPYRD_") {
+			t.Errorf("%s network policy unsubstituted:\n%s", profile, np)
+		}
+	}
+}

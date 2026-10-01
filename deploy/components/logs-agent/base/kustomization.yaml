@@ -10,3 +10,4 @@ resources:
   - rbac.yaml
   - config.yaml
   - daemonset.yaml
+  - networkpolicy.yaml
