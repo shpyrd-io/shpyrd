@@ -1,89 +1,63 @@
 ---
 title: Getting started
 pageTitle: shpyrd - Getting started
-description: Sign up for shpyrd cloud, deploy your first app from your folder and share it with your team - or run shpyrd on a cluster of your own.
+description: Sign up for shpyrd cloud, add shpyrd to the agent you build with, and ask it to put your app online and share it with your team.
 ---
 
-shpyrd puts the apps you build online and in front of the people you choose: push code, get a URL with TLS and a sign-in in front of it, with logs, metrics, releases and rollbacks - no Dockerfiles, no YAML, and nothing to install or operate on shpyrd cloud. {% .lead %}
+You built an app with your agent. shpyrd is where it goes next: its own address, a sign-in in front of it, and the colleagues you choose inside. You don't learn a new tool to get there - you add shpyrd to the agent you already use, and tell it what you want. {% .lead %}
 
-{% quick-links %}
-{% quick-link title="Deploying" icon="presets" href="/docs/deploying" description="Create a project, deploy from a checkout or a Git URL, set config vars, scale, watch logs, roll back." /%}
-{% quick-link title="Sign-in for your app" icon="theming" href="/docs/app-access" description="Who may open an app is decided before a request reaches it; your app is told who they are." /%}
-{% quick-link title="AI assistants (MCP)" icon="plugins" href="/docs/mcp" description="Add your workspace to the agent you already use, and ask it about your projects." /%}
-{% quick-link title="Running it yourself" icon="installation" href="/docs/installation" description="shpyrd is open source: install it on a laptop, on AWS or on Oracle Cloud." /%}
-{% /quick-links %}
+## 1. Create your workspace
 
-## Your first deploy
+Sign up for shpyrd cloud and give your workspace a name. It answers at its own address, like `acme.shpyrd.app`, and every app you put online gets an address under it. There is nothing to install or run.
 
-### 1. Create your workspace
+## 2. Add shpyrd to your agent
 
-Sign up for shpyrd cloud and name your workspace. It answers at its own address - `acme.shpyrd.app` - and every app you deploy gets an address under it: `shop.acme.shpyrd.app`. Your company's own domain can come later ([Domains](/docs/domains)).
+Your workspace is a connector for AI assistants, at `https://acme.shpyrd.app/mcp` (use your workspace's address). Add it once:
 
-### 2. Install the CLI
+- **Claude Code** - in a terminal:
 
-```shell
-brew install shpyrd-io/tap/shpyrd                 # macOS
-curl -fsSL https://shpyrd.io/install.sh | sh      # macOS or Linux
-```
+  ```shell
+  claude mcp add --transport http shpyrd https://acme.shpyrd.app/mcp
+  ```
 
-### 3. Sign in
+- **Claude** - **Settings › Connectors › Add custom connector**, and paste the address.
+- **Codex, Cursor, VS Code and others** - add the same address as an MCP server; [AI assistants](/docs/mcp) has each one's settings.
 
-Create a personal API token in the dashboard (**Workspace › API tokens**), then sign the CLI in to your workspace with it:
+The first time, your agent sends you to your workspace to sign in and **Allow** it. It works as you, and never with more than your roles allow.
 
-```shell
-shpyrd login --url https://acme.shpyrd.app --token shp_…
-```
+## 3. Talk to it
 
-### 4. Deploy
+In the folder of your app, say what you want, the way you'd say it to a colleague:
 
-From the folder your app is in:
+| You say | What happens |
+| --- | --- |
+| *"Put this app online on shpyrd."* | It's built and released, at its own address with a sign-in in front of it. Nobody gets in yet. |
+| *"Share it with the Finance team."* | Everyone in Finance can open it, and whoever joins Finance later. |
+| *"Let Ana change it too."* | Ana can deploy updates and roll them back. Finance can still only use it. |
+| *"Who can open it?"* | It tells you, team by team and person by person. |
+| *"Show me the errors from the last hour."* | It reads the app's logs and metrics for you. |
+| *"The last change broke it - go back."* | The previous release comes back: its code and its settings. |
 
-```shell
-shpyrd projects create "Purchase requests"
-shpyrd deploy
-shpyrd open                     # https://purchase-requests.acme.shpyrd.app
-```
+The people you shared it with sign in with their account and find the app among theirs. [Sign-in for your app](/docs/app-access) and [Teams, roles and security](/docs/access) say who can do what.
 
-shpyrd builds it from source with [Cloud Native Buildpacks](https://buildpacks.io) (Go, Node.js, Java, Python, Ruby, .NET, static sites), or with your `Dockerfile` when there is one, and releases it. New projects ask visitors to sign in: nobody gets in until you say so.
-
-### 5. Share it
-
-Give it to a team, or to a person:
-
-```shell
-shpyrd members add purchase-requests --team finance --role user
-shpyrd members add purchase-requests --user ana@acme.com --role user
-```
-
-They sign in with their account and find it among their apps. [Sign-in for your app](/docs/app-access) and [Teams, roles and security](/docs/access) say who can do what.
-
-### Or ask your agent
-
-The steps above are ordinary commands, so the coding agent you built the app with can run them for you - "put this on shpyrd and share it with Finance". Add your workspace to the agent as well ([AI assistants](/docs/mcp)) and it can read your projects, their logs and their metrics.
+{% callout title="How your agent does it" %}
+The connector answers your agent's questions about your projects today. To put an app online and change who can open it, your agent uses the shpyrd command line for you: the first time, it will ask to install it, and for a token from your workspace (**Workspace › API tokens**) to sign it in. After that, you only talk.
+{% /callout %}
 
 ## What you get
 
-- **Deploys from source.** `shpyrd deploy` archives your checkout (or points at a Git URL) and builds it with buildpacks, or with your `Dockerfile`. No manifests.
-- **Sign-in in front of every app.** People sign in before a request reaches the app; the app is told who they are in headers and a signed JWT, with no sign-in code of its own.
-- **Releases you can trust.** Every deploy, config change or rollback is a numbered release that records its build and its config vars. Rolling back restores both.
-- **Config vars that stay secret.** Set, replace and remove them from the CLI or the dashboard; values are never shown again.
-- **Processes, Heroku style.** A project can run several process types (`web`, `worker`, ...). Only `web` gets a URL; a project without `web` is a background worker or an agent.
-- **Databases and caches.** PostgreSQL and Redis-compatible stores, attached to the app as `DATABASE_URL` and `REDIS_URL` ([Databases and caches](/docs/databases)).
-- **Apps that sleep when nobody uses them.** An idle app can sleep and wake on the next request.
-- **Logs and metrics out of the box.** Instance-named logs (`web.1`, `worker.2`), throughput by status class, response time percentiles, CPU and memory.
-- **Teams and roles.** Your company's sign-in, groups as teams, and separate rights to use an app, to change it and to manage it.
+- **An address and a sign-in for every app.** People sign in before a request reaches your app, and the app is told who they are - no login code of its own.
+- **Access by team or by person.** Your company's sign-in, its groups as teams, and separate rights to use an app, to change it and to manage it.
+- **Changes you can take back.** Every deploy or settings change is a numbered release; going back restores the code and the settings together.
+- **What apps need to run.** Databases and caches, settings that stay secret, logs and metrics - and apps that sleep when nobody uses them and wake on the next visit.
+
+## Prefer commands?
+
+Everything your agent does is an ordinary command you can type yourself: [Deploying](/docs/deploying) walks through them, and the [CLI reference](/docs/cli) lists them all.
 
 ## Running it yourself
 
-shpyrd is open source (MPL-2.0). The same platform installs on a Kubernetes cluster you run - a local [kind](https://kind.sigs.k8s.io) cluster from one command, [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws):
-
-```shell
-brew install shpyrd-io/tap/shpyrd
-shpyrd cluster create        # kind cluster + base stack, 10-20 min the first time
-shpyrd cluster dashboard     # opens the dashboard, signed in
-```
-
-[Installation](/docs/installation) has the requirements and every step.
+shpyrd is open source (MPL-2.0) and runs on a Kubernetes cluster of your own too - on your laptop, on [AWS](/docs/aws) or on [Oracle Cloud](/docs/oracle-cloud). [Installation](/docs/installation) has every step.
 
 ## Status
 
