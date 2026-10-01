@@ -68,9 +68,9 @@ Implemented in v0.9.0. Known gaps:
 - The `ApiToken` CRD of the first draft was replaced by a database table; nothing to
   migrate since no release shipped the CRD.
 - `shpyrd tokens create` from the CLI works when signed in as a person or with the admin
-  token; a session opened with a `shp_` token cannot mint further tokens (by design). Until
-  the CLI's browser sign-in lands (RFC-0052), people without cluster access create their
-  tokens in the dashboard.
+  token; a session opened with a `shp_` token cannot mint further tokens (by design). The
+  CLI's browser sign-in (RFC-0052, v0.9.61) mints a session token (kind `session`), the
+  person's own: it acts with their roles as they are and can mint tokens as they can.
 - No per-token IP allow list or usage counters; RFC-0025 (durable audit) is where usage
   history belongs.
 

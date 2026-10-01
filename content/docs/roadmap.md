@@ -52,7 +52,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | --- | --- | --- |
 | kubectl through the platform's sign-in (`shpyrd auth kubectl`) | [RFC-0062](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0062-kubectl-through-platform-sign-in.md) | proposal |
 | Dashboard access zones: public dashboard with intranet-only areas | [RFC-0063](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0063-dashboard-access-zones.md) | proposal |
-| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | proposal |
+| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | done (v0.9.45) |
 | Signed-in detection on identified apps: a signed-in person is identified from the first page, however they arrive | [RFC-0068](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0068-signed-in-detection-on-identified-apps.md) | proposal |
 | Embedded git: a repository per project the platform keeps — deploys commit, pushes deploy, agents work on it | [RFC-0069](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0069-embedded-git.md) | proposal |
 | Internal names: `http://crm.internal` between projects, with a service identity | [RFC-0070](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0070-internal-names.md) | proposal |

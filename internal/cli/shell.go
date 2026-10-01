@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -28,7 +26,7 @@ import (
 // Buildpack images set up the language runtime (PATH, env) through the CNB
 // launcher; a plain exec'd shell would miss it, so commands go through it
 // when present.
-const cnbLauncher = "/cnb/lifecycle/launcher"
+const cnbLauncher = controller.CNBLauncher
 
 // ---- shell ------------------------------------------------------------------
 
@@ -195,6 +193,12 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 			if err != nil {
 				return err
 			}
+			tty := !detach && kexec.StdinIsTerminal()
+			if ac.session {
+				// Over the API (RFC-0052): the server starts the instance
+				// and the web terminal's bridge attaches to it.
+				return ac.runAPI(ctx, name, args, size, detach, tty, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			app, err := ac.getApp(ctx, name)
 			if err != nil {
 				return err
@@ -211,14 +215,12 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 			if err != nil {
 				return err
 			}
-			tty := !detach && kexec.StdinIsTerminal()
-			pod := runPod(app, image, args, res, tty, !detach)
 			// Node pools (RFC-0077): one-off runs belong with the apps.
+			pool := ""
 			if info, err := install.ReadInstallInfo(ctx, ac.k, ac.k.Namespace); err == nil {
-				if pool := info.Vars[install.VarAppsPool]; pool != "" {
-					pod.Spec.NodeSelector = map[string]string{controller.PoolLabel: pool}
-				}
+				pool = info.Vars[install.VarAppsPool]
 			}
+			pod := controller.OneOffPod(app, image, args, res, tty, !detach, pool)
 			created, err := ac.k.Kube.CoreV1().Pods(app.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("start one-off instance: %w", err)
@@ -275,61 +277,6 @@ func sizeLabel(size string, cat *sizes.Catalog) string {
 		return fmt.Sprintf("%s: %s CPU, %s", s.Name, s.CPU, s.Memory)
 	}
 	return size
-}
-
-// runPod builds the one-off pod: the release image and config vars, the
-// command through the CNB launcher, stdin attached (a TTY when interactive).
-// StdinOnce keeps stdout/stderr attached after stdin reaches EOF; without
-// it the runtime detaches the session as soon as piped input ends.
-func runPod(app *shpyrdv1.App, image string, command []string, res corev1.ResourceRequirements, tty, attach bool) *corev1.Pod {
-	suffix := make([]byte, 3)
-	_, _ = rand.Read(suffix)
-	name := fmt.Sprintf("%s-run-%s", app.Name, hex.EncodeToString(suffix))
-	// "--" makes the launcher exec the command as-is instead of via bash -c.
-	cmd := append([]string{cnbLauncher, "--"}, command...)
-	if !app.UsesBuildpacks() {
-		cmd = command // Dockerfile and prebuilt images have no launcher
-	}
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: app.Namespace,
-			Labels: map[string]string{
-				shpyrdv1.LabelApp:       app.Name,
-				shpyrdv1.LabelProcess:   "run",
-				shpyrdv1.LabelManagedBy: "shpyrd",
-			},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy:         corev1.RestartPolicyNever,
-			ActiveDeadlineSeconds: ptr.To[int64](3600),
-			EnableServiceLinks:    ptr.To(false),
-			// Private registries: the controller mirrors the credentials
-			// into the project namespace under a fixed name; the pull secret
-			// is optional for Kubernetes, so listing it is harmless without.
-			ImagePullSecrets: []corev1.LocalObjectReference{{Name: install.RegistrySecretName}},
-			Containers: []corev1.Container{{
-				Name:      "app",
-				Image:     image,
-				Command:   cmd,
-				Stdin:     attach,
-				StdinOnce: attach,
-				TTY:       tty,
-				Resources: res,
-				Env:       append([]corev1.EnvVar{{Name: "SHPYRD_RUN", Value: "1"}}, app.Spec.Env...),
-				// Globals, config vars, bound vars: the same sources and
-				// order as the deployed processes (RFC-0016).
-				EnvFrom: controller.EnvSources(app),
-				// Same hardening as deployed processes (RFC-0008).
-				SecurityContext: &corev1.SecurityContext{
-					AllowPrivilegeEscalation: ptr.To(false),
-					RunAsNonRoot:             ptr.To(true),
-					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
-			}},
-		},
-	}
 }
 
 func (a *appClient) waitPodRunningOrDone(ctx context.Context, namespace, name string, timeout time.Duration) error {

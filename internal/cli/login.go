@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -142,23 +144,29 @@ func DirectURL(wsURL string) string {
 // newLoginCmd is `shpyrd login`.
 func newLoginCmd(g *globalFlags) *cobra.Command {
 	var (
-		wsURL string
-		token string
+		wsURL     string
+		token     string
+		noBrowser bool
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Save credentials for a workspace (no kubeconfig needed for project commands)",
+		Short: "Sign in to a workspace (no kubeconfig needed for project commands)",
 		Long: `Sign in to a shpyrd workspace so project commands work without a kubeconfig:
 
-  shpyrd login --url https://acme.shpyrd.app          # opens the browser for the token
+  shpyrd login --url https://acme.shpyrd.app                      # approve in the browser
+  shpyrd login --url https://acme.shpyrd.app --token shp_...      # a token from the dashboard or CI
   shpyrd login --url https://shpyrd.oci.shpyrd.io --token <admin token>
 
-After login, project commands use the workspace API and your identity; no
-kubeconfig needed: projects (create, list, info, rename, destroy), deploy,
-logs, shell, scale, resize, releases, rollback, redeploy, open, secrets,
-access, allow, exposure, volumes, attach, detach, drains, members, tokens.
-Still cluster-only for now (run them with --context): run, pg, redis,
-domains. Operator commands live in shpyrd-ctl and keep the kubeconfig.
+Without --token the browser opens the workspace's sign-in; approve the code
+shown here and the CLI is signed in as you for 30 days (--no-browser prints
+the link instead of opening it; it works over SSH). That creates a session
+token, listed with your API tokens on the Workspace page and revoked there.
+
+After login, every developer command uses the workspace API and your
+identity: projects, deploy, logs, shell, run, scale, resize, releases,
+rollback, redeploy, open, secrets, access, allow, exposure, volumes,
+attach, detach, drains, domains, pg, redis, members, tokens. Operator
+commands live in shpyrd-ctl and keep the kubeconfig.
 
 The workspace you sign in to becomes the current one (shpyrd use lists
 and switches; SHPYRD_URL overrides for one shell).
@@ -167,6 +175,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
 			out := cmd.OutOrStdout()
+			var expires time.Time
 			if wsURL == "" {
 				// Try to guess from --context if available.
 				if g.kubeCtx != "" {
@@ -179,8 +188,10 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				return err
 			}
 			if token == "" {
-				// Already signed in there: make it the current workspace.
-				if s := loadSessions(); s.Sessions[norm] != nil {
+				// Already signed in there, and the credential still works:
+				// make it the current workspace. A dead one (expired,
+				// revoked) is replaced by a fresh sign-in.
+				if s := loadSessions(); s.Sessions[norm] != nil && verifyToken(ctx, norm, s.Sessions[norm].Token) == nil {
 					s.Current = norm
 					if err := s.save(); err != nil {
 						return err
@@ -188,7 +199,14 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 					fmt.Fprintf(out, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
 					return nil
 				}
-				return errors.New("--token is required; the browser device flow is not yet implemented.\nRun `shpyrd cluster token --context <ctx>` to get the admin token and pass it here.")
+				// The browser sign-in (RFC-0052): the workspace shows a
+				// code here, the person approves it in the dashboard.
+				approved, err := browserLogin(ctx, norm, out, noBrowser)
+				if err != nil {
+					return err
+				}
+				token = approved.Token
+				expires = approved.ExpiresAt
 			}
 			// Verify the token works before saving.
 			if err := verifyToken(ctx, norm, token); err != nil {
@@ -196,7 +214,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			}
 			whoAmI := whoAmI(ctx, norm, token)
 			s := loadSessions()
-			s.Sessions[norm] = &loginSession{URL: norm, Token: token, SavedAt: time.Now(), WhoAmI: whoAmI}
+			s.Sessions[norm] = &loginSession{URL: norm, Token: token, SavedAt: time.Now(), WhoAmI: whoAmI, ExpiresAt: expires}
 			s.Current = norm
 			if err := s.save(); err != nil {
 				return fmt.Errorf("save session: %w", err)
@@ -211,8 +229,151 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		},
 	}
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
-	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN): a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN): a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
+	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
 	return cmd
+}
+
+// deviceStart is what the workspace answers when a browser sign-in
+// begins (RFC 8628 §3.2).
+type deviceStart struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+// deviceApproval is the credential the approval minted.
+type deviceApproval struct {
+	Token     string    `json:"token"`
+	Email     string    `json:"email"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// browserLogin runs the browser sign-in against a workspace: asks it for
+// a code, shows the person where to approve it, and polls until the
+// approval has turned into a token (or the code expires, or Ctrl-C).
+func browserLogin(ctx context.Context, wsURL string, out io.Writer, noBrowser bool) (*deviceApproval, error) {
+	host, _ := os.Hostname()
+	body, _ := json.Marshal(map[string]string{"name": host})
+	var start deviceStart
+	if err := postJSON(ctx, wsURL+"/api/cli/device", body, &start); err != nil {
+		return nil, fmt.Errorf("cannot start the browser sign-in at %s: %w\n(pass --token to sign in with a token instead)", wsURL, err)
+	}
+	if start.DeviceCode == "" || start.UserCode == "" {
+		return nil, fmt.Errorf("the workspace answered without a sign-in code; is %s a shpyrd workspace?", wsURL)
+	}
+	link := firstNonEmpty(start.VerificationURIComplete, start.VerificationURI)
+	fmt.Fprintf(out, "Your code: %s\n", start.UserCode)
+	opened := false
+	if !noBrowser {
+		opened = openBrowser(link) == nil
+	}
+	if opened {
+		fmt.Fprintf(out, "Approve it in the browser (if nothing opened: %s)\n", link)
+	} else {
+		fmt.Fprintf(out, "Open %s and approve it.\n", link)
+	}
+	fmt.Fprint(out, "Waiting for the approval... ")
+	interval := time.Duration(firstPositive(start.Interval, 5)) * time.Second
+	deadline := time.Now().Add(time.Duration(firstPositive(start.ExpiresIn, 600)) * time.Second)
+	poll, _ := json.Marshal(map[string]string{"device_code": start.DeviceCode})
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(out)
+			return nil, errors.New("sign-in cancelled")
+		case <-time.After(interval):
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintln(out)
+			return nil, errors.New("the code expired before it was approved; run `shpyrd login` again")
+		}
+		var approval deviceApproval
+		status, err := postJSONStatus(ctx, wsURL+"/api/cli/device/token", poll, &approval)
+		if err != nil {
+			return nil, fmt.Errorf("cannot reach %s: %w", wsURL, err)
+		}
+		switch status.Error {
+		case "":
+			if approval.Token == "" {
+				fmt.Fprintln(out)
+				return nil, errors.New("the workspace approved the sign-in but sent no token")
+			}
+			fmt.Fprintln(out, "approved.")
+			return &approval, nil
+		case "authorization_pending":
+		case "slow_down":
+			interval += 5 * time.Second
+		case "access_denied":
+			fmt.Fprintln(out)
+			return nil, errors.New("the sign-in was refused in the browser")
+		case "expired_token":
+			fmt.Fprintln(out)
+			return nil, errors.New("the code expired before it was approved; run `shpyrd login` again")
+		default:
+			fmt.Fprintln(out)
+			return nil, fmt.Errorf("sign-in failed: %s", firstNonEmpty(status.Description, status.Error))
+		}
+	}
+}
+
+// deviceStatus is the error half of a poll (RFC 8628 §3.5).
+type deviceStatus struct {
+	Error       string `json:"error"`
+	Description string `json:"error_description"`
+}
+
+// postJSON sends a JSON body and decodes a 2xx answer into v; any other
+// status is an error with the server's message.
+func postJSON(ctx context.Context, url string, body []byte, v any) error {
+	status, err := postJSONStatus(ctx, url, body, v)
+	if err != nil {
+		return err
+	}
+	if status.Error != "" {
+		return errors.New(firstNonEmpty(status.Description, status.Error))
+	}
+	return nil
+}
+
+// postJSONStatus is postJSON that hands a 4xx answer back as a status
+// instead of an error: the poll's "not yet" answers are 400s.
+func postJSONStatus(ctx context.Context, url string, body []byte, v any) (deviceStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return deviceStatus{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return deviceStatus{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return deviceStatus{}, json.Unmarshal(raw, v)
+	}
+	var st deviceStatus
+	if json.Unmarshal(raw, &st) != nil || st.Error == "" {
+		st.Error = resp.Status
+		st.Description = strings.TrimSpace(truncate(string(raw), 200))
+	}
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusNotFound {
+		return deviceStatus{}, fmt.Errorf("%s: %s", resp.Status, firstNonEmpty(st.Description, st.Error))
+	}
+	return st, nil
+}
+
+func firstPositive(vals ...int) int {
+	for _, v := range vals {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // verifyToken checks the token is accepted by the workspace: /api/me answers
@@ -307,7 +468,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				wsURL = s.activeURL()
 			}
 			if wsURL == "" {
-				return errors.New("not signed in: run `shpyrd login --url <workspace URL> --token <token>`")
+				return errors.New("not signed in: run `shpyrd login --url <workspace URL>`")
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -318,7 +479,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				return fmt.Errorf("not signed in to %s; run `shpyrd login --url %s`", norm, norm)
 			}
 			if err := verifyToken(ctx, norm, sess.Token); err != nil {
-				return fmt.Errorf("%s: %w; run `shpyrd login --url %s --token <token>` again", norm, err, norm)
+				return fmt.Errorf("%s: %w; run `shpyrd login --url %s` again", norm, err, norm)
 			}
 			me := whoAmI(ctx, norm, sess.Token)
 			if me == "" {
@@ -338,6 +499,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 type TokenView struct {
 	ID           string            `json:"id"`
 	Name         string            `json:"name"`
+	Kind         string            `json:"kind,omitempty"`
 	PlatformRole string            `json:"platformRole,omitempty"`
 	ProjectRoles map[string]string `json:"projectRoles,omitempty"`
 	ExpiresAt    *time.Time        `json:"expiresAt,omitempty"`
@@ -469,6 +631,9 @@ pass it to shpyrd login --token.`,
 				if role == "" {
 					role = "project-scoped"
 				}
+				if t.Kind == "session" {
+					role = "session (your roles)"
+				}
 				expires := "never"
 				if t.ExpiresAt != nil {
 					expires = t.ExpiresAt.Local().Format("2006-01-02")
@@ -521,7 +686,7 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 			s := loadSessions()
 			if len(args) == 0 {
 				if len(s.Sessions) == 0 {
-					fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL> --token <token>")
+					fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL>")
 					return nil
 				}
 				active := s.activeURL()
@@ -544,7 +709,7 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 				return err
 			}
 			if _, ok := s.Sessions[norm]; !ok {
-				return fmt.Errorf("not signed in to %s; run `shpyrd login --url %s --token <token>`", norm, norm)
+				return fmt.Errorf("not signed in to %s; run `shpyrd login --url %s`", norm, norm)
 			}
 			s.Current = norm
 			if err := s.save(); err != nil {

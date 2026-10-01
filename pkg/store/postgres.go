@@ -914,10 +914,14 @@ func (p *Postgres) CreateToken(ctx context.Context, ws string, t APIToken, hash 
 		return nil, err
 	}
 	roles, _ := json.Marshal(t.ProjectRoles)
-	row := p.pool.QueryRow(ctx, `INSERT INTO api_tokens (id, workspace_id, name, owner_email, hash, platform_role, project_roles, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at`,
-		newID(), wsID, t.Name, strings.ToLower(t.OwnerEmail), hash, t.PlatformRole, roles, t.ExpiresAt)
+	kind := t.Kind
+	if kind == "" {
+		kind = TokenKindToken
+	}
+	row := p.pool.QueryRow(ctx, `INSERT INTO api_tokens (id, workspace_id, name, owner_email, hash, platform_role, project_roles, expires_at, kind)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind`,
+		newID(), wsID, t.Name, strings.ToLower(t.OwnerEmail), hash, t.PlatformRole, roles, t.ExpiresAt, kind)
 	out, err := scanToken(row)
 	if isUnique(err) {
 		return nil, ErrConflict
@@ -928,18 +932,21 @@ func (p *Postgres) CreateToken(ctx context.Context, ws string, t APIToken, hash 
 func scanToken(row pgx.Row) (*APIToken, error) {
 	var t APIToken
 	var roles []byte
-	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.OwnerEmail, &t.PlatformRole, &roles, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.OwnerEmail, &t.PlatformRole, &roles, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &t.Kind); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if t.Kind == TokenKindToken {
+		t.Kind = ""
 	}
 	_ = json.Unmarshal(roles, &t.ProjectRoles)
 	return &t, nil
 }
 
 func (p *Postgres) LookupToken(ctx context.Context, hash string) (*APIToken, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at
+	row := p.pool.QueryRow(ctx, `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind
 		FROM api_tokens WHERE hash = $1 AND (expires_at IS NULL OR expires_at > now())`, hash)
 	t, err := scanToken(row)
 	if err != nil || t == nil {
@@ -959,7 +966,7 @@ func (p *Postgres) ListTokens(ctx context.Context, ws, ownerEmail string) ([]API
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at FROM api_tokens WHERE workspace_id = $1`
+	q := `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind FROM api_tokens WHERE workspace_id = $1`
 	args := []any{wsID}
 	if ownerEmail != "" {
 		q += ` AND lower(owner_email) = lower($2)`

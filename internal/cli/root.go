@@ -57,6 +57,16 @@ func (t *apiTransport) Session() bool {
 	return err == nil && ac.session
 }
 
+// Exec is a shell into a resource over the web terminal's bridge
+// (RFC-0052).
+func (t *apiTransport) Exec(ctx context.Context, project, kind, name string, args []string, stderr io.Writer) error {
+	ac, err := t.client()
+	if err != nil {
+		return err
+	}
+	return ac.execResourceAPI(ctx, project, kind, name, args, stderr)
+}
+
 // New builds the root command.
 func New() *cobra.Command {
 	g := &globalFlags{}

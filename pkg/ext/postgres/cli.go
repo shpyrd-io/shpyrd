@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
@@ -278,6 +277,12 @@ func newPsqlCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
+			if api := g.API(); api.Session() {
+				// Signed in with `shpyrd login` (RFC-0052): through the
+				// web terminal's bridge, the server picking the primary.
+				fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s (primary)...\n", args[0])
+				return api.Exec(ctx, project, "postgres", args[0], args[1:], cmd.ErrOrStderr())
+			}
 			k, c, err := resources.Connect(g)
 			if err != nil {
 				return err
@@ -286,16 +291,12 @@ func newPsqlCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var pods corev1.PodList
-			if err := c.List(ctx, &pods, client.InNamespace(pg.Namespace), client.MatchingLabels{"cnpg.io/cluster": pg.Name, "cnpg.io/instanceRole": "primary"}); err != nil {
+			pod, err := primaryPod(ctx, c, pg)
+			if err != nil {
 				return err
 			}
-			if len(pods.Items) == 0 {
-				return fmt.Errorf("database %s has no primary instance yet (%s)", pg.Name, firstNonEmpty(pg.Status.Message, pg.Status.Phase))
-			}
-			command := append([]string{"psql", "-d", "app"}, args[1:]...)
 			fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s (primary)...\n", pg.Name)
-			return kexec.RemoteExit(kexec.Exec(ctx, k, pg.Namespace, pods.Items[0].Name, "postgres", command, kexec.StdinIsTerminal()))
+			return kexec.RemoteExit(kexec.Exec(ctx, k, pg.Namespace, pod, "postgres", psqlCommand(args[1:]), kexec.StdinIsTerminal()))
 		},
 	}
 	projectFlag(cmd, &project)

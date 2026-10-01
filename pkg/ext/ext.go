@@ -7,7 +7,7 @@ package ext
 
 import (
 	"context"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"io"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Extension is one optional capability.
@@ -54,6 +55,22 @@ type ResourceType struct {
 	Resource string
 	// Bindable resources can be attached to an App (RFC-0003).
 	Bindable bool
+}
+
+// ShellTarget is where a shell into a resource lands (RFC-0052): the pod
+// and container, and the command to run there.
+type ShellTarget struct {
+	Pod       string
+	Container string
+	Command   []string
+}
+
+// Shellable is an extension whose resources take a shell: `shpyrd pg
+// psql`, `shpyrd redis cli` over the web terminal's bridge (RFC-0026).
+// ResourceShell names the pod, container and command for one resource of
+// a kind; args are what the person wrote after the resource's name.
+type Shellable interface {
+	ResourceShell(ctx context.Context, deps Deps, kind, namespace, name string, args []string) (ShellTarget, error)
 }
 
 // Router gives extensions the route groups of the API: public (no
@@ -293,8 +310,13 @@ type APIClient interface {
 	// server's message.
 	Request(ctx context.Context, method, path string, body []byte, contentType string) ([]byte, error)
 	// Session says the CLI is signed in through the API and has no cluster:
-	// commands that exec into pods must say so instead of failing.
+	// commands that exec into pods go through Exec then.
 	Session() bool
+	// Exec opens a shell into a resource of a project through the web
+	// terminal's bridge (RFC-0026): the extension that owns the kind names
+	// the pod and the command (Shellable); the local terminal is bridged
+	// until it ends. Returns the remote exit code as a *kexec.ExitError.
+	Exec(ctx context.Context, project, kind, name string, args []string, stderr io.Writer) error
 }
 
 // Names returns the names of extensions, in order.
