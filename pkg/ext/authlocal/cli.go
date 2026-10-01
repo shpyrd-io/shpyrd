@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -76,8 +77,9 @@ func newUsersAddCmd(g ext.CLIGlobals) *cobra.Command {
 				if err := st.CreatePending(cliContext(), args[0], name); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Created pending account %s. Send the set-password link via `shpyrd invite %s` or ask them to use \"Forgot password\" once mail is configured.\n", args[0], args[0])
-				return nil
+				return ext.Print(g, cmd, map[string]any{"email": strings.ToLower(args[0]), "name": name, "status": StatusPending}, func(w io.Writer) {
+					fmt.Fprintf(w, "Created pending account %s. Send the set-password link via `shpyrd invite %s` or ask them to use \"Forgot password\" once mail is configured.\n", args[0], args[0])
+				})
 			}
 			pw, err := passwordOrPrompt(cmd, password, true)
 			if err != nil {
@@ -87,8 +89,9 @@ func newUsersAddCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created user %s (%s). Sign in at the dashboard with \"Email and password\".\n", u.Email, u.Name)
-			return nil
+			return ext.Print(g, cmd, u, func(w io.Writer) {
+				fmt.Fprintf(w, "Created user %s (%s). Sign in at the dashboard with \"Email and password\".\n", u.Email, u.Name)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the part before @)")
@@ -111,24 +114,29 @@ func newUsersListCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(users) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No accounts yet. Create one with `shpyrd users add <email>`.")
-				return nil
+			if users == nil {
+				users = []User{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "EMAIL\tNAME\tSTATUS\tVERIFIED\tCREATED")
-			for _, u := range users {
-				status := u.Status
-				if status == "" {
-					status = StatusActive
+			return ext.Print(g, cmd, users, func(w io.Writer) {
+				if len(users) == 0 {
+					fmt.Fprintln(w, "No accounts yet. Create one with `shpyrd users add <email>`.")
+					return
 				}
-				verified := "no"
-				if u.Verified {
-					verified = "yes"
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "EMAIL\tNAME\tSTATUS\tVERIFIED\tCREATED")
+				for _, u := range users {
+					status := u.Status
+					if status == "" {
+						status = StatusActive
+					}
+					verified := "no"
+					if u.Verified {
+						verified = "yes"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", u.Email, u.Name, status, verified, u.CreatedAt.Local().Format(time.DateTime))
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", u.Email, u.Name, status, verified, u.CreatedAt.Local().Format(time.DateTime))
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -151,8 +159,9 @@ func newUsersPasswdCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := st.SetPassword(cliContext(), args[0], pw); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Password of %s changed.\n", strings.ToLower(args[0]))
-			return nil
+			return ext.Print(g, cmd, map[string]any{"email": strings.ToLower(args[0]), "passwordChanged": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Password of %s changed.\n", strings.ToLower(args[0]))
+			})
 		},
 	}
 	cmd.Flags().StringVar(&password, "password", "", "new password (prompted when omitted)")
@@ -173,8 +182,9 @@ func newUsersRmCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := st.Delete(cliContext(), args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted user %s. Existing dashboard sessions end when they expire.\n", strings.ToLower(args[0]))
-			return nil
+			return ext.Print(g, cmd, map[string]any{"email": strings.ToLower(args[0]), "deleted": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleted user %s. Existing dashboard sessions end when they expire.\n", strings.ToLower(args[0]))
+			})
 		},
 	}
 }

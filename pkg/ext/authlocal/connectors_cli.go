@@ -3,6 +3,7 @@ package authlocal
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -123,14 +124,17 @@ func newConnectorAddCmd(g ext.CLIGlobals) *cobra.Command {
 				verb = "Updated"
 			}
 			d.audit(ctx, "auth.connector.set", spec.ID, spec.Type)
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "%s connector %s (%s, %s)\n", verb, spec.ID, spec.Name, spec.Type)
-			fmt.Fprintf(out, "Callback URL to register at %s: %s/callback\n", spec.Name, strings.TrimRight(d.store.Issuer, "/"))
 			if err := d.restartServer(ctx); err != nil {
 				return err
 			}
-			fmt.Fprintln(out, "The server is restarting; the button appears on the sign-in page in a few seconds.")
-			return nil
+			callback := strings.TrimRight(d.store.Issuer, "/") + "/callback"
+			// Never the client secret: the id, the type and where to point the provider.
+			result := map[string]any{"id": spec.ID, "type": spec.Type, "name": spec.Name, "realm": spec.Realm, "callback": callback, "existed": existed}
+			return ext.Print(g, cmd, result, func(out io.Writer) {
+				fmt.Fprintf(out, "%s connector %s (%s, %s)\n", verb, spec.ID, spec.Name, spec.Type)
+				fmt.Fprintf(out, "Callback URL to register at %s: %s\n", spec.Name, callback)
+				fmt.Fprintln(out, "The server is restarting; the button appears on the sign-in page in a few seconds.")
+			})
 		},
 	}
 	cmd.Flags().StringVar(&spec.Realm, "realm", "platform", "whose login page: console (the operator's door) or platform (the defaults every workspace offers)")
@@ -162,16 +166,21 @@ func newConnectorListCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(list) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No connectors. Add one with `shpyrd auth connector add github|google`.")
-				return nil
+			if list == nil {
+				list = []Connector{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL\tREALM\tWORKSPACE")
-			for _, c := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail, c.Realm, c.Workspace)
-			}
-			return tw.Flush()
+			return ext.Print(g, cmd, list, func(w io.Writer) {
+				if len(list) == 0 {
+					fmt.Fprintln(w, "No connectors. Add one with `shpyrd auth connector add github|google`.")
+					return
+				}
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tTYPE\tLABEL\tDETAIL\tREALM\tWORKSPACE")
+				for _, c := range list {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", c.ID, c.Type, c.Name, c.Detail, c.Realm, c.Workspace)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -193,8 +202,12 @@ func newConnectorRemoveCmd(g ext.CLIGlobals) *cobra.Command {
 				return err
 			}
 			d.audit(ctx, "auth.connector.remove", args[0], "")
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed connector %s\n", args[0])
-			return d.restartServer(ctx)
+			if err := d.restartServer(ctx); err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, map[string]any{"id": args[0], "realm": realm, "removed": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed connector %s\n", args[0])
+			})
 		},
 	}
 	cmd.Flags().StringVar(&realm, "realm", "platform", "whose login page the connector is on: console or platform")

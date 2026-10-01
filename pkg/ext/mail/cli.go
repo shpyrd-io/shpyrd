@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -125,14 +126,15 @@ private network.`,
 				return err
 			}
 			d.audit(ctx, "mail.set", s.Addr(), "from "+s.From+", "+s.Security)
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Mail is sent through %s (%s) as %s.\n", s.Addr(), s.Security, s.From)
-			if !d.enabled(ctx) {
-				fmt.Fprintf(out, "The %s extension is not enabled on this cluster: run `shpyrd-ctl extensions enable %s`.\n", Name, Name)
-				return nil
-			}
-			fmt.Fprintln(out, "Send a test message: shpyrd-ctl mail test you@example.com")
-			return nil
+			enabled := d.enabled(ctx)
+			return ext.Print(g, cmd, map[string]any{"settings": s, "enabled": enabled}, func(out io.Writer) {
+				fmt.Fprintf(out, "Mail is sent through %s (%s) as %s.\n", s.Addr(), s.Security, s.From)
+				if !enabled {
+					fmt.Fprintf(out, "The %s extension is not enabled on this cluster: run `shpyrd-ctl extensions enable %s`.\n", Name, Name)
+					return
+				}
+				fmt.Fprintln(out, "Send a test message: shpyrd-ctl mail test you@example.com")
+			})
 		},
 	}
 	cmd.Flags().StringVar(&s.Host, "host", "", "SMTP server host name")
@@ -161,26 +163,28 @@ func newStatusCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			if s == nil {
-				fmt.Fprintln(out, "Mail is not configured: run `shpyrd-ctl mail set`.")
-				return nil
-			}
-			tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintf(tw, "SERVER\t%s\n", s.Addr())
-			fmt.Fprintf(tw, "SECURITY\t%s\n", s.Security)
-			fmt.Fprintf(tw, "FROM\t%s\n", s.From)
-			auth := "none"
-			if s.User != "" {
-				auth = s.User
-			}
-			fmt.Fprintf(tw, "AUTH\t%s\n", auth)
-			enabled := "no (run `shpyrd-ctl extensions enable mail`)"
-			if d.enabled(ctx) {
-				enabled = "yes"
-			}
-			fmt.Fprintf(tw, "ENABLED\t%s\n", enabled)
-			return tw.Flush()
+			isEnabled := d.enabled(ctx)
+			return ext.Print(g, cmd, map[string]any{"settings": s, "enabled": isEnabled}, func(out io.Writer) {
+				if s == nil {
+					fmt.Fprintln(out, "Mail is not configured: run `shpyrd-ctl mail set`.")
+					return
+				}
+				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+				fmt.Fprintf(tw, "SERVER\t%s\n", s.Addr())
+				fmt.Fprintf(tw, "SECURITY\t%s\n", s.Security)
+				fmt.Fprintf(tw, "FROM\t%s\n", s.From)
+				auth := "none"
+				if s.User != "" {
+					auth = s.User
+				}
+				fmt.Fprintf(tw, "AUTH\t%s\n", auth)
+				enabled := "no (run `shpyrd-ctl extensions enable mail`)"
+				if isEnabled {
+					enabled = "yes"
+				}
+				fmt.Fprintf(tw, "ENABLED\t%s\n", enabled)
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -205,8 +209,9 @@ network path and the server's acceptance of the sender address.`,
 				Took string `json:"took"`
 			}
 			_ = json.Unmarshal(raw, &res)
-			fmt.Fprintf(cmd.OutOrStdout(), "Delivered a test message to %s (%s).\n", res.To, res.Took)
-			return nil
+			return ext.Print(g, cmd, res, func(w io.Writer) {
+				fmt.Fprintf(w, "Delivered a test message to %s (%s).\n", res.To, res.Took)
+			})
 		},
 	}
 }
@@ -225,8 +230,9 @@ func newUnsetCmd(g ext.CLIGlobals) *cobra.Command {
 				return err
 			}
 			d.audit(ctx, "mail.unset", "", "")
-			fmt.Fprintln(cmd.OutOrStdout(), "Mail settings removed; invitations show their link instead of sending it.")
-			return nil
+			return ext.Print(g, cmd, map[string]any{"settings": nil, "removed": true}, func(w io.Writer) {
+				fmt.Fprintln(w, "Mail settings removed; invitations show their link instead of sending it.")
+			})
 		},
 	}
 }
