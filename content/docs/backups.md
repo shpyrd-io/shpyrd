@@ -3,7 +3,7 @@ title: Platform backups
 description: Nightly encrypted backups of the platform's state to the provider's object storage, and the way back into a new cluster with shpyrd cluster restore.
 ---
 
-Every night the platform writes an encrypted archive of its state to a bucket in your cloud provider's object storage, outside the cluster: projects, config vars, resources, the sources apps build from, sign-in users, teams and members. Lose the cluster, build a new one, `shpyrd cluster restore`, and the projects build and start again. {% .lead %}
+This page is about a cluster you run: its platform backup. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). Every night the platform writes an encrypted archive of its state to a bucket in your cloud provider's object storage, outside the cluster: projects, config vars, resources, the sources apps build from, sign-in users, teams and members. Lose the cluster, build a new one, `shpyrd cluster restore`, and the projects build and start again. {% .lead %}
 
 ![The platform backups card on the cluster page: target, schedule, last good backup, the archives and a Back up now button](/screenshots/backups-card.png)
 

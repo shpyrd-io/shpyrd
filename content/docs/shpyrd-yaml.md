@@ -52,8 +52,8 @@ build:
 domains:
   - www.myprod.com
 
-# Which front door serves the project on cloud profiles: external (public
-# load balancer, default) or internal (private one).
+# Self-hosted: which front door serves the project on a cluster you run with a
+# cloud profile: external (public load balancer, default) or internal (private one).
 exposure: external
 ```
 
@@ -79,7 +79,7 @@ exposure: external
 | `build.builder` | kpack `ClusterBuilder` to use (buildpacks). The default is fine. |
 | `build.dockerfile`, `build.target` | Dockerfile path relative to the deployed directory (default `Dockerfile`) and the multi-stage target to build. |
 | `domains` | Custom domains served in addition to the project hostname, each with its own certificate once its DNS record points here. See [Domains and exposure](/docs/domains). |
-| `exposure` | `external` (default) or `internal`: which load balancer serves the project on cloud profiles. Changing it is release-free. |
+| `exposure` | Self-hosted: `external` (default) or `internal`, which load balancer serves the project on a cluster you run with a cloud profile. Changing it is release-free. |
 
 ## Process types and buildpacks
 

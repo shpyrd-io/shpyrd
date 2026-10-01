@@ -7,11 +7,11 @@ A project is a namespace with resources in it: the app, volumes, PostgreSQL data
 
 ```
 Resources:
-  App     hello-docker  Running  https://hello-docker.127.0.0.1.nip.io
+  App     hello-docker  Running  https://hello-docker.acme.shpyrd.app
   Volume  data          Bound    1Gi single-instance, mounted by hello-docker/web
 ```
 
-Every resource is a Kubernetes object in the project's namespace (`kubectl -n app-hello-docker get apps,volumes.shpyrd.io`), so nothing is hidden from the tools you already use.
+Every resource is a Kubernetes object in the project's namespace, so on a cluster you run yourself nothing is hidden from the tools you already use (`kubectl -n app-hello-docker get apps,volumes.shpyrd.io`).
 
 ## Volumes
 
@@ -55,11 +55,11 @@ The rules are explained where they bite: `shpyrd scale web=3` on a process with 
 
 Any image user can write to a mounted volume: the platform hands the disk to a group every container in the instance belongs to, so a Dockerfile `USER` or a buildpack's non-root user needs no `chown` step.
 
-On the local profile the bytes live on the kind node, so `shpyrd cluster destroy` deletes them along with everything else. Cloud profiles keep disks independent of nodes.
+Self-hosted: on the local profile the bytes live on the kind node, so `shpyrd cluster destroy` deletes them along with everything else. Cloud profiles keep disks independent of nodes.
 
 ### Volumes on Oracle Cloud
 
-The `oci` profile puts volumes on Block Volume (`oci-bv`, balanced performance, expansion allowed) and knows Oracle's rules so they do not surprise you:
+Self-hosted, on a cluster you run on Oracle Cloud: the `oci` profile puts volumes on Block Volume (`oci-bv`, balanced performance, expansion allowed) and knows Oracle's rules so they do not surprise you:
 
 - **Disks start at 50 GB.** A request below that is created at 50Gi and the command says so: `Note: Oracle Cloud block volumes start at 50Gi: created at 50Gi instead of 1Gi`. The dashboard's size field says it up front. The same applies to a Postgres or Redis data volume, which then shows `50Gi (5Gi requested; provider minimum)`.
 - **The disk exists once a process mounts it.** Until then the volume is `Pending` with that explanation; nothing is billed for it yet.
@@ -82,7 +82,7 @@ Restoring into a new volume is the safe path: the copy is created from the snaps
 
 Snapshots are taken at the block level and are crash-consistent: before taking one, shpyrd runs `sync` in the instances mounting the volume, so what the application had written is in the copy; a database is still better served by its own backups.
 
-On AWS the `aws` profile puts volumes on EBS `gp3` (encrypted, 1 GiB minimum, expansion allowed), snapshots are EBS snapshots, and shared volumes are EFS access points in the file system `contrib/aws` creates, owned by the same group the platform hands block volumes to, so every process writes to them without further setup.
+Self-hosted, on AWS: the `aws` profile puts volumes on EBS `gp3` (encrypted, 1 GiB minimum, expansion allowed), snapshots are EBS snapshots, and shared volumes are EFS access points in the file system `contrib/aws` creates, owned by the same group the platform hands block volumes to, so every process writes to them without further setup.
 
 ## Attaching resources
 
