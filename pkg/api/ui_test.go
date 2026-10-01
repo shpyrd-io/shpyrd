@@ -146,3 +146,59 @@ func TestScriptHashesReadWhatNextWrites(t *testing.T) {
 		t.Errorf("hashes of a page without scripts = %v", got)
 	}
 }
+
+// A binary built on the core writes into every page (analytics, say): the
+// additions land before </head> and </body>, their scripts are hashed
+// like Next's, and their origins join the policy for scripts, connections
+// and images. Files are left alone.
+func TestWhatABinaryAddsToThePagesIsServedAndAllowed(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	s.opts.UI = fstest.MapFS{
+		"console/index.html":    {Data: []byte("<html><head><title>c</title></head><body><script>console()</script>console</body></html>")},
+		"console/app.js":        {Data: []byte("console js")},
+		"workspace/index.html":  {Data: []byte("<html><head></head><body>workspace</body></html>")},
+		"workspace/people.html": {Data: []byte("<html>no closing tags")},
+	}
+	s.opts.Pages = PageAdditions{
+		Head:    `<script async src="https://cdn.example.com/a.js"></script><script>track()</script>`,
+		Body:    `<footer>cloud</footer>`,
+		Origins: []string{"https://cdn.example.com", "https://api.example.com"},
+	}
+	s.engine.NoRoute(s.serveUI())
+
+	rec := get(t, s, "shpyrd.example.test", "/")
+	want := `<html><head><title>c</title><script async src="https://cdn.example.com/a.js"></script><script>track()</script></head><body><script>console()</script>console<footer>cloud</footer></body></html>`
+	if got := rec.Body.String(); got != want {
+		t.Errorf("page with additions:\n got %s\nwant %s", got, want)
+	}
+	wantPolicy := "default-src 'self'; img-src 'self' data: https://cdn.example.com https://api.example.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https://cdn.example.com https://api.example.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; script-src 'self' https://cdn.example.com https://api.example.com " + hashOf("track()") + " " + hashOf("console()")
+	if got := rec.Header().Get("Content-Security-Policy"); got != wantPolicy {
+		t.Errorf("policy with origins:\n got %s\nwant %s", got, wantPolicy)
+	}
+	// A page without scripts of its own still allows the added one.
+	rec = get(t, s, "acme.shpyrd.test", "/")
+	if got := rec.Body.String(); got != `<html><head><script async src="https://cdn.example.com/a.js"></script><script>track()</script></head><body>workspace<footer>cloud</footer></body></html>` {
+		t.Errorf("workspace page = %s", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.HasSuffix(got, "script-src 'self' https://cdn.example.com https://api.example.com "+hashOf("track()")) {
+		t.Errorf("policy of a page without scripts of its own = %s", got)
+	}
+	// Without the closing tags nothing is written in; the page is served
+	// as it is.
+	if got := get(t, s, "acme.shpyrd.test", "/people").Body.String(); got != "<html>no closing tags" {
+		t.Errorf("page without closing tags = %s", got)
+	}
+	if got := get(t, s, "shpyrd.example.test", "/app.js").Body.String(); got != "console js" {
+		t.Errorf("file = %s", got)
+	}
+}
+
+func TestWithoutAdditionsThePagesAreWhatTheBuildWrote(t *testing.T) {
+	s := uiServer(t)
+	if got := get(t, s, "acme.shpyrd.test", "/").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("page = %q", got)
+	}
+	if got := policy(nil, nil); got != basePolicy {
+		t.Errorf("policy without origins or hashes = %s", got)
+	}
+}

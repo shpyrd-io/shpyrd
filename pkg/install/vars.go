@@ -45,6 +45,7 @@ const (
 	// Default "shpyrd" keeps existing installs unchanged.
 	VarConsoleName             = "SHPYRD_CONSOLE_NAME"
 	VarServerImage             = "SHPYRD_SERVER_IMAGE"              // server image; derived from the version unless set
+	VarUIImage                 = "SHPYRD_UI_IMAGE"                  // image the applications come from (RFC-0080); the server image unless set
 	VarWorkspacesDomain        = "SHPYRD_WORKSPACES_DOMAIN"         // domain tenant workspaces live under (cloud layer)
 	VarDefaultWorkspace        = "SHPYRD_DEFAULT_WORKSPACE"         // slug of the operator's default workspace (RFC-0078); "default"
 	VarDefaultWorkspaceAddress = "SHPYRD_DEFAULT_WORKSPACE_ADDRESS" // derived: where its dashboard answers (RFC-0080)
@@ -265,6 +266,15 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	}
 	if vars[VarServerImage] == "" {
 		out[VarServerImage] = DefaultServerImage(vars[VarVersion])
+	}
+	// The applications the server serves come from an init container's
+	// image (RFC-0080): the server's own, which exports the ones built
+	// into it, unless an image holding only the applications is named.
+	if vars[VarUIImage] == "" {
+		out[VarUIImage] = vars[VarServerImage]
+		if out[VarUIImage] == "" {
+			out[VarUIImage] = out[VarServerImage]
+		}
 	}
 	// DNS (RFC-0061): with a provider, one wildcard certificate is the front
 	// door's default and project Ingresses carry none of their own.

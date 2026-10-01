@@ -70,7 +70,9 @@ vars:
   SHPYRD_LB_IP: ""                   # cloud profiles: reserved load balancer address
   # kind's default pod network; project network policies exclude it from
   # the "internet" egress rule so projects cannot reach each other.
-  SHPYRD_POD_CIDR: 10.244.0.0/16
+  SHPYRD_POD_CIDR: 10.244.0.0/16  # The applications the server serves come from this image (RFC-0080):
+  # the server's own unless an image holding only the applications is set.
+  SHPYRD_UI_IMAGE: ""
 runlevels:
   # CRD-only components first: later charts create ServiceMonitors.
   - name: rc0

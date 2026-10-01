@@ -778,7 +778,7 @@ func securityHeaders() gin.HandlerFunc {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			h.Set("Content-Security-Policy", policy(nil))
+			h.Set("Content-Security-Policy", basePolicy)
 		}
 		c.Next()
 	}

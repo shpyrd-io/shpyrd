@@ -58,11 +58,28 @@ type Options struct {
 	// Extensions are added to those enabled by SHPYRD_EXTENSIONS: their
 	// controllers, routes and login providers are registered like any.
 	Extensions []ext.Extension
+	// Pages is what this binary writes into every page of the applications
+	// (HTML before </head> and before </body>) and the origins those
+	// additions may load scripts from, connect to and show images from.
+	// The core adds nothing.
+	Pages api.PageAdditions
 }
 
 // Main parses flags and the environment, runs the server and exits on
 // error. It is the whole main() of cmd/shpyrd-server.
 func Main(opts Options) {
+	// `shpyrd-server ui-export <dir>`: write the applications built into
+	// this binary to a directory, then exit. The server's init container
+	// runs it, so the server reads its applications from a directory in
+	// every install (SHPYRD_UI_DIR), and an image holding only the
+	// applications can take the server's place there (SHPYRD_UI_IMAGE).
+	if len(os.Args) > 2 && os.Args[1] == "ui-export" {
+		if err := ui.Export(os.Args[2]); err != nil {
+			slog.Error("ui-export failed", "dir", os.Args[2], "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server backup`: one platform backup, then exit (RFC-0037).
 	if len(os.Args) > 1 && os.Args[1] == "backup" {
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -214,7 +231,8 @@ func run(o runOptions, logger *slog.Logger) error {
 				workspaces.Notify()
 			}
 		},
-		UI:             ui.Dist(),
+		UI:             uiFiles(logger),
+		Pages:          o.opts.Pages,
 		Sources:        &api.SourceStore{Dir: o.dataDir, BaseURL: internalURL},
 		SourcesAddr:    fmt.Sprintf(":%d", api.SourcesPort),
 		TrustedProxies: trustedProxies(os.Getenv("SHPYRD_POD_CIDR")),
