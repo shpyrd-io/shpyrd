@@ -681,6 +681,12 @@ func (e *Engine) overrides() map[string]string {
 			continue // seeded from their own flags
 		case VarServerImage:
 			continue // follows the CLI version; a development image is for one run
+		case VarUIImage:
+			// An image holding only the applications is for the server it
+			// was set with (RFC-0080): the next server release carries
+			// those applications itself, and a run that does not name a
+			// UI image goes back to the ones built into the server.
+			continue
 		}
 		if _, known := e.profile.Vars[k]; !known {
 			continue // derived at render time, not a setting
