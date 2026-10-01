@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
@@ -95,7 +96,7 @@ func newUsersAddCmd(g ext.CLIGlobals) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the part before @)")
-	cmd.Flags().StringVar(&password, "password", "", "password (prompted when omitted; prefer the prompt so it stays out of shell history)")
+	cmd.Flags().StringVar(&password, "password", "", "password, or @path to read it from a file (prompted when omitted; prefer the prompt or a file so it stays out of shell history)")
 	cmd.Flags().BoolVar(&invite, "invite", false, "create a pending account without a password; the person sets it via the reset flow or a workspace invite")
 	return cmd
 }
@@ -164,7 +165,7 @@ func newUsersPasswdCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&password, "password", "", "new password (prompted when omitted)")
+	cmd.Flags().StringVar(&password, "password", "", "new password, or @path to read it from a file (prompted when omitted)")
 	return cmd
 }
 
@@ -193,7 +194,11 @@ func newUsersRmCmd(g ext.CLIGlobals) *cobra.Command {
 // when confirm is set), never echoing.
 func passwordOrPrompt(cmd *cobra.Command, flag string, confirm bool) (string, error) {
 	if flag != "" {
-		return flag, CheckPassword(flag)
+		pw, err := cliout.ValueOrFile(flag)
+		if err != nil {
+			return "", fmt.Errorf("--password: %w", err)
+		}
+		return pw, CheckPassword(pw)
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("no terminal to prompt for the password; pass --password")

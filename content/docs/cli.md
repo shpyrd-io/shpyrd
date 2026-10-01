@@ -16,6 +16,14 @@ shpyrd releases --project shop --jq '.[-1].number'
 shpyrd deploy --json | jq .release
 ```
 
+Inputs can come from files too. `shpyrd secrets set` and `shpyrd globals set` take `--from-file <path>`: a dotenv file (one `KEY=VALUE` per line, `#` comments, optional `export`, single or double quotes) or, when it starts with `{`, a JSON object of strings; `-` reads stdin, and `KEY=VALUE` arguments on the same command line win over the file. Flags that carry a secret (`login --token`, `users add --password`, `mail set --password`, `sso add --client-secret`) take `@path` to read the value from a file instead of the shell history.
+
+```sh
+shpyrd secrets set --from-file .env.production --project shop
+shpyrd secrets set --from-file - --project shop < vars.json
+shpyrd login --url https://acme.shpyrd.app --token @token.txt
+```
+
 ## Signing in
 
 | Command | What it does |

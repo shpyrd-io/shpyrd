@@ -42,22 +42,27 @@ func newSecretsCmd(g *globalFlags) *cobra.Command {
 Changing them creates a new release and restarts the processes. Values are
 write-only: they are never printed back.`,
 	}
+	var fromFile string
 	set := &cobra.Command{
-		Use:   "set KEY=VALUE [KEY=VALUE...]",
-		Short: "Set config vars",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "set [KEY=VALUE...] [--from-file <path>]",
+		Short: "Set config vars, from arguments, a dotenv or JSON file, or both",
+		Long: `Set config vars. Values come from KEY=VALUE arguments, from a file
+(--from-file: dotenv lines or a JSON object of strings, "-" for stdin), or
+both, the arguments winning.
+
+  shpyrd secrets set DATABASE_POOL=20 --project shop
+  shpyrd secrets set --from-file .env.production --project shop
+  shpyrd secrets set --from-file - --project shop < vars.json`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			set := map[string]string{}
-			for _, kv := range args {
-				k, v, ok := strings.Cut(kv, "=")
-				if !ok || k == "" {
-					return fmt.Errorf("expected KEY=VALUE, got %q", kv)
-				}
-				set[k] = v
+			set, err := varsToSet(cmd, args, fromFile)
+			if err != nil {
+				return err
 			}
 			return mutateEnvSecret(g, cmd, appName, set, nil)
 		},
 	}
+	set.Flags().StringVar(&fromFile, "from-file", "", "read KEY=VALUE lines (dotenv) or a JSON object from this file; - is stdin")
 	unset := &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove config vars",

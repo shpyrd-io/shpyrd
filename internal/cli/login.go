@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/shpyrd-io/shpyrd/pkg/cliout"
 )
 
 // Session store (RFC-0052): a JSON file at ~/.shpyrd/sessions.json holds the
@@ -187,6 +189,9 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			if err != nil {
 				return err
 			}
+			if token, err = cliout.ValueOrFile(token); err != nil {
+				return fmt.Errorf("--token: %w", err)
+			}
 			if token == "" {
 				// Already signed in there, and the credential still works:
 				// make it the current workspace. A dead one (expired,
@@ -231,7 +236,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		},
 	}
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
-	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN): a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
 	return cmd
 }

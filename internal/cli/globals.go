@@ -46,22 +46,21 @@ to; over a kubeconfig it is the default one unless --workspace names another.
   shpyrd globals list`,
 	}
 	cmd.PersistentFlags().StringVar(&workspace, "workspace", "", "workspace slug (the default workspace when empty)")
-	cmd.AddCommand(&cobra.Command{
-		Use:   "set KEY=VALUE [KEY=VALUE...]",
-		Short: "Set global config vars",
-		Args:  cobra.MinimumNArgs(1),
+	var fromFile string
+	set := &cobra.Command{
+		Use:   "set [KEY=VALUE...] [--from-file <path>]",
+		Short: "Set global config vars, from arguments, a dotenv or JSON file, or both",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			set := map[string]string{}
-			for _, kv := range args {
-				k, v, ok := strings.Cut(kv, "=")
-				if !ok || k == "" {
-					return fmt.Errorf("expected KEY=VALUE, got %q", kv)
-				}
-				set[k] = v
+			set, err := varsToSet(cmd, args, fromFile)
+			if err != nil {
+				return err
 			}
 			return mutateGlobals(g, cmd, workspace, set, nil)
 		},
-	}, &cobra.Command{
+	}
+	set.Flags().StringVar(&fromFile, "from-file", "", "read KEY=VALUE lines (dotenv) or a JSON object from this file; - is stdin")
+	cmd.AddCommand(set, &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove global config vars",
 		Args:  cobra.MinimumNArgs(1),

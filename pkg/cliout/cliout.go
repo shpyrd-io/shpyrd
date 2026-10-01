@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/itchyny/gojq"
 )
@@ -86,4 +88,18 @@ func (p *Printer) jq(w io.Writer, v any) error {
 			return err
 		}
 	}
+}
+
+// ValueOrFile resolves a secret-valued flag: "@path" reads the value from
+// that file (trailing whitespace dropped), so the secret stays out of the
+// shell history; anything else is the value itself.
+func ValueOrFile(v string) (string, error) {
+	if !strings.HasPrefix(v, "@") {
+		return v, nil
+	}
+	raw, err := os.ReadFile(strings.TrimPrefix(v, "@"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(raw), "\r\n\t "), nil
 }

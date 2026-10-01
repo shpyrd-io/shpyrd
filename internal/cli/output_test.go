@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -13,6 +16,7 @@ import (
 // it; without either, the command prints its text. The workspace API is a
 // fake reached through SHPYRD_URL and SHPYRD_TOKEN, as CI does.
 func TestJSONAndJQOutput(t *testing.T) {
+	var received map[string]string // what the last PUT of secrets carried
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/projects":
@@ -20,7 +24,29 @@ func TestJSONAndJQOutput(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"slug":"shop","displayName":"Shop","phase":"Running","release":3,"url":"https://shop.example.com","createdAt":"2026-09-01T10:00:00Z"},{"slug":"api","displayName":"API","phase":"Running","release":1,"url":"https://api.example.com","createdAt":"2026-09-02T10:00:00Z"}]`))
 		case "/api/projects/shop/secrets":
 			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPut {
+				// Echo the names that were set, sorted, as the server would.
+				var upd struct {
+					Set map[string]string `json:"set"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&upd)
+				received = upd.Set
+				names := make([]string, 0, len(upd.Set))
+				for k := range upd.Set {
+					names = append(names, k)
+				}
+				sort.Strings(names)
+				vars := make([]map[string]string, 0, len(names))
+				for _, n := range names {
+					vars = append(vars, map[string]string{"name": n})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"vars": vars})
+				return
+			}
 			_, _ = w.Write([]byte(`{"vars":[{"name":"DATABASE_URL","updatedAt":"2026-09-01T10:00:00Z"}]}`))
+		case "/api/projects/shop":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"slug":"shop","spec":{},"status":{}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -69,6 +95,20 @@ func TestJSONAndJQOutput(t *testing.T) {
 	stdout, _ = run("secrets", "list", "--project", "shop", "--jq", "{names: [.vars[].name]}")
 	if stdout != "{\"names\":[\"DATABASE_URL\"]}\n" {
 		t.Fatalf("--jq objects print as compact JSON: %q", stdout)
+	}
+
+	// --from-file: a dotenv file plus an argument that overrides one of
+	// its lines; the fake echoes the values it was sent.
+	env := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(env, []byte("A=from-file\nB=\"from file\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _ = run("secrets", "set", "B=arg", "--from-file", env, "--project", "shop", "--jq", ".vars[].name")
+	if stdout != "A\nB\n" {
+		t.Fatalf("--from-file names: %q", stdout)
+	}
+	if received["A"] != "from-file" || received["B"] != "arg" {
+		t.Fatalf("--from-file merged with arguments: the server received %v", received)
 	}
 
 	var out bytes.Buffer
