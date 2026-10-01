@@ -4,7 +4,6 @@ import { LogoMark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card } from "@shpyrd/ui/components/card";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
-import { developerSection } from "@shpyrd/content/site/home";
 import { developerCta } from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { ShipyardCta } from "@/components/shipyard-cta";
@@ -214,8 +213,6 @@ export function ConnectOnce() {
 // The end of the homepage (and the old homepage proposals): the shipyard at
 // work beside the way in. shpyrd cloud first, always; running it yourself is
 // there too, as the second way, because it is open source and says so.
-//
-// TODO: "Get started" goes to the cloud's sign-up once it is live.
 export function Closing() {
   return (
     <ShipyardCta
@@ -224,10 +221,10 @@ export function Closing() {
       actions={
         <>
           <Button asChild>
-            <a href="#">Get started</a>
+            <a href="/docs/getting-started">Get started</a>
           </Button>
           <Button variant="outline" asChild>
-            <a href={developerSection.links[0].href}>Run it yourself</a>
+            <a href="/docs/installation">Run it yourself</a>
           </Button>
         </>
       }

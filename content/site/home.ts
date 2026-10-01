@@ -98,17 +98,3 @@ export const boundariesSection = {
     'shpyrd is in beta and developed in the open. The limits below are the ' +
     'ones worth knowing before you spend time on an evaluation.',
 }
-
-export const developerSection = {
-  title: 'Run it yourself',
-  body:
-    'shpyrd is open source under MPL-2.0. The whole base stack installs onto a ' +
-    'local kind cluster from one command, and the quick start takes you from ' +
-    'nothing to a deployed app.',
-  code: `brew install shpyrd-io/tap/shpyrd
-shpyrd cluster create
-shpyrd cluster dashboard`,
-  // GitHub and Discord are in the header, on every page; saying them again at
-  // the foot of this one was noise.
-  links: [{ label: 'Quick start', href: '/docs/getting-started' }],
-}

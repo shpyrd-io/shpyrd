@@ -1,8 +1,11 @@
 import Link from "next/link";
-import { BookOpen, LayoutDashboard, Rocket, Workflow } from "lucide-react";
+import { BookOpen, Bot, LayoutDashboard, Rocket, Workflow } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { AppWindow } from "@shpyrd/ui/components/app-window";
+import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
 import { IDE } from "@shpyrd/ui/components/ide";
+import { addToAgent, agents } from "@shpyrd/content/site/agents";
 
 // What draws each tag and node of a text. A text names what it wants
 // ("callout", a fenced block of code); which component of design/ui draws
@@ -67,4 +70,75 @@ function Fence({ content, language }: { content: string; language?: string }) {
   return <IDE code={content.replace(/\n$/, "")} language={language} showLineNumbers={false} />;
 }
 
-export const components = { Callout, QuickLinks, QuickLink, Fence };
+// A conversation with an agent, in the agent's window: what was asked, what
+// it did, what it answered.
+function Chat({
+  title,
+  detail,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <AppWindow
+      title={
+        <>
+          <Bot />
+          {title}
+        </>
+      }
+      detail={detail}
+      className="not-prose my-6"
+    >
+      <div className="px-5 py-5">
+        <Conversation>{children}</Conversation>
+      </div>
+    </AppWindow>
+  );
+}
+
+function Message({
+  from,
+  author,
+  steps,
+  children,
+}: {
+  from: "person" | "agent";
+  author?: string;
+  steps?: string[];
+  children: React.ReactNode;
+}) {
+  return (
+    <ConversationMessage
+      from={from}
+      author={author ?? (from === "person" ? "You" : "Your agent")}
+      steps={steps?.map((label) => ({ label }))}
+      className="[&_p]:m-0"
+    >
+      {children}
+    </ConversationMessage>
+  );
+}
+
+// How to add shpyrd to each agent. The site shows them as tabs; here each is
+// listed with what to paste.
+function AgentSetup() {
+  return (
+    <div className="not-prose my-6 grid gap-4">
+      {agents.map((agent) => (
+        <div key={agent.id} className="grid gap-2">
+          <p className="text-sm font-medium">
+            {agent.name}
+            {agent.file && <span className="text-muted-foreground"> · {agent.file}</span>}
+          </p>
+          <IDE code={agent.snippet} language="txt" showLineNumbers={false} />
+        </div>
+      ))}
+      <p className="text-sm text-muted-foreground">{addToAgent.note}</p>
+    </div>
+  );
+}
+
+export const components = { Callout, QuickLinks, QuickLink, Fence, Chat, Message, AgentSetup };

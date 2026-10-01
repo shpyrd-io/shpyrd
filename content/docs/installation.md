@@ -3,7 +3,7 @@ title: Installation
 description: Create a local cluster with the shpyrd base stack, or install it on an existing Kubernetes cluster.
 ---
 
-Shpyrd ships as a single CLI, `shpyrd`, that installs the platform on a Kubernetes cluster: a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
+shpyrd is open source; this page is for running it on your own cluster. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The single CLI, `shpyrd`, installs the platform on a Kubernetes cluster: a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
 
 ## Requirements
 
@@ -67,7 +67,7 @@ shpyrd cluster create --no-init                            # only the kind clust
 
 ## Local names and ports
 
-Two choices decide what your URLs look like, and `shpyrd cluster create` detects the fitting ones ([RFC-0057](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0057-local-names-and-front-door.md)):
+Two choices decide what your URLs look like, and `shpyrd cluster create` detects the fitting ones:
 
 | | Default | Alternative |
 | --- | --- | --- |
@@ -150,6 +150,23 @@ shpyrd teams create platform --platform-role platform-admin --member you@example
 
 Then sign in with the email and password, and switch the token off when nobody needs it (`shpyrd cluster token --disable`; `--rotate` replaces it). Details: [Extensions and sign-in](/docs/extensions), [Teams, roles and security](/docs/access).
 
+## Deploy the example
+
+The repository bundles an example, a Go module with a `web` and a `worker` process:
+
+```shell
+shpyrd projects create hello-world
+cd examples/hello && shpyrd deploy
+shpyrd open                              # https://hello-world.127.0.0.1.nip.io
+shpyrd secrets set GREETING="Olá mundo"  # new release, the page picks it up
+shpyrd scale web=3 worker=2
+shpyrd logs -f
+```
+
+{% callout title="Ports 80 and 443 taken?" %}
+`shpyrd cluster create --http-port 8080 --https-port 8443` maps other host ports; URLs then carry the port (`https://hello-world.127.0.0.1.nip.io:8443`).
+{% /callout %}
+
 ## Install on an existing cluster
 
 The installer works against any kubeconfig context:
@@ -166,7 +183,7 @@ Install the new CLI and run `shpyrd cluster init` again with the same context an
 
 - The apps keep serving throughout: the platform's server restarts, the apps do not depend on it at run time.
 - A release that changes what every instance is given (a new platform variable such as `REVISION`, a new resource model) rolls every app's instances once, one at a time; a single-instance app is unavailable for the seconds its new instance takes to start.
-- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so. v0.9.11 moved every image to a repository named after its workspace, which rebuilt every buildpack app once; the old repositories stay in the registry until a prune exists (RFC-0059).
+- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so. v0.9.11 moved every image to a repository named after its workspace, which rebuilt every buildpack app once; the old repositories stay in the registry until a prune exists.
 - A release with a database migration (v0.9.11: identifiers became native `uuid`; v0.9.13: the `memberships` and `invitations` tables) migrates at the server's first start; take a backup first (`shpyrd cluster backup`, or `pg_dump` against the `control-plane-db` pod). Backups made by v0.9.13 carry workspace roles (dump version 2) and cannot be restored by an older server.
 - v0.9.13 adds workspace roles. Nothing changes for existing people: a team's `platformRole` still counts for anyone without a workspace role. Give yourself the owner role (`shpyrd people role you@example.com owner`) so the workspace has one; a workspace role, once set, decides over the team's.
 - Re-applying every component (without `--only`) restarts ingress-nginx, which is a real interruption of a few seconds at the front door.

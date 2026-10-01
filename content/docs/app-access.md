@@ -132,7 +132,7 @@ shpyrd members list expenses       # what a team would get
 - Signing out of the dashboard ends every app cookie: each request checks that the session still exists. Signing out of an app (`/.shpyrd/logout` on its host) ends the same session, so the dashboard and every other app close too.
 - The keys apps verify the JWT against rotate every 30 days; a retired key stays in the JWKS for a week, so verify by `kid` and refetch the JWKS when you meet one you do not know (the example's verifier does).
 - A companion Ingress for `/.shpyrd/` on the app's host serves the sign-in bounce, the callback, the sign-out and the "available to team X" page; the path is reserved for the platform.
-- Operators reach apps with the admin token (`Authorization: Bearer <token>`); scripts and CI can too. Pasting the token on the sign-in page opens a browser session the same way accounts do.
+- Self-hosted: operators reach apps with the admin token (`Authorization: Bearer <token>`); scripts and CI can too. Pasting the token on the sign-in page opens a browser session the same way accounts do.
 
 ## Between projects
 

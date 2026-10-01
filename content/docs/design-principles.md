@@ -3,8 +3,6 @@ title: Design principles
 description: The choices behind shpyrd and why they were made.
 ---
 
-These principles come from building the first version of the platform and are recorded in more detail in [RFC-0001](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0001-mvp-local-platform.md). {% .lead %}
-
 ## Zero config for applications
 
 A repository with a `go.mod`, a `package.json` or a `pom.xml` is a deployable project. Buildpacks detect the stack, build the image and record the process types; the platform injects `PORT`, publishes `web`, sizes processes with sane defaults. `shpyrd.yaml` exists for the cases that need a word (several process types, sizes, build settings), never as a prerequisite.
