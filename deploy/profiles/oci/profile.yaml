@@ -104,7 +104,9 @@ vars:
   SHPYRD_HTTPS_PORT: "443"
   # OKE VCN-native pod networking: pods get addresses from the pod subnet;
   # with the flannel CNI use 10.244.0.0/16.
-  SHPYRD_POD_CIDR: 10.0.4.0/22
+  SHPYRD_POD_CIDR: 10.0.4.0/22  # The applications the server serves come from this image (RFC-0080):
+  # the server's own unless an image holding only the applications is set.
+  SHPYRD_UI_IMAGE: ""
 runlevels:
   - name: rc0
     components: [monitoring-crds]

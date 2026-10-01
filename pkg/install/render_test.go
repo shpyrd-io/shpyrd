@@ -646,3 +646,65 @@ func TestPlatformBackupFetchesSourcesOnTheSourcesPort(t *testing.T) {
 		t.Errorf("the backup job must fetch sources on the sources port:\n%s", cronjob)
 	}
 }
+
+// The server's Deployment takes its applications from an init container
+// (RFC-0080): the server image itself by default, the image named by
+// SHPYRD_UI_IMAGE otherwise; the server reads them from the shared
+// directory either way.
+func TestTheServerDeploymentTakesItsApplicationsFromTheUIImage(t *testing.T) {
+	server := func(t *testing.T, vars map[string]string) (init, server map[string]interface{}) {
+		t.Helper()
+		eng := testProfileRenders(t, "local", vars, "https://auth.example.test:8443")
+		objs, err := eng.renderComponent(eng.components["shpyrd"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range objs {
+			if o.GetKind() != "Deployment" || o.GetName() != "shpyrd-server" {
+				continue
+			}
+			inits, _, _ := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "initContainers")
+			conts, _, _ := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+			if len(inits) != 1 || len(conts) != 1 {
+				t.Fatalf("init containers = %d, containers = %d", len(inits), len(conts))
+			}
+			return inits[0].(map[string]interface{}), conts[0].(map[string]interface{})
+		}
+		t.Fatal("no shpyrd-server Deployment")
+		return nil, nil
+	}
+	envOf := func(c map[string]interface{}, name string) string {
+		env, _, _ := unstructured.NestedSlice(c, "env")
+		for _, e := range env {
+			if m := e.(map[string]interface{}); m["name"] == name {
+				return m["value"].(string)
+			}
+		}
+		return ""
+	}
+	base := map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443", VarServerImage: "shpyrd-server:dev"}
+	init, srv := server(t, base)
+	if init["image"] != "shpyrd-server:dev" || srv["image"] != "shpyrd-server:dev" {
+		t.Errorf("by default the init container runs the server image: init=%v server=%v", init["image"], srv["image"])
+	}
+	args, _, _ := unstructured.NestedStringSlice(init, "args")
+	if strings.Join(args, " ") != "ui-export /ui" {
+		t.Errorf("init container args = %v", args)
+	}
+	if envOf(srv, "SHPYRD_UI_DIR") != "/ui" {
+		t.Errorf("the server must read the applications from /ui")
+	}
+	with := map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443", VarServerImage: "shpyrd-server:dev", VarUIImage: "cloud-ui:v1"}
+	init, srv = server(t, with)
+	if init["image"] != "cloud-ui:v1" || srv["image"] != "shpyrd-server:dev" {
+		t.Errorf("with SHPYRD_UI_IMAGE: init=%v server=%v", init["image"], srv["image"])
+	}
+	// Named explicitly, it is an override the next `cluster init` keeps.
+	eng, err := New(nil, Options{Profile: "local", Vars: with, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.overrides()[VarUIImage] != "cloud-ui:v1" {
+		t.Errorf("overrides = %v", eng.overrides())
+	}
+}

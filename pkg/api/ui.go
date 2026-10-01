@@ -25,11 +25,55 @@ import (
 // each page it embeds, takes the SHA-256 of every such script, and sends
 // the page with the policy of every response plus `script-src 'self'` and
 // those hashes.
+//
+// A binary built on the core may add to every page (Options.Pages): HTML
+// before </head> and before </body>, and the origins those additions
+// load scripts from, connect to and show images from. The additions are
+// written into the pages as they are read, so their scripts are hashed
+// like Next's, and the origins join the policy.
 
 const (
 	uiConsole   = "console"
 	uiWorkspace = "workspace"
 )
+
+// PageAdditions is what a binary built on the core writes into every page
+// of the applications: Head goes before </head>, Body before </body>, and
+// Origins are the sources beyond this server the additions may load
+// scripts from, connect to and show images from ("https://cdn.example.com").
+// The core adds nothing.
+type PageAdditions struct {
+	Head    string
+	Body    string
+	Origins []string
+}
+
+func (p PageAdditions) empty() bool {
+	return p.Head == "" && p.Body == "" && len(p.Origins) == 0
+}
+
+// apply writes the additions into a page. A page without the closing tags
+// is left as it is.
+func (p PageAdditions) apply(page []byte) []byte {
+	if p.Head != "" {
+		page = insertBefore(page, "</head>", p.Head)
+	}
+	if p.Body != "" {
+		page = insertBefore(page, "</body>", p.Body)
+	}
+	return page
+}
+
+func insertBefore(page []byte, tag, html string) []byte {
+	i := strings.LastIndex(strings.ToLower(string(page)), tag)
+	if i < 0 {
+		return page
+	}
+	out := make([]byte, 0, len(page)+len(html))
+	out = append(out, page[:i]...)
+	out = append(out, html...)
+	return append(out, page[i:]...)
+}
 
 // basePolicy is the Content-Security-Policy of every response that is not
 // the API's (RFC-0008): the applications are same-origin, scripts and
@@ -37,12 +81,24 @@ const (
 const basePolicy = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 // policy is the base policy, with the scripts a page may run when it has
-// scripts written into it: its own files, and those, by their hashes.
-func policy(hashes []string) string {
-	if len(hashes) == 0 {
-		return basePolicy
+// scripts written into it: its own files, and those, by their hashes;
+// and, when a binary added origins to the pages, those origins for
+// scripts, connections and images.
+func policy(hashes, origins []string) string {
+	if len(origins) == 0 {
+		if len(hashes) == 0 {
+			return basePolicy
+		}
+		return basePolicy + "; script-src 'self' " + strings.Join(hashes, " ")
 	}
-	return basePolicy + "; script-src 'self' " + strings.Join(hashes, " ")
+	more := " " + strings.Join(origins, " ")
+	p := strings.Replace(basePolicy, "img-src 'self' data:", "img-src 'self' data:"+more, 1)
+	p = strings.Replace(p, "connect-src 'self'", "connect-src 'self'"+more, 1)
+	p += "; script-src 'self'" + more
+	if len(hashes) > 0 {
+		p += " " + strings.Join(hashes, " ")
+	}
+	return p
 }
 
 var inlineScript = regexp.MustCompile(`(?is)<script(\s[^>]*)?>(.*?)</script>`)
@@ -61,17 +117,24 @@ func scriptHashes(page []byte) []string {
 	return hashes
 }
 
-// application is one built application: its folder, and the hashes of
-// the scripts of each of its pages, by path within the folder.
+// application is one built application: its folder, and each of its
+// pages by path within the folder, as served (with the additions written
+// in) and with the hashes of the scripts in it.
 type application struct {
-	files fs.FS
-	serve http.Handler
-	pages map[string][]string
+	files   fs.FS
+	serve   http.Handler
+	pages   map[string]page
+	origins []string
+}
+
+type page struct {
+	body   []byte
+	hashes []string
 }
 
 // loadApplication reads an application's folder; nil when it was not
 // built into the file system.
-func loadApplication(root fs.FS, name string) *application {
+func loadApplication(root fs.FS, name string, add PageAdditions) *application {
 	files, err := fs.Sub(root, name)
 	if err != nil {
 		return nil
@@ -79,7 +142,7 @@ func loadApplication(root fs.FS, name string) *application {
 	if _, err := fs.Stat(files, "index.html"); err != nil {
 		return nil
 	}
-	a := &application{files: files, serve: http.FileServer(http.FS(files)), pages: map[string][]string{}}
+	a := &application{files: files, serve: http.FileServer(http.FS(files)), pages: map[string]page{}, origins: add.Origins}
 	_ = fs.WalkDir(files, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".html") {
 			return nil
@@ -88,7 +151,8 @@ func loadApplication(root fs.FS, name string) *application {
 		if err != nil {
 			return nil
 		}
-		a.pages[p] = scriptHashes(body)
+		body = add.apply(body)
+		a.pages[p] = page{body: body, hashes: scriptHashes(body)}
 		return nil
 	})
 	return a
@@ -101,11 +165,11 @@ func (a *application) handle(c *gin.Context) {
 		a.page(c, "index.html")
 		return
 	}
+	if _, ok := a.pages[p]; ok {
+		a.page(c, p)
+		return
+	}
 	if st, err := fs.Stat(a.files, p); err == nil && !st.IsDir() {
-		if strings.HasSuffix(p, ".html") {
-			a.page(c, p)
-			return
-		}
 		a.serve.ServeHTTP(c.Writer, c.Request)
 		return
 	}
@@ -119,14 +183,14 @@ func (a *application) handle(c *gin.Context) {
 // page sends one page of the application with the policy that lets its
 // scripts run.
 func (a *application) page(c *gin.Context, name string) {
-	body, err := fs.ReadFile(a.files, name)
-	if err != nil {
+	pg, ok := a.pages[name]
+	if !ok {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))
 		return
 	}
 	c.Header("Cache-Control", "no-cache")
-	c.Header("Content-Security-Policy", policy(a.pages[name]))
-	c.Data(http.StatusOK, "text/html; charset=utf-8", body)
+	c.Header("Content-Security-Policy", policy(pg.hashes, a.origins))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", pg.body)
 }
 
 // serveUI serves the embedded applications: the host's, by the rule
@@ -134,7 +198,7 @@ func (a *application) page(c *gin.Context, name string) {
 func (s *Server) serveUI() gin.HandlerFunc {
 	apps := map[string]*application{}
 	for _, name := range []string{uiConsole, uiWorkspace} {
-		if a := loadApplication(s.opts.UI, name); a != nil {
+		if a := loadApplication(s.opts.UI, name, s.opts.Pages); a != nil {
 			apps[name] = a
 		}
 	}

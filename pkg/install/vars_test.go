@@ -27,6 +27,23 @@ func TestDefaultServerImage(t *testing.T) {
 	}
 }
 
+// The applications come from the server image unless an image holding
+// only them is named (RFC-0080).
+func TestTheUIImageFollowsTheServerImageUnlessSet(t *testing.T) {
+	d := derivedVars(map[string]string{VarVersion: "v0.1.0", VarDomain: "x.test", VarUIImage: ""}, nil)
+	if d[VarUIImage] != ServerImageRepo+":v0.1.0" {
+		t.Errorf("ui image from the version = %q", d[VarUIImage])
+	}
+	d = derivedVars(map[string]string{VarVersion: "v0.1.0", VarDomain: "x.test", VarServerImage: "shpyrd-cloud-server:dev"}, nil)
+	if d[VarUIImage] != "shpyrd-cloud-server:dev" {
+		t.Errorf("ui image from an explicit server image = %q", d[VarUIImage])
+	}
+	d = derivedVars(map[string]string{VarVersion: "v0.1.0", VarDomain: "x.test", VarUIImage: "cloud-ui:v1"}, nil)
+	if _, ok := d[VarUIImage]; ok {
+		t.Error("an explicit ui image must not be overridden")
+	}
+}
+
 func TestFrontDoorVars(t *testing.T) {
 	kind := map[string]string{VarDomain: "127.0.0.1.nip.io", VarHTTPSPort: "8443", VarFrontDoor: FrontDoorKind}
 	if u := BaseURL(kind)("shpyrd"); u != "https://shpyrd.127.0.0.1.nip.io:8443" {

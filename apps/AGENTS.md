@@ -129,6 +129,17 @@ writes scripts into every page, so the server reads each page it embeds
 when it starts and sends the hashes of those scripts in its
 Content-Security-Policy (`pkg/api/ui.go`).
 
+On a cluster the server reads the applications from a directory rather
+than from itself: an init container writes them to a volume
+(`shpyrd-server ui-export /ui`) and the server is told where
+(`SHPYRD_UI_DIR`). The image of that init container is the server's own
+unless the installer variable `SHPYRD_UI_IMAGE` names another, one that
+holds only the applications: that is how the applications ship without a
+new server image. A directory without an application falls back to the
+embedded ones. A binary built on the core may write HTML into every page
+and allow the origins it needs (`server.Options.Pages`); the core adds
+nothing.
+
 ## Tests
 
 Vitest, in files beside the source, named as sentences about what the

@@ -46,6 +46,9 @@ type Options struct {
 	TrustedProxies []string
 	// UI is the built single page application. Nil disables UI serving.
 	UI fs.FS
+	// Pages is what this binary writes into every page of the
+	// applications, and the origins it allows them: nothing on the core.
+	Pages PageAdditions
 	// Sources stores uploaded application archives. Nil disables deploys
 	// from local checkouts.
 	Sources *SourceStore

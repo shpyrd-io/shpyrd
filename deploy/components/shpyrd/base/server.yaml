@@ -25,12 +25,47 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # The applications the server serves (RFC-0080) are written to /ui
+        # by this image, run as `<entrypoint> ui-export /ui`: the server's
+        # own by default (the applications built into it), or an image
+        # holding only the applications, so they ship without the server.
+        - name: ui
+          image: ${SHPYRD_UI_IMAGE}
+          imagePullPolicy: IfNotPresent
+          args: ["ui-export", "/ui"]
+          volumeMounts:
+            - name: ui
+              mountPath: /ui
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
       containers:
         - name: server
           image: ${SHPYRD_SERVER_IMAGE}
           imagePullPolicy: IfNotPresent
           args: ["--addr", ":8080"]
+          # Settings the installer does not know, for a binary built on the
+          # core (RFC-0033): whatever a ConfigMap or Secret named
+          # shpyrd-server-env holds joins the environment. Neither exists
+          # on the open-source platform.
+          envFrom:
+            - configMapRef:
+                name: shpyrd-server-env
+                optional: true
+            - secretRef:
+                name: shpyrd-server-env
+                optional: true
           env:
+            # The applications, as the init container wrote them.
+            - name: SHPYRD_UI_DIR
+              value: /ui
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -167,6 +202,9 @@ spec:
             - name: webhook
               containerPort: 9443
           volumeMounts:
+            - name: ui
+              mountPath: /ui
+              readOnly: true
             - name: data
               mountPath: /data
             - name: webhook-tls
@@ -207,6 +245,8 @@ spec:
             capabilities:
               drop: [ALL]
       volumes:
+        - name: ui
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: shpyrd-data
