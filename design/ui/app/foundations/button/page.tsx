@@ -14,6 +14,7 @@ export default function Page() {
           <Button variant="ghost">Ghost</Button>
           <Button variant="destructive">Destructive</Button>
           <Button variant="link">Link</Button>
+          <Button variant="nav">Nav</Button>
         </Stack>
       </Section>
       <Section title="Sizes and states">

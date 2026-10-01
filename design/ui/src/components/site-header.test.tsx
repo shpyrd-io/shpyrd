@@ -67,4 +67,19 @@ describe("SiteHeader", () => {
     expect(screen.getAllByText("For").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "For IT teams" }).length).toBeGreaterThan(0);
   });
+
+  it("draws the pages as nav buttons at the large size, standing apart with no ground", () => {
+    const { container } = render(
+      <SiteHeader links={[docs, { label: "Solutions", links: [<a key="it" href="/for/it">For IT teams</a>] }]} />,
+    );
+    const list = container.querySelector("[data-slot=navigation-menu-list]");
+    expect(list?.className).toContain("gap-5");
+    const link = list?.querySelector("a[href='/docs']");
+    expect(link?.className).toContain("h-10");
+    expect(link?.className).toContain("hover:text-primary");
+    expect(link?.className).toContain("hover:bg-transparent");
+    const trigger = screen.getByRole("button", { name: "Solutions" });
+    expect(trigger.className).toContain("h-10");
+    expect(trigger.className).toContain("data-[state=open]:text-primary");
+  });
 });

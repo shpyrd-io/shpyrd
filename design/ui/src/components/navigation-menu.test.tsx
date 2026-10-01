@@ -58,4 +58,10 @@ describe("NavigationMenu", () => {
     expect(link.getAttribute("href")).toBe("/docs");
     expect(link.textContent).toContain("Every command.");
   });
+
+  it("opens its panel a little under the bar, not on its line", () => {
+    const { container } = render(<Menu />);
+    fireEvent.click(screen.getByRole("button", { name: "Solutions" }));
+    expect(container.querySelector("[data-slot=navigation-menu-viewport]")?.className).toContain("mt-3");
+  });
 });

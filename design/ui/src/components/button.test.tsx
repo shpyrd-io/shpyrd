@@ -35,4 +35,14 @@ describe("Button", () => {
     expect(link.getAttribute("data-slot")).toBe("button");
     expect(link.firstElementChild).toBe(screen.getByTestId("icon"));
   });
+
+  it("has a look for the bar of a site: the text alone, that turns to the brand's colour under the pointer", () => {
+    render(<Button variant="nav">Docs</Button>);
+    const button = screen.getByRole("button", { name: "Docs" });
+    expect(button.className).toContain("text-foreground");
+    expect(button.className).toContain("hover:text-primary");
+    expect(button.className).toContain("aria-[current=page]:text-primary");
+    expect(button.className).toContain("antialiased");
+    expect(button.className).not.toMatch(/(^|\s|:)bg-(?!clip)/);
+  });
 });

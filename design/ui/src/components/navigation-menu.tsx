@@ -101,7 +101,7 @@ function NavigationMenuViewport({ className, ...props }: React.ComponentProps<ty
       <Primitive.Viewport
         data-slot="navigation-menu-viewport"
         className={cn(
-          "relative mt-2 h-(--radix-navigation-menu-viewport-height) w-full origin-top overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 md:w-(--radix-navigation-menu-viewport-width)",
+          "relative mt-3 h-(--radix-navigation-menu-viewport-height) w-full origin-top overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 md:w-(--radix-navigation-menu-viewport-width)",
           "transition-[width,height] duration-normal ease-move",
           "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className,

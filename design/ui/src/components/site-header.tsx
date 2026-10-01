@@ -4,7 +4,7 @@ import * as React from "react";
 import { Menu } from "lucide-react";
 import { cn } from "cn";
 import { AnchoredOverlay } from "./anchored-overlay";
-import { Button } from "./button";
+import { Button, buttonVariants } from "./button";
 import {
   NavigationMenu,
   NavigationMenuContent,
@@ -174,7 +174,8 @@ function SiteHeader({
             aria-label="Site"
             className="ml-4 hidden @2xl/site-header:flex"
           >
-            <NavigationMenuList>
+            {/* The words of a site stand a little apart from one another. */}
+            <NavigationMenuList className="gap-5">
               {links.map((item, i) =>
                 isGroup(item) ? (
                   <NavigationMenuItem key={i}>
@@ -184,7 +185,13 @@ function SiteHeader({
                           c.links.some((e) => current(entryOf(e).link) === "page"),
                         ) || undefined
                       }
-                      className="data-current:text-foreground"
+                      // The links of a site are nav buttons at the large size,
+                      // not the small items of an application's menus; the
+                      // menu's grounds go, the colour of the text does it all.
+                      className={cn(
+                        buttonVariants({ variant: "nav", size: "lg" }),
+                        "px-0 hover:bg-transparent data-[state=open]:bg-transparent data-[state=open]:text-primary data-current:text-primary",
+                      )}
                     >
                       {item.label}
                     </NavigationMenuTrigger>
@@ -227,7 +234,10 @@ function SiteHeader({
                     <NavigationMenuLink
                       asChild
                       active={current(item) === "page"}
-                      className="h-7 items-center rounded-md px-2.5 py-0 text-[0.8rem] font-medium text-muted-foreground hover:text-foreground aria-[current=page]:bg-muted aria-[current=page]:text-foreground"
+                      className={cn(
+                        buttonVariants({ variant: "nav", size: "lg" }),
+                        "p-0 hover:bg-transparent data-[active=true]:bg-transparent",
+                      )}
                     >
                       {item}
                     </NavigationMenuLink>

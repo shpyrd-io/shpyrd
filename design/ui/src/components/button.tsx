@@ -18,6 +18,10 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
+        // A page's name in the bar of a site: the text alone, in the colour of
+        // the text, that turns to the brand's under the pointer and when it is
+        // open or is the page. Smoothed by itself: the bar is read from afar.
+        nav: "text-foreground antialiased hover:text-primary aria-expanded:text-primary aria-[current=page]:text-primary",
       },
       size: {
         default:
