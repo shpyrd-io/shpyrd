@@ -80,7 +80,7 @@ declare what they depend on.
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
-| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API); gaps: run, pg, redis, domains; browser device flow | 0031, 0026 |
+| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API; v0.9.61 the browser sign-in, run, pg psql, redis cli and globals over the API; complete) | 0031, 0026 |
 | [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | implementable | 0012, 0014 |
 | [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
@@ -107,7 +107,7 @@ declare what they depend on.
 | [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44) | 0033, 0059, 0075 |
 | [0080](0080-two-doors.md) | Two doors: the console (operator, its own host and sign-in realm, restrictable to one IdP) and workspaces (every one explicit with an address, the default one included) are separate applications on one identity provider; per-host OIDC callbacks, sessions per realm, no implicit workspace; two UI applications served by host | implemented (v0.9.52; the library split in `design/ui` and `apps/` on 2026-09-30); gaps: identity linking, two-host e2e, docs | 0033, 0058, 0076, 0078 |
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
-| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.46) | 0033, 0035, 0076 |
+| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 
 ## Phases
@@ -147,7 +147,7 @@ an "Implementation status" section with the details; the short version:
 | 0003 | unattached resources in `projects info`; attach confirmation with var names; `Deleting` phase |
 | 0004 | a "build" catalog size; TTL on build Jobs |
 | 0005 | `shpyrd forward`; `shpyrd run --process` |
-| 0007 | `shpyrd login` for developers (→ 0052); stored OIDC tokens |
+| 0007 | stored OIDC tokens (`shpyrd login` for developers landed with 0052) |
 | 0008 | admin-only domains; audit export and cluster-level listing; session rotation; API rate limit; backup-exclusion label |
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |
@@ -156,7 +156,7 @@ an "Implementation status" section with the details; the short version:
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0022a | NetworkPolicy for logs-system; console sink off on cloud |
 | 0023 | `drain.failing` audit event |
-| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; needs the CLI browser sign-in of 0052) |
+| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
 | 0045 | e2e for `examples/hello-docker` |

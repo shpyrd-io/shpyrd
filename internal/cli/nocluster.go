@@ -19,7 +19,7 @@ import (
 // errNoCluster is what a command that still talks to the cluster directly
 // gets when the CLI is signed in through `shpyrd login` and no kubeconfig
 // was named: a sentence instead of a nil pointer.
-var errNoCluster = errors.New("this command still needs cluster access: run it with --context <kubeconfig context> (or --kubeconfig); it will go through the API in a later release (RFC-0052)")
+var errNoCluster = errors.New("this command needs cluster access: run it with --context <kubeconfig context> (or --kubeconfig)")
 
 // noCluster is the controller-runtime client the app client carries when
 // there is no cluster connection. Every method answers errNoCluster.

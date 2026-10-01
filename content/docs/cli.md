@@ -9,14 +9,14 @@ Two binaries, one install: `shpyrd` for people who deploy and run projects, `shp
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd login --url <workspace> --token <token>` | Sign the CLI in to a workspace (`https://shpyrd.example.com`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. The token is a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. Without `--token`, switches to a workspace you are already signed in to. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
+| `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.app`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd whoami` | Who you are at the current workspace, checked live; fails when the token expired or was revoked. |
 | `shpyrd logout` | Forget the current workspace's credential (or `--url` another's). |
 | `shpyrd tokens create <name>` | Create an API token for CI or another machine: `--platform-role platform-viewer\|platform-admin` or `--project <slug> --role user\|viewer\|developer\|admin`, `--expires 90d`. The value is printed once. A token never carries more than you hold at the moment it is used, and a token cannot create tokens: run this signed in as yourself (or with the admin token), or use the dashboard's Workspace → API tokens tab. |
-| `shpyrd tokens list`, `tokens revoke <id>` | Your tokens with role, expiry and last use (platform admins see everyone's); revocation is immediate. |
+| `shpyrd tokens list`, `tokens revoke <id>` | Your tokens with role, expiry and last use (platform admins see everyone's); a session token is listed as `session (your roles)`. Revocation is immediate. |
 
-Still cluster-only after `shpyrd login` (run them with `--context`): `run`, `pg`, `redis` and `domains`; a `shell` cannot be given a command over the API (it opens the image's shell). They say so in one line instead of failing.
+Every developer command works signed in with `shpyrd login`, with no kubeconfig: `run`, `shell -- <cmd>`, `pg psql` and `redis cli` go through the web terminal's bridge, the server starting the one-off instance or picking the database's pod.
 
 ## Cluster
 
@@ -122,7 +122,7 @@ Platform-level, for the operator:
 | `shpyrd secrets unset K ...` | Remove config vars. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |
 | `shpyrd shell [-- cmd...]` | Interactive shell in a running instance (`--process`, `--instance web.2`); with a command, runs it and returns its exit code. |
-| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. |
+| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. Signed in, the server starts the instance and attaches the terminal through the web terminal's bridge; piped input reaches the command and ends when the pipe does. |
 | `shpyrd volumes create <name> --size 5Gi` | Create a persistent volume in the project (`--class`, `--shared`, `--from-snapshot`). Cloud profiles round the size up to the provider's minimum and say so. |
 | `shpyrd volumes list` | Volumes with size, mode, status and what mounts them. |
 | `shpyrd volumes resize <name> --size 10Gi` | Grow a volume (when the storage class allows expansion). |

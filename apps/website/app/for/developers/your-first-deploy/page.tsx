@@ -35,10 +35,10 @@ export default function Page() {
           <IDE className="mt-2" code="brew install shpyrd-io/tap/shpyrd" language="sh" showLineNumbers={false} />
         </TimelineItem>
         <TimelineItem icon={<KeyRound />}>
-          <strong>Sign it in.</strong> Create a token under Workspace › API tokens, then:
+          <strong>Sign it in.</strong> The browser opens your workspace; approve the code the terminal shows:
           <IDE
             className="mt-2"
-            code="shpyrd login --url https://acme.shpyrd.app --token shp_…"
+            code="shpyrd login --url https://acme.shpyrd.app"
             language="sh"
             showLineNumbers={false}
           />

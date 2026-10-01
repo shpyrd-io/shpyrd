@@ -92,7 +92,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
 | Per-user API tokens | [RFC-0031](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0031-api-tokens.md) | done (v0.9.0; accepted at the edge to open apps in v0.9.11) |
-| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; v0.9.9 `secrets set/unset` over the API; `run`, `pg`, `redis`, `domains` and a browser sign-in for the CLI still missing) |
+| API-first CLI and `shpyrd login` | [RFC-0052](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0052-api-first-cli-and-login.md) | done (v0.8.0 `shpyrd login` and `shpyrd-ctl`; v0.9.8 every developer command over the API, `shpyrd use`; v0.9.61 the browser sign-in and the last commands over the API: `run`, `pg psql`, `redis cli`, `globals`; nothing missing) |
 | MCP connector for AI agents: every workspace is a remote MCP server with OAuth 2.1 and read tools | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | in progress (v0.9.16: remote server, OAuth 2.1, read tools; writing tools, stdio mode still missing) |
 | Supply chain and encryption at rest | [RFC-0044](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0044-supply-chain.md) | ready to implement |
 

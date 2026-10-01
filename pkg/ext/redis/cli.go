@@ -214,6 +214,12 @@ func newCliCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
+			if api := g.API(); api.Session() {
+				// Signed in with `shpyrd login` (RFC-0052): through the
+				// web terminal's bridge.
+				fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s...\n", args[0])
+				return api.Exec(ctx, project, "redis", args[0], args[1:], cmd.ErrOrStderr())
+			}
 			k, c, err := resources.Connect(g)
 			if err != nil {
 				return err
@@ -222,14 +228,8 @@ func newCliCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			engine := firstNonEmpty(rd.Spec.Engine, "valkey")
-			extra := ""
-			if len(args) > 1 {
-				extra = " " + shellJoin(args[1:])
-			}
-			command := []string{"sh", "-c", fmt.Sprintf(`exec %s-cli -a "$REDIS_PASSWORD" --no-auth-warning%s`, engine, extra)}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s...\n", rd.Name)
-			return kexec.RemoteExit(kexec.Exec(ctx, k, rd.Namespace, rd.Name+"-0", "redis", command, kexec.StdinIsTerminal()))
+			return kexec.RemoteExit(kexec.Exec(ctx, k, rd.Namespace, rd.Name+"-0", "redis", cliCommand(rd, args[1:]), kexec.StdinIsTerminal()))
 		},
 	}
 	projectFlag(cmd, &project)

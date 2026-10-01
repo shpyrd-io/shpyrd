@@ -117,6 +117,6 @@ out by design.
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
 
-- **Not implemented:** `shpyrd login` (device flow) for developers: the CLI still needs an operator kubeconfig (picked up by RFC-0052).
+- **Implemented elsewhere:** `shpyrd login` for developers landed with RFC-0052 (v0.9.61): a device flow against the workspace, approved with the dashboard session, so a developer never needs a kubeconfig.
 - **Not implemented:** Stored OIDC access/refresh tokens; sessions are identity-only with a 12 h idle / 7 day limit.
 - **Fixed:** 2026-09-25: the users API (`/api/users`) required only a session; it now requires the cluster.admin action (platform administrators), like every other admin route.
