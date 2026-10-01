@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -234,6 +235,33 @@ func (s *Server) handleSetPassword(c *gin.Context) {
 	audit.Record(ctx, s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace),
 		audit.Entry{Actor: email, Action: "user.activated", Target: email, Via: "web", From: c.ClientIP()}) //nolint:errcheck
 	c.Redirect(http.StatusFound, "/?activated=ok")
+}
+
+// setSignupPasswordHook is ext.Deps.SetSignupPassword: the password a
+// person chose at signup, applied to the local sign-in at once. The email
+// was proved by the signup's code, which is what an invitation link proves
+// too, so the account is activated the way an invite activates it.
+func (s *Server) setSignupPasswordHook(ctx context.Context, email, name, password string) error {
+	if s.localAccounts == nil {
+		return errors.New("the platform has no password sign-in")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	status, err := s.localAccounts.Status(ctx, email)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case "":
+		if err := s.localAccounts.CreatePending(ctx, email, name); err != nil {
+			return err
+		}
+	case ext.AccountPending:
+	case ext.AccountLocked:
+		return errors.New("the account is locked; try again later")
+	default:
+		return ext.ErrAccountHasPassword
+	}
+	return s.localAccounts.ActivateFromInvite(ctx, email, password)
 }
 
 // passwordWayIn gives an invited person without a password a way to

@@ -7,6 +7,7 @@ package ext
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -152,7 +153,24 @@ type Deps struct {
 	// that sends a first owner's invitation once their workspace is ready.
 	// The platform itself is the inviter.
 	InviteBackground func(ctx context.Context, workspace, email, role string) (*InviteOutcome, error)
+	// SetSignupPassword gives a person who proved their email a password
+	// on the platform's local sign-in (RFC-0014), as the signup does, so
+	// no set-password step follows: the account is created if it does not
+	// exist and activated. ErrAccountHasPassword when the person has one
+	// already (they sign in with it); an error when the platform has no
+	// local sign-in. Nil without a store.
+	SetSignupPassword func(ctx context.Context, email, name, password string) error
+	// SignInTicket is a link that signs a person in at a workspace's door
+	// once, within ten minutes, with no form: a one-time code the door
+	// turns into a session, for the signup to hand the person it just made
+	// a workspace for straight into it. The person must be admitted there
+	// as any sign-in is (a membership, the join policy). Nil without a store.
+	SignInTicket func(ctx context.Context, workspace, email string) (string, error)
 }
+
+// ErrAccountHasPassword says the person has a password already: the one
+// they chose at signup is not applied, and they sign in with theirs.
+var ErrAccountHasPassword = errors.New("the account has a password already")
 
 // InviteOutcome is what Invite produced.
 type InviteOutcome struct {

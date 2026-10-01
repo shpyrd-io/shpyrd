@@ -2,12 +2,16 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 	"io"
 	"net"
 	"net/http"
@@ -683,6 +687,94 @@ func (s *Server) authTicket(c *gin.Context) {
 	ext.SetIdentity(c, id)
 	s.audit(c, "", "auth.login", actor, "one-time ticket from the CLI")
 	c.Redirect(http.StatusFound, safeNext(c.Query("next")))
+}
+
+// A sign-in ticket (ext.Deps.SignInTicket): the signup made a person a
+// workspace and proved their email; rather than a login form at the new
+// door, the page sends them through a one-time code that the door turns
+// into a session. The code lives in the store's one-time codes, bound to
+// the door's host, for ten minutes, and is taken on first use.
+
+const signupTicketTTL = 10 * time.Minute
+
+// signupTicketClaims is what a sign-in ticket carries.
+type signupTicketClaims struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+}
+
+func (s *Server) signInTicketHook(ctx context.Context, wsSlug, email string) (string, error) {
+	if s.store == nil {
+		return "", errors.New("no control-plane store")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if !validEmail(email) {
+		return "", errors.New("that is not an email address")
+	}
+	ws, err := s.store.Workspace(ctx, wsSlug)
+	if err != nil {
+		return "", err
+	}
+	if ws.Address == "" {
+		return "", errors.New("the workspace has no address yet")
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	code := base64.RawURLEncoding.EncodeToString(raw)
+	claims, _ := json.Marshal(signupTicketClaims{Email: email, Name: strings.SplitN(email, "@", 2)[0]})
+	if err := s.store.PutCode(ctx, store.Code{Code: code, Host: strings.ToLower(ws.Address), Claims: claims, ExpiresAt: time.Now().Add(signupTicketTTL)}); err != nil {
+		return "", err
+	}
+	return s.dashboardURLOf(ws) + "/api/auth/signup-ticket?code=" + url.QueryEscape(code), nil
+}
+
+// authSignupTicket is GET /api/auth/signup-ticket?code=…: the door takes
+// the code once, admits the person as any sign-in would and opens their
+// session here, then sends them to the launcher.
+func (s *Server) authSignupTicket(c *gin.Context) {
+	code := c.Query("code")
+	if code == "" || s.store == nil || s.rp == nil {
+		s.loginFailed(c, errors.New("no such sign-in link"))
+		return
+	}
+	ticket, err := s.store.TakeCode(c.Request.Context(), code)
+	if err != nil || ticket == nil || time.Now().After(ticket.ExpiresAt) {
+		s.auditAnonymous(c, "auth.signup_ticket_failed", "unknown or expired")
+		s.loginFailed(c, errors.New("this sign-in link was used already or expired; sign in with your email and password"))
+		return
+	}
+	if ws := s.workspace(c); ticket.Host != tenancy.Host(c.Request.Host) && (ws == "" || ticket.Host != s.workspaceAddress(c)) {
+		s.auditAnonymous(c, "auth.signup_ticket_failed", "another door")
+		s.loginFailed(c, errors.New("this sign-in link is for another workspace"))
+		return
+	}
+	var claims signupTicketClaims
+	if json.Unmarshal(ticket.Claims, &claims) != nil || claims.Email == "" {
+		s.loginFailed(c, errors.New("this sign-in link is not valid"))
+		return
+	}
+	id := ext.Identity{Subject: claims.Email, Email: claims.Email, Name: firstNonEmpty(claims.Name, claims.Email), Provider: "signup"}
+	if err := s.admitAt(c, id); err != nil {
+		s.auditFailure(c, "auth.refused", id.Email, err.Error())
+		s.loginFailed(c, err)
+		return
+	}
+	next, ok := s.openSession(c, id, "", "signup ticket")
+	if !ok {
+		return
+	}
+	c.Redirect(http.StatusFound, next)
+}
+
+// workspaceAddress is the address of the request's workspace, "" at the
+// console or when unresolved.
+func (s *Server) workspaceAddress(c *gin.Context) string {
+	if ws := ext.WorkspaceObjectFrom(c); ws != nil {
+		return strings.ToLower(ws.Address)
+	}
+	return ""
 }
 
 // loginFailed sends the browser back to the login page with the reason.

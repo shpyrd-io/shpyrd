@@ -390,6 +390,8 @@ func (s *Server) deps() ext.Deps {
 	if s.store != nil {
 		d.Invite = s.inviteHook
 		d.InviteBackground = s.inviteBackgroundHook
+		d.SetSignupPassword = s.setSignupPasswordHook
+		d.SignInTicket = s.signInTicketHook
 	}
 	return d
 }
@@ -507,12 +509,13 @@ func (s *Server) routes() error {
 	pub.GET("/auth/login", login, s.authLogin)
 	pub.GET("/auth/callback", login, s.authCallback)
 	pub.GET("/auth/ticket", login, s.authTicket)
-	pub.POST("/auth/password", login, s.authPassword)      // RFC-0012
-	pub.POST("/auth/reset", s.requestReset)                // RFC-0014: send reset link (public)
-	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
-	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
-	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
-	pub.GET("/workspace/logo", s.workspaceLogo)            // the workspace's logo, for the login page too
+	pub.GET("/auth/signup-ticket", login, s.authSignupTicket) // a one-time sign-in from the signup
+	pub.POST("/auth/password", login, s.authPassword)         // RFC-0012
+	pub.POST("/auth/reset", s.requestReset)                   // RFC-0014: send reset link (public)
+	pub.POST("/auth/token", login, s.authToken)               // the admin token as a session (RFC-0033)
+	pub.GET("/invitations/:token", login, s.getInvitation)    // an invitation link, before signing in (RFC-0033)
+	pub.GET("/auth/route", login, s.authRoute)                // the method a claimed email domain routes to
+	pub.GET("/workspace/logo", s.workspaceLogo)               // the workspace's logo, for the login page too
 	// The workspace's OAuth 2.1 server and MCP endpoint (RFC-0032). The
 	// well-known documents sit at the root, with and without the resource
 	// path (RFC 8414 §3.1, RFC 9728 §3.1); the endpoints are throttled
