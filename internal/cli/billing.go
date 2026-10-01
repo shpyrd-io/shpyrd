@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"text/tabwriter"
@@ -44,27 +45,24 @@ a payment provider is connected.
 				return err
 			}
 			if month != "" {
-				var lines []api.InvoiceLine
+				lines := []api.InvoiceLine{}
 				if err := json.Unmarshal(raw, &lines); err != nil {
 					return err
 				}
-				printInvoiceLines(cmd, lines)
-				return nil
+				return g.print(cmd, lines, func(w io.Writer) { printInvoiceLines(w, lines) })
 			}
 			var view api.WorkspaceBillingView
 			if err := json.Unmarshal(raw, &view); err != nil {
 				return err
 			}
-			printBillingView(cmd, view)
-			return nil
+			return g.print(cmd, view, func(w io.Writer) { printBillingView(w, view) })
 		},
 	}
 	cmd.Flags().String("month", "", "show a past month (YYYY-MM)")
 	return cmd
 }
 
-func printBillingView(cmd *cobra.Command, v api.WorkspaceBillingView) {
-	out := cmd.OutOrStdout()
+func printBillingView(out io.Writer, v api.WorkspaceBillingView) {
 	planName := "(no plan)"
 	if v.Plan != nil {
 		planName = v.Plan.Name
@@ -98,8 +96,8 @@ func printBillingView(cmd *cobra.Command, v api.WorkspaceBillingView) {
 	fmt.Fprintln(out, "\n(Estimate only; no money is owed. Billing is activated when a payment provider is configured.)")
 }
 
-func printInvoiceLines(cmd *cobra.Command, lines []api.InvoiceLine) {
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+func printInvoiceLines(w io.Writer, lines []api.InvoiceLine) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "PERIOD\tCOMPONENT\tMETRIC\tQUANTITY\tAMOUNT\tFINALIZED")
 	for _, l := range lines {
 		fin := "no"
@@ -142,20 +140,25 @@ func plansList(cmd *cobra.Command, g *globalFlags) error {
 	if err := t.call(ctx, "GET", "api/cluster/plans", nil, &plans); err != nil {
 		return err
 	}
-	if len(plans) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No plans. Create one: shpyrd-ctl plans create starter --cpu-hour 0.02")
-		return nil
+	if plans == nil {
+		plans = []api.PlanView{}
 	}
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tCURRENCY\tSLEEP DEFAULT")
-	for _, p := range plans {
-		sleep := "-"
-		if p.SleepAfter != "" {
-			sleep = p.SleepAfter + " " + firstNonEmpty(p.SleepResuming, "wait")
+	return g.print(cmd, plans, func(w io.Writer) {
+		if len(plans) == 0 {
+			fmt.Fprintln(w, "No plans. Create one: shpyrd-ctl plans create starter --cpu-hour 0.02")
+			return
 		}
-		fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\t%s\n", p.Name, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency, sleep)
-	}
-	return tw.Flush()
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tCPU/CORE-H\tMEM/GIB-H\tSTORAGE/GIB-MO\tEGRESS/GIB\tMIN/MO\tCURRENCY\tSLEEP DEFAULT")
+		for _, p := range plans {
+			sleep := "-"
+			if p.SleepAfter != "" {
+				sleep = p.SleepAfter + " " + firstNonEmpty(p.SleepResuming, "wait")
+			}
+			fmt.Fprintf(tw, "%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.2f\t%s\t%s\n", p.Name, p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency, sleep)
+		}
+		_ = tw.Flush()
+	})
 }
 
 func newPlansListCmd(g *globalFlags) *cobra.Command {
@@ -204,12 +207,13 @@ with --sleep-after inherit it unless they set their own policy;
 			if err := t.call(ctx, "POST", "api/cluster/plans", body, &p); err != nil {
 				return err
 			}
-			if p.SleepAfter != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Plan %s created; its projects sleep after %s (%s mode) unless they say otherwise.\n", p.Name, p.SleepAfter, firstNonEmpty(p.SleepResuming, "wait"))
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Plan %s created.\n", p.Name)
-			}
-			return nil
+			return g.print(cmd, p, func(w io.Writer) {
+				if p.SleepAfter != "" {
+					fmt.Fprintf(w, "Plan %s created; its projects sleep after %s (%s mode) unless they say otherwise.\n", p.Name, p.SleepAfter, firstNonEmpty(p.SleepResuming, "wait"))
+				} else {
+					fmt.Fprintf(w, "Plan %s created.\n", p.Name)
+				}
+			})
 		},
 	}
 	cmd.Flags().Float64Var(&cpuHour, "cpu-hour", 0, "price per core-hour of actual CPU use")
@@ -243,8 +247,9 @@ func newPlansAssignCmd(g *globalFlags) *cobra.Command {
 			if err := t.call(ctx, "POST", path, nil, nil); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Plan %s assigned to %s.\n", args[0], ws)
-			return nil
+			return g.print(cmd, map[string]string{"plan": args[0], "workspace": ws}, func(w io.Writer) {
+				fmt.Fprintf(w, "Plan %s assigned to %s.\n", args[0], ws)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&ws, "workspace", "", "workspace slug to assign the plan to (required)")
@@ -280,6 +285,9 @@ Requires the opencost extension to be enabled for the COGS column.
 			var raw map[string]json.RawMessage
 			if err := t.call(ctx, "GET", path, nil, &raw); err != nil {
 				return err
+			}
+			if g.out.Machine() {
+				return g.print(cmd, raw, nil)
 			}
 			out := cmd.OutOrStdout()
 			if m, ok := raw["month"]; ok {

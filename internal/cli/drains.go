@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"text/tabwriter"
@@ -94,6 +95,13 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			if err != nil {
 				return err
 			}
+			// added prints the drain once it exists, with the sentence
+			// that fits its scope.
+			added := func(text string) error {
+				view := api.DrainView{Name: name, URL: d.Spec.URL, Format: d.EffectiveFormat(), Processes: processes}
+				result := map[string]any{"drain": view, "project": project, "workspace": workspace, "cluster": project == "" && workspace == ""}
+				return g.print(cmd, result, func(w io.Writer) { fmt.Fprint(w, text) })
+			}
 			if ac.session {
 				body, _ := json.Marshal(api.CreateDrainRequest{Name: name, URL: d.Spec.URL, Format: format, Headers: headers, Processes: processes})
 				if workspace != "" {
@@ -101,8 +109,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 					if _, err := ac.serverRequest(ctx, "POST", "api/workspace/drains", body, "application/json"); err != nil {
 						return err
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to the workspace: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat())
-					return nil
+					return added(fmt.Sprintf("Added drain %s to the workspace: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat()))
 				}
 				if project == "" {
 					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
@@ -110,8 +117,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+project+"/drains", body, "application/json"); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat())
-				return nil
+				return added(fmt.Sprintf("Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat()))
 			}
 			if project != "" {
 				if _, err := ac.getApp(ctx, project); err != nil {
@@ -143,20 +149,21 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 				return err
 			}
+			var text string
 			if workspace != "" {
 				ac.auditCluster(ctx, "drain.add", name+" -> "+d.Spec.URL, "workspace "+workspace+" drain ("+d.EffectiveFormat()+")")
-				fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to workspace %s: every project's logs -> %s (%s)\n", name, workspace, d.Spec.URL, d.EffectiveFormat())
+				text = fmt.Sprintf("Added drain %s to workspace %s: every project's logs -> %s (%s)\n", name, workspace, d.Spec.URL, d.EffectiveFormat())
 			} else if project == "" {
 				ac.auditCluster(ctx, "drain.add", name+" -> "+d.Spec.URL, "cluster drain ("+d.EffectiveFormat()+")")
-				fmt.Fprintf(cmd.OutOrStdout(), "Added cluster drain %s: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat())
+				text = fmt.Sprintf("Added cluster drain %s: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat())
 			} else {
 				ac.audit(ctx, project, "drain.add", name+" -> "+d.Spec.URL, d.EffectiveFormat())
-				fmt.Fprintf(cmd.OutOrStdout(), "Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat())
+				text = fmt.Sprintf("Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat())
 			}
 			if !contains(recordedExtensions(ctx, ac.k), "logs-agent") {
-				fmt.Fprintln(cmd.OutOrStdout(), "The logs-agent extension is not enabled; nothing is forwarded until you run `shpyrd extensions enable logs-agent`.")
+				text += "The logs-agent extension is not enabled; nothing is forwarded until you run `shpyrd extensions enable logs-agent`.\n"
 			}
-			return nil
+			return added(text)
 		},
 	}
 	add.Flags().String("name", "", "drain name (default: derived from the url host)")
@@ -223,28 +230,40 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				}
 				drains.Items = kept
 			}
-			if len(drains.Items) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no drains; add one with `shpyrd drains add <url>`")
-				return nil
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tURL\tFORMAT\tPROCESSES\tSTATUS\tLAST DELIVERY")
+			// One shape for both paths: what the API shows.
+			views := make([]api.DrainView, 0, len(drains.Items))
 			for _, d := range drains.Items {
-				procs := "all"
-				if len(d.Spec.Processes) > 0 {
-					procs = strings.Join(d.Spec.Processes, ",")
-				}
-				last := "-"
+				v := api.DrainView{Name: d.Name, URL: d.Spec.URL, Format: d.EffectiveFormat(), Processes: d.Spec.Processes, Phase: firstNonEmpty(d.Status.Phase, shpyrdv1.DrainPending), Message: d.Status.Message}
 				if d.Status.LastDeliveryAt != nil {
-					last = age(*d.Status.LastDeliveryAt) + " ago"
+					t := d.Status.LastDeliveryAt.Time
+					v.LastDeliveryAt = &t
 				}
-				status := firstNonEmpty(d.Status.Phase, shpyrdv1.DrainPending)
-				if d.Status.Message != "" && d.Status.Phase != shpyrdv1.DrainActive {
-					status += " (" + d.Status.Message + ")"
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.Spec.URL, d.EffectiveFormat(), procs, status, last)
+				views = append(views, v)
 			}
-			return tw.Flush()
+			return g.print(cmd, views, func(w io.Writer) {
+				if len(drains.Items) == 0 {
+					fmt.Fprintln(w, "no drains; add one with `shpyrd drains add <url>`")
+					return
+				}
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tURL\tFORMAT\tPROCESSES\tSTATUS\tLAST DELIVERY")
+				for _, d := range drains.Items {
+					procs := "all"
+					if len(d.Spec.Processes) > 0 {
+						procs = strings.Join(d.Spec.Processes, ",")
+					}
+					last := "-"
+					if d.Status.LastDeliveryAt != nil {
+						last = age(*d.Status.LastDeliveryAt) + " ago"
+					}
+					status := firstNonEmpty(d.Status.Phase, shpyrdv1.DrainPending)
+					if d.Status.Message != "" && d.Status.Phase != shpyrdv1.DrainActive {
+						status += " (" + d.Status.Message + ")"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.Spec.URL, d.EffectiveFormat(), procs, status, last)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 
@@ -273,8 +292,9 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				if _, err := ac.serverRequest(ctx, "DELETE", path, nil, ""); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Removed drain %s\n", args[0])
-				return nil
+				return g.print(cmd, map[string]any{"drain": args[0], "removed": true}, func(w io.Writer) {
+					fmt.Fprintf(w, "Removed drain %s\n", args[0])
+				})
 			}
 			objectName := args[0]
 			if workspace != "" {
@@ -300,8 +320,9 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 			} else {
 				ac.audit(ctx, project, "drain.remove", args[0], "")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed drain %s\n", args[0])
-			return nil
+			return g.print(cmd, map[string]any{"drain": args[0], "removed": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed drain %s\n", args[0])
+			})
 		},
 	}
 
