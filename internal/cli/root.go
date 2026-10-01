@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -91,7 +92,7 @@ func New() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
 	root.CompletionOptions.HiddenDefaultCmd = true
-	root.SetHelpTemplate(rootHelpTemplate)
+	root.SetUsageTemplate(rootUsageTemplate(root))
 
 	root.AddCommand(newClusterCmd(g))
 	root.AddCommand(newAppsCmd(g))
@@ -173,13 +174,12 @@ func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) 
 
 // agentDocsURL is the whole CLI as one text file, for LLMs and agents that
 // drive shpyrd on a person's behalf.
-const agentDocsURL = "https://shpyrd.io/llms/cli.txt"
+const agentDocsURL = "https://mcp.shpyrd.io/cli"
 
-// rootHelpTemplate is cobra's default help template with one line appended
-// for the root command only: where LLMs, IAs and agents read the full docs.
-// Subcommands inherit the template, so the footer checks for a parent.
-const rootHelpTemplate = `{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
-
-{{end}}{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}{{if not .HasParent}}
-LLM, IA and Agents, read the Docs: ` + agentDocsURL + `
-{{end}}`
+// rootUsageTemplate is cobra's default usage template with the docs pointer
+// on the "Usage" line of the root command only. Subcommands inherit the
+// template, so the pointer checks for a parent.
+func rootUsageTemplate(root *cobra.Command) string {
+	return strings.Replace(root.UsageTemplate(), "Usage:",
+		"Usage{{if not .HasParent}} (LLM, IA and Agents, read the Docs: "+agentDocsURL+"){{end}}:", 1)
+}
