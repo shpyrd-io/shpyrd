@@ -29,14 +29,31 @@ The first time, your agent sends you to your workspace to sign in and **Allow** 
 
 In the folder of your app, say what you want, the way you'd say it to a colleague:
 
-| You say | What happens |
-| --- | --- |
-| *"Put this app online on shpyrd."* | It's built and released, at its own address with a sign-in in front of it. Nobody gets in yet. |
-| *"Share it with the Finance team."* | Everyone in Finance can open it, and whoever joins Finance later. |
-| *"Let Ana change it too."* | Ana can deploy updates and roll them back. Finance can still only use it. |
-| *"Who can open it?"* | It tells you, team by team and person by person. |
-| *"Show me the errors from the last hour."* | It reads the app's logs and metrics for you. |
-| *"The last change broke it - go back."* | The previous release comes back: its code and its settings. |
+{% chat title="Claude Code" detail="~/projects/purchases" %}
+{% message from="person" %}
+Put this app online on shpyrd.
+{% /message %}
+{% message from="agent" steps=["Deployed purchase-requests · release 1", "purchases.acme.shpyrd.app is live · sign-in required"] %}
+Done. It's at **purchases.acme.shpyrd.app**, behind your workspace's sign-in. Nobody else can open it yet.
+{% /message %}
+{% message from="person" %}
+Share it with the Finance team, and let Ana change it too.
+{% /message %}
+{% message from="agent" steps=["Finance · can use", "ana@acme.com · can update"] %}
+Done. Everyone in Finance can open it - and whoever joins Finance later. Ana can deploy updates and roll them back.
+{% /message %}
+{% /chat %}
+
+And a week later:
+
+{% chat title="Claude Code" detail="~/projects/purchases" %}
+{% message from="person" %}
+Finance says the totals are wrong since this morning.
+{% /message %}
+{% message from="agent" steps=["Read the logs of release 3: errors in /totals since 09:12", "Rolled back to release 2"] %}
+Release 3 broke the totals, so everyone is on release 2 again - its code and its settings. Want me to look at the fix?
+{% /message %}
+{% /chat %}
 
 The people you shared it with sign in with their account and find the app among theirs. [Sign-in for your app](/docs/app-access) and [Teams, roles and security](/docs/access) say who can do what.
 
