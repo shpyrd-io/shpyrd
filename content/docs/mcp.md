@@ -31,4 +31,4 @@ Your connected assistants are listed on the same card with what they may do and 
 
 ## For the platform operator
 
-Self-hosted only: on shpyrd cloud there is nothing for you to set up. On a cluster you run, there is nothing to configure either: the OAuth server and the MCP endpoint answer at every workspace's address, with the workspace's dashboard as the token issuer and the platform's signing keys ([RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md)). Scripts that already hold a personal API token may call `/mcp` with it as a bearer instead of going through OAuth.
+Self-hosted only: on shpyrd cloud there is nothing for you to set up. On a cluster you run, there is nothing to configure either: the OAuth server and the MCP endpoint answer at every workspace's address, with the workspace's dashboard as the token issuer and the platform's signing keys. Scripts that already hold a personal API token may call `/mcp` with it as a bearer instead of going through OAuth.

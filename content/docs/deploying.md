@@ -69,7 +69,7 @@ Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, .NET
 
 ## Buildpacks: languages, stacks and system packages
 
-The Paketo buildpacks detect the language from the repository and do the right thing for the common case. A few patterns need hints they cannot guess; the CLI recognises those patterns in the directory and fills the hints in before the build (**build profiles**, [RFC-0067](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0067-build-profiles.md)), saying what it inferred and why:
+The Paketo buildpacks detect the language from the repository and do the right thing for the common case. A few patterns need hints they cannot guess; the CLI recognises those patterns in the directory and fills the hints in before the build (**build profiles**), saying what it inferred and why:
 
 ```
 ==> Detected static site (public/index.html and no language files)
@@ -258,7 +258,7 @@ env:
 
 ### Global config vars
 
-Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a platform admin and injected into every process of every project ([RFC-0016](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0016-global-config-vars.md)):
+Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a platform admin and injected into every process of every project:
 
 ```shell
 shpyrd globals set OPENAI_API_KEY=sk-... REGION=eu
@@ -275,7 +275,7 @@ globals: { exclude: [OPENAI_API_KEY] } # all but these
 
 ## Health checks
 
-shpyrd configures probes automatically ([RFC-0019](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0019-health-checks-and-rollouts.md)). No configuration is needed for the common case:
+shpyrd configures probes automatically. No configuration is needed for the common case:
 
 | Process type | Default probe |
 |---|---|

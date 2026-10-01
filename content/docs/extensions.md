@@ -27,7 +27,7 @@ opencost        disabled opencost        Infrastructure cost allocation via Open
 
 Enabling installs the extension's component with the same runlevel installer as the base stack (ordering, readiness waits, install record) and restarts the server with the extension; the choice is recorded in the cluster, so `shpyrd cluster init` and `shpyrd cluster status` keep it. Disabling removes the component and is refused while resources of the extension still exist. The **Cluster** page lists every extension with its state.
 
-Extensions contribute an installer component, resource types with controllers, API routes, CLI commands and login providers through a few small Go interfaces ([RFC-0002](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0002-extension-model.md)). Databases (Postgres, Redis) and shared storage arrive as extensions.
+Extensions contribute an installer component, resource types with controllers, API routes, CLI commands and login providers through a few small Go interfaces. Databases (Postgres, Redis) and shared storage arrive as extensions.
 
 ## Object storage
 
@@ -35,7 +35,7 @@ Extensions contribute an installer component, resource types with controllers, A
 
 Every consumer gets a bucket **and a key that opens only that bucket**: an `ObjectBucket` resource in its namespace produces the bucket `shpyrd-<namespace>-<name>` and a Secret `<name>-object-storage` next to it (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `BUCKET`). A key from one project cannot list or read another project's bucket. Optional retention (`retentionDays`) expires old objects; `deletionPolicy: Retain` keeps the bucket's contents when the resource goes.
 
-The **Cluster** page shows the store's volume and every bucket with its size and object count; `shpyrd object-storage list` prints the same. The store speaks plain HTTP inside the cluster; it is never exposed outside it. Copies that must survive the cluster — the platform's own backups — go to the provider's object storage ([RFC-0037](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0037-platform-backup-and-restore.md)).
+The **Cluster** page shows the store's volume and every bucket with its size and object count; `shpyrd object-storage list` prints the same. The store speaks plain HTTP inside the cluster; it is never exposed outside it. Copies that must survive the cluster — the platform's own backups — go to the provider's object storage.
 
 ## Email
 
@@ -49,7 +49,7 @@ shpyrd-ctl mail status
 shpyrd-ctl mail test you@example.com
 ```
 
-STARTTLS on port 587 is the default; `--tls` speaks TLS from the first byte (port 465); `--plain` is for a relay on a private network only — credentials are never sent unencrypted anywhere else. PLAIN and LOGIN authentication are supported. The test message is sent by the server from inside the cluster, so it proves the settings, the network path and the sender address at once; the **Cluster** page's Email card shows the status and sends the same test. Deliveries to one address are rate limited (five in ten minutes), and every test and failure is in the audit trail. Without a sender, invitations show their link to whoever invites, to pass along ([RFC-0013](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0013-email-delivery.md)).
+STARTTLS on port 587 is the default; `--tls` speaks TLS from the first byte (port 465); `--plain` is for a relay on a private network only — credentials are never sent unencrypted anywhere else. PLAIN and LOGIN authentication are supported. The test message is sent by the server from inside the cluster, so it proves the settings, the network path and the sender address at once; the **Cluster** page's Email card shows the status and sends the same test. Deliveries to one address are rate limited (five in ten minutes), and every test and failure is in the audit trail. Without a sender, invitations show their link to whoever invites, to pass along.
 
 ## Signing in with an account
 
@@ -68,14 +68,14 @@ The sign-in page then asks for email and password directly (the admin token move
 ### How it works
 
 - The extension installs [Dex](https://dexidp.io), an OpenID Connect issuer, at `https://auth.<domain>` with a certificate from the cluster issuer. Accounts are Dex objects in the cluster (bcrypt hashes), so they survive restarts, upgrades and even disabling the extension.
-- The shpyrd server is an OpenID Connect relying party. Email and password never leave shpyrd's own page: the server exchanges them with Dex server to server (the OAuth2 password grant) and verifies the resulting identity token exactly as it would after a redirect ([RFC-0012](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0012-sign-in-experience.md)). External providers use the authorization code flow with PKCE. Either way: an HttpOnly session cookie, a CSRF token on every change, sessions that expire after 12 hours idle or 7 days, and sign-out that also ends the session at issuers that support it. A company identity provider (Okta, Google, GitHub through Dex) is configuration, not code ([RFC-0058](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0058-external-identity-providers.md), next).
+- The shpyrd server is an OpenID Connect relying party. Email and password never leave shpyrd's own page: the server exchanges them with Dex server to server (the OAuth2 password grant) and verifies the resulting identity token exactly as it would after a redirect. External providers use the authorization code flow with PKCE. Either way: an HttpOnly session cookie, a CSRF token on every change, sessions that expire after 12 hours idle or 7 days, and sign-out that also ends the session at issuers that support it. A company identity provider (Okta, Google, GitHub through Dex) is configuration, not code (next).
 - The CLI keeps using your kubeconfig; cluster operations are not affected by dashboard accounts.
 
 ## Company identity providers
 
 ![The sign-in page with a password form and buttons for GitHub and Okta](/screenshots/login.png)
 
-Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd with the `auth-oidc` extension; GitHub and Google also work through the bundled issuer of `auth-local`. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-company-s-sign-in). Users are the same person across providers when the email matches, and roles are granted by email or by group, so an Okta group or a GitHub team can be a shpyrd [Team](/docs/access) ([RFC-0058](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0058-external-identity-providers.md)).
+Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd with the `auth-oidc` extension; GitHub and Google also work through the bundled issuer of `auth-local`. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-company-s-sign-in). Users are the same person across providers when the email matches, and roles are granted by email or by group, so an Okta group or a GitHub team can be a shpyrd [Team](/docs/access).
 
 ### Okta, or any OpenID Connect issuer
 

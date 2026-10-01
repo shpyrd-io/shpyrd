@@ -128,4 +128,4 @@ Every mutation is recorded as `{who, what, target, detail, when, from, via}`: de
 
 ## Not yet
 
-Resource quotas per project, image signing and CVE reporting, per-user API tokens and an enforcing Pod Security mode are on the roadmap ([RFC-0008](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0008-teams-roles-and-security.md)).
+Resource quotas per project, image signing and CVE reporting, per-user API tokens and an enforcing Pod Security mode are on the roadmap.

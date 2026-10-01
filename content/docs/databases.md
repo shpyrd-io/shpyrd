@@ -42,7 +42,7 @@ shpyrd pg restore db --as db-restored --to 2026-09-25T16:58:02Z --project shop
 
 `pg info` and the dashboard show the state (`on, daily at 02:00 UTC, kept 7d, last …, recoverable from …`). A restore never touches the source: it creates a **new** database recovered to the moment you name (RFC 3339, UTC; the latest possible when omitted), any second inside the window, with its own credentials; when it is ready, `shpyrd attach db-restored` and detach the old one. Restores are refused before the earliest recoverable point and onto the database itself. `shpyrd pg backups disable` stops archiving; existing backups stay restorable until the database is deleted, when its bucket goes with it.
 
-Backups live in the cluster's object store and go with the cluster: a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents. Copying the in-cluster store to the provider's bucket is the open follow-up ([RFC-0046](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0046-object-storage.md)); until then, `pg_dump` what must survive the cluster.
+Backups live in the cluster's object store and go with the cluster: a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents. Copying the in-cluster store to the provider's bucket is the open follow-up; until then, `pg_dump` what must survive the cluster.
 
 ### Sleep
 
@@ -61,7 +61,7 @@ How it wakes: the database's address stays the same. While it sleeps, connection
 
 Only single-instance databases sleep; a database with `--instances 2` or more exists to be available. Setting or removing a policy re-releases the attached apps once (their database host changes to the platform's wake-capable address). Sleep keeps the volume; it is not a backup — see above for those.
 
-Not there yet: connection pooling and credential rotation ([RFC-0039](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0039-postgres-pooling-rotation-resize.md)).
+Not there yet: connection pooling and credential rotation.
 
 ## Redis and Valkey
 
@@ -72,7 +72,7 @@ shpyrd redis create legacy --project shop --engine redis  # upstream Redis 7
 shpyrd redis cli cache --project shop -- INFO memory
 ```
 
-[Valkey](https://valkey.io) (BSD licensed, protocol compatible) is the default engine; `--engine redis` selects upstream Redis. A store is a single instance run by the shpyrd controller: `maxmemory` is 75% of the size's memory; a **cache** evicts with `allkeys-lru` and loses its content on restart, which is the expected behaviour of a cache; a **persistent** store keeps an append-only file on a volume and refuses writes instead of evicting when full. Persistence cannot change after creation. High availability through an operator comes later ([RFC-0010](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0010-redis-resource.md)).
+[Valkey](https://valkey.io) (BSD licensed, protocol compatible) is the default engine; `--engine redis` selects upstream Redis. A store is a single instance run by the shpyrd controller: `maxmemory` is 75% of the size's memory; a **cache** evicts with `allkeys-lru` and loses its content on restart, which is the expected behaviour of a cache; a **persistent** store keeps an append-only file on a volume and refuses writes instead of evicting when full. Persistence cannot change after creation. High availability through an operator comes later.
 
 ## Attaching
 

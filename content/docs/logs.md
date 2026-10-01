@@ -16,7 +16,7 @@ The dashboard's **Logs** tab streams the same lines with a process filter, a tex
 
 ## The log agent
 
-The log agent runs [Vector](https://vector.dev) on every node ([RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md)). It reads the container logs of project instances and turns every line into a structured event:
+The log agent runs [Vector](https://vector.dev) on every node. It reads the container logs of project instances and turns every line into a structured event:
 
 ```json
 {"time": "...", "project": "shop", "process": "web", "instance": "web.2", "stream": "stdout",
@@ -33,7 +33,7 @@ On a cluster you run yourself, the operator switches the agent on with `shpyrd e
 
 ## Log drains
 
-A drain forwards lines as they are written ([RFC-0023](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0023-log-drains.md)). Two kinds of receiver:
+A drain forwards lines as they are written. Two kinds of receiver:
 
 | Receiver | URL | What arrives |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ shpyrd drains remove in-logs-betterstack-com --project shop
 The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. The pages show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` event visible in the project's activity.
 
 {% callout title="Storage and history" %}
-Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md), an optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.
+Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is a planned, optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.
 {% /callout %}
 
 ### Providers
@@ -68,5 +68,5 @@ Drains are the foundation for log history too: a cluster drain to Loki (or any r
 | Datadog | `https://http-intake.logs.datadoghq.com/api/v2/logs` with `DD-API-KEY: <key>` (use your site's intake host) |
 | Axiom | `https://api.axiom.co/v1/datasets/<dataset>/ingest` with `Authorization: Bearer <token>` |
 | Papertrail | `syslog+tls://logsN.papertrailapp.com:<port>` |
-| Grafana Loki (push API) | `https://loki.example.com/loki/api/v1/push` accepts JSON lines only through a proxy; native Loki support is RFC-0022b |
+| Grafana Loki (push API) | `https://loki.example.com/loki/api/v1/push` accepts JSON lines only through a proxy; native Loki support is planned |
 | Anything that accepts newline-delimited JSON over HTTP, or syslog | works |

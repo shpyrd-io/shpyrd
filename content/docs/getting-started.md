@@ -76,5 +76,4 @@ shpyrd is in beta and developed in the open. The [roadmap](/docs/roadmap) shows 
 ## Getting help
 
 - Bugs, ideas and questions: [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
-- Design changes go through short [RFCs](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs).
 - Community chat: [Discord](https://discord.gg/RYAT4wNKfw).
