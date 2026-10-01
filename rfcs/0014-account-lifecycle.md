@@ -1,6 +1,6 @@
 # RFC-0014 Account lifecycle
 
-**Status:** implemented (v0.9.45)
+**Status:** implemented (v0.9.45), gaps — see Implementation status below
 
 **Owner:** unassigned
 

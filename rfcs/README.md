@@ -21,19 +21,19 @@ declare what they depend on.
 | `provisional` | A proposal. The Open questions section lists what must be settled, each with a default that applies when nobody objects. |
 | `implementable` | Decided; anyone can pick it up. |
 | `in progress` | Being implemented; the Owner field names who and where. |
-| `implemented` | Merged. Partial scope, if any, follows the word; "gaps" points at an Implementation status section in the RFC listing what its text still promises (audit of 2026-09-25, mirrored on the website's roadmap). |
+| `implemented` | Merged. Partial scope, if any, follows the word; "gaps" means the RFC's Implementation status section lists what its text still promises; every such list is collected under [Where things stand](#where-things-stand) below. |
 | `deferred`, `rejected`, `withdrawn`, `replaced` | Not going ahead (as is). |
 
 ## Index
 
 | RFC | Title | Status | Depends on |
 | --- | --- | --- | --- |
-| [0001](0001-mvp-local-platform.md) | MVP: local platform, App CRD and CLI | implemented | |
+| [0001](0001-mvp-local-platform.md) | MVP: local platform, App CRD and CLI | implemented, gaps | |
 | [0002](0002-extension-model.md) | Extension model | implemented (framework), gaps | |
 | [0003](0003-projects-and-resources.md) | Projects and resources | implemented, gaps | |
 | [0004](0004-dockerfile-builds.md) | Dockerfile builds (BuildKit) | implemented, gaps | |
 | [0005](0005-shell-and-one-off-commands.md) | Shell and one-off commands | implemented (CLI); browser terminal → 0026, gaps | |
-| [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041 | |
+| [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041, gaps | |
 | [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users; 3.2 → 0014, 3.3 → 0012 + 0058; complete: `shpyrd login` with 0052, stored OIDC tokens not needed) | |
 | [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → 0043, supply chain → 0044, tokens → 0031, durable audit → 0025, gaps | |
 | [0009](0009-postgres-resource.md) | Postgres resource (CloudNativePG) | implemented; backups → 0038, pooling/rotation → 0039, gaps | |
@@ -41,7 +41,7 @@ declare what they depend on.
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
 | [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only — suppression and bounces are the relay's) | 0002 |
-| [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45) | 0012, 0013 |
+| [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45), gaps | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |
@@ -63,9 +63,9 @@ declare what they depend on.
 | [0032](0032-mcp-connector.md) | MCP connector | in progress (v0.9.16: every workspace is a remote MCP server with OAuth 2.1 and read tools; writing tools, stdio mode and MCP resources remain) | 0031, 0033 |
 | [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5; CLI over the API v0.9.8; audit and fixes — allow lists, suspension, backups — v0.9.10; tokens at the edge, key rotation, server NetworkPolicy, denial counters v0.9.11; workspace roles and invitations v0.9.13; per-workspace SSO and the reader role v0.9.15; address change, custom domains, the launcher for everyone, branding and the MCP server v0.9.16; gaps listed) | 0008, 0016 |
 | [0034](0034-domains-and-certificates.md) | Custom domains | implemented | 0036, 0061 |
-| [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci`, network policy); AWS provisional | 0045 |
+| [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci` and `aws`, network policy) | 0045 |
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
-| [0037](0037-platform-backup-and-restore.md) | Platform backup and restore | implemented | 0046 |
+| [0037](0037-platform-backup-and-restore.md) | Platform backup and restore | implemented, gaps | 0046 |
 | [0038](0038-postgres-backups-and-pitr.md) | Postgres backups and PITR | implemented | 0009, 0046 |
 | [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implementable | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
@@ -76,7 +76,7 @@ declare what they depend on.
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
 | [0047](0047-autoscaling.md) | Autoscaling (min/max mode, HPA, KEDA) | implementable | 0019, 0042 |
-| [0048](0048-cost-visibility.md) | Cost visibility | superseded by RFC-0075 | 0042 |
+| [0048](0048-cost-visibility.md) | Cost visibility | replaced by RFC-0075 | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
@@ -88,7 +88,7 @@ declare what they depend on.
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |
 | [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app); `auth-oidc` retired in favour of `oidc` connectors | 0012 |
 | [0059](0059-in-cluster-registry-on-cloud.md) | In-cluster registry as the default on every profile | implemented, gaps | 0035, 0060 |
-| [0060](0060-volumes-on-cloud-profiles.md) | Volumes on cloud profiles: storage classes, provider minimums, snapshots | implemented | 0006, 0035, 0041 |
+| [0060](0060-volumes-on-cloud-profiles.md) | Volumes on cloud profiles: storage classes, provider minimums, snapshots | implemented, gaps | 0006, 0035, 0041 |
 | [0061](0061-dns-providers.md) | DNS providers: automatic records and wildcard certificates | implemented (OCI DNS), gaps | 0035, 0036 |
 | [0062](0062-kubectl-through-platform-sign-in.md) | kubectl through the platform's sign-in (`shpyrd auth kubectl`) | provisional | 0007, 0008, 0058, 0035 |
 | [0063](0063-dashboard-access-zones.md) | Dashboard access zones: public dashboard, intranet-only areas | provisional | 0036, 0008, 0035 |
@@ -103,12 +103,12 @@ declare what they depend on.
 | [0072](0072-app-actions.md) | App actions: declared endpoints the platform runs for a person (MCP tools, launcher buttons) | provisional | 0032, 0033, 0070 |
 | [0073](0073-data-in-backups.md) | Data in backups: database archives and volumes in the platform backup; workspace data export | provisional | 0037, 0038, 0046, 0060 |
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
-| [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep scaffolding) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
-| [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44) | 0033, 0059, 0075 |
+| [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | in progress (ledger and billing preview v0.9.18; OpenCost economics enabled on shpyrd cloud; HTTP sleep opt-in; Postgres sleep opt-in v0.9.36) | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
+| [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44), gaps | 0033, 0059, 0075 |
 | [0080](0080-two-doors.md) | Two doors: the console (operator, its own host and sign-in realm, restrictable to one IdP) and workspaces (every one explicit with an address, the default one included) are separate applications on one identity provider; per-host OIDC callbacks, sessions per realm, no implicit workspace; two UI applications served by host | implemented (v0.9.52; the library split in `design/ui` and `apps/` on 2026-09-30); gaps: identity linking, two-host e2e, docs | 0033, 0058, 0076, 0078 |
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
-| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
-| [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
+| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61), gaps | 0033, 0035, 0076 |
+| [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41), gaps | 0035, 0060, 0075 |
 
 ## Phases
 
@@ -120,49 +120,80 @@ declare what they depend on.
 | D | 0008 | done |
 | E | 0009, 0010 | done |
 | F | 0045, 0057, 0011, 0012, 0058, 0016, 0019, 0046 | done |
-| G | 0022a, 0021, 0017, 0018, 0023, 0024, 0025 | delivery and logs: agent, structured viewer, git creds, auto-deploy, drains, run history, durable audit |
+| G | 0022a, 0021, 0017, 0018, 0023, 0024, 0025 | delivery and logs: agent, structured viewer, git creds, auto-deploy, drains, run history, durable audit — 0022a, 0021, 0023 done; 0017, 0018, 0024, 0025 open |
 | G (old) | 0017, 0018, 0021, 0022, 0024, 0025, 0023 | superseded by new G above |
-| H | 0027, 0028, 0015, 0029, 0030 | observability and notifications |
-| I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime |
+| H | 0027, 0028, 0015, 0029, 0030 | observability and notifications — 0027 done; the rest open |
+| I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime — 0031, 0026, 0014, 0013 done; 0032 in progress; 0020 open |
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
-| K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
-| L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing |
-| M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep |
-
-| O | 0077 | node pools: fixed platform pool, autoscaled apps pool; the node side of scaling next to RFC-0047's pod side |
-| P | 0079 | Node.js builds: pnpm, Next.js 16 on buildpacks — the builder's Node group and what the `next` profile knows |
-| Q | 0080 | two doors: console and workspaces as separate applications and realms |
+| K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge — 0038 done; 0033 in progress; 0042 partly shipped with 0033; the rest open |
+| L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing — 0052 done; 0048 replaced by 0075; the rest open |
+| M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep — 0075 in progress; the rest open |
+| N | 0076, 0078 | identity and tenancy: stable identifiers for workspaces and projects, workspaces are not the cluster — done, gaps |
+| O | 0077 | node pools: fixed platform pool, autoscaled apps pool; the node side of scaling next to RFC-0047's pod side — done, gaps |
+| P | 0079 | Node.js builds: pnpm, Next.js 16 on buildpacks — the builder's Node group and what the `next` profile knows — open |
+| Q | 0080 | two doors: console and workspaces as separate applications and realms — done, gaps |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
 keeps dependencies satisfied.
 
-## Known gaps in implemented RFCs
+## Where things stand
 
-The 2026-09-25 audit compared every implemented RFC with the code. Each RFC listed carries
-an "Implementation status" section with the details; the short version:
+One place for what is done, what is done with gaps, and what is in progress. The gap lists
+are copied from each RFC's Implementation status section, which stays the source; the
+first set came from the audit of 2026-09-25, the rest from the reviews of the RFCs that
+landed since.
+
+### Done, nothing recorded as missing
+
+0007, 0012, 0013, 0016, 0021, 0034, 0035, 0038, 0046, 0052, 0057, 0058, 0064.
+
+### Done with gaps
 
 | RFC | Still missing |
 | --- | --- |
+| 0001 | a Grafana dashboard for worker processes (only "Web apps" ships) |
 | 0002 | one ServiceAccount per extension; extension health on the cluster page |
 | 0003 | unattached resources in `projects info`; attach confirmation with var names; `Deleting` phase |
 | 0004 | a "build" catalog size; TTL on build Jobs |
 | 0005 | `shpyrd forward`; `shpyrd run --process` |
+| 0006 | the SQLite-over-NFS warning in the documentation |
 | 0008 | admin-only domains; audit export and cluster-level listing; session rotation; API rate limit; backup-exclusion label |
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |
 | 0011 | "pods" in the logs-agent description |
+| 0014 | a "Forgot password" link on the sign-in page; branded email templates; the lockout message and a resend-invite flow in the dashboard; failure counts kept in memory only (the lock itself is durable) |
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0022a | NetworkPolicy for logs-system; console sink off on cloud |
 | 0023 | `drain.failing` audit event |
-| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
+| 0026 | a server shutdown is never audited; `shell.close` can go unrecorded when the client disconnects; the write deadline is unverified through an ingress; `TERM` is never set |
+| 0027 | no instance subset (click-to-isolate on the legend); the network chart's default view counts a running build pod |
+| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can); per-token IP allow list and usage counters |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
-| 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
+| 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; restore does not install the profile; e2e in CI |
 | 0045 | e2e for `examples/hello-docker` |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
+| 0060 | the shared `shpyrd-fss` class on OKE is built but unverified end to end (the tenancy's File Storage limit) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
-| 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |
+| 0065 | `GET /api/buildpacks`; the composition in the dashboard's build settings |
+| 0066 | no release phase for images from other registries without a declared command |
+| 0067 | no "save these?" prompt on deploy (flag only, by design); `--git` deploys detect nothing; a root `index.html` and Create React App are not recognised |
+| 0076 | `shpyrd projects migrate` for legacy projects; grants still keyed by slug; `--wide` id column; COGS by project name; `audit.AppRef` for the implicit workspace; the `app-` slug reservation |
 | 0077 | autoscaler log noise for platform nodes (`node pool not found for instance`); unpinned platform Deployments may ride apps nodes; apps pool minimum 0 untested end to end; `data` pool not started |
+| 0078 | `cluster init` does not create the first workspace explicitly; no UI for cluster settings; the implicit-workspace branch kept for legacy projects; `shpyrd use` switching deferred |
+| 0080 | identity linking across connectors; two-host e2e in CI; Google groups not mirrored; the docs do not describe the two doors |
 
-Fixed in the same audit: the users API required no role (0007/0008), the RBAC mirror was
-not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did nothing (0036),
-the registry never reloaded a renewed certificate (0059).
+### In progress
+
+| RFC | Shipped | What remains |
+| --- | --- | --- |
+| 0032 | the remote MCP server per workspace with OAuth 2.1 and read tools (v0.9.16) | writing tools behind `projects:write`; `releases`, `resources`, `audit` tools; MCP resources and prompts; the stdio `shpyrd mcp`; `via: mcp` on audit entries; a Cursor test |
+| 0033 | everything up to v0.9.16 (see the index) | identified apps on a typed URL (→ 0068); workspace delete; delegated (NS) custom domains and PSL submission; SAML and step-up on claimed domains; disabling previews; one key ring per platform; the legacy `Team`/`ProjectMember` CRDs; `run`, `globals`, `sizes`, `extensions` still need a kubeconfig; a browser flow for `shpyrd login` |
+| 0075 | ledger and billing preview (v0.9.18); OpenCost economics, enabled on shpyrd cloud; HTTP sleep opt-in; Postgres sleep opt-in (v0.9.36) | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases; sleep by default for small plans (phase 6) |
+
+RFC-0042 is `implementable`, but its workspace ceilings and the `ResourceQuota` backstop
+shipped with RFC-0033 in v0.9.3; per-project quotas, `LimitRange` and the usage bars are
+what remains.
+
+Fixed in the audit of 2026-09-25: the users API required no role (0007/0008), the RBAC
+mirror was not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did
+nothing (0036), the registry never reloaded a renewed certificate (0059).

@@ -50,6 +50,13 @@ storage it claims.
 
 - Build pods (BuildKit, kpack) count against the quota only while running; documented.
 
+## Implementation status
+
+The workspace plan ceilings (projects, instances, CPU, memory, storage) and the
+`ResourceQuota` backstop per project namespace shipped with RFC-0033 in v0.9.3. Still to
+do from this RFC: per-project quotas set by platform admins, the `LimitRange`, and the
+usage bars on the project and cluster pages.
+
 ## Implementation History
 
 - 2026-09-22: RFC written.

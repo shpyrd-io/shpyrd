@@ -1,6 +1,6 @@
 # RFC-0066 Release phase
 
-**Status:** implemented
+**Status:** implemented (v0.9.9; dashboard, deploy output and retry in v0.9.10), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

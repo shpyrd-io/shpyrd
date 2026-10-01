@@ -1,6 +1,6 @@
 # RFC-0078 Workspaces are not the cluster
 
-**Status:** implemented (v0.9.46)
+**Status:** implemented (v0.9.46), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 
@@ -190,10 +190,6 @@ use` covers the rare operator in two workspaces.
 - **RFC-0014**: password reset and invite flows live at the console host
   (`/account/set-password`, `/account/reset`) and are workspace-scoped — they need the
   workspace-not-cluster separation to be clean before they are added.
-
-## Implementation status
-
-Not started.
 
 ## History
 

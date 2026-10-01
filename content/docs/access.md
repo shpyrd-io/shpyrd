@@ -128,4 +128,4 @@ Every mutation is recorded as `{who, what, target, detail, when, from, via}`: de
 
 ## Not yet
 
-Resource quotas per project, image signing and CVE reporting, per-user API tokens and an enforcing Pod Security mode are on the roadmap.
+Resource quotas per project, image signing and CVE reporting, and an enforcing Pod Security mode are on the roadmap.

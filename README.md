@@ -7,7 +7,7 @@ CLI and one dashboard on top of Kubernetes.
 
 [![The shop project in the shpyrd dashboard](https://shpyrd.io/screenshots/project-overview.png)](https://shpyrd.io/docs/tour)
 
-Status: beta. It runs on a local kind cluster and on Oracle Cloud (OKE); the
+Status: beta. It runs on a local kind cluster, on Oracle Cloud (OKE) and on AWS (EKS); the
 design record and roadmap live in [rfcs/](rfcs/README.md). Website: https://shpyrd.io
 
 ## Quick start (local)

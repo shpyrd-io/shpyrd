@@ -1,6 +1,6 @@
 # RFC-0058 External identity providers (Okta and OIDC, GitHub, Google)
 
-**Status:** implemented (with gaps) — see Implementation status below
+**Status:** implemented (GitHub round trip pending an OAuth app); `auth-oidc` retired in favour of `oidc` connectors — see Implementation status below
 
 **Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 

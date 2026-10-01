@@ -1,6 +1,6 @@
 # RFC-0077 Node pools: a fixed platform pool and an autoscaled apps pool
 
-**Status:** implemented (v0.9.41)
+**Status:** implemented (v0.9.41), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

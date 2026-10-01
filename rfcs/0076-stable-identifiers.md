@@ -1,6 +1,6 @@
 # RFC-0076 Stable identifiers: IDs identify, names present
 
-**Status:** implemented (v0.9.43: new projects named by ID, legacy stamped; v0.9.44: rename + hostname redirect)
+**Status:** implemented (v0.9.43: new projects named by ID, legacy stamped; v0.9.44: rename + hostname redirect), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 
@@ -186,7 +186,6 @@ v0.9.43 (part A):
 
 Known gaps — part B (before first invoice):
 
-- **Project rename**: `shpyrd projects rename` changes `spec.slug`, display labels, the hostname and certificate; old hostname redirects 301 for 30 days.
 - **`shpyrd projects migrate <slug>`**: recreates a legacy project under its id; volumes and databases via snapshot/restore; old namespace deleted after a soak. The first cloud's projects are recreated; the ledger is truncated before the first invoice.
 - **Grants by slug**: `store.Grant.Project` is still the slug; rename must update them.
 - **`--wide` id column** in `shpyrd projects list`.
