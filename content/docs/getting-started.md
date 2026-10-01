@@ -1,24 +1,46 @@
 ---
 title: Getting started
 pageTitle: shpyrd - Getting started
-description: Sign up for shpyrd cloud, add shpyrd to the agent you build with, and ask it to put your app online and share it with your team.
+description: Install shpyrd - with the installer, or by hand - then ask your agent to put your app online and share it with your team.
 ---
 
 You built an app with your agent. shpyrd is where it goes next: its own address, a sign-in in front of it, and the colleagues you choose inside. You don't learn a new tool to get there - you add shpyrd to the agent you already use, and tell it what you want. {% .lead %}
 
-## 1. Create your workspace
+## 1. Install shpyrd
 
-Sign up for shpyrd cloud and give your workspace a name. It answers at its own address, like `acme.shpyrd.app`, and every app you put online gets an address under it. There is nothing to install or run.
+### With the installer
 
-## 2. Add shpyrd to your agent
+Download it for your computer and open it. It installs the shpyrd CLI, adds shpyrd to every AI agent it finds on your computer, and offers to sign you in.
 
-Your workspace is a connector for AI assistants, at your workspace's address followed by `/mcp` - like `https://acme.shpyrd.app/mcp`. Pick the agent you use and add it once:
+- **macOS**: [Shpyrd-Installer.dmg](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.dmg)
+- **Windows**: [Shpyrd-Installer.exe](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.exe)
+- **Linux**: [Shpyrd-Installer-linux-amd64.tar.gz](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer-linux-amd64.tar.gz)
+
+### Manually
+
+The same three things the installer does.
+
+**Add shpyrd to your agent.** shpyrd has a server for AI agents at `https://mcp.shpyrd.io/mcp`. It needs no account: it tells your agent how to build an app that runs on shpyrd - where it keeps its data, how it knows who is signed in - and where the documentation is. Pick the agent you use and add it once:
 
 {% agent-setup /%}
 
-The first time, your agent sends you to your workspace to sign in and **Allow** it. It works as you, and never with more than your roles allow.
+**Install the shpyrd CLI.** It is how your agent puts apps online and shares them, as you. On macOS and Linux:
 
-## 3. Talk to it
+```shell
+curl -fsSL https://shpyrd.io/install.sh | sh
+# or, with Homebrew
+brew install shpyrd-io/tap/shpyrd
+```
+
+**Sign in.**
+
+```shell
+shpyrd login
+```
+
+Your browser opens on shpyrd cloud. Sign in, or sign up and name your free workspace - it answers at its own address, like `acme.shpyrd.app`, and every app you put online gets an address under it. Then approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
+
+## 2. Talk to it
 
 In the folder of your app, say what you want, the way you'd say it to a colleague:
 
@@ -51,7 +73,7 @@ Release 3 broke the totals, so everyone is on release 2 again - its code and its
 The people you shared it with sign in with their account and find the app among theirs. [Sign-in for your app](/docs/app-access) and [Teams, roles and security](/docs/access) say who can do what.
 
 {% callout title="How your agent does it" %}
-The connector answers your agent's questions about your projects today. To put an app online and change who can open it, your agent uses the shpyrd command line for you: the first time, it will ask to install it, and for a token from your workspace (**Workspace › API tokens**) to sign it in. After that, you only talk.
+Before it writes code, your agent reads from shpyrd's server how an app should be built to run there. To put it online, share it and roll it back, it runs the shpyrd CLI for you, signed in as you. To also let it read your projects, logs and metrics from anywhere, add your workspace's own server - [Connecting AI assistants](/docs/mcp) says how.
 {% /callout %}
 
 ## What you get

@@ -10,14 +10,16 @@ import { components } from "./markdoc";
 // A text of the site as a page: its heading, the text itself, and beside
 // it the list of its parts. Rendered when the application is built.
 export function Text({ text }: { text: TextOf }) {
-  const parts = text.headings.filter((h) => h.level === 2);
+  // The parts, and the sections of a part under it, a step in. Deeper headings
+  // are too small a piece to go to from the side.
+  const parts = text.headings.filter((h) => h.level === 2 || h.level === 3);
   return (
     <>
       <PageLayoutContent width="large" padding="normal" className="grid content-start gap-8">
         <PageHeading title={text.title} description={text.description} variant="large" border />
         <Prose>{Markdoc.renderers.react(text.content, React, { components })}</Prose>
       </PageLayoutContent>
-      {parts.length > 1 && (
+      {parts.filter((h) => h.level === 2).length > 1 && (
         <PageLayoutPane
           aria-label="On this page"
           position="end"
@@ -30,7 +32,7 @@ export function Text({ text }: { text: TextOf }) {
         >
           <NavList aria-label="On this page" heading="On this page" headingLevel="h2">
             {parts.map((h) => (
-              <NavListItem key={h.id} asChild>
+              <NavListItem key={h.id} asChild className={h.level === 3 ? "pl-5" : undefined}>
                 <a href={`#${h.id}`}>{h.title}</a>
               </NavListItem>
             ))}

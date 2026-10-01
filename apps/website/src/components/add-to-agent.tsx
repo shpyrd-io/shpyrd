@@ -2,9 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "cn";
-import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
 import { Button } from "@shpyrd/ui/components/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import {
   type BrandIconProps,
   ClaudeIcon,
@@ -13,6 +11,7 @@ import {
   VSCodeIcon,
 } from "@shpyrd/ui/components/brand-icons";
 import { addToAgent, agents } from "@shpyrd/content/site/agents";
+import { type Platform, platformOf } from "@/lib/platform";
 
 // An agent's mark, from design/ui's brand icons. "color" is the brand's own
 // fill, for where it stands on the page; "ink" is the colour of the text
@@ -46,12 +45,14 @@ export function AgentMark({
   );
 }
 
-// The developer action: connect a workspace to the agent you already use.
+// The developer action: connect shpyrd to the agent you already use. A click
+// downloads the shpyrd installer for the reader's computer, which installs the
+// CLI and connects it to their agents; under it, the way to do it by hand.
 //
 // The client name changes on its own, which is the page's one piece of motion
 // nobody asked for — it carries the fact that this works with more than one
-// agent rather than decorating. It stops while the panel is open, and entirely
-// when the reader has asked for less motion.
+// agent rather than decorating. It stops while the pointer or the keyboard is
+// on the button, and entirely when the reader has asked for less motion.
 const HOLD = 2200;
 
 // One clock for every button on the page, so the one in the header and the one
@@ -129,14 +130,13 @@ export function useCurrentAgent() {
   return { index, agent: agents[index] };
 }
 
-export function AddToAgent() {
+export function AddToAgent({ manual = true }: { manual?: boolean }) {
   // The agent showing, and the one on its way out (none, at first).
   const { index, leaving } = useSyncExternalStore(clock.subscribe, clock.now, clock.atStart);
-  const [open, setOpen] = useState(false);
-  const [client, setClient] = useState(agents[0].id);
-  // Rendered when the application is built, where there is no matchMedia; the
-  // reader's preference is read in an effect instead.
+  // Rendered when the application is built, where there is no matchMedia and
+  // no navigator; the reader's preference and computer are read in effects.
   const [still, setStill] = useState(true);
+  const [platform, setPlatform] = useState<Platform | null>(null);
   // What this button is holding the clock for: the pointer, and focus.
   const hovered = useRef<(() => void) | null>(null);
   const focused = useRef<(() => void) | null>(null);
@@ -147,9 +147,9 @@ export function AddToAgent() {
     less.addEventListener("change", apply);
     return () => less.removeEventListener("change", apply);
   }, []);
+  useEffect(() => setPlatform(platformOf(navigator)), []);
 
   useEffect(() => (still ? undefined : clock.run()), [still]);
-  useEffect(() => (open ? clock.hold() : undefined), [open]);
   // Let go of whatever is still held when the button leaves the page.
   useEffect(
     () => () => {
@@ -159,33 +159,24 @@ export function AddToAgent() {
     [],
   );
 
-  // A tab picked in the panel rolls the button to that agent, so the button
-  // says what the panel shows; it goes on from there when the panel closes.
-  function pick(id: string) {
-    setClient(id);
-    clock.show(agents.findIndex((agent) => agent.id === id));
-  }
-
-  // Opening shows whichever client the reader was just looking at.
-  function onOpenChange(next: boolean) {
-    if (next) setClient(agents[index].id);
-    if (!next) {
-      focused.current?.();
-      focused.current = null;
-    }
-    setOpen(next);
-  }
+  // Until the computer is known, and where there is no installer for it, the
+  // button goes to the manual install.
+  const installer = platform ? addToAgent.installers[platform] : null;
+  const label = `${addToAgent.label} ${agents[index].name}: ${
+    installer ? `download the shpyrd installer for ${installer.name}` : "install shpyrd"
+  }`;
 
   return (
     <div
+      className="inline-grid justify-items-center gap-1.5"
       onMouseEnter={() => (hovered.current ??= clock.hold())}
       onMouseLeave={() => {
         hovered.current?.();
         hovered.current = null;
       }}
       // Only focus from the keyboard holds the roll: someone tabbing to the
-      // button is reading it. A click focuses it too, and closing the panel
-      // hands focus back to it, and neither of those should keep it still.
+      // button is reading it. A click focuses it too, and that should not
+      // keep it still.
       onFocusCapture={(event) => {
         if (event.target.matches(":focus-visible")) focused.current ??= clock.hold();
       }}
@@ -194,87 +185,50 @@ export function AddToAgent() {
         focused.current = null;
       }}
     >
-      <AnchoredOverlay
-        open={open}
-        onOpenChange={onOpenChange}
-        width="xlarge"
-        anchor={
-          <Button aria-label={`${addToAgent.label} ${agents[index].name}`}>
-            <span className="inline-flex items-center gap-1.5">
-              {addToAgent.label}
-              {/* Two columns: "Add to", which never moves, and the agent,
-                  centred in the room the longest of them needs. The agent is
-                  its mark and its name, together, and they change as one: the
-                  one showing rolls up and out while the next rolls in from
-                  under it, and its mark turns into place a beat after the
-                  words land, like a board of departures settling. They all sit
-                  in one cell, so the button keeps one width and nothing beside
-                  it moves; the cell clips what is above and below. */}
-              <span className="-my-1 grid justify-items-center overflow-hidden py-1">
-                {agents.map((agent, i) => {
-                  const place = i === index ? "here" : i === leaving ? "leaving" : "waiting";
-                  return (
-                    <span
-                      key={agent.id}
-                      aria-hidden={place === "here" ? undefined : "true"}
-                      data-place={place}
-                      className={cn(
-                        "group/agent col-start-1 row-start-1 flex w-max items-center gap-1.5 font-semibold",
-                        roll,
-                      )}
-                    >
-                      <span className={turn}>
-                        <AgentMark id={agent.id} tone="ink" className="size-4" />
-                      </span>
-                      {agent.name}
+      <Button asChild>
+        <a href={installer?.href ?? addToAgent.manual.href} aria-label={label}>
+          <span className="inline-flex items-center gap-1.5">
+            {addToAgent.label}
+            {/* Two columns: "Add to", which never moves, and the agent,
+                centred in the room the longest of them needs. The agent is
+                its mark and its name, together, and they change as one: the
+                one showing rolls up and out while the next rolls in from
+                under it, and its mark turns into place a beat after the
+                words land, like a board of departures settling. They all sit
+                in one cell, so the button keeps one width and nothing beside
+                it moves; the cell clips what is above and below. */}
+            <span className="-my-1 grid justify-items-center overflow-hidden py-1">
+              {agents.map((agent, i) => {
+                const place = i === index ? "here" : i === leaving ? "leaving" : "waiting";
+                return (
+                  <span
+                    key={agent.id}
+                    aria-hidden={place === "here" ? undefined : "true"}
+                    data-place={place}
+                    className={cn(
+                      "group/agent col-start-1 row-start-1 flex w-max items-center gap-1.5 font-semibold",
+                      roll,
+                    )}
+                  >
+                    <span className={turn}>
+                      <AgentMark id={agent.id} tone="ink" className="size-4" />
                     </span>
-                  );
-                })}
-              </span>
+                    {agent.name}
+                  </span>
+                );
+              })}
             </span>
-          </Button>
-        }
-      >
-        <Tabs value={client} onValueChange={pick} className="min-w-0">
-          {/* The panel is wide enough for the five with their marks. On a
-              screen narrower than that the list scrolls sideways under a
-              finger, with no bar drawn: a scrollbar across a row of tabs reads
-              as a slider. The scrolling is on a wrapper with a little room all
-              round, so the focus ring of a tab is not cut by the clip. */}
-          <div className="-m-1 overflow-x-auto overflow-y-hidden p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <TabsList>
-              {agents.map((agent) => (
-                <TabsTrigger
-                  key={agent.id}
-                  value={agent.id}
-                  icon={<AgentMark id={agent.id} />}
-                >
-                  {agent.name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
-          {agents.map((agent) => (
-            <TabsContent key={agent.id} value={agent.id} className="grid min-w-0 gap-2">
-              {agent.file && <p className="text-xs text-muted-foreground">{agent.file}</p>}
-              {/* The command wraps rather than scrolling: a scrollbar in a
-                  panel this narrow hides half the line, and a reader has to
-                  see the whole thing to copy it. break-all because a URL and
-                  a path have nowhere else to break. */}
-              <pre className="min-w-0 rounded-lg border bg-muted p-3 text-xs whitespace-pre-wrap break-all">
-                <code>{agent.snippet}</code>
-              </pre>
-            </TabsContent>
-          ))}
-        </Tabs>
-        <p className="mt-3 text-xs text-muted-foreground">{addToAgent.note}</p>
-        <a
-          href={addToAgent.docs.href}
-          className="mt-2 inline-block text-xs underline underline-offset-4"
-        >
-          {addToAgent.docs.label}
+          </span>
         </a>
-      </AnchoredOverlay>
+      </Button>
+      {manual && (
+        <a
+          href={addToAgent.manual.href}
+          className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+        >
+          {addToAgent.manual.label}
+        </a>
+      )}
     </div>
   );
 }
