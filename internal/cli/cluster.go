@@ -257,12 +257,13 @@ through accounts only. --enable turns it back on; --rotate replaces it.`,
 				if err := setTokenDisabled(ctx, k, disable); err != nil {
 					return err
 				}
-				if disable {
-					fmt.Fprintln(cmd.OutOrStdout(), "Admin token disabled; the server is restarting. Sign in with your account; `shpyrd cluster dashboard` still works through one-time tickets.")
-				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "Admin token enabled; the server is restarting.")
-				}
-				return nil
+				return g.print(cmd, map[string]bool{"enabled": !disable}, func(w io.Writer) {
+					if disable {
+						fmt.Fprintln(w, "Admin token disabled; the server is restarting. Sign in with your account; `shpyrd cluster dashboard` still works through one-time tickets.")
+					} else {
+						fmt.Fprintln(w, "Admin token enabled; the server is restarting.")
+					}
+				})
 			}
 			if rotate {
 				tok, err := rotateAdminToken(ctx, k)
@@ -270,18 +271,17 @@ through accounts only. --enable turns it back on; --rotate replaces it.`,
 					return err
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(), "Admin token rotated; the server is restarting with it. Automation using the old token must be updated:")
-				fmt.Fprintln(cmd.OutOrStdout(), tok)
-				return nil
+				return g.print(cmd, map[string]any{"token": tok, "rotated": true}, func(w io.Writer) { fmt.Fprintln(w, tok) })
 			}
 			tok, err := adminToken(ctx, k)
 			if err != nil {
 				return err
 			}
-			if disabled, _ := tokenDisabled(ctx, k); disabled {
+			disabled, _ := tokenDisabled(ctx, k)
+			if disabled {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Note: the admin token is disabled on this cluster (`shpyrd cluster token --enable` turns it back on).")
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), tok)
-			return nil
+			return g.print(cmd, map[string]any{"token": tok, "enabled": !disabled}, func(w io.Writer) { fmt.Fprintln(w, tok) })
 		},
 	}
 	cmd.Flags().BoolVar(&rotate, "rotate", false, "generate a new token, store it and restart the server")
@@ -1208,24 +1208,45 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Profile: %s  Version: %s  Domain: %s  Updated: %s\n", info.Profile, info.Version, info.Vars[install.VarDomain], info.UpdatedAt)
-			fmt.Fprintf(out, "%s\n\n", describeLocal(info.Vars))
-			tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "RUNLEVEL\tCOMPONENT\tSTATUS\tVERSION\tAPPLIED")
+			type component struct {
+				Runlevel  string `json:"runlevel"`
+				Name      string `json:"name"`
+				Ready     bool   `json:"ready"`
+				Detail    string `json:"detail,omitempty"`
+				Version   string `json:"version,omitempty"`
+				AppliedAt string `json:"appliedAt,omitempty"`
+			}
+			components := make([]component, 0, len(statuses))
 			allReady := true
 			for _, s := range statuses {
-				status := "ready"
 				if !s.Ready {
 					allReady = false
-					status = "not ready"
-					if s.Detail != "" {
-						status += " (" + s.Detail + ")"
-					}
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.Runlevel, s.Name, status, s.Version, s.AppliedAt)
+				components = append(components, component{Runlevel: s.Runlevel, Name: s.Name, Ready: s.Ready, Detail: s.Detail, Version: s.Version, AppliedAt: s.AppliedAt})
 			}
-			tw.Flush()
+			result := map[string]any{
+				"profile": info.Profile, "version": info.Version, "domain": info.Vars[install.VarDomain],
+				"updatedAt": info.UpdatedAt, "ready": allReady, "components": components,
+			}
+			if err := g.print(cmd, result, func(out io.Writer) {
+				fmt.Fprintf(out, "Profile: %s  Version: %s  Domain: %s  Updated: %s\n", info.Profile, info.Version, info.Vars[install.VarDomain], info.UpdatedAt)
+				fmt.Fprintf(out, "%s\n\n", describeLocal(info.Vars))
+				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "RUNLEVEL\tCOMPONENT\tSTATUS\tVERSION\tAPPLIED")
+				for _, c := range components {
+					status := "ready"
+					if !c.Ready {
+						status = "not ready"
+						if c.Detail != "" {
+							status += " (" + c.Detail + ")"
+						}
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.Runlevel, c.Name, status, c.Version, c.AppliedAt)
+				}
+				_ = tw.Flush()
+			}); err != nil {
+				return err
+			}
 			if !allReady {
 				return fmt.Errorf("some components are not ready")
 			}
