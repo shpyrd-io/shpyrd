@@ -40,7 +40,7 @@ declare what they depend on.
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
-| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only, no HTTP providers yet) | 0002 |
+| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only — suppression and bounces are the relay's) | 0002 |
 | [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
@@ -152,7 +152,6 @@ an "Implementation status" section with the details; the short version:
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |
 | 0011 | "pods" in the logs-agent description |
-| 0013 | HTTP provider adapters (SES API, Resend, Postmark); bounce handling; last test result on the card |
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0022a | NetworkPolicy for logs-system; console sink off on cloud |
 | 0023 | `drain.failing` audit event |
