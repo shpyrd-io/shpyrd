@@ -445,7 +445,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			IngressClassInternal:  envOr("SHPYRD_INGRESS_CLASS_INTERNAL", "nginx-internal"),
 			InternalLBAddress:     internalLBAddress(k),
 			ExternalLBAddress:     externalLBAddress(k),
-			PublicChecks:          publishesNames(os.Getenv(install.VarDNSProvider)),
+			PublicChecks:          publishesNames(os.Getenv(install.VarDNSProvider), os.Getenv(install.VarWildcardTLS)),
 		},
 		// The external address may not exist yet at start (first install):
 		// look it up when a custom domain needs it.
@@ -623,9 +623,12 @@ func defaultWorkspaceFromEnv(domain, dashboard string) store.DefaultWorkspaceSpe
 	return def
 }
 
-// publishesNames says the install writes its names to public DNS (a DNS
-// provider other than none), so what it publishes can be checked from
-// outside (RFC-0061).
-func publishesNames(provider string) bool {
-	return provider != "" && provider != "none"
+// publishesNames says the install writes its names to public DNS, so what
+// it publishes can be checked from outside (RFC-0061): a DNS provider
+// other than none. The server is not handed the provider on every
+// install, but it is handed SHPYRD_WILDCARD_TLS, which the installer sets
+// to true exactly when a provider exists (pkg/install/vars.go), so either
+// says so.
+func publishesNames(provider, wildcardTLS string) bool {
+	return (provider != "" && provider != "none") || wildcardTLS == "true"
 }

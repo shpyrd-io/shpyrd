@@ -236,6 +236,9 @@ func waitForWorkspace(ctx context.Context, cmd *cobra.Command, g *globalFlags, a
 // readyColumn is the READY column of the list: "yes", or "not yet" with
 // the first check that does not pass.
 func readyColumn(ws *api.WorkspaceSummary) string {
+	if ws.Address == "" {
+		return "no address"
+	}
 	if ws.Readiness != nil && ws.Readiness.Ready {
 		return "yes"
 	}
