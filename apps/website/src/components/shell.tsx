@@ -255,7 +255,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">
-                <AddToAgent />
+                <AddToAgent manual={false} />
               </div>
             </>
           }

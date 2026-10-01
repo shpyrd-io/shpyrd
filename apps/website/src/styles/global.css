@@ -1,3 +1,9 @@
 /* The identity comes whole from design/ui: tokens, fonts, themes, the look
    of a written text, and the classes its components use. */
 @import "@shpyrd/ui/styles.css";
+
+/* The site header stays at the top (3.5rem and its line), so a link to a
+   heading stops below it, with a little room, rather than under it. */
+html {
+  scroll-padding-top: calc(3.5rem + 1px + 1.5rem);
+}
