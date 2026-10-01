@@ -32,6 +32,20 @@ var ConnectorKinds = []string{"github", "google", "microsoft", "oidc"}
 
 var connectorIDRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$`)
 
+// ErrConnectorsNotEnabled says the bundled issuer, which stores the
+// connectors, is not installed. It is ErrNotEnabled (errors.Is) worded
+// for connectors.
+var ErrConnectorsNotEnabled = fmt.Errorf("sign-in connectors need the bundled issuer, which the auth-local extension installs: run `shpyrd extensions enable auth-local`: %w", ErrNotEnabled)
+
+// wrapConnector turns a missing Connector resource into
+// ErrConnectorsNotEnabled.
+func wrapConnector(err error) error {
+	if err := wrap(err); errors.Is(err, ErrNotEnabled) {
+		return ErrConnectorsNotEnabled
+	}
+	return err
+}
+
 // Connector is a Dex connector as shown to people: no secrets.
 type Connector struct {
 	// ID is the connector's id within its scope: "google" for the
@@ -263,15 +277,15 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 	if _, err := s.res().Create(ctx, obj, metav1.CreateOptions{}); err == nil {
 		return false, nil
 	} else if !apierrors.IsAlreadyExists(err) {
-		return false, wrap(err)
+		return false, wrapConnector(err)
 	}
 	cur, err := s.res().Get(ctx, full, metav1.GetOptions{})
 	if err != nil {
-		return true, wrap(err)
+		return true, wrapConnector(err)
 	}
 	obj.SetResourceVersion(cur.GetResourceVersion())
 	_, err = s.res().Update(ctx, obj, metav1.UpdateOptions{})
-	return true, wrap(err)
+	return true, wrapConnector(err)
 }
 
 // List returns every connector sorted by id, without their secrets: the
@@ -279,7 +293,7 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 func (s *ConnectorStore) List(ctx context.Context) ([]Connector, error) {
 	list, err := s.res().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrapConnector(err)
 	}
 	out := make([]Connector, 0, len(list.Items))
 	for _, u := range list.Items {
@@ -374,11 +388,13 @@ func (s *ConnectorStore) Remove(ctx context.Context, realm, workspace, id string
 	if realm != ext.RealmWorkspace && strings.HasPrefix(id, workspacePrefix) {
 		return fmt.Errorf("connector %q belongs to a workspace; remove it from that workspace's Sign-in page", id)
 	}
-	err := s.res().Delete(ctx, FullConnectorID(realm, workspace, id), metav1.DeleteOptions{})
+	err := wrapConnector(s.res().Delete(ctx, FullConnectorID(realm, workspace, id), metav1.DeleteOptions{}))
+	// A missing resource is a 404 too: tell the extension apart from the
+	// connector.
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("no connector %q; see `shpyrd auth connector list`", id)
 	}
-	return wrap(err)
+	return err
 }
 
 // Rekey moves connectors keyed by workspace slug (before RFC-0080) to the
@@ -388,7 +404,7 @@ func (s *ConnectorStore) Remove(ctx context.Context, realm, workspace, id string
 func (s *ConnectorStore) Rekey(ctx context.Context, slugToID func(slug string) string) (int, error) {
 	list, err := s.res().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return 0, wrap(err)
+		return 0, wrapConnector(err)
 	}
 	moved := 0
 	for _, u := range list.Items {
@@ -404,7 +420,7 @@ func (s *ConnectorStore) Rekey(ctx context.Context, slugToID func(slug string) s
 			l[LabelRealm] = ext.RealmPlatform
 			cp.SetLabels(l)
 			if _, err := s.res().Update(ctx, cp, metav1.UpdateOptions{}); err != nil {
-				return moved, wrap(err)
+				return moved, wrapConnector(err)
 			}
 			continue
 		}
@@ -422,10 +438,10 @@ func (s *ConnectorStore) Rekey(ctx context.Context, slugToID func(slug string) s
 		cp.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "shpyrd", LabelRealm: ext.RealmWorkspace, LabelWorkspaceID: id})
 		_ = unstructured.SetNestedField(cp.Object, newFull, "id")
 		if _, err := s.res().Create(ctx, cp, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return moved, wrap(err)
+			return moved, wrapConnector(err)
 		}
 		if err := s.res().Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return moved, wrap(err)
+			return moved, wrapConnector(err)
 		}
 		moved++
 	}
