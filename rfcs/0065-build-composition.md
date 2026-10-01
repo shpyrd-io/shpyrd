@@ -1,6 +1,6 @@
 # RFC-0065 Build composition: buildpacks, stacks and system packages per project
 
-**Status:** implemented
+**Status:** implemented (v0.9.9), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

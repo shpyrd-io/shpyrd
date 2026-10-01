@@ -147,4 +147,4 @@ The listed project must be one of the workspace's own: allows never cross a work
 
 ## Not yet
 
-OAuth 2.1 for AI agents (personal tokens work today), and disabling previews per project.
+Disabling previews per project. AI agents already connect with OAuth 2.1 through the workspace's [MCP server](/docs/mcp); personal tokens work too.

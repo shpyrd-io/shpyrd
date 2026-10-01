@@ -24,6 +24,7 @@ A project page has:
 - **Overview**: source and build strategy, current release and build, per-process instances with scale buttons and an instance size selector (pinned to one for processes mounting a single-instance volume), the **Resources** card (the app, its volumes and databases, with status and what uses them; create, resize and delete volumes there), the **Domains** card (the project hostname, custom domains with the exact DNS record to create and each one's DNS and certificate state; add and remove), the log drains, and the **Releases** table (kind badge, what changed, build number, rollback button).
 - **Metrics**: see below.
 - **Logs**: every instance streamed live, named `web.1`, `worker.2`; filter box, pause/live, error and warning highlighting.
+- **Shell**: a terminal into a running instance, the same launcher as `shpyrd shell`, for roles that may run commands (`project.exec`). One shell per person per project at a time, reaped after 30 minutes idle; every session is audited.
 - **Builds**: build history with status, strategy, reason, source and duration; select one to read its full output (live while building), and which releases use it.
 - **Config**: config var names and last-updated times; add, replace (blind), remove, or paste a `.env`. Variables provided by attached resources are listed read-only with their provider. Values are never shown.
 

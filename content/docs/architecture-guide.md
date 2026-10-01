@@ -28,7 +28,7 @@ shpyrd is two binaries and a set of well-known open source components. This guid
 
 Components are grouped in **runlevels** (rc0...rc4). A level is applied in parallel and waited for before the next starts, so CRDs exist before the resources that use them and webhooks are serving before objects they validate. Variables (`${SHPYRD_DOMAIN}`, `${SHPYRD_REGISTRY_HOST}`...) are substituted in the manifests before Kustomize parses them. The result is recorded in a ConfigMap (`shpyrd-system/shpyrd-install`) that `cluster status` and the dashboard read. Re-runs upgrade in place; `cluster export` renders everything to disk for GitOps tools.
 
-Cloud profiles (`oci` today) swap the pieces that differ - a cloud load balancer on a reserved address, Let's Encrypt, the provider's storage - and run `cluster init` in two phases: everything that needs no certificate first, then a wait for the load balancer address and for DNS, then the rest ([Oracle Cloud (OKE)](/docs/oracle-cloud)). Explicitly given settings are recorded as overrides and carried over by later runs.
+Cloud profiles (`oci` and `aws`) swap the pieces that differ - a cloud load balancer on a reserved address, Let's Encrypt, the provider's storage - and run `cluster init` in two phases: everything that needs no certificate first, then a wait for the load balancer address and for DNS, then the rest ([Oracle Cloud (OKE)](/docs/oracle-cloud)). Explicitly given settings are recorded as overrides and carried over by later runs.
 
 Three decisions shaped the profiles:
 

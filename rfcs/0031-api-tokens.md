@@ -1,6 +1,6 @@
 # RFC-0031 Per-user API tokens
 
-**Status:** implemented
+**Status:** implemented (v0.9.0), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

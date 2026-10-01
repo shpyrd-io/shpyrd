@@ -1,6 +1,6 @@
 # RFC-0052 API-first CLI and `shpyrd login`
 
-**Status:** implemented
+**Status:** implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

@@ -1,6 +1,6 @@
 # RFC-0037 Platform backup and restore
 
-**Status:** implemented
+**Status:** implemented, gaps — see Implementation status below
 
 **Owner:** unassigned
 

@@ -1,6 +1,6 @@
 # RFC-0067 Build profiles: automatic buildpack configuration
 
-**Status:** implemented
+**Status:** implemented (v0.9.10), gaps — see Implementation status below
 
 **Owner:** Patrick Negri
 

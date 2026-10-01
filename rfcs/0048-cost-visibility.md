@@ -1,6 +1,6 @@
 # RFC-0048 Cost visibility
 
-**Status:** implementable
+**Status:** replaced by RFC-0075 (usage, billing and sleep), which measures the same usage as one piece of the full economics stack
 
 **Owner:** unassigned
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-09-30 (replaced by RFC-0075)
 
 ## Summary
 
@@ -46,3 +46,4 @@ they have a price.
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-09-30: replaced by RFC-0075, whose usage ledger and OpenCost economics cover this scope.

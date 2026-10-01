@@ -9,7 +9,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Cost visibility | [RFC-0048](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0048-cost-visibility.md) | ready to implement |
+| Usage, billing and sleep: usage ledger, plans and invoices, operator economics, scale to zero for web processes and databases | [RFC-0075](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0075-usage-billing-and-sleep.md) | in progress (v0.9.18: ledger and billing preview shipped; HTTP sleep opt-in; Postgres sleep opt-in since v0.9.36; OpenCost economics built, not enabled) |
 | Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace; v0.9.11 keeps the edge's promises: personal tokens open apps, sign-out from an app, key rotation, JSON 401 for API clients, a NetworkPolicy for the server, denial counters; v0.9.11/v0.9.12: native `uuid` identifiers with golang-migrate, image repositories keyed by the workspace id; v0.9.13: workspace roles (owner, admin, member) and invitations accepted by signing in; v0.9.15: per-workspace SSO, the email-first login step for claimed domains, the `reader` role; v0.9.16: address change with redirects, custom workspace domains (CNAME mode), the launcher for everyone with search and featured apps, workspace branding, the MCP server — the remaining gaps (workspace delete, per-workspace login methods, custom workspace domains) are listed in the RFC) |
 
 ## Deploying
@@ -23,7 +23,6 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Autoscaling mode (min/max, HPA, KEDA) | [RFC-0047](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0047-autoscaling.md) | ready to implement |
 | Maintenance mode | [RFC-0020](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0020-maintenance-mode.md) | proposal |
 | Run history and scheduled tasks | [RFC-0024](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0024-runs-and-scheduled-tasks.md) | proposal |
-| Web terminal | [RFC-0026](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0026-web-terminal.md) | ready to implement |
 | Builds namespace and enforce-mode Pod Security | [RFC-0043](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0043-builds-namespace-and-pod-security.md) | ready to implement |
 
 ## Data stores
@@ -38,7 +37,6 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Structured (JSON) logs in the viewer and CLI | [RFC-0021](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0021-structured-logs.md) | ready to implement |
 | Log storage and history (Loki as an add-on, `--since`) | [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md) | proposal |
 | Application metrics v2 (per instance, aggregation, totals) | [RFC-0027](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0027-application-metrics-v2.md) | ready to implement |
 | OpenTelemetry collector and export | [RFC-0029](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0029-opentelemetry.md) | proposal |
