@@ -42,6 +42,11 @@ type CreateWorkspaceRequest struct {
 type CreatedWorkspace struct {
 	WorkspaceSummary
 	OwnerInvitation *ext.InviteOutcome `json:"ownerInvitation,omitempty"`
+	// OwnerInvitationPending says the invitation was not sent yet: it goes
+	// out by email once the workspace's door answers, so the link in it
+	// leads somewhere. (When mail is not configured the link is made at
+	// once and returned above, for the operator to pass on.)
+	OwnerInvitationPending bool `json:"ownerInvitationPending,omitempty"`
 }
 
 // UpdateWorkspaceRequest is PATCH /api/workspaces/:slug; every field is
@@ -66,9 +71,14 @@ type WorkspaceSummary struct {
 	Owner string `json:"owner,omitempty"`
 	// Plan is the billing plan the workspace is metered against (RFC-0075);
 	// empty when none, always empty for the operator's own.
-	Plan      string        `json:"plan,omitempty"`
-	Limits    *store.Limits `json:"limits,omitempty"`
-	Usage     *Usage        `json:"usage,omitempty"`
-	Owners    []string      `json:"owners"`
-	CreatedAt time.Time     `json:"createdAt"`
+	Plan   string        `json:"plan,omitempty"`
+	Limits *store.Limits `json:"limits,omitempty"`
+	Usage  *Usage        `json:"usage,omitempty"`
+	Owners []string      `json:"owners"`
+	// Readiness is the controller's last look at the workspace's door
+	// (nil before the first), ReadyAt when it first answered (nil until
+	// then): the moment an invitation link to it can be followed.
+	Readiness *store.WorkspaceReadiness `json:"readiness,omitempty"`
+	ReadyAt   *time.Time                `json:"readyAt,omitempty"`
+	CreatedAt time.Time                 `json:"createdAt"`
 }

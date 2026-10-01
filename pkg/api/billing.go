@@ -38,10 +38,23 @@ type PlanView struct {
 	// projects without one of their own (RFC-0075). Empty = no default.
 	SleepAfter    string `json:"sleepAfter,omitempty"`
 	SleepResuming string `json:"sleepResuming,omitempty"`
+	// PostgresSleepAfter: the plan's default sleep for databases without a
+	// policy of their own. Empty = no default.
+	PostgresSleepAfter string `json:"postgresSleepAfter,omitempty"`
+	// MonthlyBudget caps a month at plan prices (0 = none); SelfServe says
+	// people may pick the plan when they sign up.
+	MonthlyBudget float64 `json:"monthlyBudget,omitempty"`
+	SelfServe     bool    `json:"selfServe,omitempty"`
+	// Limits are the ceilings a workspace starts with on the plan.
+	Limits *store.Limits `json:"limits,omitempty"`
+	// Free: nothing to pay; the bill shows consumption alone. CostBudget is
+	// the operator's cap on the plan's cost to the platform.
+	Free       bool    `json:"free,omitempty"`
+	CostBudget float64 `json:"costBudget,omitempty"`
 }
 
 func planView(p store.Plan) PlanView {
-	return PlanView{ID: p.ID, Name: p.Name, CPUHour: p.CPUHour, MemoryGiBHour: p.MemoryGiBHour, StorageGiBMonth: p.StorageGiBMonth, EgressGiB: p.EgressGiB, MinMonthly: p.MinMonthly, Currency: firstNonEmpty(p.Currency, "USD"), EffectiveFrom: p.EffectiveFrom, SleepAfter: p.SleepAfter, SleepResuming: p.SleepResuming}
+	return PlanView{ID: p.ID, Name: p.Name, CPUHour: p.CPUHour, MemoryGiBHour: p.MemoryGiBHour, StorageGiBMonth: p.StorageGiBMonth, EgressGiB: p.EgressGiB, MinMonthly: p.MinMonthly, Currency: firstNonEmpty(p.Currency, "USD"), EffectiveFrom: p.EffectiveFrom, SleepAfter: p.SleepAfter, SleepResuming: p.SleepResuming, PostgresSleepAfter: p.PostgresSleepAfter, MonthlyBudget: p.MonthlyBudget, SelfServe: p.SelfServe, Limits: p.Limits, Free: p.Free, CostBudget: p.CostBudget}
 }
 
 // listPlans is GET /api/cluster/plans (cluster admins).
@@ -61,20 +74,42 @@ func (s *Server) listPlans(c *gin.Context) {
 // createPlan is POST /api/cluster/plans (cluster admins).
 func (s *Server) createPlan(c *gin.Context) {
 	var req struct {
-		Name            string     `json:"name" binding:"required"`
-		CPUHour         float64    `json:"cpuHour"`
-		MemoryGiBHour   float64    `json:"memoryGibHour"`
-		StorageGiBMonth float64    `json:"storageGibMonth"`
-		EgressGiB       float64    `json:"egressGib"`
-		MinMonthly      float64    `json:"minMonthly"`
-		Currency        string     `json:"currency"`
-		EffectiveFrom   *time.Time `json:"effectiveFrom"`
-		SleepAfter      string     `json:"sleepAfter"`
-		SleepResuming   string     `json:"sleepResuming"`
+		Name            string        `json:"name" binding:"required"`
+		CPUHour         float64       `json:"cpuHour"`
+		MemoryGiBHour   float64       `json:"memoryGibHour"`
+		StorageGiBMonth float64       `json:"storageGibMonth"`
+		EgressGiB       float64       `json:"egressGib"`
+		MinMonthly      float64       `json:"minMonthly"`
+		Currency        string        `json:"currency"`
+		EffectiveFrom   *time.Time    `json:"effectiveFrom"`
+		SleepAfter      string        `json:"sleepAfter"`
+		SleepResuming   string        `json:"sleepResuming"`
+		PostgresSleep   string        `json:"postgresSleepAfter"`
+		MonthlyBudget   float64       `json:"monthlyBudget"`
+		SelfServe       bool          `json:"selfServe"`
+		Limits          *store.Limits `json:"limits"`
+		Free            bool          `json:"free"`
+		CostBudget      float64       `json:"costBudget"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
+	}
+	if req.MonthlyBudget < 0 || req.CostBudget < 0 {
+		abort(c, http.StatusBadRequest, errors.New("a budget cannot be negative"))
+		return
+	}
+	// The database default obeys the rules of a database's own policy.
+	pgSleep := strings.ToLower(strings.TrimSpace(req.PostgresSleep))
+	if pgSleep != "" && pgSleep != "off" {
+		d, err := time.ParseDuration(pgSleep)
+		if err != nil || d < 5*time.Minute || d > 24*time.Hour {
+			abort(c, http.StatusBadRequest, errors.New("plan database sleep default must be a duration from 5m to 24h, or off"))
+			return
+		}
+		pgSleep = d.String()
+	} else {
+		pgSleep = ""
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len(req.Name) > 64 {
@@ -97,7 +132,7 @@ func (s *Server) createPlan(c *gin.Context) {
 			sleepAfter, sleepResuming = sp.After, sp.Resuming
 		}
 	}
-	p := store.Plan{Name: req.Name, CPUHour: req.CPUHour, MemoryGiBHour: req.MemoryGiBHour, StorageGiBMonth: req.StorageGiBMonth, EgressGiB: req.EgressGiB, MinMonthly: req.MinMonthly, Currency: firstNonEmpty(req.Currency, "USD"), EffectiveFrom: ef, SleepAfter: sleepAfter, SleepResuming: sleepResuming}
+	p := store.Plan{Name: req.Name, CPUHour: req.CPUHour, MemoryGiBHour: req.MemoryGiBHour, StorageGiBMonth: req.StorageGiBMonth, EgressGiB: req.EgressGiB, MinMonthly: req.MinMonthly, Currency: firstNonEmpty(req.Currency, "USD"), EffectiveFrom: ef, SleepAfter: sleepAfter, SleepResuming: sleepResuming, PostgresSleepAfter: pgSleep, MonthlyBudget: req.MonthlyBudget, SelfServe: req.SelfServe, Limits: req.Limits, Free: req.Free, CostBudget: req.CostBudget}
 	created, err := s.store.CreatePlan(c.Request.Context(), p)
 	if errors.Is(err, store.ErrConflict) {
 		abort(c, http.StatusConflict, errors.New("a plan with that name already exists"))
@@ -109,6 +144,147 @@ func (s *Server) createPlan(c *gin.Context) {
 	}
 	s.audit(c, "", "plan.create", created.Name, "")
 	c.JSON(http.StatusCreated, planView(*created))
+}
+
+// planVersionRequest is POST /api/cluster/plans/:name/versions: a new
+// version of a plan from a date, with the prices and settings that change;
+// what is not given stays as in the version in force.
+type planVersionRequest struct {
+	CPUHour         *float64      `json:"cpuHour"`
+	MemoryGiBHour   *float64      `json:"memoryGibHour"`
+	StorageGiBMonth *float64      `json:"storageGibMonth"`
+	EgressGiB       *float64      `json:"egressGib"`
+	MinMonthly      *float64      `json:"minMonthly"`
+	Currency        *string       `json:"currency"`
+	EffectiveFrom   *time.Time    `json:"effectiveFrom"`
+	SleepAfter      *string       `json:"sleepAfter"`
+	SleepResuming   *string       `json:"sleepResuming"`
+	PostgresSleep   *string       `json:"postgresSleepAfter"`
+	MonthlyBudget   *float64      `json:"monthlyBudget"`
+	CostBudget      *float64      `json:"costBudget"`
+	SelfServe       *bool         `json:"selfServe"`
+	Free            *bool         `json:"free"`
+	Limits          *store.Limits `json:"limits"`
+	ClearLimits     bool          `json:"clearLimits"`
+}
+
+// addPlanVersion is POST /api/cluster/plans/:name/versions (cluster
+// admins): the plan's prices from a date on. Months before keep the
+// version they were priced at.
+func (s *Server) addPlanVersion(c *gin.Context) {
+	var req planVersionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	ctx := c.Request.Context()
+	cur, err := s.store.GetPlan(ctx, c.Param("name"))
+	if errors.Is(err, store.ErrNotFound) {
+		abort(c, http.StatusNotFound, errors.New("no such plan"))
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	next := *cur
+	next.ID, next.CreatedAt = "", time.Time{}
+	next.EffectiveFrom = time.Now().UTC()
+	if req.EffectiveFrom != nil {
+		next.EffectiveFrom = *req.EffectiveFrom
+	}
+	setF := func(dst *float64, v *float64) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	setF(&next.CPUHour, req.CPUHour)
+	setF(&next.MemoryGiBHour, req.MemoryGiBHour)
+	setF(&next.StorageGiBMonth, req.StorageGiBMonth)
+	setF(&next.EgressGiB, req.EgressGiB)
+	setF(&next.MinMonthly, req.MinMonthly)
+	setF(&next.MonthlyBudget, req.MonthlyBudget)
+	setF(&next.CostBudget, req.CostBudget)
+	if req.Currency != nil {
+		next.Currency = *req.Currency
+	}
+	if req.SelfServe != nil {
+		next.SelfServe = *req.SelfServe
+	}
+	if req.Free != nil {
+		next.Free = *req.Free
+	}
+	if req.ClearLimits {
+		next.Limits = nil
+	} else if req.Limits != nil {
+		next.Limits = req.Limits
+	}
+	if next.CPUHour < 0 || next.MemoryGiBHour < 0 || next.StorageGiBMonth < 0 || next.EgressGiB < 0 || next.MinMonthly < 0 || next.MonthlyBudget < 0 || next.CostBudget < 0 {
+		abort(c, http.StatusBadRequest, errors.New("prices and budgets cannot be negative"))
+		return
+	}
+	if req.SleepAfter != nil {
+		next.SleepAfter, next.SleepResuming = "", ""
+		if strings.TrimSpace(*req.SleepAfter) != "" {
+			resuming := next.SleepResuming
+			if req.SleepResuming != nil {
+				resuming = *req.SleepResuming
+			}
+			sp, err := validateSleep("web", &shpyrdv1.SleepSpec{After: *req.SleepAfter, Resuming: resuming})
+			if err != nil {
+				abort(c, http.StatusBadRequest, fmt.Errorf("plan sleep default: %w", err))
+				return
+			}
+			if sp != nil {
+				next.SleepAfter, next.SleepResuming = sp.After, sp.Resuming
+			}
+		}
+	} else if req.SleepResuming != nil {
+		next.SleepResuming = *req.SleepResuming
+	}
+	if req.PostgresSleep != nil {
+		pg := strings.ToLower(strings.TrimSpace(*req.PostgresSleep))
+		if pg != "" && pg != "off" {
+			d, err := time.ParseDuration(pg)
+			if err != nil || d < 5*time.Minute || d > 24*time.Hour {
+				abort(c, http.StatusBadRequest, errors.New("plan database sleep default must be a duration from 5m to 24h, or off"))
+				return
+			}
+			pg = d.String()
+		} else {
+			pg = ""
+		}
+		next.PostgresSleepAfter = pg
+	}
+	created, err := s.store.AddPlanVersion(ctx, next)
+	if errors.Is(err, store.ErrConflict) {
+		abort(c, http.StatusConflict, fmt.Errorf("the plan has a version from %s already; a new version must be later", cur.EffectiveFrom.Format("2006-01-02")))
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	s.audit(c, "", "plan.version", created.Name, created.EffectiveFrom.Format(time.RFC3339))
+	c.JSON(http.StatusCreated, planView(*created))
+}
+
+// listPlanVersions is GET /api/cluster/plans/:name/versions.
+func (s *Server) listPlanVersions(c *gin.Context) {
+	versions, err := s.store.PlanVersions(c.Request.Context(), c.Param("name"))
+	if errors.Is(err, store.ErrNotFound) {
+		abort(c, http.StatusNotFound, errors.New("no such plan"))
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	out := make([]PlanView, len(versions))
+	for i, v := range versions {
+		out[i] = planView(v)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // assignPlan is POST /api/cluster/plans/:name/assign?workspace=<slug>
@@ -149,6 +325,9 @@ type WorkspaceBillingView struct {
 	Currency   string            `json:"currency"`
 	Projection float64           `json:"projection"` // run-rate to month end
 	Quality    string            `json:"quality"`    // complete | partial | missing
+	// Free says the plan charges nothing: the lines are consumption, the
+	// total and the projection are nothing to pay.
+	Free bool `json:"free,omitempty"`
 }
 
 type BillingLineView struct {
@@ -195,17 +374,21 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 		until = monthEnd
 	}
 
+	// The plan's versions price each bucket at the version of its time;
+	// the version in force at the month's end gives the floor and the flags.
 	wp, _ := s.store.WorkspacePlan(ctx, ws)
 	var plan *store.Plan
+	var versions []store.Plan
 	if wp != nil {
-		if p, err := s.store.GetPlan(ctx, wp.PlanID); err == nil {
-			plan = p
+		if v, err := s.store.PlanVersions(ctx, wp.PlanName); err == nil {
+			versions = v
+			plan = store.PlanAt(versions, until)
 		}
 	}
 	// A month that ended before the plan took effect had no prices, and
 	// no minimum to meet.
 	if plan != nil && !plan.EffectiveFrom.IsZero() && !plan.EffectiveFrom.Before(monthEnd) {
-		plan = nil
+		plan, versions = nil, nil
 	}
 
 	buckets, err := s.store.QueryBuckets(ctx, ws, "", monthStart, until)
@@ -214,17 +397,20 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 		return
 	}
 
-	lines, total, quality := computeInvoicePreview(buckets, plan, monthStart, until)
+	lines, total, quality := InvoicePreview(buckets, versions, monthStart, until)
+	// A free plan: the consumption is shown, the amounts are nothing.
+	free := plan != nil && plan.Free
+	if free {
+		for i := range lines {
+			lines[i].UnitPrice, lines[i].GrossAmount = 0, 0
+		}
+		total = 0
+	}
 	s.nameLedgerProjects(ctx, ws, lines)
-	// Simple run-rate projection; a month that went by is what it was.
+	// Run-rate projection; a month that went by is what it was.
 	projection := total
 	if until == now {
-		elapsed := now.Sub(monthStart).Hours()
-		total_h := monthEnd.Sub(monthStart).Hours()
-		projection = 0
-		if elapsed > 0 {
-			projection = total / elapsed * total_h
-		}
+		projection = projectMonth(lines, total, plan, now.Sub(monthStart), monthEnd.Sub(monthStart))
 	}
 
 	if lines == nil {
@@ -234,8 +420,12 @@ func (s *Server) workspaceBillingCurrent(c *gin.Context) {
 		Workspace: ws, Period: monthStart.Format("2006-01"), Total: total,
 		Currency: "USD", Projection: projection, Quality: quality, Lines: lines,
 	}
+	out.Free = free
 	if plan != nil {
 		pv := planView(*plan)
+		// The budgets and the signup flag are the operator's numbers,
+		// never the customer's to see.
+		pv.MonthlyBudget, pv.CostBudget, pv.SelfServe = 0, 0, false
 		out.Plan = &pv
 	}
 	c.JSON(http.StatusOK, out)
@@ -411,12 +601,12 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 				if now.Before(end) {
 					end = now
 				}
-				var plan *store.Plan
+				var versions []store.Plan
 				if wp, err := s.store.WorkspacePlan(ctx, ws.Slug); err == nil && wp != nil {
-					plan, _ = s.store.GetPlan(ctx, wp.PlanID)
+					versions, _ = s.store.PlanVersions(ctx, wp.PlanName)
 				}
 				if buckets, err := s.store.QueryBuckets(ctx, ws.Slug, "", from, end); err == nil {
-					_, rev, _ = computeInvoicePreview(buckets, plan, from, end)
+					_, rev, _ = InvoicePreview(buckets, versions, from, end)
 				}
 			}
 		}
@@ -465,20 +655,57 @@ func (s *Server) clusterEconomics(c *gin.Context) {
 // Zero-quantity lines are dropped; a missing bucket still lowers the
 // quality. When there is no plan, amounts and unit prices are zero.
 func computeInvoicePreview(buckets []store.UsageBucket, plan *store.Plan, from, to time.Time) ([]BillingLineView, float64, string) {
+	if plan == nil {
+		return InvoicePreview(buckets, nil, from, to)
+	}
+	return InvoicePreview(buckets, []store.Plan{*plan}, from, to)
+}
+
+// InvoicePreview is what a workspace owes so far, from the ledger's
+// buckets: each bucket priced at the plan version in force at its time
+// (a price change never rewrites the days before it), one line per
+// (project, component, metric) with the quantity-weighted unit price, and
+// the floor of the version in force at the period's end. No versions, no
+// prices. A plan's monthly budget (RFC-0075) is compared with the total.
+func InvoicePreview(buckets []store.UsageBucket, versions []store.Plan, from, to time.Time) ([]BillingLineView, float64, string) {
 	type key struct{ project, component, metric string }
+	// Memory switched from the working set to the reservation on
+	// 2026-10-01; the meter's catch-up back-filled the reservation for the
+	// days it could, so a window may carry both. The working set is priced
+	// only before the first reserved bucket of the same component, never
+	// beside it.
+	reservedFrom := map[[2]string]time.Time{}
+	for _, b := range buckets {
+		if b.Metric != store.MetricMemoryReserved {
+			continue
+		}
+		k := [2]string{b.Project, b.Component}
+		if first, ok := reservedFrom[k]; !ok || b.PeriodStart.Before(first) {
+			reservedFrom[k] = b.PeriodStart
+		}
+	}
 	totals := map[key]float64{}
+	amounts := map[key]float64{}
 	qualities := map[key]string{}
 	for _, b := range buckets {
+		if b.Metric == store.MetricMemoryUsed {
+			if first, ok := reservedFrom[[2]string{b.Project, b.Component}]; ok && !b.PeriodStart.Before(first) {
+				continue
+			}
+		}
 		k := key{b.Project, b.Component, b.Metric}
 		if b.Quantity == nil {
 			qualities[k] = store.QualityMissing
 			continue
 		}
+		up, _ := unitPriceFor(b.Metric, store.PlanAt(versions, b.PeriodStart))
 		totals[k] += *b.Quantity
+		amounts[k] += convertUnits(*b.Quantity, b.Metric) * up
 		if qualities[k] != store.QualityMissing {
 			qualities[k] = b.Quality
 		}
 	}
+	plan := store.PlanAt(versions, to)
 
 	var lines []BillingLineView
 	totalAmount := 0.0
@@ -492,9 +719,15 @@ func computeInvoicePreview(buckets []store.UsageBucket, plan *store.Plan, from, 
 		if qty <= 0 {
 			continue
 		}
-		up, unit := unitPriceFor(k.metric, plan)
+		_, unit := unitPriceFor(k.metric, plan)
 		qty = convertUnits(qty, k.metric)
-		amount := qty * up
+		amount := amounts[k]
+		// The unit price shown is the one the line was priced at: the
+		// version's when one applied, the average across a change.
+		up := 0.0
+		if qty > 0 {
+			up = amount / qty
+		}
 		lines = append(lines, BillingLineView{Project: k.project, Component: k.component, Metric: k.metric, Quantity: qty, Unit: unit, UnitPrice: up, GrossAmount: amount})
 		totalAmount += amount
 	}
@@ -516,6 +749,30 @@ func computeInvoicePreview(buckets []store.UsageBucket, plan *store.Plan, from, 
 	return lines, totalAmount, worstQuality
 }
 
+// projectMonth extrapolates the month's usage at its pace so far, then
+// applies the plan's floor once: the floor is not usage and must not be
+// multiplied with it (on the first day a 5.00 floor read as 193.00 by the
+// month's end). A free plan projects nothing to pay.
+func projectMonth(lines []BillingLineView, total float64, plan *store.Plan, elapsed, month time.Duration) float64 {
+	if plan != nil && plan.Free {
+		return 0
+	}
+	usage := total
+	for _, l := range lines {
+		if l.Metric == "min_monthly" {
+			usage -= l.GrossAmount
+		}
+	}
+	projected := 0.0
+	if elapsed > 0 {
+		projected = usage / elapsed.Hours() * month.Hours()
+	}
+	if plan != nil && projected < plan.MinMonthly {
+		projected = plan.MinMonthly
+	}
+	return projected
+}
+
 // hoursPerMonth is the billing month used to turn a GiB-month price into
 // the metered GiB-seconds (30-day month, the industry convention).
 const hoursPerMonth = 30 * 24
@@ -531,7 +788,7 @@ func unitPriceFor(metric string, plan *store.Plan) (float64, string) {
 		if plan != nil {
 			price = plan.CPUHour
 		}
-	case store.MetricMemoryUsed:
+	case store.MetricMemoryUsed, store.MetricMemoryReserved:
 		unit = "GiB-hours"
 		if plan != nil {
 			price = plan.MemoryGiBHour
@@ -556,7 +813,7 @@ func unitPriceFor(metric string, plan *store.Plan) (float64, string) {
 // unitPriceFor.
 func convertUnits(qty float64, metric string) float64 {
 	switch metric {
-	case store.MetricCPUUsed, store.MetricCPUReserved, store.MetricMemoryUsed, store.MetricInstanceSec:
+	case store.MetricCPUUsed, store.MetricCPUReserved, store.MetricMemoryUsed, store.MetricMemoryReserved, store.MetricInstanceSec:
 		return qty / 3600 // core-seconds, GiB-seconds, seconds → hours
 	case store.MetricStorage:
 		return qty / 3600 / hoursPerMonth // GiB-seconds → GiB-months

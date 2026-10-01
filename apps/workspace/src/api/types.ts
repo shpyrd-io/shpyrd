@@ -360,7 +360,9 @@ export type DomainClaim = { domain: string; connector?: string; verified: boolea
 export type BillingLine = { project?: string; component: string; metric: string; quantity: number; unit: string; price: number; amount: number };
 // The usage of a month at the prices of the plan: this one so far, with
 // where it is headed at this pace, or a month that went by.
-export type Billing = { plan: string; currency: string; month: string; past?: boolean; total: number; projection?: number; lines: BillingLine[] };
+// `free` says the plan charges nothing: the lines are the consumption, the
+// total is nothing to pay.
+export type Billing = { plan: string; currency: string; month: string; past?: boolean; free?: boolean; total: number; projection?: number; lines: BillingLine[] };
 
 export type Point = [time: number, value: number];
 // `reference` is the allocation the series is measured against (what the

@@ -34,10 +34,38 @@ type Workspace struct {
 	Status  string `json:"status"` // WorkspaceActive or WorkspaceSuspended
 	// Owner distinguishes operator workspaces (COGS, never invoiced) from
 	// customer workspaces (revenue). RFC-0078.
-	Owner     string            `json:"owner,omitempty"` // "operator" | "customer"
-	Settings  WorkspaceSettings `json:"settings"`
-	CreatedAt time.Time         `json:"createdAt"`
-	UpdatedAt time.Time         `json:"updatedAt"`
+	Owner    string            `json:"owner,omitempty"` // "operator" | "customer"
+	Settings WorkspaceSettings `json:"settings"`
+	// Readiness is what the controller found the last time it looked at
+	// the workspace's front door; nil before the first look. ReadyAt is
+	// when every check first passed, nil until then: before that moment
+	// a link to the workspace's address leads nowhere.
+	Readiness *WorkspaceReadiness `json:"readiness,omitempty"`
+	ReadyAt   *time.Time          `json:"readyAt,omitempty"`
+	// OwnerInvitePending is the email of a first owner whose invitation
+	// waits for the workspace to be ready; "" when none waits.
+	OwnerInvitePending string    `json:"ownerInvitePending,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+}
+
+// WorkspaceReadiness is the state of a workspace's door, as the controller
+// last saw it: whether the address answers, and each thing it checked.
+type WorkspaceReadiness struct {
+	Ready     bool             `json:"ready"`
+	CheckedAt time.Time        `json:"checkedAt"`
+	Checks    []ReadinessCheck `json:"checks"`
+}
+
+// ReadinessCheck is one thing the controller checked about a workspace's
+// door: the front door exists, the certificate is issued, the public name
+// resolves, the door answers over HTTPS.
+type ReadinessCheck struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Detail says what was seen when the check did not pass, or why it was
+	// not made ("not checked: no DNS provider").
+	Detail string `json:"detail,omitempty"`
 }
 
 // Workspace statuses.
@@ -110,6 +138,16 @@ type WorkspaceSettings struct {
 	// MCPName is what an assistant shows for the workspace's MCP server
 	// (RFC-0032); "<name> on shpyrd" when empty.
 	MCPName string `json:"mcpName,omitempty"`
+	// Budget is how the plan's monthly budget (RFC-0075) has touched this
+	// workspace: the month (YYYY-MM) its owners were warned, and the month
+	// it was paused for, so it is resumed when that month ends.
+	Budget *BudgetState `json:"budget,omitempty"`
+}
+
+// BudgetState records what the monthly budget did to a workspace.
+type BudgetState struct {
+	WarnedMonth string `json:"warnedMonth,omitempty"`
+	PausedMonth string `json:"pausedMonth,omitempty"`
 }
 
 // Branding is a workspace's look.
@@ -402,6 +440,48 @@ type Plan struct {
 	// SleepAfter means no default.
 	SleepAfter    string `json:"sleepAfter,omitempty"`
 	SleepResuming string `json:"sleepResuming,omitempty"`
+	// PostgresSleepAfter is the plan's default sleep for databases:
+	// databases without a policy of their own hibernate after this quiet
+	// period. Empty means no default.
+	PostgresSleepAfter string `json:"postgresSleepAfter,omitempty"`
+	// MonthlyBudget caps what a month may come to at plan prices: owners
+	// are warned near it and the workspace is paused at it until the
+	// month ends. Zero means no cap.
+	MonthlyBudget float64 `json:"monthlyBudget,omitempty"`
+	// CostBudget caps what a month may cost the platform (OpenCost's COGS,
+	// the operator's number): the same warning and pause, measured on
+	// cost. Zero means no cap. Never shown to a customer.
+	CostBudget float64 `json:"costBudget,omitempty"`
+	// SelfServe says people may pick this plan for themselves when they
+	// sign up; the others are assigned by the operator.
+	SelfServe bool `json:"selfServe,omitempty"`
+	// Limits are the ceilings a workspace starts with on this plan; nil
+	// means none. A workspace's own limits are set as before afterwards.
+	Limits *Limits `json:"limits,omitempty"`
+	// Free says the plan charges nothing: the bill shows the consumption
+	// with nothing to pay. Such a plan is capped by CostBudget.
+	Free bool `json:"free,omitempty"`
+}
+
+// PlanAt is the version of a plan in force at t: the latest whose
+// EffectiveFrom is not after t, else the earliest. Nil for no versions.
+func PlanAt(versions []Plan, t time.Time) *Plan {
+	var pick *Plan
+	for i := range versions {
+		v := &versions[i]
+		if !v.EffectiveFrom.After(t) && (pick == nil || v.EffectiveFrom.After(pick.EffectiveFrom)) {
+			pick = v
+		}
+	}
+	if pick == nil {
+		for i := range versions {
+			v := &versions[i]
+			if pick == nil || v.EffectiveFrom.Before(pick.EffectiveFrom) {
+				pick = v
+			}
+		}
+	}
+	return pick
 }
 
 // WorkspacePlan is a workspace's current or historical plan assignment.
@@ -433,13 +513,17 @@ type UsageBucket struct {
 
 // Usage metrics.
 const (
-	MetricCPUUsed     = "cpu_used"         // core-seconds
-	MetricCPUReserved = "cpu_reserved"     // core-seconds
-	MetricMemoryUsed  = "memory_used"      // GiB-seconds
-	MetricStorage     = "storage"          // GiB-seconds (provisioned)
-	MetricEgressHTTP  = "egress_http"      // bytes
-	MetricInstanceSec = "instance_seconds" // process-seconds
-	MetricStateSec    = "state_seconds"    // seconds in each state
+	MetricCPUUsed     = "cpu_used"     // core-seconds
+	MetricCPUReserved = "cpu_reserved" // core-seconds
+	MetricMemoryUsed  = "memory_used"  // GiB-seconds of working set (metered until the switch to reserved)
+	// MetricMemoryReserved is the memory an awake instance reserves,
+	// request equals limit, so it is also what the instance takes from the
+	// node: the memory the customer is billed for (RFC-0075).
+	MetricMemoryReserved = "memory_reserved"  // GiB-seconds
+	MetricStorage        = "storage"          // GiB-seconds (provisioned)
+	MetricEgressHTTP     = "egress_http"      // bytes
+	MetricInstanceSec    = "instance_seconds" // process-seconds
+	MetricStateSec       = "state_seconds"    // seconds in each state
 
 	UnitCoreSeconds = "core_seconds"
 	UnitGiBSeconds  = "gib_seconds"
@@ -549,9 +633,18 @@ type Projects interface {
 // Billing is the metering and economics part of the Store (RFC-0075).
 type Billing interface {
 	// Plans.
+	// CreatePlan makes a new plan; a name in use is ErrConflict. Prices
+	// change by versions: AddPlanVersion adds a row for an existing name
+	// with a later EffectiveFrom (earlier or equal is ErrConflict). GetPlan
+	// by name and ListPlans answer the version in force now (the latest
+	// whose EffectiveFrom has come; the earliest when none has);
+	// PlanVersions lists them all, oldest first. PlanAt picks the version
+	// in force at a time from such a list.
 	CreatePlan(ctx context.Context, p Plan) (*Plan, error)
+	AddPlanVersion(ctx context.Context, p Plan) (*Plan, error)
 	ListPlans(ctx context.Context) ([]Plan, error)
 	GetPlan(ctx context.Context, nameOrID string) (*Plan, error)
+	PlanVersions(ctx context.Context, name string) ([]Plan, error)
 	// AssignPlan sets the plan for a workspace (closes the previous assignment).
 	AssignPlan(ctx context.Context, ws, planNameOrID string) (*WorkspacePlan, error)
 	// WorkspacePlan returns the current plan assignment, ErrNotFound when none.
@@ -659,6 +752,12 @@ type Store interface {
 	UpdateWorkspaceSettings(ctx context.Context, slug string, settings WorkspaceSettings) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)
+	// SetWorkspaceReadiness records what the controller found at the
+	// workspace's door; ReadyAt is set the first time it is ready and kept.
+	SetWorkspaceReadiness(ctx context.Context, slug string, r WorkspaceReadiness) (*Workspace, error)
+	// SetWorkspaceOwnerInvitePending keeps (or, with "", clears) the email
+	// of a first owner whose invitation waits for readiness.
+	SetWorkspaceOwnerInvitePending(ctx context.Context, slug, email string) (*Workspace, error)
 
 	// Domain claims: PutDomainClaim creates one (with a fresh token) or
 	// updates its connector; MarkDomainVerified records the DNS check.

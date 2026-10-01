@@ -135,6 +135,11 @@ type Config struct {
 	// ExternalLBAddress is the public front door's address, what a custom
 	// domain's A record points at (RFC-0034); "" when unknown at start.
 	ExternalLBAddress string
+	// PublicChecks says the platform publishes its names on public DNS (a
+	// DNS provider is configured), so a workspace's readiness may be
+	// checked from outside: the name resolves, the door answers over
+	// HTTPS. Off on a local cluster, where neither can be asked.
+	PublicChecks bool
 }
 
 // BuildServiceAccount is the ServiceAccount builds run as in a project

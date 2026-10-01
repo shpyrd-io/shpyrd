@@ -82,7 +82,7 @@ func TestMeteringWritesBucketsBySlug(t *testing.T) {
 			sample(map[string]string{"namespace": "app-shop"}, "1"), // an unlabelled pod
 			sample(map[string]string{"namespace": "app-other", "label_shpyrd_io_process": "web"}, "99"),
 		},
-		"container_memory_working_set_bytes": {
+		"kube_pod_container_resource_requests": {
 			sample(map[string]string{"namespace": "app-shop", "label_shpyrd_io_process": "web"}, "0.25"),
 		},
 		"kube_persistentvolume_capacity_bytes": {

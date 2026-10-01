@@ -931,7 +931,7 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 	out := make([]WorkspaceSummary, 0, len(all))
 	for i := range all {
 		w := &all[i]
-		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Limits: w.Settings.Limits, Owners: []string{}, CreatedAt: w.CreatedAt}
+		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Limits: w.Settings.Limits, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
 		if wp, err := s.store.WorkspacePlan(ctx, w.Slug); err == nil && wp != nil {
 			sum.Plan = wp.PlanName
 		}

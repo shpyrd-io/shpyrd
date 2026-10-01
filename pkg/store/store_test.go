@@ -497,7 +497,7 @@ func TestBillingStore(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
 			// Plans: create, list, get, assign to workspace, history.
-			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0, SleepAfter: "15m0s", SleepResuming: "page"}); err != nil {
+			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0, SleepAfter: "15m0s", SleepResuming: "page", PostgresSleepAfter: "10m0s", MonthlyBudget: 0.5, SelfServe: true, Limits: &Limits{Projects: 1, Memory: "256Mi"}, Free: true, CostBudget: 0.5}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.CreatePlan(ctx, Plan{Name: "starter"}); !errors.Is(err, ErrConflict) {
@@ -508,7 +508,7 @@ func TestBillingStore(t *testing.T) {
 				t.Fatalf("list plans: %+v", plans)
 			}
 			pl, err := s.GetPlan(ctx, "starter")
-			if err != nil || pl.CPUHour != 0.02 || pl.SleepAfter != "15m0s" || pl.SleepResuming != "page" {
+			if err != nil || pl.CPUHour != 0.02 || pl.SleepAfter != "15m0s" || pl.SleepResuming != "page" || pl.PostgresSleepAfter != "10m0s" || pl.MonthlyBudget != 0.5 || !pl.SelfServe || pl.Limits == nil || pl.Limits.Projects != 1 || !pl.Free || pl.CostBudget != 0.5 {
 				t.Fatalf("get plan: %+v %v", pl, err)
 			}
 			wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter")
@@ -843,6 +843,34 @@ func TestWorkspaces(t *testing.T) {
 			if _, err := s.SetWorkspaceStatus(ctx, "nope", WorkspaceSuspended); !errors.Is(err, ErrNotFound) {
 				t.Errorf("suspend unknown: %v", err)
 			}
+			// Readiness: the controller's last look; ReadyAt is set once,
+			// the first time the door answers, and kept afterwards.
+			if w, _ := s.Workspace(ctx, "acme"); w.Readiness != nil || w.ReadyAt != nil {
+				t.Errorf("fresh workspace has readiness: %+v", w)
+			}
+			notYet := WorkspaceReadiness{Ready: false, CheckedAt: time.Now(), Checks: []ReadinessCheck{{Name: "certificate", OK: false, Detail: "issuing"}}}
+			if w, err := s.SetWorkspaceReadiness(ctx, "acme", notYet); err != nil || w.Readiness == nil || w.Readiness.Ready || w.ReadyAt != nil || len(w.Readiness.Checks) != 1 {
+				t.Errorf("readiness not yet: %+v %v", w, err)
+			}
+			ready := WorkspaceReadiness{Ready: true, CheckedAt: time.Now(), Checks: []ReadinessCheck{{Name: "certificate", OK: true}}}
+			w, err := s.SetWorkspaceReadiness(ctx, "acme", ready)
+			if err != nil || !w.Readiness.Ready || w.ReadyAt == nil {
+				t.Fatalf("readiness ready: %+v %v", w, err)
+			}
+			first := *w.ReadyAt
+			if w, _ = s.SetWorkspaceReadiness(ctx, "acme", notYet); w.Readiness.Ready || w.ReadyAt == nil || !w.ReadyAt.Equal(first) {
+				t.Errorf("ready_at must be kept once set: %+v", w)
+			}
+			if _, err := s.SetWorkspaceReadiness(ctx, "nope", ready); !errors.Is(err, ErrNotFound) {
+				t.Errorf("readiness of unknown: %v", err)
+			}
+			// A first owner's invitation may wait for readiness.
+			if w, err := s.SetWorkspaceOwnerInvitePending(ctx, "acme", " Ana@Acme.test "); err != nil || w.OwnerInvitePending != "ana@acme.test" {
+				t.Errorf("pending invite: %+v %v", w, err)
+			}
+			if w, err := s.SetWorkspaceOwnerInvitePending(ctx, "acme", ""); err != nil || w.OwnerInvitePending != "" {
+				t.Errorf("pending invite cleared: %+v %v", w, err)
+			}
 			// Objects of one workspace are invisible from another.
 			if _, err := s.TouchIdentity(ctx, "acme", Identity{Email: "ana@acme.test"}); err != nil {
 				t.Fatal(err)
@@ -1037,6 +1065,76 @@ func TestProjectsStore(t *testing.T) {
 			// Rekeying again moves nothing.
 			if moved, err := s.RekeyProject(ctx, DefaultWorkspace, "shop", id); err != nil || moved != 0 {
 				t.Errorf("second rekey: %d %v", moved, err)
+			}
+		})
+	}
+}
+
+// A plan's prices change by versions: a later version with its effective
+// date, the name answering the version in force, every version kept so an
+// old month is priced as it was.
+func TestPlanVersions(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			jan := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+			v1, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, EffectiveFrom: jan})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.04, EffectiveFrom: jan.AddDate(0, 1, 0)}); !errors.Is(err, ErrConflict) {
+				t.Errorf("create with a name in use: %v, want conflict (versions go through AddPlanVersion)", err)
+			}
+			if _, err := s.AddPlanVersion(ctx, Plan{Name: "nope", CPUHour: 1, EffectiveFrom: jan}); !errors.Is(err, ErrNotFound) {
+				t.Errorf("version of an unknown plan: %v", err)
+			}
+			if _, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.04, EffectiveFrom: jan}); !errors.Is(err, ErrConflict) {
+				t.Errorf("version not later than the last: %v, want conflict", err)
+			}
+			v2, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.04, MemoryGiBHour: 0.03, EffectiveFrom: jan.AddDate(0, 2, 0)})
+			if err != nil || v2.ID == v1.ID {
+				t.Fatalf("second version: %+v %v", v2, err)
+			}
+			// By name, the version in force (March is past); by id, that version.
+			if cur, err := s.GetPlan(ctx, "starter"); err != nil || cur.ID != v2.ID || cur.CPUHour != 0.04 {
+				t.Errorf("current by name = %+v %v", cur, err)
+			}
+			if old, err := s.GetPlan(ctx, v1.ID); err != nil || old.CPUHour != 0.02 {
+				t.Errorf("by id = %+v %v", old, err)
+			}
+			// A version for the future is not in force yet.
+			future, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.08, EffectiveFrom: time.Now().AddDate(1, 0, 0)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cur, _ := s.GetPlan(ctx, "starter"); cur.ID != v2.ID {
+				t.Errorf("a future version must not be in force: %+v", cur)
+			}
+			list, _ := s.ListPlans(ctx)
+			if len(list) != 1 || list[0].ID != v2.ID {
+				t.Errorf("list shows one row per name, the version in force: %+v", list)
+			}
+			versions, err := s.PlanVersions(ctx, "starter")
+			if err != nil || len(versions) != 3 || versions[0].ID != v1.ID || versions[2].ID != future.ID {
+				t.Errorf("versions = %+v %v", versions, err)
+			}
+			if _, err := s.PlanVersions(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("versions of unknown: %v", err)
+			}
+			// The version in force at a time.
+			if got := PlanAt(versions, jan.AddDate(0, 1, 15)); got == nil || got.ID != v1.ID {
+				t.Errorf("February is priced by the first version: %+v", got)
+			}
+			if got := PlanAt(versions, jan.AddDate(0, 3, 0)); got == nil || got.ID != v2.ID {
+				t.Errorf("April is priced by the second: %+v", got)
+			}
+			if got := PlanAt(versions, jan.AddDate(-1, 0, 0)); got == nil || got.ID != v1.ID {
+				t.Errorf("before every version, the earliest: %+v", got)
+			}
+			// The assignment follows the name: the version in force applies.
+			if wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter"); err != nil || wp.PlanName != "starter" {
+				t.Errorf("assign: %+v %v", wp, err)
 			}
 		})
 	}

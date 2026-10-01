@@ -11,4 +11,4 @@ processes:
         path: /data
   worker:                       # Dockerfile images need a command per extra process
     command: ["hello", "worker"]
-    size: shared-xs
+    size: shared-s

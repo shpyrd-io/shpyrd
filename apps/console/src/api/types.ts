@@ -46,14 +46,27 @@ export type WorkspaceSummary = {
   limits?: { projects?: number; instances?: number; cpu?: string; memory?: string; storage?: string };
   usage?: { projects: number; instances: number; cpu: string; memory: string; storage: string };
   owners: string[];
+  // What the controller last saw at the workspace's door, and when it
+  // first answered: before that moment a link to it leads nowhere.
+  readiness?: { ready: boolean; checkedAt: string; checks: { name: string; ok: boolean; detail?: string }[] };
+  readyAt?: string;
   createdAt: string;
 };
+
+// doorState says, in a word or two, whether a workspace's door answers:
+// "ready", the first check that does not pass, or "not looked at yet".
+export function doorState(w: WorkspaceSummary): { ready: boolean; text: string } {
+  if (!w.readiness) return { ready: false, text: "not looked at yet" };
+  if (w.readiness.ready) return { ready: true, text: "ready" };
+  const failing = w.readiness.checks.find((c) => !c.ok);
+  return { ready: false, text: failing ? `${failing.name}: ${failing.detail ?? "not yet"}` : "not ready" };
+}
 
 // What became of the first owner's invitation when a workspace was made.
 // `setPasswordLink` is the other way in for someone without a password:
 // where they choose one, good for a day.
 export type InviteOutcome = { applied: boolean; link?: string; expiresAt?: string; setPasswordLink?: string; emailed: boolean; mailError?: string; error?: string };
-export type CreatedWorkspace = WorkspaceSummary & { ownerInvitation?: InviteOutcome };
+export type CreatedWorkspace = WorkspaceSummary & { ownerInvitation?: InviteOutcome; ownerInvitationPending?: boolean };
 export type NewWorkspace = { slug: string; name?: string; address?: string; owner?: string; operatorOwned?: boolean; plan?: string };
 
 export type Plan = { id: string; name: string; currency: string; minMonthly: number };

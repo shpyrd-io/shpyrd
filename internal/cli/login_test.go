@@ -92,3 +92,73 @@ func TestBrowserLoginReportsARefusal(t *testing.T) {
 }
 
 func serverURL(r *http.Request) string { return "http://" + r.Host }
+
+// `shpyrd login --signup` is the device flow against the signup rather than
+// a workspace: the approval names the workspace the signup made, the CLI
+// checks the credential there and keeps it as the current session.
+func TestSignupLoginSignsInToTheNewWorkspace(t *testing.T) {
+	var polls atomic.Int32
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/signup/cli/device":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code": "dev-7", "user_code": "KLMN-PQRS",
+				"verification_uri":          serverURL(r) + "/",
+				"verification_uri_complete": serverURL(r) + "/?cli=KLMN-PQRS",
+				"expires_in":                600, "interval": 1,
+			})
+		case "/api/signup/cli/device/token":
+			if polls.Add(1) == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "shp_new", "email": "new@person.test", "expiresAt": time.Now().Add(time.Hour), "workspaceUrl": srv.URL})
+		case "/api/me":
+			// The new workspace: the credential works there.
+			if r.Header.Get("Authorization") != "Bearer shp_new" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"email": "new@person.test"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("HOME", t.TempDir())
+
+	var out bytes.Buffer
+	cmd := newLoginCmd(&globalFlags{})
+	cmd.SetOut(&out)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := signupLogin(ctx, cmd, &globalFlags{}, srv.URL+"/", &out, true); err != nil {
+		t.Fatalf("signupLogin: %v\n%s", err, out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "Your code: KLMN-PQRS") || !strings.Contains(text, "/?cli=KLMN-PQRS") || !strings.Contains(text, "is ready, and the CLI is signed in as new@person.test") {
+		t.Errorf("output:\n%s", text)
+	}
+	s := loadSessions()
+	norm, _ := normaliseURL(srv.URL)
+	if s.Current != norm || s.Sessions[norm] == nil || s.Sessions[norm].Token != "shp_new" || s.Sessions[norm].WhoAmI != "new@person.test" {
+		t.Errorf("sessions after signup = %+v (current %q)", s.Sessions, s.Current)
+	}
+}
+
+// Away from a terminal, `shpyrd login` with no URL explains the two flags
+// instead of asking.
+func TestLoginWithoutURLExplainsAwayFromATerminal(t *testing.T) {
+	cmd := newLoginCmd(&globalFlags{})
+	cmd.SetArgs([]string{})
+	cmd.SetIn(strings.NewReader(""))
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--url is required") || !strings.Contains(err.Error(), "--signup") {
+		t.Errorf("err = %v", err)
+	}
+}

@@ -3,7 +3,7 @@ processes:
   web:
     size: shared-m
   worker:
-    size: shared-xs
+    size: shared-s
 build:
   env:
     BP_GO_TARGETS: ./cmd/web:./cmd/worker

@@ -46,11 +46,33 @@ import {
   TabsTrigger,
 } from "@shpyrd/ui/components/tabs";
 import { api } from "@/api/api";
+import type { BillingLine } from "@/api/types";
 import { usePerms } from "@/lib/perms";
 import { Failed, Loading } from "../project/shared";
 
 // The usage of a month at the prices of the plan: this one so far, or
 // one that went by.
+// withSubtotals puts a subtotal after the lines of each project that has
+// more than one, in the order the server gave them (by project). Lines
+// without a project (the floor) get none.
+function withSubtotals(lines: BillingLine[]): (BillingLine | { project: string; subtotal: number })[] {
+  const out: (BillingLine | { project: string; subtotal: number })[] = [];
+  let group: BillingLine[] = [];
+  const flush = () => {
+    if (group.length > 1 && group[0].project) {
+      out.push({ project: group[0].project, subtotal: group.reduce((sum, g) => sum + g.amount, 0) });
+    }
+    group = [];
+  };
+  for (const l of lines) {
+    if (group.length && group[0].project !== l.project) flush();
+    out.push(l);
+    group.push(l);
+  }
+  flush();
+  return out;
+}
+
 export function Billing() {
   const [month, setMonth] = useState("");
   const billing = useQuery({ queryKey: ["billing", month], queryFn: () => api.billing(month || undefined) });
@@ -66,13 +88,15 @@ export function Billing() {
       <CardHeader>
         <CardTitle>Billing</CardTitle>
         <CardDescription>
-          {open
-            ? "Month-to-date estimate at the prices of the plan. No money is owed until the month closes."
-            : "The usage of the month, at the prices of the plan."}
+          {b.free
+            ? "Nothing to pay on this plan. What the workspace used this month, for your information."
+            : open
+              ? "Month-to-date estimate at the prices of the plan. No money is owed until the month closes."
+              : "The usage of the month, at the prices of the plan."}
         </CardDescription>
         <CardAction>
           <Stack direction="horizontal" align="center" gap="cozy">
-            {b.plan && <StatusBadge type="info">{b.plan} plan</StatusBadge>}
+            {b.plan && <StatusBadge type={b.free ? "success" : "info"}>{b.plan} plan{b.free ? ", free" : ""}</StatusBadge>}
             <Input type="month" size="sm" value={month || b.month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" className="w-40" />
           </Stack>
         </CardAction>
@@ -89,39 +113,53 @@ export function Billing() {
               <TableHead>Metric</TableHead>
               <TableHead className="text-right">Quantity</TableHead>
               <TableHead>Unit</TableHead>
-              <TableHead className="text-right">Price ({b.currency || "USD"})</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              {!b.free && <TableHead className="text-right">Price ({b.currency || "USD"})</TableHead>}
+              {!b.free && <TableHead className="text-right">Amount</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {b.lines.map((l, i) => (
+            {withSubtotals(b.lines).map((row, i) =>
+              "subtotal" in row ? (
+                // What a project came to this month, under its lines.
+                <TableRow key={`sub-${row.project}-${i}`} className="bg-muted/40">
+                  <TableCell colSpan={b.free ? 4 : 6} className="text-sm font-medium">
+                    {row.project}, this month
+                  </TableCell>
+                  {!b.free && <TableCell className="text-right font-mono text-sm font-medium">{money(row.subtotal)}</TableCell>}
+                </TableRow>
+              ) : (
               <TableRow key={i}>
-                <TableCell>{l.project ?? "-"}</TableCell>
-                <TableCell>{l.component}</TableCell>
+                <TableCell>{row.project ?? "-"}</TableCell>
+                <TableCell>{row.component}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {l.metric.replace(/_/g, " ")}
+                  {row.metric.replace(/_/g, " ")}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
-                  {l.quantity.toLocaleString("en", { maximumFractionDigits: 4 })}
+                  {row.quantity.toLocaleString("en", { maximumFractionDigits: 4 })}
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{l.unit}</TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {l.price.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {money(l.amount)}
-                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">{row.unit}</TableCell>
+                {!b.free && (
+                  <TableCell className="text-right font-mono text-xs">
+                    {row.price.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                  </TableCell>
+                )}
+                {!b.free && (
+                  <TableCell className="text-right font-mono text-xs">
+                    {money(row.amount)}
+                  </TableCell>
+                )}
               </TableRow>
-            ))}
+              ),
+            )}
           </TableBody>
           <TableFooter>
             <TableRow>
-              <TableCell colSpan={6}>{open ? `${b.month}, so far` : b.month}</TableCell>
+              <TableCell colSpan={b.free ? 4 : 6}>{open ? `${b.month}, so far` : b.month}</TableCell>
               <TableCell className="text-right font-mono">
-                {money(b.total)}
+                {b.free ? "nothing to pay" : money(b.total)}
               </TableCell>
             </TableRow>
-            {open && typeof b.projection === "number" && (
+            {!b.free && open && typeof b.projection === "number" && (
               <TableRow>
                 <TableCell colSpan={6} className="text-muted-foreground">At this pace, by the end of the month</TableCell>
                 <TableCell className="text-right font-mono text-muted-foreground">{money(b.projection)}</TableCell>

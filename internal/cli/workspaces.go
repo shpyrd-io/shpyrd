@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -33,12 +34,13 @@ to it. On a platform that hosts many (the "workspaces" capability), they create,
 list, suspend and resume workspaces and set their plans.
 
   shpyrd-ctl workspaces create acme --name "Acme Corp" --owner ana@acme.com --address acme.shpyrd.app
+  shpyrd-ctl workspaces status acme --wait 15m   # the checks behind the READY column
   shpyrd-ctl workspaces list
-  shpyrd-ctl workspaces plan acme --projects 10 --instances 20 --cpu 8 --memory 16Gi --storage 100Gi
+  shpyrd-ctl workspaces limits acme --projects 10 --instances 20 --cpu 8 --memory 16Gi --storage 100Gi
   shpyrd-ctl workspaces suspend acme
   shpyrd-ctl workspaces resume acme`,
 	}
-	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesListCmd(g), newWorkspacesInviteCmd(g), newWorkspacesLimitsCmd(g), newWorkspacesStatusCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesStatusCmd(g, "resume", store.WorkspaceActive))
+	cmd.AddCommand(newWorkspacesCreateCmd(g), newWorkspacesStatusCmd(g), newWorkspacesListCmd(g), newWorkspacesInviteCmd(g), newWorkspacesLimitsCmd(g), newWorkspacesSuspendResumeCmd(g, "suspend", store.WorkspaceSuspended), newWorkspacesSuspendResumeCmd(g, "resume", store.WorkspaceActive))
 	return cmd
 }
 
@@ -64,11 +66,18 @@ func requireWorkspaces(ctx context.Context, ac *appClient) error {
 func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 	var name, address, owner, plan string
 	var operator bool
+	var wait time.Duration
 	var limits limitFlags
 	cmd := &cobra.Command{
 		Use:   "create <slug>",
 		Short: "Create a workspace with its first owner",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a workspace: the row, its address and its first owner. The front door,
+the certificate and the public name follow through the controller, which records
+what it sees on the workspace (` + "`workspaces status`" + `). When the platform sends mail,
+the owner's invitation goes out once the door answers, so its link leads somewhere;
+otherwise the link is printed here, for you to pass on once the door answers.
+--wait stays until it does.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
 			slug := args[0]
@@ -97,20 +106,30 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			var created api.CreatedWorkspace
 			_ = json.Unmarshal(raw, &created)
 			ws := created.WorkspaceSummary
-			return g.print(cmd, created, func(out io.Writer) {
+			if err := g.print(cmd, created, func(out io.Writer) {
 				fmt.Fprintf(out, "Created workspace %s (%s) at %s\n", ws.Slug, ws.Name, ws.URL)
 				if operator {
-					fmt.Fprintln(out, "An operator workspace: every platform admin owns it. The front door and certificate follow within a minute.")
+					fmt.Fprintf(out, "An operator workspace: every platform admin owns it. The door follows in a few minutes: `shpyrd-ctl workspaces status %s`.\n", ws.Slug)
 					return
 				}
-				fmt.Fprintf(out, "%s is its first owner; the front door and certificate follow within a minute.\n", owner)
-				printOwnerInvitation(out, owner, ws.URL, created.OwnerInvitation)
+				fmt.Fprintf(out, "%s is its first owner. The door follows in a few minutes: `shpyrd-ctl workspaces status %s`.\n", owner, ws.Slug)
+				if created.OwnerInvitationPending {
+					fmt.Fprintf(out, "The invitation to %s goes out by email once the door answers.\n", owner)
+				} else {
+					printOwnerInvitation(out, owner, ws.URL, created.OwnerInvitation)
+				}
 				if ws.Plan != "" {
 					fmt.Fprintf(out, "Metered against the %s plan from now on.\n", ws.Plan)
 				} else {
 					fmt.Fprintf(out, "No billing plan yet: its usage is not priced until `shpyrd-ctl plans assign <plan> --workspace %s`.\n", ws.Slug)
 				}
-			})
+			}); err != nil {
+				return err
+			}
+			if wait > 0 {
+				return waitForWorkspace(ctx, cmd, g, ac, ws.Slug, wait)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "display name (default: the slug)")
@@ -118,8 +137,156 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&address, "address", "", "host of the workspace's dashboard; apps live one label under it (default: <slug>.<the platform's workspaces domain>)")
 	cmd.Flags().StringVar(&owner, "owner", "", "email of the workspace's first owner")
 	cmd.Flags().BoolVar(&operator, "operator", false, "one of the platform operator's own workspaces: never invoiced, owned by every platform admin (RFC-0078)")
+	cmd.Flags().DurationVar(&wait, "wait", 0, "stay until the door answers, at most this long (e.g. 15m); the exit code says whether it did")
 	limits.bind(cmd)
 	return cmd
+}
+
+// newWorkspacesStatusCmd is `shpyrd-ctl workspaces status <slug>`: what the
+// controller last saw at the workspace's door, one line per check, and an
+// exit code that says whether the door answers (for scripts). --wait polls
+// until it does or the time is up.
+func newWorkspacesStatusCmd(g *globalFlags) *cobra.Command {
+	var wait time.Duration
+	cmd := &cobra.Command{
+		Use:   "status <slug>",
+		Short: "Show whether a workspace's door answers: front door, certificate, public name, HTTPS",
+		Long: `A workspace exists the moment it is created; its address answers once the
+front door has an Ingress, the certificate is issued, the name is on public DNS
+and the door answers over HTTPS. The controller looks every few seconds while
+it is not ready and records what it saw. This shows that record, and exits 1
+while the door does not answer.
+
+  shpyrd-ctl workspaces status acme
+  shpyrd-ctl workspaces status acme --wait 15m
+  shpyrd-ctl workspaces status acme --json | jq .readiness`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := signalContext()
+			ac, err := newAppClient(g, g.progress(cmd))
+			if err != nil {
+				return err
+			}
+			if err := requireWorkspaces(ctx, ac); err != nil {
+				return err
+			}
+			if wait > 0 {
+				return waitForWorkspace(ctx, cmd, g, ac, args[0], wait)
+			}
+			ws, err := getWorkspace(ctx, ac, args[0])
+			if err != nil {
+				return err
+			}
+			if err := g.print(cmd, ws, func(out io.Writer) { printReadiness(out, ws) }); err != nil {
+				return err
+			}
+			if ws.Readiness == nil || !ws.Readiness.Ready {
+				return errors.New("the door does not answer yet")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&wait, "wait", 0, "poll until the door answers, at most this long (e.g. 15m)")
+	return cmd
+}
+
+func getWorkspace(ctx context.Context, ac *appClient, slug string) (*api.WorkspaceSummary, error) {
+	raw, err := serverRequest(ctx, ac.k, "GET", "api/workspaces/"+url.PathEscape(slug), nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var ws api.WorkspaceSummary
+	if err := json.Unmarshal(raw, &ws); err != nil {
+		return nil, err
+	}
+	return &ws, nil
+}
+
+// waitForWorkspace polls the workspace until its door answers or the time
+// is up, narrating each change of what the controller sees. Under --json
+// the final record is printed, nothing else.
+func waitForWorkspace(ctx context.Context, cmd *cobra.Command, g *globalFlags, ac *appClient, slug string, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	progress := g.progress(cmd)
+	last := ""
+	for {
+		ws, err := getWorkspace(ctx, ac, slug)
+		if err != nil {
+			return err
+		}
+		if line := readinessLine(ws); line != last {
+			fmt.Fprintln(progress, line)
+			last = line
+		}
+		if ws.Readiness != nil && ws.Readiness.Ready {
+			return g.print(cmd, ws, func(out io.Writer) { printReadiness(out, ws) })
+		}
+		if time.Now().After(deadline) {
+			_ = g.print(cmd, ws, func(out io.Writer) { printReadiness(out, ws) })
+			return fmt.Errorf("the door of %s does not answer after %s", slug, wait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+// readyColumn is the READY column of the list: "yes", or "not yet" with
+// the first check that does not pass.
+func readyColumn(ws *api.WorkspaceSummary) string {
+	if ws.Readiness != nil && ws.Readiness.Ready {
+		return "yes"
+	}
+	if ws.Readiness == nil {
+		return "not yet"
+	}
+	for _, c := range ws.Readiness.Checks {
+		if !c.OK {
+			return "not yet: " + c.Name
+		}
+	}
+	return "not yet"
+}
+
+// readinessLine is the one-line state of a door: "ready", or the first
+// check that does not pass and why.
+func readinessLine(ws *api.WorkspaceSummary) string {
+	if ws.Readiness == nil {
+		return "not looked at yet"
+	}
+	if ws.Readiness.Ready {
+		return "ready"
+	}
+	for _, c := range ws.Readiness.Checks {
+		if !c.OK {
+			return c.Name + ": " + firstNonEmpty(c.Detail, "not yet")
+		}
+	}
+	return "not ready"
+}
+
+func printReadiness(out io.Writer, ws *api.WorkspaceSummary) {
+	fmt.Fprintf(out, "Workspace %s at %s: %s\n", ws.Slug, firstNonEmpty(ws.URL, ws.Address), readinessLine(ws))
+	if ws.Readiness == nil {
+		fmt.Fprintln(out, "The controller has not looked at its door yet; it does within seconds of creation.")
+		return
+	}
+	if ws.ReadyAt != nil {
+		fmt.Fprintf(out, "The door first answered on %s.\n", ws.ReadyAt.Local().Format("Jan 2, 15:04"))
+	}
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "CHECK\tSTATE\tDETAIL")
+	for _, c := range ws.Readiness.Checks {
+		state := "ok"
+		if !c.OK {
+			state = "not yet"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.Name, state, c.Detail)
+	}
+	_ = tw.Flush()
+	fmt.Fprintf(out, "Looked at %s.\n", ws.Readiness.CheckedAt.Local().Format("Jan 2, 15:04:05"))
 }
 
 // printOwnerInvitation says how the first owner gets in: by the email
@@ -217,7 +384,7 @@ func newWorkspacesListCmd(g *globalFlags) *cobra.Command {
 
 func printWorkspaces(out io.Writer, list []api.WorkspaceSummary) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKSPACE\tNAME\tADDRESS\tSTATUS\tPLAN\tLIMITS\tOWNERS")
+	fmt.Fprintln(w, "WORKSPACE\tNAME\tADDRESS\tSTATUS\tREADY\tPLAN\tLIMITS\tOWNERS")
 	for _, ws := range list {
 		limits := "-"
 		if ws.Limits != nil {
@@ -229,7 +396,7 @@ func printWorkspaces(out io.Writer, list []api.WorkspaceSummary) {
 			owners = firstNonEmpty(owners, "(platform admins)")
 			plan = "(operator)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, ws.Address, ws.Status, plan, limits, owners)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ws.Slug, ws.Name, ws.Address, ws.Status, readyColumn(&ws), plan, limits, owners)
 	}
 	w.Flush()
 }
@@ -328,7 +495,7 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 	return cmd
 }
 
-func newWorkspacesStatusCmd(g *globalFlags, verb, status string) *cobra.Command {
+func newWorkspacesSuspendResumeCmd(g *globalFlags, verb, status string) *cobra.Command {
 	short := "Suspend a workspace: its hosts answer only a 'suspended' page, nothing is deleted"
 	if status == store.WorkspaceActive {
 		short = "Resume a suspended workspace"

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shpyrd-io/shpyrd/pkg/cliout"
+	"github.com/shpyrd-io/shpyrd/pkg/kexec"
 )
 
 // Session store (RFC-0052): a JSON file at ~/.shpyrd/sessions.json holds the
@@ -149,6 +151,8 @@ func newLoginCmd(g *globalFlags) *cobra.Command {
 		wsURL     string
 		token     string
 		noBrowser bool
+		signup    bool
+		signupURL string
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -178,12 +182,31 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			ctx := signalContext()
 			out := g.progress(cmd)
 			var expires time.Time
-			if wsURL == "" {
+			if wsURL == "" && !signup {
 				// Try to guess from --context if available.
 				if g.kubeCtx != "" {
 					return errors.New("--url is required: give the dashboard URL, e.g. https://shpyrd.oci.shpyrd.io")
 				}
-				return errors.New("--url is required: the workspace URL, e.g. https://acme.shpyrd.app")
+				// At a terminal, ask: an existing workspace, or a new
+				// account with its first workspace on shpyrd cloud.
+				choice, err := askLoginChoice(cmd.InOrStdin(), out)
+				if err != nil {
+					return err
+				}
+				switch choice {
+				case "":
+					return errors.New("--url is required: the workspace URL, e.g. https://acme.shpyrd.app (or --signup to create an account)")
+				case loginChoiceSignup:
+					signup = true
+				default:
+					wsURL = choice
+				}
+			}
+			if signup {
+				if token != "" || wsURL != "" {
+					return errors.New("--signup creates an account and a workspace: it takes neither --url nor --token")
+				}
+				return signupLogin(ctx, cmd, g, signupURL, out, noBrowser)
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -238,7 +261,88 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
+	cmd.Flags().BoolVar(&signup, "signup", false, "create an account and a first workspace on shpyrd cloud, in the browser; the CLI is signed in to it when it is ready")
+	cmd.Flags().StringVar(&signupURL, "signup-url", firstNonEmpty(os.Getenv("SHPYRD_SIGNUP_URL"), defaultSignupURL), "where the signup lives (or SHPYRD_SIGNUP_URL)")
 	return cmd
+}
+
+// defaultSignupURL is shpyrd cloud's signup.
+const defaultSignupURL = "https://signup.shpyrd.io"
+
+// loginChoiceSignup is what askLoginChoice answers for a new account.
+const loginChoiceSignup = "signup"
+
+// askLoginChoice asks a person at a terminal what they want when they ran
+// `shpyrd login` with no URL: the URL of a workspace they belong to, or a
+// new account. Away from a terminal it answers "" and the caller explains
+// the flags.
+func askLoginChoice(in io.Reader, out io.Writer) (string, error) {
+	if !kexec.StdinIsTerminal() {
+		return "", nil
+	}
+	fmt.Fprintln(out, "No workspace given. What do you want to do?")
+	fmt.Fprintln(out, "  1) Sign in to a workspace you belong to (its URL, like https://acme.shpyrd.app)")
+	fmt.Fprintln(out, "  2) Create an account and your first workspace on shpyrd cloud")
+	fmt.Fprint(out, "Choose 1 or 2: ")
+	reader := bufio.NewReader(in)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	switch strings.TrimSpace(line) {
+	case "2":
+		return loginChoiceSignup, nil
+	case "1":
+		fmt.Fprint(out, "Workspace URL: ")
+		url, err := reader.ReadString('\n')
+		if err != nil && url == "" {
+			return "", err
+		}
+		if url = strings.TrimSpace(url); url != "" {
+			return url, nil
+		}
+		return "", nil
+	default:
+		return "", errors.New("answer 1 or 2")
+	}
+}
+
+// signupLogin creates an account and a workspace from the terminal: the
+// signup gives the CLI a code, the browser opens the signup with it, the
+// person proves their email and names the workspace there, and when the
+// workspace's door answers the signup signs the CLI in to it. One signup,
+// two entrances.
+func signupLogin(ctx context.Context, cmd *cobra.Command, g *globalFlags, signupURL string, out io.Writer, noBrowser bool) error {
+	base := strings.TrimSuffix(strings.TrimSpace(signupURL), "/")
+	if base == "" {
+		return errors.New("--signup-url is empty")
+	}
+	fmt.Fprintf(out, "Creating an account at %s.\n", base)
+	approved, err := deviceFlow(ctx, base+"/api/signup/cli/device", base+"/api/signup/cli/device/token", out, noBrowser,
+		"Finish the signup in the browser: your email, a code we send it, your workspace's name. The CLI waits for the workspace's door to answer.")
+	if err != nil {
+		return err
+	}
+	if approved.WorkspaceURL == "" {
+		return errors.New("the signup approved the sign-in but named no workspace")
+	}
+	norm, err := normaliseURL(approved.WorkspaceURL)
+	if err != nil {
+		return err
+	}
+	if err := verifyToken(ctx, norm, approved.Token); err != nil {
+		return fmt.Errorf("the new workspace refused the credential: %w", err)
+	}
+	s := loadSessions()
+	s.Sessions[norm] = &loginSession{URL: norm, Token: approved.Token, SavedAt: time.Now(), WhoAmI: approved.Email, ExpiresAt: approved.ExpiresAt}
+	s.Current = norm
+	if err := s.save(); err != nil {
+		return fmt.Errorf("save session: %w", err)
+	}
+	return g.print(cmd, map[string]any{"url": norm, "user": approved.Email, "signedIn": true, "created": true}, func(w io.Writer) {
+		fmt.Fprintf(w, "Your workspace %s is ready, and the CLI is signed in as %s.\n", norm, approved.Email)
+		fmt.Fprintln(w, "Deploy your first project: `shpyrd deploy` in its folder. Your email has the way into the dashboard.")
+	})
 }
 
 // deviceStart is what the workspace answers when a browser sign-in
@@ -252,25 +356,38 @@ type deviceStart struct {
 	Interval                int    `json:"interval"`
 }
 
-// deviceApproval is the credential the approval minted.
+// deviceApproval is the credential the approval minted. WorkspaceURL is
+// set by the signup, which makes the workspace the credential is for.
 type deviceApproval struct {
-	Token     string    `json:"token"`
-	Email     string    `json:"email"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Token        string    `json:"token"`
+	Email        string    `json:"email"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	WorkspaceURL string    `json:"workspaceUrl,omitempty"`
 }
 
 // browserLogin runs the browser sign-in against a workspace: asks it for
 // a code, shows the person where to approve it, and polls until the
 // approval has turned into a token (or the code expires, or Ctrl-C).
 func browserLogin(ctx context.Context, wsURL string, out io.Writer, noBrowser bool) (*deviceApproval, error) {
+	approved, err := deviceFlow(ctx, wsURL+"/api/cli/device", wsURL+"/api/cli/device/token", out, noBrowser, "")
+	if err != nil && strings.Contains(err.Error(), "cannot start") {
+		return nil, fmt.Errorf("%w\n(pass --token to sign in with a token instead)", err)
+	}
+	return approved, err
+}
+
+// deviceFlow is the device flow (RFC 8628) against any pair of endpoints:
+// a workspace's own sign-in, or the signup's. `note` is said once the
+// browser opened, when there is more to do there than approve.
+func deviceFlow(ctx context.Context, startURL, pollURL string, out io.Writer, noBrowser bool, note string) (*deviceApproval, error) {
 	host, _ := os.Hostname()
 	body, _ := json.Marshal(map[string]string{"name": host})
 	var start deviceStart
-	if err := postJSON(ctx, wsURL+"/api/cli/device", body, &start); err != nil {
-		return nil, fmt.Errorf("cannot start the browser sign-in at %s: %w\n(pass --token to sign in with a token instead)", wsURL, err)
+	if err := postJSON(ctx, startURL, body, &start); err != nil {
+		return nil, fmt.Errorf("cannot start the browser sign-in at %s: %w", startURL, err)
 	}
 	if start.DeviceCode == "" || start.UserCode == "" {
-		return nil, fmt.Errorf("the workspace answered without a sign-in code; is %s a shpyrd workspace?", wsURL)
+		return nil, fmt.Errorf("%s answered without a sign-in code; is it a shpyrd server?", startURL)
 	}
 	link := firstNonEmpty(start.VerificationURIComplete, start.VerificationURI)
 	fmt.Fprintf(out, "Your code: %s\n", start.UserCode)
@@ -282,6 +399,9 @@ func browserLogin(ctx context.Context, wsURL string, out io.Writer, noBrowser bo
 		fmt.Fprintf(out, "Approve it in the browser (if nothing opened: %s)\n", link)
 	} else {
 		fmt.Fprintf(out, "Open %s and approve it.\n", link)
+	}
+	if note != "" {
+		fmt.Fprintln(out, note)
 	}
 	fmt.Fprint(out, "Waiting for the approval... ")
 	interval := time.Duration(firstPositive(start.Interval, 5)) * time.Second
@@ -299,9 +419,9 @@ func browserLogin(ctx context.Context, wsURL string, out io.Writer, noBrowser bo
 			return nil, errors.New("the code expired before it was approved; run `shpyrd login` again")
 		}
 		var approval deviceApproval
-		status, err := postJSONStatus(ctx, wsURL+"/api/cli/device/token", poll, &approval)
+		status, err := postJSONStatus(ctx, pollURL, poll, &approval)
 		if err != nil {
-			return nil, fmt.Errorf("cannot reach %s: %w", wsURL, err)
+			return nil, fmt.Errorf("cannot reach %s: %w", pollURL, err)
 		}
 		switch status.Error {
 		case "":

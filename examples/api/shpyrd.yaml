@@ -3,4 +3,4 @@ build:
   strategy: dockerfile
 processes:
   web:
-    size: shared-xs
+    size: shared-s

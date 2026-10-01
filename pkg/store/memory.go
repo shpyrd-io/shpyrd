@@ -248,6 +248,35 @@ func (m *Memory) SetWorkspaceStatus(_ context.Context, slug, status string) (*Wo
 	return &c, nil
 }
 
+func (m *Memory) SetWorkspaceReadiness(_ context.Context, slug string, r WorkspaceReadiness) (*Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(slug)
+	if err != nil {
+		return nil, err
+	}
+	rc := r
+	w.Readiness = &rc
+	if r.Ready && w.ReadyAt == nil {
+		t := m.now()
+		w.ReadyAt = &t
+	}
+	c := *w
+	return &c, nil
+}
+
+func (m *Memory) SetWorkspaceOwnerInvitePending(_ context.Context, slug, email string) (*Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(slug)
+	if err != nil {
+		return nil, err
+	}
+	w.OwnerInvitePending = strings.ToLower(strings.TrimSpace(email))
+	c := *w
+	return &c, nil
+}
+
 func (m *Memory) UpdateWorkspace(_ context.Context, slug, name string) (*Workspace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1469,29 +1498,89 @@ func (m *Memory) CreatePlan(_ context.Context, p Plan) (*Plan, error) {
 			return nil, ErrConflict
 		}
 	}
+	return m.insertPlan(p), nil
+}
+
+func (m *Memory) AddPlanVersion(_ context.Context, p Plan) (*Plan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, e := range m.billing().plans {
+		if e.Name != p.Name {
+			continue
+		}
+		found = true
+		if !p.EffectiveFrom.After(e.EffectiveFrom) {
+			return nil, ErrConflict
+		}
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	return m.insertPlan(p), nil
+}
+
+func (m *Memory) insertPlan(p Plan) *Plan {
 	p.ID, p.CreatedAt = newID(), m.now()
 	if p.Currency == "" {
 		p.Currency = "USD"
 	}
+	if p.EffectiveFrom.IsZero() {
+		p.EffectiveFrom = m.now()
+	}
 	m.billing().plans = append(m.billing().plans, p)
 	out := p
-	return &out, nil
+	return &out
 }
+
 func (m *Memory) ListPlans(_ context.Context) ([]Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]Plan(nil), m.billing().plans...), nil
+	all := append([]Plan(nil), m.billing().plans...)
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Name != all[j].Name {
+			return all[i].Name < all[j].Name
+		}
+		return all[i].EffectiveFrom.Before(all[j].EffectiveFrom)
+	})
+	return currentPlans(all, m.now()), nil
 }
-func (m *Memory) GetPlan(_ context.Context, nameOrID string) (*Plan, error) {
+
+func (m *Memory) GetPlan(ctx context.Context, nameOrID string) (*Plan, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, p := range m.billing().plans {
-		if p.ID == nameOrID || p.Name == nameOrID {
+		if p.ID == nameOrID {
 			out := p
+			m.mu.Unlock()
 			return &out, nil
 		}
 	}
-	return nil, ErrNotFound
+	m.mu.Unlock()
+	versions, err := m.PlanVersions(ctx, nameOrID)
+	if err != nil {
+		return nil, err
+	}
+	cur := PlanAt(versions, m.now())
+	if cur == nil {
+		return nil, ErrNotFound
+	}
+	return cur, nil
+}
+
+func (m *Memory) PlanVersions(_ context.Context, name string) ([]Plan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Plan
+	for _, p := range m.billing().plans {
+		if p.Name == name {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].EffectiveFrom.Before(out[j].EffectiveFrom) })
+	return out, nil
 }
 func (m *Memory) AssignPlan(ctx context.Context, ws, nameOrID string) (*WorkspacePlan, error) {
 	p, err := m.GetPlan(ctx, nameOrID)
