@@ -1,10 +1,10 @@
 # RFC-0007 Authentication
 
-**Status:** implemented (with gaps) — see Implementation status below
+**Status:** implemented (complete; the three steps live in RFC-0007, RFC-0014 and RFC-0058)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-09-30
 
 ## Summary
 
@@ -104,6 +104,10 @@ out by design.
   naming), so no Dex API client is needed and accounts survive disable/enable. Dashboard:
   provider buttons on the login page, session gate, user menu with sign-out, Users page.
   Not done: `shpyrd login` for the CLI (kubeconfig remains its identity) and steps 3.2/3.3.
+- 2026-09-30: closed. `shpyrd login` for developers landed with RFC-0052; stored OIDC
+  tokens are not needed (Implementation status). Steps 3.2 and 3.3 shipped as RFC-0014
+  (v0.9.45) and RFC-0058.
+
 - 2026-09-22: Admin token hardening. `shpyrd cluster token --disable|--enable` (refused
   unless a login provider is enabled and a platform-admin team has members; the server then
   refuses the token instead of switching authentication off), `shpyrd cluster dashboard`
@@ -118,5 +122,14 @@ out by design.
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
 
 - **Implemented elsewhere:** `shpyrd login` for developers landed with RFC-0052 (v0.9.61): a device flow against the workspace, approved with the dashboard session, so a developer never needs a kubeconfig.
-- **Not implemented:** Stored OIDC access/refresh tokens; sessions are identity-only with a 12 h idle / 7 day limit.
+- **Not needed, superseded:** stored OIDC access and refresh tokens. The text wanted them
+  for two things. Signing out at the issuer: the id_token is kept for exactly that, when
+  the issuer supports RP-initiated logout (RFC-0012). Ending access when the identity
+  provider refuses a person before their session runs out: that is deprovisioning, which
+  directories do by pushing the change (SCIM, RFC-0074), not by the relying party polling
+  a refresh token; until then, suspending or forgetting a person in shpyrd ends their
+  sessions and their tokens' effect at once (RFC-0033), and sessions are bounded by the
+  12 h idle / 7 day limits. Nothing in the platform calls the provider on a person's
+  behalf, so an access token would sit unused. The RFC is done; what remains of the idea
+  is RFC-0074's.
 - **Fixed:** 2026-09-25: the users API (`/api/users`) required only a session; it now requires the cluster.admin action (platform administrators), like every other admin route.

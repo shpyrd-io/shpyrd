@@ -34,7 +34,7 @@ declare what they depend on.
 | [0004](0004-dockerfile-builds.md) | Dockerfile builds (BuildKit) | implemented, gaps | |
 | [0005](0005-shell-and-one-off-commands.md) | Shell and one-off commands | implemented (CLI); browser terminal → 0026, gaps | |
 | [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041 | |
-| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users); 3.2 → 0014, 3.3 → 0012 + 0058, gaps | |
+| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users; 3.2 → 0014, 3.3 → 0012 + 0058; complete: `shpyrd login` with 0052, stored OIDC tokens not needed) | |
 | [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → 0043, supply chain → 0044, tokens → 0031, durable audit → 0025, gaps | |
 | [0009](0009-postgres-resource.md) | Postgres resource (CloudNativePG) | implemented; backups → 0038, pooling/rotation → 0039, gaps | |
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
@@ -147,7 +147,6 @@ an "Implementation status" section with the details; the short version:
 | 0003 | unattached resources in `projects info`; attach confirmation with var names; `Deleting` phase |
 | 0004 | a "build" catalog size; TTL on build Jobs |
 | 0005 | `shpyrd forward`; `shpyrd run --process` |
-| 0007 | stored OIDC tokens (`shpyrd login` for developers landed with 0052) |
 | 0008 | admin-only domains; audit export and cluster-level listing; session rotation; API rate limit; backup-exclusion label |
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |

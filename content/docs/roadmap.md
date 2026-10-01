@@ -72,14 +72,14 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Sign-in with accounts (Dex, local users) | [RFC-0007](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0007-authentication.md) | done (`shpyrd login` for developers; stored OIDC tokens still missing) |
+| Sign-in with accounts (Dex, local users) | [RFC-0007](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0007-authentication.md) | done (`shpyrd login` for developers with RFC-0052; nothing missing) |
 | Teams, roles, RBAC mirror, isolation, audit | [RFC-0008](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0008-teams-roles-and-security.md) | done (admin-only domains; audit export; session rotation; API rate limit still missing) |
 | Sign-in experience: shpyrd's own sign-in page, local sign-in, sign-out at the issuer | [RFC-0012](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0012-sign-in-experience.md) | done |
 | External identity providers: Okta and any OIDC issuer, GitHub and Google | [RFC-0058](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0058-external-identity-providers.md) | done (`auth connector add` message without auth-local still missing) |
 | kubectl through the platform's sign-in (`shpyrd auth kubectl`) | [RFC-0062](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0062-kubectl-through-platform-sign-in.md) | proposal |
 | Dashboard access zones: public dashboard with intranet-only areas | [RFC-0063](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0063-dashboard-access-zones.md) | proposal |
 | Email delivery: the `mail` extension, `shpyrd-ctl mail set\|test`, invitations emailed | [RFC-0013](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0013-email-delivery.md) | done (v0.9.13) (SMTP only; HTTP providers and bounce handling still missing) |
-| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | proposal |
+| Account lifecycle: reset, verification, lockout (invitations shipped with RFC-0033 in v0.9.13) | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | done (v0.9.45) |
 | Signed-in detection on identified apps: a signed-in person is identified from the first page, however they arrive | [RFC-0068](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0068-signed-in-detection-on-identified-apps.md) | proposal |
 | Embedded git: a repository per project the platform keeps — deploys commit, pushes deploy, agents work on it | [RFC-0069](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0069-embedded-git.md) | proposal |
 | Internal names: `http://crm.internal` between projects, with a service identity | [RFC-0070](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0070-internal-names.md) | proposal |
