@@ -54,8 +54,7 @@ certificate is issued as soon as DNS resolves here.
 			if err := json.Unmarshal(raw, &res); err != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
-			printDomains(cmd.OutOrStdout(), &res)
-			return nil
+			return g.print(cmd, res, func(w io.Writer) { printDomains(w, &res) })
 		},
 	}
 	var noWait bool
@@ -65,7 +64,7 @@ certificate is issued as soon as DNS resolves here.
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			name, err := resolveAppName(appName)
 			if err != nil {
 				return err
@@ -92,7 +91,7 @@ certificate is issued as soon as DNS resolves here.
 			fmt.Fprintln(out)
 			if noWait {
 				fmt.Fprintf(out, "The certificate is issued once %s resolves here; follow it with `shpyrd domains list`.\n", host)
-				return nil
+				return g.print(cmd, res, silent)
 			}
 			fmt.Fprintf(out, "Waiting for %s to resolve here and for its certificate (Ctrl-C to stop waiting; nothing is lost)...", host)
 			deadline := time.Now().Add(30 * time.Minute)
@@ -101,7 +100,7 @@ certificate is issued as soon as DNS resolves here.
 				select {
 				case <-ctx.Done():
 					fmt.Fprintln(out)
-					return nil
+					return g.print(cmd, res, silent)
 				case <-time.After(10 * time.Second):
 				}
 				raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+name+"/domains", nil, "")
@@ -117,7 +116,7 @@ certificate is issued as soon as DNS resolves here.
 					}
 					if d.DNS == "ok" && (d.Certificate == "ready" || d.Certificate == "wildcard") {
 						fmt.Fprintf(out, " done.\n\nhttps://%s serves %s.\n", host, name)
-						return nil
+						return g.print(cmd, res, silent)
 					}
 					if d.Certificate == "failed" {
 						fmt.Fprintln(out)
@@ -155,8 +154,9 @@ certificate is issued as soon as DNS resolves here.
 			if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name+"/domains/"+strings.ToLower(args[0]), nil, ""); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s from %s (its certificate goes with it).\n", strings.ToLower(args[0]), name)
-			return nil
+			return g.print(cmd, map[string]string{"project": name, "host": strings.ToLower(args[0])}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed %s from %s (its certificate goes with it).\n", strings.ToLower(args[0]), name)
+			})
 		},
 	}
 	for _, c := range []*cobra.Command{list, add, rm} {

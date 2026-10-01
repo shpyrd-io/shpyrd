@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -93,29 +94,31 @@ to; over a kubeconfig it is the default one unless --workspace names another.
 				vars = res.Vars
 			} else {
 				sec := &corev1.Secret{}
-				if err := ac.c.Get(ctx, globalsKey(workspace), sec); err != nil {
-					if apierrors.IsNotFound(err) {
-						fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
-						return nil
-					}
+				if err := ac.c.Get(ctx, globalsKey(workspace), sec); err != nil && !apierrors.IsNotFound(err) {
 					return err
+				} else if err == nil {
+					vars = configvars.List(sec)
 				}
-				vars = configvars.List(sec)
 			}
-			if len(vars) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
-				return nil
+			if vars == nil {
+				vars = []configvars.Var{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tUPDATED")
-			for _, v := range vars {
-				when := "-"
-				if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
-					when = age(metav1.NewTime(t))
+			return g.print(cmd, map[string]any{"vars": vars}, func(w io.Writer) {
+				if len(vars) == 0 {
+					fmt.Fprintln(w, "no global config vars set")
+					return
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", v.Name, when)
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tUPDATED")
+				for _, v := range vars {
+					when := "-"
+					if t, err := time.Parse(time.RFC3339, v.UpdatedAt); err == nil {
+						when = age(metav1.NewTime(t))
+					}
+					fmt.Fprintf(tw, "%s\t%s\n", v.Name, when)
+				}
+				_ = tw.Flush()
+			})
 		},
 	})
 	return cmd
@@ -157,11 +160,12 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map
 		for _, v := range res.Vars {
 			names = append(names, v.Name)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Global config vars: %s\n", firstNonEmpty(strings.Join(names, ", "), "(none)"))
-		if res.Projects > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "Releasing the change to %d project(s)...\n", res.Projects)
-		}
-		return nil
+		return g.print(cmd, res, func(w io.Writer) {
+			fmt.Fprintf(w, "Global config vars: %s\n", firstNonEmpty(strings.Join(names, ", "), "(none)"))
+			if res.Projects > 0 {
+				fmt.Fprintf(w, "Releasing the change to %d project(s)...\n", res.Projects)
+			}
+		})
 	}
 	sec := &corev1.Secret{}
 	create := false
@@ -193,15 +197,14 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map
 	if len(unset) > 0 {
 		ac.auditCluster(ctx, "globals.unset", "global config vars", configDetail(nil, unset))
 	}
-	out := cmd.OutOrStdout()
-	names := make([]string, 0, len(configvars.List(sec)))
-	for _, v := range configvars.List(sec) {
+	vars := configvars.List(sec)
+	names := make([]string, 0, len(vars))
+	for _, v := range vars {
 		names = append(names, v.Name)
 	}
-	fmt.Fprintf(out, "Global config vars: %s\n", firstNonEmpty(strings.Join(names, ", "), "(none)"))
+	n := 0
 	var apps shpyrdv1.AppList
 	if err := ac.c.List(ctx, &apps); err == nil {
-		n := 0
 		want := workspace
 		if want == "" {
 			want = "default"
@@ -211,9 +214,11 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map
 				n++
 			}
 		}
+	}
+	return g.print(cmd, api.GlobalsResponse{Vars: vars, Projects: n}, func(out io.Writer) {
+		fmt.Fprintf(out, "Global config vars: %s\n", firstNonEmpty(strings.Join(names, ", "), "(none)"))
 		if n > 0 {
 			fmt.Fprintf(out, "Releasing the change to %d project(s)...\n", n)
 		}
-	}
-	return nil
+	})
 }

@@ -36,6 +36,10 @@ func (g *globalFlags) print(cmd *cobra.Command, v any, human func(w io.Writer)) 
 	return g.out.Print(cmd.OutOrStdout(), v, human)
 }
 
+// silent is the text form of a command that already narrated what it did
+// on the way: under --json only the result prints.
+func silent(io.Writer) {}
+
 // progress is where a command narrates: stdout, or stderr under --json.
 func (g *globalFlags) progress(cmd *cobra.Command) io.Writer {
 	return g.out.Progress(cmd.OutOrStdout(), cmd.ErrOrStderr())
