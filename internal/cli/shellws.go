@@ -9,10 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/term"
@@ -220,14 +218,8 @@ func (a *appClient) bridge(ctx context.Context, slug, ticket, instance string, q
 		}
 	}
 	sendSize()
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
-	go func() {
-		for range winch {
-			sendSize()
-		}
-	}()
+	stopResize := watchResize(sendSize) // per OS: resize_unix.go, resize_windows.go
+	defer stopResize()
 
 	// stdin → binary frames. Piped input that reaches EOF is reported with
 	// an eof frame, once the session is open, so the remote command sees

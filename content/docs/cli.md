@@ -5,6 +5,17 @@ description: Every shpyrd command and its flags.
 
 `shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.app` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`, `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`. {% .lead %}
 
+## For scripts and agents
+
+Every command takes `--json`: the result is printed as one JSON document on stdout and nothing else (progress and hints go to stderr), with the shapes the workspace API uses, so a script or an agent reads it instead of parsing a table. `--jq <expression>` filters that document the way `gh --jq` does: strings print raw, everything else as compact JSON. Interactive commands (`shell`, `run`, `pg psql`, `redis cli`, `logs`) stream as they always did.
+
+```sh
+shpyrd projects list --json
+shpyrd projects list --jq '.[].slug'
+shpyrd releases --project shop --jq '.[-1].number'
+shpyrd deploy --json | jq .release
+```
+
 ## Signing in
 
 | Command | What it does |

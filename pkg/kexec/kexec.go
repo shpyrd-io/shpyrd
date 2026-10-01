@@ -11,9 +11,7 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
@@ -224,19 +222,7 @@ type sizeQueue struct {
 func newSizeQueue() *sizeQueue {
 	q := &sizeQueue{ch: make(chan remotecommand.TerminalSize, 1), done: make(chan struct{})}
 	q.push()
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGWINCH)
-	go func() {
-		defer signal.Stop(sig)
-		for {
-			select {
-			case <-sig:
-				q.push()
-			case <-q.done:
-				return
-			}
-		}
-	}()
+	go q.watch() // how the OS tells us the terminal changed size: kexec_resize_*.go
 	return q
 }
 
