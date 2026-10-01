@@ -59,9 +59,9 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Item | RFC | Status |
 | --- | --- | --- |
 | Structured (JSON) logs in the viewer and CLI | [RFC-0021](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0021-structured-logs.md) | ready to implement |
-| Log agent: Vector on every node, project/process/instance labels, bounded node logs | [RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md) | done (NetworkPolicy for logs-system; console sink off on cloud still missing) |
+| Log agent: Vector on every node, project/process/instance labels, bounded node logs | [RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md) | done |
 | Log storage and history (Loki as an add-on, `--since`) | [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md) | proposal |
-| Log drains (syslog, HTTPS) to any provider, per project or cluster-wide | [RFC-0023](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0023-log-drains.md) | done (`drain.failing` audit event still missing) |
+| Log drains (syslog, HTTPS) to any provider, per project or cluster-wide | [RFC-0023](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0023-log-drains.md) | done |
 | Application metrics v2 (per instance, aggregation, totals) | [RFC-0027](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0027-application-metrics-v2.md) | ready to implement |
 | OpenTelemetry collector and export | [RFC-0029](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0029-opentelemetry.md) | proposal |
 | Tracing backend (Jaeger) and a Traces tab | [RFC-0056](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0056-tracing-backend.md) | ready to implement |

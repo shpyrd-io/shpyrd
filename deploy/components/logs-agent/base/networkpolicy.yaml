@@ -1,0 +1,38 @@
+# What the agent may talk to (RFC-0022a, settled by RFC-0023). Out: the
+# drains' receivers, on the internet or in a platform namespace (an
+# in-cluster Loki), DNS, and the API server for pod metadata; never a
+# project's pods, and never the cloud's instance metadata service, since a
+# drain's URL is written by a workspace admin (RFC-0035). In: the platform's
+# server reading the delivery counters, Prometheus, and the nodes for the
+# readiness probe. Project pods keep no log egress of their own.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vector
+  namespace: logs-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: shpyrd.io/project
+                operator: DoesNotExist
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["${SHPYRD_POD_CIDR}"]
+      ports:
+        - port: 8686
+        - port: 9598
+  egress:
+    - to:
+        - namespaceSelector:
+            matchExpressions:
+              - key: shpyrd.io/project
+                operator: DoesNotExist
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["${SHPYRD_POD_CIDR}", "169.254.0.0/16"]

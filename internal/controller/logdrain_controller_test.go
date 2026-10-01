@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -9,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,6 +20,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
@@ -241,5 +246,104 @@ func TestLogDrainWithoutAgent(t *testing.T) {
 	_ = c.Get(context.Background(), client.ObjectKeyFromObject(drain), drain)
 	if drain.Status.Phase != shpyrdv1.DrainPending || !strings.Contains(drain.Status.Message, "logs-agent") {
 		t.Errorf("status without agent = %+v", drain.Status)
+	}
+}
+
+// vectorMetrics answers Vector's metrics endpoint with the counters it is
+// given: sent and errs are read on every request.
+type vectorMetrics struct{ sent, errs int64 }
+
+func (m *vectorMetrics) RoundTrip(*http.Request) (*http.Response, error) {
+	body := fmt.Sprintf(`vector_component_sent_events_total{component_id="drain_app_shop_dd_sink",component_kind="sink"} %d
+vector_component_errors_total{component_id="drain_app_shop_dd_sink",component_kind="sink",error_type="request_failed"} %d
+`, m.sent, m.errs)
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+// A receiver failing for ten checks in a row is one drain.failing entry in
+// the project's audit trail; lines flowing again reset the count.
+func TestLogDrainFailingAudit(t *testing.T) {
+	ctx := context.Background()
+	drain := &shpyrdv1.LogDrain{ObjectMeta: metav1.ObjectMeta{Name: "dd", Namespace: "app-shop"}, Spec: shpyrdv1.LogDrainSpec{URL: "https://intake.example.com/v1"}}
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	r, c := newDrainReconciler(t, drain, app, vectorDaemonSet())
+	r.Recorder = record.NewFakeRecorder(64)
+	metrics := &vectorMetrics{}
+	r.HTTP = &http.Client{Transport: metrics}
+	events := k8sfake.NewSimpleClientset()
+	r.Kube = events
+
+	poll := func() shpyrdv1.LogDrainStatus {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(drain)}); err != nil {
+			t.Fatal(err)
+		}
+		got := &shpyrdv1.LogDrain{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(drain), got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Status
+	}
+	audited := func() []audit.Entry {
+		t.Helper()
+		entries, err := audit.List(ctx, events, audit.AppRefIn("app-shop", "shop"), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entries
+	}
+
+	for i := 1; i < drainFailingPolls; i++ {
+		metrics.errs++
+		if st := poll(); st.Phase != shpyrdv1.DrainFailing || int(st.FailingPolls) != i {
+			t.Fatalf("check %d: status = %+v", i, st)
+		}
+	}
+	if n := len(audited()); n != 0 {
+		t.Fatalf("audited before the tenth check: %d entries", n)
+	}
+	metrics.errs++
+	if st := poll(); int(st.FailingPolls) != drainFailingPolls {
+		t.Fatalf("tenth check: status = %+v", st)
+	}
+	entries := audited()
+	if len(entries) != 1 {
+		t.Fatalf("audit entries after the tenth check = %+v", entries)
+	}
+	e := entries[0]
+	if e.Action != "drain.failing" || e.Actor != "platform" || e.Via != "controller" || e.Target != "dd -> https://intake.example.com/v1" || !strings.Contains(e.Detail, "for 5m0s") {
+		t.Errorf("entry = %+v", e)
+	}
+	// Still failing: the count goes on, the entry is not repeated.
+	metrics.errs++
+	if st := poll(); int(st.FailingPolls) != drainFailingPolls+1 {
+		t.Errorf("eleventh check: status = %+v", st)
+	}
+	if n := len(audited()); n != 1 {
+		t.Errorf("audit entries after the eleventh check: %d", n)
+	}
+	// Lines flow again: active, count reset.
+	metrics.sent = 7
+	if st := poll(); st.Phase != shpyrdv1.DrainActive || st.FailingPolls != 0 {
+		t.Errorf("after delivery: status = %+v", st)
+	}
+}
+
+// A cluster drain's entry goes to the cluster's trail.
+func TestLogDrainFailingAuditCluster(t *testing.T) {
+	ctx := context.Background()
+	drain := &shpyrdv1.LogDrain{ObjectMeta: metav1.ObjectMeta{Name: "siem", Namespace: "shpyrd-system"}, Spec: shpyrdv1.LogDrainSpec{URL: "https://siem.example.com/"}}
+	r, _ := newDrainReconciler(t, drain, vectorDaemonSet())
+	r.Recorder = record.NewFakeRecorder(64)
+	r.Kube = k8sfake.NewSimpleClientset()
+	drain.Status.FailingPolls = drainFailingPolls
+	drain.Status.Message = "3 delivery errors, nothing sent since the last check"
+	r.auditFailing(ctx, drain)
+	entries, err := audit.List(ctx, r.Kube, audit.ClusterRef("shpyrd-system"), 0)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cluster entries = %+v, %v", entries, err)
+	}
+	if entries[0].Action != "drain.failing" || entries[0].Target != "siem -> https://siem.example.com/" {
+		t.Errorf("entry = %+v", entries[0])
 	}
 }

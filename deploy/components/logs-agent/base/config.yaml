@@ -1,8 +1,9 @@
 # Vector configuration for shpyrd (RFC-0022a).
 #
 # Pipeline: kubernetes_logs source -> remap (filter, label, parse JSON) ->
-# shpyrd_logs transform -> console sink (dev) + drain sinks (added by the
-# controller from LogDrain objects, RFC-0023).
+# shpyrd_enrich transform -> drain sinks (added by the controller from
+# LogDrain objects, RFC-0023), plus the console sink of console.yaml on a
+# local cluster.
 #
 # Hot path for drain sinks: the controller writes a ConfigMap
 # vector-drains in logs-system and Vector reloads it via inotify.
@@ -39,16 +40,20 @@ data:
         type: remap
         inputs: [kubernetes_logs]
         source: |
-          # Core shpyrd labels from the pod annotations and labels.
+          # Core shpyrd labels from the pod annotations and labels. A
+          # missing label reads as null (get! cannot fail on a literal
+          # path, so no ?? here: VRL refuses one on an infallible call).
+          labels = object!(.kubernetes.pod_labels)
           # RFC-0076: prefer the human-readable slug label; fall back to the
           # shpyrd.io/app label (which equals the App's name = the short id).
-          .project   = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/project"]) ??
-                       get!(object!(.kubernetes.pod_labels), ["shpyrd.io/app"])
-          .process   = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/process"])
+          .project   = get!(labels, ["shpyrd.io/project"])
+          if .project == null { .project = get!(labels, ["shpyrd.io/app"]) }
+          .process   = get!(labels, ["shpyrd.io/process"])
           # The namespace tells projects of different workspaces apart
           # (RFC-0033): drains select on it, never on the project name alone.
           .namespace = .kubernetes.pod_namespace
-          .workspace = get!(object!(.kubernetes.pod_labels), ["shpyrd.io/workspace"]) ?? "default"
+          .workspace = get!(labels, ["shpyrd.io/workspace"])
+          if .workspace == null { .workspace = "default" }
           .instance  = string(get!(object!(.kubernetes.pod_annotations), ["shpyrd.io/instance"])) ?? .process
           .pod       = .kubernetes.pod_name
 
@@ -89,9 +94,13 @@ data:
         type: prometheus_exporter
         inputs: [internal_metrics]
         address: 0.0.0.0:9598
-      # Development: log to stdout of the Vector pod so `kubectl logs -n
-      # logs-system daemonset/vector` shows the enriched stream.
-      # In production with drains this sink can be disabled.
+  # A file of its own, so the cloud profiles can leave it out: the enriched
+  # stream on the agent's own stdout, where `kubectl logs -n logs-system
+  # daemonset/vector` shows the pipeline at work on a local cluster. In
+  # production it would only double every project's lines into the node's
+  # log store.
+  console.yaml: |
+    sinks:
       console:
         type: console
         inputs: [shpyrd_enrich]

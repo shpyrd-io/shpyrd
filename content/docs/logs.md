@@ -27,6 +27,8 @@ Lines that are JSON get `level` and `msg` promoted and the rest kept in `fields`
 
 **Bounded on the node.** Each container keeps at most 20 MiB of logs on disk (two files of 10 MiB, rotated by the kubelet), so an application logging at full speed cannot fill a node. History beyond that lives wherever you drain it.
 
+**Fenced in.** A network policy lets the agent reach the drains' receivers (on the internet or in a platform namespace), DNS and the API server, and nothing in a project; only the platform reads its counters. On a local cluster the enriched stream is also written to the agent's own pod log (`kubectl logs -n logs-system daemonset/vector`), to see the pipeline at work; the cloud profiles leave that out.
+
 ## Log drains
 
 A drain forwards lines as they are written ([RFC-0023](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0023-log-drains.md)). Two kinds of receiver:
@@ -50,7 +52,7 @@ shpyrd drains list --project shop
 shpyrd drains remove in-logs-betterstack-com --project shop
 ```
 
-The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. The pages show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` event visible in the project's activity.
+The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. The pages show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` warning event on the drain, and after five minutes of failed checks a `drain.failing` entry in the project's activity (the cluster's, for a workspace or cluster drain).
 
 {% callout title="Storage and history" %}
 Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md), an optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.

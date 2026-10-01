@@ -154,8 +154,6 @@ an "Implementation status" section with the details; the short version:
 | 0011 | "pods" in the logs-agent description |
 | 0013 | HTTP provider adapters (SES API, Resend, Postmark); bounce handling; last test result on the card |
 | 0019 | zero-downtime rollout test; probe message in failing status |
-| 0022a | NetworkPolicy for logs-system; console sink off on cloud |
-| 0023 | `drain.failing` audit event |
 | 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; needs the CLI browser sign-in of 0052) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |

@@ -1,0 +1,27 @@
+# Cloud profile overlay for the logs-agent component: no console sink. On a
+# local cluster the sink shows the enriched stream in the agent's own pod
+# log; in production it would only double every project's lines into the
+# node's log store. The key leaves the ConfigMap and the file the arguments.
+resources:
+  - ../../../components/logs-agent/base
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: vector
+    patch: |
+      - op: remove
+        path: /data/console.yaml
+  - target:
+      kind: DaemonSet
+      name: vector
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /etc/vector/vector.yaml
+          - --config
+          - /etc/vector/drains/drains.yaml
+          - --watch-config
+          - --dangerously-allow-env-var-interpolation

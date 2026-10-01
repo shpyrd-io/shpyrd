@@ -435,7 +435,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := rec.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("app controller: %w", err)
 	}
-	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace}
+	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace, Kube: k.Kube}
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
 	}

@@ -57,6 +57,10 @@ type LogDrainStatus struct {
 	// Errors counts delivery errors since the agent started.
 	// +optional
 	Errors int64 `json:"errors,omitempty"`
+	// FailingPolls counts the consecutive status checks that found errors
+	// and nothing delivered; back to zero when lines flow again.
+	// +optional
+	FailingPolls int32 `json:"failingPolls,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

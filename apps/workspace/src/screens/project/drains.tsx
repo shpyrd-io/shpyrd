@@ -45,7 +45,10 @@ export function Drains({ project, perms }: { project: Project; perms: Perms }) {
         <Alert variant="warning">
           <AlertTitle>Nothing is forwarded</AlertTitle>
           <AlertDescription>
-            The logs-agent extension is off. Drains start sending once the operator runs <InlineCode>shpyrd extensions enable logs-agent</InlineCode>.
+            The logs-agent extension is off. Drains start sending once the operator runs <InlineCode>shpyrd extensions enable logs-agent</InlineCode>.{" "}
+            <a href="https://shpyrd.io/docs/logs#the-log-agent" target="_blank" rel="noreferrer" className="font-medium underline underline-offset-4">
+              Read about the log agent
+            </a>
           </AlertDescription>
         </Alert>
       )}
