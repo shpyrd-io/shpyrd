@@ -143,3 +143,45 @@ func TestSignupPasswordActivatesTheAccount(t *testing.T) {
 		t.Error("without local sign-in the password cannot be set")
 	}
 }
+
+// A sign-in ticket opens a session at the door it was minted for, once:
+// the signup hands it to the person it just made a workspace for, so no
+// login form follows. Used again, or at another door, it is refused.
+func TestSignInTicketOpensTheDoorOnce(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	ctx := context.Background()
+	link, err := s.signInTicketHook(ctx, "acme", "New@Person.test")
+	if err != nil || !strings.Contains(link, "https://acme.shpyrd.test/api/auth/signup-ticket?code=") {
+		t.Fatalf("ticket = %q %v", link, err)
+	}
+	redeem := func(host string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", link, nil)
+		req.Host = host
+		req.Header.Set("X-Forwarded-Proto", "https")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	// At another door: refused, and the code is spent (taken once).
+	rec := redeem("example.test")
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "another+workspace") {
+		t.Fatalf("another door: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	// A fresh ticket at its own door: a session, and the person recorded.
+	link, _ = s.signInTicketHook(ctx, "acme", "new@person.test")
+	rec = redeem("acme.shpyrd.test")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
+		t.Fatalf("own door: %d %s %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	if len(rec.Result().Cookies()) == 0 {
+		t.Error("no session cookie set")
+	}
+	if person, err := s.store.GetIdentity(ctx, "acme", "new@person.test"); err != nil || person == nil {
+		t.Errorf("the person is recorded by the sign-in: %+v %v", person, err)
+	}
+	// Once only.
+	rec = redeem("acme.shpyrd.test")
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "login_error=") {
+		t.Fatalf("second use: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+}
