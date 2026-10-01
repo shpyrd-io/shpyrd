@@ -22,7 +22,7 @@ import { useTheme } from "@shpyrd/ui/lib/theme";
 import { find, navigation } from "@shpyrd/content/navigation";
 import * as site from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
-import { sectionsLive } from "@/lib/sections";
+import { sectionsLive, signInLive } from "@/lib/sections";
 import { DiscordMark, GitHubMark } from "@/components/marks";
 
 // Where the code is, and where the community talks; the header and the foot
@@ -244,13 +244,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 onClick={() => setTheme(next[theme])}
               />
               {/* Back to the dashboard, for whoever has a workspace already.
-                  TODO: it goes nowhere yet; each workspace has its own address,
-                  and where "Sign in" lands is still to be decided. */}
-              <Button variant="outline" asChild className="ml-2">
-                <a href="#" onClick={(event) => event.preventDefault()}>
-                  Sign in
-                </a>
-              </Button>
+                  Hidden until it has somewhere to go (src/lib/sections.ts). */}
+              {signInLive && (
+                <Button variant="outline" asChild className="ml-2">
+                  <a href="#" onClick={(event) => event.preventDefault()}>
+                    Sign in
+                  </a>
+                </Button>
+              )}
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">
