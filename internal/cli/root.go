@@ -73,7 +73,7 @@ func New() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "shpyrd",
 		Short:         "Opensource Cloud PaaS",
-		Long:          "shpyrd manages applications and agents from one place, from deploy to monitoring: cluster bootstrap, buildpack builds, releases, config vars, logs and metrics on Kubernetes.",
+		Long:          "shpyrd manages applications and agents from one place, from deploy to monitoring.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -91,6 +91,7 @@ func New() *cobra.Command {
 	root.PersistentFlags().StringVar(&g.kubeCtx, "context", "", "kubeconfig context to use")
 	root.PersistentFlags().BoolVarP(&g.verbose, "verbose", "v", false, "verbose output")
 	root.CompletionOptions.HiddenDefaultCmd = true
+	root.SetHelpTemplate(rootHelpTemplate)
 
 	root.AddCommand(newClusterCmd(g))
 	root.AddCommand(newAppsCmd(g))
@@ -169,3 +170,16 @@ func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) 
 		}
 	}
 }
+
+// agentDocsURL is the whole CLI as one text file, for LLMs and agents that
+// drive shpyrd on a person's behalf.
+const agentDocsURL = "https://shpyrd.io/llms/cli.txt"
+
+// rootHelpTemplate is cobra's default help template with one line appended
+// for the root command only: where LLMs, IAs and agents read the full docs.
+// Subcommands inherit the template, so the footer checks for a parent.
+const rootHelpTemplate = `{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
+
+{{end}}{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}{{if not .HasParent}}
+LLM, IA and Agents, read the Docs: ` + agentDocsURL + `
+{{end}}`
