@@ -699,12 +699,15 @@ func TestTheServerDeploymentTakesItsApplicationsFromTheUIImage(t *testing.T) {
 	if init["image"] != "cloud-ui:v1" || srv["image"] != "shpyrd-server:dev" {
 		t.Errorf("with SHPYRD_UI_IMAGE: init=%v server=%v", init["image"], srv["image"])
 	}
-	// Named explicitly, it is an override the next `cluster init` keeps.
+	// It is for this run alone, like the server image: the next
+	// `cluster init` without it goes back to the applications built into
+	// the server, so a server release takes precedence over an older UI
+	// image.
 	eng, err := New(nil, Options{Profile: "local", Vars: with, Reporter: &quiet{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if eng.overrides()[VarUIImage] != "cloud-ui:v1" {
-		t.Errorf("overrides = %v", eng.overrides())
+	if _, kept := eng.overrides()[VarUIImage]; kept {
+		t.Errorf("SHPYRD_UI_IMAGE must not be recorded as an override: %v", eng.overrides())
 	}
 }
