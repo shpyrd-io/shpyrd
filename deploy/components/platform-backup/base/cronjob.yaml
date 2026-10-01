@@ -39,8 +39,12 @@ spec:
               env:
                 - name: SHPYRD_SYSTEM_NAMESPACE
                   value: shpyrd-system
+                # The archives are fetched on the server's sources port: the
+                # only one its NetworkPolicy opens to the platform's own pods
+                # (the API port is for the front doors). Port 80 timed out,
+                # and no backup ever completed.
                 - name: SHPYRD_INTERNAL_URL
-                  value: http://shpyrd-server.shpyrd-system.svc
+                  value: http://shpyrd-server.shpyrd-system.svc:8082
                 - name: SHPYRD_BACKUP_KEEP
                   value: "${SHPYRD_BACKUP_KEEP}"
                 - name: SHPYRD_DATABASE_URL

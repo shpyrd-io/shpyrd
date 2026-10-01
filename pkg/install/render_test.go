@@ -615,3 +615,34 @@ func TestLogsAgentRenders(t *testing.T) {
 		}
 	}
 }
+
+// The backup job fetches source archives from the server inside the
+// cluster. The server's NetworkPolicy opens the API port to the front doors
+// alone; the platform's own pods reach it on the sources port (8082,
+// controller.SourcesPort). Production ran for two days with the job on
+// port 80: every run timed out and no archive was ever written.
+func TestPlatformBackupFetchesSourcesOnTheSourcesPort(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com", VarBackupTarget: "s3://bucket/prefix"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.components["platform-backup"] == nil {
+		t.Fatal("a backup target must install platform-backup")
+	}
+	objs, err := eng.renderComponent(eng.components["platform-backup"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cronjob string
+	for _, o := range objs {
+		if o.GetKind() == "CronJob" {
+			cronjob = mustYAML(t, o)
+		}
+	}
+	if cronjob == "" {
+		t.Fatal("CronJob missing")
+	}
+	if !strings.Contains(cronjob, `"value":"http://shpyrd-server.shpyrd-system.svc:8082"`) {
+		t.Errorf("the backup job must fetch sources on the sources port:\n%s", cronjob)
+	}
+}
