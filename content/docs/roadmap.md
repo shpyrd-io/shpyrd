@@ -106,17 +106,3 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Front doors: internal and external load balancers, exposure per project | [RFC-0036](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0036-load-balancer-exposure.md) | done (`SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure` still missing) |
 | Custom domains: CNAME or A to the project, per-host certificates | [RFC-0034](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0034-domains-and-certificates.md) | done |
 | Volumes on cloud profiles: storage classes, provider minimums, snapshots, shared volumes on File Storage | [RFC-0060](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0060-volumes-on-cloud-profiles.md) | done |
-
-## Decided against, for now
-
-| Item | RFC | Why |
-| --- | --- | --- |
-| GitOps export as a first-class flow | [RFC-0049](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0049-gitops-export.md) | the platform installs and upgrades itself; `shpyrd cluster export` stays as a plain rendering |
-| `git push shpyrd main` | [RFC-0050](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0050-git-push-receiver.md) | `shpyrd deploy` and auto-deploy from the repository cover the workflows in use |
-| Agents as a separate kind | [RFC-0051](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0051-agents-and-background-processes.md) | an agent is an app: a worker process, a run or a scheduled task, with everything apps get |
-| Environments and promotion | [RFC-0055](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0055-environments-and-promotion.md) | deferred: environments are Git branches deploying to their own projects, pull requests promote |
-
-## Not planned
-
-- Emulating cloud services locally (LocalStack and similar). Environment profiles abstract them instead.
-- A hosted control plane. shpyrd runs inside your cluster.
