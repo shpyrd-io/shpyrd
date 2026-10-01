@@ -11,6 +11,7 @@ import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
 import { also, gap, hero, route } from "@shpyrd/content/site/home";
 import { secondaryCta } from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
+import { sectionsLive } from "@/lib/sections";
 import { Closing } from "@/components/proposals";
 
 // The homepage, for the person who built an app with AI and cannot yet put it in
@@ -45,9 +46,11 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         actions={
           <>
             <AddToAgent />
-            <Button variant="outline" asChild>
-              <a href={secondaryCta.href}>{secondaryCta.label}</a>
-            </Button>
+            {sectionsLive && (
+              <Button variant="outline" asChild>
+                <a href={secondaryCta.href}>{secondaryCta.label}</a>
+              </Button>
+            )}
           </>
         }
         image={picture}
@@ -77,6 +80,8 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         </Timeline>
       </Stack>
 
+      {/* The solutions wait with the sections (src/lib/sections.ts). */}
+      {sectionsLive && (
       <Stack gap="spacious">
         <SectionIntro label={also.label} heading={also.heading} />
         <ul className="grid gap-4 sm:grid-cols-3">
@@ -94,6 +99,7 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
           ))}
         </ul>
       </Stack>
+      )}
 
       <Closing />
     </PageLayoutContent>

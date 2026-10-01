@@ -34,13 +34,13 @@ declare what they depend on.
 | [0004](0004-dockerfile-builds.md) | Dockerfile builds (BuildKit) | implemented, gaps | |
 | [0005](0005-shell-and-one-off-commands.md) | Shell and one-off commands | implemented (CLI); browser terminal → 0026, gaps | |
 | [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041 | |
-| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users); 3.2 → 0014, 3.3 → 0012 + 0058, gaps | |
+| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users; 3.2 → 0014, 3.3 → 0012 + 0058; complete: `shpyrd login` with 0052, stored OIDC tokens not needed) | |
 | [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → 0043, supply chain → 0044, tokens → 0031, durable audit → 0025, gaps | |
 | [0009](0009-postgres-resource.md) | Postgres resource (CloudNativePG) | implemented; backups → 0038, pooling/rotation → 0039, gaps | |
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
-| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only, no HTTP providers yet) | 0002 |
+| [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only — suppression and bounces are the relay's) | 0002 |
 | [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
@@ -80,13 +80,13 @@ declare what they depend on.
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
-| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API); gaps: run, pg, redis, domains; browser device flow | 0031, 0026 |
+| [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API; v0.9.61 the browser sign-in, run, pg psql, redis cli and globals over the API; complete) | 0031, 0026 |
 | [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | implementable | 0012, 0014 |
 | [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
 | [0056](0056-tracing-backend.md) | Tracing backend (Jaeger) | implementable | 0029, 0015 |
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |
-| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app), gaps; `auth-oidc` retired in favour of `oidc` connectors | 0012 |
+| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app); `auth-oidc` retired in favour of `oidc` connectors | 0012 |
 | [0059](0059-in-cluster-registry-on-cloud.md) | In-cluster registry as the default on every profile | implemented, gaps | 0035, 0060 |
 | [0060](0060-volumes-on-cloud-profiles.md) | Volumes on cloud profiles: storage classes, provider minimums, snapshots | implemented | 0006, 0035, 0041 |
 | [0061](0061-dns-providers.md) | DNS providers: automatic records and wildcard certificates | implemented (OCI DNS), gaps | 0035, 0036 |
@@ -107,7 +107,7 @@ declare what they depend on.
 | [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44) | 0033, 0059, 0075 |
 | [0080](0080-two-doors.md) | Two doors: the console (operator, its own host and sign-in realm, restrictable to one IdP) and workspaces (every one explicit with an address, the default one included) are separate applications on one identity provider; per-host OIDC callbacks, sessions per realm, no implicit workspace; two UI applications served by host | implemented (v0.9.52; the library split in `design/ui` and `apps/` on 2026-09-30); gaps: identity linking, two-host e2e, docs | 0033, 0058, 0076, 0078 |
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
-| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.46) | 0033, 0035, 0076 |
+| [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 
 ## Phases
@@ -147,18 +147,15 @@ an "Implementation status" section with the details; the short version:
 | 0003 | unattached resources in `projects info`; attach confirmation with var names; `Deleting` phase |
 | 0004 | a "build" catalog size; TTL on build Jobs |
 | 0005 | `shpyrd forward`; `shpyrd run --process` |
-| 0007 | `shpyrd login` for developers (→ 0052); stored OIDC tokens |
 | 0008 | admin-only domains; audit export and cluster-level listing; session rotation; API rate limit; backup-exclusion label |
 | 0009 | typed-name delete confirmation; storage used |
 | 0010 | Redis PodDisruptionBudget |
 | 0011 | "pods" in the logs-agent description |
-| 0013 | HTTP provider adapters (SES API, Resend, Postmark); bounce handling; last test result on the card |
 | 0019 | zero-downtime rollout test; probe message in failing status |
-| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; needs the CLI browser sign-in of 0052) |
+| 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
 | 0045 | e2e for `examples/hello-docker` |
-| 0058 | `auth connector add` message without auth-local |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
 | 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |

@@ -3,16 +3,15 @@
 export type Link = { title: string; href: string };
 export type Group = { title: string; links: Link[] };
 
+// shpyrd cloud first: the first groups are what someone with a workspace reads;
+// running shpyrd yourself has a group of its own, after them.
 export const navigation: Group[] = [
   {
-    title: "Introduction",
+    title: "Get started",
     links: [
       { title: "Getting started", href: "/docs/getting-started" },
-      { title: "Tour", href: "/docs/tour" },
-      { title: "Installation", href: "/docs/installation" },
-      { title: "Oracle Cloud (OKE)", href: "/docs/oracle-cloud" },
-      { title: "AWS (EKS)", href: "/docs/aws" },
       { title: "Concepts", href: "/docs/concepts" },
+      { title: "Tour", href: "/docs/tour" },
     ],
   },
   {
@@ -24,19 +23,27 @@ export const navigation: Group[] = [
       { title: "Databases and caches", href: "/docs/databases" },
       { title: "Domains and exposure", href: "/docs/domains" },
       { title: "Sign-in for your app", href: "/docs/app-access" },
+      { title: "Teams, roles and security", href: "/docs/access" },
       { title: "AI assistants (MCP)", href: "/docs/mcp" },
       { title: "Logs", href: "/docs/logs" },
-      { title: "Extensions and sign-in", href: "/docs/extensions" },
-      { title: "Teams, roles and security", href: "/docs/access" },
-      { title: "Platform backups", href: "/docs/backups" },
       { title: "Dashboard", href: "/docs/dashboard" },
       { title: "CLI reference", href: "/docs/cli" },
     ],
   },
   {
+    title: "Running it yourself",
+    links: [
+      { title: "Installation", href: "/docs/installation" },
+      { title: "Oracle Cloud (OKE)", href: "/docs/oracle-cloud" },
+      { title: "AWS (EKS)", href: "/docs/aws" },
+      { title: "Extensions and sign-in", href: "/docs/extensions" },
+      { title: "Platform backups", href: "/docs/backups" },
+      { title: "Architecture guide", href: "/docs/architecture-guide" },
+    ],
+  },
+  {
     title: "Project",
     links: [
-      { title: "Architecture guide", href: "/docs/architecture-guide" },
       { title: "Design principles", href: "/docs/design-principles" },
       { title: "Roadmap", href: "/docs/roadmap" },
       { title: "How to contribute", href: "/docs/how-to-contribute" },

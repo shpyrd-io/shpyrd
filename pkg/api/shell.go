@@ -165,7 +165,9 @@ func (s *Server) mintShellTicket(c *gin.Context) {
 	// The ticket names the project by its slug, as the socket's path does
 	// and as the slot above is held: never by the grant key, which is the
 	// project's ID once it has one (RFC-0076).
-	code, err := s.execTickets.mint(execTicket{Identity: id, Project: project.SlugOf(app), Instance: instance, Command: command})
+	// An app's command runs through the buildpack launcher when the image
+	// has one (Launcher); a resource's (resources_shell.go) does not.
+	code, err := s.execTickets.mint(execTicket{Identity: id, Project: project.SlugOf(app), Instance: instance, Command: command, Launcher: len(command) > 0})
 	if errors.Is(err, errTicketsFull) {
 		// Not the caller's fault and not permanent: the store drains itself
 		// within a ticket's 30 seconds, so say so rather than reporting a fault.

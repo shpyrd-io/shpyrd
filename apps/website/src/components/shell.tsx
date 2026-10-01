@@ -20,13 +20,15 @@ import { SiteHeader } from "@shpyrd/ui/components/site-header";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { find, navigation } from "@shpyrd/content/navigation";
+import * as site from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
+import { sectionsLive, signInLive } from "@/lib/sections";
 import { DiscordMark, GitHubMark } from "@/components/marks";
 
 // Where the code is, and where the community talks; the header and the foot
 // both point there.
 const github = "https://github.com/shpyrd-io/shpyrd";
-const discord = "https://discord.gg/AxWMXXW7";
+const discord = site.discord.href;
 
 // What is around every page: the pages of the site at the side, where the
 // page is over it, and the foot. All of it is made of design/ui; a page
@@ -49,8 +51,9 @@ const useCases = [
   { title: "Client apps", href: "/use-cases/client-apps", icon: <Briefcase />, description: "Built by you, opened with their own sign-in." },
 ];
 
+// How sharing works is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
-  { title: "How sharing works", href: "/how-sharing-works" },
+  ...(sectionsLive ? [{ title: "How sharing works", href: "/how-sharing-works" }] : []),
   { title: "Docs", href: "/docs/getting-started" },
 ];
 
@@ -73,8 +76,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {l.title}
     </Link>
   );
-  const links = [
-    {
+  // The Solutions menu waits with the sections (src/lib/sections.ts).
+  const solutionsMenu = {
       label: "Solutions",
       columns: [
         {
@@ -91,12 +94,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           links: useCases.map((l) => ({ link: link(l), description: l.description, icon: l.icon })),
         },
       ],
-    },
-    ...marketing.map(link),
-  ];
+    };
+  const links = [...(sectionsLive ? [solutionsMenu] : []), ...marketing.map(link)];
 
   const siteNav = (
     <NavList aria-label="Site">
+      {sectionsLive && (
       <NavListGroup title="Solutions">
         {solutions.map((link) => (
           <NavListItem key={link.href} asChild>
@@ -104,6 +107,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </NavListItem>
         ))}
       </NavListGroup>
+      )}
+      {sectionsLive && (
       <NavListGroup title="What you're shipping">
         {useCases.map((link) => (
           <NavListItem key={link.href} asChild>
@@ -111,6 +116,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </NavListItem>
         ))}
       </NavListGroup>
+      )}
       <NavListGroup title="shpyrd">
         {marketing.map((link) => (
           <NavListItem key={link.href} asChild>
@@ -238,13 +244,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 onClick={() => setTheme(next[theme])}
               />
               {/* Back to the dashboard, for whoever has a workspace already.
-                  TODO: it goes nowhere yet; each workspace has its own address,
-                  and where "Sign in" lands is still to be decided. */}
-              <Button variant="outline" asChild className="ml-2">
-                <a href="#" onClick={(event) => event.preventDefault()}>
-                  Sign in
-                </a>
-              </Button>
+                  Hidden until it has somewhere to go (src/lib/sections.ts). */}
+              {signInLive && (
+                <Button variant="outline" asChild className="ml-2">
+                  <a href="#" onClick={(event) => event.preventDefault()}>
+                    Sign in
+                  </a>
+                </Button>
+              )}
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">
@@ -261,7 +268,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <MinimalFooter
           as="div"
           width={isDocument ? "full" : "large"}
-          links={[...solutions, ...marketing].map((l) => (
+          links={[...(sectionsLive ? solutions : []), ...marketing].map((l) => (
             <Link key={l.href} href={l.href}>
               {l.title}
             </Link>

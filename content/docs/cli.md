@@ -3,24 +3,24 @@ title: CLI reference
 description: Every shpyrd command and its flags.
 ---
 
-Two binaries, one install: `shpyrd` for people who deploy and run projects, `shpyrd-ctl` for the operator who installs and runs the platform (the cluster, extensions, accounts, backups). `shpyrd` signs in to a workspace with `shpyrd login` and needs no kubeconfig: every developer command speaks the workspace API. With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`, `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`. {% .lead %}
+`shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.app` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`, `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`. {% .lead %}
 
 ## Signing in
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd login --url <workspace> --token <token>` | Sign the CLI in to a workspace (`https://shpyrd.example.com`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. The token is a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. Without `--token`, switches to a workspace you are already signed in to. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
+| `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.app`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd whoami` | Who you are at the current workspace, checked live; fails when the token expired or was revoked. |
 | `shpyrd logout` | Forget the current workspace's credential (or `--url` another's). |
 | `shpyrd tokens create <name>` | Create an API token for CI or another machine: `--platform-role platform-viewer\|platform-admin` or `--project <slug> --role user\|viewer\|developer\|admin`, `--expires 90d`. The value is printed once. A token never carries more than you hold at the moment it is used, and a token cannot create tokens: run this signed in as yourself (or with the admin token), or use the dashboard's Workspace → API tokens tab. |
-| `shpyrd tokens list`, `tokens revoke <id>` | Your tokens with role, expiry and last use (platform admins see everyone's); revocation is immediate. |
+| `shpyrd tokens list`, `tokens revoke <id>` | Your tokens with role, expiry and last use (platform admins see everyone's); a session token is listed as `session (your roles)`. Revocation is immediate. |
 
-Still cluster-only after `shpyrd login` (run them with `--context`): `run`, `pg`, `redis` and `domains`; a `shell` cannot be given a command over the API (it opens the image's shell). They say so in one line instead of failing.
+Every developer command works signed in with `shpyrd login`, with no kubeconfig: `run`, `shell -- <cmd>`, `pg psql` and `redis cli` go through the web terminal's bridge, the server starting the one-off instance or picking the database's pod. On shpyrd cloud, databases, caches and custom domains are also at hand in the dashboard: the project's **Resources** and **Domains** cards.
 
 ## Cluster
 
-Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Homebrew and the release archives) and also answer as `shpyrd cluster …` when a kubeconfig is available.
+Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we run the cluster). They live in `shpyrd-ctl` (installed alongside `shpyrd` by Homebrew and the release archives) and also answer as `shpyrd cluster …` when a kubeconfig is available.
 
 | Command | What it does |
 | --- | --- |
@@ -72,6 +72,8 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 
 ## Sign-in providers
 
+Self-hosted: the platform-wide sign-in methods of a cluster you run yourself. A workspace's own sign-in, on shpyrd cloud too, is `shpyrd sso` (above) or the dashboard's Workspace › Sign-in tab.
+
 | Command | What it does |
 | --- | --- |
 | `shpyrd auth oidc set --id <id> --label <text> --issuer <url> --client-id <id> --client-secret <secret\|@file>` | Add or update a company identity provider (extension `auth-oidc`); `--scopes` replaces the extra scopes (`-` for none). Prints the redirect URIs to register. |
@@ -82,7 +84,7 @@ Operator commands. They live in `shpyrd-ctl` (installed alongside `shpyrd` by Ho
 
 ## Plans and economics
 
-Platform-level, for the operator:
+Self-hosted: platform-level, for the operator:
 
 | Command | What it does |
 | --- | --- |
@@ -92,6 +94,8 @@ Platform-level, for the operator:
 | `shpyrd-ctl economics [--month YYYY-MM]` | Revenue at plan prices, infrastructure cost from OpenCost (extension `opencost`) and gross margin per workspace. Operator-only; customers see usage and their plan's prices, never cost. |
 
 ## Email
+
+Self-hosted: the platform's sender, set by the operator.
 
 | Command | What it does |
 | --- | --- |
@@ -122,7 +126,7 @@ Platform-level, for the operator:
 | `shpyrd secrets unset K ...` | Remove config vars. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |
 | `shpyrd shell [-- cmd...]` | Interactive shell in a running instance (`--process`, `--instance web.2`); with a command, runs it and returns its exit code. |
-| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. |
+| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. Signed in, the server starts the instance and attaches the terminal through the web terminal's bridge; piped input reaches the command and ends when the pipe does. |
 | `shpyrd volumes create <name> --size 5Gi` | Create a persistent volume in the project (`--class`, `--shared`, `--from-snapshot`). Cloud profiles round the size up to the provider's minimum and say so. |
 | `shpyrd volumes list` | Volumes with size, mode, status and what mounts them. |
 | `shpyrd volumes resize <name> --size 10Gi` | Grow a volume (when the storage class allows expansion). |
@@ -155,6 +159,8 @@ Platform-level, for the operator:
 | `shpyrd open` | Open the project URL in the browser. |
 
 ## Where things are
+
+Self-hosted: where things are on your machine and on a cluster you run yourself.
 
 | | |
 | --- | --- |

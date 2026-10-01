@@ -4,12 +4,14 @@
 
 **Owner:** unassigned
 
-**Depends on:** RFC-0007 (authentication), RFC-0008 (teams, roles; the RBAC mirror),
-RFC-0058 (external identity providers), RFC-0035 (cloud profiles)
+**Depends on:** RFC-0007 (authentication: the issuer; done. The server keeps no OIDC
+access or refresh tokens, and this RFC needs none from it: the exec plugin obtains and
+caches its own tokens on the developer's machine, below), RFC-0008 (teams, roles; the
+RBAC mirror), RFC-0058 (external identity providers), RFC-0035 (cloud profiles)
 
 **Creation date:** 2026-09-25
 
-**Last update:** 2026-09-25
+**Last update:** 2026-09-30
 
 ## Summary
 

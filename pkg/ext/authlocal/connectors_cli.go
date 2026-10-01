@@ -58,9 +58,24 @@ func connectorDepsFor(g ext.CLIGlobals) (*connectorDeps, error) {
 	}
 	d := &connectorDeps{k: k, store: &ConnectorStore{Dynamic: k.Dynamic, Namespace: install.DefaultSystemNamespace}}
 	if d.info, _ = install.ReadInstallInfo(context.Background(), k, install.DefaultSystemNamespace); d.info != nil {
+		// Say so before touching the API: without the extension there is
+		// no Connector resource to speak to.
+		if !extensionEnabled(d.info) {
+			return nil, ErrConnectorsNotEnabled
+		}
 		d.store.Issuer = d.info.Vars[install.VarAuthURL]
 	}
 	return d, nil
+}
+
+// extensionEnabled reports whether the install record lists auth-local.
+func extensionEnabled(info *install.InstallInfo) bool {
+	for _, n := range strings.Split(info.Vars[install.VarExtensions], ",") {
+		if strings.TrimSpace(n) == Name {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *connectorDeps) restartServer(ctx context.Context) error {

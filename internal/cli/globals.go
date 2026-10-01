@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -13,12 +15,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
 // Global config vars (RFC-0016): `shpyrd globals set|unset|list`, a
-// workspace admin's counterpart of `shpyrd secrets`, over a kubeconfig.
+// workspace admin's counterpart of `shpyrd secrets`. Signed in with
+// `shpyrd login` they go through the workspace API (RFC-0052); over a
+// kubeconfig they edit the Secret, and --workspace names which one.
 
 func newGlobalsCmd(g *globalFlags) *cobra.Command {
 	var workspace string
@@ -31,8 +36,8 @@ project's own config var of the same name wins and attached resources win over
 both. Changing them creates a "Global config change" release in every project
 of the workspace that has not opted out (shpyrd.yaml: globals: false, or
 globals: {exclude: [NAME]}). Values are write-only: they are never printed
-back. Over a kubeconfig the workspace is the default one unless --workspace
-names another.
+back. Signed in with shpyrd login, the workspace is the one you are signed in
+to; over a kubeconfig it is the default one unless --workspace names another.
 
   shpyrd globals set OPENAI_API_KEY=sk-... REGION=eu
   shpyrd globals set --workspace acme SENTRY_DSN=https://...
@@ -72,15 +77,31 @@ names another.
 			if err != nil {
 				return err
 			}
-			sec := &corev1.Secret{}
-			if err := ac.c.Get(ctx, globalsKey(workspace), sec); err != nil {
-				if apierrors.IsNotFound(err) {
-					fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
-					return nil
+			var vars []configvars.Var
+			if ac.session {
+				if workspace != "" {
+					return errors.New("--workspace names a workspace over a kubeconfig; signed in, the globals are the current workspace's")
 				}
-				return err
+				raw, err := ac.serverRequest(ctx, "GET", "api/workspace/globals", nil, "")
+				if err != nil {
+					return err
+				}
+				var res api.GlobalsResponse
+				if err := json.Unmarshal(raw, &res); err != nil {
+					return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
+				}
+				vars = res.Vars
+			} else {
+				sec := &corev1.Secret{}
+				if err := ac.c.Get(ctx, globalsKey(workspace), sec); err != nil {
+					if apierrors.IsNotFound(err) {
+						fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
+						return nil
+					}
+					return err
+				}
+				vars = configvars.List(sec)
 			}
-			vars := configvars.List(sec)
 			if len(vars) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no global config vars set")
 				return nil
@@ -118,6 +139,29 @@ func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map
 	ac, err := newAppClient(g, cmd.OutOrStdout())
 	if err != nil {
 		return err
+	}
+	if ac.session {
+		// Over the API (RFC-0052): the server applies the change and
+		// releases it to the workspace's projects.
+		if workspace != "" {
+			return errors.New("--workspace names a workspace over a kubeconfig; signed in, the globals are the current workspace's")
+		}
+		body, _ := json.Marshal(api.ConfigVarsUpdate{Set: set, Unset: unset})
+		raw, err := ac.serverRequest(ctx, "PUT", "api/workspace/globals", body, "application/json")
+		if err != nil {
+			return err
+		}
+		var res api.GlobalsResponse
+		_ = json.Unmarshal(raw, &res)
+		names := make([]string, 0, len(res.Vars))
+		for _, v := range res.Vars {
+			names = append(names, v.Name)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Global config vars: %s\n", firstNonEmpty(strings.Join(names, ", "), "(none)"))
+		if res.Projects > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "Releasing the change to %d project(s)...\n", res.Projects)
+		}
+		return nil
 	}
 	sec := &corev1.Secret{}
 	create := false

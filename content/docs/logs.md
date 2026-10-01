@@ -12,11 +12,11 @@ shpyrd logs --project shop              # last 200 lines of every instance
 shpyrd logs --project shop -f -p worker # follow one process type
 ```
 
-The dashboard's **Logs** tab streams the same lines with a process filter, a text filter and level highlighting. This path reads from the Kubernetes API and works on every cluster with nothing enabled.
+The dashboard's **Logs** tab streams the same lines with a process filter, a text filter and level highlighting. There is nothing to set up: on shpyrd cloud and on a cluster you run yourself alike, this path reads from the Kubernetes API with nothing enabled.
 
 ## The log agent
 
-`shpyrd extensions enable logs-agent` runs [Vector](https://vector.dev) on every node ([RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md)). It reads the container logs of project instances and turns every line into a structured event:
+The log agent runs [Vector](https://vector.dev) on every node. It reads the container logs of project instances and turns every line into a structured event:
 
 ```json
 {"time": "...", "project": "shop", "process": "web", "instance": "web.2", "stream": "stdout",
@@ -25,13 +25,17 @@ The dashboard's **Logs** tab streams the same lines with a process filter, a tex
 
 Lines that are JSON get `level` and `msg` promoted and the rest kept in `fields`; plain lines keep `msg` as the text. Build output and the pods of attached databases and caches are not part of this stream.
 
+{% callout title="Self-hosted" %}
+On a cluster you run yourself, the operator switches the agent on with `shpyrd extensions enable logs-agent`.
+{% /callout %}
+
 **Bounded on the node.** Each container keeps at most 20 MiB of logs on disk (two files of 10 MiB, rotated by the kubelet), so an application logging at full speed cannot fill a node. History beyond that lives wherever you drain it.
 
 **Fenced in.** A network policy lets the agent reach the drains' receivers (on the internet or in a platform namespace), DNS and the API server, and nothing in a project; only the platform reads its counters. On a local cluster the enriched stream is also written to the agent's own pod log (`kubectl logs -n logs-system daemonset/vector`), to see the pipeline at work; the cloud profiles leave that out.
 
 ## Log drains
 
-A drain forwards lines as they are written ([RFC-0023](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0023-log-drains.md)). Two kinds of receiver:
+A drain forwards lines as they are written. Two kinds of receiver:
 
 | Receiver | URL | What arrives |
 | --- | --- | --- |
@@ -42,7 +46,7 @@ And three scopes:
 
 - a **project drain** receives that project's lines; project admins add them on the project page or with `--project`;
 - a **workspace drain** receives every project's lines of the workspace, labelled with the project; workspace admins add them on the workspace's Log drains page or with `--workspace`;
-- a **cluster drain** receives every project's lines of the platform; the operator adds them over a kubeconfig with `--cluster`.
+- a **cluster drain** (self-hosted) receives every project's lines of the platform; the operator of a cluster you run yourself adds them over a kubeconfig with `--cluster`.
 
 ```shell
 shpyrd drains add https://in.logs.betterstack.com/ --header "Authorization: Bearer ..." --project shop
@@ -55,7 +59,7 @@ shpyrd drains remove in-logs-betterstack-com --project shop
 The name defaults to the receiver's host. `--processes` limits a drain to some process types. Header values are stored in the cluster and never shown again, in the CLI or the dashboard. The pages show each drain's delivery status (Pending, Active with the last delivery time and line count, Failing with the error) refreshed every 30 seconds; a receiver that keeps failing raises a `DrainFailing` warning event on the drain, and after five minutes of failed checks a `drain.failing` entry in the project's activity (the cluster's, for a workspace or cluster drain).
 
 {% callout title="Storage and history" %}
-Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is [RFC-0022b](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022-log-pipeline.md), an optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.
+Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is a planned, optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.
 {% /callout %}
 
 ### Providers
@@ -66,5 +70,5 @@ Drains are the foundation for log history too: a cluster drain to Loki (or any r
 | Datadog | `https://http-intake.logs.datadoghq.com/api/v2/logs` with `DD-API-KEY: <key>` (use your site's intake host) |
 | Axiom | `https://api.axiom.co/v1/datasets/<dataset>/ingest` with `Authorization: Bearer <token>` |
 | Papertrail | `syslog+tls://logsN.papertrailapp.com:<port>` |
-| Grafana Loki (push API) | `https://loki.example.com/loki/api/v1/push` accepts JSON lines only through a proxy; native Loki support is RFC-0022b |
+| Grafana Loki (push API) | `https://loki.example.com/loki/api/v1/push` accepts JSON lines only through a proxy; native Loki support is planned |
 | Anything that accepts newline-delimited JSON over HTTP, or syslog | works |

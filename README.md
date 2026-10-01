@@ -246,8 +246,9 @@ For CI and scripts, people create **API tokens** (rfcs/0031) in the dashboard
 developer --expires 90d`. A token carries at most the role its owner holds
 when it is used (a demoted or suspended owner's tokens follow), expires when
 told to, is shown once and can be revoked at any time. `shpyrd login --url
-https://shpyrd.example.com --token shp_...` signs the CLI in with it, or set
-`SHPYRD_TOKEN` and `SHPYRD_URL` in CI.
+https://shpyrd.example.com` signs the CLI in from the browser, as you;
+`--token shp_...` signs it in with a token, or set `SHPYRD_TOKEN` and
+`SHPYRD_URL` in CI.
 
 Hardening that needs no extension: a `NetworkPolicy` per project (ingress only
 from the project itself, the ingress controller and monitoring; egress to the
