@@ -63,7 +63,7 @@ ones into the file.
 The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			name, err := resolveAppName(appName)
 			if err != nil {
 				return err
@@ -180,8 +180,9 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				return fmt.Errorf("deploy: %w", err)
 			}
 			if noWait {
-				fmt.Fprintln(out, "Deploy requested. Follow with `shpyrd projects info", name+"`.")
-				return nil
+				return g.print(cmd, map[string]any{"project": name, "waited": false}, func(w io.Writer) {
+					fmt.Fprintln(w, "Deploy requested. Follow with `shpyrd projects info", name+"`.")
+				})
 			}
 
 			specChanged := after.Status.Generation != before.Status.Generation
@@ -205,19 +206,26 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			if err != nil {
 				return err
 			}
+			result := map[string]any{"project": name, "waited": true, "url": final.Status.URL}
+			var rel *api.ReleaseView
 			if n := len(final.Status.Releases); n > 0 {
-				rel := final.Status.Releases[n-1]
+				latest := final.Status.Releases[n-1]
 				for _, r := range final.Status.Releases {
-					if r.Number > rel.Number {
-						rel = r
+					if r.Number > latest.Number {
+						latest = r
 					}
 				}
-				fmt.Fprintf(out, "\nReleased v%d: %s\n", rel.Number, rel.Description)
+				rel = &latest
+				result["release"] = latest
 			}
-			if final.Status.URL != "" {
-				fmt.Fprintf(out, "%s\n", final.Status.URL)
-			}
-			return nil
+			return g.print(cmd, result, func(w io.Writer) {
+				if rel != nil {
+					fmt.Fprintf(w, "\nReleased v%d: %s\n", rel.Number, rel.Description)
+				}
+				if final.Status.URL != "" {
+					fmt.Fprintf(w, "%s\n", final.Status.URL)
+				}
+			})
 		},
 	}
 	cmd.Flags().StringVar(&appName, "project", "", "project name (default from shpyrd.yaml)")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -88,9 +89,10 @@ inside that window into a new database.`,
 			if err := c.Update(ctx, pg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Backups of %s: %s\n", pg.Name, backupsLine(pg))
-			fmt.Fprintln(cmd.OutOrStdout(), "The first base backup starts now; follow it with `shpyrd pg backups list "+pg.Name+"`.")
-			return nil
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backups": pg.Spec.Backups}, func(w io.Writer) {
+				fmt.Fprintf(w, "Backups of %s: %s\n", pg.Name, backupsLine(pg))
+				fmt.Fprintln(w, "The first base backup starts now; follow it with `shpyrd pg backups list "+pg.Name+"`.")
+			})
 		},
 	}
 	projectFlag(enable, &project)
@@ -119,8 +121,9 @@ inside that window into a new database.`,
 			if err := c.Update(ctx, pg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Backups of %s are off. Existing backups remain restorable until the database is deleted.\n", pg.Name)
-			return nil
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backups": nil}, func(w io.Writer) {
+				fmt.Fprintf(w, "Backups of %s are off. Existing backups remain restorable until the database is deleted.\n", pg.Name)
+			})
 		},
 	}
 	projectFlag(disable, &project)
@@ -145,18 +148,22 @@ inside that window into a new database.`,
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Backups:    %s\n\n", backupsLine(pg))
-			if len(backups) == 0 {
-				fmt.Fprintln(out, "No base backups yet.")
-				return nil
+			if backups == nil {
+				backups = []backupRow{}
 			}
-			tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSTARTED\tSTATUS\tKIND")
-			for _, b := range backups {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.Started, b.Phase, b.Kind)
-			}
-			return tw.Flush()
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "policy": pg.Spec.Backups, "backups": backups}, func(out io.Writer) {
+				fmt.Fprintf(out, "Backups:    %s\n\n", backupsLine(pg))
+				if len(backups) == 0 {
+					fmt.Fprintln(out, "No base backups yet.")
+					return
+				}
+				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tSTARTED\tSTATUS\tKIND")
+				for _, b := range backups {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.Started, b.Phase, b.Kind)
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 	projectFlag(list, &project)
@@ -165,8 +172,11 @@ inside that window into a new database.`,
 }
 
 type backupRow struct {
-	Name, Started, Phase, Kind string
-	at                         time.Time
+	Name    string `json:"name"`
+	Started string `json:"started"`
+	Phase   string `json:"phase"`
+	Kind    string `json:"kind"`
+	at      time.Time
 }
 
 func listBackups(ctx context.Context, c client.Client, pg *shpyrdv1.Postgres) ([]backupRow, error) {
@@ -238,7 +248,7 @@ func newBackupCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := c.Create(ctx, b); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Backup %s started...\n", b.GetName())
+			fmt.Fprintf(ext.Progress(g, cmd), "Backup %s started...\n", b.GetName())
 			deadline := time.Now().Add(10 * time.Minute)
 			for time.Now().Before(deadline) {
 				time.Sleep(3 * time.Second)
@@ -250,15 +260,17 @@ func newBackupCmd(g ext.CLIGlobals) *cobra.Command {
 				phase, _, _ := unstructured.NestedString(cur.Object, "status", "phase")
 				switch phase {
 				case "completed":
-					fmt.Fprintf(cmd.OutOrStdout(), "Backup %s completed.\n", b.GetName())
-					return nil
+					return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backup": b.GetName(), "phase": phase}, func(w io.Writer) {
+						fmt.Fprintf(w, "Backup %s completed.\n", b.GetName())
+					})
 				case "failed":
 					msg, _, _ := unstructured.NestedString(cur.Object, "status", "error")
 					return fmt.Errorf("backup failed: %s", msg)
 				}
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Still running; check with `shpyrd pg backups list "+pg.Name+"`.")
-			return nil
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backup": b.GetName(), "phase": "running"}, func(w io.Writer) {
+				fmt.Fprintln(w, "Still running; check with `shpyrd pg backups list "+pg.Name+"`.")
+			})
 		},
 	}
 	projectFlag(cmd, &project)
@@ -323,8 +335,8 @@ with "shpyrd attach" when it is ready.`,
 			if rec.TargetTime != nil {
 				when = rec.TargetTime.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Restoring %s from the backups of %s to %s...\n", as, source.Name, when)
-			return waitReady(ctx, cmd, c, pg, 15*time.Minute)
+			fmt.Fprintf(ext.Progress(g, cmd), "Restoring %s from the backups of %s to %s...\n", as, source.Name, when)
+			return waitReady(ctx, g, cmd, c, pg, 15*time.Minute)
 		},
 	}
 	projectFlag(cmd, &project)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -86,23 +87,26 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 			if persistent {
 				mode = "persistent"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Creating %s %s (%s)...\n", firstNonEmpty(engine, "valkey"), args[0], mode)
-			v, err := resources.WaitReadyAPI(ctx, g.API(), cmd.OutOrStdout(), project, "Redis", args[0], 3*time.Minute)
+			out := ext.Progress(g, cmd)
+			fmt.Fprintf(out, "Creating %s %s (%s)...\n", firstNonEmpty(engine, "valkey"), args[0], mode)
+			v, err := resources.WaitReadyAPI(ctx, g.API(), out, project, "Redis", args[0], 3*time.Minute)
 			if err != nil {
 				return err
 			}
 			switch {
 			case v == nil:
-				fmt.Fprintln(cmd.OutOrStdout(), "Still provisioning; check with `shpyrd redis list`.")
+				return ext.Print(g, cmd, map[string]any{"project": project, "name": args[0], "ready": false}, func(w io.Writer) {
+					fmt.Fprintln(w, "Still provisioning; check with `shpyrd redis list`.")
+				})
 			case v.Phase == shpyrdv1.ResourceFailed:
 				if strings.Contains(v.Message, "extension is not installed") {
 					return errors.New(resources.ExtensionHint(Name))
 				}
 				return errors.New(v.Message)
-			default:
-				fmt.Fprintf(cmd.OutOrStdout(), "Store %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
 			}
-			return nil
+			return ext.Print(g, cmd, v, func(w io.Writer) {
+				fmt.Fprintf(w, "Store %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
+			})
 		},
 	}
 	projectFlag(cmd, &project)
@@ -160,20 +164,25 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(list) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "No stores in project %s. Create one with `shpyrd redis create cache --project %s`.\n", project, project)
-				return nil
+			if list == nil {
+				list = []resources.View{}
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tENGINE\tSIZE\tMODE\tSTATUS\tATTACHED TO")
-			for _, v := range list {
-				mode := "cache"
-				if v.Details["persistent"] == "true" {
-					mode = "persistent " + firstNonEmpty(v.Details["storage"], "")
+			return ext.Print(g, cmd, list, func(w io.Writer) {
+				if len(list) == 0 {
+					fmt.Fprintf(w, "No stores in project %s. Create one with `shpyrd redis create cache --project %s`.\n", project, project)
+					return
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["engine"], "valkey"), firstNonEmpty(v.Details["size"], "default"), strings.TrimSpace(mode), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tENGINE\tSIZE\tMODE\tSTATUS\tATTACHED TO")
+				for _, v := range list {
+					mode := "cache"
+					if v.Details["persistent"] == "true" {
+						mode = "persistent " + firstNonEmpty(v.Details["storage"], "")
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["engine"], "valkey"), firstNonEmpty(v.Details["size"], "default"), strings.TrimSpace(mode), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
+				}
+				_ = tw.Flush()
+			})
 		},
 	}
 	projectFlag(cmd, &project)
@@ -192,14 +201,14 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Store:      %s (project %s)\n", v.Name, project)
-			fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
-			fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
-			fmt.Fprintf(out, "Engine:     %s %s\n", firstNonEmpty(v.Details["engine"], "valkey"), v.Details["version"])
-			fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
-			fmt.Fprintf(out, "Config vars: REDIS_URL, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (values are never shown)\n")
-			return nil
+			return ext.Print(g, cmd, v, func(out io.Writer) {
+				fmt.Fprintf(out, "Store:      %s (project %s)\n", v.Name, project)
+				fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
+				fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
+				fmt.Fprintf(out, "Engine:     %s %s\n", firstNonEmpty(v.Details["engine"], "valkey"), v.Details["version"])
+				fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
+				fmt.Fprintf(out, "Config vars: REDIS_URL, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (values are never shown)\n")
+			})
 		},
 	}
 	projectFlag(cmd, &project)
@@ -270,8 +279,9 @@ func newDeleteCmd(g ext.CLIGlobals) *cobra.Command {
 			if err := resources.DeleteAPI(ctx, g.API(), project, "Redis", v.Name, force); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted store %s from project %s\n", v.Name, project)
-			return nil
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": v.Name, "deleted": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleted store %s from project %s\n", v.Name, project)
+			})
 		},
 	}
 	projectFlag(cmd, &project)

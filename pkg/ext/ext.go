@@ -372,3 +372,16 @@ func IdentityFrom(c *gin.Context) (Identity, bool) {
 	id, ok := v.(Identity)
 	return id, ok
 }
+
+// Print writes the result of an extension command the way the person or
+// program asked for: v as JSON under --json or --jq, otherwise what human
+// writes (see cliout.Printer).
+func Print(g CLIGlobals, cmd *cobra.Command, v any, human func(w io.Writer)) error {
+	return g.Output().Print(cmd.OutOrStdout(), v, human)
+}
+
+// Progress is where an extension command narrates what it is doing: stdout,
+// or stderr under --json so the JSON document stays alone on stdout.
+func Progress(g CLIGlobals, cmd *cobra.Command) io.Writer {
+	return g.Output().Progress(cmd.OutOrStdout(), cmd.ErrOrStderr())
+}
