@@ -3,7 +3,7 @@ title: Installation
 description: Create a local cluster with the shpyrd base stack, or install it on an existing Kubernetes cluster.
 ---
 
-Shpyrd ships as a single CLI, `shpyrd`, that installs the platform on a Kubernetes cluster: a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
+shpyrd is open source; this page is for running it on your own cluster. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The single CLI, `shpyrd`, installs the platform on a Kubernetes cluster: a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
 
 ## Requirements
 
@@ -149,6 +149,23 @@ shpyrd teams create platform --platform-role platform-admin --member you@example
 ```
 
 Then sign in with the email and password, and switch the token off when nobody needs it (`shpyrd cluster token --disable`; `--rotate` replaces it). Details: [Extensions and sign-in](/docs/extensions), [Teams, roles and security](/docs/access).
+
+## Deploy the example
+
+The repository bundles an example, a Go module with a `web` and a `worker` process:
+
+```shell
+shpyrd projects create hello-world
+cd examples/hello && shpyrd deploy
+shpyrd open                              # https://hello-world.127.0.0.1.nip.io
+shpyrd secrets set GREETING="Olá mundo"  # new release, the page picks it up
+shpyrd scale web=3 worker=2
+shpyrd logs -f
+```
+
+{% callout title="Ports 80 and 443 taken?" %}
+`shpyrd cluster create --http-port 8080 --https-port 8443` maps other host ports; URLs then carry the port (`https://hello-world.127.0.0.1.nip.io:8443`).
+{% /callout %}
 
 ## Install on an existing cluster
 

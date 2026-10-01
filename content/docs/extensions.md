@@ -3,7 +3,7 @@ title: Extensions and sign-in
 description: Optional capabilities switched on per cluster, and how people sign in to the dashboard with their own accounts.
 ---
 
-Shpyrd keeps its core small and adds optional capabilities as **extensions**: Go packages compiled into the binaries and switched on per cluster. The first one gives the dashboard real user accounts. {% .lead %}
+This page is for the operator of a cluster you run: shpyrd keeps its core small and adds optional capabilities as **extensions**, Go packages compiled into the binaries and switched on per cluster. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The first one gives the dashboard real user accounts. {% .lead %}
 
 ## Extensions
 
@@ -75,7 +75,7 @@ The sign-in page then asks for email and password directly (the admin token move
 
 ![The sign-in page with a password form and buttons for GitHub and Okta](/screenshots/login.png)
 
-Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd with the `auth-oidc` extension; GitHub and Google also work through the bundled issuer of `auth-local`. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-companys-sign-in). Users are the same person across providers when the email matches, and roles are granted by email or by group, so an Okta group or a GitHub team can be a shpyrd [Team](/docs/access) ([RFC-0058](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0058-external-identity-providers.md)).
+Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd with the `auth-oidc` extension; GitHub and Google also work through the bundled issuer of `auth-local`. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-company-s-sign-in). Users are the same person across providers when the email matches, and roles are granted by email or by group, so an Okta group or a GitHub team can be a shpyrd [Team](/docs/access) ([RFC-0058](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0058-external-identity-providers.md)).
 
 ### Okta, or any OpenID Connect issuer
 

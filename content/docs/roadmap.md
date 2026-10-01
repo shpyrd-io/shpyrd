@@ -119,4 +119,4 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 ## Not planned
 
 - Emulating cloud services locally (LocalStack and similar). Environment profiles abstract them instead.
-- A hosted control plane. Shpyrd runs inside your cluster.
+- A hosted control plane. shpyrd runs inside your cluster.

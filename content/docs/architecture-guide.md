@@ -3,7 +3,7 @@ title: Architecture guide
 description: How the installer, the App controller and the server turn a Kubernetes cluster into a PaaS.
 ---
 
-Shpyrd is two binaries and a set of well-known open source components. The CLI installs and operates the cluster from your machine; the server runs inside it as API, controller and dashboard. {% .lead %}
+shpyrd is two binaries and a set of well-known open source components. This guide is for running shpyrd yourself, or for knowing how it works; on shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The CLI installs and operates the cluster from your machine; the server runs inside it as API, controller and dashboard. {% .lead %}
 
 ## Components
 

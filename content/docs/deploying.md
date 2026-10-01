@@ -3,7 +3,7 @@ title: Deploying
 description: Create a project, deploy it from a checkout or a Git URL, configure it, scale it, read its logs and roll back.
 ---
 
-The CLI talks to your cluster with your kubeconfig; the only call that reaches the shpyrd server is the upload of your source archive. {% .lead %}
+Signed in to your workspace with `shpyrd login` (see [Getting started](/docs/getting-started)), the CLI speaks the workspace's API: on shpyrd cloud there is nothing else to set up. On a cluster you run yourself, a kubeconfig named on the command line (`--context`) makes it go through the cluster instead. {% .lead %}
 
 {% callout title="Examples" %}
 [shpyrd-io/shpyrd-examples](https://github.com/shpyrd-io/shpyrd-examples) has fifteen small projects deployed to the demo workspace, one per language or pattern: Go, Node.js, Express, Python, Ruby, Sinatra, Rails, Java, .NET, PHP, static nginx, static httpd, React (Vite), Next.js, a multi-stage Dockerfile (Sinatra + React) and a Ruby app with system packages from an Aptfile.
@@ -31,7 +31,7 @@ shpyrd deploy                 # app from shpyrd.yaml, or --project my-service
 What happens:
 
 1. **Archive.** The committed tree of the current directory (`git archive HEAD`) is packed; run it from a subdirectory to deploy just that service of a monorepo. Uncommitted changes are not included unless you pass `--working-tree` (also chosen automatically when nothing in the directory is committed yet). Outside a Git repository the directory is tarred.
-2. **Upload.** The archive is sent to the cluster through the Kubernetes API server (no ingress or token needed).
+2. **Upload.** The archive is sent to your workspace over its API (self-hosted, with `--context`: through the Kubernetes API server).
 3. **Build.** In the cluster, with the Paketo buildpacks (kpack) or, when the directory has a `Dockerfile`, with BuildKit; the CLI streams every step.
 4. **Release.** The controller rolls the new image out process by process and prints the release number and URL.
 
@@ -50,7 +50,7 @@ What happens:
     Deploying: Releasing v3: web 1/3 updated · worker 0/1 updated
     Running: web 3/3 · worker 1/1
 Released v3: Deploy 654f4925638e
-https://hello-world.127.0.0.1.nip.io
+https://hello-world.acme.shpyrd.app
 ```
 
 Other sources:
@@ -326,6 +326,10 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 
 `shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). Instances left by `--detach` or a killed terminal are cleaned up after they finish.
 
+{% callout title="Self-hosted" %}
+`shpyrd run`, and `shpyrd shell` given a command, need a cluster you run: pass `--context`. Signed in to a workspace, `shpyrd shell` opens the image's shell.
+{% /callout %}
+
 ## Volumes
 
 Processes that need a disk mount a project volume:
@@ -389,7 +393,7 @@ Redeploy tries the current release again without creating a release. With a heal
 shpyrd open                 # opens https://my-service.<domain>
 shpyrd projects info my-service     # status, releases and every resource of the project (app, volumes...)
 shpyrd projects list
-kubectl -n app-my-service get all,ingress,volumes.shpyrd.io,image.kpack.io,jobs
+kubectl -n app-my-service get all,ingress,volumes.shpyrd.io,image.kpack.io,jobs   # self-hosted: on a cluster you run
 ```
 
 ## Destroy

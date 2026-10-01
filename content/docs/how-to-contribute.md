@@ -3,14 +3,14 @@ title: How to contribute
 description: Set up a development environment, find something to work on and send a change.
 ---
 
-Shpyrd is developed in the open at [github.com/shpyrd-io/shpyrd](https://github.com/shpyrd-io/shpyrd) under the MPL-2.0 license. Issues, ideas and pull requests are welcome. {% .lead %}
+shpyrd is developed in the open at [github.com/shpyrd-io/shpyrd](https://github.com/shpyrd-io/shpyrd) under the MPL-2.0 license. Issues, ideas and pull requests are welcome. {% .lead %}
 
 ## Where to start
 
 - **Try it and report.** Run the [quick start](/) on your machine and open an issue for anything confusing, slow or broken. UX feedback is as valuable as code at this stage.
 - **Pick an issue.** The [issue tracker](https://github.com/shpyrd-io/shpyrd/issues) has bugs and roadmap items. Comment on one before starting so work is not duplicated.
 - **Propose a change.** Small fixes go straight to a pull request. Anything that changes behaviour or architecture starts as a short RFC (`rfcs/0000-template.md`) or an issue describing the problem first.
-- **Talk.** Questions and discussions happen on [Discord](https://discord.gg/AxWMXXW7); the [code of conduct](https://github.com/shpyrd-io/shpyrd/blob/main/CODE_OF_CONDUCT.md) applies everywhere.
+- **Talk.** Questions and discussions happen on [Discord](https://discord.gg/RYAT4wNKfw); the [code of conduct](https://github.com/shpyrd-io/shpyrd/blob/main/CODE_OF_CONDUCT.md) applies everywhere.
 
 ## Development environment
 
@@ -49,4 +49,4 @@ This site lives in [shpyrd-io/shpyrd-docs](https://github.com/shpyrd-io/shpyrd-d
 
 ## Support the project
 
-Shpyrd is free and open source. If it saves you time, you can support its development with a donation: [donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01](https://donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01). Thank you.
+shpyrd is free and open source. If it saves you time, you can support its development with a donation: [donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01](https://donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01). Thank you.

@@ -3,12 +3,18 @@ title: Databases and caches
 description: PostgreSQL databases (CloudNativePG) and Redis-compatible stores (Valkey) as project resources, attached to apps as config vars.
 ---
 
-Two extensions add data stores to projects: `postgres` runs PostgreSQL databases with the CloudNativePG operator, `redis` runs Valkey or Redis caches and queues. Attach one to the app and it appears as `DATABASE_URL` or `REDIS_URL`. {% .lead %}
+A project can have PostgreSQL databases (run by the CloudNativePG operator) and Valkey or Redis caches and queues. Attach one to the app and it appears as `DATABASE_URL` or `REDIS_URL`. {% .lead %}
+
+On shpyrd cloud, add them from the project page: the Resources card's **Add resource** menu creates a database or a store, and **Attach** hands it to the app; `shpyrd attach` and `shpyrd detach` work from the CLI as well ([Attaching](#attaching)).
+
+{% callout title="Self-hosted" %}
+The `shpyrd pg` and `shpyrd redis` commands on this page need a cluster you run: pass `--context` (see the [CLI reference](/docs/cli)). There, two extensions add the data stores:
 
 ```shell
 shpyrd extensions enable postgres
 shpyrd extensions enable redis
 ```
+{% /callout %}
 
 ## PostgreSQL
 

@@ -12,11 +12,11 @@ shpyrd logs --project shop              # last 200 lines of every instance
 shpyrd logs --project shop -f -p worker # follow one process type
 ```
 
-The dashboard's **Logs** tab streams the same lines with a process filter, a text filter and level highlighting. This path reads from the Kubernetes API and works on every cluster with nothing enabled.
+The dashboard's **Logs** tab streams the same lines with a process filter, a text filter and level highlighting. There is nothing to set up: on shpyrd cloud and on a cluster you run yourself alike, this path reads from the Kubernetes API with nothing enabled.
 
 ## The log agent
 
-`shpyrd extensions enable logs-agent` runs [Vector](https://vector.dev) on every node ([RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md)). It reads the container logs of project instances and turns every line into a structured event:
+The log agent runs [Vector](https://vector.dev) on every node ([RFC-0022a](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0022a-log-agent.md)). It reads the container logs of project instances and turns every line into a structured event:
 
 ```json
 {"time": "...", "project": "shop", "process": "web", "instance": "web.2", "stream": "stdout",
@@ -24,6 +24,10 @@ The dashboard's **Logs** tab streams the same lines with a process filter, a tex
 ```
 
 Lines that are JSON get `level` and `msg` promoted and the rest kept in `fields`; plain lines keep `msg` as the text. Build output and the pods of attached databases and caches are not part of this stream.
+
+{% callout title="Self-hosted" %}
+On a cluster you run yourself, the operator switches the agent on with `shpyrd extensions enable logs-agent`.
+{% /callout %}
 
 **Bounded on the node.** Each container keeps at most 20 MiB of logs on disk (two files of 10 MiB, rotated by the kubelet), so an application logging at full speed cannot fill a node. History beyond that lives wherever you drain it.
 
@@ -40,7 +44,7 @@ And three scopes:
 
 - a **project drain** receives that project's lines; project admins add them on the project page or with `--project`;
 - a **workspace drain** receives every project's lines of the workspace, labelled with the project; workspace admins add them on the workspace's Log drains page or with `--workspace`;
-- a **cluster drain** receives every project's lines of the platform; the operator adds them over a kubeconfig with `--cluster`.
+- a **cluster drain** (self-hosted) receives every project's lines of the platform; the operator of a cluster you run yourself adds them over a kubeconfig with `--cluster`.
 
 ```shell
 shpyrd drains add https://in.logs.betterstack.com/ --header "Authorization: Bearer ..." --project shop
