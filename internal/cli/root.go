@@ -177,9 +177,9 @@ func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) 
 const agentDocsURL = "https://mcp.shpyrd.io/cli"
 
 // rootUsageTemplate is cobra's default usage template with the docs pointer
-// on the "Usage" line. Every subcommand inherits it, so `shpyrd deploy
-// --help` carries the pointer too.
+// on the "Usage" line of the root command only. Subcommands inherit the
+// template, so the pointer checks for a parent.
 func rootUsageTemplate(root *cobra.Command) string {
 	return strings.Replace(root.UsageTemplate(), "Usage:",
-		"Usage (LLM, IA and Agents, read the Docs: "+agentDocsURL+"):", 1)
+		"Usage{{if not .HasParent}} (LLM, IA and Agents, read the Docs: "+agentDocsURL+"){{end}}:", 1)
 }
