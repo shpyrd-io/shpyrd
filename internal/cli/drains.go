@@ -90,7 +90,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				return err
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -174,7 +174,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				return err
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -259,7 +259,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				return err
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

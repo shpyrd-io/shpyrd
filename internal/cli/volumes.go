@@ -75,7 +75,7 @@ func newVolumesCreateCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -132,7 +132,7 @@ func newVolumesListCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -202,7 +202,7 @@ func newVolumesResizeCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -278,7 +278,7 @@ func newVolumesDeleteCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

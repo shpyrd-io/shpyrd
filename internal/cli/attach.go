@@ -54,7 +54,7 @@ detach is a release that can be rolled back.
 			if prefix != "" && !prefixRe.MatchString(prefix) {
 				return errors.New("--prefix must be letters, digits and underscores")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -132,7 +132,7 @@ func newDetachCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

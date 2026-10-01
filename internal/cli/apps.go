@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -62,7 +63,7 @@ the app receives who they are. --public makes it a site anyone can open;
 				return err
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -70,7 +71,7 @@ the app receives who they are. --public makes it a site anyone can open;
 			if public {
 				access = shpyrdv1.AccessPublic
 			}
-			out := cmd.OutOrStdout()
+			out := g.progress(cmd)
 			var label string
 			if ac.session {
 				// Signed in through the API (shpyrd login): the server creates
@@ -119,12 +120,9 @@ the app receives who they are. --public makes it a site anyone can open;
 				ac.audit(ctx, slug, "project.create", project.Label(app), "")
 				label = project.Label(app)
 			}
-			fmt.Fprintf(out, "Created project %s\n", label)
-			if public {
-				fmt.Fprintln(out, "Anyone on the internet can open it (public). `shpyrd access set authenticated` closes it.")
-			} else {
-				fmt.Fprintln(out, "Visitors must sign in; grant a team the user role to let it in (`shpyrd members add`), or `shpyrd access set public` for a site.")
-			}
+			result := map[string]any{"project": slug, "name": name, "access": access}
+			var configPath string
+			var configCreated bool
 			if save {
 				// The file starts with the project and whatever the
 				// directory's build profile implies (RFC-0067).
@@ -134,16 +132,27 @@ the app receives who they are. --public makes it a site anyone can open;
 				if err != nil {
 					return err
 				}
-				if created {
-					fmt.Fprintf(out, "Wrote %s\n", path)
-				} else {
-					fmt.Fprintf(out, "Added to %s\n", path)
-				}
-				fmt.Fprintln(out, "Next: shpyrd deploy")
-			} else {
-				fmt.Fprintf(out, "Next: shpyrd deploy --project %s   (or add `project: %s` to shpyrd.yaml)\n", slug, slug)
+				configPath, configCreated = path, created
+				result["config"] = path
 			}
-			return nil
+			return g.print(cmd, result, func(w io.Writer) {
+				fmt.Fprintf(w, "Created project %s\n", label)
+				if public {
+					fmt.Fprintln(w, "Anyone on the internet can open it (public). `shpyrd access set authenticated` closes it.")
+				} else {
+					fmt.Fprintln(w, "Visitors must sign in; grant a team the user role to let it in (`shpyrd members add`), or `shpyrd access set public` for a site.")
+				}
+				if save {
+					if configCreated {
+						fmt.Fprintf(w, "Wrote %s\n", configPath)
+					} else {
+						fmt.Fprintf(w, "Added to %s\n", configPath)
+					}
+					fmt.Fprintln(w, "Next: shpyrd deploy")
+				} else {
+					fmt.Fprintf(w, "Next: shpyrd deploy --project %s   (or add `project: %s` to shpyrd.yaml)\n", slug, slug)
+				}
+			})
 		},
 	}
 	cmd.Flags().StringVar(&slug, "slug", "", "identifier to use instead of the one derived from the name")
@@ -168,7 +177,7 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 				return errors.New("provide a new name, --slug, or both")
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -197,9 +206,10 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 				if name != "" {
 					label = name + " (" + newSlug + ")"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Renamed project to %s\n", label)
-				fmt.Fprintf(cmd.OutOrStdout(), "Old address redirects for 30 days.\n")
-				return nil
+				return g.print(cmd, map[string]any{"project": newSlug, "previous": project.SlugOf(app), "name": firstNonEmpty(name, project.DisplayName(app))}, func(w io.Writer) {
+					fmt.Fprintf(w, "Renamed project to %s\n", label)
+					fmt.Fprintf(w, "Old address redirects for 30 days.\n")
+				})
 			}
 			// Display name only.
 			project.SetDisplayName(app, name)
@@ -208,15 +218,15 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 				if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+project.SlugOf(app), body, "application/json"); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
-				return nil
+			} else {
+				if err := ac.c.Update(ctx, app); err != nil {
+					return err
+				}
+				ac.audit(ctx, project.SlugOf(app), "project.rename", project.Label(app), "")
 			}
-			if err := ac.c.Update(ctx, app); err != nil {
-				return err
-			}
-			ac.audit(ctx, project.SlugOf(app), "project.rename", project.Label(app), "")
-			fmt.Fprintf(cmd.OutOrStdout(), "Renamed project %s\n", project.Label(app))
-			return nil
+			return g.print(cmd, map[string]any{"project": project.SlugOf(app), "name": name}, func(w io.Writer) {
+				fmt.Fprintf(w, "Renamed project %s\n", project.Label(app))
+			})
 		},
 	}
 	cmd.Flags().StringVar(&newSlug, "slug", "", "change the URL slug (hostname) too; the old address redirects for 30 days; requires a session and an ID-named project")
@@ -248,7 +258,7 @@ func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
 				body["featured"] = featured
 			}
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -256,8 +266,10 @@ func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
 			if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+args[0], raw, "application/json"); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Updated what the launcher shows for %s.\n", args[0])
-			return nil
+			body["project"] = args[0]
+			return g.print(cmd, body, func(w io.Writer) {
+				fmt.Fprintf(w, "Updated what the launcher shows for %s.\n", args[0])
+			})
 		},
 	}
 	cmd.Flags().StringVar(&description, "description", "", "one line under the name in the launcher (empty removes it)")
@@ -273,7 +285,7 @@ func newAppsListCmd(g *globalFlags) *cobra.Command {
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -286,16 +298,18 @@ func newAppsListCmd(g *globalFlags) *cobra.Command {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
 			sort.Slice(items, func(i, j int) bool { return items[i].Slug < items[j].Slug })
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "PROJECT\tNAME\tPHASE\tRELEASE\tURL\tAGE")
-			for _, a := range items {
-				rel := "-"
-				if a.Release > 0 {
-					rel = fmt.Sprintf("v%d", a.Release)
+			return g.print(cmd, items, func(w io.Writer) {
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "PROJECT\tNAME\tPHASE\tRELEASE\tURL\tAGE")
+				for _, a := range items {
+					rel := "-"
+					if a.Release > 0 {
+						rel = fmt.Sprintf("v%d", a.Release)
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Slug, a.DisplayName, firstNonEmpty(a.Phase, "Pending"), rel, a.URL, a.CreatedAt.Local().Format("Jan 2"))
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Slug, a.DisplayName, firstNonEmpty(a.Phase, "Pending"), rel, a.URL, a.CreatedAt.Local().Format("Jan 2"))
-			}
-			return tw.Flush()
+				_ = tw.Flush()
+			})
 		},
 	}
 }
@@ -307,7 +321,7 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -315,7 +329,6 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printAppInfo(cmd, app)
 			var vols []shpyrdv1.Volume
 			if ac.session {
 				vols, _ = ac.listVolumesAPI(ctx, project.SlugOf(app))
@@ -324,16 +337,17 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 				_ = ac.c.List(ctx, &list, client.InNamespace(app.Namespace))
 				vols = list.Items
 			}
-			printResources(cmd, app, vols)
-			return nil
+			return g.print(cmd, map[string]any{"project": app, "volumes": vols}, func(w io.Writer) {
+				printAppInfo(w, app)
+				printResources(w, app, vols)
+			})
 		},
 	}
 }
 
 // printResources lists every resource of the project (RFC-0003): the app
 // itself, its attached resources and the volumes.
-func printResources(cmd *cobra.Command, app *shpyrdv1.App, vols []shpyrdv1.Volume) {
-	out := cmd.OutOrStdout()
+func printResources(out io.Writer, app *shpyrdv1.App, vols []shpyrdv1.Volume) {
 	fmt.Fprintln(out, "Resources:")
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", "App", project.SlugOf(app), firstNonEmpty(app.Status.Phase, "Pending"), firstNonEmpty(app.Status.URL, "-"))
@@ -354,8 +368,7 @@ func printResources(cmd *cobra.Command, app *shpyrdv1.App, vols []shpyrdv1.Volum
 	_ = tw.Flush()
 }
 
-func printAppInfo(cmd *cobra.Command, app *shpyrdv1.App) {
-	out := cmd.OutOrStdout()
+func printAppInfo(out io.Writer, app *shpyrdv1.App) {
 	fmt.Fprintf(out, "Project:    %s\n", project.Label(app))
 	fmt.Fprintf(out, "Phase:      %s\n", firstNonEmpty(app.Status.Phase, "Pending"))
 	if app.Status.Message != "" {
@@ -451,7 +464,7 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -471,7 +484,7 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 				for _, v := range vols.Items {
 					names = append(names, fmt.Sprintf("%s (%s)", v.Name, v.Spec.Size.String()))
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Warning: this deletes the data on volume(s) %s.\n", strings.Join(names, ", "))
+				fmt.Fprintf(g.progress(cmd), "Warning: this deletes the data on volume(s) %s.\n", strings.Join(names, ", "))
 			}
 			if !confirm(cmd, yes, fmt.Sprintf("Delete project %s with all its resources?", project.Label(app)), false) {
 				return fmt.Errorf("aborted")
@@ -481,15 +494,15 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 				if _, err := ac.serverRequest(ctx, "DELETE", "api/projects/"+name, nil, ""); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Deleting project %s...\n", name)
-				return nil
+			} else {
+				if err := ac.c.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
+				ac.auditCluster(ctx, "project.destroy", project.Label(app), "")
 			}
-			if err := ac.c.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-			ac.auditCluster(ctx, "project.destroy", project.Label(app), "")
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleting project %s...\n", name)
-			return nil
+			return g.print(cmd, map[string]any{"project": name, "deleting": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Deleting project %s...\n", name)
+			})
 		},
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask for confirmation")

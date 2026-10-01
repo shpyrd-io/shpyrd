@@ -73,7 +73,7 @@ to; over a kubeconfig it is the default one unless --workspace names another.
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -136,7 +136,7 @@ func workspaceOfApp(a *shpyrdv1.App) string {
 
 func mutateGlobals(g *globalFlags, cmd *cobra.Command, workspace string, set map[string]string, unset []string) error {
 	ctx := signalContext()
-	ac, err := newAppClient(g, cmd.OutOrStdout())
+	ac, err := newAppClient(g, g.progress(cmd))
 	if err != nil {
 		return err
 	}

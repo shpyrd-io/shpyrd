@@ -42,7 +42,7 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -70,7 +70,7 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -148,7 +148,7 @@ certificate is issued as soon as DNS resolves here.
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

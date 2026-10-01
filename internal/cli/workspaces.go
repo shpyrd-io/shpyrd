@@ -81,7 +81,7 @@ func newWorkspacesCreateCmd(g *globalFlags) *cobra.Command {
 			if plan != "" && operator {
 				return errors.New("--plan does not apply to an operator workspace: the operator's own are never invoiced")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -165,7 +165,7 @@ printed once otherwise.`,
 			if !store.ValidWorkspaceRole(role) {
 				return errors.New("--role must be owner, admin or member")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -195,7 +195,7 @@ func newWorkspacesListCmd(g *globalFlags) *cobra.Command {
 		Short: "List the workspaces",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -300,7 +300,7 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 			if !clear && !limits.set() {
 				return errors.New("give at least one ceiling (--projects, --instances, --cpu, --memory, --storage) or --clear")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
@@ -339,7 +339,7 @@ func newWorkspacesStatusCmd(g *globalFlags, verb, status string) *cobra.Command 
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

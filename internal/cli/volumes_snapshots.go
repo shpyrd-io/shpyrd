@@ -185,7 +185,7 @@ snapshot first if you may want it back.`,
 			if to != "" && !volumeNameRe.MatchString(to) {
 				return errors.New("new volume names use lowercase letters, digits and dashes (max 40 chars)")
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}

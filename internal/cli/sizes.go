@@ -227,7 +227,7 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ac, err := newAppClient(g, cmd.OutOrStdout())
+			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
