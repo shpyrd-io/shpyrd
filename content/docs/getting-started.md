@@ -22,7 +22,7 @@ The first time, your agent sends you to your workspace to sign in and **Allow** 
 
 In the folder of your app, say what you want, the way you'd say it to a colleague:
 
-{% chat title="Claude Code" detail="~/projects/purchases" %}
+{% chat detail="~/projects/purchases" %}
 {% message from="person" %}
 Put this app online on shpyrd.
 {% /message %}
@@ -39,7 +39,7 @@ Done. Everyone in Finance can open it - and whoever joins Finance later. Ana can
 
 And a week later:
 
-{% chat title="Claude Code" detail="~/projects/purchases" %}
+{% chat detail="~/projects/purchases" %}
 {% message from="person" %}
 Finance says the totals are wrong since this morning.
 {% /message %}
