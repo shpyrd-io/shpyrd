@@ -1,6 +1,7 @@
 "use client";
 
 import { Cpu, MemoryStick, Server } from "lucide-react";
+import { Badge } from "@shpyrd/ui/components/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InfoTable, InfoTableItem } from "@shpyrd/ui/components/info-table";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
@@ -21,11 +22,18 @@ import { cpu, memory } from "../../samples";
 // the processes have reserved on them, and how many there are, between
 // the fewest the cluster keeps and the most it may grow to.
 
+// The node pools, in the order they are listed, and what lands on each.
+const pools: Record<string, string> = {
+  platform: "The platform itself, and whatever has no pool of its own.",
+  data: "Project databases and Redis.",
+  apps: "Project processes, builds and one-off runs.",
+};
+
 const nodes = [
-  { name: "10.0.1.14", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-1", arch: "arm64", role: "control, worker", cpu: [62, 78], memory: [71, 84], cores: 4, gib: 24, pods: "23 / 110", kubelet: "v1.31.2", ready: true },
-  { name: "10.0.1.27", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-1", arch: "arm64", role: "worker", cpu: [48, 65], memory: [55, 70], cores: 4, gib: 24, pods: "19 / 110", kubelet: "v1.31.2", ready: true },
-  { name: "10.0.1.31", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", role: "worker", cpu: [88, 92], memory: [81, 90], cores: 4, gib: 24, pods: "27 / 110", kubelet: "v1.31.2", ready: true },
-  { name: "10.0.1.40", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", role: "worker", cpu: [0, 0], memory: [0, 0], cores: 4, gib: 24, pods: "0 / 110", kubelet: "v1.31.2", ready: false },
+  { name: "10.0.1.14", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-1", arch: "arm64", pool: "platform", cpu: [62, 78], memory: [71, 84], cores: 4, gib: 24, pods: "23 / 110", kubelet: "v1.31.2", ready: true },
+  { name: "10.0.1.27", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-1", arch: "arm64", pool: "platform", cpu: [48, 65], memory: [55, 70], cores: 4, gib: 24, pods: "19 / 110", kubelet: "v1.31.2", ready: true },
+  { name: "10.0.1.31", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", pool: "data", cpu: [88, 92], memory: [81, 90], cores: 4, gib: 24, pods: "27 / 110", kubelet: "v1.31.2", ready: true },
+  { name: "10.0.1.40", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", pool: "apps", cpu: [0, 0], memory: [0, 0], cores: 4, gib: 24, pods: "0 / 110", kubelet: "v1.31.2", ready: false },
 ];
 
 const extensions = [
@@ -141,7 +149,7 @@ export default function Page() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Node</TableHead>
-                  <TableHead>Role</TableHead>
+                  <TableHead>Pool</TableHead>
                   <TableHead className="w-36">CPU used / reserved</TableHead>
                   <TableHead className="w-36">Memory used / reserved</TableHead>
                   <TableHead>Instances</TableHead>
@@ -160,7 +168,10 @@ export default function Page() {
                       </Stack>
                       <div className="mt-1 text-[11px] text-muted-foreground">{n.shape}</div>
                     </TableCell>
-                    <TableCell className="text-xs">{n.role}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{n.pool}</Badge>
+                      <div className="mt-1 max-w-52 text-[11px] leading-snug whitespace-normal text-muted-foreground">{pools[n.pool]}</div>
+                    </TableCell>
                     <TableCell>
                       <Usage label={`CPU of ${n.name}`} used={n.cpu[0]} reserved={n.cpu[1]} detail={`${n.cores} cores`} />
                     </TableCell>

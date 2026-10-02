@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
@@ -68,6 +69,10 @@ type NodeInfo struct {
 	// clusters without a cloud provider (kind).
 	InstanceType string `json:"instanceType,omitempty"`
 	Zone         string `json:"zone,omitempty"`
+	// Pool is the node pool the node belongs to (RFC-0077): platform, apps
+	// or data, from the shpyrd.io/pool label; empty on a single-pool
+	// cluster.
+	Pool string `json:"pool,omitempty"`
 }
 
 func (s *Server) clusterSummary(c *gin.Context) {
@@ -136,6 +141,7 @@ func nodeInfo(n corev1.Node) NodeInfo {
 		Pods:           n.Status.Capacity.Pods().String(),
 		InstanceType:   firstLabel(n.Labels, "node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type"),
 		Zone:           firstLabel(n.Labels, "topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"),
+		Pool:           n.Labels[controller.PoolLabel],
 	}
 	var roles []string
 	for k := range n.Labels {

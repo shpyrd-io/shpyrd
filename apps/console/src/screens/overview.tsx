@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, MemoryStick } from "lucide-react";
+import { Badge } from "@shpyrd/ui/components/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InfoTable, InfoTableItem } from "@shpyrd/ui/components/info-table";
 import { Meter } from "@shpyrd/ui/components/meter";
@@ -13,6 +14,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { TimeChart } from "@shpyrd/ui/components/time-chart";
 import { api } from "@/api/api";
+import type { Node } from "@/api/types";
 import { ago, bytes, Failed, Loading } from "./shared";
 
 // What the environment was built for, and so how load balancing, DNS,
@@ -21,6 +23,28 @@ const profiles: Record<string, string> = {
   local: "A local kind cluster: a front door on the host, local names, a development CA, a registry in the cluster.",
   oci: "Oracle Cloud: an OCI load balancer, a wildcard DNS record, Let's Encrypt certificates, OCIR.",
 };
+
+// The node pools (RFC-0077), in the order they are listed, and what the
+// controller puts on each. A node without a pool is on a single-pool
+// cluster, where everything lands everywhere.
+const pools: Record<string, string> = {
+  platform: "The platform itself, and whatever has no pool of its own.",
+  data: "Project databases and Redis.",
+  apps: "Project processes, builds and one-off runs.",
+};
+const poolOrder = (n: Node) => {
+  const i = Object.keys(pools).indexOf(n.pool ?? "");
+  return i < 0 ? Object.keys(pools).length : i;
+};
+
+// "2 platform, 1 data and 2 apps": how many nodes each pool has, in the
+// order above; empty when no node has a pool.
+function poolCounts(nodes: Node[]): string {
+  const counts = new Map<string, number>();
+  for (const n of nodes) if (n.pool) counts.set(n.pool, (counts.get(n.pool) ?? 0) + 1);
+  const parts = [...counts].sort(([a], [b]) => poolOrder({ pool: a } as Node) - poolOrder({ pool: b } as Node)).map(([pool, n]) => `${n} ${pool}`);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? "");
+}
 
 // The cluster as it is: what was installed, where it answers, and how
 // full the machines are.
@@ -37,11 +61,13 @@ export function Overview() {
   const installer = c.install?.version;
   const byName = new Map((m?.nodes ?? []).map((n) => [n.name, n]));
   const failing = c.nodes.filter((n) => !n.ready).length;
+  const nodes = [...c.nodes].sort((a, b) => poolOrder(a) - poolOrder(b) || a.name.localeCompare(b.name));
+  const byPool = poolCounts(nodes);
   return (
     <>
       <PageHeading
         title="Cluster"
-        description={`${c.nodes.length} ${c.nodes.length === 1 ? "node" : "nodes"}, ${c.apps} ${c.apps === 1 ? "project" : "projects"}, ${Object.entries(c.phases)
+        description={`${c.nodes.length} ${c.nodes.length === 1 ? "node" : "nodes"}${byPool ? ` (${byPool})` : ""}, ${c.apps} ${c.apps === 1 ? "project" : "projects"}, ${Object.entries(c.phases)
           .map(([phase, n]) => `${n} ${phase.toLowerCase()}`)
           .join(", ")}.`}
         iconEnd={failing ? <StatusBadge type="error">{`${failing} ${failing === 1 ? "node" : "nodes"} not ready`}</StatusBadge> : <StatusBadge type="success">Every node ready</StatusBadge>}
@@ -117,7 +143,7 @@ export function Overview() {
             <TableHeader>
               <TableRow>
                 <TableHead>Node</TableHead>
-                <TableHead>Role</TableHead>
+                <TableHead>Pool</TableHead>
                 <TableHead className="w-44">CPU used · reserved</TableHead>
                 <TableHead className="w-44">Memory used · reserved</TableHead>
                 <TableHead>Instances</TableHead>
@@ -125,9 +151,11 @@ export function Overview() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {c.nodes.map((n) => {
+              {nodes.map((n) => {
                 const u = byName.get(n.name);
                 const under = [n.instanceType, n.zone].filter(Boolean).join(" · ");
+                // The Kubernetes role matters only when it is not a plain worker.
+                const role = n.roles === "worker" ? "" : n.roles;
                 return (
                   <TableRow key={n.name}>
                     <TableCell>
@@ -140,7 +168,19 @@ export function Overview() {
                       </div>
                       {under && <div className="mt-0.5 text-[11px] text-muted-foreground">{under}</div>}
                     </TableCell>
-                    <TableCell className="text-xs">{n.roles}</TableCell>
+                    <TableCell>
+                      {n.pool ? (
+                        <>
+                          <Badge variant="secondary">{n.pool}</Badge>
+                          <div className="mt-1 max-w-52 text-[11px] leading-snug whitespace-normal text-muted-foreground">{[pools[n.pool], role].filter(Boolean).join(" · ")}</div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xs text-muted-foreground">-</span>
+                          <div className="mt-0.5 max-w-52 text-[11px] leading-snug whitespace-normal text-muted-foreground">{[role, "No pools: everything lands here."].filter(Boolean).join(" · ")}</div>
+                        </>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {u ? (
                         <div className="grid gap-1">
