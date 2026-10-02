@@ -39,10 +39,13 @@ function Hero({
   note?: React.ReactNode;
   // A picture beside the words. Centred heroes have no room for one.
   image?: React.ReactNode;
-  align?: "start" | "center";
+  // "auto" is centred while the hero is one column, a phone's width, and
+  // starts at the left once there is room for the picture beside the words.
+  align?: "start" | "center" | "auto";
   variant?: keyof typeof sizes;
 }) {
   const centred = align === "center";
+  const auto = align === "auto";
   const beside = Boolean(image) && !centred;
 
   return (
@@ -60,7 +63,13 @@ function Hero({
           beside && "@3xl/hero:grid-cols-2",
         )}
       >
-        <div className={cn("grid gap-5", centred && "justify-items-center text-center")}>
+        <div
+          className={cn(
+            "grid gap-5",
+            centred && "justify-items-center text-center",
+            auto && "justify-items-center text-center @3xl/hero:justify-items-start @3xl/hero:text-start",
+          )}
+        >
           {label && (
             <div data-slot="hero-label" className="text-sm text-muted-foreground">
               {label}
@@ -86,7 +95,11 @@ function Hero({
           {actions && (
             <div
               data-slot="hero-actions"
-              className={cn("flex flex-wrap items-center gap-3", centred && "justify-center")}
+              className={cn(
+                "flex flex-wrap items-center gap-3",
+                centred && "justify-center",
+                auto && "justify-center @3xl/hero:justify-start",
+              )}
             >
               {actions}
             </div>

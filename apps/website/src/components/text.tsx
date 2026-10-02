@@ -15,7 +15,7 @@ export function Text({ text }: { text: TextOf }) {
   const parts = text.headings.filter((h) => h.level === 2 || h.level === 3);
   return (
     <>
-      <PageLayoutContent width="large" padding="normal" className="grid content-start gap-8">
+      <PageLayoutContent width="large" padding="normal" className="grid grid-cols-1 content-start gap-8">
         <PageHeading title={text.title} description={text.description} variant="large" border />
         <Prose>{Markdoc.renderers.react(text.content, React, { components })}</Prose>
       </PageLayoutContent>
