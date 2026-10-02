@@ -199,3 +199,66 @@ func rolesWithToken(t *testing.T, s *Server, token string) authz.Roles {
 	_ = json.Unmarshal(rec.Body.Bytes(), &me)
 	return me.Roles
 }
+
+// A workspace owner or admin administers every project without a grant on
+// it (issue #31), so they may give a token any role on any project - and
+// the token holds it when used, rather than being cut to the grant they
+// never had.
+func TestAWorkspaceAdminScopesATokenToAProjectWithoutAGrant(t *testing.T) {
+	shop := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	s, _ := newTestServer(t, nil, []client.Object{shop})
+	s.authz.TTL = 1
+	ctx := t.Context()
+	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "ada@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, s, "PATCH", "/api/workspace/people/ada@example.test", `{"role":"admin"}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("make ada a workspace admin = %d %s", rec.Code, rec.Body.String())
+	}
+	s.authz.Invalidate()
+	sid, csrf := signIn(t, s, ext.Identity{Email: "ada@example.test", Provider: "local"})
+
+	// No grant on shop, and still a developer token for it, or an admin one.
+	for _, role := range []string{"developer", "admin"} {
+		rec := doCookie(t, s, "POST", "/api/tokens", `{"name":"ci-`+role+`","projectRoles":{"shop":"`+role+`"}}`, sid, csrf)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create a %s token for shop = %d %s", role, rec.Code, rec.Body.String())
+		}
+	}
+	rec := doCookie(t, s, "POST", "/api/tokens", `{"name":"ci","projectRoles":{"shop":"developer"}}`, sid, csrf)
+	var created TokenCreateView
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Token == "" {
+		t.Fatalf("token response: %s %v", rec.Body.String(), err)
+	}
+
+	// The token reaches its project, as a developer: not cut to nothing.
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+created.Token)
+		out := httptest.NewRecorder()
+		s.Handler().ServeHTTP(out, req)
+		return out
+	}
+	if out := get("/api/projects/shop"); out.Code != http.StatusOK {
+		t.Fatalf("the token reads its project = %d %s", out.Code, out.Body.String())
+	}
+	var me struct {
+		Roles authz.Roles `json:"roles"`
+	}
+	_ = json.Unmarshal(get("/api/me").Body.Bytes(), &me)
+	if me.Roles.ProjectRole("shop") != shpyrdv1.RoleDeveloper && !hasRole(me.Roles.Projects, shpyrdv1.RoleDeveloper) {
+		t.Errorf("token roles = %+v, want developer on shop", me.Roles)
+	}
+	if me.Roles.Platform != "" {
+		t.Errorf("a project-scoped token carries the platform role %q", me.Roles.Platform)
+	}
+}
+
+func hasRole(projects map[string]string, role string) bool {
+	for _, r := range projects {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}

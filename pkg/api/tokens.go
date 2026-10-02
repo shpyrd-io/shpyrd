@@ -142,7 +142,9 @@ func (s *Server) resolveAPIToken(c *gin.Context, tok string) (*tokenCaller, bool
 	}
 	projects := map[string]string{}
 	for proj, role := range apiTok.ProjectRoles {
-		ownerRole := ownerRoles.Projects[proj]
+		// The owner's effective role: a workspace owner or admin administers
+		// every project without a grant on it (issue #31).
+		ownerRole := ownerRoles.ProjectRole(proj)
 		if authz.RankRole(role) <= authz.RankRole(ownerRole) {
 			projects[proj] = role
 		} else {
@@ -341,7 +343,9 @@ func (s *Server) createToken(c *gin.Context) {
 		grantKeyRoles[key] = role
 	}
 	for proj, role := range grantKeyRoles {
-		ownerRole := caller.Projects[proj]
+		// The caller's effective role, not only their grants: a workspace
+		// owner or admin administers every project (issue #31).
+		ownerRole := caller.ProjectRole(proj)
 		if authz.RankRole(role) > authz.RankRole(ownerRole) {
 			abort(c, http.StatusBadRequest, fmt.Errorf("a token cannot be %s on %s: you are %s there", role, proj, roleOrNone(ownerRole)))
 			return
