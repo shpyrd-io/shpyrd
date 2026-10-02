@@ -2,7 +2,10 @@
 # buildpack-<name>/vX.Y.Z, package buildpacks/<name> and push it to GHCR as
 # ghcr.io/shpyrd-io/buildpack-<name>:X.Y.Z, which the kpack component's
 # ClusterBuildpack names (deploy/components/kpack/base/builder.yaml). The
-# package must be public: every cluster pulls it without credentials.
+# package must be public (once, in the organisation's package settings):
+# every cluster pulls it without credentials. Until a version the manifest
+# names exists, kpack cannot make the platform's builder and every
+# buildpack build fails, the end-to-end CI job's included.
 #
 #   git tag buildpack-build-env/v0.1.0 && git push origin buildpack-build-env/v0.1.0
 #
@@ -41,5 +44,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: imjasonh/setup-crane@v0.7
       - name: Package and push
         run: pack buildpack package "${{ steps.tag.outputs.image }}" --path "${{ steps.tag.outputs.dir }}" --publish
+      # pack sets no labels: the source label links the package to this
+      # repository, so the workflow's own token may publish its next
+      # versions.
+      - name: Link the package to the repository
+        run: |
+          crane mutate "${{ steps.tag.outputs.image }}" \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.description="shpyrd's build-env buildpack" \
+            --tag "${{ steps.tag.outputs.image }}"
