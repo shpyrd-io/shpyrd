@@ -110,6 +110,17 @@ export type ProjectSummary = {
   createdAt: string;
   exposure?: Exposure;
   access: Access;
+  // The symbol of its card on the launcher and its colour; the image it
+  // sent in their place, and that image's type.
+  icon?: string;
+  iconColor?: string;
+  iconUrl?: string;
+  iconType?: string;
+  // The first domain of its own that answers: what its card shows and
+  // opens, before its address under the platform.
+  domain?: string;
+  // The teams that have access to it; only in the list.
+  teams?: string[];
 };
 
 export type Project = ProjectSummary & {

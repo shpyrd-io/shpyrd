@@ -41,7 +41,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -1065,6 +1065,37 @@ func TestProjectsStore(t *testing.T) {
 			// Rekeying again moves nothing.
 			if moved, err := s.RekeyProject(ctx, DefaultWorkspace, "shop", id); err != nil || moved != 0 {
 				t.Errorf("second rekey: %d %v", moved, err)
+			}
+		})
+	}
+}
+
+// The image a project sent for its card: by the project's ID, replaced in
+// place, removed by an empty one.
+func TestProjectIcons(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			const id = "0b1e6c7a-9d6e-4c2f-8a1b-2f3e4d5c6b7a"
+			if _, _, err := s.ProjectIcon(ctx, id); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("none yet: %v", err)
+			}
+			if err := s.SetProjectIcon(ctx, id, []byte("<svg/>"), "image/svg+xml"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetProjectIcon(ctx, id, []byte("PNG"), "image/png"); err != nil {
+				t.Fatal(err)
+			}
+			data, typ, err := s.ProjectIcon(ctx, id)
+			if err != nil || string(data) != "PNG" || typ != "image/png" {
+				t.Fatalf("replaced: %q %q %v", data, typ, err)
+			}
+			if err := s.SetProjectIcon(ctx, id, nil, ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := s.ProjectIcon(ctx, id); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("removed: %v", err)
 			}
 		})
 	}

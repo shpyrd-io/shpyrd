@@ -1,6 +1,7 @@
 "use client";
 
 import { BookOpen, Briefcase, Mail, Tv } from "lucide-react";
+import { AppIcon } from "@shpyrd/ui/components/app-icons";
 import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
 import { Section } from "../../section";
 
@@ -55,6 +56,25 @@ export default function Page() {
           />
           <LauncherCard name="Mail" icon={<Mail />} tone="neutral" url="mail.acme.internal" exposure="internal" access="locked" />
           <LauncherCard name="Reports" tone="blue" phase="running" exposure="internal" />
+        </div>
+      </Section>
+      <Section title="The colour the project chose for its symbol, and a picture of its own, as it is">
+        <div className="grid items-stretch gap-4 @xl/page-layout:grid-cols-2 @3xl/page-layout:grid-cols-3">
+          <LauncherCard
+            name="Fleet"
+            description="Where every truck is, and what it carries."
+            icon={<AppIcon name="truck" />}
+            colour="amber"
+            url="fleet.acme.com"
+            tags={["Logistics", "Operations"]}
+          />
+          <LauncherCard
+            name="Garden"
+            description="The orders of the garden centre, and its deliveries."
+            picture="/samples/picture.png"
+            url="garden.acme.com"
+            tags={["Orders"]}
+          />
         </div>
       </Section>
     </>

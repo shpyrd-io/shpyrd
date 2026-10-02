@@ -101,7 +101,10 @@ export type Api = {
   projects: () => Promise<ProjectSummary[]>;
   project: (slug: string) => Promise<Project>;
   createProject: (body: NewProject) => Promise<ProjectSummary>;
-  updateProject: (slug: string, body: { name?: string; description?: string; featured?: boolean }) => Promise<Project>;
+  updateProject: (slug: string, body: { name?: string; description?: string; featured?: boolean; icon?: string; iconColor?: string }) => Promise<Project>;
+  // The project's own image for its card, as a data URL; and back to its symbol.
+  setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
+  removeProjectIcon: (slug: string) => Promise<Project>;
   destroyProject: (slug: string) => Promise<void>;
   deploy: (slug: string, body: DeployRequest) => Promise<ProjectSummary>;
   // The current release again: new instances of it, or, after a failed

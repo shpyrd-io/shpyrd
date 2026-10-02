@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AppWindow, LayoutGrid, Plus, Settings } from "lucide-react";
+import { LayoutGrid, Plus, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Blankslate } from "@shpyrd/ui/components/blankslate";
@@ -29,7 +29,8 @@ import { api, ApiError } from "@/api/api";
 import type { ProjectSummary } from "@/api/types";
 import { useBrandColor } from "@/lib/branding";
 import { usePerms, useUserOnly } from "@/lib/perms";
-import { hostOf, openUrl, phaseOf, toneOf } from "@/lib/project";
+import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
+import { lookOf } from "@/lib/tile";
 import { PersonMenu, ThemeButton } from "@/shell/person";
 
 // Where everyone lands: the applications of the workspace, one card
@@ -103,19 +104,22 @@ export function Launcher() {
   );
 }
 
+// One project: its symbol, where it answers (its own domain first), and
+// who may open it.
 function Card({ project, operator }: { project: ProjectSummary; operator: boolean }) {
   const navigate = useNavigate();
+  const address = addressOf(project);
   return (
     <LauncherCard
       name={project.displayName}
       description={project.description}
-      icon={project.url ? <AppWindow /> : undefined}
-      tone={toneOf(project.slug)}
-      url={hostOf(project.url)}
-      href={openUrl(project.url, project.access)}
+      {...lookOf(project)}
+      url={hostOf(address)}
+      href={openUrl(address, project.access)}
+      tags={badgesOf(project)}
       phase={phaseOf(project)}
       exposure={project.exposure === "internal" ? "internal" : "public"}
-      access={project.access === "public" ? "open" : "locked"}
+      access={project.access === "authenticated" ? "locked" : "open"}
       onSettings={operator ? () => navigate(`/projects/${project.slug}`) : undefined}
     />
   );

@@ -192,6 +192,51 @@
           "createdAt": "2026-09-28T02:00:00Z"
         }
       ]
+    },
+    "billing": {
+      "configVars": [],
+      "builds": [],
+      "resources": [],
+      "volumes": [],
+      "snapshots": [],
+      "domains": {
+        "target": "acme.shpyrd.app",
+        "domains": []
+      },
+      "drains": [],
+      "members": [
+        {
+          "name": "team:finance",
+          "team": "finance",
+          "role": "user"
+        },
+        {
+          "name": "team:support",
+          "team": "support",
+          "role": "viewer"
+        }
+      ],
+      "allow": []
+    },
+    "dash-tv": {
+      "configVars": [],
+      "builds": [],
+      "resources": [],
+      "volumes": [],
+      "snapshots": [],
+      "domains": {
+        "target": "acme.shpyrd.app",
+        "domains": []
+      },
+      "drains": [],
+      "members": [
+        {
+          "name": "team:everyone",
+          "team": "everyone",
+          "role": "user"
+        }
+      ],
+      "allow": []
     }
   },
   "people": [
@@ -268,6 +313,14 @@
         "marcelo@acme.com"
       ],
       "platformRole": "platform-admin"
+    },
+    {
+      "name": "finance",
+      "description": "Invoices, plans and what each client owes.",
+      "members": [
+        "ana@acme.com"
+      ],
+      "groups": []
     },
     {
       "name": "support",

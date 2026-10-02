@@ -5,6 +5,7 @@ package project
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -278,6 +279,83 @@ func SetFeatured(a *shpyrdv1.App, on bool) {
 		a.Annotations = map[string]string{}
 	}
 	a.Annotations[shpyrdv1.AnnotationFeatured] = "true"
+}
+
+// IconColors are the colours a project may give its symbol on the
+// launcher. The interface has a value of each for each theme
+// (design/ui, --symbol-<name>).
+var IconColors = []string{"red", "orange", "amber", "yellow", "lime", "green", "teal", "cyan", "blue", "indigo", "violet", "pink", "brown", "grey"}
+
+var iconRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// Icon of an App: the name of its symbol on the launcher, or "".
+func Icon(a *shpyrdv1.App) string {
+	if a == nil {
+		return ""
+	}
+	return a.Annotations[shpyrdv1.AnnotationIcon]
+}
+
+// SetIcon records the symbol of the App by its name ("briefcase"); ""
+// removes it. Which names are drawn is the interface's to say; a name
+// it does not know falls back to its default.
+func SetIcon(a *shpyrdv1.App, name string) error {
+	name = strings.TrimSpace(name)
+	if name != "" && (len(name) > 40 || !iconRe.MatchString(name)) {
+		return fmt.Errorf("icon %q is not the name of a symbol (lowercase words joined by dashes, like briefcase or chart-line)", name)
+	}
+	setAnnotation(a, shpyrdv1.AnnotationIcon, name)
+	return nil
+}
+
+// IconColor of an App: the colour of its symbol, or "".
+func IconColor(a *shpyrdv1.App) string {
+	if a == nil {
+		return ""
+	}
+	return a.Annotations[shpyrdv1.AnnotationIconColor]
+}
+
+// SetIconColor records the colour of the symbol, one of IconColors; ""
+// removes it.
+func SetIconColor(a *shpyrdv1.App, color string) error {
+	color = strings.TrimSpace(color)
+	if color != "" && !slices.Contains(IconColors, color) {
+		return fmt.Errorf("colour %q is not one of %s", color, strings.Join(IconColors, ", "))
+	}
+	setAnnotation(a, shpyrdv1.AnnotationIconColor, color)
+	return nil
+}
+
+// IconFile of an App: the version and the kind (svg, png or webp) of the
+// image it sent for its card; empty when it sent none.
+func IconFile(a *shpyrdv1.App) (version, kind string) {
+	if a == nil {
+		return "", ""
+	}
+	version, kind, _ = strings.Cut(a.Annotations[shpyrdv1.AnnotationIconFile], ".")
+	return version, kind
+}
+
+// SetIconFile records that the App has an image of its own, of that
+// version and kind; an empty version removes the mark.
+func SetIconFile(a *shpyrdv1.App, version, kind string) {
+	if version == "" {
+		setAnnotation(a, shpyrdv1.AnnotationIconFile, "")
+		return
+	}
+	setAnnotation(a, shpyrdv1.AnnotationIconFile, version+"."+kind)
+}
+
+func setAnnotation(a *shpyrdv1.App, key, value string) {
+	if value == "" {
+		delete(a.Annotations, key)
+		return
+	}
+	if a.Annotations == nil {
+		a.Annotations = map[string]string{}
+	}
+	a.Annotations[key] = value
 }
 
 // Label formats a project for people: "My Shop (my-shop)", or just the

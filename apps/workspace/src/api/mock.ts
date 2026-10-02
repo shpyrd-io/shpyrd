@@ -68,7 +68,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "2";
+const shape = "3";
 const projectsOf = collection<Project>(`projects${shape}`, projects as Project[], (p) => p.slug);
 const workspaceOf = single<WorkspaceInfo>(`workspace${shape}`, workspace as WorkspaceInfo);
 const seed = things as unknown as Things;
@@ -98,6 +98,10 @@ async function ofProject(slug: string): Promise<[Things, ProjectThings]> {
 }
 
 const summary = ({ spec: _spec, status: _status, ...rest }: Project): ProjectSummary => rest;
+// The first domain of a project's own that answers: its DNS points here
+// and its certificate is ready.
+const domainOf = (all: Things, slug: string) =>
+  all.projects[slug]?.domains.domains.find((d) => d.dns === "ok" && (d.certificate === "ready" || d.certificate === "wildcard"))?.host;
 const now = () => new Date().toISOString();
 const id = () => Math.random().toString(36).slice(2, 10);
 const who = () => (me as Identity).email;
@@ -332,8 +336,19 @@ export const mock: Api = {
   },
   sizes: async () => (await thingsOf.get()).sizes,
 
-  projects: async () => (await projectsOf.list()).map(summary),
-  project: (slug) => projectsOf.find(slug),
+  // As the server answers the list: with the teams that have access to
+  // each, and the first domain of its own that answers.
+  projects: async () => {
+    const all = await thingsOf.get();
+    return (await projectsOf.list()).map((p) => {
+      const teams = [...new Set((all.projects[p.slug]?.members ?? []).flatMap((m) => (m.team ? [m.team] : [])))].sort();
+      return { ...summary(p), teams: teams.length ? teams : undefined, domain: domainOf(all, p.slug) };
+    });
+  },
+  project: async (slug) => {
+    const p = await projectsOf.find(slug);
+    return { ...p, domain: domainOf(await thingsOf.get(), slug) };
+  },
   createProject: async (body) => {
     const all = await projectsOf.list();
     if (!/^[a-z0-9-]{2,}$/.test(body.slug)) throw new ApiError(400, "the slug has lowercase letters, digits and dashes");
@@ -347,6 +362,22 @@ export const mock: Api = {
     if (body.name !== undefined) p.displayName = body.name;
     if (body.description !== undefined) p.description = body.description || undefined;
     if (body.featured !== undefined) p.featured = body.featured;
+    if (body.icon !== undefined) p.icon = body.icon || undefined;
+    if (body.iconColor !== undefined) p.iconColor = body.iconColor || undefined;
+    return projectsOf.set(p);
+  },
+  // The Mock keeps the image itself, as the data URL it came as.
+  setProjectIcon: async (slug, dataUrl) => {
+    const type = /^data:([^;,]+)/.exec(dataUrl)?.[1];
+    if (!type || !["image/svg+xml", "image/png", "image/webp"].includes(type)) throw new ApiError(400, "icon must be an SVG, a PNG or a WebP image");
+    const p = await projectsOf.find(slug);
+    p.iconUrl = dataUrl;
+    p.iconType = type;
+    return projectsOf.set(p);
+  },
+  removeProjectIcon: async (slug) => {
+    const p = await projectsOf.find(slug);
+    p.iconUrl = p.iconType = undefined;
     return projectsOf.set(p);
   },
   destroyProject: (slug) => projectsOf.remove(slug),

@@ -628,6 +628,12 @@ type Projects interface {
 	// RenameProjectSlug changes the slug of a live project and updates every
 	// grant that referenced it. Used by the rename API (RFC-0076 part B).
 	RenameProjectSlug(ctx context.Context, ws, oldSlug, newSlug string) error
+	// ProjectIcon is the image a project sent for its card on the
+	// launcher, by the project's ID, and its media type; ErrNotFound when
+	// it sent none.
+	ProjectIcon(ctx context.Context, id string) (data []byte, typ string, err error)
+	// SetProjectIcon records the image of a project; no data removes it.
+	SetProjectIcon(ctx context.Context, id string, data []byte, typ string) error
 }
 
 // Billing is the metering and economics part of the Store (RFC-0075).
