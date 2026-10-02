@@ -281,7 +281,14 @@ func (s *Server) databaseSize(ctx context.Context, ws string, spec map[string]in
 		xs, ok := cat.Get(sizes.DBXS)
 		if err == nil && ok && ceiling.Cmp(resource.MustParse(sizes.DBXSPlanBelow)) < 0 {
 			spec["size"] = sizes.DBXS
-			return fmt.Sprintf("The database has the size %s: %s of memory, enough for a small app's database (about 20 connections), not for reporting. The workspace's memory ceiling is %s, which a database's usual %s would mostly take.", sizes.DBXS, xs.Memory, l.Memory, sizes.DBDefaultMemory)
+			usual := resource.MustParse(sizes.DBDefaultMemory)
+			left := "none of it for the app's processes"
+			if ceiling.Cmp(usual) > 0 {
+				rest := ceiling.DeepCopy()
+				rest.Sub(usual)
+				left = rest.String() + " of it for the app's processes"
+			}
+			return fmt.Sprintf("The database has the size %s: %s of memory, enough for a small app's database (about 20 connections), not for reporting. The workspace's memory ceiling is %s; a database's usual %s would leave %s.", sizes.DBXS, xs.Memory, l.Memory, sizes.DBDefaultMemory, left)
 		}
 	}
 	return fmt.Sprintf("The database has %s of memory, what a database gets when it names no size.", sizes.DBDefaultMemory)

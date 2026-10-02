@@ -114,6 +114,28 @@ func isBuildVarRef(e interface{}) bool {
 	return ref
 }
 
+// buildChanges says desired builds something else than current: another
+// source, or other build.env values. Not the whole spec: kpack writes
+// defaults into a stored Image (build.resources: {}), so the stored spec
+// never equals the one rendered.
+func buildChanges(current, desired *unstructured.Unstructured) bool {
+	curSrc, _, _ := unstructured.NestedMap(current.Object, "spec", "source")
+	desSrc, _, _ := unstructured.NestedMap(desired.Object, "spec", "source")
+	return !equalJSON(curSrc, desSrc) || !equalJSON(buildValues(current), buildValues(desired))
+}
+
+// buildValues are the build.env entries with values (the project's own).
+func buildValues(img *unstructured.Unstructured) []interface{} {
+	env, _, _ := unstructured.NestedSlice(img.Object, "spec", "build", "env")
+	var out []interface{}
+	for _, e := range env {
+		if !isBuildVarRef(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // withBuildVarsOf is desired with the variable names current carries: what
 // the Image would be if only the values of build.env and the rest changed.
 func withBuildVarsOf(desired, current *unstructured.Unstructured) *unstructured.Unstructured {

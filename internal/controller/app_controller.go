@@ -641,10 +641,8 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	// with the next deploy, not by starting a build (build_env.go). A Git
 	// source is rebuilt by kpack on every commit without the Image
 	// changing, so there the names follow at once (one build).
-	if !needsTrigger && app.Spec.Source != nil && app.Spec.Source.Git == nil {
-		if kept := withBuildVarsOf(desired, current); equalJSON(current.Object["spec"], kept.Object["spec"]) {
-			desired = kept
-		}
+	if !needsTrigger && app.Spec.Source != nil && app.Spec.Source.Git == nil && !buildChanges(current, desired) {
+		desired = withBuildVarsOf(desired, current)
 	}
 
 	// Compare the fields we own.

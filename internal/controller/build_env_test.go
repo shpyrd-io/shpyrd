@@ -69,6 +69,14 @@ func TestBuildSeesTheAppsVariables(t *testing.T) {
 		t.Errorf("build env = %s", got)
 	}
 
+	// kpack writes defaults into the stored Image (seen on kind, kpack
+	// 0.18): the names must not refresh because of them.
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, img)
+	_ = unstructured.SetNestedMap(img.Object, map[string]interface{}{}, "spec", "build", "resources")
+	if err := c.Update(ctx, img); err != nil {
+		t.Fatal(err)
+	}
+
 	// A new config var: the ConfigMap has it at once, the Image waits.
 	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-env"}, env)
 	env.Data["SENTRY_DSN"] = []byte("https://key@sentry.test/1")
