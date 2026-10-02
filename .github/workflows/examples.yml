@@ -5,7 +5,8 @@
 #
 # An example is any folder of examples/ with a shpyrd.yaml; a new folder is
 # picked up with no change here. Each deploys with a plain `shpyrd deploy`
-# from its folder, to the project its shpyrd.yaml names.
+# from its folder, to the project its shpyrd.yaml names, and is public:
+# anyone may open it, with no sign-in.
 #
 # Needs, in the repository settings:
 #   variable ACME_SHPYRD_URL    https://acme.shpyrd.app
@@ -108,6 +109,11 @@ jobs:
           curl -fsSL https://shpyrd.io/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # The project is the one the folder's shpyrd.yaml names.
+      # The project is the one the folder's shpyrd.yaml names. The examples are
+      # demos anyone may open; access is not a setting of shpyrd.yaml, so it is
+      # set here, every time (it creates no release).
+      - name: Make it public
+        run: shpyrd access set public
+
       - name: Deploy
         run: shpyrd deploy
