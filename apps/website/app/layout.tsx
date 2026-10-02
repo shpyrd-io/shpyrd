@@ -20,8 +20,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* The theme is applied before the first paint, by a file of its own. */}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="/theme.js" />
+        {/* Which part of the funnel this is, on the data layer before the
+            container's own first message: the container's tags fire at
+            initialization only where shpyrd_app is set, and Next's component
+            pushes its data after that message. A plain script, so it runs
+            as the page is parsed. */}
+        {gtm && <script dangerouslySetInnerHTML={{ __html: 'window.dataLayer=window.dataLayer||[];window.dataLayer.push({shpyrd_app:"website"});' }} />}
       </head>
-      {gtm && <GoogleTagManager gtmId={gtm} dataLayer={{ shpyrd_app: "website" }} />}
+      {gtm && <GoogleTagManager gtmId={gtm} />}
       <body className="bg-background text-foreground">
         <Shell>{children}</Shell>
       </body>
