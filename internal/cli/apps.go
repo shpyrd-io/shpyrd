@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -234,37 +238,71 @@ func newAppsRenameCmd(g *globalFlags) *cobra.Command {
 }
 
 func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
-	var description string
+	var description, icon, color, iconFile string
 	var featured, unfeatured bool
 	cmd := &cobra.Command{
-		Use:   "describe <project> [--description text] [--featured|--unfeatured]",
-		Short: "Set the launcher's description of a project, and whether it is featured",
+		Use:   "describe <project> [--description text] [--featured|--unfeatured] [--icon name] [--color name] [--icon-file path]",
+		Short: "Set what the launcher shows of a project: its description, its symbol and colour, whether it is featured",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateAppName(args[0]); err != nil {
 				return err
 			}
-			if !cmd.Flags().Changed("description") && !featured && !unfeatured {
-				return errors.New("give --description, --featured or --unfeatured")
+			changed := cmd.Flags().Changed
+			if !changed("description") && !featured && !unfeatured && !changed("icon") && !changed("color") && !changed("icon-file") {
+				return errors.New("give --description, --featured, --unfeatured, --icon, --color or --icon-file")
 			}
 			if featured && unfeatured {
 				return errors.New("--featured and --unfeatured exclude each other")
 			}
+			if color = strings.TrimSpace(color); color != "" && !slices.Contains(project.IconColors, color) {
+				return fmt.Errorf("--color must be one of %s", strings.Join(project.IconColors, ", "))
+			}
+			// The image is read before anything changes, so a wrong path
+			// changes nothing.
+			var image []byte
+			if changed("icon-file") && iconFile != "" {
+				raw, err := iconDataURL(iconFile)
+				if err != nil {
+					return err
+				}
+				image, _ = json.Marshal(map[string]string{"icon": raw})
+			}
 			body := map[string]any{}
-			if cmd.Flags().Changed("description") {
+			if changed("description") {
 				body["description"] = strings.TrimSpace(description)
 			}
 			if featured || unfeatured {
 				body["featured"] = featured
+			}
+			if changed("icon") {
+				body["icon"] = strings.TrimSpace(icon)
+			}
+			if changed("color") {
+				body["iconColor"] = color
 			}
 			ctx := signalContext()
 			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
 			}
-			raw, _ := json.Marshal(body)
-			if _, err := ac.serverRequest(ctx, "PATCH", "api/projects/"+args[0], raw, "application/json"); err != nil {
-				return err
+			path := "api/projects/" + args[0]
+			if len(body) > 0 {
+				raw, _ := json.Marshal(body)
+				if _, err := ac.serverRequest(ctx, "PATCH", path, raw, "application/json"); err != nil {
+					return err
+				}
+			}
+			if changed("icon-file") {
+				if iconFile == "" {
+					_, err = ac.serverRequest(ctx, "DELETE", path+"/icon", nil, "")
+				} else {
+					_, err = ac.serverRequest(ctx, "PUT", path+"/icon", image, "application/json")
+				}
+				if err != nil {
+					return err
+				}
+				body["iconFile"] = iconFile
 			}
 			body["project"] = args[0]
 			return g.print(cmd, body, func(w io.Writer) {
@@ -275,7 +313,24 @@ func newAppsDescribeCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&description, "description", "", "one line under the name in the launcher (empty removes it)")
 	cmd.Flags().BoolVar(&featured, "featured", false, "show the app first, and larger, in the launcher")
 	cmd.Flags().BoolVar(&unfeatured, "unfeatured", false, "stop featuring the app")
+	cmd.Flags().StringVar(&icon, "icon", "", "the symbol of its card, by the name lucide gives it, like briefcase or chart-line (empty removes it)")
+	cmd.Flags().StringVar(&color, "color", "", "the colour of the symbol: "+strings.Join(project.IconColors, ", ")+" (empty removes it)")
+	cmd.Flags().StringVar(&iconFile, "icon-file", "", "an image of its own for the card, in place of the symbol: an SVG drawn in the colour, or a PNG or WebP as it is (empty removes it)")
 	return cmd
+}
+
+// iconDataURL reads an image for a card and writes it as a data URL.
+func iconDataURL(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	types := map[string]string{".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp"}
+	typ, ok := types[strings.ToLower(filepath.Ext(path))]
+	if !ok {
+		return "", errors.New("--icon-file must be an .svg, a .png or a .webp")
+	}
+	return "data:" + typ + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
 }
 
 func newAppsListCmd(g *globalFlags) *cobra.Command {

@@ -2113,6 +2113,26 @@ func (p *Postgres) ProjectBySlug(ctx context.Context, ws, slug string) (*Project
 	return scanProject(p.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE workspace_id = $1 AND slug = $2 AND deleted_at IS NULL`, wsID, slug))
 }
 
+func (p *Postgres) ProjectIcon(ctx context.Context, id string) ([]byte, string, error) {
+	var data []byte
+	var typ string
+	err := p.pool.QueryRow(ctx, `SELECT data, type FROM project_icons WHERE project_id = $1`, id).Scan(&data, &typ)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", ErrNotFound
+	}
+	return data, typ, err
+}
+
+func (p *Postgres) SetProjectIcon(ctx context.Context, id string, data []byte, typ string) error {
+	if len(data) == 0 {
+		_, err := p.pool.Exec(ctx, `DELETE FROM project_icons WHERE project_id = $1`, id)
+		return err
+	}
+	_, err := p.pool.Exec(ctx, `INSERT INTO project_icons (project_id, data, type, updated_at) VALUES ($1, $2, $3, now())
+		ON CONFLICT (project_id) DO UPDATE SET data = EXCLUDED.data, type = EXCLUDED.type, updated_at = now()`, id, data, typ)
+	return err
+}
+
 // RekeyProject moves ledger rows from the legacy slug key to the ID key in
 // one transaction: copy under the new key (rows already there win), then
 // delete the old ones.

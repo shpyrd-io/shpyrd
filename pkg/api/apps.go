@@ -58,6 +58,20 @@ type AppSummary struct {
 	// Access is who may open the app: public, authenticated or identified
 	// (RFC-0033). Apps created before the field exist are public.
 	Access string `json:"access"`
+	// Icon and IconColor are the symbol of the card on the launcher, by
+	// its name, and its colour. IconURL is the image the project sent in
+	// its place, and IconType its media type: an SVG is drawn as a symbol
+	// in the colour, a PNG or a WebP as it is.
+	Icon      string `json:"icon,omitempty"`
+	IconColor string `json:"iconColor,omitempty"`
+	IconURL   string `json:"iconUrl,omitempty"`
+	IconType  string `json:"iconType,omitempty"`
+	// Domain is the first domain of the project's own that answers: what
+	// the launcher shows and opens before the address under the platform.
+	Domain string `json:"domain,omitempty"`
+	// Teams are the teams that have access to the project, by name; only
+	// in the list.
+	Teams []string `json:"teams,omitempty"`
 }
 
 func summarize(a *shpyrdv1.App) AppSummary {
@@ -76,7 +90,11 @@ func summarize(a *shpyrdv1.App) AppSummary {
 		Digest:      Digest(a.Status.Image),
 		Processes:   a.Status.Processes,
 		CreatedAt:   a.CreationTimestamp.Time,
+		Icon:        project.Icon(a),
+		IconColor:   project.IconColor(a),
+		Domain:      domainOf(a),
 	}
+	s.IconURL, s.IconType = iconURL(a)
 	if s.Phase == "" {
 		s.Phase = shpyrdv1.PhasePending
 	}
@@ -114,6 +132,11 @@ type AppDetail struct {
 	DisplayName string                            `json:"displayName"`
 	Description string                            `json:"description,omitempty"`
 	Featured    bool                              `json:"featured,omitempty"`
+	Icon        string                            `json:"icon,omitempty"`
+	IconColor   string                            `json:"iconColor,omitempty"`
+	IconURL     string                            `json:"iconUrl,omitempty"`
+	IconType    string                            `json:"iconType,omitempty"`
+	Domain      string                            `json:"domain,omitempty"`
 	Namespace   string                            `json:"namespace"`
 	CreatedAt   time.Time                         `json:"createdAt"`
 	Spec        AppDetailSpec                     `json:"spec"`
@@ -188,6 +211,9 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 		DisplayName: project.DisplayName(a),
 		Description: project.Description(a),
 		Featured:    project.Featured(a),
+		Icon:        project.Icon(a),
+		IconColor:   project.IconColor(a),
+		Domain:      domainOf(a),
 		Namespace:   a.Namespace,
 		CreatedAt:   a.CreationTimestamp.Time,
 		Spec: AppDetailSpec{
@@ -215,6 +241,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 		},
 		Processes: a.Status.Processes,
 	}
+	d.IconURL, d.IconType = iconURL(a)
 	if a.Spec.Source != nil && a.Spec.Source.Blob != nil {
 		// The blob URL is an internal address; keep only the identity.
 		blob := *a.Spec.Source.Blob
@@ -260,11 +287,14 @@ func (s *Server) listApps(c *gin.Context) {
 	}
 	out := make([]AppSummary, 0, len(list.Items))
 	ws := s.workspace(c)
+	teams := s.teamsByProject(c.Request.Context(), ws)
 	for i := range list.Items {
 		if workspaceOf(&list.Items[i]) != ws || !s.canViewApp(c, &list.Items[i]) {
 			continue
 		}
-		out = append(out, summarize(&list.Items[i]))
+		sum := summarize(&list.Items[i])
+		sum.Teams = teams[projectGrantKey(&list.Items[i])]
+		out = append(out, sum)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].DisplayName != out[j].DisplayName {
@@ -498,16 +528,21 @@ func (s *Server) grantCreator(c *gin.Context, slug string) {
 	s.audit(c, slug, "member.add", email, shpyrdv1.RoleAdmin+" (creator)")
 }
 
-// UpdateAppRequest changes project metadata; only the display name so far.
+// UpdateAppRequest changes how a project is named and shown.
 type UpdateAppRequest struct {
 	Name *string `json:"name,omitempty"`
 	// Description is the launcher's one line under the name; Featured
 	// shows the app first and larger there (RFC-0033).
 	Description *string `json:"description,omitempty"`
 	Featured    *bool   `json:"featured,omitempty"`
+	// Icon is the symbol of the card on the launcher, by its name, and
+	// IconColor its colour; "" removes either.
+	Icon      *string `json:"icon,omitempty"`
+	IconColor *string `json:"iconColor,omitempty"`
 }
 
-// updateApp changes a project's display name, description or featured flag.
+// updateApp changes a project's display name, description, featured flag,
+// or the symbol of its card.
 // Slug changes go through POST /api/projects/:slug/rename (RFC-0076 part B).
 func (s *Server) updateApp(c *gin.Context) {
 	var req UpdateAppRequest
@@ -515,8 +550,8 @@ func (s *Server) updateApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.Name == nil && req.Description == nil && req.Featured == nil {
-		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description or featured"))
+	if req.Name == nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
+		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description, featured, icon or iconColor"))
 		return
 	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
@@ -538,13 +573,25 @@ func (s *Server) updateApp(c *gin.Context) {
 			project.SetFeatured(a, *req.Featured)
 			changes = append(changes, fmt.Sprintf("featured %v", *req.Featured))
 		}
+		if req.Icon != nil {
+			if err := project.SetIcon(a, *req.Icon); err != nil {
+				return err
+			}
+			changes = append(changes, "icon")
+		}
+		if req.IconColor != nil {
+			if err := project.SetIconColor(a, *req.IconColor); err != nil {
+				return err
+			}
+			changes = append(changes, "icon colour")
+		}
 		return nil
 	})
 	if err != nil {
 		return
 	}
 	action := "project.update"
-	if req.Name != nil && req.Description == nil && req.Featured == nil {
+	if req.Name != nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
 		action = "project.rename"
 	}
 	s.audit(c, project.SlugOf(app), action, project.Label(app), strings.Join(changes, ", "))

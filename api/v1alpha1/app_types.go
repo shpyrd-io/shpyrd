@@ -44,6 +44,16 @@ const (
 	// AnnotationFeatured on an App ("true") shows it first, and larger, in
 	// the launcher: the company's own app (RFC-0033).
 	AnnotationFeatured = "shpyrd.io/featured"
+	// AnnotationIcon on an App is the symbol of its card on the launcher,
+	// by the name lucide gives it ("briefcase").
+	AnnotationIcon = "shpyrd.io/icon"
+	// AnnotationIconColor is the colour of that symbol, one of a few names
+	// ("teal") the interface has a value of for each theme.
+	AnnotationIconColor = "shpyrd.io/icon-color"
+	// AnnotationIconFile marks that the project sent an image of its own
+	// for the card, kept by the store: "<version>.<svg|png|webp>". The
+	// version changes with the image, so its address can be cached.
+	AnnotationIconFile = "shpyrd.io/icon-file"
 	// AnnotationConfigHash is put on pod templates so config changes roll out.
 	AnnotationConfigHash = "shpyrd.io/config-hash"
 	// AnnotationInstance on a running pod holds the human name of the

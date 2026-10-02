@@ -170,3 +170,46 @@ func TestIDNaming(t *testing.T) {
 		t.Errorf("IDLabels with an empty workspace = %v", l)
 	}
 }
+
+func TestIcon(t *testing.T) {
+	a := &shpyrdv1.App{}
+	if err := SetIcon(a, "chart-line"); err != nil || Icon(a) != "chart-line" {
+		t.Fatalf("set: %q %v", Icon(a), err)
+	}
+	for _, bad := range []string{"Chart Line", "chart--line", "-chart", "<svg>", strings.Repeat("a", 41)} {
+		if err := SetIcon(a, bad); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+	if Icon(a) != "chart-line" {
+		t.Errorf("a refused name must leave the icon as it was, got %q", Icon(a))
+	}
+	if err := SetIcon(a, ""); err != nil || Icon(a) != "" || len(a.Annotations) != 0 {
+		t.Errorf("remove: %v %v", a.Annotations, err)
+	}
+}
+
+func TestIconColor(t *testing.T) {
+	a := &shpyrdv1.App{}
+	if err := SetIconColor(a, "teal"); err != nil || IconColor(a) != "teal" {
+		t.Fatalf("set: %q %v", IconColor(a), err)
+	}
+	if err := SetIconColor(a, "#00ffaa"); err == nil || IconColor(a) != "teal" {
+		t.Errorf("a colour outside the set: %v, kept %q", err, IconColor(a))
+	}
+	if err := SetIconColor(a, ""); err != nil || IconColor(a) != "" {
+		t.Errorf("remove: %v", err)
+	}
+}
+
+func TestIconFile(t *testing.T) {
+	a := &shpyrdv1.App{}
+	SetIconFile(a, "abc123", "svg")
+	if v, k := IconFile(a); v != "abc123" || k != "svg" {
+		t.Errorf("file = %q %q", v, k)
+	}
+	SetIconFile(a, "", "")
+	if v, _ := IconFile(a); v != "" || len(a.Annotations) != 0 {
+		t.Errorf("removed: %v", a.Annotations)
+	}
+}

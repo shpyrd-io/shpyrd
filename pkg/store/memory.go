@@ -44,6 +44,7 @@ type Memory struct {
 	otokens     []OAuthToken
 	bill        *billingMemory
 	projects    []Project
+	icons       map[string]projectIcon
 	settings    map[string]string
 	now         func() time.Time
 }
@@ -2088,4 +2089,33 @@ func (m *Memory) RekeyGrantsToIDs(_ context.Context) (int, error) {
 		_ = i
 	}
 	return moved, nil
+}
+
+type projectIcon struct {
+	data []byte
+	typ  string
+}
+
+func (m *Memory) ProjectIcon(_ context.Context, id string) ([]byte, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i, ok := m.icons[id]
+	if !ok {
+		return nil, "", ErrNotFound
+	}
+	return append([]byte(nil), i.data...), i.typ, nil
+}
+
+func (m *Memory) SetProjectIcon(_ context.Context, id string, data []byte, typ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(data) == 0 {
+		delete(m.icons, id)
+		return nil
+	}
+	if m.icons == nil {
+		m.icons = map[string]projectIcon{}
+	}
+	m.icons[id] = projectIcon{data: append([]byte(nil), data...), typ: typ}
+	return nil
 }
