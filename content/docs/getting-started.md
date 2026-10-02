@@ -1,7 +1,7 @@
 ---
 title: Getting started
 pageTitle: shpyrd - Getting started
-description: Install shpyrd - with the installer, or by hand - then ask your agent to put your app online and share it with your team.
+description: Install shpyrd - with the installer, or manually - then ask your agent to put your app online and share it with your team.
 ---
 
 You built an app with your agent. shpyrd is where it goes next: its own address, a sign-in in front of it, and the colleagues you choose inside. You don't learn a new tool to get there - you add shpyrd to the agent you already use, and tell it what you want. {% .lead %}

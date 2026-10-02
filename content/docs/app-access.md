@@ -144,7 +144,3 @@ allow:
 ```
 
 The listed project must be one of the workspace's own: allows never cross a workspace, and the platform refuses a name that is not there. Changes apply within seconds and create no release. The caller reaches the callee at `http://<callee>-web.<callee namespace>.svc` inside the cluster (or through its public hostname, which goes through the front door and the callee's access mode).
-
-## Not yet
-
-OAuth 2.1 for AI agents (personal tokens work today), and disabling previews per project.

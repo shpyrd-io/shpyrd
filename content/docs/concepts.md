@@ -1,9 +1,9 @@
 ---
 title: Concepts
-description: Projects, processes, builds, releases and config vars - the vocabulary shpyrd shares with Heroku and Fly.
+description: Projects, processes, builds, releases and config vars - what each one is in shpyrd.
 ---
 
-shpyrd borrows the vocabulary of Heroku and Fly. On shpyrd cloud you work with these through the dashboard and the CLI; underneath, each maps onto Kubernetes objects, which you can inspect with `kubectl` on a cluster you run yourself. {% .lead %}
+On shpyrd cloud you work with projects, processes, builds, releases and config vars through the dashboard and the CLI; underneath, each maps onto Kubernetes objects, which you can inspect with `kubectl` on a cluster you run yourself. {% .lead %}
 
 ## Project and resources
 

@@ -393,7 +393,6 @@ Redeploy tries the current release again without creating a release. With a heal
 shpyrd open                 # opens https://my-service.<domain>
 shpyrd projects info my-service     # status, releases and every resource of the project (app, volumes...)
 shpyrd projects list
-kubectl -n app-my-service get all,ingress,volumes.shpyrd.io,image.kpack.io,jobs   # self-hosted: on a cluster you run
 ```
 
 ## Destroy
