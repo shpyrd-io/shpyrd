@@ -54,6 +54,7 @@ const useCases = [
 // How sharing works is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
   ...(sectionsLive ? [{ title: "How sharing works", href: "/how-sharing-works" }] : []),
+  { title: "Pricing", href: "/pricing" },
   { title: "Docs", href: "/docs/getting-started" },
 ];
 
