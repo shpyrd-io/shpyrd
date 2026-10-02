@@ -4,14 +4,13 @@
 # Actions tab, any of them, or all.
 #
 # An example is any folder of examples/ with a shpyrd.yaml; a new folder is
-# picked up with no change here. Its project is the one shpyrd.yaml names, and
-# is created on the first deploy; when the folder has a setup.sh, it runs then,
-# once, from the folder (resources the example needs: a database, a volume).
+# picked up with no change here. Each deploys to the project named like its
+# folder: shpyrd deploy --project <folder>.
 #
 # Needs, in the repository settings:
 #   variable ACME_SHPYRD_URL    https://acme.shpyrd.app
 #   secret   ACME_SHPYRD_TOKEN  an API token of the acme workspace that can
-#                                   create projects and deploy them:
+#                                   deploy every example:
 #                                   shpyrd tokens create examples-ci \
 #                                     --platform-role platform-admin --expires 90d
 name: Examples
@@ -109,22 +108,7 @@ jobs:
           curl -fsSL https://shpyrd.io/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Create the project, the first time
-        run: |
-          project=$(sed -n 's/^project:[[:space:]]*\([^[:space:]#]*\).*/\1/p' shpyrd.yaml | head -1)
-          if [ -z "$project" ]; then
-            echo "::error::shpyrd.yaml names no project."
-            exit 1
-          fi
-          if shpyrd projects info "$project" > /dev/null 2>&1; then
-            echo "Project $project exists."
-            exit 0
-          fi
-          shpyrd projects create "$project"
-          if [ -f setup.sh ]; then
-            echo "Running setup.sh for the new project."
-            sh ./setup.sh
-          fi
-
       - name: Deploy
-        run: shpyrd deploy
+        env:
+          EXAMPLE: ${{ matrix.example }}
+        run: shpyrd deploy --project "$EXAMPLE"
