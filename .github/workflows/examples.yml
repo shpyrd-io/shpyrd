@@ -4,8 +4,8 @@
 # Actions tab, any of them, or all.
 #
 # An example is any folder of examples/ with a shpyrd.yaml; a new folder is
-# picked up with no change here. Each deploys to the project named like its
-# folder: shpyrd deploy --project <folder>.
+# picked up with no change here. Each deploys with a plain `shpyrd deploy`
+# from its folder, to the project its shpyrd.yaml names.
 #
 # Needs, in the repository settings:
 #   variable ACME_SHPYRD_URL    https://acme.shpyrd.app
@@ -108,7 +108,6 @@ jobs:
           curl -fsSL https://shpyrd.io/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      # The project is the one the folder's shpyrd.yaml names.
       - name: Deploy
-        env:
-          EXAMPLE: ${{ matrix.example }}
-        run: shpyrd deploy --project "$EXAMPLE"
+        run: shpyrd deploy
