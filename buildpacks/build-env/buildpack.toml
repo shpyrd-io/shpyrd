@@ -1,0 +1,15 @@
+# The project's variables for the build (shpyrd #54): the controller writes
+# them into the Secret <app>-build-env and kpack mounts it as a service
+# binding of type shpyrd-env; this buildpack, first in every group of the
+# platform's builders, gives them to the buildpacks after it as build-time
+# environment. Nothing of it reaches the image or the cache.
+api = "0.9"
+
+[buildpack]
+  id = "shpyrd/build-env"
+  version = "0.1.0"
+  name = "shpyrd build environment"
+  homepage = "https://github.com/shpyrd-io/shpyrd/tree/main/buildpacks/build-env"
+
+[[stacks]]
+  id = "*"

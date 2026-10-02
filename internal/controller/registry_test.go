@@ -63,7 +63,7 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 	// kpack Images build as the credentialed ServiceAccount.
 	src := sampleApp("gitapp")
 	src.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/r.git"}}
-	img, _ := r.Config.desiredKpackImage(src, nil)
+	img, _ := r.Config.desiredKpackImage(src)
 	if sa, _, _ := unstructured.NestedString(img.Object, "spec", "serviceAccountName"); sa != BuildServiceAccount {
 		t.Errorf("kpack serviceAccountName = %q", sa)
 	}

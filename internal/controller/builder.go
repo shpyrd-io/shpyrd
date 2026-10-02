@@ -19,8 +19,12 @@ import (
 // gets a kpack Builder of its own, composed from the platform's catalog of
 // ClusterBuildpacks and ClusterStacks; the kpack Image builds with it.
 
-// BuilderGVK is kpack's namespaced Builder.
-var BuilderGVK = schema.GroupVersionKind{Group: "kpack.io", Version: "v1alpha2", Kind: "Builder"}
+// BuilderGVK is kpack's namespaced Builder; ClusterBuildpackGVK one of the
+// platform's buildpacks.
+var (
+	BuilderGVK          = schema.GroupVersionKind{Group: "kpack.io", Version: "v1alpha2", Kind: "Builder"}
+	ClusterBuildpackGVK = schema.GroupVersionKind{Group: "kpack.io", Version: "v1alpha2", Kind: "ClusterBuildpack"}
+)
 
 // BuildpackCatalog maps the short names people write in shpyrd.yaml to the
 // platform's ClusterBuildpack names (deploy/components/kpack). A
@@ -91,8 +95,10 @@ var detectionOrder = []string{"java", "nodejs", "go", "python", "ruby", "php", "
 // builderName is the project's Builder.
 func builderName(app *shpyrdv1.App) string { return app.Name + "-builder" }
 
-// desiredBuilder renders the project's kpack Builder.
-func (c Config) desiredBuilder(app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+// desiredBuilder renders the project's kpack Builder; with buildEnv the
+// build-env buildpack is first in every group, as in the platform's builder
+// (build_env.go).
+func (c Config) desiredBuilder(app *shpyrdv1.App, buildEnv bool) (*unstructured.Unstructured, error) {
 	stack, ok := Stacks[strings.ToLower(app.Spec.Build.Stack)]
 	if !ok {
 		return nil, fmt.Errorf("build.stack must be base or full, got %q", app.Spec.Build.Stack)
@@ -104,8 +110,12 @@ func (c Config) desiredBuilder(app *shpyrdv1.App) (*unstructured.Unstructured, e
 	entry := func(cluster string) map[string]interface{} {
 		return map[string]interface{}{"name": cluster, "kind": "ClusterBuildpack"}
 	}
-	// An Aptfile puts the .deb packages buildpack in front of every group.
+	// The project's variables, then an Aptfile's .deb packages, in front of
+	// every group.
 	var prefix []interface{}
+	if buildEnv {
+		prefix = append(prefix, entry(BuildEnvBuildpack))
+	}
 	if app.Spec.Build.SystemPackages {
 		prefix = append(prefix, entry(BuildpackCatalog["deb-packages"]))
 	}
@@ -163,7 +173,12 @@ func (r *AppReconciler) reconcileBuilder(ctx context.Context, app *shpyrdv1.App)
 		}
 		return map[string]interface{}{"name": builder, "kind": "ClusterBuilder"}, nil
 	}
-	desired, err := r.Config.desiredBuilder(app)
+	// An install whose kpack component predates the build-env buildpack
+	// builds without the project's variables rather than not at all.
+	bp := &unstructured.Unstructured{}
+	bp.SetGroupVersionKind(ClusterBuildpackGVK)
+	buildEnv := r.Get(ctx, client.ObjectKey{Name: BuildEnvBuildpack}, bp) == nil
+	desired, err := r.Config.desiredBuilder(app, buildEnv)
 	if err != nil {
 		return nil, err
 	}

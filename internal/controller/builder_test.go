@@ -78,3 +78,54 @@ func TestBuildComposition(t *testing.T) {
 		t.Error("the Builder survived the composition being cleared")
 	}
 }
+
+// A project's own Builder puts the build-env buildpack first in every
+// group, as the platform's does (#54), when the platform has it; without
+// it (a kpack component from before) the project still builds.
+func TestComposedBuilderReadsTheProjectsVariables(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"},
+		Spec:       shpyrdv1.AppSpec{Build: &shpyrdv1.Build{Buildpacks: []string{"ruby"}, SystemPackages: true}},
+	}
+	r, c := newTestReconciler(t, app)
+	groups := func() []string {
+		t.Helper()
+		if _, err := r.reconcileBuilder(ctx, app); err != nil {
+			t.Fatal(err)
+		}
+		b := &unstructured.Unstructured{}
+		b.SetGroupVersionKind(BuilderGVK)
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "shop-builder"}, b); err != nil {
+			t.Fatal(err)
+		}
+		order, _, _ := unstructured.NestedSlice(b.Object, "spec", "order")
+		var out []string
+		for _, g := range order {
+			var names []string
+			for _, e := range g.(map[string]interface{})["group"].([]interface{}) {
+				names = append(names, e.(map[string]interface{})["name"].(string))
+			}
+			out = append(out, strings.Join(names, ","))
+		}
+		return out
+	}
+	if got := strings.Join(groups(), " | "); got != "heroku-deb-packages,paketo-ruby" {
+		t.Errorf("without the buildpack on the platform = %s", got)
+	}
+	bp := &unstructured.Unstructured{}
+	bp.SetGroupVersionKind(ClusterBuildpackGVK)
+	bp.SetName(BuildEnvBuildpack)
+	if err := c.Create(ctx, bp); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(groups(), " | "); got != "shpyrd-build-env,heroku-deb-packages,paketo-ruby" {
+		t.Errorf("with it = %s", got)
+	}
+	app.Spec.Build.Buildpacks = nil // the platform's detection, one group per language
+	for _, g := range groups() {
+		if !strings.HasPrefix(g, "shpyrd-build-env,") {
+			t.Errorf("a group without it first: %s", g)
+		}
+	}
+}

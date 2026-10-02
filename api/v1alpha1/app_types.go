@@ -684,13 +684,14 @@ const BindingsSecretSuffix = "-bindings"
 // BindingsSecretName is the Secret with the config vars of attached resources.
 func (a *App) BindingsSecretName() string { return a.Name + BindingsSecretSuffix }
 
-// BuildEnvSuffix: the ConfigMap <app>-build-env holds the variables a
+// BuildEnvSuffix: the Secret <app>-build-env holds the variables a
 // buildpack build sees besides the project's build.env: the ones the app
-// runs with (global, own and bound config vars). The controller owns it.
+// runs with (global, own and bound config vars), bound to the build as a
+// service. The controller owns it.
 const BuildEnvSuffix = "-build-env"
 
-// BuildEnvName is the ConfigMap a buildpack build reads the app's
-// variables from.
+// BuildEnvName is the Secret a buildpack build reads the app's variables
+// from.
 func (a *App) BuildEnvName() string { return a.Name + BuildEnvSuffix }
 
 // ReleaseSnapshotName is the Secret holding the config vars as they were

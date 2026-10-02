@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Always takes part: without a binding of its type, build does nothing.
+exit 0

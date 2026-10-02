@@ -540,9 +540,8 @@ func kpackImageKey(app *shpyrdv1.App) *unstructured.Unstructured {
 	return u
 }
 
-// desiredKpackImage renders the kpack Image that builds the App's source;
-// vars are the names the build reads from <app>-build-env (build_env.go).
-func (c Config) desiredKpackImage(app *shpyrdv1.App, vars []string) (*unstructured.Unstructured, error) {
+// desiredKpackImage renders the kpack Image that builds the App's source.
+func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured, error) {
 	tag, err := c.imageTag(app)
 	if err != nil {
 		return nil, err
@@ -596,12 +595,11 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App, vars []string) (*unstructur
 			env = append(env, map[string]interface{}{"name": e.Name, "value": e.Value})
 		}
 	}
-	for _, name := range vars {
-		env = append(env, buildVarRef(app, name))
-	}
 	if len(env) > 0 {
 		build["env"] = env
 	}
+	// The project's variables, through the Secret it binds (build_env.go).
+	build["services"] = []interface{}{buildEnvService(app)}
 	if sel := c.appsNodeSelector(); sel != nil {
 		// Builds are bursty and transient: the apps pool (RFC-0077).
 		ns := map[string]interface{}{}

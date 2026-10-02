@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Every file of a binding of type shpyrd-env (one per variable) becomes a
+# variable of the build of the buildpacks that follow. The layer is for the
+# build only: not in the image (launch = false), not in the cache
+# (cache = false). A variable the platform's environment sets (build.env)
+# keeps its value.
+set -euo pipefail
+layers="${CNB_LAYERS_DIR:-$1}"
+platform="${CNB_PLATFORM_DIR:-$2}"
+root="${SERVICE_BINDING_ROOT:-$platform/bindings}"
+layer="$layers/build-env"
+count=0
+for binding in "$root"/*/; do
+  [ -f "${binding}type" ] || continue
+  [ "$(tr -d '[:space:]' < "${binding}type")" = "shpyrd-env" ] || continue
+  for f in "$binding"*; do
+    name="$(basename "$f")"
+    case "$name" in type | provider) continue ;; esac
+    [ -f "$f" ] || continue
+    [ -e "$platform/env/$name" ] && continue
+    mkdir -p "$layer/env.build"
+    cp "$f" "$layer/env.build/$name.override"
+    count=$((count + 1))
+  done
+done
+if [ "$count" -gt 0 ]; then
+  printf '[types]\n  build = true\n  launch = false\n  cache = false\n' > "$layers/build-env.toml"
+fi
+echo "shpyrd: the build sees $count variable(s) of the project"

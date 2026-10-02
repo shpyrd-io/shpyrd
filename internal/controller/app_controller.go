@@ -347,7 +347,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
-			img, err := r.reconcileKpackImage(ctx, app, buildVarNames(app, vars))
+			img, err := r.reconcileKpackImage(ctx, app)
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
 				app.Status.Message = "moving the build to its new image repository"
@@ -554,14 +554,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
-func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App, vars []string) (*unstructured.Unstructured, error) {
+func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
 	// The project's own builder when it composes its build (RFC-0065),
 	// else the platform's.
 	builderRef, err := r.reconcileBuilder(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := r.Config.desiredKpackImage(app, vars)
+	desired, err := r.Config.desiredKpackImage(app)
 	if err != nil {
 		return nil, err
 	}
@@ -632,19 +632,20 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		}
 	}
 
-	// A variable name that appeared since the last build joins the Image
-	// with the next deploy, not by starting a build (build_env.go). A Git
-	// source is rebuilt by kpack on every commit without the Image
-	// changing, so there the names follow at once (one build).
+	// An Image from before builds read the project's variables binds their
+	// Secret with its next build (a new archive, a redeploy), not by
+	// starting one (build_env.go). A Git source is built by kpack on every
+	// commit without the Image changing, so there it binds at once, with
+	// one build.
 	if !needsTrigger && app.Spec.Source != nil && app.Spec.Source.Git == nil && !buildChanges(current, desired) {
-		desired = withBuildVarsOf(desired, current)
+		desired = withServicesOf(desired, current)
 	}
 
 	// The redeploy's build: the trigger, unless the update below changes
 	// what kpack builds (another source address, other build.env values,
-	// new variable names), which builds by itself; both would build
-	// twice, the first time without the change.
-	if needsTrigger && !buildChanges(current, desired) && equalJSON(buildRefs(current), buildRefs(desired)) {
+	// the Secret bound), which builds by itself; both would build twice,
+	// the first time without the change.
+	if needsTrigger && !buildChanges(current, desired) && equalJSON(buildServices(current), buildServices(desired)) {
 		if err := r.triggerKpackBuild(ctx, app, current); err != nil {
 			return nil, err
 		}

@@ -164,6 +164,22 @@ spec:
     namespace: ${SHPYRD_SYSTEM_NS}
   image: index.docker.io/paketobuildpacks/procfile:latest
 ---
+# The project's variables for its build (shpyrd #54, buildpacks/build-env):
+# first in every group, it gives the buildpacks after it the variables of
+# the Secret the controller binds to each build. Published by
+# .github/workflows/buildpacks.yml.
+apiVersion: kpack.io/v1alpha2
+kind: ClusterBuildpack
+metadata:
+  name: shpyrd-build-env
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  serviceAccountRef:
+    name: kpack-builder
+    namespace: ${SHPYRD_SYSTEM_NS}
+  image: ghcr.io/shpyrd-io/buildpack-build-env:0.1.0
+---
 apiVersion: kpack.io/v1alpha2
 kind: ClusterBuilder
 metadata:
@@ -179,32 +195,51 @@ spec:
     name: kpack-builder
     namespace: ${SHPYRD_SYSTEM_NS}
   # Detection runs group by group; the first group whose buildpacks all
-  # detect wins. Order mirrors the Paketo base builder.
+  # detect wins. Order mirrors the Paketo base builder, each group behind
+  # shpyrd-build-env, which always detects.
   order:
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-java
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-nodejs
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-go
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-python
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-ruby
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-php
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-dotnet-core
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-web-servers
           kind: ClusterBuildpack
     - group:
+        - name: shpyrd-build-env
+          kind: ClusterBuildpack
         - name: paketo-procfile
           kind: ClusterBuildpack

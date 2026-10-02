@@ -45,7 +45,7 @@ func TestSourcePortMoveDoesNotRebuild(t *testing.T) {
 	r, c := newTestReconciler(t, app)
 	r.Config.SystemNamespace = "shpyrd-system"
 	// The Image as an older platform left it.
-	img, err := r.Config.desiredKpackImage(app, nil)
+	img, err := r.Config.desiredKpackImage(app)
 	if err != nil {
 		t.Fatal(err)
 	}
