@@ -1,5 +1,6 @@
 import { ApiError } from "@shpyrd/shared/api/error";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
+import { buildFailed } from "./types";
 import type { Api } from "./api";
 import type {
   Globals,
@@ -415,7 +416,7 @@ export const mock: Api = {
     await wait();
     const p = await projectsOf.find(slug);
     if (action === "restart") return { action: "restart", message: "Running the release command again" };
-    if (p.phase === "Failed" && p.status.message?.startsWith("build failed")) return { action: "rebuild", message: "Building the same source again" };
+    if (buildFailed({ phase: p.phase, conditions: p.status.conditions })) return { action: "rebuild", message: "Building the same source again" };
     return { action: "redeploy", message: "Starting new instances of the current release" };
   },
   rollback: async (slug, to) => {

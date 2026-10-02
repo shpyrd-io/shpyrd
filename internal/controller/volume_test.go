@@ -226,7 +226,7 @@ func TestAppMountsSingleInstanceVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = runReconcile(t, r, got)
-	if !strings.Contains(got.Status.Message, "shpyrd volumes create missing") {
+	if !strings.Contains(got.Status.Message, `the volume "missing" the process web mounts does not exist`) || PlatformWordingFault(got.Status.Message) != "" {
 		t.Errorf("missing volume: %s", got.Status.Message)
 	}
 	if reqs := r.volumeToApps(context.Background(), vol); len(reqs) != 0 {
@@ -246,7 +246,7 @@ func TestVolumeProfileClassesAndSnapshotSource(t *testing.T) {
 
 	// The shared class is not installed yet: a clear refusal, no claim.
 	got := reconcileVolume(t, r, shared)
-	if got.Status.Phase != shpyrdv1.VolumeFailed || !strings.Contains(got.Status.Message, "shared volumes are not set up on this cluster") {
+	if got.Status.Phase != shpyrdv1.VolumeFailed || !strings.Contains(got.Status.Message, "shared volumes are not offered on this platform") {
 		t.Errorf("missing shared class: %s / %s", got.Status.Phase, got.Status.Message)
 	}
 	if err := c.Create(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-fss"}, Provisioner: "fss.csi.oraclecloud.com"}); err != nil {

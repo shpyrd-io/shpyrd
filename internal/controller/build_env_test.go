@@ -24,7 +24,7 @@ func TestBuildSeesTheAppsVariables(t *testing.T) {
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: "web1", Namespace: "app-web1", Generation: 1},
 		Spec: shpyrdv1.AppSpec{
-			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/repo.git", Revision: "main"}},
+			Source: &shpyrdv1.Source{Blob: &shpyrdv1.BlobSource{URL: "http://shpyrd-server.shpyrd-system.svc:8082/api/sources/" + strings.Repeat("a", 64) + ".tgz", SHA256: strings.Repeat("a", 64)}},
 			Build:  &shpyrdv1.Build{Env: []corev1.EnvVar{{Name: "NODE_ENV", Value: "production"}, {Name: "FOO", Value: "from-build"}}},
 		},
 	}
@@ -94,5 +94,33 @@ func TestBuildSeesTheAppsVariables(t *testing.T) {
 	runReconcile(t, r, cur)
 	if got := strings.Join(names(), " "); got != "NODE_ENV=value FOO=value DATABASE_URL=ref SENTRY_DSN=ref" {
 		t.Errorf("the redeploy's build env = %s", got)
+	}
+}
+
+// A Git source is rebuilt by kpack on each commit without the Image
+// changing: a new variable name joins the Image at once there.
+func TestGitBuildTakesANewVariableAtOnce(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "web1", Namespace: "app-web1", Generation: 1},
+		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/repo.git", Revision: "main"}}},
+	}
+	env := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "web1-env", Namespace: "app-web1"}, Data: map[string][]byte{"A": []byte("1")}}
+	r, c := newTestReconciler(t, app, env)
+	runReconcile(t, r, app)
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-env"}, env)
+	env.Data["NEXT_PUBLIC_B"] = []byte("2")
+	if err := c.Update(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, app)
+	img := &unstructured.Unstructured{}
+	img.SetGroupVersionKind(KpackImageGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, img); err != nil {
+		t.Fatal(err)
+	}
+	entries, _, _ := unstructured.NestedSlice(img.Object, "spec", "build", "env")
+	if len(entries) != 2 || entries[1].(map[string]interface{})["name"] != "NEXT_PUBLIC_B" {
+		t.Errorf("git build env = %v", entries)
 	}
 }

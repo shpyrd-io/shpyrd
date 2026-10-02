@@ -290,9 +290,11 @@ func (r *VolumeReconciler) checkStorageClass(ctx context.Context, vol *shpyrdv1.
 	err := r.Get(ctx, types.NamespacedName{Name: class}, sc)
 	switch {
 	case apierrors.IsNotFound(err) && vol.Spec.StorageClass == "" && vol.Shared():
-		return fmt.Errorf("shared volumes are not set up on this cluster (storage class %s does not exist): on Oracle Cloud create the File Storage mount target with contrib/oci/terraform and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`", class)
+		log.FromContext(ctx).Info("shared volumes are not set up: on Oracle Cloud create the File Storage mount target with contrib/oci/terraform and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`", "storageClass", class)
+		return fmt.Errorf("shared volumes are not offered on this platform yet: its operator sets them up")
 	case apierrors.IsNotFound(err):
-		return fmt.Errorf("storage class %s does not exist on this cluster (`kubectl get storageclass` lists the available ones)", class)
+		log.FromContext(ctx).Info("a volume names a storage class that does not exist", "storageClass", class)
+		return fmt.Errorf("the kind of disk %q the volume asks for is not offered on this platform", class)
 	case err != nil:
 		return fmt.Errorf("get storage class %s: %w", class, err)
 	}

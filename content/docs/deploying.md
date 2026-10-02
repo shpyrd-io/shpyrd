@@ -260,7 +260,7 @@ env:
 
 A buildpack build sees the same variables the app will run with: global config vars, the project's config vars, the variables of attached resources (`DATABASE_URL`, `DATABASE_HOST`, …) and `env:`, in that order (the later wins), with `build.env` from `shpyrd.yaml` above them all. That is what `prisma generate`, a Next.js page that reads the database while the build collects page data, `NEXT_PUBLIC_*` variables inlined into the assets and Rails' `assets:precompile` rely on. Attach the database before the first deploy and the first build already has `DATABASE_URL`.
 
-A build reads the values current when it starts. Setting or changing a config var does not start a build: it restarts the processes, and the next deploy builds with the new values (`shpyrd deploy` again, or **Redeploy** in the dashboard, rebuilds the same source). What a build inlines on purpose, such as `NEXT_PUBLIC_*`, ends up in the image, as on Heroku; buildpacks do not keep the rest of the environment in the image.
+A build reads the values current when it starts. Setting or changing a config var does not start a build: it restarts the processes, and the next deploy builds with the new values (`shpyrd redeploy --rebuild`, or **Redeploy** in the dashboard, builds the same source again). A project deployed from Git is built on every commit, so a variable with a new name starts one build there, which sees it. What a build inlines on purpose, such as `NEXT_PUBLIC_*`, ends up in the image, as on Heroku; buildpacks do not keep the rest of the environment in the image.
 
 A build can reach the project's database: it runs in the project's own network. Run migrations in the [release phase](#release-phase), not in the build, so a build that fails never leaves the schema half changed. Dockerfile builds receive only `build.env`, as `ARG` values.
 
@@ -385,6 +385,16 @@ shpyrd rollback 4      # to a specific release: its build and its config vars
 ```
 
 A rollback is refused while another release is still rolling out (`--force` overrides). See [Concepts](/docs/concepts#releases) for what a release contains.
+
+## When something fails
+
+The project says what failed, in words, in the dashboard, the CLI (`shpyrd projects info`) and the workspace's MCP server alike:
+
+- **A build**: the script that was running and, when the build's output makes it plain, why - a variable the build reads and nobody set, a module that is not installed, a source no buildpack recognises. The output itself is the build's log: `shpyrd logs --build`.
+- **The release phase**: that it failed, ran past its 30 minutes, or could not start. Its output is `shpyrd logs -p release`.
+- **Something that cannot start because of the workspace's ceilings**: which ceiling (memory, CPU), what takes it - the database, the processes - and how much more was needed. Retrying does not help; a smaller size, fewer instances or a larger plan does.
+
+The previous release keeps serving through all of these.
 
 ## Redeploy
 

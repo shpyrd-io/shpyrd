@@ -248,7 +248,7 @@ func (c Catalog) Resolve(sizeName string, override corev1.ResourceRequirements) 
 	}
 	size, ok := c.Get(name)
 	if !ok {
-		return corev1.ResourceRequirements{}, "", fmt.Errorf("unknown size %q (see `shpyrd sizes list`)", name)
+		return corev1.ResourceRequirements{}, "", fmt.Errorf("unknown size %q: it is not in this platform's catalog of sizes", name)
 	}
 	base := size.Resources()
 	if len(override.Requests) == 0 && len(override.Limits) == 0 {

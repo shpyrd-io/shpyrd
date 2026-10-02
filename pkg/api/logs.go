@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
 )
 
@@ -72,7 +73,7 @@ func (s *Server) appLogs(c *gin.Context) {
 
 	pods, err := s.kube.Kube.CoreV1().Pods(app.Namespace).List(c.Request.Context(), metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		abort(c, http.StatusBadGateway, err)
+		abort(c, http.StatusBadGateway, s.errUnreadable("the project's instances", err))
 		return
 	}
 	if len(pods.Items) == 0 {
@@ -180,10 +181,11 @@ func buildInfo(u unstructured.Unstructured) BuildInfo {
 		case "True":
 			b.Status = "Succeeded"
 		case "False":
+			// What failed, in words, as the controller read it from the
+			// build's output; kpack's own sentence names a pod, a
+			// namespace and kubectl, which the reader has none of (#52).
 			b.Status = "Failed"
-		}
-		if msg, ok := m["message"].(string); ok {
-			b.Message = msg
+			b.Message = controller.KpackFailure(&u)
 		}
 		if b.Status != "Building" {
 			if lt, ok := m["lastTransitionTime"].(string); ok {
@@ -215,7 +217,7 @@ func jobBuildInfo(j batchv1.Job) BuildInfo {
 	case j.Annotations[shpyrdv1.AnnotationBuildFailure] != "":
 		b.Status, b.Message = "Failed", j.Annotations[shpyrdv1.AnnotationBuildFailure]
 	case j.Status.Failed > 0:
-		b.Status = "Failed"
+		b.Status, b.Message = "Failed", "The Dockerfile build failed. The build's log has the full output."
 	}
 	if b.Status != "Building" {
 		if t := j.Status.CompletionTime; t != nil {
@@ -269,7 +271,7 @@ func (s *Server) listBuilds(c *gin.Context) {
 	}
 	out, err := s.appBuilds(c.Request.Context(), app)
 	if err != nil {
-		abort(c, http.StatusBadGateway, err)
+		abort(c, http.StatusBadGateway, s.errUnreadable("the project's builds", err))
 		return
 	}
 	c.JSON(http.StatusOK, out)
@@ -322,7 +324,7 @@ func (s *Server) buildLogs(c *gin.Context) {
 			break
 		}
 		if !apierrors.IsNotFound(err) {
-			abort(c, http.StatusBadGateway, err)
+			abort(c, http.StatusBadGateway, s.errUnreadable("the build's output", err))
 			return
 		}
 		if !follow {
@@ -454,4 +456,12 @@ func (s *Server) buildsByDigest(ctx context.Context, app *shpyrdv1.App) map[stri
 		}
 	}
 	return out
+}
+
+// errUnreadable is what a customer reads when the platform could not read
+// something of theirs from Kubernetes: what, in words; the cause, which
+// names Kubernetes objects, goes to the server's log (#52).
+func (s *Server) errUnreadable(what string, cause error) error {
+	s.log.Warn("reading for a customer failed", "what", what, "err", cause)
+	return fmt.Errorf("the platform could not read %s just now; try again in a moment", what)
 }

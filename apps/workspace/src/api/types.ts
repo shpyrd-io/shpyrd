@@ -147,8 +147,15 @@ export type Project = ProjectSummary & {
     // The release command of the release going out, while it runs or
     // after it failed.
     release?: { target: string; state: "Running" | "Succeeded" | "Failed"; message?: string };
+    // Built is False when the last build failed; Ready's reason says what
+    // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
+    conditions?: { type: string; status: "True" | "False" | "Unknown"; reason?: string; message?: string }[];
   };
 };
+
+// buildFailed says the project's last build failed (its Built condition).
+export const buildFailed = (status: { phase: string; conditions?: { type: string; status: string }[] }) =>
+  status.phase === "Failed" && (status.conditions ?? []).some((c) => c.type === "Built" && c.status === "False");
 
 export type DeployRequest = {
   git?: { url: string; revision?: string };

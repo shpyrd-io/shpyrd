@@ -596,7 +596,7 @@ func (a *appClient) followBuildAPI(ctx context.Context, slug, before string, tim
 	for _, b := range builds {
 		if b.Name == build {
 			if b.Status == "Failed" {
-				return fmt.Errorf("build %d failed: %s", b.Number, firstNonEmpty(b.Message, b.Reason))
+				return fmt.Errorf("build %d: %s", b.Number, firstNonEmpty(b.Message, "The build failed. The build's log has the full output."))
 			}
 			return nil
 		}

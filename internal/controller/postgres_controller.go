@@ -204,7 +204,8 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {
 			if strings.Contains(err.Error(), "no matches for kind") {
-				return ctrl.Result{}, fmt.Errorf("the postgres extension is not installed on this cluster (CloudNativePG missing): run `shpyrd extensions enable postgres`")
+				log.FromContext(ctx).Info("the postgres extension is not installed (CloudNativePG missing)", "postgres", pg.Name)
+				return ctrl.Result{}, fmt.Errorf("databases are not offered on this platform yet: its operator turns them on")
 			}
 			return ctrl.Result{}, fmt.Errorf("create database cluster: %w", err)
 		}

@@ -28,8 +28,10 @@ import (
 // so the platform mirrors the values into a ConfigMap of its own and the
 // Image names them by reference: the Image never carries a value. A value
 // that changes is read by the next build; a name that appears joins the
-// Image when a build happens anyway (a new source, a redeploy), so setting
-// a config var never starts a build by itself.
+// Image when a build happens anyway (a new archive, a redeploy), so setting
+// a config var never starts a build by itself. A Git source is the
+// exception: kpack builds each new commit without the Image changing, so a
+// new name joins at once, with one build.
 
 // buildVars merges the variables of the given Secrets, later ones winning,
 // and the plain variables of shpyrd.yaml's env: over them, as a process
