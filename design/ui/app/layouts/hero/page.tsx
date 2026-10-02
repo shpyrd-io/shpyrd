@@ -54,6 +54,17 @@ export default function Page() {
         />
       </Section>
 
+      <Section title="Centred while narrow, beside its picture once wide">
+        <Hero
+          as="h2"
+          align="auto"
+          heading="You built it. We ship it."
+          description="On a phone the words, the buttons and then the picture are centred, one under the other; once the hero is wide, the words start at the left with the picture beside them."
+          actions={<Button onClick={stay}>Add to Claude Code</Button>}
+          image={<Placeholder />}
+        />
+      </Section>
+
       <Section title="Centred, for a page with no picture">
         <Hero
           as="h2"

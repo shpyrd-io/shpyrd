@@ -2,8 +2,8 @@ import { Hero } from "@shpyrd/ui/components/hero";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 
 // The end of a page, with the shipyard at work beside it: what to do next on
-// the left, the yard on the right, and under the words where there is no
-// room. It is the library's hero as a section heading, with the yard for its
+// the left, the yard on the right, and under the words, centred, where there
+// is no room. It is the library's hero as a section heading, with the yard for its
 // picture. The yard only moves while it is on the screen.
 export function ShipyardCta({
   heading,
@@ -26,6 +26,7 @@ export function ShipyardCta({
       actions={actions}
       note={note}
       image={<Shipyard />}
+      align="auto"
     />
   );
 }

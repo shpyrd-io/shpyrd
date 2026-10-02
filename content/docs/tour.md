@@ -1,15 +1,21 @@
 ---
 title: Tour
-description: The dashboard, feature by feature, on a local cluster running three sample projects.
+description: The dashboard of a shpyrd cloud workspace, feature by feature, with three sample projects deployed.
 ---
 
-The dashboard is the same on shpyrd cloud, at your workspace's address; these screenshots come from a local kind cluster running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI. {% .lead %}
+Every workspace on shpyrd cloud has a dashboard at its own address. These screenshots come from **acme.shpyrd.app**, running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI, which is how your agent does it. {% .lead %}
 
 ## Signing in
 
 ![Login page](/screenshots/login.png)
 
-With the `auth-local` extension enabled, people sign in with their own email and password on this page, never on a third-party screen; a wrong password is shown right here. Company identity providers (Okta or any OpenID Connect issuer) and GitHub or Google appear as buttons. On a cluster you run yourself, the admin token is still accepted for automation, sits behind a small link, and can be switched off, and `shpyrd cluster dashboard` opens the dashboard signed in as you through a one-time link, so the token never reaches the browser.
+The workspace's login page, at its own address. People sign in with their shpyrd account, or with your company's sign-in once the workspace has one - Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider - and the page carries the workspace's logo and colour. The CLI signs in through the same page: `shpyrd login` opens it in the browser.
+
+## The launcher
+
+![Launcher](/screenshots/launcher.png)
+
+Where everyone lands after signing in: a tile for each app they may open, the featured ones first, each with its one-line description. People who only use apps see nothing else; people who build reach their projects from the **Projects** link.
 
 ## Projects
 
@@ -21,7 +27,7 @@ Every project with its phase, current release, per-process health and URL. A pro
 
 ![Project overview](/screenshots/project-overview.png)
 
-The overview of `shop`: source and build strategy, the current release and its build, and the **Processes** card where instance counts and sizes are edited as a draft and applied at once (one release). Below it the **Resources**, **Members**, **Recent actions** and **Releases** cards.
+The overview of `shop`: source and build strategy, the current release and its build, and the **Processes** card where instance counts and sizes are edited as a draft and applied at once (one release). Below it the **Resources**, **Access**, **Roles**, **Recent actions** and **Releases** cards.
 
 ### Resources and attachments
 
@@ -37,11 +43,15 @@ Everything in the project: the app, its volumes, databases and caches, with stat
 
 A release is a build plus the config in effect. Six releases of `shop`: the initial deploy, two attachments and a config change (all `config` releases reusing build #1), a second deploy (build #2) and a rollback to v4. Rollback re-releases a build together with its config vars, sizes and attachments.
 
-### Members and the audit trail
+### Access and roles
 
-![Members card](/screenshots/members-card.png)
+![Access card](/screenshots/access-card.png)
 
-Roles per project (`viewer`, `developer`, `admin`) granted to users or teams; platform admins have access everywhere. Next to it, **Recent actions** lists who did what, from the dashboard, the API and the CLI.
+Who may open the app: sign-in required (the default), public, or public with signed-in visitors identified. **Open as** opens the app in a new tab as one of your teams, or as a stranger, so you see what your users see.
+
+![Roles card](/screenshots/members-card.png)
+
+Roles on the project - `reader`, `user`, `viewer`, `developer`, `admin` - granted to people or teams. Next to it, **Recent actions** lists who did what, from the dashboard, the CLI or an agent.
 
 ## Deploying
 
@@ -83,30 +93,35 @@ Config vars are write-only: names and last-updated times are shown, values never
 
 `blog` mounts a persistent volume at `/data` for its visit counter. A single-instance volume pins the process to one instance (the scale control is disabled) and rolls out with Recreate; the data survives deploys.
 
-## Cluster
+## The workspace
 
-![Cluster page](/screenshots/cluster.png)
+![Workspace overview](/screenshots/workspace-overview.png)
 
-Self-hosted: the page the platform admins of a cluster you run yourself see. Capacity (used versus reserved CPU and memory, per node and over time), the instance size catalog, the extensions and their state, installed components and Helm releases.
+The **Workspace** page, for its owners and admins. **Overview**: the name, the look (logo and accent colour), the workspace's own domains, and the address for AI assistants.
 
-## Teams and users
+![People tab](/screenshots/workspace-people.png)
 
-![Teams page](/screenshots/teams.png)
+**People**: everyone in the workspace with their role (owner, admin, member) and how they last signed in, an **Invite** link, and suspension when someone has to be switched off at once.
 
-Teams group users (by email or by a group from the identity provider) so projects can grant roles to many people at once; a team can hold a platform role.
+![Teams tab](/screenshots/teams.png)
 
-![Users page](/screenshots/users.png)
+**Teams** group people - by email or by a group of your company's sign-in - so projects grant roles to many people at once.
 
-Self-hosted: local accounts of the `auth-local` extension: add, reset passwords, remove.
+![Sign-in tab](/screenshots/workspace-signin.png)
+
+**Sign-in**: your company's login methods, who may join on first sign-in, and your claimed email domains. **API tokens** holds the tokens for CI and scripts, and **Billing** the plan.
 
 ## Try it yourself
 
-On a cluster you run yourself (`pg` and `redis` go through the cluster; on shpyrd cloud, add databases from the project's **Resources** card):
+Sign in, then deploy the samples from a checkout of the repository:
 
 ```shell
+shpyrd login
 shpyrd projects create shop --public && cd examples/shop && shpyrd deploy   # a public shop; without --public visitors sign in
 shpyrd pg create db --project shop && shpyrd redis create cache --project shop
 shpyrd attach db && shpyrd attach cache
 shpyrd projects create blog && shpyrd volumes create data --size 1Gi --project blog && (cd ../blog && shpyrd deploy)
 shpyrd projects create api && (cd ../api && shpyrd deploy)
 ```
+
+Or ask your agent to do it: "Deploy the three examples in examples/ to shpyrd."

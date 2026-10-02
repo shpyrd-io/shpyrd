@@ -54,6 +54,7 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
           </>
         }
         image={picture}
+        align="auto"
       />
 
       <Stack gap="spacious">

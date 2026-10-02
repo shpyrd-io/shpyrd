@@ -54,4 +54,23 @@ describe("Hero", () => {
     expect(container.querySelector("[data-slot=hero-image]")).toBeNull();
     expect(container.querySelector("[data-slot=hero]")?.getAttribute("data-align")).toBe("center");
   });
+
+  it("centres the words and the actions while narrow, and starts them at the left once wide", () => {
+    const { container } = render(
+      <Hero
+        align="auto"
+        heading="You built it. We ship it."
+        actions={<button>Add to Claude Code</button>}
+        image={<img alt="" src="/x.webp" />}
+      />,
+    );
+    const words = container.querySelector("[data-slot=hero-heading]")?.parentElement;
+    const actions = container.querySelector("[data-slot=hero-actions]");
+    expect(words?.className).toContain("text-center");
+    expect(words?.className).toContain("@3xl/hero:text-start");
+    expect(actions?.className).toContain("justify-center");
+    expect(actions?.className).toContain("@3xl/hero:justify-start");
+    // Unlike a centred hero, it keeps its picture.
+    expect(container.querySelector("[data-slot=hero-image]")).toBeTruthy();
+  });
 });

@@ -7,7 +7,7 @@ description: The choices behind shpyrd and why they were made.
 
 A repository with a `go.mod`, a `package.json` or a `pom.xml` is a deployable project. Buildpacks detect the stack, build the image and record the process types; the platform injects `PORT`, publishes `web`, sizes processes with sane defaults. `shpyrd.yaml` exists for the cases that need a word (several process types, sizes, build settings), never as a prerequisite.
 
-## Heroku's vocabulary on Kubernetes objects
+## A familiar model on Kubernetes objects
 
 Projects, processes, instances (`web.1`), builds, releases, config vars, rollbacks: the model people already know. Underneath, each concept is a plain Kubernetes object in the project's namespace (an `App`, Deployments, Secrets, kpack `Image`s) that `kubectl` shows and GitOps tools can manage. Nothing is hidden in a database.
 
