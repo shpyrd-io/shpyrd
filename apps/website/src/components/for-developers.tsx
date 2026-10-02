@@ -1,13 +1,13 @@
 import { Button } from "@shpyrd/ui/components/button";
 import { ShipyardCta } from "@/components/shipyard-cta";
 import { SubpageStep } from "@/components/subpage-step";
+import { signUp } from "@/lib/signup";
 
 // What the pages of "For developers" share: the overview's ending, and the
 // short step that closes each subpage. shpyrd cloud comes first everywhere;
 // running it yourself has a tab of its own, the last.
 //
-// TODO: "Get started" is the self sign-up of shpyrd cloud; its address comes
-// when the cloud is finished.
+// "Get started" is the self sign-up of shpyrd cloud (src/lib/signup.ts).
 
 // The end of the overview: sign up and deploy, with the yard beside it.
 export function DeveloperNext() {
@@ -18,7 +18,7 @@ export function DeveloperNext() {
       actions={
         <>
           <Button asChild>
-            <a href="#">Get started</a>
+            <a href={signUp}>Get started</a>
           </Button>
           <Button variant="outline" asChild>
             <a href="/for/developers/your-first-deploy">Quick start</a>

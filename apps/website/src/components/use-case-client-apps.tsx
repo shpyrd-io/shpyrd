@@ -3,6 +3,7 @@ import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { contact } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
+import { signUp } from "@/lib/signup";
 
 // The endings of the Client apps section. The section is about the app built
 // for a client; the firm that builds it has its own page (/for/fde-partners).
@@ -20,9 +21,9 @@ export function ClientAppsNext({
     <Stack gap="normal" className="border-t pt-12">
       <SectionIntro heading={heading} description={description} />
       <Stack direction="horizontal" gap="cozy" className="flex-wrap">
-        {/* Self sign-up on shpyrd cloud; the address comes with the cloud. */}
+        {/* Self sign-up on shpyrd cloud. */}
         <Button asChild>
-          <a href="#">Get started</a>
+          <a href={signUp}>Get started</a>
         </Button>
         <Button variant="outline" asChild>
           <a href={contact.href}>Talk to us</a>

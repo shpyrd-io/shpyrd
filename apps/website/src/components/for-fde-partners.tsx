@@ -3,6 +3,7 @@ import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { contact, developerCta } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
+import { signUp } from "@/lib/signup";
 
 // What the pages of "For FDE partners" share: the full ending and the limits
 // (on the section's own page), and the short step at the end of each subpage.
@@ -11,8 +12,6 @@ import { SubpageStep } from "@/components/subpage-step";
 // is explicit that there is no partner programme, fleet management, per-client
 // billing or SLA to offer, so none is.
 //
-// TODO: "Get started" goes to the sign-up once the cloud has one.
-const signUp = "#";
 
 export function PartnerNext({ heading = "Start with one client" }: { heading?: string }) {
   return (

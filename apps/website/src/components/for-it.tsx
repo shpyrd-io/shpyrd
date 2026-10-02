@@ -3,10 +3,10 @@ import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { contact } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
+import { signUp } from "@/lib/signup";
 
 // Where "Get started" goes: signing up for a workspace on shpyrd cloud.
-// TODO: the sign-up is being built; this is its placeholder.
-export const getStarted = { label: "Get started", href: "#" };
+export const getStarted = { label: "Get started", href: signUp };
 
 // The end of the "For IT teams" section's own page. Start on shpyrd cloud;
 // or bring one app and one team to a pilot; or read how access works.
