@@ -46,6 +46,7 @@ export const catalog: Category[] = [
       { slug: "icon-picker", title: "Icon picker", description: "The icon of a card, chosen: a symbol and its colour, or an image of its own." },
       { slug: "switch", title: "Switch", description: "A setting that is on or off, and takes effect at once." },
       { slug: "card", title: "Card", description: "A box for what belongs together." },
+      { slug: "pricing-options", title: "Pricing options", description: "The plans of an offer side by side: the price, what comes with it, what to do." },
       { slug: "avatar-stack", title: "Avatar stack", description: "Who is in it: pictures over each other, spread under the pointer." },
       { slug: "toast", title: "Toast", description: "A word in the corner, for a moment: what was just done, or what went wrong." },
       { slug: "alert", title: "Alert", description: "Something the person has to know: what goes on, went well, asks for care or went wrong." },

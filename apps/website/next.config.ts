@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import vercel from "./vercel.json";
 
-// Everything is compiled to static files (out/): no Node at run time.
-const config: NextConfig = {
+// Everything is compiled to static files (out/): no Node at run time. A static
+// export has no redirects of its own, so they live in vercel.json, which
+// Vercel answers before any file; the development server reads the same list.
+const base: NextConfig = {
   output: "export",
   // A static export has no server to resize on request: the pictures are
   // converted once and shipped as they are.
@@ -15,4 +19,9 @@ const config: NextConfig = {
   allowedDevOrigins: ["*.trycloudflare.com"],
 };
 
-export default config;
+export default function config(phase: string): NextConfig {
+  if (phase === PHASE_DEVELOPMENT_SERVER) {
+    return { ...base, output: undefined, redirects: async () => vercel.redirects };
+  }
+  return base;
+}

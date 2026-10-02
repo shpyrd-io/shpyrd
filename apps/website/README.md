@@ -33,7 +33,7 @@ src/components/markdoc.tsx   which component of design/ui draws each tag
 src/lib/content.ts           reads content/docs and returns front matter, tree and headings
 public/install.sh            served at shpyrd.io/install.sh, the documented install path
 public/screenshots/          screenshots used by the docs and the root README
-public/_redirects            /docs -> /docs/getting-started; a static export emits none
+vercel.json                  the redirects (/discord, /docs); a static export emits none
 ```
 
 The texts are not here. Documentation is `content/docs/*.md` and the marketing

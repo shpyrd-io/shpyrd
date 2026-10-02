@@ -9,8 +9,9 @@
 // operations buyer, and the research is clear that the destination has to
 // match the promise. Replace it with a monitored address or a booking link
 // before this page is promoted anywhere.
-// The project's Discord: the site links to its own /discord, which forwards to
-// the invite, so the invite can change without touching a page.
+// The project's Discord. The site links to its own /discord, a redirect to the
+// invite (apps/website/vercel.json), so the invite can change in one place
+// without touching a page; a test keeps the two the same.
 export const discord = {
   invite: 'https://discord.gg/RYAT4wNKfw',
   href: '/discord',
