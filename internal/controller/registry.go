@@ -31,7 +31,8 @@ func (r *AppReconciler) reconcileRegistryCredentials(ctx context.Context, app *s
 	src := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: r.Config.SystemNamespace, Name: r.Config.RegistrySecret}, src); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("registry credentials Secret %s/%s not found: run `shpyrd cluster init` with --registry-user and --registry-token-file", r.Config.SystemNamespace, r.Config.RegistrySecret)
+			log.FromContext(ctx).Error(nil, "registry credentials not found: run `shpyrd cluster init` with --registry-user and --registry-token-file", "secret", r.Config.SystemNamespace+"/"+r.Config.RegistrySecret)
+			return fmt.Errorf("the platform cannot reach its image registry: a fault of the platform, not of the app; its operator is told")
 		}
 		return fmt.Errorf("get registry credentials: %w", err)
 	}

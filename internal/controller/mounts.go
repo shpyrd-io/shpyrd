@@ -53,7 +53,7 @@ func (r *AppReconciler) resolveMounts(ctx context.Context, app *shpyrdv1.App) (m
 			vol := &shpyrdv1.Volume{}
 			if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: m.Name}, vol); err != nil {
 				if apierrors.IsNotFound(err) {
-					return nil, fmt.Errorf("volume %q not found: create it with `shpyrd volumes create %s --size 5Gi`", m.Name, m.Name)
+					return nil, fmt.Errorf("the volume %q the process %s mounts does not exist: create it in the project, or remove it from the process's volumes", m.Name, p.Name)
 				}
 				return nil, err
 			}

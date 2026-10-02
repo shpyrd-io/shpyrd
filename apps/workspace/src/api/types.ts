@@ -147,8 +147,15 @@ export type Project = ProjectSummary & {
     // The release command of the release going out, while it runs or
     // after it failed.
     release?: { target: string; state: "Running" | "Succeeded" | "Failed"; message?: string };
+    // Built is False when the last build failed; Ready's reason says what
+    // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
+    conditions?: { type: string; status: "True" | "False" | "Unknown"; reason?: string; message?: string }[];
   };
 };
+
+// buildFailed says the project's last build failed (its Built condition).
+export const buildFailed = (status: { phase: string; conditions?: { type: string; status: string }[] }) =>
+  status.phase === "Failed" && (status.conditions ?? []).some((c) => c.type === "Built" && c.status === "False");
 
 export type DeployRequest = {
   git?: { url: string; revision?: string };
@@ -200,6 +207,8 @@ export type ResourceInfo = {
   data: boolean;
   bindable?: boolean;
   createdAt: string;
+  // What the platform decided on creation and why (a database's size).
+  note?: string;
 };
 
 export type VolumeInfo = {
@@ -221,7 +230,10 @@ export type SnapshotInfo = { name: string; volume: string; size?: string; ready:
 export type RestoreVolumeResult = { volume: VolumeInfo; inPlace: boolean; message: string };
 
 export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string };
-export type SizeCatalog = { default: string; sizes: InstanceSize[] };
+// databaseMinMemory: the least a database runs with (a smaller size is
+// raised to it); databaseDefaultMemory: what one that names no size gets,
+// unless the plan is small and it is given databaseSmallSize.
+export type SizeCatalog = { default: string; sizes: InstanceSize[]; databaseMinMemory?: string; databaseDefaultMemory?: string; databaseSmallSize?: string };
 
 export type Instance = { name: string; process: string; pod: string; ready: boolean };
 

@@ -22,7 +22,7 @@ import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { api } from "@/api/api";
-import type { DeployRequest, Project } from "@/api/types";
+import { buildFailed, type DeployRequest, type Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import { addressOf, hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
 import { choiceOf, ProjectTile } from "@/lib/tile";
@@ -72,7 +72,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
     onError: (e: Error) => toast.error(e.message),
   });
   const internal = project.exposure === "internal";
-  const buildFailed = project.status.phase === "Failed" && (project.status.message ?? "").startsWith("build failed");
+  const lastBuildFailed = buildFailed(project.status);
   const processes = Object.entries(project.processes ?? {});
   const release = project.status.release;
   return (
@@ -126,7 +126,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
             {perms.deploy && (
               <Deploy project={project} onDone={refresh}>
                 <DropdownMenuItem disabled={redeploy.isPending || busy(project)} onClick={() => redeploy.mutate(undefined)}>
-                  <RotateCcw /> {buildFailed ? "Build the same source again" : "Redeploy the current release"}
+                  <RotateCcw /> {lastBuildFailed ? "Build the same source again" : "Redeploy the current release"}
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={redeploy.isPending || busy(project)} onClick={() => redeploy.mutate("rebuild")}>
                   <Hammer /> Rebuild from the source
@@ -171,7 +171,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
       )}
       {phase === "failed" && !(release && release.state === "Failed") && (
         <Alert variant="destructive">
-          <AlertTitle>{buildFailed ? "The build failed" : "The release is not healthy"}</AlertTitle>
+          <AlertTitle>{lastBuildFailed ? "The build failed" : "The release is not healthy"}</AlertTitle>
           <AlertDescription>{project.status.message ?? project.message ?? "An instance keeps failing."}</AlertDescription>
         </Alert>
       )}

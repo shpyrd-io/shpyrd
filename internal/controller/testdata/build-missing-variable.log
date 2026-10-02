@@ -1,0 +1,60 @@
+    NODE_OPTIONS -> "--use-openssl-ca"
+    NODE_VERBOSE -> "false"
+
+    Writing exec.d/0-optimize-memory
+      Calculates available memory based on container limits at launch time.
+      Made available in the MEMORY_AVAILABLE environment variable.
+    Writing exec.d/1-inspector
+
+Paketo Buildpack for NPM Install 2.3.30
+  Resolving installation process
+    Process inputs:
+      node_modules      -> "Not found"
+      npm-cache         -> "Not found"
+      package-lock.json -> "Found"
+
+    Selected NPM build process: 'npm ci'
+
+  Executing build environment install process
+    Running 'npm ci --unsafe-perm --cache /layers/paketo-buildpacks_npm-install/npm-cache'
+      
+      up to date, audited 1 package in 255ms
+      
+      found 0 vulnerabilities
+      Completed in 400ms
+
+  Configuring build environment
+    NODE_ENV -> "development"
+    PATH     -> "/layers/paketo-buildpacks_npm-install/build-modules/node_modules/.bin_local:$PATH:/layers/paketo-buildpacks_npm-install/build-modules/node_modules/.bin"
+
+  Generating SBOM for /layers/paketo-buildpacks_npm-install/build-modules
+      Completed in 716ms
+
+  Executing launch environment install process
+    Running 'npm prune'
+      
+      up to date, audited 1 package in 136ms
+      
+      found 0 vulnerabilities
+      Completed in 176ms
+
+  Configuring launch environment
+    NODE_PROJECT_PATH   -> "/workspace"
+    NPM_CONFIG_LOGLEVEL -> "error"
+    PATH                -> "/layers/paketo-buildpacks_npm-install/launch-modules/node_modules/.bin_local:$PATH:/layers/paketo-buildpacks_npm-install/launch-modules/node_modules/.bin"
+
+  Generating SBOM for /layers/paketo-buildpacks_npm-install/launch-modules
+      Completed in 586ms
+
+
+Paketo Buildpack for Node Run Script 2.3.54
+  Executing build process
+    Running 'npm run build'
+      
+      > buildfail@1.0.0 build
+      > node build.js
+      
+      Error: Could not load `--schema` from provided path `prisma/schema.prisma`
+      PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL
+exit status 1
+[31;1mERROR: [0mfailed to build: exit status 1

@@ -193,7 +193,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			case after.Spec.Source != nil && after.Spec.PinnedImage == "" && req.Image == "" && sourceChanged:
 				fmt.Fprintln(out, "==> Building")
 				if err := ac.followBuildAPI(ctx, name, before.Status.LatestBuild, 3*time.Minute); err != nil {
-					return fmt.Errorf("build failed: %w", err)
+					return err // the platform's message says what failed
 				}
 			case specChanged:
 				fmt.Fprintln(out, "    source unchanged since the last build; releasing the configuration change")

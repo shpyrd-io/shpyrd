@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -334,4 +335,58 @@ func checkByName(r *store.WorkspaceReadiness, name string) *store.ReadinessCheck
 		}
 	}
 	return nil
+}
+
+// A plan's ceilings reach the quotas of projects already running (#51):
+// the workspace reconciler writes them on its pass, with no deploy; a
+// workspace with ceilings of its own keeps those.
+func TestQuotasFollowThePlan(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	for _, slug := range []string{"acme", "beta"} {
+		if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: slug, Name: slug}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.CreatePlan(ctx, store.Plan{Name: "free", EffectiveFrom: time.Now().Add(-time.Hour), Limits: &store.Limits{Memory: "256Mi"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"acme", "beta"} {
+		if _, err := st.AssignPlan(ctx, slug, "free"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.UpdateWorkspaceSettings(ctx, "beta", store.WorkspaceSettings{Limits: &store.Limits{Memory: "2Gi"}}); err != nil {
+		t.Fatal(err)
+	}
+	acme := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "p-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}}}
+	beta := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "wiki", Namespace: "p-wiki", Labels: map[string]string{shpyrdv1.LabelWorkspace: "beta"}}}
+	base, c := newTestReconciler(t, acme, beta)
+	r := &WorkspaceReconciler{Client: c, Scheme: base.Scheme, Store: st}
+	memory := func(ns string) string {
+		t.Helper()
+		q := &corev1.ResourceQuota{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: QuotaName}, q); err != nil {
+			return "none"
+		}
+		m := q.Spec.Hard[corev1.ResourceRequestsMemory]
+		return m.String()
+	}
+	all, _ := st.ListWorkspaces(ctx)
+	if err := r.syncQuotas(ctx, all); err != nil {
+		t.Fatal(err)
+	}
+	if memory("p-shop") != "256Mi" || memory("p-wiki") != "2Gi" {
+		t.Fatalf("quotas = %s %s", memory("p-shop"), memory("p-wiki"))
+	}
+	// The plan is raised: acme's quota follows, beta keeps its own.
+	if _, err := st.AddPlanVersion(ctx, store.Plan{Name: "free", EffectiveFrom: time.Now().Add(-time.Minute), Limits: &store.Limits{Memory: "512Mi"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.syncQuotas(ctx, all); err != nil {
+		t.Fatal(err)
+	}
+	if memory("p-shop") != "512Mi" || memory("p-wiki") != "2Gi" {
+		t.Errorf("after the plan rose = %s %s", memory("p-shop"), memory("p-wiki"))
+	}
 }

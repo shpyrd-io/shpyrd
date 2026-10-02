@@ -171,18 +171,22 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 			if backups || retention != "" || schedule != "" {
 				spec.Backups = &shpyrdv1.PostgresBackups{Retention: retention, Schedule: schedule}
 			}
-			if _, err := resources.CreateAPI(ctx, g.API(), project, "Postgres", args[0], spec); err != nil {
+			created, err := resources.CreateAPI(ctx, g.API(), project, "Postgres", args[0], spec)
+			if err != nil {
 				return err
 			}
 			out := ext.Progress(g, cmd)
 			fmt.Fprintf(out, "Creating PostgreSQL %s database %s (%s, %d instance(s))...\n", version, args[0], qty.String(), instances)
+			if created.Note != "" {
+				fmt.Fprintln(out, created.Note)
+			}
 			v, err := resources.WaitReadyAPI(ctx, g.API(), out, project, "Postgres", args[0], 5*time.Minute)
 			if err != nil {
 				return err
 			}
 			switch {
 			case v == nil:
-				return ext.Print(g, cmd, map[string]any{"project": project, "name": args[0], "ready": false}, func(w io.Writer) {
+				return ext.Print(g, cmd, map[string]any{"project": project, "name": args[0], "ready": false, "note": created.Note}, func(w io.Writer) {
 					fmt.Fprintln(w, "Still provisioning; check with `shpyrd pg list`.")
 				})
 			case v.Phase == shpyrdv1.ResourceFailed:
@@ -191,6 +195,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 				}
 				return errors.New(v.Message)
 			}
+			v.Note = created.Note
 			return ext.Print(g, cmd, v, func(w io.Writer) {
 				fmt.Fprintf(w, "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
 			})
@@ -198,7 +203,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	}
 	projectFlag(cmd, &project)
 	cmd.Flags().StringVar(&version, "version", "17", "PostgreSQL major version")
-	cmd.Flags().StringVar(&size, "size", "", "instance size from the catalog (default: the catalog default)")
+	cmd.Flags().StringVar(&size, "size", "", "instance size from the catalog, at least 128Mi of memory (default: 256Mi, or db-xs on a plan with less than 512Mi)")
 	cmd.Flags().StringVar(&storage, "storage", "5Gi", "data volume size")
 	cmd.Flags().Int32Var(&instances, "instances", 1, "number of instances (2-3 for high availability)")
 	cmd.Flags().BoolVar(&backups, "backups", false, "back up to the platform's object store: continuous WAL archiving and a daily base backup (needs the object-storage extension)")

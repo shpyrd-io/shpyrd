@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -110,7 +111,8 @@ func (r *PostgresReconciler) reconcileBackups(ctx context.Context, pg *shpyrdv1.
 		return controllerutil.SetControllerReference(pg, bucket, r.Scheme)
 	}); err != nil {
 		if isNoKind(err) {
-			return fmt.Errorf("backups need the object-storage extension: run `shpyrd extensions enable object-storage`")
+			log.FromContext(ctx).Info("database backups need the object-storage extension", "postgres", pg.Name)
+			return fmt.Errorf("backups need the platform's object storage, which this platform does not offer yet: its operator turns it on")
 		}
 		return fmt.Errorf("backups bucket: %w", err)
 	}
@@ -143,7 +145,8 @@ func (r *PostgresReconciler) reconcileBackups(ctx context.Context, pg *shpyrdv1.
 		return controllerutil.SetControllerReference(pg, store, r.Scheme)
 	}); err != nil {
 		if isNoKind(err) {
-			return fmt.Errorf("backups need the Barman Cloud plugin (component barman-cloud of the postgres extension): run `shpyrd cluster init`")
+			log.FromContext(ctx).Info("database backups need the Barman Cloud plugin (component barman-cloud of the postgres extension)", "postgres", pg.Name)
+			return fmt.Errorf("backups are not set up on this platform yet: its operator sets them up")
 		}
 		return fmt.Errorf("backups object store: %w", err)
 	}
@@ -220,7 +223,7 @@ func (r *PostgresReconciler) checkRecoverySource(ctx context.Context, pg *shpyrd
 		return err
 	}
 	if source.Spec.Backups == nil {
-		return fmt.Errorf("database %q has no backups (enable them with `shpyrd pg backups enable %s`)", rec.From, rec.From)
+		return fmt.Errorf("the database %q has no backups to restore from: turn its backups on first", rec.From)
 	}
 	if source.Status.LastBackup == nil {
 		return fmt.Errorf("database %q has no completed backup yet", rec.From)

@@ -342,7 +342,7 @@ type Addresses struct {
 	mu    sync.Mutex
 	cache map[string]wsEntry
 	hosts map[string]hostsEntry
-	sleep map[string]sleepEntry
+	plans map[string]planEntry
 }
 
 type wsEntry struct {
@@ -481,18 +481,37 @@ func (a *Addresses) Suspended(slug string) bool {
 	return ws != nil && ws.Status == store.WorkspaceSuspended
 }
 
-// Limits is the plan of a workspace, nil when it has none.
+// Limits are the ceilings a workspace is held to: its own, else its
+// plan's (#51); nil when it has none, or when the store is unreachable.
 func (a *Addresses) Limits(slug string) *store.Limits {
-	if ws := a.Workspace(slug); ws != nil {
+	ws := a.Workspace(slug)
+	if ws == nil {
+		return nil
+	}
+	if ws.Settings.Limits != nil {
 		return ws.Settings.Limits
 	}
-	return nil
+	plan, ok := a.Plan(slug)
+	if !ok {
+		return nil
+	}
+	l, _ := store.EffectiveLimits(ws, plan)
+	return l
 }
 
 // SleepDefault is the workspace's plan's default HTTP sleep policy (RFC-0075):
 // after and resuming, or "" when the workspace has no plan or the plan sets
 // none. Cached like Workspace; a plan change shows within the TTL.
 func (a *Addresses) SleepDefault(slug string) (after, resuming string) {
+	if p, ok := a.Plan(slug); ok && p != nil {
+		return p.SleepAfter, p.SleepResuming
+	}
+	return "", ""
+}
+
+// Plan is the version in force of a workspace's plan, nil when it has none;
+// ok is false when the store could not say. Cached like Workspace.
+func (a *Addresses) Plan(slug string) (plan *store.Plan, ok bool) {
 	if slug == "" {
 		slug = a.defaultSlug()
 	}
@@ -502,32 +521,34 @@ func (a *Addresses) SleepDefault(slug string) (after, resuming string) {
 	}
 	now := time.Now()
 	a.mu.Lock()
-	if e, ok := a.sleep[slug]; ok && now.Before(e.expires) {
+	if e, ok := a.plans[slug]; ok && now.Before(e.expires) {
 		a.mu.Unlock()
-		return e.after, e.resuming
+		return e.plan, true
 	}
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var e sleepEntry
-	if wp, err := a.Store.WorkspacePlan(ctx, slug); err == nil && wp != nil {
-		if p, err := a.Store.GetPlan(ctx, wp.PlanName); err == nil && p != nil {
-			e.after, e.resuming = p.SleepAfter, p.SleepResuming
-		}
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return "", "" // store trouble: not cached, no default this round
+	p, err := store.PlanOf(ctx, a.Store, slug)
+	if err != nil {
+		return nil, false // store trouble: not cached
 	}
-	e.expires = now.Add(ttl)
 	a.mu.Lock()
-	if a.sleep == nil {
-		a.sleep = map[string]sleepEntry{}
+	if a.plans == nil {
+		a.plans = map[string]planEntry{}
 	}
-	a.sleep[slug] = e
+	a.plans[slug] = planEntry{plan: p, expires: now.Add(ttl)}
 	a.mu.Unlock()
-	return e.after, e.resuming
+	return p, true
 }
 
-type sleepEntry struct {
-	after, resuming string
-	expires         time.Time
+// Forget drops what is remembered: a workspace or a plan changed.
+func (a *Addresses) Forget() {
+	a.mu.Lock()
+	a.cache, a.hosts, a.plans = nil, nil, nil
+	a.mu.Unlock()
+}
+
+type planEntry struct {
+	plan    *store.Plan // nil: no plan
+	expires time.Time
 }

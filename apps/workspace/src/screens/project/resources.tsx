@@ -447,6 +447,13 @@ function VolumeDialog({ slug, resize, open: openProp, onOpenChange, onDone }: { 
 }
 
 // A Postgres or a Redis, with the few things that matter.
+// mebibytes reads a memory quantity of the catalog ("64Mi", "1Gi").
+const mebibytes = (q: string) => {
+  const m = /^(\d+(?:\.\d+)?)(Mi|Gi|Ti)?$/.exec(q.trim());
+  if (!m) return Number.NaN;
+  return Number(m[1]) * ({ Mi: 1, Gi: 1024, Ti: 1024 * 1024 }[m[2] ?? ""] ?? 1 / (1024 * 1024));
+};
+
 function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "Postgres" | "Redis"; onDone: () => void; onClose: () => void }) {
   const catalog = useQuery({ queryKey: ["sizes"], queryFn: api.sizes, staleTime: 60_000 });
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
@@ -459,6 +466,7 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
   const [engine, setEngine] = useState("valkey");
   const [persistent, setPersistent] = useState(false);
   const [backups, setBackups] = useState("off");
+  const floor = catalog.data?.databaseMinMemory;
   const save = useMutation({
     mutationFn: () => {
       const spec: Record<string, unknown> = {};
@@ -475,8 +483,8 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
       }
       return api.createResource(slug, { kind, name: name.trim(), spec });
     },
-    onSuccess: () => {
-      toast.success(`Making ${kind} ${name.trim()}`, { description: "Attach it once it is ready." });
+    onSuccess: (r) => {
+      toast.success(`Making ${kind} ${name.trim()}`, { description: r.note ? `${r.note} Attach it once it is ready.` : "Attach it once it is ready.", duration: r.note ? 12_000 : undefined });
       onClose();
       onDone();
     },
@@ -488,7 +496,7 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
         <DialogHeader divider>
           <DialogTitle>{kind === "Postgres" ? "New Postgres database" : "New Redis-compatible store"}</DialogTitle>
           <DialogDescription>
-            {kind === "Postgres" ? "A PostgreSQL cluster in the project, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars." : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
+            {kind === "Postgres" ? `A PostgreSQL cluster in the project, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars. A database takes at least ${floor ?? "128Mi"} of memory; without a size it has ${catalog.data?.databaseDefaultMemory ?? "256Mi"}, or the small size on a plan with little memory.` : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -508,10 +516,15 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">the default, {catalog.data?.default ?? "…"}</SelectItem>
+                  {kind === "Postgres" ? (
+                    <SelectItem value="default">the default for a database</SelectItem>
+                  ) : (
+                    <SelectItem value="default">the default, {catalog.data?.default ?? "…"}</SelectItem>
+                  )}
                   {(catalog.data?.sizes ?? []).map((s) => (
                     <SelectItem key={s.name} value={s.name}>
                       {s.name} · {s.cpu} CPU · {s.memory}
+                      {kind === "Postgres" && floor && mebibytes(s.memory) < mebibytes(floor) && <span className="text-xs text-muted-foreground"> raised to {floor}</span>}
                     </SelectItem>
                   ))}
                 </SelectContent>

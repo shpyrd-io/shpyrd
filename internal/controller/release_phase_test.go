@@ -31,7 +31,7 @@ func TestReleasePhase(t *testing.T) {
 
 	// 1. The first reconcile creates the release Job and no Deployment yet.
 	got := runReconcile(t, r, app)
-	if got.Status.Phase != shpyrdv1.PhaseDeploying || !strings.Contains(got.Status.Message, "release phase") {
+	if got.Status.Phase != shpyrdv1.PhaseDeploying || !strings.Contains(got.Status.Message, "release step") {
 		t.Fatalf("phase = %q %q, want Deploying with the release phase", got.Status.Phase, got.Status.Message)
 	}
 	if got.Status.Release == nil || got.Status.Release.State != shpyrdv1.ReleaseRunning {
@@ -67,7 +67,7 @@ func TestReleasePhase(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = runReconcile(t, r, got)
-	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "release command failed") {
+	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "The release step failed") || PlatformWordingFault(got.Status.Message) != "" {
 		t.Fatalf("after failure: %q %q", got.Status.Phase, got.Status.Message)
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-rails", Name: "rails-web"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {

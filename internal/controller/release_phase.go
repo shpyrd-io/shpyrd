@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -114,61 +113,92 @@ func releaseJobName(app *shpyrdv1.App, target string) string {
 	return app.Name + "-release-" + target
 }
 
+// Messages of the release step, in words (#52).
+const (
+	releaseRunningMessage   = "Running the release step before the new release starts."
+	releaseSucceededMessage = "The release step succeeded."
+)
+
 // reconcileReleasePhase runs the release command for the target and reports
 // its state. proceed is true when the rollout may go on (no command, or it
 // succeeded); otherwise the caller sets the phase from the status and
-// requeues.
-func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash, revision string, res corev1.ResourceRequirements) (proceed bool, err error) {
+// requeues. refused says the step cannot start: the workspace's ceiling
+// leaves no room for it.
+func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash, revision string, res corev1.ResourceRequirements) (proceed, refused bool, err error) {
 	command := releaseCommand(app, app.Status.ProcessTypes)
 	if command == nil {
 		app.Status.Release = nil
-		return true, nil
+		return true, false, nil
 	}
 	target := releaseTarget(image, configHash)
 	if app.Status.Release != nil && app.Status.Release.Target == target && app.Status.Release.State == shpyrdv1.ReleaseSucceeded {
-		return true, nil
+		return true, false, nil
 	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: releaseJobName(app, target), Namespace: app.Namespace}}
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), job)
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := r.createReleaseJob(ctx, app, job, image, command, revision, releaseNumber(app, image, configHash), res, target); err != nil {
-			return false, err
+			return false, false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
-		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: "running " + strings.Join(command, " "), Job: job.Name}
-		return false, nil
+		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: releaseRunningMessage, Job: job.Name}
+		return false, false, nil
 	case err != nil:
-		return false, fmt.Errorf("release job: %w", err)
+		return false, false, fmt.Errorf("release job: %w", err)
 	}
 	st := &shpyrdv1.ReleasePhaseStatus{Target: target, Job: job.Name}
 	switch {
 	case jobSucceeded(job):
-		st.State, st.Message = shpyrdv1.ReleaseSucceeded, "release command succeeded"
+		st.State, st.Message = shpyrdv1.ReleaseSucceeded, releaseSucceededMessage
 		app.Status.Release = st
-		return true, nil
+		return true, false, nil
 	case jobFailed(job):
 		// A redeploy asked after the failure runs the command again: the
 		// failed Job goes, the next pass creates a fresh one carrying the
 		// request, so the same request does not retry forever.
 		if restart := app.Annotations[shpyrdv1.AnnotationRestartedAt]; restart != "" && restart != job.Annotations[shpyrdv1.AnnotationRestartedAt] {
 			if err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
-				return false, fmt.Errorf("remove failed release job: %w", err)
+				return false, false, fmt.Errorf("remove failed release job: %w", err)
 			}
 			r.Recorder.Event(app, corev1.EventTypeNormal, "ReleasePhase", "running the release command again")
-			st.State, st.Message = shpyrdv1.ReleaseRunning, "running "+strings.Join(command, " ")+" again"
+			st.State, st.Message = shpyrdv1.ReleaseRunning, "Running the release step again before the new release starts."
 			app.Status.Release = st
-			return false, nil
+			return false, false, nil
 		}
 		st.State = shpyrdv1.ReleaseFailed
-		st.Message = fmt.Sprintf("release command failed (%s): fix it and deploy again, or redeploy to run it again; its output is in `shpyrd logs -p release`", jobFailureReason(job))
+		switch refusal := r.releaseJobRefusal(ctx, job); {
+		case jobDeadlineExceeded(job) && refusal != "":
+			st.Message = "The release step was given up after 30 minutes without starting. " + refusal
+		case jobDeadlineExceeded(job):
+			st.Message = "The release step ran longer than 30 minutes and was stopped. Its log has its output. Make it shorter and deploy again; the previous release keeps running."
+		default:
+			st.Message = "The release step failed. Its log has its output. Fix it and deploy again, or deploy the same source again to run it again; the previous release keeps running."
+		}
 		app.Status.Release = st
-		return false, nil
+		return false, false, nil
 	default:
-		st.State, st.Message = shpyrdv1.ReleaseRunning, "running "+strings.Join(command, " ")
+		st.State, st.Message = shpyrdv1.ReleaseRunning, releaseRunningMessage
+		if job.Status.Active == 0 {
+			if msg := r.releaseJobRefusal(ctx, job); msg != "" {
+				st.Message = msg
+				app.Status.Release = st
+				return false, true, nil
+			}
+		}
 		app.Status.Release = st
-		return false, nil
+		return false, false, nil
 	}
+}
+
+// jobDeadlineExceeded says the Job was stopped at its active deadline.
+func jobDeadlineExceeded(j *batchv1.Job) bool {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue && c.Reason == batchv1.JobReasonDeadlineExceeded {
+			return true
+		}
+	}
+	return false
 }
 
 // createReleaseJob renders the one-off Job: the release's image and config

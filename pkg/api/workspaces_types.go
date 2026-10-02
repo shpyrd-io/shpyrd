@@ -32,7 +32,8 @@ type CreateWorkspaceRequest struct {
 	// against from birth. Empty: none yet. Refused for the operator's own
 	// workspaces, which are never invoiced.
 	Plan string `json:"plan,omitempty"`
-	// Limits sets the workspace's ceilings; nil means none.
+	// Limits gives the workspace ceilings of its own, an exception to its
+	// plan's (#51); nil: it follows its plan's, or has none without one.
 	Limits *store.Limits `json:"limits,omitempty"`
 }
 
@@ -52,11 +53,14 @@ type CreatedWorkspace struct {
 // UpdateWorkspaceRequest is PATCH /api/workspaces/:slug; every field is
 // optional.
 type UpdateWorkspaceRequest struct {
-	Name    *string       `json:"name,omitempty"`
-	Address *string       `json:"address,omitempty"`
-	Status  *string       `json:"status,omitempty"` // active or suspended
-	Limits  *store.Limits `json:"limits,omitempty"`
-	// ClearLimits removes the ceilings.
+	Name    *string `json:"name,omitempty"`
+	Address *string `json:"address,omitempty"`
+	Status  *string `json:"status,omitempty"` // active or suspended
+	// Limits sets ceilings of the workspace's own over those in force
+	// (those not given keep their value), an exception to its plan's.
+	Limits *store.Limits `json:"limits,omitempty"`
+	// ClearLimits removes the workspace's own ceilings: it follows its
+	// plan's again (none without a plan).
 	ClearLimits bool `json:"clearLimits,omitempty"`
 }
 
@@ -71,10 +75,13 @@ type WorkspaceSummary struct {
 	Owner string `json:"owner,omitempty"`
 	// Plan is the billing plan the workspace is metered against (RFC-0075);
 	// empty when none, always empty for the operator's own.
-	Plan   string        `json:"plan,omitempty"`
-	Limits *store.Limits `json:"limits,omitempty"`
-	Usage  *Usage        `json:"usage,omitempty"`
-	Owners []string      `json:"owners"`
+	Plan string `json:"plan,omitempty"`
+	// Limits are the ceilings in force: the workspace's own when
+	// LimitsOverride, else its plan's (#51); nil for none.
+	Limits         *store.Limits `json:"limits,omitempty"`
+	LimitsOverride bool          `json:"limitsOverride,omitempty"`
+	Usage          *Usage        `json:"usage,omitempty"`
+	Owners         []string      `json:"owners"`
 	// Readiness is the controller's last look at the workspace's door
 	// (nil before the first), ReadyAt when it first answered (nil until
 	// then): the moment an invitation link to it can be followed.

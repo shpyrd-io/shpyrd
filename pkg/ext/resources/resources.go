@@ -103,6 +103,8 @@ type View struct {
 	AttachedTo []string          `json:"attachedTo"`
 	Data       bool              `json:"data"`
 	CreatedAt  time.Time         `json:"createdAt"`
+	// Note is what the platform decided on creation and why.
+	Note string `json:"note,omitempty"`
 }
 
 // CreateAPI creates a resource of a kind with a spec, as the CRD spells it.

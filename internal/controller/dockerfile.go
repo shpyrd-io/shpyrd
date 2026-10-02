@@ -196,7 +196,7 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 	pod := pods.Items[0]
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
-			return nil, failureSummary("fetching the source failed", t.Message)
+			return nil, describeBuildFailure("prepare", t.Message)
 		}
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -211,41 +211,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 			}
 			return nil, "build finished without reporting an image"
 		}
-		return nil, failureSummary(fmt.Sprintf("exit %d", t.ExitCode), t.Message)
+		return nil, describeBuildFailure("dockerfile", t.Message)
 	}
 	return nil, ""
-}
-
-// failureSummary keeps the most useful part of a log tail: the error lines
-// when BuildKit printed any, otherwise the last lines, trimmed to a size
-// that fits a status message.
-func failureSummary(prefix, tail string) string {
-	var lines, errs []string
-	for _, l := range strings.Split(strings.TrimSpace(tail), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		lines = append(lines, l)
-		if strings.HasPrefix(l, "error:") || strings.HasPrefix(l, "ERROR") || strings.Contains(l, " ERROR: ") {
-			errs = append(errs, l)
-		}
-	}
-	keep := lines
-	if len(errs) > 0 {
-		keep = errs
-	}
-	if n := 3; len(keep) > n {
-		keep = keep[len(keep)-n:]
-	}
-	msg := strings.Join(keep, " | ")
-	if len(msg) > 400 {
-		msg = msg[len(msg)-400:]
-	}
-	if msg == "" {
-		return prefix
-	}
-	return prefix + ": " + msg
 }
 
 func (r *AppReconciler) annotateJob(ctx context.Context, job *batchv1.Job, ann map[string]string) error {

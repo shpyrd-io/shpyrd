@@ -256,6 +256,16 @@ env:
 
 `env:` is authoritative when present: an empty map (`env: {}`) removes every previously declared plain variable. Secret values — API keys, database passwords — always go through `shpyrd secrets set`, never here.
 
+### At build time
+
+A buildpack build sees the same variables the app will run with: global config vars, the project's config vars, the variables of attached resources (`DATABASE_URL`, `DATABASE_HOST`, …) and `env:`, in that order (the later wins), with `build.env` from `shpyrd.yaml` above them all. That is what `prisma generate`, a Next.js page that reads the database while the build collects page data, `NEXT_PUBLIC_*` variables inlined into the assets and Rails' `assets:precompile` rely on. Attach the database before the first deploy and the first build already has `DATABASE_URL`.
+
+A build reads the values current when it starts. Setting or changing a config var does not start a build: it restarts the processes, and the next deploy builds with the new values (`shpyrd redeploy --rebuild`, or **Redeploy** in the dashboard, builds the same source again).
+
+The values stay secret on the way. They reach the build in a Kubernetes Secret mounted into the build alone, and shpyrd's buildpack, first in every builder, hands them to the buildpacks after it for the build only: they are not written into the image nor into the build cache. What the app's build does with them is its own: a variable it inlines on purpose, such as `NEXT_PUBLIC_*`, ends up in the image, as on Heroku. A secret value the build prints shows as `***` in the build's log, in the dashboard and the CLI alike: the value whole, each line of a value of several lines, and the password of a URL on its own. A value shorter than 8 characters, or one printed in another form (base64, a part of it), shows as it is; and only the values current when the log is read are recognised. Two names cannot reach a build, `type` and `provider`; a project that names its own builder (`build.builder`) gets the variables only if that builder starts with shpyrd's buildpack.
+
+A build can reach the project's database: it runs in the project's own network. Run migrations in the [release phase](#release-phase), not in the build, so a build that fails never leaves the schema half changed. Dockerfile builds receive only `build.env`, as `ARG` values.
+
 ### Global config vars
 
 Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a platform admin and injected into every process of every project:
@@ -377,6 +387,16 @@ shpyrd rollback 4      # to a specific release: its build and its config vars
 ```
 
 A rollback is refused while another release is still rolling out (`--force` overrides). See [Concepts](/docs/concepts#releases) for what a release contains.
+
+## When something fails
+
+The project says what failed, in words, in the dashboard, the CLI (`shpyrd projects info`) and the workspace's MCP server alike:
+
+- **A build**: the script that was running and, when the build's output makes it plain, why - a variable the build reads and nobody set, a module that is not installed, a source no buildpack recognises. The output itself is the build's log: `shpyrd logs --build`.
+- **The release phase**: that it failed, ran past its 30 minutes, or could not start. Its output is `shpyrd logs -p release`.
+- **Something that cannot start because of the workspace's ceilings**: which ceiling (memory, CPU), what takes it - the database, the processes - and how much more was needed. Retrying does not help; a smaller size, fewer instances or a larger plan does.
+
+The previous release keeps serving through all of these.
 
 ## Redeploy
 

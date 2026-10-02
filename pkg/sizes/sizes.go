@@ -65,6 +65,19 @@ type Catalog struct {
 	Sizes   []Size `json:"sizes"`
 }
 
+// Databases (#53). DBMinMemory is the least a database runs with: a
+// smaller size is raised to it, and under DBDefaultMemory PostgreSQL is
+// tuned for it (about 20 connections). DBDefaultMemory is what a database
+// that names no size gets; on a plan whose memory ceiling is under
+// DBXSPlanBelow it is given DBXS instead, the catalog's database size.
+const (
+	DBMinMemory     = "128Mi"
+	DBDefaultMemory = "256Mi"
+	DBXS            = "db-xs"
+	DBXSPlanBelow   = "512Mi"
+	DBXSDescription = "Small databases: a small app's, about 20 connections; not for reporting"
+)
+
 // Defaults is the catalog seeded at install time. Memory steps follow Fly
 // and Render from 64 MiB up: the smallest entry suits Go services and
 // static sites, JVM and Node apps usually need shared-m or larger. Memory
@@ -75,6 +88,7 @@ func Defaults() Catalog {
 		Default: "shared-s",
 		Sizes: []Size{
 			{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Description: "Default: static sites, Go services"},
+			{Name: "db-xs", Kind: Shared, CPU: "0.5", Memory: "128Mi", Description: DBXSDescription},
 			{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Description: "Node.js, Python, Ruby"},
 			{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Description: "JVM, heavier web apps"},
 			{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi"},
@@ -234,7 +248,7 @@ func (c Catalog) Resolve(sizeName string, override corev1.ResourceRequirements) 
 	}
 	size, ok := c.Get(name)
 	if !ok {
-		return corev1.ResourceRequirements{}, "", fmt.Errorf("unknown size %q (see `shpyrd sizes list`)", name)
+		return corev1.ResourceRequirements{}, "", fmt.Errorf("unknown size %q: it is not in this platform's catalog of sizes", name)
 	}
 	base := size.Resources()
 	if len(override.Requests) == 0 && len(override.Limits) == 0 {

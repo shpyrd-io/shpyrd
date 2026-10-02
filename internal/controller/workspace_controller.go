@@ -43,6 +43,9 @@ type WorkspaceReconciler struct {
 	// LookupLB finds the public front door's address when Config did not
 	// know it at start (a first install), for the readiness checks.
 	LookupLB func(ctx context.Context) string
+	// Forget drops the App controller's memory of workspaces and plans on
+	// Notify, so a change of ceilings is seen by the next reconcile.
+	Forget func()
 
 	events  chan event.GenericEvent
 	checker readinessChecker
@@ -64,6 +67,9 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // Notify asks for a pass now (after a workspace was created or changed).
 func (r *WorkspaceReconciler) Notify() {
+	if r.Forget != nil {
+		r.Forget()
+	}
 	if r.events == nil {
 		return
 	}
@@ -146,6 +152,10 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 			}
 			logger.Info("workspace front door removed", "ingress", ing.Name, "workspace", ing.Labels[shpyrdv1.LabelWorkspace])
 		}
+	}
+	// The projects' quotas follow their workspace's ceilings.
+	if err := r.syncQuotas(ctx, all); err != nil {
+		logger.Error(err, "workspace quotas")
 	}
 	if pending {
 		return ctrl.Result{RequeueAfter: readinessRetry}, nil

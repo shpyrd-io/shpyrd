@@ -140,7 +140,8 @@ func TestDockerfileBuildJob(t *testing.T) {
 		t.Error("finished job must be annotated with its image")
 	}
 
-	// A new archive triggers build 2; its failure keeps the release and reports the log tail.
+	// A new archive triggers build 2; its failure keeps the release and
+	// says, in words, which step failed (BuildKit's lines stay in the log).
 	app = got
 	app.Spec.Source.Blob.SHA256, app.Spec.Source.Blob.Ref = "def456def456def456", "fedcba987654"
 	if err := c.Update(context.Background(), app); err != nil {
@@ -153,7 +154,7 @@ func TestDockerfileBuildJob(t *testing.T) {
 	markDeploymentReady(t, c, "app-dk", "dk-web", 1)
 	finishBuild(t, c, getJob(t, c, "app-dk", "dk-build-2"), 1, "#5 [2/3] RUN npm ci\n#5 ERROR: process \"/bin/sh -c npm ci\" did not complete successfully: exit code: 1\nerror: failed to solve: process did not complete successfully\n")
 	got = runReconcile(t, r, app)
-	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "failed to solve") {
+	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "while running `npm ci` (exit status 1)") || !strings.Contains(got.Status.Message, "previous release keeps running") || strings.Contains(got.Status.Message, "failed to solve") {
 		t.Fatalf("phase = %q (%s)", got.Status.Phase, got.Status.Message)
 	}
 	if got.Status.Image != "10.96.0.50:5000/apps/dk@"+testDigest || len(got.Status.Releases) != 1 {
@@ -215,15 +216,14 @@ func TestBuildKeyAndFailureSummary(t *testing.T) {
 		t.Error("the source is part of the key")
 	}
 
-	got := failureSummary("exit 1", "#1 [internal] load\n#2 DONE 0.1s\n\n#3 ERROR: not found\n   2 | >>> RUN false\n--------------------\nerror: failed to solve: not found\n")
-	if got != "exit 1: #3 ERROR: not found | error: failed to solve: not found" {
+	// A failed BuildKit build is told in words: the RUN step's command,
+	// never BuildKit's lines (#52).
+	got := describeBuildFailure("dockerfile", "#7 [build 4/5] RUN npm run build\n#7 ERROR: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 1\n------\nerror: failed to solve: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 1\n")
+	if got != "The build failed while running `npm run build` (exit status 1). "+buildLogHint {
 		t.Errorf("summary = %q", got)
 	}
-	if got := failureSummary("exit 2", "a\nb\nc\nd"); got != "exit 2: b | c | d" {
+	if got := describeBuildFailure("dockerfile", "#3 ERROR: not found\nerror: failed to solve: not found\n"); got != "The Dockerfile build failed. "+buildLogHint {
 		t.Errorf("fallback summary = %q", got)
-	}
-	if failureSummary("x", "") != "x" {
-		t.Error("empty tail keeps the prefix")
 	}
 	if shellQuote("it's") != `'it'\''s'` {
 		t.Errorf("shellQuote = %s", shellQuote("it's"))

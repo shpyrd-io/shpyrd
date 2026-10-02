@@ -19,14 +19,27 @@ shpyrd extensions enable redis
 ## PostgreSQL
 
 ```shell
-shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi, 1 instance, default size
+shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi, 1 instance, 256Mi (db-xs on a small plan)
 shpyrd pg create db --project shop --size shared-m --storage 20Gi --instances 3   # HA with replicas
 shpyrd pg list --project shop
 shpyrd pg psql db --project shop -- -c 'select version()'
 shpyrd pg delete db --project shop --yes                  # refused while attached (or --force)
 ```
 
-Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory, with a floor of 256 MiB because PostgreSQL does not start below it; storage grows (`shpyrd pg create` again is not needed, edit the resource) but never shrinks.
+Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; storage grows (`shpyrd pg create` again is not needed, edit the resource) but never shrinks.
+
+### Memory
+
+| The database | Memory | PostgreSQL |
+|---|---|---|
+| names no size | 256 MiB | CloudNativePG's defaults |
+| names no size, on a plan with less than 512 MiB of memory | `db-xs`: 128 MiB, 0.5 CPU | tuned for 128 MiB |
+| names a size under 128 MiB (`shared-s`) | raised to 128 MiB | tuned for 128 MiB |
+| names a size of 256 MiB or more | the size's | CloudNativePG's defaults |
+
+128 MiB is the floor: under 256 MiB PostgreSQL runs with `shared_buffers` 16MB, `work_mem` 1MB, `maintenance_work_mem` 16MB, `effective_cache_size` 48MB, `wal_buffers` 1MB, `autovacuum_work_mem` 16MB and **20 connections** (17 for the app; the rest are reserved for the platform). That fits a small app's database: a Prisma or Rails migration with its `CREATE INDEX`, a web process with a pool of 5 to 10 connections. It is not a reporting database, and a pool larger than 17 connections is refused. On kind a 128 MiB database ran a million-row index build and 17 concurrent clients with no memory kill; give it `shared-m` (256 MiB) or more when it does more than that.
+
+Creating a database says which memory it got and why, in the CLI and the dashboard. A database's memory changes only when its own size does: a newer platform version never shrinks a database that is running.
 
 ### Backups and point-in-time recovery
 

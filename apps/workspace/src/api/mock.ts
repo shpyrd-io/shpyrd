@@ -1,5 +1,6 @@
 import { ApiError } from "@shpyrd/shared/api/error";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
+import { buildFailed } from "./types";
 import type { Api } from "./api";
 import type {
   Globals,
@@ -415,7 +416,7 @@ export const mock: Api = {
     await wait();
     const p = await projectsOf.find(slug);
     if (action === "restart") return { action: "restart", message: "Running the release command again" };
-    if (p.phase === "Failed" && p.status.message?.startsWith("build failed")) return { action: "rebuild", message: "Building the same source again" };
+    if (buildFailed({ phase: p.phase, conditions: p.status.conditions })) return { action: "rebuild", message: "Building the same source again" };
     return { action: "redeploy", message: "Starting new instances of the current release" };
   },
   rollback: async (slug, to) => {
@@ -492,6 +493,7 @@ export const mock: Api = {
     const r: ResourceInfo = { kind: body.kind, name: body.name, phase: "Pending", details, attachedTo: [], data: true, bindable: true, createdAt: now() };
     t.resources.push(r);
     await thingsOf.set(all);
+    if (body.kind === "Postgres" && !body.spec.size) r.note = "The database has 256Mi of memory, what a database gets when it names no size.";
     setTimeout(async () => {
       const [all2, t2] = await ofProject(slug);
       const x = t2.resources.find((y) => y.kind === body.kind && y.name === body.name);

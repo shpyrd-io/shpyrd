@@ -13,18 +13,21 @@ import (
 
 	"flag"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -392,6 +395,11 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		LeaseDuration:                 &lease,
 		RenewDeadline:                 &renew,
 		RetryPeriod:                   &retry,
+		// A lost lease restarts the manager in this process (runControllers);
+		// controller-runtime remembers controller names process-wide, so
+		// without this every restart failed with "controller with name app
+		// already exists" and no controller ran again until the pod did.
+		Controller: ctrlconfig.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller manager: %w", err)
@@ -474,6 +482,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// Front doors of explicit workspaces (RFC-0033 phase 6); nothing to do
 	// while there is one workspace.
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
+	workspaces.Forget = workspaceCache.Forget
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}

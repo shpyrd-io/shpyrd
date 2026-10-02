@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Every file of a binding of type shpyrd-env (one per variable) becomes a
+# variable of the build of the buildpacks that follow. The layer is for the
+# build only: not in the image (launch = false), not in the cache
+# (cache = false). A variable the platform's environment sets (build.env)
+# keeps its value. Bash builtins only, no process per variable: a project
+# with many variables costs the build a few milliseconds.
+set -euo pipefail
+layers="${CNB_LAYERS_DIR:-$1}"
+platform="${CNB_PLATFORM_DIR:-$2}"
+root="${SERVICE_BINDING_ROOT:-$platform/bindings}"
+layer="$layers/build-env"
+count=0
+made=""
+for binding in "$root"/*/; do
+  [ -f "${binding}type" ] || continue
+  type=""
+  IFS= read -r type < "${binding}type" || true
+  type="${type//[[:space:]]/}"
+  [ "$type" = "shpyrd-env" ] || continue
+  for f in "$binding"*; do
+    name="${f##*/}"
+    case "$name" in type | provider) continue ;; esac
+    [ -f "$f" ] || continue
+    [ -e "$platform/env/$name" ] && continue
+    if [ -z "$made" ]; then
+      mkdir -p "$layer/env.build"
+      made=1
+    fi
+    # The value as it is, trailing newlines included (read stops only at
+    # the end of the file; an environment value holds no NUL byte).
+    value=""
+    IFS= read -r -d '' value < "$f" || true
+    printf '%s' "$value" > "$layer/env.build/$name.override"
+    count=$((count + 1))
+  done
+done
+if [ "$count" -gt 0 ]; then
+  printf '[types]\n  build = true\n  launch = false\n  cache = false\n' > "$layers/build-env.toml"
+fi
+echo "shpyrd: the build sees $count variable(s) of the project"

@@ -332,6 +332,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				return outcome{}, err
 			}
 			build = st
+			if err := r.reconcileBuildEnv(ctx, app, nil); err != nil {
+				return outcome{}, err
+			}
 			// A strategy switch leaves a kpack Image behind; drop it.
 			stale := kpackImageKey(app)
 			if err := r.Get(ctx, client.ObjectKeyFromObject(stale), stale); err == nil {
@@ -340,6 +343,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				}
 			}
 		} else {
+			vars := buildVars(app, globals, secret, bindings)
+			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
+				return outcome{}, err
+			}
 			img, err := r.reconcileKpackImage(ctx, app)
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
@@ -353,6 +360,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			build = readBuildState(img)
 			if build.LatestBuild != "" {
 				kpackBuild = r.getBuild(ctx, app.Namespace, build.LatestBuild)
+			}
+			// kpack's own sentence names a pod and kubectl: the customer
+			// reads what failed, in words, instead (#52).
+			if build.Ready == "False" {
+				if kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild) {
+					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
+				} else {
+					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
+				}
 			}
 		}
 		app.Status.LatestBuild = build.LatestBuild
@@ -378,13 +394,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if image == "" {
 		if !app.HasSource() {
 			app.Status.Phase = shpyrdv1.PhasePending
-			app.Status.Message = "no source or image; run `shpyrd deploy`"
+			app.Status.Message = "Nothing deployed yet: deploy the app's source or an image."
 			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Pending", app.Status.Message)
 			return outcome{}, nil
 		}
 		if build.Ready == "False" {
 			app.Status.Phase = shpyrdv1.PhaseFailed
-			app.Status.Message = "build failed: " + build.Message
+			app.Status.Message = build.Message
 			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
 			return outcome{}, nil
 		}
@@ -412,7 +428,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	}
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
-		proceed, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
+		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
 		if err != nil {
 			return outcome{}, err
 		}
@@ -424,9 +440,16 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReleaseFailed", st.Message)
 				return outcome{}, nil
 			}
+			reason := "ReleasePhase"
+			if refused {
+				reason = "QuotaExceeded"
+			}
 			app.Status.Phase = shpyrdv1.PhaseDeploying
-			app.Status.Message = "release phase: " + st.Message
-			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReleasePhase", app.Status.Message)
+			app.Status.Message = st.Message
+			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, reason, app.Status.Message)
+			if refused {
+				return requeue(30 * time.Second), nil
+			}
 			return requeue(5 * time.Second), nil
 		}
 	}
@@ -484,7 +507,19 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if cur := app.CurrentRelease(); cur != nil && !ready {
 		summary = fmt.Sprintf("Releasing v%d: %s", cur.Number, summary)
 	}
+	refusal := ""
+	if !ready && !failing {
+		refusal = r.processRefusals(ctx, app, procStatus)
+	}
 	switch {
+	case refusal != "":
+		// The workspace's ceiling leaves no room for the new instances
+		// (#52); older ones may still be serving.
+		app.Status.Phase = shpyrdv1.PhaseFailed
+		app.Status.Message = refusal
+		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "QuotaExceeded", refusal)
+		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
+		return out, nil
 	case failing && !ready:
 		// New instances cannot start; older ones may still be serving.
 		app.Status.Phase = shpyrdv1.PhaseFailed
@@ -494,7 +529,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return out, nil
 	case app.HasSource() && app.Spec.Image == "" && build.Ready == "False":
 		app.Status.Phase = shpyrdv1.PhaseFailed
-		app.Status.Message = "build failed (previous release still running): " + build.Message
+		app.Status.Message = build.Message + " The previous release keeps running."
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
 	case app.HasSource() && app.Spec.Image == "" && build.Ready != "True":
 		app.Status.Phase = shpyrdv1.PhaseBuilding
@@ -584,11 +619,6 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	// The request is remembered on the Image so it fires once per redeploy.
 	rebuild := app.Annotations[shpyrdv1.AnnotationRebuildAt]
 	needsTrigger := rebuild != "" && current.GetAnnotations()[shpyrdv1.AnnotationRebuildAt] != rebuild
-	if needsTrigger {
-		if err := r.triggerKpackBuild(ctx, app, current); err != nil {
-			return nil, err
-		}
-	}
 
 	// An archive uploaded before the sources port existed names the API
 	// port; rewriting that in the Image would make kpack rebuild every
@@ -599,6 +629,25 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
 		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
 			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
+		}
+	}
+
+	// An Image from before builds read the project's variables binds their
+	// Secret with its next build (a new archive, a redeploy), not by
+	// starting one (build_env.go). A Git source is built by kpack on every
+	// commit without the Image changing, so there it binds at once, with
+	// one build.
+	if !needsTrigger && app.Spec.Source != nil && app.Spec.Source.Git == nil && !buildChanges(current, desired) {
+		desired = withServicesOf(desired, current)
+	}
+
+	// The redeploy's build: the trigger, unless the update below changes
+	// what kpack builds (another source address, other build.env values,
+	// the Secret bound), which builds by itself; both would build twice,
+	// the first time without the change.
+	if needsTrigger && !buildChanges(current, desired) && equalJSON(buildServices(current), buildServices(desired)) {
+		if err := r.triggerKpackBuild(ctx, app, current); err != nil {
+			return nil, err
 		}
 	}
 
@@ -798,7 +847,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 		if ps.Sleep.Message == "" && r.sleepSource(app) == "plan" {
 			if sp := r.webSleepSpec(app); sp != nil {
-				ps.Sleep.Message = "workspace plan default: after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode); shpyrd sleep <project> --after off opts out"
+				ps.Sleep.Message = "the workspace plan's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
 			}
 		}
 		status["web"] = ps

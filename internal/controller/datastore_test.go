@@ -56,7 +56,7 @@ func TestPostgresReconcile(t *testing.T) {
 	if inst != 2 || img != "ghcr.io/cloudnative-pg/postgresql:16" || size != "10Gi" || owner != "app" || cpu == "" {
 		t.Errorf("cluster spec = %v", cluster.Object["spec"])
 	}
-	// Small sizes are raised to the PostgreSQL minimum.
+	// Small sizes are raised to the database floor.
 	small := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "tiny", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
 	if err := c.Create(context.Background(), small); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestPostgresReconcile(t *testing.T) {
 	tiny := &unstructured.Unstructured{}
 	tiny.SetGroupVersionKind(CNPGClusterGVK)
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "tiny"}, tiny)
-	if mem, _, _ := unstructured.NestedString(tiny.Object, "spec", "resources", "limits", "memory"); mem != "256Mi" {
+	if mem, _, _ := unstructured.NestedString(tiny.Object, "spec", "resources", "limits", "memory"); mem != "128Mi" {
 		t.Errorf("memory floor not applied: %q", mem)
 	}
 	if len(cluster.GetOwnerReferences()) != 1 || cluster.GetOwnerReferences()[0].Kind != "Postgres" {
@@ -436,5 +436,79 @@ func TestPostgresBackupsAndRecovery(t *testing.T) {
 	_ = c.Get(ctx, key, cluster)
 	if p, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins"); len(p) != 0 {
 		t.Errorf("plugin entry should be removed: %v", p)
+	}
+}
+
+// A small database (#53): db-xs runs in 128Mi with PostgreSQL tuned for it
+// and a patient liveness probe; one without a size keeps 256Mi and CNPG's
+// defaults; a database that was running before keeps its memory until its
+// own size changes, and CNPG's parameters are never touched.
+func TestSmallPostgres(t *testing.T) {
+	ctx := context.Background()
+	xs := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "xs", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "db-xs"}}
+	plain := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "app-shop"}}
+	// A database an older platform made: shared-s raised to 256Mi, no
+	// size recorded, CNPG's own parameters on it.
+	legacy := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
+	old := desiredCNPGCluster(legacy, resource.MustParse("5Gi"), withMemoryFloor(corev1.ResourceRequirements{}, resource.MustParse("256Mi")), "", "")
+	old.SetAnnotations(nil)
+	_ = unstructured.SetNestedStringMap(old.Object, map[string]string{"archive_mode": "on", "wal_level": "logical"}, "spec", "postgresql", "parameters")
+	base, c := newTestReconciler(t, xs, plain, legacy, old)
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(50), SystemNamespace: "shpyrd-system"}
+	cluster := func(name string) *unstructured.Unstructured {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(CNPGClusterGVK)
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	shape := func(u *unstructured.Unstructured) (mem string, params map[string]string, liveness int64) {
+		mem, _, _ = unstructured.NestedString(u.Object, "spec", "resources", "limits", "memory")
+		params, _, _ = unstructured.NestedStringMap(u.Object, "spec", "postgresql", "parameters")
+		liveness, _, _ = unstructured.NestedInt64(u.Object, "spec", "livenessProbeTimeout")
+		return
+	}
+
+	mem, params, live := shape(cluster("xs"))
+	if mem != "128Mi" || params["shared_buffers"] != "16MB" || params["max_connections"] != "20" || live != 120 {
+		t.Errorf("db-xs = %s %v liveness %d", mem, params, live)
+	}
+	mem, params, live = shape(cluster("plain"))
+	if mem != "256Mi" || len(params) != 0 || live != 0 {
+		t.Errorf("no size = %s %v liveness %d", mem, params, live)
+	}
+
+	u := cluster("legacy")
+	mem, params, live = shape(u)
+	if mem != "256Mi" || params["shared_buffers"] != "" || params["archive_mode"] != "on" || live != 0 {
+		t.Errorf("a running database changed with the floor: %s %v liveness %d", mem, params, live)
+	}
+	if u.GetAnnotations()[AnnotationPostgresSize] != "shared-s" {
+		t.Errorf("size not recorded: %v", u.GetAnnotations())
+	}
+	// Its own size changes: now it goes down, and is tuned.
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "legacy"}, legacy)
+	legacy.Spec.Size = "db-xs"
+	if err := c.Update(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	mem, params, live = shape(cluster("legacy"))
+	if mem != "128Mi" || params["shared_buffers"] != "16MB" || params["archive_mode"] != "on" || live != 120 {
+		t.Errorf("resized to db-xs = %s %v liveness %d", mem, params, live)
+	}
+	// And back up: the tuning goes, CNPG's parameters stay.
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "legacy"}, legacy)
+	legacy.Spec.Size = "shared-m"
+	if err := c.Update(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	mem, params, live = shape(cluster("legacy"))
+	if mem != "256Mi" || params["shared_buffers"] != "" || params["archive_mode"] != "on" || live != 0 {
+		t.Errorf("resized to shared-m = %s %v liveness %d", mem, params, live)
 	}
 }

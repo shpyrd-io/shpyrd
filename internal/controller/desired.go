@@ -589,13 +589,17 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 		spec["cache"] = map[string]interface{}{"volume": map[string]interface{}{"size": c.BuildCacheSize}}
 	}
 	build := map[string]interface{}{}
-	if app.Spec.Build != nil && len(app.Spec.Build.Env) > 0 {
-		var env []interface{}
+	var env []interface{}
+	if app.Spec.Build != nil {
 		for _, e := range app.Spec.Build.Env {
 			env = append(env, map[string]interface{}{"name": e.Name, "value": e.Value})
 		}
+	}
+	if len(env) > 0 {
 		build["env"] = env
 	}
+	// The project's variables, through the Secret it binds (build_env.go).
+	build["services"] = []interface{}{buildEnvService(app)}
 	if sel := c.appsNodeSelector(); sel != nil {
 		// Builds are bursty and transient: the apps pool (RFC-0077).
 		ns := map[string]interface{}{}
