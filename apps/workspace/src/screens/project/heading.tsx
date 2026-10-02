@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Globe, Hammer, Lock, Network, Pencil, RotateCcw, Rocket, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertActions, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
+import type { IconChoice } from "@shpyrd/ui/components/app-icons";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
@@ -14,6 +15,7 @@ import { DropdownButton } from "@shpyrd/ui/components/dropdown-button";
 import { DropdownMenuItem } from "@shpyrd/ui/components/dropdown-menu";
 import { Field } from "@shpyrd/ui/components/field";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
+import { IconPicker } from "@shpyrd/ui/components/icon-picker";
 import { Input } from "@shpyrd/ui/components/input";
 import { TextLogView } from "@shpyrd/ui/components/log-view";
 import { PageHeading } from "@shpyrd/ui/components/page-heading";
@@ -22,7 +24,8 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { api } from "@/api/api";
 import type { DeployRequest, Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
-import { hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
+import { addressOf, hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
+import { choiceOf, ProjectTile } from "@/lib/tile";
 import { useStream } from "./shared";
 
 const types = { running: "success", deploying: "warning", failed: "error", sleeping: "neutral" } as const;
@@ -37,7 +40,8 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
   const navigate = useNavigate();
   const queries = useQueryClient();
   const phase = phaseOf(project);
-  const host = hostOf(project.status.url ?? project.url);
+  const address = addressOf({ url: project.status.url ?? project.url, domain: project.domain });
+  const host = hostOf(address);
   const refresh = () => {
     queries.invalidateQueries({ queryKey: ["project", project.slug] });
     queries.invalidateQueries({ queryKey: ["projects"] });
@@ -75,6 +79,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
     <>
       <PageHeading
         title={project.displayName}
+        icon={<ProjectTile project={project} className="size-9 rounded-md" />}
         iconEnd={
           <>
             {project.displayName !== project.slug && <InlineCode>{project.slug}</InlineCode>}
@@ -113,7 +118,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
           <>
             {host && (
               <Button variant="outline" size="sm" iconEnd={<ExternalLink />} asChild>
-                <a href={openUrl(project.status.url ?? project.url, project.access)} target="_blank" rel="noreferrer">
+                <a href={openUrl(address, project.access)} target="_blank" rel="noreferrer">
                   Open
                 </a>
               </Button>
@@ -300,19 +305,38 @@ function Deploy({ project, onDone, children }: { project: Project; onDone: () =>
   );
 }
 
-// The name and the line under it on the launcher. The slug never changes.
+// What people see on the launcher: the name, the line under it, and the
+// icon of the card. The slug never changes.
 function Describe({ project, onDone }: { project: Project; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(project.displayName);
   const [description, setDescription] = useState(project.description ?? "");
+  const [choice, setChoice] = useState<IconChoice>(choiceOf(project));
   useEffect(() => {
     if (open) {
       setName(project.displayName);
       setDescription(project.description ?? "");
+      setChoice(choiceOf(project));
     }
-  }, [open, project.displayName, project.description]);
+    // Only when it opens: what is being typed is not reset by a refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const iconChanged = (choice.icon ?? "") !== (project.icon ?? "") || (choice.colour ?? "") !== (project.iconColor ?? "");
+  const fileChanged = choice.file?.src !== project.iconUrl;
   const save = useMutation({
-    mutationFn: () => api.updateProject(project.slug, { name: name.trim(), description: description.trim() }),
+    mutationFn: async () => {
+      await api.updateProject(project.slug, {
+        name: name.trim(),
+        description: description.trim(),
+        ...(iconChanged ? { icon: choice.icon ?? "", iconColor: choice.colour ?? "" } : {}),
+      });
+      // The image of its own: sent when it is a new one, removed when a
+      // symbol took its place.
+      if (fileChanged) {
+        if (choice.file) await api.setProjectIcon(project.slug, choice.file.src);
+        else await api.removeProjectIcon(project.slug);
+      }
+    },
     onSuccess: () => {
       toast.success("Saved");
       setOpen(false);
@@ -320,15 +344,15 @@ function Describe({ project, onDone }: { project: Project; onDone: () => void })
     },
     onError: (e: Error) => toast.error(e.message),
   });
-  const dirty = name.trim() !== project.displayName || description.trim() !== (project.description ?? "");
+  const dirty = name.trim() !== project.displayName || description.trim() !== (project.description ?? "") || iconChanged || fileChanged;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon-xs" icon={<Pencil />} aria-label="Name and description" className="text-muted-foreground" />
+        <Button variant="ghost" size="icon-xs" icon={<Pencil />} aria-label="Name, icon and description" className="text-muted-foreground" />
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader divider>
-          <DialogTitle>Name and description</DialogTitle>
+          <DialogTitle>Name, icon and description</DialogTitle>
           <DialogDescription>
             What people see on the launcher. The slug <InlineCode>{project.slug}</InlineCode> stays: it is the address and what the CLI uses.
           </DialogDescription>
@@ -346,6 +370,7 @@ function Describe({ project, onDone }: { project: Project; onDone: () => void })
           <Field label="Description" hint="One line under the name on the launcher.">
             <Input value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="Operations of the day, finance and the team." />
           </Field>
+          <IconPicker value={choice} onChange={setChoice} />
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="outline">

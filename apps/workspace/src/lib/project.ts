@@ -40,6 +40,23 @@ export function openUrl(url: string | undefined, access: string | undefined) {
   return url.replace(/\/$/, "") + "/.shpyrd/signin?rd=%2F";
 }
 
+// Where a project answers for the people who open it: its own domain
+// when one answers, else its address under the platform.
+export function addressOf(p: { url?: string; domain?: string }): string | undefined {
+  return p.domain ? `https://${p.domain}` : p.url;
+}
+
+// The words under a card: who may open the app. Anyone, when it is open
+// to the internet; Everyone, when the whole workspace has access; else
+// the teams that have access, by name. People given access one by one
+// are not listed. A worker opens nothing: only its teams are named.
+export function badgesOf(p: Pick<ProjectSummary, "url" | "access" | "teams">): string[] | undefined {
+  if (p.url && (p.access === "public" || p.access === "identified")) return ["Anyone"];
+  const teams = p.teams ?? [];
+  if (teams.includes("everyone")) return ["Everyone"];
+  return teams.length ? teams.map((t) => t.charAt(0).toUpperCase() + t.slice(1)) : undefined;
+}
+
 // The address without the scheme, as it is written on a card.
 export function hostOf(url?: string) {
   return url?.replace(/^https?:\/\//, "");

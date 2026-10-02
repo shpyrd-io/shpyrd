@@ -167,6 +167,8 @@ export const backend: Api = {
   createProject: ({ slug, displayName, description, git, subPath }) =>
     request<ProjectSummary>("/api/projects", json("POST", { name: displayName ?? slug, slug, description, git, subPath })),
   updateProject: async (slug, body) => toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
+  setProjectIcon: async (slug, dataUrl) => toProject(await request<DetailAnswer>(`${project(slug)}/icon`, json("PUT", { icon: dataUrl }))),
+  removeProjectIcon: async (slug) => toProject(await request<DetailAnswer>(`${project(slug)}/icon`, gone)),
   destroyProject: async (slug) => {
     await request(project(slug), gone);
   },
