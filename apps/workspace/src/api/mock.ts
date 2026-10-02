@@ -492,6 +492,7 @@ export const mock: Api = {
     const r: ResourceInfo = { kind: body.kind, name: body.name, phase: "Pending", details, attachedTo: [], data: true, bindable: true, createdAt: now() };
     t.resources.push(r);
     await thingsOf.set(all);
+    if (body.kind === "Postgres" && !body.spec.size) r.note = "The database has 256Mi of memory, what a database gets when it names no size.";
     setTimeout(async () => {
       const [all2, t2] = await ofProject(slug);
       const x = t2.resources.find((y) => y.kind === body.kind && y.name === body.name);

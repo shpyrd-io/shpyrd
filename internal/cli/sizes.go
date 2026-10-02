@@ -74,7 +74,10 @@ Fly machine sizes or Render instance types. The catalog is cluster-wide.
   dedicated requests equal limits, whole cores (Guaranteed QoS)
 
 Processes pick a size in shpyrd.yaml (processes.<type>.size) or with
-'shpyrd resize'; without one they get the catalog default.`,
+'shpyrd resize'; without one they get the catalog default. Databases pick
+one with 'shpyrd pg create --size'; they take at least 128Mi, 256Mi when
+they name none, and db-xs (128Mi, PostgreSQL tuned for about 20
+connections) on a plan with less than 512Mi of memory.`,
 	}
 	cmd.AddCommand(newSizesListCmd(g), newSizesSetCmd(g), newSizesDeleteCmd(g), newSizesDefaultCmd(g))
 	return cmd
@@ -107,6 +110,11 @@ func newSizesListCmd(g *globalFlags) *cobra.Command {
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
 				}
 				_ = tw.Flush()
+				fmt.Fprintf(w, "\nDatabases take at least %s (a smaller size is raised to it) and %s when they name no size.\n", sizes.DBMinMemory, sizes.DBDefaultMemory)
+				fmt.Fprintf(w, "Under %s PostgreSQL is tuned for it: a small app's database, about 20 connections; not a reporting database.\n", sizes.DBDefaultMemory)
+				if _, ok := cat.Get(sizes.DBXS); ok {
+					fmt.Fprintf(w, "On a plan with less than %s of memory a database is given %s unless it names a size.\n", sizes.DBXSPlanBelow, sizes.DBXS)
+				}
 			})
 		},
 	}

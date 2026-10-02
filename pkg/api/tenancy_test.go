@@ -22,6 +22,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
@@ -843,5 +844,44 @@ func TestTwoApplicationsByHost(t *testing.T) {
 	}
 	if got := body("acme.shpyrd.test", "/app.js"); got != "js" {
 		t.Errorf("asset = %q", got)
+	}
+}
+
+// A database on a small plan (#53): one that names no size gets db-xs when
+// the workspace's memory ceiling is under 512Mi, and the answer says so in
+// words; a size under the database floor is said to be raised; without a
+// plan the database keeps the usual 256Mi.
+func TestDatabaseSizeOnASmallPlan(t *testing.T) {
+	s, cr, st := newTenantServer(t)
+	s.opts.Extensions = all.All()
+	ctx := context.Background()
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Memory: "256Mi"}}); err != nil {
+		t.Fatal(err)
+	}
+	create := func(host, body string) ResourceView {
+		t.Helper()
+		rec := at(t, s, host, "POST", "/api/projects/shop/resources", body)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+		}
+		var v ResourceView
+		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		return v
+	}
+	v := create("acme.shpyrd.test", `{"kind":"Postgres","name":"db","spec":{"storage":"5Gi"}}`)
+	if v.Details["size"] != "db-xs" || !strings.Contains(v.Note, "db-xs: 128Mi") || !strings.Contains(v.Note, "memory ceiling is 256Mi") {
+		t.Errorf("small plan = size %q note %q", v.Details["size"], v.Note)
+	}
+	pg := &shpyrdv1.Postgres{}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, pg); err != nil || pg.Spec.Size != "db-xs" {
+		t.Errorf("stored size = %q %v", pg.Spec.Size, err)
+	}
+	v = create("acme.shpyrd.test", `{"kind":"Postgres","name":"tiny","spec":{"size":"shared-s"}}`)
+	if v.Details["size"] != "shared-s" || !strings.Contains(v.Note, "at least 128Mi") {
+		t.Errorf("shared-s = size %q note %q", v.Details["size"], v.Note)
+	}
+	v = create("example.test", `{"kind":"Postgres","name":"db","spec":{}}`)
+	if v.Details["size"] != "" || !strings.Contains(v.Note, "256Mi") {
+		t.Errorf("no plan = size %q note %q", v.Details["size"], v.Note)
 	}
 }

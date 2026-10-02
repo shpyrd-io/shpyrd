@@ -26,6 +26,12 @@ import (
 type SizesResponse struct {
 	Default string       `json:"default"`
 	Sizes   []sizes.Size `json:"sizes"`
+	// DatabaseMinMemory is the least a database runs with (a smaller size
+	// is raised to it); DatabaseDefaultMemory what one that names no size
+	// gets, unless the plan is small and it is given DatabaseSmallSize.
+	DatabaseMinMemory     string `json:"databaseMinMemory"`
+	DatabaseDefaultMemory string `json:"databaseDefaultMemory"`
+	DatabaseSmallSize     string `json:"databaseSmallSize,omitempty"`
 }
 
 // loadCatalog reads the catalog ConfigMap, falling back to defaults.
@@ -62,7 +68,11 @@ func (s *Server) getSizes(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	c.JSON(http.StatusOK, SizesResponse{Default: cat.Default, Sizes: cat.Sorted()})
+	out := SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), DatabaseMinMemory: sizes.DBMinMemory, DatabaseDefaultMemory: sizes.DBDefaultMemory}
+	if _, ok := cat.Get(sizes.DBXS); ok {
+		out.DatabaseSmallSize = sizes.DBXS
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // putSizes replaces the whole catalog (the dashboard edits it as a list).

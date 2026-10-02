@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 // PostgresReconciler turns a Postgres resource into a CloudNativePG Cluster
@@ -63,9 +64,26 @@ var CNPGClusterGVK = schema.GroupVersionKind{Group: "postgresql.cnpg.io", Versio
 const (
 	defaultPostgresVersion = "17"
 	defaultPostgresStorage = "5Gi"
-	// postgresMinMemory is the least PostgreSQL runs (and initdb completes)
-	// with; small catalog sizes are raised to it.
-	postgresMinMemory = "256Mi"
+	// postgresMinMemory is the least a database runs with (#53): a size
+	// below it is raised to it. Under postgresTunedBelow the database runs
+	// with smallPostgresParameters, which keep the instance manager and
+	// PostgreSQL inside the limit through a migration's CREATE INDEX and
+	// about 20 connections (measured on kind: 128Mi, 0.5 CPU, no OOM).
+	postgresMinMemory = sizes.DBMinMemory
+	// postgresDefaultMemory is what a database that names no size gets, as
+	// before the floor came down; a small plan's database is given db-xs
+	// by the API instead.
+	postgresDefaultMemory = sizes.DBDefaultMemory
+	postgresTunedBelow    = sizes.DBDefaultMemory
+	// smallPostgresLivenessTimeout (seconds) lets a small database's
+	// instance manager answer late while a migration takes all of its CPU
+	// share, instead of being restarted in the middle of it (CNPG's
+	// default is 30).
+	smallPostgresLivenessTimeout = 120
+	// AnnotationPostgresSize on the CNPG Cluster records the size its
+	// resources were rendered from: memory goes down only when the size
+	// changes, never because a newer platform lowered a floor.
+	AnnotationPostgresSize = "shpyrd.io/size"
 	// PostgresDatabase and PostgresUser are what CNPG's initdb bootstrap creates.
 	PostgresDatabase = "app"
 	PostgresUser     = "app"
@@ -142,7 +160,11 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	resources = withMemoryFloor(resources, resource.MustParse(postgresMinMemory))
+	floor := postgresMinMemory
+	if pg.Spec.Size == "" {
+		floor = postgresDefaultMemory
+	}
+	resources = withMemoryFloor(resources, resource.MustParse(floor))
 	storage := resource.MustParse(defaultPostgresStorage)
 	if pg.Spec.Storage != nil {
 		storage = *pg.Spec.Storage
@@ -168,13 +190,16 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 			return ctrl.Result{}, err
 		}
 	}
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(CNPGClusterGVK)
+	err = r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name}, current)
+	if err == nil {
+		resources = keepMemory(current, pg.Spec.Size, resources)
+	}
 	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class, r.PlatformPool)
 	if err := controllerutil.SetControllerReference(pg, desired, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(CNPGClusterGVK)
-	err = r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {
@@ -278,6 +303,32 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 		_ = unstructured.SetNestedMap(current.Object, wantRes, "spec", "resources")
 		changed = true
 	}
+	// The parameters of a small database (only the keys shpyrd sets; CNPG
+	// writes its own beside them) and its liveness patience.
+	params, _, _ := unstructured.NestedStringMap(current.Object, "spec", "postgresql", "parameters")
+	wantParams, _, _ := unstructured.NestedStringMap(desired.Object, "spec", "postgresql", "parameters")
+	if next, ok := withSmallParameters(params, wantParams); ok {
+		if len(next) == 0 {
+			unstructured.RemoveNestedField(current.Object, "spec", "postgresql", "parameters")
+		} else {
+			_ = unstructured.SetNestedStringMap(current.Object, next, "spec", "postgresql", "parameters")
+		}
+		changed = true
+	}
+	wantLive, wantSet, _ := unstructured.NestedInt64(desired.Object, "spec", "livenessProbeTimeout")
+	if curLive, curSet, _ := unstructured.NestedInt64(current.Object, "spec", "livenessProbeTimeout"); curSet != wantSet || curLive != wantLive {
+		if wantSet {
+			_ = unstructured.SetNestedField(current.Object, wantLive, "spec", "livenessProbeTimeout")
+		} else {
+			unstructured.RemoveNestedField(current.Object, "spec", "livenessProbeTimeout")
+		}
+		changed = true
+	}
+	if was, recorded := current.GetAnnotations()[AnnotationPostgresSize]; !recorded || was != desired.GetAnnotations()[AnnotationPostgresSize] {
+		want := desired.GetAnnotations()[AnnotationPostgresSize]
+		current.SetAnnotations(mergeMaps(current.GetAnnotations(), map[string]string{AnnotationPostgresSize: want}))
+		changed = true
+	}
 	if pm, _, _ := unstructured.NestedBool(current.Object, "spec", "monitoring", "enablePodMonitor"); !pm {
 		_ = unstructured.SetNestedField(current.Object, true, "spec", "monitoring", "enablePodMonitor")
 		changed = true
@@ -319,6 +370,64 @@ func withMemoryFloor(res corev1.ResourceRequirements, floor resource.Quantity) c
 	return res
 }
 
+// keepMemory keeps a running database's memory when the resources asked
+// are lower and its size has not changed: a floor that came down in a
+// newer platform applies to databases created after it. A cluster from
+// before the size was recorded counts as unchanged.
+func keepMemory(current *unstructured.Unstructured, size string, res corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if was, recorded := current.GetAnnotations()[AnnotationPostgresSize]; recorded && was != size {
+		return res
+	}
+	raw, _, _ := unstructured.NestedString(current.Object, "spec", "resources", "limits", "memory")
+	cur, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return res
+	}
+	return withMemoryFloor(res, cur)
+}
+
+// smallPostgresParameters are PostgreSQL's settings for a database under
+// postgresTunedBelow; above it CNPG's defaults stay.
+var smallPostgresParameters = map[string]string{
+	"shared_buffers":       "16MB",
+	"work_mem":             "1MB",
+	"maintenance_work_mem": "16MB",
+	"effective_cache_size": "48MB",
+	"max_connections":      "20",
+	"wal_buffers":          "1MB",
+	"autovacuum_work_mem":  "16MB",
+}
+
+// smallPostgres says a database with these resources runs tuned.
+func smallPostgres(res corev1.ResourceRequirements) bool {
+	mem, ok := res.Limits[corev1.ResourceMemory]
+	return ok && mem.Cmp(resource.MustParse(postgresTunedBelow)) < 0
+}
+
+// withSmallParameters sets the keys of smallPostgresParameters in params to
+// want's (removing those want leaves out) and leaves CNPG's own keys alone;
+// ok says something changed.
+func withSmallParameters(params, want map[string]string) (map[string]string, bool) {
+	next := map[string]string{}
+	for k, v := range params {
+		next[k] = v
+	}
+	changed := false
+	for k := range smallPostgresParameters {
+		w, wanted := want[k]
+		v, has := next[k]
+		switch {
+		case wanted && (!has || v != w):
+			next[k] = w
+			changed = true
+		case !wanted && has:
+			delete(next, k)
+			changed = true
+		}
+	}
+	return next, changed
+}
+
 // PostgresSecretName is the Secret CNPG creates for the application user.
 func PostgresSecretName(name string) string { return name + "-app" }
 
@@ -350,6 +459,7 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		shpyrdv1.LabelManagedBy: "shpyrd",
 		"shpyrd.io/postgres":    pg.Name,
 	})
+	u.SetAnnotations(map[string]string{AnnotationPostgresSize: pg.Spec.Size})
 	spec := map[string]interface{}{
 		"instances":             int64(instances(pg)),
 		"imageName":             "ghcr.io/cloudnative-pg/postgresql:" + version(pg),
@@ -360,6 +470,14 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},
+	}
+	if smallPostgres(res) {
+		params := map[string]interface{}{}
+		for k, v := range smallPostgresParameters {
+			params[k] = v
+		}
+		spec["postgresql"] = map[string]interface{}{"parameters": params}
+		spec["livenessProbeTimeout"] = int64(smallPostgresLivenessTimeout)
 	}
 	if platformPool != "" {
 		// Databases are stateful and single-instance: the platform pool,

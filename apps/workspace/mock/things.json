@@ -492,6 +492,9 @@
   ],
   "sizes": {
     "default": "shared-s",
+    "databaseMinMemory": "128Mi",
+    "databaseDefaultMemory": "256Mi",
+    "databaseSmallSize": "db-xs",
     "sizes": [
       {
         "name": "shared-s",

@@ -200,6 +200,8 @@ export type ResourceInfo = {
   data: boolean;
   bindable?: boolean;
   createdAt: string;
+  // What the platform decided on creation and why (a database's size).
+  note?: string;
 };
 
 export type VolumeInfo = {
@@ -221,7 +223,10 @@ export type SnapshotInfo = { name: string; volume: string; size?: string; ready:
 export type RestoreVolumeResult = { volume: VolumeInfo; inPlace: boolean; message: string };
 
 export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string };
-export type SizeCatalog = { default: string; sizes: InstanceSize[] };
+// databaseMinMemory: the least a database runs with (a smaller size is
+// raised to it); databaseDefaultMemory: what one that names no size gets,
+// unless the plan is small and it is given databaseSmallSize.
+export type SizeCatalog = { default: string; sizes: InstanceSize[]; databaseMinMemory?: string; databaseDefaultMemory?: string; databaseSmallSize?: string };
 
 export type Instance = { name: string; process: string; pod: string; ready: boolean };
 

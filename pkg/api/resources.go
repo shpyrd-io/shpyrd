@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,6 +22,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 // ResourceView is any resource of a project in the shared shape the
@@ -40,6 +43,9 @@ type ResourceView struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// Bindable resources can be attached to apps (Postgres, Redis).
 	Bindable bool `json:"bindable"`
+	// Note says, on creation, what the platform decided for the resource
+	// and why (a database's size).
+	Note string `json:"note,omitempty"`
 }
 
 // listProjectResources returns every resource of the project namespace.
@@ -232,6 +238,10 @@ func (s *Server) createResource(c *gin.Context) {
 	if u.Object["spec"] == nil {
 		u.Object["spec"] = map[string]interface{}{}
 	}
+	note := ""
+	if t.Kind == "Postgres" {
+		note = s.databaseSize(c.Request.Context(), s.workspace(c), u.Object["spec"].(map[string]interface{}))
+	}
 	if err := s.apps.Create(c.Request.Context(), u); err != nil {
 		switch {
 		case apierrors.IsAlreadyExists(err):
@@ -244,7 +254,37 @@ func (s *Server) createResource(c *gin.Context) {
 		return
 	}
 	s.audit(c, c.Param("slug"), "resource.create", t.Kind+" "+req.Name, "")
-	c.JSON(http.StatusCreated, resourceViewOf(t, *u))
+	view := resourceViewOf(t, *u)
+	view.Note = note
+	c.JSON(http.StatusCreated, view)
+}
+
+// databaseSize gives a new database that names no size db-xs when the
+// workspace's memory ceiling is small (#53), and says in words which
+// memory the database has and why; "" when it got what it asked for.
+func (s *Server) databaseSize(ctx context.Context, ws string, spec map[string]interface{}) string {
+	cat, err := s.catalog(ctx)
+	if err != nil {
+		return ""
+	}
+	floor := resource.MustParse(sizes.DBMinMemory)
+	name, _ := spec["size"].(string)
+	if name != "" {
+		size, ok := cat.Get(name)
+		if mem, err := resource.ParseQuantity(size.Memory); ok && err == nil && mem.Cmp(floor) < 0 {
+			return fmt.Sprintf("The size %s has %s of memory; a database takes at least %s, so this one has %s.", name, size.Memory, sizes.DBMinMemory, sizes.DBMinMemory)
+		}
+		return ""
+	}
+	if l := s.planOf(ctx, ws); l != nil && l.Memory != "" {
+		ceiling, err := resource.ParseQuantity(l.Memory)
+		xs, ok := cat.Get(sizes.DBXS)
+		if err == nil && ok && ceiling.Cmp(resource.MustParse(sizes.DBXSPlanBelow)) < 0 {
+			spec["size"] = sizes.DBXS
+			return fmt.Sprintf("The database has the size %s: %s of memory, enough for a small app's database (about 20 connections), not for reporting. The workspace's memory ceiling is %s, which a database's usual %s would mostly take.", sizes.DBXS, xs.Memory, l.Memory, sizes.DBDefaultMemory)
+		}
+	}
+	return fmt.Sprintf("The database has %s of memory, what a database gets when it names no size.", sizes.DBDefaultMemory)
 }
 
 // deleteResource removes an extension resource; attached ones need ?force=true.
