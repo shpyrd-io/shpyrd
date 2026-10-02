@@ -45,7 +45,8 @@ type PlanView struct {
 	// people may pick the plan when they sign up.
 	MonthlyBudget float64 `json:"monthlyBudget,omitempty"`
 	SelfServe     bool    `json:"selfServe,omitempty"`
-	// Limits are the ceilings a workspace starts with on the plan.
+	// Limits are the ceilings of every workspace on the plan that has none
+	// of its own (#51).
 	Limits *store.Limits `json:"limits,omitempty"`
 	// Free: nothing to pay; the bill shows consumption alone. CostBudget is
 	// the operator's cap on the plan's cost to the platform.
@@ -214,10 +215,16 @@ func (s *Server) addPlanVersion(c *gin.Context) {
 	if req.Free != nil {
 		next.Free = *req.Free
 	}
-	if req.ClearLimits {
+	// The ceilings given change, the others stay; clearing them all and
+	// setting some in one version would have to pick one (#51).
+	switch {
+	case req.ClearLimits && req.Limits != nil:
+		abort(c, http.StatusBadRequest, errors.New("clear the limits or set some, not both: the limits given change and the others stay"))
+		return
+	case req.ClearLimits:
 		next.Limits = nil
-	} else if req.Limits != nil {
-		next.Limits = req.Limits
+	case req.Limits != nil:
+		next.Limits = store.MergeLimits(cur.Limits, req.Limits)
 	}
 	if next.CPUHour < 0 || next.MemoryGiBHour < 0 || next.StorageGiBMonth < 0 || next.EgressGiB < 0 || next.MinMonthly < 0 || next.MonthlyBudget < 0 || next.CostBudget < 0 {
 		abort(c, http.StatusBadRequest, errors.New("prices and budgets cannot be negative"))
@@ -266,6 +273,9 @@ func (s *Server) addPlanVersion(c *gin.Context) {
 		return
 	}
 	s.audit(c, "", "plan.version", created.Name, created.EffectiveFrom.Format(time.RFC3339))
+	// The plan's workspaces follow its ceilings and sleep defaults: the
+	// controller looks at them again now (quotas included).
+	s.workspacesChanged()
 	c.JSON(http.StatusCreated, planView(*created))
 }
 
@@ -288,14 +298,17 @@ func (s *Server) listPlanVersions(c *gin.Context) {
 }
 
 // assignPlan is POST /api/cluster/plans/:name/assign?workspace=<slug>
-// (cluster admins; assigns a plan to a workspace).
+// (cluster admins; assigns a plan to a workspace). The workspace follows
+// the new plan's ceilings: ceilings of its own are removed unless
+// keepLimits=true (#51).
 func (s *Server) assignPlan(c *gin.Context) {
 	ws := c.Query("workspace")
 	if ws == "" {
 		abort(c, http.StatusBadRequest, errors.New("workspace is required"))
 		return
 	}
-	if _, err := s.store.Workspace(c.Request.Context(), ws); err != nil {
+	w, err := s.store.Workspace(c.Request.Context(), ws)
+	if err != nil {
 		storeErr(c, err, "workspace")
 		return
 	}
@@ -309,7 +322,16 @@ func (s *Server) assignPlan(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	if w.Settings.Limits != nil && c.Query("keepLimits") != "true" {
+		settings := w.Settings
+		settings.Limits = nil
+		if _, err := s.store.UpdateWorkspaceSettings(c.Request.Context(), ws, settings); err != nil {
+			abort(c, http.StatusBadGateway, fmt.Errorf("the plan is assigned, but the workspace's own ceilings stay: %w", err))
+			return
+		}
+	}
 	s.audit(c, "", "plan.assign", ws, wp.PlanName)
+	s.workspacesChanged()
 	c.JSON(http.StatusOK, wp)
 }
 

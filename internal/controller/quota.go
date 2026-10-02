@@ -48,14 +48,64 @@ func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) e
 }
 
 func (r *AppReconciler) applyQuota(ctx context.Context, app *shpyrdv1.App, name string, hard corev1.ResourceList, scopes []corev1.ResourceQuotaScope) error {
+	return applyQuota(ctx, r.Client, app, name, hard, scopes)
+}
+
+// syncQuotas keeps the quotas of every project in step with its
+// workspace's ceilings (#51): a plan whose limits change, or a workspace
+// given ceilings of its own, reaches the projects already running within a
+// pass of the workspace reconciler, not at their next deploy.
+func (r *WorkspaceReconciler) syncQuotas(ctx context.Context, all []store.Workspace) error {
+	var apps shpyrdv1.AppList
+	if err := r.List(ctx, &apps); err != nil {
+		return err
+	}
+	bySlug := map[string]*store.Workspace{}
+	for i := range all {
+		bySlug[all[i].Slug] = &all[i]
+	}
+	limits := map[string]*store.Limits{}
+	for i := range apps.Items {
+		app := &apps.Items[i]
+		if !app.DeletionTimestamp.IsZero() {
+			continue
+		}
+		slug := workspaceOf(app)
+		l, seen := limits[slug]
+		if !seen {
+			ws := bySlug[slug]
+			if ws == nil {
+				continue // a workspace the store does not know: leave it be
+			}
+			var err error
+			if l, _, err = store.WorkspaceLimits(ctx, r.Store, ws); err != nil {
+				return err
+			}
+			limits[slug] = l
+		}
+		compute, storage := quotaHard(l)
+		if err := applyQuota(ctx, r.Client, app, QuotaName, compute, []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}); err != nil {
+			return err
+		}
+		if err := applyQuota(ctx, r.Client, app, QuotaStorageName, storage, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name string, hard corev1.ResourceList, scopes []corev1.ResourceQuotaScope) error {
 	q := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: app.Namespace}}
 	if len(hard) == 0 {
-		if err := r.Delete(ctx, q); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(q), q); apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err := c.Delete(ctx, q); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("remove quota %s: %w", name, err)
 		}
 		return nil
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, q, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, c, q, func() error {
 		q.Labels = mergeMaps(q.Labels, commonLabels(app))
 		q.Spec.Hard = hard
 		q.Spec.Scopes = scopes

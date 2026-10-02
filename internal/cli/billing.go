@@ -264,7 +264,7 @@ warns the owners at 80% and pauses the workspace at 100% until the month ends.`,
 					fmt.Fprintln(w, "People may pick it when they sign up.")
 				}
 				if p.Limits != nil {
-					fmt.Fprintf(w, "Workspaces start with: %s.\n", limitsString(p.Limits))
+					fmt.Fprintf(w, "Ceilings: %s, for every workspace on it without ceilings of its own.\n", limitsString(p.Limits))
 				}
 			})
 		},
@@ -289,10 +289,14 @@ warns the owners at 80% and pauses the workspace at 100% until the month ends.`,
 
 func newPlansAssignCmd(g *globalFlags) *cobra.Command {
 	var ws string
+	var keepLimits bool
 	cmd := &cobra.Command{
 		Use:   "assign <plan-name>",
-		Short: "Assign a plan to a workspace",
-		Args:  cobra.ExactArgs(1),
+		Short: "Assign a plan to a workspace (it follows the plan's ceilings)",
+		Long: `Assign a billing plan to a workspace. The workspace is held to the plan's
+ceilings from then on: ceilings of its own ('shpyrd-ctl workspaces limits')
+are removed, unless --keep-limits.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if ws == "" {
 				return fmt.Errorf("--workspace is required")
@@ -303,15 +307,23 @@ func newPlansAssignCmd(g *globalFlags) *cobra.Command {
 				return err
 			}
 			path := "api/cluster/plans/" + url.PathEscape(args[0]) + "/assign?workspace=" + url.QueryEscape(ws)
+			if keepLimits {
+				path += "&keepLimits=true"
+			}
 			if err := t.call(ctx, "POST", path, nil, nil); err != nil {
 				return err
 			}
-			return g.print(cmd, map[string]string{"plan": args[0], "workspace": ws}, func(w io.Writer) {
-				fmt.Fprintf(w, "Plan %s assigned to %s.\n", args[0], ws)
+			return g.print(cmd, map[string]any{"plan": args[0], "workspace": ws, "keepLimits": keepLimits}, func(w io.Writer) {
+				if keepLimits {
+					fmt.Fprintf(w, "Plan %s assigned to %s; its own ceilings, if it has some, stay.\n", args[0], ws)
+					return
+				}
+				fmt.Fprintf(w, "Plan %s assigned to %s; the workspace follows the plan's ceilings.\n", args[0], ws)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&ws, "workspace", "", "workspace slug to assign the plan to (required)")
+	cmd.Flags().BoolVar(&keepLimits, "keep-limits", false, "keep the workspace's own ceilings instead of following the plan's")
 	_ = cmd.MarkFlagRequired("workspace")
 	return cmd
 }
@@ -438,7 +450,11 @@ func newPlansUpdateCmd(g *globalFlags) *cobra.Command {
 		Long: `Add a version of a plan: its prices and settings from --effective-from
 (today when not given) on. The ledger prices every five minutes of use at the
 version in force at that time, so an old month is never rewritten. Only the
-flags given change; everything else stays as in the version in force.
+flags given change; everything else stays as in the version in force, the
+ceilings too (--projects alone leaves --memory as it was).
+
+The plan's ceilings apply to every workspace on it without ceilings of its
+own ('shpyrd-ctl workspaces limits'): raising them raises those workspaces.
 
   shpyrd-ctl plans update starter --cpu-hour 0.04 --memory-gib-hour 0.03 --min-monthly 0 --effective-from 2026-11-01
   shpyrd-ctl plans history starter`,
@@ -467,9 +483,12 @@ flags given change; everything else stays as in the version in force.
 					body[field] = values[flag]
 				}
 			}
-			if clearLimits {
+			switch l := limits.limits(); {
+			case clearLimits && l != nil:
+				return errors.New("--clear-limits or the limits, not both: the limits given change and the others stay; --clear-limits removes them all")
+			case clearLimits:
 				body["clearLimits"] = true
-			} else if l := limits.limits(); l != nil {
+			case l != nil:
 				body["limits"] = l
 			}
 			if len(body) == 0 {
@@ -490,6 +509,11 @@ flags given change; everything else stays as in the version in force.
 				fmt.Fprintf(w, "Plan %s changes from %s: %.6f per core-hour, %.6f per GiB-hour reserved, %.6f per GiB-month, %.6f per GiB egress, floor %.2f %s.\n",
 					p.Name, p.EffectiveFrom.Format("2006-01-02"), p.CPUHour, p.MemoryGiBHour, p.StorageGiBMonth, p.EgressGiB, p.MinMonthly, p.Currency)
 				fmt.Fprintln(w, "Months before that date keep the prices they were billed at.")
+				if p.Limits != nil {
+					fmt.Fprintf(w, "Ceilings: %s, for every workspace on the plan without ceilings of its own.\n", limitsString(p.Limits))
+				} else if clearLimits {
+					fmt.Fprintln(w, "No ceilings: workspaces on the plan without ceilings of their own have none.")
+				}
 			})
 		},
 	}
@@ -508,7 +532,7 @@ flags given change; everything else stays as in the version in force.
 	cmd.Flags().BoolVar(&selfServe, "self-serve", false, "people may pick the plan when they sign up")
 	cmd.Flags().BoolVar(&free, "free", false, "the plan charges nothing")
 	limits.bind(cmd)
-	cmd.Flags().BoolVar(&clearLimits, "clear-limits", false, "workspaces start with no ceilings")
+	cmd.Flags().BoolVar(&clearLimits, "clear-limits", false, "remove the plan's ceilings (not with the limit flags)")
 	return cmd
 }
 

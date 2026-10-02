@@ -474,6 +474,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// Front doors of explicit workspaces (RFC-0033 phase 6); nothing to do
 	// while there is one workspace.
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
+	workspaces.Forget = workspaceCache.Forget
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}

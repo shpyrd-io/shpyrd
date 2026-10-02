@@ -885,3 +885,75 @@ func TestDatabaseSizeOnASmallPlan(t *testing.T) {
 		t.Errorf("no plan = size %q note %q", v.Details["size"], v.Note)
 	}
 }
+
+// A plan's ceilings reach the workspaces on it (#51): a new version with
+// other limits applies to every workspace without ceilings of its own;
+// one with its own keeps them; assigning a plan removes them unless asked
+// to keep them; clearing a plan's limits and setting some at once is
+// refused; the limits given change and the others stay.
+func TestPlanLimitsReachTheirWorkspaces(t *testing.T) {
+	s, _, st := newTenantServer(t)
+	ctx := context.Background()
+	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := at(t, s, "shpyrd.example.test", method, path, body)
+		if rec.Code != want {
+			t.Fatalf("%s %s = %d %s", method, path, rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+	view := func() WorkspaceView {
+		t.Helper()
+		var v WorkspaceView
+		_ = json.Unmarshal(at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "").Body.Bytes(), &v)
+		return v
+	}
+	call("POST", "/api/cluster/plans", `{"name":"free","free":true,"limits":{"projects":1,"instances":1,"memory":"256Mi"}}`, http.StatusCreated)
+	call("POST", "/api/cluster/plans/free/assign?workspace=acme", "", http.StatusOK)
+
+	// acme follows the plan: one project, and it has two already.
+	if v := view(); v.Limits == nil || v.Limits.Projects != 1 || v.LimitsOverride {
+		t.Fatalf("acme on free = %+v own %v", v.Limits, v.LimitsOverride)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"third"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "allows 1 projects") {
+		t.Errorf("third project on the plan's ceilings = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The plan is raised: acme follows without anyone touching it; the
+	// ceilings not given stay.
+	call("POST", "/api/cluster/plans/free/versions", `{"limits":{"projects":4,"cpu":"2"}}`, http.StatusCreated)
+	if v := view(); v.Limits == nil || v.Limits.Projects != 4 || v.Limits.CPU != "2" || v.Limits.Memory != "256Mi" || v.Limits.Instances != 1 || v.LimitsOverride {
+		t.Errorf("acme after the plan rose = %+v own %v", v.Limits, v.LimitsOverride)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"third"}`); rec.Code != http.StatusCreated {
+		t.Errorf("third project after the plan rose = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Clearing and setting at once is refused, not half done.
+	rec := call("POST", "/api/cluster/plans/free/versions", `{"clearLimits":true,"limits":{"projects":9}}`, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), "not both") {
+		t.Errorf("clear and set = %s", rec.Body.String())
+	}
+
+	// An exception: acme gets ceilings of its own; the plan moving does
+	// not move them.
+	w, _ := st.Workspace(ctx, "acme")
+	settings := w.Settings
+	settings.Limits = &store.Limits{Projects: 10}
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", settings); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", "/api/cluster/plans/free/versions", `{"limits":{"projects":5}}`, http.StatusCreated)
+	if v := view(); v.Limits == nil || v.Limits.Projects != 10 || !v.LimitsOverride {
+		t.Errorf("acme with its own = %+v own %v", v.Limits, v.LimitsOverride)
+	}
+	// Assigned again with keepLimits, they stay; without, they go.
+	call("POST", "/api/cluster/plans/free/assign?workspace=acme&keepLimits=true", "", http.StatusOK)
+	if v := view(); v.Limits == nil || v.Limits.Projects != 10 {
+		t.Errorf("keepLimits = %+v", v.Limits)
+	}
+	call("POST", "/api/cluster/plans/free/assign?workspace=acme", "", http.StatusOK)
+	if v := view(); v.Limits == nil || v.Limits.Projects != 5 || v.LimitsOverride {
+		t.Errorf("assigned again = %+v own %v", v.Limits, v.LimitsOverride)
+	}
+}

@@ -84,13 +84,18 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 	}
 }
 
-// planOf returns the workspace's limits, nil when it has none.
+// planOf returns the ceilings the workspace is held to: its own, else its
+// billing plan's (#51); nil when it has none.
 func (s *Server) planOf(ctx context.Context, ws string) *store.Limits {
 	w, err := s.store.Workspace(ctx, ws)
-	if err != nil || w.Settings.Limits == nil {
+	if err != nil {
 		return nil
 	}
-	return w.Settings.Limits
+	l, _, err := store.WorkspaceLimits(ctx, s.store, w)
+	if err != nil {
+		return nil
+	}
+	return l
 }
 
 // workspaceUsage sums a workspace's projects. When replace is not nil it

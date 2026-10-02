@@ -127,10 +127,12 @@ type WorkspaceSettings struct {
 	// itself (its company SSO) are offered (RFC-0033). Never true for the
 	// implicit workspace.
 	OwnMethodsOnly bool `json:"ownMethodsOnly,omitempty"`
-	// Limits is the workspace's plan (RFC-0033, RFC-0042): ceilings the
-	// API checks before changing anything and the controller backs with a
-	// ResourceQuota per project namespace. Nil means no ceiling, the
-	// open-source default.
+	// Limits are the workspace's own ceilings (RFC-0033, RFC-0042), an
+	// exception to its billing plan's (#51): nil means it follows its
+	// plan's (Plan.Limits), and has none without a plan, the open-source
+	// default. The API checks the ceilings in force (EffectiveLimits)
+	// before changing anything; the controller backs them with a
+	// ResourceQuota per project namespace.
 	Limits *Limits `json:"limits,omitempty"`
 	// Branding is how the workspace looks to its people: the launcher and
 	// the login page show its logo and use its colour (RFC-0033).
@@ -455,12 +457,91 @@ type Plan struct {
 	// SelfServe says people may pick this plan for themselves when they
 	// sign up; the others are assigned by the operator.
 	SelfServe bool `json:"selfServe,omitempty"`
-	// Limits are the ceilings a workspace starts with on this plan; nil
-	// means none. A workspace's own limits are set as before afterwards.
+	// Limits are the ceilings of every workspace on this plan that has
+	// none of its own (#51); nil means none. A new version with other
+	// limits reaches those workspaces when it takes effect.
 	Limits *Limits `json:"limits,omitempty"`
 	// Free says the plan charges nothing: the bill shows the consumption
 	// with nothing to pay. Such a plan is capped by CostBudget.
 	Free bool `json:"free,omitempty"`
+}
+
+// EffectiveLimits are the ceilings a workspace is held to (#51): its own
+// when it has some, else its plan's; nil for none. own says they are the
+// workspace's own.
+func EffectiveLimits(w *Workspace, plan *Plan) (limits *Limits, own bool) {
+	if w != nil && w.Settings.Limits != nil {
+		return w.Settings.Limits, true
+	}
+	if plan != nil {
+		return plan.Limits, false
+	}
+	return nil, false
+}
+
+// PlanReader is the part of the store that answers a workspace's plan.
+type PlanReader interface {
+	WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error)
+	GetPlan(ctx context.Context, nameOrID string) (*Plan, error)
+}
+
+// PlanOf is the version in force of a workspace's plan, nil when it has
+// none.
+func PlanOf(ctx context.Context, st PlanReader, ws string) (*Plan, error) {
+	wp, err := st.WorkspacePlan(ctx, ws)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p, err := st.GetPlan(ctx, wp.PlanName)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return p, err
+}
+
+// WorkspaceLimits are the ceilings a workspace is held to, its plan read
+// from the store when it has none of its own (EffectiveLimits).
+func WorkspaceLimits(ctx context.Context, st PlanReader, w *Workspace) (limits *Limits, own bool, err error) {
+	if w.Settings.Limits != nil {
+		return w.Settings.Limits, true, nil
+	}
+	p, err := PlanOf(ctx, st, w.Slug)
+	if err != nil {
+		return nil, false, err
+	}
+	limits, own = EffectiveLimits(w, p)
+	return limits, own, nil
+}
+
+// MergeLimits applies the ceilings patch gives (its non-zero fields) over
+// base; a nil base is no ceiling at all.
+func MergeLimits(base, patch *Limits) *Limits {
+	out := Limits{}
+	if base != nil {
+		out = *base
+	}
+	if patch == nil {
+		return &out
+	}
+	if patch.Projects > 0 {
+		out.Projects = patch.Projects
+	}
+	if patch.Instances > 0 {
+		out.Instances = patch.Instances
+	}
+	if patch.CPU != "" {
+		out.CPU = patch.CPU
+	}
+	if patch.Memory != "" {
+		out.Memory = patch.Memory
+	}
+	if patch.Storage != "" {
+		out.Storage = patch.Storage
+	}
+	return &out
 }
 
 // PlanAt is the version of a plan in force at t: the latest whose

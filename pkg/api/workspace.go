@@ -45,10 +45,12 @@ type WorkspaceView struct {
 	// URL is where this workspace's dashboard answers.
 	URL    string `json:"url"`
 	Status string `json:"status"`
-	// Limits is the workspace's plan (nil: no ceiling) and Usage what it
-	// uses today, in the plan's terms.
-	Limits *store.Limits `json:"limits,omitempty"`
-	Usage  *Usage        `json:"usage,omitempty"`
+	// Limits are the ceilings the workspace is held to (nil: none), its
+	// own when LimitsOverride, else its billing plan's (#51); Usage what
+	// it uses today, in the same terms.
+	Limits         *store.Limits `json:"limits,omitempty"`
+	LimitsOverride bool          `json:"limitsOverride,omitempty"`
+	Usage          *Usage        `json:"usage,omitempty"`
 	// JoinPolicy says who becomes a person on first sign-in: open,
 	// company (through a claimed domain's method) or listed (already named
 	// in a team or a grant, holding a role, or invited).
@@ -137,8 +139,8 @@ func (s *Server) getWorkspace(c *gin.Context) {
 		return
 	}
 	view := s.workspaceView(c, w)
-	if w.Settings.Limits != nil {
-		view.Limits = w.Settings.Limits
+	if l, own, err := store.WorkspaceLimits(c.Request.Context(), s.store, w); err == nil && l != nil {
+		view.Limits, view.LimitsOverride = l, own
 		view.Usage = s.usageOf(c.Request.Context(), w.Slug)
 	}
 	c.JSON(http.StatusOK, view)
@@ -931,10 +933,11 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 	out := make([]WorkspaceSummary, 0, len(all))
 	for i := range all {
 		w := &all[i]
-		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Limits: w.Settings.Limits, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
+		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
 		if wp, err := s.store.WorkspacePlan(ctx, w.Slug); err == nil && wp != nil {
 			sum.Plan = wp.PlanName
 		}
+		sum.Limits, sum.LimitsOverride, _ = store.WorkspaceLimits(ctx, s.store, w)
 		if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
 			for _, m := range roles {
 				if m.Role == store.WorkspaceRoleOwner {

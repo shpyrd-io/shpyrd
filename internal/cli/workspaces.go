@@ -392,6 +392,9 @@ func printWorkspaces(out io.Writer, list []api.WorkspaceSummary) {
 		limits := "-"
 		if ws.Limits != nil {
 			limits = limitsString(ws.Limits)
+			if ws.LimitsOverride && ws.Plan != "" {
+				limits += " (own)"
+			}
 		}
 		plan := firstNonEmpty(ws.Plan, "-")
 		owners := strings.Join(ws.Owners, ",")
@@ -459,8 +462,17 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "limits <slug>",
 		Aliases: []string{"plan"}, // the name until v0.9.56; plan is the billing plan now
-		Short:   "Set a workspace's ceilings (those not given keep their value; --clear removes all)",
-		Args:    cobra.ExactArgs(1),
+		Short:   "Give a workspace ceilings of its own, or --clear them to follow its plan's",
+		Long: `A workspace is held to its billing plan's ceilings ('shpyrd-ctl plans'), and
+follows them when the plan changes. Ceilings of its own are an exception (a
+customer with a negotiated limit): the flags given are set over the ceilings
+in force and the others keep their value; from then on the plan's changes do
+not reach it. --clear removes them and the plan's apply again (none for a
+workspace without a plan).
+
+  shpyrd-ctl workspaces limits acme --projects 10
+  shpyrd-ctl workspaces limits acme --clear`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
 			if cmd.CalledAs() == "plan" {
@@ -468,6 +480,9 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 			}
 			if !clear && !limits.set() {
 				return errors.New("give at least one ceiling (--projects, --instances, --cpu, --memory, --storage) or --clear")
+			}
+			if clear && limits.set() {
+				return errors.New("--clear or the ceilings, not both: --clear makes the workspace follow its plan's")
 			}
 			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
@@ -485,16 +500,19 @@ func newWorkspacesLimitsCmd(g *globalFlags) *cobra.Command {
 			var ws api.WorkspaceSummary
 			_ = json.Unmarshal(raw, &ws)
 			return g.print(cmd, ws, func(w io.Writer) {
-				if ws.Limits == nil {
+				switch {
+				case ws.Limits == nil:
 					fmt.Fprintf(w, "Workspace %s has no ceilings.\n", ws.Slug)
-				} else {
-					fmt.Fprintf(w, "Workspace %s: %s\n", ws.Slug, limitsString(ws.Limits))
+				case ws.LimitsOverride:
+					fmt.Fprintf(w, "Workspace %s: %s, its own (the plan's changes do not reach it).\n", ws.Slug, limitsString(ws.Limits))
+				default:
+					fmt.Fprintf(w, "Workspace %s follows plan %s: %s.\n", ws.Slug, ws.Plan, limitsString(ws.Limits))
 				}
 			})
 		},
 	}
 	limits.bind(cmd)
-	cmd.Flags().BoolVar(&clear, "clear", false, "remove every ceiling")
+	cmd.Flags().BoolVar(&clear, "clear", false, "remove the workspace's own ceilings: it follows its plan's")
 	return cmd
 }
 
