@@ -141,6 +141,7 @@ on committed pricing, and the two can differ in shape.
 | Cluster autoscaler bound to the apps pool alone (`--nodes=<min>:<max>:<apps pool>`) | v0.9.41 |
 | `cluster init`: a value in `--vars-file` beats a `--set` recorded by an earlier run (a remembered pool OCID had pinned the autoscaler to the platform pool) | v0.9.42 |
 | First cloud: platform pool 2 × 4 OCPU, apps pool 1–3 × 1 OCPU / 8 GB; apps moved, apps pool scaled 1 → 2 on the Pending replacements | applied |
+| The cluster summary (`/api/cluster`) carries each node's pool from the label; the console's Cluster page lists nodes by pool and says what each pool carries | pending |
 
 Known gaps:
 

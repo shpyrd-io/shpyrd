@@ -20,9 +20,10 @@
     { "name": "autoscaler", "description": "Nodes added and removed as the load asks.", "enabled": false }
   ],
   "nodes": [
-    { "name": "10.0.10.21", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1" },
-    { "name": "10.0.10.22", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1" },
-    { "name": "10.0.10.23", "ready": false, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1" }
+    { "name": "10.0.10.21", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "platform" },
+    { "name": "10.0.10.22", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "platform" },
+    { "name": "10.0.10.24", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "data" },
+    { "name": "10.0.10.23", "ready": false, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "apps" }
   ],
   "apps": 14,
   "phases": { "Running": 12, "Building": 1, "Failed": 1 },

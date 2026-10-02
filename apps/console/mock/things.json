@@ -6,10 +6,10 @@
       "memoryUsedPct": 58,
       "cpuRequestedPct": 63,
       "memoryRequestedPct": 71,
-      "cpuCores": 12,
-      "memoryBytes": 77309411328,
-      "pods": 96,
-      "podCapacity": 330
+      "cpuCores": 16,
+      "memoryBytes": 103079215104,
+      "pods": 105,
+      "podCapacity": 440
     },
     "nodes": [
       {
@@ -32,6 +32,17 @@
         "cpuCores": 4,
         "memoryBytes": 25769803776,
         "pods": 38,
+        "podCapacity": 110
+      },
+      {
+        "name": "10.0.10.24",
+        "cpuUsedPct": 18,
+        "memoryUsedPct": 54,
+        "cpuRequestedPct": 40,
+        "memoryRequestedPct": 66,
+        "cpuCores": 4,
+        "memoryBytes": 25769803776,
+        "pods": 9,
         "podCapacity": 110
       },
       {

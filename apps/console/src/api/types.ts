@@ -87,6 +87,8 @@ export type Node = {
   pods: string;
   instanceType?: string;
   zone?: string;
+  // The node pool (platform, data or apps); absent on a single-pool cluster.
+  pool?: string;
 };
 
 export type ClusterSummary = {
