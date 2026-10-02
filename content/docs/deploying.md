@@ -256,6 +256,14 @@ env:
 
 `env:` is authoritative when present: an empty map (`env: {}`) removes every previously declared plain variable. Secret values — API keys, database passwords — always go through `shpyrd secrets set`, never here.
 
+### At build time
+
+A buildpack build sees the same variables the app will run with: global config vars, the project's config vars, the variables of attached resources (`DATABASE_URL`, `DATABASE_HOST`, …) and `env:`, in that order (the later wins), with `build.env` from `shpyrd.yaml` above them all. That is what `prisma generate`, a Next.js page that reads the database while the build collects page data, `NEXT_PUBLIC_*` variables inlined into the assets and Rails' `assets:precompile` rely on. Attach the database before the first deploy and the first build already has `DATABASE_URL`.
+
+A build reads the values current when it starts. Setting or changing a config var does not start a build: it restarts the processes, and the next deploy builds with the new values (`shpyrd deploy` again, or **Redeploy** in the dashboard, rebuilds the same source). What a build inlines on purpose, such as `NEXT_PUBLIC_*`, ends up in the image, as on Heroku; buildpacks do not keep the rest of the environment in the image.
+
+A build can reach the project's database: it runs in the project's own network. Run migrations in the [release phase](#release-phase), not in the build, so a build that fails never leaves the schema half changed. Dockerfile builds receive only `build.env`, as `ARG` values.
+
 ### Global config vars
 
 Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a platform admin and injected into every process of every project:

@@ -332,6 +332,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				return outcome{}, err
 			}
 			build = st
+			if err := r.reconcileBuildEnv(ctx, app, nil); err != nil {
+				return outcome{}, err
+			}
 			// A strategy switch leaves a kpack Image behind; drop it.
 			stale := kpackImageKey(app)
 			if err := r.Get(ctx, client.ObjectKeyFromObject(stale), stale); err == nil {
@@ -340,7 +343,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				}
 			}
 		} else {
-			img, err := r.reconcileKpackImage(ctx, app)
+			vars := buildVars(app, globals, secret, bindings)
+			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
+				return outcome{}, err
+			}
+			img, err := r.reconcileKpackImage(ctx, app, buildVarNames(app, vars))
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
 				app.Status.Message = "moving the build to its new image repository"
@@ -519,14 +526,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
-func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App, vars []string) (*unstructured.Unstructured, error) {
 	// The project's own builder when it composes its build (RFC-0065),
 	// else the platform's.
 	builderRef, err := r.reconcileBuilder(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := r.Config.desiredKpackImage(app)
+	desired, err := r.Config.desiredKpackImage(app, vars)
 	if err != nil {
 		return nil, err
 	}
@@ -599,6 +606,14 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
 		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
 			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
+		}
+	}
+
+	// A variable name that appeared since the last build joins the Image
+	// with the next build, not by starting one (build_env.go).
+	if !needsTrigger {
+		if kept := withBuildVarsOf(desired, current); equalJSON(current.Object["spec"], kept.Object["spec"]) {
+			desired = kept
 		}
 	}
 

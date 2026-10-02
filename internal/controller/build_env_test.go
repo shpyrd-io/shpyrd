@@ -1,0 +1,98 @@
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+)
+
+// A buildpack build sees the variables the app runs with (#54): the
+// project's config vars and the bound vars of its attachments reach it by
+// reference to <app>-build-env, never as values in the Image; build.env
+// sets its own names; a new config var waits for the next build instead
+// of starting one.
+func TestBuildSeesTheAppsVariables(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "web1", Namespace: "app-web1", Generation: 1},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/repo.git", Revision: "main"}},
+			Build:  &shpyrdv1.Build{Env: []corev1.EnvVar{{Name: "NODE_ENV", Value: "production"}, {Name: "FOO", Value: "from-build"}}},
+		},
+	}
+	env := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "web1-env", Namespace: "app-web1"},
+		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://secret@db/app"), "FOO": []byte("from-config")},
+	}
+	r, c := newTestReconciler(t, app, env)
+	runReconcile(t, r, app)
+
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-build-env"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data["DATABASE_URL"] != "postgres://secret@db/app" {
+		t.Errorf("build variables = %v", cm.Data)
+	}
+	img := &unstructured.Unstructured{}
+	img.SetGroupVersionKind(KpackImageGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, img); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(img.Object["spec"])
+	if strings.Contains(string(raw), "secret@db") {
+		t.Fatalf("a value sits in the Image: %s", raw)
+	}
+	names := func() []string {
+		_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, img)
+		entries, _, _ := unstructured.NestedSlice(img.Object, "spec", "build", "env")
+		var out []string
+		for _, e := range entries {
+			m := e.(map[string]interface{})
+			kind := "value"
+			if isBuildVarRef(m) {
+				kind = "ref"
+			}
+			out = append(out, m["name"].(string)+"="+kind)
+		}
+		return out
+	}
+	if got := strings.Join(names(), " "); got != "NODE_ENV=value FOO=value DATABASE_URL=ref" {
+		t.Errorf("build env = %s", got)
+	}
+
+	// A new config var: the ConfigMap has it at once, the Image waits.
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-env"}, env)
+	env.Data["SENTRY_DSN"] = []byte("https://key@sentry.test/1")
+	if err := c.Update(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, app)
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-build-env"}, cm)
+	if cm.Data["SENTRY_DSN"] == "" {
+		t.Errorf("the new variable is not in the build variables: %v", cm.Data)
+	}
+	if got := strings.Join(names(), " "); got != "NODE_ENV=value FOO=value DATABASE_URL=ref" {
+		t.Errorf("a new config var changed the Image (a build): %s", got)
+	}
+
+	// The next build (a redeploy) takes the new name.
+	cur := &shpyrdv1.App{}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, cur)
+	cur.Annotations = map[string]string{shpyrdv1.AnnotationRebuildAt: "2026-10-02T10:00:00Z"}
+	if err := c.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, cur)
+	if got := strings.Join(names(), " "); got != "NODE_ENV=value FOO=value DATABASE_URL=ref SENTRY_DSN=ref" {
+		t.Errorf("the redeploy's build env = %s", got)
+	}
+}
