@@ -1,0 +1,119 @@
+# Deploys the example projects in examples/ to the demo workspace
+# (https://acme.shpyrd.app): on every push to main, only the examples whose
+# folder changed, each in a job of its own, side by side. By hand from the
+# Actions tab, any of them, or all.
+#
+# An example is any folder of examples/ with a shpyrd.yaml; a new folder is
+# picked up with no change here. Each deploys with a plain `shpyrd deploy`
+# from its folder, to the project its shpyrd.yaml names, and is public:
+# anyone may open it, with no sign-in.
+#
+# Needs, in the repository settings:
+#   variable ACME_SHPYRD_URL    https://acme.shpyrd.app
+#   secret   ACME_SHPYRD_TOKEN  an API token of the acme workspace that can
+#                                   deploy every example:
+#                                   shpyrd tokens create examples-ci \
+#                                     --platform-role platform-admin --expires 90d
+name: Examples
+
+on:
+  push:
+    branches: [main]
+    paths: ["examples/**"]
+  workflow_dispatch:
+    inputs:
+      examples:
+        description: Examples to deploy, separated by spaces or commas, or "all"
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  changed:
+    name: Find the examples to deploy
+    runs-on: ubuntu-latest
+    outputs:
+      examples: ${{ steps.find.outputs.examples }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find them
+        id: find
+        env:
+          EVENT: ${{ github.event_name }}
+          WANTED: ${{ inputs.examples }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # Every example: a folder of examples/ with a shpyrd.yaml.
+          all=$(find examples -mindepth 2 -maxdepth 2 -name shpyrd.yaml -printf '%h\n' | xargs -rn1 basename | sort)
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -z "$WANTED" ] || [ "$WANTED" = "all" ]; then
+              picked="$all"
+            else
+              picked=$(echo "$WANTED" | tr ', ' '\n\n' | sed '/^$/d' | sort -u)
+              for name in $picked; do
+                if ! echo "$all" | grep -qx "$name"; then
+                  echo "::error::No example named \"$name\". The examples are: $(echo $all)"
+                  exit 1
+                fi
+              done
+            fi
+          elif [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            # A first push, or history that was rewritten: nothing to compare with.
+            picked="$all"
+          else
+            # The examples a file changed in; a removed folder is no longer one.
+            touched=$(git diff --name-only "$BEFORE" "$AFTER" -- examples | cut -d/ -f2 | sort -u)
+            picked=$(comm -12 <(echo "$touched") <(echo "$all"))
+          fi
+
+          json=$(echo "$picked" | sed '/^$/d' | jq -R . | jq -sc .)
+          echo "Deploying: $json"
+          echo "examples=$json" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy ${{ matrix.example }}
+    needs: changed
+    if: needs.changed.outputs.examples != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.changed.outputs.examples) }}
+    # One deploy of an example at a time; another example never waits.
+    concurrency:
+      group: examples-${{ matrix.example }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: examples/${{ matrix.example }}
+    env:
+      SHPYRD_URL: ${{ vars.ACME_SHPYRD_URL || 'https://acme.shpyrd.app' }}
+      SHPYRD_TOKEN: ${{ secrets.ACME_SHPYRD_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the shpyrd CLI
+        working-directory: .
+        run: |
+          if [ -z "$SHPYRD_TOKEN" ]; then
+            echo "::error::The ACME_SHPYRD_TOKEN secret is not set (see the top of this file)."
+            exit 1
+          fi
+          curl -fsSL https://shpyrd.io/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The project is the one the folder's shpyrd.yaml names. The examples are
+      # demos anyone may open; access is not a setting of shpyrd.yaml, so it is
+      # set here, every time (it creates no release).
+      - name: Make it public
+        run: shpyrd access set public
+
+      - name: Deploy
+        run: shpyrd deploy
