@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -339,6 +340,19 @@ func (s *Server) buildLogs(c *gin.Context) {
 	}
 	podName := pod.Name
 
+	// The build saw the project's secret variables: what it printed of
+	// them is masked (#54). A build Secret that cannot be read stops the
+	// log rather than letting it out unmasked.
+	var secrets corev1.Secret
+	var masker *logs.Masker
+	switch err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.BuildEnvName()}, &secrets); {
+	case err == nil:
+		masker = logs.NewMasker(logs.BuildSecrets(app, secrets.Data))
+	case !apierrors.IsNotFound(err):
+		abort(c, http.StatusBadGateway, s.errUnreadable("the build's output", err))
+		return
+	}
+
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Cache-Control", "no-cache")
@@ -388,7 +402,7 @@ func (s *Server) buildLogs(c *gin.Context) {
 			}
 			continue
 		}
-		_, _ = io.Copy(w, stream)
+		_ = masker.Copy(w, stream)
 		stream.Close()
 		if p, err := pods.Get(ctx, podName, metav1.GetOptions{}); err == nil {
 			if st := ContainerStatus(p, ic.Name); st != nil && st.State.Terminated != nil && st.State.Terminated.ExitCode != 0 {

@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/logs"
 )
 
 // A failed build is explained in words (#52): what happened and how to
@@ -133,6 +134,9 @@ func KpackFailure(b *unstructured.Unstructured) string {
 	if msg := b.GetAnnotations()[shpyrdv1.AnnotationBuildFailure]; msg != "" {
 		return msg
 	}
+	if stepNotStarted(kpackMessage(b)) {
+		return notStartedMessage
+	}
 	return describeBuildFailure(kpackStep(kpackMessage(b)), "")
 }
 
@@ -169,36 +173,74 @@ func (r *AppReconciler) kpackBuildFailure(ctx context.Context, b *unstructured.U
 	if msg := b.GetAnnotations()[shpyrdv1.AnnotationBuildFailure]; msg != "" {
 		return msg
 	}
-	step, out := r.failedStepOutput(ctx, b.GetNamespace(), b.GetName()+"-build-pod")
+	step, out, started := r.failedStepOutput(ctx, b.GetNamespace(), b.GetName()+"-build-pod")
 	if step == "" {
 		step = kpackStep(kpackMessage(b))
 	}
 	msg := describeBuildFailure(step, out)
+	if !started || stepNotStarted(kpackMessage(b)) {
+		msg = notStartedMessage
+	}
+	// The message quotes the script that ran, from the build's output:
+	// masked like the log (#54).
+	var vars corev1.Secret
+	if app := r.appOfBuild(ctx, b); app != nil && r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.BuildEnvName()}, &vars) == nil {
+		msg = logs.NewMasker(logs.BuildSecrets(app, vars.Data)).Line(msg)
+	}
 	patch := client.MergeFrom(b.DeepCopy())
 	b.SetAnnotations(mergeMaps(b.GetAnnotations(), map[string]string{shpyrdv1.AnnotationBuildFailure: msg}))
 	_ = r.Patch(ctx, b, patch) // read again next time when it does not stick
 	return msg
 }
 
+// notStartedMessage is what a build says when the platform could not start
+// one of its steps (the container runtime refused it): no output to read,
+// nothing the app did.
+const notStartedMessage = "The build could not start one of its steps: a fault of the platform, not of the app. Deploying again usually passes."
+
+// stepNotStarted says kpack's message is about a step the container runtime
+// could not start.
+func stepNotStarted(kpackMessage string) bool {
+	return strings.Contains(kpackMessage, "failed to create containerd task") || strings.Contains(kpackMessage, "OCI runtime create failed")
+}
+
 // failedStepOutput finds the step of a build pod that exited with an
-// error and the end of its output; "" when the pod is gone.
-func (r *AppReconciler) failedStepOutput(ctx context.Context, namespace, podName string) (step, out string) {
+// error and the end of its output; "" when the pod is gone. started is
+// false when the step never ran (the runtime could not start it).
+func (r *AppReconciler) failedStepOutput(ctx context.Context, namespace, podName string) (step, out string, started bool) {
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: podName}, pod); err != nil {
-		return "", ""
+		return "", "", true
 	}
 	for _, cs := range append(append([]corev1.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
-			step = cs.Name
+			step, started = cs.Name, t.Reason != "StartError"
 			break
 		}
 	}
-	if step == "" || r.Kube == nil {
-		return step, ""
+	if step == "" {
+		return "", "", true
+	}
+	if !started || r.Kube == nil {
+		return step, "", started
 	}
 	raw, err := r.Kube.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: step, TailLines: ptr.To[int64](200)}).Do(ctx).Raw()
 	if err != nil {
-		return step, ""
+		return step, "", true
 	}
-	return step, string(raw)
+	return step, string(raw), true
+}
+
+// appOfBuild is the App a kpack Build belongs to (its Image is named after
+// the App), nil when it cannot be read.
+func (r *AppReconciler) appOfBuild(ctx context.Context, b *unstructured.Unstructured) *shpyrdv1.App {
+	name := b.GetLabels()["image.kpack.io/image"]
+	if name == "" {
+		return nil
+	}
+	app := &shpyrdv1.App{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: b.GetNamespace(), Name: name}, app); err != nil {
+		return nil
+	}
+	return app
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/logs"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
@@ -798,8 +799,18 @@ func (a *appClient) newestKpackBuild(ctx context.Context, app *shpyrdv1.App, sin
 // an error when a step fails. kpack builds run their phases as init
 // containers; Dockerfile builds fetch the source in an init container and
 // build in the main one.
-func (a *appClient) followBuild(ctx context.Context, namespace, build string) error {
+func (a *appClient) followBuild(ctx context.Context, app *shpyrdv1.App, build string) error {
+	namespace := app.Namespace
 	pods := a.k.Kube.CoreV1().Pods(namespace)
+	// What the build printed of the project's secret variables is masked,
+	// as the API masks it (#54).
+	var masker *logs.Masker
+	switch sec, err := a.k.Kube.CoreV1().Secrets(namespace).Get(ctx, app.BuildEnvName(), metav1.GetOptions{}); {
+	case err == nil:
+		masker = logs.NewMasker(logs.BuildSecrets(app, sec.Data))
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("the build's variables: %w", err)
+	}
 
 	var pod *corev1.Pod
 	deadline := time.Now().Add(3 * time.Minute)
@@ -845,7 +856,7 @@ func (a *appClient) followBuild(ctx context.Context, namespace, build string) er
 		if err != nil {
 			return fmt.Errorf("logs of step %s: %w", ic.Name, err)
 		}
-		_, copyErr := io.Copy(a.out, stream)
+		copyErr := masker.Copy(a.out, stream)
 		stream.Close()
 		if copyErr != nil && !errors.Is(copyErr, context.Canceled) {
 			return copyErr

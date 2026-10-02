@@ -313,7 +313,7 @@ what a tool reading the output wants.`,
 					_, err = io.Copy(cmd.OutOrStdout(), stream)
 					return err
 				}
-				return ac.followBuild(ctx, app.Namespace, app.Status.LatestBuild)
+				return ac.followBuild(ctx, app, app.Status.LatestBuild)
 			}
 			if ac.session {
 				// The server renders the same "<time> <instance> | line" form.
@@ -735,7 +735,7 @@ that results is a normal deploy.`,
 				if err != nil {
 					return err
 				}
-				if err := ac.followBuild(ctx, app.Namespace, build); err != nil {
+				if err := ac.followBuild(ctx, app, build); err != nil {
 					return err
 				}
 			}

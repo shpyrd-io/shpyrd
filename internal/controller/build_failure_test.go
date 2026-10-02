@@ -108,3 +108,30 @@ func conditionMessage(app *shpyrdv1.App, typ string) string {
 	}
 	return ""
 }
+
+// A step the container runtime could not start (seen on kind: "runc
+// create failed ... unable to freeze") left no output: the build says the
+// platform failed, not that its log has the answer.
+func TestBuildStepThatNeverStarted(t *testing.T) {
+	ctx := context.Background()
+	kpackSentence := "Error:  failed to create containerd task: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error setting cgroup config for procHooks process: unable to freeze : For more info use `kubectl logs -n app-src src-build-1-build-pod -c build`"
+	b := &unstructured.Unstructured{}
+	b.SetGroupVersionKind(KpackBuildGVK)
+	b.SetNamespace("app-src")
+	b.SetName("src-build-1")
+	_ = unstructured.SetNestedSlice(b.Object, []interface{}{map[string]interface{}{"type": "Succeeded", "status": "False", "message": kpackSentence}}, "status", "conditions")
+	if got := KpackFailure(b); got != notStartedMessage {
+		t.Errorf("without the controller's reading: %q", got)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "src-build-1-build-pod", Namespace: "app-src"},
+		Status: corev1.PodStatus{InitContainerStatuses: []corev1.ContainerStatus{
+			{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 128, Reason: "StartError"}}},
+		}},
+	}
+	r, _ := newTestReconciler(t, b, pod)
+	r.Kube = kubefake.NewSimpleClientset()
+	if got := r.kpackBuildFailure(ctx, b); got != notStartedMessage || PlatformWordingFault(got) != "" {
+		t.Errorf("read by the controller: %q", got)
+	}
+}
