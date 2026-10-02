@@ -120,6 +120,23 @@
   --chart-info: oklch(0.588 0.158 241.966);
   --chart-warning: oklch(0.681 0.162 75.834);
   --chart-error: oklch(0.577 0.245 27.325);
+  /* The colours a project may give its symbol on the launcher. Each was
+     checked at 3:1 or more against its own tile (the colour at 15% over
+     the card) in this theme; a change has to be checked again. */
+  --symbol-red: oklch(0.58 0.21 27);
+  --symbol-orange: oklch(0.62 0.17 45);
+  --symbol-amber: oklch(0.6 0.125 70);
+  --symbol-yellow: oklch(0.6 0.12 95);
+  --symbol-lime: oklch(0.59 0.15 128);
+  --symbol-green: oklch(0.58 0.14 152);
+  --symbol-teal: oklch(0.58 0.1 185);
+  --symbol-cyan: oklch(0.58 0.1 215);
+  --symbol-blue: oklch(0.56 0.15 252);
+  --symbol-indigo: oklch(0.52 0.2 275);
+  --symbol-violet: oklch(0.54 0.24 298);
+  --symbol-pink: oklch(0.6 0.21 350);
+  --symbol-brown: oklch(0.52 0.07 55);
+  --symbol-grey: oklch(0.55 0.02 262);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -166,6 +183,20 @@
   --chart-info: oklch(0.588 0.158 241.966);
   --chart-warning: oklch(0.66 0.157 75.834);
   --chart-error: oklch(0.577 0.245 27.325);
+  --symbol-red: oklch(0.72 0.17 22);
+  --symbol-orange: oklch(0.76 0.15 50);
+  --symbol-amber: oklch(0.8 0.15 78);
+  --symbol-yellow: oklch(0.86 0.15 98);
+  --symbol-lime: oklch(0.84 0.17 128);
+  --symbol-green: oklch(0.78 0.14 155);
+  --symbol-teal: oklch(0.78 0.11 185);
+  --symbol-cyan: oklch(0.8 0.11 215);
+  --symbol-blue: oklch(0.74 0.13 250);
+  --symbol-indigo: oklch(0.72 0.14 275);
+  --symbol-violet: oklch(0.74 0.14 298);
+  --symbol-pink: oklch(0.76 0.15 350);
+  --symbol-brown: oklch(0.74 0.06 60);
+  --symbol-grey: oklch(0.74 0.02 262);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.7 0.21 38);

@@ -67,4 +67,18 @@ describe("LauncherCard", () => {
     render(<LauncherCard name="Locked" url="locked.acme.app" href="https://locked.acme.app/.shpyrd/signin?rd=%2F" />);
     expect(screen.getByRole("link", { name: "locked.acme.app" }).getAttribute("href")).toBe("https://locked.acme.app/.shpyrd/signin?rd=%2F");
   });
+
+  it("takes the colour the project chose, over its tone", () => {
+    const { container } = render(<LauncherCard name="Fleet" url="fleet.example" tone="blue" colour="amber" />);
+    const card = container.querySelector<HTMLElement>("[data-slot=launcher-card]")!;
+    expect(card.style.getPropertyValue("--ink")).toBe("var(--symbol-amber)");
+  });
+
+  it("shows a picture of its own as it is, in place of the icon", () => {
+    const { container } = render(<LauncherCard name="Garden" url="garden.example" icon={<svg data-testid="own" />} picture="/garden.png" />);
+    const tile = container.querySelector("[data-slot=launcher-tile]")!;
+    expect(tile.getAttribute("data-picture")).toBe("true");
+    expect(tile.querySelector("img")?.getAttribute("src")).toBe("/garden.png");
+    expect(screen.queryByTestId("own")).toBeNull();
+  });
 });

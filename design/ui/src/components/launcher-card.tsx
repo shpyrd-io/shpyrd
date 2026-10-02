@@ -5,6 +5,7 @@ import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardFooter } from "./card";
 import { inks, type Tone } from "../lib/chart";
+import { symbolInk } from "./app-icons";
 
 // One application, as the people who open it see it: what it is, how it
 // is, where it answers. The whole card opens it; one without a web
@@ -50,17 +51,20 @@ function Semaphore({ phase, className }: { phase: Phase; className?: string }) {
   );
 }
 
-// The icon of the application, on a wash of its own colour.
-function Tile({ icon, className }: { icon?: React.ReactElement; className?: string }) {
+// The icon of the application, on a wash of its own colour; or a picture
+// of its own, which fills the tile as it is.
+function Tile({ icon, picture, className }: { icon?: React.ReactElement; picture?: string; className?: string }) {
   return (
     <span
       data-slot="launcher-tile"
+      data-picture={picture ? true : undefined}
       className={cn(
-        "inline-flex size-12 shrink-0 items-center justify-center rounded-lg bg-(--ink)/15 text-(--ink) [&_svg]:size-6",
+        "inline-flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg [&_svg]:size-6",
+        picture ? "bg-muted" : "bg-(--ink)/15 text-(--ink)",
         className,
       )}
     >
-      {icon}
+      {picture ? <img src={picture} alt="" className="size-full object-cover" /> : icon}
     </span>
   );
 }
@@ -115,7 +119,9 @@ function LauncherCard({
   name,
   description,
   icon,
+  picture,
   tone = "orange",
+  colour,
   url,
   href,
   phase = "running",
@@ -123,12 +129,18 @@ function LauncherCard({
   access = "open",
   tags,
   onSettings,
+  style,
   ...props
 }: Omit<React.ComponentProps<typeof Card>, "children"> & {
   name: string;
   description?: React.ReactNode;
   icon?: React.ReactElement;
+  // A picture of its own, in place of the icon: shown as it is.
+  picture?: string;
   tone?: Tone;
+  // The colour the project chose for its symbol, one of symbolColours;
+  // it wins over the tone.
+  colour?: string;
   // Where it answers. Without one it has no web process: nothing to open,
   // and the icon gives way to the bot.
   url?: string;
@@ -137,6 +149,8 @@ function LauncherCard({
   phase?: Phase;
   exposure?: Exposure;
   access?: Access;
+  // The words that mark it; on the launcher, the teams that have access
+  // to it.
   tags?: string[];
   // With it, a gear at the top opens the settings of the application.
   onSettings?: () => void;
@@ -156,12 +170,13 @@ function LauncherCard({
         inks[tone],
         className,
       )}
+      style={{ ...symbolInk(colour), ...style }}
       {...props}
     >
       <div className="flex items-start justify-between gap-3 px-(--card-spacing)">
         {/* The light sits on the corner of the icon. A worker is always the bot: its own icon is not drawn. */}
         <span className="relative">
-          <Tile icon={opens ? icon : <Bot />} />
+          <Tile icon={opens ? icon : <Bot />} picture={opens ? picture : undefined} />
           <Semaphore
             phase={phase}
             className={cn(

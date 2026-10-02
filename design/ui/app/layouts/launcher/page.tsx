@@ -1,24 +1,14 @@
 "use client";
 
 import {
-  BookOpen,
-  Briefcase,
-  Calendar,
   ChevronDown,
   LayoutGrid,
   LogOut,
-  Mail,
-  MessageSquare,
   Moon,
-  PartyPopper,
   Plus,
   Settings,
-  ShoppingCart,
   Sun,
-  Ticket,
-  Tv,
   UserRound,
-  Users,
 } from "lucide-react";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { Blankslate } from "@shpyrd/ui/components/blankslate";
@@ -32,6 +22,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@shpyrd/ui/components/dropdown-menu";
+import { AppIcon } from "@shpyrd/ui/components/app-icons";
 import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { Section } from "../../section";
@@ -46,18 +37,18 @@ type App = React.ComponentProps<typeof LauncherCard>;
 const settings = () => {};
 
 const apps: App[] = [
-  { name: "Corporate", description: "Operations of the day, finance and the team.", icon: <Briefcase />, tone: "orange", url: "corporate.acme.shpyrd.app", tags: ["Operations", "Finance"] },
-  { name: "People", description: "The calendar, the posts and the billing of events.", icon: <PartyPopper />, tone: "green", url: "people.acme.shpyrd.app", tags: ["Calendar", "Posts"] },
-  { name: "Connect", description: "People, mailing and the reminders of the agency.", icon: <Users />, tone: "blue", url: "connect.acme.shpyrd.app", access: "locked", tags: ["People", "Mailing"] },
-  { name: "Dash TV", description: "The two business units on one screen, for the TV.", icon: <Tv />, tone: "violet", url: "dash.acme.internal", phase: "sleeping", exposure: "internal", access: "locked", tags: ["Revenue", "Agenda"] },
-  { name: "Reports", description: "Builds the reports of the month, every night.", tone: "blue", phase: "failed", exposure: "internal", tags: ["Nightly"] },
-  { name: "Docs", description: "What is written about the agency, for everyone.", icon: <BookOpen />, tone: "green", url: "docs.acme.com", phase: "deploying", tags: ["Public"] },
-  { name: "Mail", description: "The mail of the agency, on its own.", icon: <Mail />, tone: "neutral", url: "mail.acme.internal", exposure: "internal", access: "locked" },
-  { name: "Shop", description: "The store of the agency's own products.", icon: <ShoppingCart />, tone: "orange", url: "shop.acme.com", tags: ["Public", "Orders"] },
-  { name: "Tickets", description: "What the clients ask, and who answers.", icon: <Ticket />, tone: "violet", url: "tickets.acme.shpyrd.app", access: "locked", tags: ["Support"] },
-  { name: "Chat", description: "The rooms of the teams.", icon: <MessageSquare />, tone: "blue", url: "chat.acme.internal", exposure: "internal", access: "locked" },
-  { name: "Calendar", description: "The events of the agency and of each client.", icon: <Calendar />, tone: "green", url: "calendar.acme.shpyrd.app", tags: ["Events"] },
-  { name: "Metrics", description: "Collects the numbers of every application, each hour.", tone: "orange", exposure: "internal", tags: ["Hourly"] },
+  { name: "Corporate", description: "Operations of the day, finance and the team.", icon: <AppIcon name="briefcase" />, colour: "orange", url: "corporate.acme.com", tags: ["Finance", "Operations"] },
+  { name: "People", description: "The calendar, the posts and the billing of events.", icon: <AppIcon name="calendar-days" />, colour: "green", url: "people.acme.shpyrd.app", tags: ["Events"] },
+  { name: "Connect", description: "People, mailing and the reminders of the agency.", icon: <AppIcon name="users" />, colour: "blue", url: "connect.acme.shpyrd.app", access: "locked", tags: ["Sales", "Support"] },
+  { name: "Dash TV", description: "The two business units on one screen, for the TV.", icon: <AppIcon name="layout-dashboard" />, colour: "violet", url: "dash.acme.internal", phase: "sleeping", exposure: "internal", access: "locked", tags: ["Board"] },
+  { name: "Reports", description: "Builds the reports of the month, every night.", tone: "blue", phase: "failed", exposure: "internal", tags: ["Finance"] },
+  { name: "Docs", description: "What is written about the agency, for everyone.", icon: <AppIcon name="book-open" />, colour: "teal", url: "docs.acme.com", phase: "deploying" },
+  { name: "Mail", description: "The mail of the agency, on its own.", icon: <AppIcon name="mail" />, colour: "grey", url: "mail.acme.internal", exposure: "internal", access: "locked" },
+  { name: "Shop", description: "The store of the agency's own products.", icon: <AppIcon name="store" />, colour: "pink", url: "shop.acme.com", tags: ["Sales"] },
+  { name: "Tickets", description: "What the clients ask, and who answers.", icon: <AppIcon name="headset" />, colour: "indigo", url: "tickets.acme.shpyrd.app", access: "locked", tags: ["Support"] },
+  { name: "Chat", description: "The rooms of the teams.", icon: <AppIcon name="message-square" />, colour: "cyan", url: "chat.acme.internal", exposure: "internal", access: "locked", tags: ["Everyone"] },
+  { name: "Garden", description: "The orders of the garden centre, and its deliveries.", picture: "/samples/picture.png", url: "garden.acme.com", tags: ["Orders"] },
+  { name: "Metrics", description: "Collects the numbers of every application, each hour.", tone: "orange", exposure: "internal", tags: ["Platform"] },
 ];
 
 export default function Page() {
