@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@markdoc/markdoc": "^0.5.10",
+    "@next/third-parties": "^16.3.8",
     "@shpyrd/content": "*",
     "@shpyrd/ui": "*",
     "@tailwindcss/postcss": "^4.3.3",

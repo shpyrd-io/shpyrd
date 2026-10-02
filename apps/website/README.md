@@ -51,6 +51,17 @@ The root `README.md`, the install instructions and published release notes link
 to `/install.sh`, `/screenshots/*.png` and `/docs/*`. Those addresses keep their
 exact shape.
 
+## Measuring
+
+The site carries Google Tag Manager when the build is given a container:
+`NEXT_PUBLIC_GTM_ID=GTM-XXXXXXX` where the site is built (Vercel's
+environment variables). Without it nothing is loaded. The container's tags
+decide what is measured; the page pushes `shpyrd_app: "website"` before the
+container loads, so the tags know which part of the funnel they are on (the
+sign-up says `signup`, the dashboards `console` or `workspace`). Every
+"Get started" goes to the sign-up (`src/lib/signup.ts`), which the container
+reads as a link click.
+
 ## License
 
 [MPL-2.0](../../LICENSE), like the rest of the repository. Every component here
