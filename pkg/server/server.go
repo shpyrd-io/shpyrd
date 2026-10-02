@@ -411,6 +411,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	}
 	rec := &controller.AppReconciler{
 		BindableTypes: bindable,
+		Kube:          k.Kube,
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("shpyrd"),

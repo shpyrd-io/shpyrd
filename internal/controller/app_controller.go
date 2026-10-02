@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -30,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
@@ -69,6 +71,9 @@ type AppReconciler struct {
 	// LookupLB returns the external front door's address when the Config
 	// does not carry one (it may not exist at start); nil disables.
 	LookupLB func(ctx context.Context) string
+	// Kube writes the audit entries of a release's outcome (RFC-0022a);
+	// nil records nothing.
+	Kube kubernetes.Interface
 }
 
 // SetupWithManager registers the controller and its watches.
@@ -220,6 +225,7 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.newRelease != nil {
 		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Release", "v%d: %s", out.newRelease.Number, out.newRelease.Description)
 	}
+	r.auditReleaseOutcome(ctx, orig, app)
 	if out.clearNote {
 		r.clearReleaseNote(ctx, app)
 	}
@@ -869,6 +875,57 @@ func (r *AppReconciler) deleteIfExists(ctx context.Context, obj client.Object) e
 		return fmt.Errorf("delete %T %s: %w", obj, obj.GetName(), err)
 	}
 	return nil
+}
+
+// auditReleaseOutcome records what became of a release (RFC-0022a): once
+// per release when the rollout reaches Running, and every time the app
+// turns Failed (a build that failed, instances that cannot start). The
+// entry is in the name of whoever asked for the deploy, as the API left
+// on the App; a release nobody asked for by hand (a config change) is the
+// platform's. Writing the trail never fails the reconcile.
+func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *shpyrdv1.App) {
+	if r.Kube == nil {
+		return
+	}
+	cur := app.CurrentRelease()
+	target := "build"
+	if cur != nil {
+		target = fmt.Sprintf("v%d", cur.Number)
+	}
+	entry := audit.Entry{
+		Actor:   firstNonEmpty(app.Annotations[shpyrdv1.AnnotationDeployedBy], "platform"),
+		Subject: app.Annotations[shpyrdv1.AnnotationDeployedSubject],
+		Client:  app.Annotations[shpyrdv1.AnnotationDeployedClient],
+		Target:  target, Via: "controller", Realm: "workspace",
+	}
+	ref := audit.AppRefIn(app.Namespace, app.Name)
+	switch {
+	// A rollout that reaches Running: the transition, so apps already
+	// running when this controller first sees them are not back-filled;
+	// the annotation keeps a rollout that flaps from saying it twice.
+	case app.Status.Phase == shpyrdv1.PhaseRunning && before.Status.Phase != shpyrdv1.PhaseRunning && cur != nil && app.Annotations[shpyrdv1.AnnotationAuditedRelease] != strconv.Itoa(cur.Number):
+		entry.Action, entry.Detail = "release.succeeded", cur.Description
+		if err := audit.Record(ctx, r.Kube, ref, entry); err != nil {
+			log.FromContext(ctx).Info("could not audit the release", "err", err.Error())
+			return
+		}
+		patch := client.MergeFrom(app.DeepCopy())
+		if app.Annotations == nil {
+			app.Annotations = map[string]string{}
+		}
+		app.Annotations[shpyrdv1.AnnotationAuditedRelease] = strconv.Itoa(cur.Number)
+		delete(app.Annotations, shpyrdv1.AnnotationDeployedBy)
+		delete(app.Annotations, shpyrdv1.AnnotationDeployedSubject)
+		delete(app.Annotations, shpyrdv1.AnnotationDeployedClient)
+		if err := r.Patch(ctx, app, patch); err != nil {
+			log.FromContext(ctx).Info("could not mark the release audited", "err", err.Error())
+		}
+	case app.Status.Phase == shpyrdv1.PhaseFailed && before.Status.Phase != shpyrdv1.PhaseFailed:
+		entry.Action, entry.Detail = "release.failed", app.Status.Message
+		if err := audit.Record(ctx, r.Kube, ref, entry); err != nil {
+			log.FromContext(ctx).Info("could not audit the failure", "err", err.Error())
+		}
+	}
 }
 
 // clearReleaseNote removes the one-shot annotations once consumed.

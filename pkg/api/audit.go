@@ -19,9 +19,11 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 		return
 	}
 	actor, realm := "anonymous", ""
+	var subject, clientKind string
 	if id, ok := ext.IdentityFrom(c); ok {
 		actor = firstNonEmpty(id.Email, id.Name, id.Subject)
 		realm = realmOf(id)
+		subject, clientKind = s.subjectOf(c, id), clientOf(id)
 		switch id.Provider {
 		case "token":
 			actor = "admin token"
@@ -42,10 +44,45 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 			ref = audit.AppRefIn(app.Namespace, app.Name)
 		}
 	}
-	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: realm}
+	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api", Realm: realm, Subject: subject, Client: clientKind}
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, ref, entry); err != nil {
 		s.log.Warn("audit: cannot record", "action", action, "error", err)
 	}
+}
+
+// subjectOf is the stable id of the person behind a request: the store's
+// identity id (what the dashboard and the sign-up report as the person),
+// found by email for sessions and API tokens alike; empty for the admin
+// token and kubeconfig sessions, which are nobody in particular.
+func (s *Server) subjectOf(c *gin.Context, id ext.Identity) string {
+	if id.Email == "" || s.store == nil {
+		return ""
+	}
+	ws := s.workspace(c)
+	if ws == "" {
+		ws = s.defaultSlug(c.Request.Context())
+	}
+	person, err := s.store.GetIdentity(c.Request.Context(), ws, id.Email)
+	if err != nil || person == nil {
+		return ""
+	}
+	return person.ID
+}
+
+// clientOf says what spoke to the API, from the identity's provider: an
+// API token is the CLI's way in (and CI's), a session is the dashboard's.
+func clientOf(id ext.Identity) string {
+	switch id.Provider {
+	case "api-token":
+		return "cli"
+	case "token":
+		return "admin"
+	case "kubeconfig":
+		return "kubeconfig"
+	case "", "none":
+		return ""
+	}
+	return "dashboard"
 }
 
 // auditActor records an action on behalf of a named person when the
