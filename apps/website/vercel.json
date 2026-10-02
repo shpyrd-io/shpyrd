@@ -1,0 +1,6 @@
+{
+  "redirects": [
+    { "source": "/discord", "destination": "https://discord.gg/RYAT4wNKfw", "permanent": false },
+    { "source": "/docs", "destination": "/docs/getting-started", "permanent": false }
+  ]
+}
