@@ -75,6 +75,17 @@ const (
 	// AnnotationBuildImage holds the pushed digest reference of a
 	// finished build Job.
 	AnnotationBuildImage = "shpyrd.io/build-image"
+	// AnnotationDeployedBy, AnnotationDeployedSubject and
+	// AnnotationDeployedClient say who asked for the next release and
+	// through what (cli, dashboard), written by the API with the deploy
+	// and consumed by the controller when the release's outcome is
+	// audited (release.succeeded, release.failed).
+	AnnotationDeployedBy      = "shpyrd.io/deployed-by"
+	AnnotationDeployedSubject = "shpyrd.io/deployed-subject"
+	AnnotationDeployedClient  = "shpyrd.io/deployed-client"
+	// AnnotationAuditedRelease is the number of the last release whose
+	// success was audited, so a rollout that flaps does not audit it twice.
+	AnnotationAuditedRelease = "shpyrd.io/audited-release"
 	// AnnotationBuildRevision holds the git commit a build Job resolved.
 	AnnotationBuildRevision = "shpyrd.io/build-revision"
 	// AnnotationBuildFailure holds the failure summary of a build Job.

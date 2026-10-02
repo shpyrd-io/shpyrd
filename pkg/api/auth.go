@@ -830,7 +830,11 @@ func (s *Server) authLogout(c *gin.Context) {
 // Me is the caller's identity with the roles the dashboard hides actions by.
 type Me struct {
 	ext.Identity
-	Roles authz.Roles `json:"roles"`
+	// Person is the stable id the workspace knows the person by (the
+	// store's identity id): what the pages report as who acted, and what
+	// the audit trail carries as Subject. Empty for the admin token.
+	Person string      `json:"person,omitempty"`
+	Roles  authz.Roles `json:"roles"`
 	// Console says the person is a platform admin by the console's roles
 	// (RFC-0080): a workspace owned by the operator shows them the way to
 	// the console.
@@ -857,7 +861,7 @@ func (s *Server) me(c *gin.Context) {
 	if !console && s.authz != nil {
 		console = s.authz.ConsoleAdmin(c.Request.Context(), id)
 	}
-	c.JSON(http.StatusOK, Me{Identity: id, Roles: roles, Console: console})
+	c.JSON(http.StatusOK, Me{Identity: id, Person: s.subjectOf(c, id), Roles: roles, Console: console})
 }
 
 // securityHeaders hardens every response (RFC-0008). The dashboard is a

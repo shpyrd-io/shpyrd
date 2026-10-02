@@ -695,6 +695,16 @@ func (s *Server) deployApp(c *gin.Context) {
 			}
 			a.Annotations[shpyrdv1.AnnotationReleaseNote] = req.Note
 		}
+		// Who asked, for the release's outcome to be audited in their
+		// name once the controller knows it (release.succeeded/failed).
+		if id, ok := ext.IdentityFrom(c); ok {
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[shpyrdv1.AnnotationDeployedBy] = firstNonEmpty(id.Email, id.Name, id.Subject)
+			a.Annotations[shpyrdv1.AnnotationDeployedSubject] = s.subjectOf(c, id)
+			a.Annotations[shpyrdv1.AnnotationDeployedClient] = clientOf(id)
+		}
 		return nil
 	})
 	if err != nil {

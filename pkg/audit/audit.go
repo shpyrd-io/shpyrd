@@ -26,14 +26,22 @@ const Reason = "Audit"
 
 // Annotations carrying the structured fields.
 const (
-	AnnotationActor  = "shpyrd.io/actor"
-	AnnotationAction = "shpyrd.io/action"
-	AnnotationTarget = "shpyrd.io/target"
-	AnnotationDetail = "shpyrd.io/detail"
-	AnnotationFrom   = "shpyrd.io/from"
-	AnnotationVia    = "shpyrd.io/via"
-	AnnotationRealm  = "shpyrd.io/realm"
+	AnnotationActor   = "shpyrd.io/actor"
+	AnnotationAction  = "shpyrd.io/action"
+	AnnotationTarget  = "shpyrd.io/target"
+	AnnotationDetail  = "shpyrd.io/detail"
+	AnnotationFrom    = "shpyrd.io/from"
+	AnnotationVia     = "shpyrd.io/via"
+	AnnotationRealm   = "shpyrd.io/realm"
+	AnnotationSubject = "shpyrd.io/subject"
+	AnnotationClient  = "shpyrd.io/client"
 )
+
+// Sink, when set, is told every entry after it is written: the cloud
+// layer forwards a chosen set of actions to the product analytics as
+// events of the same person the pages report. Nil on the open-source
+// platform. It must not block: Record calls it inline.
+var Sink func(ref Ref, e Entry)
 
 // Entry is one audited action.
 type Entry struct {
@@ -48,6 +56,13 @@ type Entry struct {
 	// person of the workspace, or their token), operator (the admin token,
 	// a kubeconfig), later console:<name> for collaborators and partners.
 	Realm string `json:"realm,omitempty"`
+	// Subject is the stable id of the person behind Actor (the store's id
+	// of the identity; the token's owner for an API token), empty when
+	// no person acted (the admin token, a kubeconfig, the controller).
+	Subject string `json:"subject,omitempty"`
+	// Client says what spoke to the API: cli (an API token), dashboard (a
+	// session), admin (the admin token), kubeconfig; empty when unknown.
+	Client string `json:"client,omitempty"`
 }
 
 // Ref is the object an entry is attached to.
@@ -107,6 +122,7 @@ func Record(ctx context.Context, k kubernetes.Interface, ref Ref, e Entry) error
 			Annotations: map[string]string{
 				AnnotationActor: e.Actor, AnnotationAction: e.Action, AnnotationTarget: e.Target,
 				AnnotationDetail: e.Detail, AnnotationFrom: e.From, AnnotationVia: e.Via, AnnotationRealm: e.Realm,
+				AnnotationSubject: e.Subject, AnnotationClient: e.Client,
 			},
 		},
 		InvolvedObject:      corev1.ObjectReference{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name, APIVersion: apiVersionFor(ref.Kind)},
@@ -121,6 +137,9 @@ func Record(ctx context.Context, k kubernetes.Interface, ref Ref, e Entry) error
 		ReportingInstance:   e.Via,
 	}
 	_, err := k.CoreV1().Events(ref.Namespace).Create(ctx, ev, metav1.CreateOptions{})
+	if Sink != nil {
+		Sink(ref, e)
+	}
 	return err
 }
 
@@ -150,6 +169,7 @@ func List(ctx context.Context, k kubernetes.Interface, ref Ref, limit int) ([]En
 		out = append(out, Entry{
 			Time: t, Actor: a[AnnotationActor], Action: a[AnnotationAction], Target: a[AnnotationTarget],
 			Detail: a[AnnotationDetail], From: a[AnnotationFrom], Via: a[AnnotationVia], Realm: a[AnnotationRealm],
+			Subject: a[AnnotationSubject], Client: a[AnnotationClient],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })

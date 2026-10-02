@@ -329,6 +329,11 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 	if got.Spec.Build != nil && got.Spec.Build.Strategy != "" {
 		t.Errorf("no strategy requested must keep the app's setting: %+v", got.Spec.Build)
 	}
+	// The deploy leaves who asked on the App, for the release's outcome to
+	// be audited in their name (the admin token here: nobody's subject).
+	if got.Annotations[shpyrdv1.AnnotationDeployedBy] != "admin token" || got.Annotations[shpyrdv1.AnnotationDeployedClient] != "admin" || got.Annotations[shpyrdv1.AnnotationDeployedSubject] != "" {
+		t.Errorf("deployer annotations = %v", got.Annotations)
+	}
 	rec = do(t, s, "POST", "/api/projects/newapp/deploy", `{"git":{"url":"https://example.test/r"},"strategy":"dockerfile","dockerfile":"deploy/Dockerfile"}`, true)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("dockerfile deploy: %d %s", rec.Code, rec.Body.String())
