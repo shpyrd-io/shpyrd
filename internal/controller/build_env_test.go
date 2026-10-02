@@ -92,7 +92,20 @@ func TestBuildSeesTheAppsVariables(t *testing.T) {
 		t.Errorf("a new config var changed the Image (a build): %s", got)
 	}
 
-	// The next build (a redeploy) takes the new name.
+	// The next build (a redeploy) takes the new name, and is the Image's
+	// update alone: a trigger too would build first without the name.
+	last := &unstructured.Unstructured{}
+	last.SetGroupVersionKind(KpackBuildGVK)
+	last.SetNamespace("app-web1")
+	last.SetName("web1-build-1")
+	if err := c.Create(ctx, last); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, img)
+	_ = unstructured.SetNestedField(img.Object, "web1-build-1", "status", "latestBuildRef")
+	if err := c.Update(ctx, img); err != nil {
+		t.Fatal(err)
+	}
 	cur := &shpyrdv1.App{}
 	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, cur)
 	cur.Annotations = map[string]string{shpyrdv1.AnnotationRebuildAt: "2026-10-02T10:00:00Z"}
@@ -102,6 +115,21 @@ func TestBuildSeesTheAppsVariables(t *testing.T) {
 	runReconcile(t, r, cur)
 	if got := strings.Join(names(), " "); got != "NODE_ENV=value FOO=value DATABASE_URL=ref SENTRY_DSN=ref" {
 		t.Errorf("the redeploy's build env = %s", got)
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-build-1"}, last)
+	if last.GetAnnotations()[kpackBuildNeededAnnotation] != "" {
+		t.Error("the redeploy triggered a build on the old names besides the update's")
+	}
+	// A redeploy with nothing new is the trigger.
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1"}, cur)
+	cur.Annotations[shpyrdv1.AnnotationRebuildAt] = "2026-10-02T11:00:00Z"
+	if err := c.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, cur)
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-web1", Name: "web1-build-1"}, last)
+	if last.GetAnnotations()[kpackBuildNeededAnnotation] != "true" {
+		t.Error("a redeploy with nothing new did not trigger a build")
 	}
 }
 

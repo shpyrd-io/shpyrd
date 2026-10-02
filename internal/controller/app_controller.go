@@ -619,11 +619,6 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	// The request is remembered on the Image so it fires once per redeploy.
 	rebuild := app.Annotations[shpyrdv1.AnnotationRebuildAt]
 	needsTrigger := rebuild != "" && current.GetAnnotations()[shpyrdv1.AnnotationRebuildAt] != rebuild
-	if needsTrigger {
-		if err := r.triggerKpackBuild(ctx, app, current); err != nil {
-			return nil, err
-		}
-	}
 
 	// An archive uploaded before the sources port existed names the API
 	// port; rewriting that in the Image would make kpack rebuild every
@@ -643,6 +638,16 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	// changing, so there the names follow at once (one build).
 	if !needsTrigger && app.Spec.Source != nil && app.Spec.Source.Git == nil && !buildChanges(current, desired) {
 		desired = withBuildVarsOf(desired, current)
+	}
+
+	// The redeploy's build: the trigger, unless the update below changes
+	// what kpack builds (another source address, other build.env values,
+	// new variable names), which builds by itself; both would build
+	// twice, the first time without the change.
+	if needsTrigger && !buildChanges(current, desired) && equalJSON(buildRefs(current), buildRefs(desired)) {
+		if err := r.triggerKpackBuild(ctx, app, current); err != nil {
+			return nil, err
+		}
 	}
 
 	// Compare the fields we own.

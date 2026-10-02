@@ -136,6 +136,18 @@ func buildValues(img *unstructured.Unstructured) []interface{} {
 	return out
 }
 
+// buildRefs are the build.env entries that read a variable by reference.
+func buildRefs(img *unstructured.Unstructured) []interface{} {
+	env, _, _ := unstructured.NestedSlice(img.Object, "spec", "build", "env")
+	var out []interface{}
+	for _, e := range env {
+		if isBuildVarRef(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // withBuildVarsOf is desired with the variable names current carries: what
 // the Image would be if only the values of build.env and the rest changed.
 func withBuildVarsOf(desired, current *unstructured.Unstructured) *unstructured.Unstructured {
