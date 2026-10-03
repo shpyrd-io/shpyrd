@@ -904,10 +904,12 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// reader's cached GET never admits their POST.
 		"nginx.ingress.kubernetes.io/auth-cache-key":      "$http_cookie$http_authorization$http_x_shpyrd_token$http_accept$request_method",
 		"nginx.ingress.kubernetes.io/auth-cache-duration": "200 20s, 401 5s, 403 5s",
-		// The 403 goes to the controller's default backend — the server —
-		// which renders the "available to team X" page. (A per-Ingress
-		// default-backend cannot be an ExternalName.)
-		"nginx.ingress.kubernetes.io/custom-http-errors": "403",
+		// The 403 and the 503 go to the controller's default backend — the
+		// server — which renders the "available to team X" page and the
+		// "service unavailable" one, instead of nginx's own 503 while no
+		// pod of the app is ready. (A per-Ingress default-backend cannot be
+		// an ExternalName.)
+		"nginx.ingress.kubernetes.io/custom-http-errors": "403,503",
 	}
 	if mode == shpyrdv1.AccessAuthenticated {
 		// $http_host keeps the port (kind maps 8443); $host would drop it.

@@ -17,4 +17,11 @@ describe("StatePage", () => {
     expect(screen.queryByRole("heading")).toBeNull();
     expect(screen.queryByLabelText("Waiting")).toBeNull();
   });
+
+  it("draws a picture in the place of the icon and of the mark", () => {
+    render(<StatePage picture={<div role="img" aria-label="A shipyard at work" />} icon={<span data-testid="icon" />} title="Service unavailable" />);
+    expect(screen.getByRole("img", { name: "A shipyard at work" })).toBeTruthy();
+    expect(screen.queryByTestId("icon")).toBeNull();
+    expect(screen.getAllByRole("img", { name: "shpyrd" })).toHaveLength(1);
+  });
 });

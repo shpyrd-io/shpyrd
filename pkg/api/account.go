@@ -20,10 +20,12 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/emails"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/authlocal"
 )
@@ -68,11 +70,18 @@ func (s *Server) requestReset(c *gin.Context) {
 	}
 	if s.deps().Mail != nil {
 		link := s.resetLink(c, code)
+		subject, body, err := emails.Render(emails.Reset, emails.Words{
+			"Logo": emails.Logo(doorURL(c)), "Door": emails.Host(doorURL(c)), "Email": email, "Link": link,
+		})
+		if err != nil {
+			s.log.Error("reset: the email could not be drawn", "err", err)
+			subject = "Reset your password"
+		}
 		_ = s.deps().Mail.Send(ctx, ext.Message{
 			To:      []string{email},
-			Subject: "Reset your password",
+			Subject: subject,
 			Text:    "Open this link to set a new password (expires in 1 hour):\n\n" + link + "\n\nIf you did not request this, ignore this email.",
-			HTML:    fmt.Sprintf(`<p>Open this link to set a new password (expires in 1 hour):</p><p><a href="%s">Reset password</a></p><p>If you did not request this, ignore this email.</p>`, link),
+			HTML:    body,
 		})
 	}
 	audit.Record(ctx, s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace),
@@ -182,11 +191,19 @@ func (s *Server) handleReset(c *gin.Context) {
 	audit.Record(ctx, s.kube.Kube, audit.ClusterRef(s.deps().SystemNamespace),
 		audit.Entry{Actor: email, Action: "user.reset", Target: email, Via: "web", From: c.ClientIP()}) //nolint:errcheck
 	if s.deps().Mail != nil {
+		when := time.Now().UTC().Format("Jan 2, 2006 at 15:04 UTC")
+		subject, body, err := emails.Render(emails.PasswordChanged, emails.Words{
+			"Logo": emails.Logo(doorURL(c)), "Door": emails.Host(doorURL(c)), "Email": email, "When": when,
+		})
+		if err != nil {
+			s.log.Error("reset: the email could not be drawn", "err", err)
+			subject = "Your password was changed"
+		}
 		_ = s.deps().Mail.Send(ctx, ext.Message{
 			To:      []string{email},
-			Subject: "Your password was changed",
-			Text:    "Your password was changed. If you did not do this, contact your administrator immediately.",
-			HTML:    "<p>Your password was changed.</p><p>If you did not do this, contact your administrator immediately.</p>",
+			Subject: subject,
+			Text:    "Your password was changed on " + when + ", and every session was signed out. If you did not do this, contact your administrator immediately.",
+			HTML:    body,
 		})
 	}
 	c.Redirect(http.StatusFound, "/?reset=ok")

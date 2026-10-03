@@ -1,0 +1,3 @@
+/* The gallery's identity comes whole from design/ui; the pages, in their
+   frames, read their own stylesheet (global.css). */
+@import "@shpyrd/ui/styles.css";

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/emails"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 )
 
@@ -102,11 +104,21 @@ func (h *handlers) test(c *gin.Context) {
 		return
 	}
 	st, _ := h.sender.Status(ctx)
+	sent := time.Now().UTC().Format(time.RFC1123)
+	door := doorOf(c)
+	subject, body, err := emails.Render(emails.Test, emails.Words{
+		"Logo": emails.Logo(door), "Door": emails.Host(door), "Host": st.Host, "Port": strconv.Itoa(st.Port),
+		"Security": st.Security, "From": st.From, "Sent": sent,
+	})
+	if err != nil {
+		subject = "shpyrd test message"
+	}
 	msg := ext.Message{
 		To:      []string{to.Address},
-		Subject: "shpyrd test message",
+		Subject: subject,
 		Text: fmt.Sprintf("This is a test message from your shpyrd platform.\n\nSent through %s:%d (%s) as %s at %s.\n\nIf you received it, email delivery works.\n",
-			st.Host, st.Port, st.Security, st.From, time.Now().UTC().Format(time.RFC1123)),
+			st.Host, st.Port, st.Security, st.From, sent),
+		HTML: body,
 	}
 	start := time.Now()
 	err = h.sender.Send(ctx, msg)
@@ -138,4 +150,14 @@ func (h *handlers) audit(c *gin.Context, action, target, detail string) {
 	}
 	entry := audit.Entry{Actor: actor, Action: action, Target: target, Detail: detail, From: c.ClientIP(), Via: "api"}
 	_ = audit.Record(context.WithoutCancel(c.Request.Context()), h.deps.Kube.Kube, audit.ClusterRef(h.deps.SystemNamespace), entry)
+}
+
+// doorOf is the address the request came in on (https://acme.shpyrd.app),
+// where the email's mark is served.
+func doorOf(c *gin.Context) string {
+	scheme := "https"
+	if c.Request.TLS == nil && c.GetHeader("X-Forwarded-Proto") == "http" {
+		scheme = "http"
+	}
+	return scheme + "://" + c.Request.Host
 }

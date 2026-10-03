@@ -502,7 +502,7 @@ func TestEdgeObjects(t *testing.T) {
 	if got := ing.Annotations["nginx.ingress.kubernetes.io/auth-url"]; got != "http://shpyrd-server.shpyrd-system.svc.cluster.local/edge/auth?project=expenses&mode=authenticated" {
 		t.Errorf("auth-url = %q", got)
 	}
-	if ing.Annotations["nginx.ingress.kubernetes.io/auth-signin"] == "" || ing.Annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "403" {
+	if ing.Annotations["nginx.ingress.kubernetes.io/auth-signin"] == "" || ing.Annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "403,503" {
 		t.Errorf("edge annotations = %v", ing.Annotations)
 	}
 	edgeIng := &networkingv1.Ingress{}

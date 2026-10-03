@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"regexp"
 	"strings"
 	"testing"
@@ -72,5 +74,24 @@ func TestEveryPageIsSelfContained(t *testing.T) {
 		if !strings.Contains(html, "prefers-color-scheme:dark") {
 			t.Errorf("%s does not follow the system's theme", kind)
 		}
+	}
+}
+
+func TestThePageThatMovesCarriesItsScriptAndItsHash(t *testing.T) {
+	html := HTML(ServiceUnavailable, Page{Title: "Service unavailable", Text: "Try again in a few moments."})
+	start := strings.Index(html, "<script>")
+	end := strings.LastIndex(html, "</script>")
+	if start < 0 || end < start || !strings.HasSuffix(html[end:], "</script></body></html>") {
+		t.Fatalf("the script is not at the end of the page")
+	}
+	sum := sha256.Sum256([]byte(html[start+len("<script>") : end]))
+	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; ScriptHash(ServiceUnavailable) != want {
+		t.Errorf("the hash is %q, the script's is %q", ScriptHash(ServiceUnavailable), want)
+	}
+	if !strings.Contains(html, `data-slot="shipyard"`) || strings.Contains(markup(html), "/_next/") {
+		t.Errorf("the shipyard is missing, or points at files the page has not")
+	}
+	if ScriptHash(Nothing) != "" || strings.Contains(HTML(Nothing, Page{Title: "x"}), "<script") {
+		t.Errorf("a page that stands still has a script")
 	}
 }
