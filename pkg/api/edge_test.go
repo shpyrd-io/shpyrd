@@ -390,6 +390,20 @@ func TestEdgeSigninAndStart(t *testing.T) {
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "is available to") {
 		t.Errorf("denied page = %d %s", rec.Code, rec.Body.String()[:min(len(rec.Body.String()), 200)])
 	}
+	// nginx's own 503, while no pod of the app is ready, becomes the
+	// service-unavailable page, whose one script its policy allows.
+	req = httptest.NewRequest("GET", "/reports", nil)
+	req.Host = "expenses.example.test"
+	req.Header.Set("X-Code", "503")
+	req.Header.Set("X-Format", "text/html")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "Service unavailable") || !strings.Contains(rec.Body.String(), "<script>") {
+		t.Errorf("unavailable page = %d %s", rec.Code, rec.Body.String()[:min(len(rec.Body.String()), 200)])
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'sha256-") {
+		t.Errorf("unavailable page policy = %q: its script would not run", csp)
+	}
 	// The launcher lists what the caller may open: in bootstrap mode Maria
 	// is a platform admin, so everything.
 	rec = doCookie(t, s, "GET", "/api/launcher", "", sid, "")

@@ -11,6 +11,8 @@ person says when each moment starts.
 |---|---|
 | `design/brand` | the logo, the colours, the fonts |
 | `design/ui` | the components (`src/`) and the gallery that shows them (`app/`), a page for each |
+| `design/pages` | the pages the server serves by itself, packed into `pkg/pages` (its README) |
+| `design/emails` | the emails the platform sends, packed into `pkg/emails` (its README) |
 | `content/` | what is written: documentation, pages, texts |
 | `apps/` | the applications, which use `design/ui` and `content/` |
 
@@ -23,6 +25,8 @@ names the target: what is being designed. Without a target, ask.
 |---|---|---|---|
 | `design/ui`, the library | `design-ui`, the gallery | none | those of `design/ui` |
 | an application, `apps/<name>` | the entry named after it | mock | those of the application |
+| `design/pages`, the server's pages | `design-pages`, its gallery | none | those of `design/pages`, then `make pages` and `go test ./pkg/pages` |
+| `design/emails`, the emails | `design-emails`, its gallery | none | those of `design/emails`, then `make emails` and `go test ./pkg/emails` |
 
 1. Install what is missing: `npm install` at the repository root.
 2. Start the target's server. An application that does not exist yet is

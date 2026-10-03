@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"html"
 	"net/http"
 	"net/url"
 	"sort"
@@ -20,6 +19,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -331,32 +331,74 @@ func sessionIDOf(c *gin.Context) string {
 }
 
 // consentPage asks the person to allow the client what it asked for.
+// The name and the mark are the client's own say (it registered itself);
+// the host its answer goes to is named beside them, and that it cannot
+// make up.
 func (s *Server) consentPage(c *gin.Context, p *authorizeParams, id ext.Identity, csrf string) {
 	ws, _ := s.tenant(c)
 	scopeText := map[string]string{
 		ScopeProjectsRead:  "See your projects: their status, logs and metrics",
 		ScopeProjectsWrite: "Change your projects: deploy, scale, configure",
 	}
-	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Allow ` + html.EscapeString(p.client.Name) + `?</title>`)
-	b.WriteString(`<style>body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f6f6f6;color:#111;display:flex;min-height:100vh;align-items:center;justify-content:center}main{max-width:26rem;width:100%;padding:2rem;background:#fff;border-radius:12px;border:1px solid #e5e5e5}h1{font-size:1.2rem;margin:0 0 .5rem}p{margin:0 0 1rem;color:#444}ul{margin:0 0 1.25rem;padding-left:1.2rem;color:#333}button{font:inherit;padding:.6rem 1.1rem;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:pointer;margin-right:.5rem}button.allow{background:#ff4f00;border-color:#ff4f00;color:#fff;font-weight:600}small{color:#777}</style></head><body><main>`)
-	b.WriteString(`<h1>Allow ` + html.EscapeString(p.client.Name) + ` to use ` + html.EscapeString(firstNonEmpty(ws.Name, "this workspace")) + `?</h1>`)
-	b.WriteString(`<p>It will act as <strong>` + html.EscapeString(firstNonEmpty(id.Email, id.Name)) + `</strong>, with what your roles allow, and:</p><ul>`)
+	page := pages.ConsentPage{
+		Title:     "Allow " + p.client.Name + "?",
+		Client:    p.client.Name,
+		Icon:      clientMark(p.client.Name),
+		Initial:   initialOf(p.client.Name),
+		Workspace: firstNonEmpty(ws.Name, "this workspace"),
+		Account:   firstNonEmpty(id.Email, id.Name),
+		Host:      firstNonEmpty(hostOf(p.redirectURI), originOf(p.redirectURI)),
+	}
 	for _, sc := range p.scope {
-		b.WriteString(`<li>` + html.EscapeString(firstNonEmpty(scopeText[sc], sc)) + `</li>`)
+		page.Scopes = append(page.Scopes, pages.Scope{Text: firstNonEmpty(scopeText[sc], sc)})
 	}
-	b.WriteString(`</ul><form method="post" action="/oauth/authorize">`)
-	for k, v := range map[string]string{"client_id": p.client.ClientID, "redirect_uri": p.redirectURI, "scope": strings.Join(p.scope, " "), "state": p.state, "code_challenge": p.codeChallenge, "code_challenge_method": "S256", "response_type": "code", "resource": p.resource, "csrf": csrf} {
-		b.WriteString(`<input type="hidden" name="` + k + `" value="` + html.EscapeString(v) + `">`)
+	for _, f := range [][2]string{
+		{"client_id", p.client.ClientID}, {"redirect_uri", p.redirectURI}, {"scope", strings.Join(p.scope, " ")},
+		{"state", p.state}, {"code_challenge", p.codeChallenge}, {"code_challenge_method", "S256"},
+		{"response_type", "code"}, {"resource", p.resource}, {"csrf", csrf},
+	} {
+		page.Fields = append(page.Fields, pages.Field{Name: f[0], Value: f[1]})
 	}
-	b.WriteString(`<button class="allow" name="decision" value="allow">Allow</button><button name="decision" value="deny">Deny</button></form>`)
-	b.WriteString(`<p style="margin-top:1.25rem"><small>You can revoke this at any time on the Workspace page. Redirects to ` + html.EscapeString(hostOf(p.redirectURI)) + `.</small></p></main></body></html>`)
 	c.Header("Cache-Control", "no-store")
 	// Chrome and Safari hold the redirect that follows a form submission
 	// to the page's form-action; the answer goes to the client's redirect
 	// URI, so that origin is allowed here (and only here).
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' "+originOf(p.redirectURI))
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(b.String()))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.Consent, page)))
+}
+
+// clientMark is the mark the consent page has for a client, by the name
+// it gave itself; "" for one it has none for.
+func clientMark(name string) string {
+	n := strings.ToLower(name)
+	for _, m := range []struct {
+		mark  string
+		names []string
+	}{
+		{"claude", []string{"claude"}},
+		{"openai", []string{"chatgpt", "openai", "codex"}},
+		{"gemini", []string{"gemini"}},
+		{"copilot", []string{"copilot"}},
+		{"cursor", []string{"cursor"}},
+		{"vscode", []string{"vs code", "vscode", "visual studio code"}},
+		{"warp", []string{"warp"}},
+	} {
+		for _, word := range m.names {
+			if strings.Contains(n, word) {
+				return m.mark
+			}
+		}
+	}
+	return ""
+}
+
+// initialOf is the first letter of a name, as the mark of a client the
+// page has none for.
+func initialOf(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
 }
 
 // originOf is scheme://host[:port] of a URL, as a CSP source.

@@ -4,6 +4,7 @@
   "workspaces": [
     "design/ui",
     "design/pages",
+    "design/emails",
     "apps/shared",
     "apps/example",
     "apps/workspace",
