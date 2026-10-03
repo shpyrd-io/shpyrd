@@ -15,18 +15,6 @@ prometheus:
       requests:
         cpu: 100m
         memory: 512Mi
-    # Node pools (RFC-0077): Prometheus is stateful; prefer the platform
-    # pool so it never pins an apps node. Soft: with a single pool the
-    # variable is empty and no node matches, which changes nothing.
-    affinity:
-      nodeAffinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-                - key: shpyrd.io/pool
-                  operator: In
-                  values: ["${SHPYRD_PLATFORM_POOL}"]
 
 grafana:
   adminPassword: shpyrd

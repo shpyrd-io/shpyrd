@@ -57,18 +57,9 @@ Any image user can write to a mounted volume: the platform hands the disk to a g
 
 Self-hosted: on the local profile the bytes live on the kind node, so `shpyrd cluster destroy` deletes them along with everything else. Cloud profiles keep disks independent of nodes.
 
-### Volumes on Oracle Cloud
-
-Self-hosted, on a cluster you run on Oracle Cloud: the `oci` profile puts volumes on Block Volume (`oci-bv`, balanced performance, expansion allowed) and knows Oracle's rules so they do not surprise you:
-
-- **Disks start at 50 GB.** A request below that is created at 50Gi and the command says so: `Note: Oracle Cloud block volumes start at 50Gi: created at 50Gi instead of 1Gi`. The dashboard's size field says it up front. The same applies to a Postgres or Redis data volume, which then shows `50Gi (5Gi requested; provider minimum)`.
-- **The disk exists once a process mounts it.** Until then the volume is `Pending` with that explanation; nothing is billed for it yet.
-- **Shared volumes are File Storage file systems.** They need the mount target the Terraform in `contrib/oci` creates (`shared_storage = true`) and the two `--set` values it prints for `shpyrd cluster init`; without them a `--shared` volume is refused with those instructions. File Storage ignores the size (the file system grows as needed and bills by the space used), which the create command notes.
-- **Snapshots** are block volume backups (incremental after the first), billed on the backup's size.
-
 ### Snapshots
 
-Where the profile supports it (Oracle Cloud today; the local profile answers that snapshots are not available), a volume can be snapshotted and restored:
+Where the profile supports it, a volume can be snapshotted and restored:
 
 ```shell
 shpyrd volumes snapshot data --name before-migration   # a point-in-time copy of the disk

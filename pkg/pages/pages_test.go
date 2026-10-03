@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"regexp"
 	"strings"
 	"testing"
@@ -72,5 +74,54 @@ func TestEveryPageIsSelfContained(t *testing.T) {
 		if !strings.Contains(html, "prefers-color-scheme:dark") {
 			t.Errorf("%s does not follow the system's theme", kind)
 		}
+	}
+}
+
+func TestThePageThatMovesCarriesItsScriptAndItsHash(t *testing.T) {
+	html := HTML(ServiceUnavailable, Page{Title: "Service unavailable", Text: "Try again in a few moments."})
+	start := strings.Index(html, "<script>")
+	end := strings.LastIndex(html, "</script>")
+	if start < 0 || end < start || !strings.HasSuffix(html[end:], "</script></body></html>") {
+		t.Fatalf("the script is not at the end of the page")
+	}
+	sum := sha256.Sum256([]byte(html[start+len("<script>") : end]))
+	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; ScriptHash(ServiceUnavailable) != want {
+		t.Errorf("the hash is %q, the script's is %q", ScriptHash(ServiceUnavailable), want)
+	}
+	if !strings.Contains(html, `data-slot="shipyard"`) || strings.Contains(markup(html), "/_next/") {
+		t.Errorf("the shipyard is missing, or points at files the page has not")
+	}
+	if ScriptHash(Nothing) != "" || strings.Contains(HTML(Nothing, Page{Title: "x"}), "<script") {
+		t.Errorf("a page that stands still has a script")
+	}
+}
+
+func TestTheConsentSaysWhoAsksWhereTheAnswerGoesAndAnswers(t *testing.T) {
+	page := ConsentPage{
+		Title: "Allow <Claude>?", Client: "<Claude>", Icon: "claude", Initial: "C", Workspace: "Acme", Account: "joao@acme.com",
+		Host:   "claude.ai",
+		Scopes: []Scope{{Text: "See your projects"}, {Text: "Change your projects"}},
+		Fields: []Field{{Name: "client_id", Value: "c1"}, {Name: "state", Value: `a"b`}},
+	}
+	html := HTML(Consent, page)
+	for _, want := range []string{
+		"Allow &lt;Claude&gt; to use Acme?", ">claude.ai</strong>", ">joao@acme.com</strong>",
+		"See your projects", "Change your projects",
+		`name="client_id" value="c1"`, `name="state" value="a&#34;b"`,
+		`action="/oauth/authorize"`, `value="allow" name="decision"`, `value="deny" name="decision"`,
+		`aria-label="Claude"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("the consent lacks %q", want)
+		}
+	}
+	for _, stray := range []string{"{{", "}}", "<script", "<img"} {
+		if strings.Contains(markup(html), stray) {
+			t.Errorf("the consent still has %q", stray)
+		}
+	}
+	page.Icon = ""
+	if html := HTML(Consent, page); strings.Contains(html, `aria-label="Claude"`) || !strings.Contains(html, ">C</span>") {
+		t.Errorf("a client the page has no mark for is not drawn by its initial")
 	}
 }

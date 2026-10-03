@@ -145,20 +145,20 @@ func (r *AppReconciler) quotaTakers(ctx context.Context, namespace string, res c
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1], database
 }
 
-// releaseJobRefusal is the quota refusal Kubernetes reported for the
-// release Job's pod, in words; "" when there is none.
-func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job) string {
+// releaseJobRefusal reports why the current release instance could not be
+// created, and whether the refusal came from the workspace quota.
+func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job) (string, bool) {
 	if r.Kube == nil {
-		return ""
+		return "", false
 	}
 	events, err := r.Kube.CoreV1().Events(job.Namespace).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.name=" + job.Name + ",reason=FailedCreate"})
 	if err != nil {
-		return ""
+		return "", false
 	}
 	var latest *corev1.Event
 	for i := range events.Items {
 		e := &events.Items[i]
-		if e.InvolvedObject.Name != job.Name || e.Reason != "FailedCreate" {
+		if e.InvolvedObject.Name != job.Name || e.Reason != "FailedCreate" || (job.UID != "" && e.InvolvedObject.UID != job.UID) {
 			continue
 		}
 		if latest == nil || e.LastTimestamp.After(latest.LastTimestamp.Time) {
@@ -166,9 +166,12 @@ func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job)
 		}
 	}
 	if latest == nil {
-		return ""
+		return "", false
 	}
-	return r.quotaRefusal(ctx, job.Namespace, "The release step", latest.Message)
+	if msg := r.quotaRefusal(ctx, job.Namespace, "The release step", latest.Message); msg != "" {
+		return msg, true
+	}
+	return "The release step cannot start: the platform refused to create its instance. Ask the operator to check the workspace’s capacity and permissions.", false
 }
 
 // processRefusals are the quota refusals of the processes whose new

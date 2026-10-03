@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 // Client talks to one registry with one credential.
@@ -199,12 +201,24 @@ func nextLink(h string) string {
 	return ""
 }
 
-// ProcessTypes reads the process types a Cloud Native Buildpacks image
-// declares (web, worker, release, ...) from its config's
-// io.buildpacks.build.metadata label. ref is a digest or a tag; an image
-// index resolves to the entry for this platform. Images not built by
-// buildpacks have no label: an empty list, no error.
+// BuildMetadata describes the launch processes and runtime detected by buildpacks.
+type BuildMetadata struct {
+	ProcessTypes []string
+	Runtime      string
+}
+
+// ProcessTypes reads the process types a Cloud Native Buildpacks image declares.
 func (c *Client) ProcessTypes(ctx context.Context, repo, ref string) ([]string, error) {
+	meta, err := c.BuildMetadata(ctx, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	return meta.ProcessTypes, nil
+}
+
+// BuildMetadata reads process types and the detected runtime together from
+// the immutable image config, including images built from remote Git sources.
+func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMetadata, error) {
 	const accept = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
 	resp, err := c.do(ctx, "GET", "/v2/"+repo+"/manifests/"+ref, accept)
 	if err != nil {
@@ -240,7 +254,7 @@ func (c *Client) ProcessTypes(ctx context.Context, repo, ref string) ([]string, 
 				break
 			}
 		}
-		return c.ProcessTypes(ctx, repo, pick)
+		return c.BuildMetadata(ctx, repo, pick)
 	}
 	if manifest.Config.Digest == "" {
 		return nil, errors.New("manifest has no config")
@@ -264,9 +278,12 @@ func (c *Client) ProcessTypes(ctx context.Context, repo, ref string) ([]string, 
 	}
 	raw := cfg.Config.Labels["io.buildpacks.build.metadata"]
 	if raw == "" {
-		return []string{}, nil
+		return &BuildMetadata{}, nil
 	}
 	var meta struct {
+		Buildpacks []struct {
+			ID string `json:"id"`
+		} `json:"buildpacks"`
 		Processes []struct {
 			Type string `json:"type"`
 		} `json:"processes"`
@@ -280,5 +297,9 @@ func (c *Client) ProcessTypes(ctx context.Context, repo, ref string) ([]string, 
 			out = append(out, p.Type)
 		}
 	}
-	return out, nil
+	ids := make([]string, 0, len(meta.Buildpacks))
+	for _, bp := range meta.Buildpacks {
+		ids = append(ids, bp.ID)
+	}
+	return &BuildMetadata{ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
 }

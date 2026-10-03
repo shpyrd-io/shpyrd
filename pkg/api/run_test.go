@@ -19,6 +19,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 func TestRunCreatesTheInstanceAndATicket(t *testing.T) {
@@ -120,7 +121,7 @@ func newRunFixture(t *testing.T, out string, exitCode int32, attachErr error) (*
 
 func (f *shellFixture) dialRun(t *testing.T, pod string, command []string) *websocket.Conn {
 	t.Helper()
-	code, err := f.s.execTickets.mint(execTicket{
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: pod, Pod: pod, Container: appContainer, Attach: true, TTY: false, Command: command,
 	})
@@ -208,7 +209,7 @@ func TestRunPrintsTheLogWhenTheCommandBeatTheAttach(t *testing.T) {
 func TestRunRefusesAnotherTicketsPod(t *testing.T) {
 	// A ticket bound to a pod is accepted only for the instance it names.
 	f, pod := newRunFixture(t, "", 0, nil)
-	code, _ := f.s.execTickets.mint(execTicket{
+	code, _ := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: pod, Pod: pod, Attach: true,
 	})
@@ -272,7 +273,7 @@ func TestResourceShellTicketNamesThePodAndCommand(t *testing.T) {
 
 func TestResourceShellRunsTheTicketsCommandWithoutTheLauncher(t *testing.T) {
 	f := newShellFixture(t, "psql (17)\n")
-	code, err := f.s.execTickets.mint(execTicket{
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: "postgres/db", Pod: "db-1", Container: "postgres", Command: []string{"psql", "-d", "app"},
 	})

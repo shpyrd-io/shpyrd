@@ -30,7 +30,7 @@ func (extension) Components() []ext.ComponentRef { return nil }
 
 // Register runs the Redis controller and makes the kind attachable.
 func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
-	r := &controller.RedisReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.ProjectStorageClass(deps.Var), MinSize: install.ProjectVolumeMinSize(deps.Var)}, PlatformPool: install.ProjectDataPool(deps.Var)}
+	r := &controller.RedisReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.ProjectStorageClass(deps.Var), MinSize: install.ProjectVolumeMinSize(deps.Var)}, DataPool: install.DataPool(deps.Var)}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}

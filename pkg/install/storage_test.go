@@ -110,7 +110,7 @@ func storageYAML(t *testing.T, obj *unstructured.Unstructured) string {
 }
 
 func TestGatewayRoutesEveryConsumerAndKeepsProviderKeyPrivate(t *testing.T) {
-	e, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarGatewayBucket: "shared-objects", VarGatewayEndpoint: "https://cloud.example", VarGatewayRegion: "region-1"}, Extensions: []ExtensionComponent{{Extension: "object-storage", Component: "object-storage", Runlevel: "rc3"}}, Reporter: &quiet{}})
+	e, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarGatewayBucket: "shared-objects", VarGatewayEndpoint: "https://cloud.example", VarGatewayRegion: "region-1", VarPlatformPool: "custom-platform", VarDataPool: "custom-data"}, Extensions: []ExtensionComponent{{Extension: "object-storage", Component: "object-storage", Runlevel: "rc3"}}, Reporter: &quiet{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +140,15 @@ func TestGatewayRoutesEveryConsumerAndKeepsProviderKeyPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, o := range objs {
+			if selectorPath := podSelectorPath(o); selectorPath != nil {
+				selector, _, err := unstructured.NestedStringMap(o.Object, selectorPath...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if selector[PoolLabel] != "custom-platform" {
+					t.Errorf("%s %s/%s: pool=%q, want custom-platform", name, o.GetKind(), o.GetName(), selector[PoolLabel])
+				}
+			}
 			raw := storageYAML(t, o)
 			if o.GetKind() == "PersistentVolumeClaim" {
 				t.Errorf("%s allocates PVC", name)

@@ -243,16 +243,20 @@ func (a *App) EffectiveAllow() []AllowEntry {
 // sees nothing at all for such an App, and so reported no allocation to draw
 // the Metrics tab's reference line at (issue #12).
 //
+// Unnamed sizes use the runtime default recorded by the controller.
 // The returned map is never the App's own: callers may write to it freely.
 func (a *App) EffectiveProcesses() map[string]Process {
 	if a == nil {
 		return map[string]Process{}
 	}
 	if len(a.Spec.Processes) == 0 {
-		return map[string]Process{DefaultProcessType: {}}
+		return map[string]Process{DefaultProcessType: {Size: a.Status.DefaultSize}}
 	}
 	out := make(map[string]Process, len(a.Spec.Processes))
 	for name, p := range a.Spec.Processes {
+		if p.Size == "" {
+			p.Size = a.Status.DefaultSize
+		}
 		out[name] = p
 	}
 	return out
@@ -478,6 +482,13 @@ type HealthCheck struct {
 
 // AppStatus is the observed state of an App.
 type AppStatus struct {
+	// Runtime is the runtime detected in the current image's buildpack metadata.
+	// +optional
+	Runtime string `json:"runtime,omitempty"`
+	// DefaultSize is the catalog size selected for this runtime. Explicit process
+	// sizes and resource overrides still win.
+	// +optional
+	DefaultSize string `json:"defaultSize,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Phase is a coarse summary: Pending, Building, Deploying, Running, Failed.

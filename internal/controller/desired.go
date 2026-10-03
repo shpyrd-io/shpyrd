@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -82,11 +83,12 @@ type Config struct {
 	// DefaultBuilder is the kpack ClusterBuilder used when the App does not
 	// name one.
 	DefaultBuilder string
-	// AppsPool and PlatformPool are the shpyrd.io/pool label values of the
-	// two node pools (RFC-0077); empty means a single pool and no selectors.
-	// Application processes, builds and one-off runs select AppsPool; the
-	// datastores select PlatformPool.
+	// LocalStorage keeps volume-backed processes on their data node.
 	LocalStorage bool
+	// AppsPool and PlatformPool are the shpyrd.io/pool label values of the
+	// node pools (RFC-0077); empty means a single pool and no selectors.
+	// Application processes, builds and one-off runs select AppsPool; the
+	// datastores select the data pool (their reconcilers' DataPool).
 	AppsPool     string
 	PlatformPool string
 	// BuildCacheSize is the kpack cache volume size (e.g. "2Gi"); empty disables.
@@ -231,7 +233,7 @@ func processes(app *shpyrdv1.App) []namedProcess {
 	}
 	if len(out) == 0 {
 		// Only a release process was declared, which is not a workload.
-		out = append(out, namedProcess{Name: shpyrdv1.DefaultProcessType})
+		out = append(out, namedProcess{Name: shpyrdv1.DefaultProcessType, Process: shpyrdv1.Process{Size: app.Status.DefaultSize}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -908,10 +910,12 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// reader's cached GET never admits their POST.
 		"nginx.ingress.kubernetes.io/auth-cache-key":      "$http_cookie$http_authorization$http_x_shpyrd_token$http_accept$request_method",
 		"nginx.ingress.kubernetes.io/auth-cache-duration": "200 20s, 401 5s, 403 5s",
-		// The 403 goes to the controller's default backend — the server —
-		// which renders the "available to team X" page. (A per-Ingress
-		// default-backend cannot be an ExternalName.)
-		"nginx.ingress.kubernetes.io/custom-http-errors": "403",
+		// The 403 and the 503 go to the controller's default backend — the
+		// server — which renders the "available to team X" page and the
+		// "service unavailable" one, instead of nginx's own 503 while no
+		// pod of the app is ready. (A per-Ingress default-backend cannot be
+		// an ExternalName.)
+		"nginx.ingress.kubernetes.io/custom-http-errors": "403,503",
 	}
 	if mode == shpyrdv1.AccessAuthenticated {
 		// $http_host keeps the port (kind maps 8443); $host would drop it.
@@ -976,7 +980,7 @@ func (c Config) mutateEdgeService(app *shpyrdv1.App, svc *corev1.Service) {
 }
 
 // PoolLabel is the node label naming a node pool (RFC-0077).
-const PoolLabel = "shpyrd.io/pool"
+const PoolLabel = install.PoolLabel
 
 // appsNodeSelector pins a pod to the apps pool, nil in single-pool mode.
 func (c Config) appsNodeSelector() map[string]string {

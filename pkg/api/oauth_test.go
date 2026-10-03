@@ -96,6 +96,9 @@ func TestOAuthAndMCP(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Allow Claude") || !strings.Contains(rec.Body.String(), "See your projects") || !strings.Contains(rec.Body.String(), `name="csrf" value="`+csrf+`"`) {
 		t.Fatalf("consent page: %d %s", rec.Code, rec.Body.String()[:min(300, len(rec.Body.String()))])
 	}
+	if body := rec.Body.String(); !strings.Contains(body, `aria-label="Claude"`) || !strings.Contains(body, ">claude.ai</strong> will act as") {
+		t.Errorf("the consent page does not show Claude's mark and where the answer goes")
+	}
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self' https://claude.ai") {
 		t.Errorf("consent page must allow the redirect in form-action: %q", csp)
 	}
@@ -257,5 +260,20 @@ func TestOAuthAndMCP(t *testing.T) {
 	rec = mcp(`{"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}`)
 	if !regexp.MustCompile(`"name":"Acme Ops"`).MatchString(rec.Body.String()) {
 		t.Errorf("renamed server: %s", rec.Body.String())
+	}
+}
+
+func TestAClientsMarkComesFromItsName(t *testing.T) {
+	for name, want := range map[string]string{
+		"Claude": "claude", "claude-code": "claude", "ChatGPT": "openai", "Codex CLI": "openai", "Gemini CLI": "gemini",
+		"GitHub Copilot": "copilot", "Cursor": "cursor", "Visual Studio Code": "vscode", "VS Code": "vscode", "Warp": "warp",
+		"Zed": "", "": "",
+	} {
+		if got := clientMark(name); got != want {
+			t.Errorf("clientMark(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if initialOf(" zed") != "Z" || initialOf("") != "?" {
+		t.Errorf("initialOf is wrong")
 	}
 }

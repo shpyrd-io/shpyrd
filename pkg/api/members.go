@@ -158,6 +158,9 @@ func projectDenial(roles authz.Roles, action authz.Action, project, grantKey str
 	if role := roles.ProjectRole(grantKey); role != "" {
 		return fmt.Errorf("your role on project %s is %s: it cannot %s the project", project, role, verb)
 	}
+	if action == authz.ProjectExec {
+		return fmt.Errorf("you cannot run commands in project %s: your roles do not grant project.exec", project)
+	}
 	return fmt.Errorf("you have no access to project %s", project)
 }
 

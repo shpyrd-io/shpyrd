@@ -110,6 +110,8 @@ spec:
               value: "${SHPYRD_APPS_POOL}"
             - name: SHPYRD_PLATFORM_POOL
               value: "${SHPYRD_PLATFORM_POOL}"
+            - name: SHPYRD_DATA_POOL
+              value: "${SHPYRD_DATA_POOL}"
             - name: SHPYRD_REGISTRY_INSECURE
               value: "${SHPYRD_REGISTRY_INSECURE}"
             # Build pods get the platform CA (trust bundle + SSL_CERT_FILE) from
@@ -151,8 +153,6 @@ spec:
             - name: SHPYRD_DNS_PROVIDER
               value: "${SHPYRD_DNS_PROVIDER}"
             # Volumes (RFC-0060): classes, provider minimum and snapshot class.
-            - name: SHPYRD_DATA_POOL
-              value: "${SHPYRD_DATA_POOL}"
             - name: SHPYRD_PROJECT_STORAGE_CLASS
               value: "${SHPYRD_PROJECT_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS

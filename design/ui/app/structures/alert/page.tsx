@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Megaphone } from "lucide-react";
+import { Hammer, Megaphone } from "lucide-react";
 import {
   Alert,
   AlertAction,
@@ -10,7 +10,10 @@ import {
   AlertTitle,
 } from "@shpyrd/ui/components/alert";
 import { Button } from "@shpyrd/ui/components/button";
+import { InlineCode } from "@shpyrd/ui/components/inline-code";
+import { TextLogView } from "@shpyrd/ui/components/log-view";
 import { Stack } from "@shpyrd/ui/components/stack";
+import { build } from "../../logs";
 import { Section } from "../../section";
 
 export default function Page() {
@@ -70,6 +73,15 @@ export default function Page() {
             </AlertAction>
           </Alert>
         </Stack>
+      </Section>
+      <Section title="With more under the text">
+        <Alert variant="info" icon={<Hammer />}>
+          <AlertTitle>
+            Building <InlineCode>hello-world-build-7</InlineCode>
+          </AlertTitle>
+          <AlertDescription>Container analyze waiting</AlertDescription>
+          <TextLogView lines={build} height={160} className="mt-3" />
+        </Alert>
       </Section>
       <Section title="That can be dismissed">
         {dismissed ? (

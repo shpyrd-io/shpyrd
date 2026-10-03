@@ -106,7 +106,7 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
               const st = project.processes?.[name];
               const is = value(name);
               const was = current(name);
-              const asleep = st?.sleep?.state === "asleep" || st?.sleep?.state === "sleeping";
+              const asleep = st?.sleep?.state === "sleeping";
               const changed = is.size !== was.size || is.replicas !== was.replicas;
               const pinned = st?.pinned;
               return (

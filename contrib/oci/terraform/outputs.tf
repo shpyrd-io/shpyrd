@@ -146,7 +146,7 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_NODE_MAX_COUNT=${var.apps_max_count > 0 ? tostring(var.apps_max_count) : (var.node_min_count > 0 ? tostring(var.node_max_count) : "5")}
     SHPYRD_DATA_POOL=${var.data_max_count > 0 ? "data" : ""}
     SHPYRD_APPS_POOL=${var.apps_max_count > 0 ? "apps" : ""}
-    SHPYRD_PLATFORM_POOL=${var.apps_max_count > 0 ? "platform" : ""}
+    SHPYRD_PLATFORM_POOL=platform
     ${join("\n", [for k in sort(keys(var.extra_vars)) : "${k}=${var.extra_vars[k]}"])}
   EOT
 }

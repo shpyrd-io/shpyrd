@@ -1,12 +1,13 @@
 import { Lock, Rocket } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
+import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { StatePage } from "@shpyrd/ui/components/state-page";
 import { Section } from "../../section";
 
 // A whole page that says one thing, in the plain style: the mark, the
-// words in the middle, the wordmark in the corner. Three things a page
-// may say: nothing answers here yet, this is not for you, wait a moment;
-// and with nothing to say, the mark alone. The server draws these pages
+// words in the middle, the wordmark in the corner. Four things a page
+// may say: nothing answers here yet, this is not for you, wait a moment,
+// nothing can answer right now; and with nothing to say, the mark alone. The server draws these pages
 // from the same component (design/pages).
 
 export default function Page() {
@@ -49,6 +50,14 @@ export default function Page() {
           waiting
           title="Waking the application up."
           description="It was asleep, as it is when nobody asks for it. It answers in a few seconds; this page goes to it by itself."
+        />
+      </Section>
+      <Section title="Service unavailable: a picture in the place of the icon">
+        <StatePage
+          className="min-h-[34rem] rounded-xl ring-1 ring-foreground/10"
+          picture={<Shipyard className="w-80 max-w-[80vw]" />}
+          title="Service unavailable"
+          description="This is not available right now. Try again in a few moments."
         />
       </Section>
       <Section title="Nothing to say: the mark alone">

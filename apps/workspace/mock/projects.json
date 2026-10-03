@@ -260,7 +260,7 @@
         "ready": 0,
         "size": "shared-s",
         "sleep": {
-          "state": "asleep",
+          "state": "sleeping",
           "message": "asleep since 02:10, wakes on the first request"
         }
       }

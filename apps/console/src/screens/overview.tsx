@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, MemoryStick } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InfoTable, InfoTableItem } from "@shpyrd/ui/components/info-table";
+import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Meter } from "@shpyrd/ui/components/meter";
 import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { ProgressBar } from "@shpyrd/ui/components/progress-bar";
@@ -14,7 +16,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { TimeChart } from "@shpyrd/ui/components/time-chart";
 import { api } from "@/api/api";
-import type { Node } from "@/api/types";
+import type { MisplacedPod, Node } from "@/api/types";
 import { ago, bytes, Failed, Loading } from "./shared";
 
 // What the environment was built for, and so how load balancing, DNS,
@@ -29,7 +31,7 @@ const profiles: Record<string, string> = {
 // cluster, where everything lands everywhere.
 const pools: Record<string, string> = {
   platform: "The platform itself, and whatever has no pool of its own.",
-  data: "Project databases and Redis.",
+  data: "Project databases, Redis and object storage.",
   apps: "Project processes, builds and one-off runs.",
 };
 const poolOrder = (n: Node) => {
@@ -44,6 +46,20 @@ function poolCounts(nodes: Node[]): string {
   for (const n of nodes) if (n.pool) counts.set(n.pool, (counts.get(n.pool) ?? 0) + 1);
   const parts = [...counts].sort(([a], [b]) => poolOrder({ pool: a } as Node) - poolOrder({ pool: b } as Node)).map(([pool, n]) => `${n} ${pool}`);
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? "");
+}
+
+// The platform's pods outside the platform pool, by node: the pool, what
+// made them ("keda/keda-operator") and the CPU they reserve there.
+export function misplacedByNode(pods: MisplacedPod[]): { node: string; pool: string; owners: string[]; millicores: number }[] {
+  const nodes = new Map<string, { node: string; pool: string; owners: string[]; millicores: number }>();
+  for (const p of pods) {
+    const n = nodes.get(p.node) ?? { node: p.node, pool: p.pool, owners: [], millicores: 0 };
+    const owner = `${p.namespace}/${p.owner?.split("/")[1] ?? p.name}`;
+    if (!n.owners.includes(owner)) n.owners.push(owner);
+    n.millicores += Number.parseInt(p.cpu ?? "", 10) || 0;
+    nodes.set(p.node, n);
+  }
+  return [...nodes.values()];
 }
 
 // The cluster as it is: what was installed, where it answers, and how
@@ -138,6 +154,23 @@ export function Overview() {
                 <TimeChart title="Memory used" description="Of each node's memory, whatever runs on it" unit="%" series={m.memory} />
               </div>
             </>
+          )}
+          {c.misplaced && c.misplaced.length > 0 && (
+            <Alert variant="warning">
+              <AlertTitle>{`${c.misplaced.length} ${c.misplaced.length === 1 ? "pod" : "pods"} of the platform outside the platform pool`}</AlertTitle>
+              <AlertDescription>
+                <p>
+                  They take room and pods from the projects, and keep the autoscaler from removing an idle node. <InlineCode>shpyrd cluster init</InlineCode> pins them; each moves when its workload rolls.
+                </p>
+                <ul className="grid gap-1">
+                  {misplacedByNode(c.misplaced).map((n) => (
+                    <li key={n.node}>
+                      <span className="font-mono text-foreground">{n.node}</span> ({n.pool}, {n.millicores}m reserved): {n.owners.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
           )}
           <Table>
             <TableHeader>

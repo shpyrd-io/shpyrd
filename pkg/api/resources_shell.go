@@ -70,7 +70,7 @@ func (s *Server) mintResourceShellTicket(c *gin.Context) {
 		return
 	}
 	code, err := s.execTickets.mint(execTicket{
-		Identity: id, Project: slug, Instance: instance,
+		Identity: id, Workspace: s.workspace(c), Project: slug, Instance: instance,
 		Pod: target.Pod, Container: target.Container, Command: target.Command,
 	})
 	if errors.Is(err, errTicketsFull) {

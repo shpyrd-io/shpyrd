@@ -5,6 +5,8 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   output: "export",
   agentRules: false,
+  // The badge of the development server would be drawn in every frame.
+  devIndicators: false,
 };
 
 export default config;

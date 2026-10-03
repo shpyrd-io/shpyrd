@@ -163,7 +163,9 @@ resource "aws_eks_node_group" "this" {
     max_unavailable = 1
   }
 
-  labels = { "shpyrd.io/platform" = var.name }
+  # The platform pool (RFC-0077): the installer puts every pod of the
+  # platform on nodes with this label.
+  labels = { "shpyrd.io/platform" = var.name, "shpyrd.io/pool" = "platform" }
 
   depends_on = [
     aws_iam_role_policy_attachment.node,

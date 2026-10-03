@@ -108,7 +108,7 @@ func (s *Server) runApp(c *gin.Context) {
 	s.audit(c, slug, "run", created.Name, detail)
 	id, _ := ext.IdentityFrom(c)
 	code, err := s.execTickets.mint(execTicket{
-		Identity: id, Project: slug, Instance: created.Name,
+		Identity: id, Workspace: s.workspace(c), Project: slug, Instance: created.Name,
 		Pod: created.Name, Container: appContainer, Attach: true, TTY: req.TTY, Command: req.Command,
 	})
 	if err != nil {

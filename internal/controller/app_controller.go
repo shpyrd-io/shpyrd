@@ -285,7 +285,6 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			secret = nil
 		}
 	}
-	sizeByProcess := r.processSizes(ctx, app)
 	// Attached resources contribute config vars through <app>-bindings. A
 	// resource that is still provisioning is not a failure: the app keeps
 	// its current release until the binding can be rendered.
@@ -311,7 +310,6 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return outcome{}, err
 	}
 	ghash := globalHash(globals)
-	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if err := r.ensureNamespaceLabels(ctx, app); err != nil {
 		return outcome{}, err
 	}
@@ -431,9 +429,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	// type (a Procfile's release: line) runs it before a new release rolls
 	// out; the rollout waits, and a failure leaves the previous release
 	// serving.
-	if types := r.processTypesOf(ctx, image); types != nil {
-		app.Status.ProcessTypes = types
+	if meta := r.metadataOf(ctx, image); meta != nil {
+		app.Status.ProcessTypes = meta.ProcessTypes
+		app.Status.Runtime = meta.Runtime
 	}
+	app.Status.DefaultSize = r.catalog(ctx).DefaultForRuntime(app.Status.Runtime)
+	// Fingerprint the effective sizes only after reading the image runtime:
+	// otherwise the next reconcile sees a new target and reruns the migration.
+	sizeByProcess := r.processSizes(ctx, app)
+	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
 		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
@@ -684,13 +688,17 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 // particular: rails db:prepare needs what rails server needs, and the
 // catalog default is sized for a static site), else nothing declared.
 func releaseProcess(app *shpyrdv1.App) shpyrdv1.Process {
+	web := app.EffectiveProcesses()["web"]
 	if p, ok := app.Spec.Processes[releaseProcessType]; ok {
+		if p.Size == "" {
+			p.Size = firstNonEmpty(web.Size, app.Status.DefaultSize)
+			if len(p.Resources.Limits) == 0 && len(p.Resources.Requests) == 0 {
+				p.Resources = web.Resources
+			}
+		}
 		return p
 	}
-	if web, ok := app.Spec.Processes["web"]; ok {
-		return shpyrdv1.Process{Size: web.Size, Resources: web.Resources}
-	}
-	return shpyrdv1.Process{}
+	return shpyrdv1.Process{Size: firstNonEmpty(web.Size, app.Status.DefaultSize), Resources: web.Resources}
 }
 
 // errImageMoving says the kpack Image is between repositories: the old one

@@ -39,8 +39,9 @@ type PostgresReconciler struct {
 	SystemNamespace string
 	// Storage is the profile's disk rules (RFC-0060).
 	Storage StorageProfile
-	// PlatformPool is the node pool databases run on (RFC-0077); "" = any.
-	PlatformPool string
+	// DataPool is the node pool databases run on (RFC-0077): the data
+	// pool, or the platform pool on a cluster without one; "" = any.
+	DataPool string
 	// PlanSleepDefault answers the default idle period before a database
 	// of the project namespace hibernates, from its workspace's plan
 	// (RFC-0075); "" when there is none. A database with a policy of its
@@ -209,7 +210,7 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 			}
 		}
 	}
-	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class, r.PlatformPool)
+	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class, r.DataPool)
 	if err := controllerutil.SetControllerReference(pg, desired, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -457,7 +458,7 @@ func instances(pg *shpyrdv1.Postgres) int32 {
 }
 
 // desiredCNPGCluster renders the CloudNativePG Cluster for a Postgres.
-func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res corev1.ResourceRequirements, storageClass string, platformPool string) *unstructured.Unstructured {
+func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res corev1.ResourceRequirements, storageClass string, pool string) *unstructured.Unstructured {
 	toMap := func(l corev1.ResourceList) map[string]interface{} {
 		out := map[string]interface{}{}
 		for k, v := range l {
@@ -493,15 +494,15 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		spec["postgresql"] = map[string]interface{}{"parameters": params}
 		spec["livenessProbeTimeout"] = int64(smallPostgresLivenessTimeout)
 	}
-	if platformPool != "" {
-		// Databases are stateful and single-instance: the platform pool,
-		// where the autoscaler never drains (RFC-0077).
-		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: platformPool}}
+	if pool != "" {
+		// Databases are stateful and single-instance: the pool kept for
+		// the projects' data (RFC-0077).
+		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: pool}}
 	}
 	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" {
 		selector := map[string]interface{}{corev1.LabelHostname: node}
-		if platformPool != "" {
-			selector[PoolLabel] = platformPool
+		if pool != "" {
+			selector[PoolLabel] = pool
 		}
 		spec["affinity"] = map[string]interface{}{"nodeSelector": selector}
 	}

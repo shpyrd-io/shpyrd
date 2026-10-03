@@ -77,3 +77,33 @@ func TestCatalogTagsDelete(t *testing.T) {
 		t.Errorf("bad credential: %v", err)
 	}
 }
+
+func TestBuildMetadataRuntime(t *testing.T) {
+	for _, tc := range []struct{ name, metadata, runtime string }{
+		{"node", `{"buildpacks":[{"id":"paketo-buildpacks/node-engine"}],"processes":[{"type":"web"},{"type":"release"}]}`, "Node.js"},
+		{"static", `{"buildpacks":[{"id":"paketo-buildpacks/node-engine"},{"id":"paketo-buildpacks/nginx"}],"processes":[{"type":"web"}]}`, "static"},
+		{"no metadata", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/manifests/") {
+					_, _ = w.Write([]byte(`{"config":{"digest":"sha256:config"}}`))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"config": map[string]any{"Labels": map[string]string{"io.buildpacks.build.metadata": tc.metadata}}})
+			}))
+			defer srv.Close()
+			c := &Client{Host: strings.TrimPrefix(srv.URL, "https://"), HTTP: srv.Client()}
+			meta, err := c.BuildMetadata(context.Background(), "apps/shop", "sha256:image")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.Runtime != tc.runtime {
+				t.Fatalf("metadata = %+v", meta)
+			}
+			if tc.name == "node" && strings.Join(meta.ProcessTypes, ",") != "web,release" {
+				t.Fatalf("lost process types: %+v", meta)
+			}
+		})
+	}
+}

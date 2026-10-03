@@ -2,8 +2,8 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CreditCard, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
-import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
+import { ArrowLeft, CreditCard, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
+import { NavList, NavListDivider, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
@@ -45,6 +45,11 @@ export function WorkspacePages() {
 
   const nav = (
     <NavList aria-label="Workspace">
+      {/* Back to the launcher, where the logo goes too. */}
+      <NavListItem asChild icon={<ArrowLeft />}>
+        <Link to="/">Back to Launcher</Link>
+      </NavListItem>
+      <NavListDivider />
       {groups.map((group) =>
         group === "" ? (
           shown.filter((p) => p.group === "").map((p) => (

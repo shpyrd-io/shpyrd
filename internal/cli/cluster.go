@@ -1239,9 +1239,19 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 				}
 				components = append(components, component{Runlevel: s.Runlevel, Name: s.Name, Ready: s.Ready, Detail: s.Detail, Version: s.Version, AppliedAt: s.AppliedAt})
 			}
+			// The platform's pods outside the platform pool (RFC-0077): a
+			// warning, not a failure.
+			misplaced, err := install.MisplacedPods(ctx, k, info.Vars)
+			if err != nil {
+				return err
+			}
+			if misplaced == nil {
+				misplaced = []install.MisplacedPod{}
+			}
 			result := map[string]any{
 				"profile": info.Profile, "version": info.Version, "domain": info.Vars[install.VarDomain],
 				"updatedAt": info.UpdatedAt, "ready": allReady, "components": components,
+				"misplaced": misplaced,
 			}
 			if err := g.print(cmd, result, func(out io.Writer) {
 				fmt.Fprintf(out, "Profile: %s  Version: %s  Domain: %s  Updated: %s\n", info.Profile, info.Version, info.Vars[install.VarDomain], info.UpdatedAt)
@@ -1259,6 +1269,7 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.Runlevel, c.Name, status, c.Version, c.AppliedAt)
 				}
 				_ = tw.Flush()
+				printMisplaced(out, misplaced, info.Vars[install.VarPlatformPool])
 			}); err != nil {
 				return err
 			}
@@ -1270,6 +1281,26 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to evaluate (defaults to the installed one)")
 	return cmd
+}
+
+// printMisplaced warns about the platform's pods outside the platform
+// pool, by node, with what made each one.
+func printMisplaced(out io.Writer, pods []install.MisplacedPod, platform string) {
+	if len(pods) == 0 {
+		return
+	}
+	what := fmt.Sprintf("%d pods of the platform run", len(pods))
+	if len(pods) == 1 {
+		what = "1 pod of the platform runs"
+	}
+	fmt.Fprintf(out, "\nWarning: %s outside the %s pool (RFC-0077): they take room and pods from the projects\nthere, and keep the autoscaler from removing an idle node.\n\n", what, platform)
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NODE\tPOOL\tPOD\tOWNER\tCPU")
+	for _, p := range pods {
+		fmt.Fprintf(tw, "%s\t%s\t%s/%s\t%s\t%s\n", p.Node, p.Pool, p.Namespace, p.Name, p.Owner, p.CPU)
+	}
+	_ = tw.Flush()
+	fmt.Fprintf(out, "\n`shpyrd cluster init` pins them to the %s pool; each moves when its workload rolls.\n", platform)
 }
 
 func newClusterDestroyCmd(g *globalFlags) *cobra.Command {

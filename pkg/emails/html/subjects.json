@@ -1,0 +1,9 @@
+{
+  "invite": "{{.Inviter}} invited you to {{.Workspace}}",
+  "invite-password": "{{.Inviter}} invited you to {{.Workspace}}",
+  "reset": "Reset your password",
+  "password-changed": "Your password was changed",
+  "code": "Your shpyrd code: {{.Code}}",
+  "notice": "{{.Title}}",
+  "test": "shpyrd test message"
+}
