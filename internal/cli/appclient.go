@@ -445,6 +445,7 @@ func (a *appClient) getDetail(ctx context.Context, slug string) (*api.AppDetail,
 func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation int64, timeout time.Duration) (*api.AppDetail, error) {
 	deadline := time.Now().Add(timeout)
 	last := ""
+	lastSize := ""
 	var release *releaseFollow
 	defer func() {
 		if release != nil {
@@ -457,6 +458,10 @@ func (a *appClient) waitRunningAPI(ctx context.Context, slug string, generation 
 			return nil, err
 		}
 		if d.Status.ObservedGeneration >= generation {
+			if d.Status.Runtime != "" && d.Status.DefaultSize != "" && d.Status.DefaultSize != lastSize && d.Spec.Processes["web"].Size == "" {
+				fmt.Fprintf(a.out, "    Default size %s for the detected %s runtime; explicit process sizes and memory settings take precedence.\n", d.Status.DefaultSize, d.Status.Runtime)
+				lastSize = d.Status.DefaultSize
+			}
 			line := d.Status.Phase
 			if d.Status.Message != "" {
 				line += ": " + d.Status.Message

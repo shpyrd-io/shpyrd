@@ -19,6 +19,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 func newDeployCmd(g *globalFlags) *cobra.Command {
@@ -124,6 +125,46 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				return err
 			}
 			req.SubPath = subPath
+			// Infer from the source before starting the build, using the actual
+			// workspace catalog instead of assuming the shipped sizes are unchanged.
+			runtime := ""
+			localSource := image == "" && gitURL == ""
+			if localSource {
+				build := req.Build
+				if build == nil {
+					build = before.Spec.Build
+				}
+				runtime = sourceRuntime(firstNonEmpty(subPath, "."), build)
+			} else if gitURL != "" {
+				runtime = before.Status.Runtime
+			}
+			if runtime != "" {
+				raw, err := ac.serverRequest(ctx, "GET", "api/sizes", nil, "")
+				if err != nil {
+					return err
+				}
+				var catalog sizes.Catalog
+				if err := json.Unmarshal(raw, &catalog); err != nil {
+					return fmt.Errorf("decode sizes: %w", err)
+				}
+				if err := catalog.Validate(); err != nil {
+					return err
+				}
+				if localSource {
+					if err := prepareRuntimeSize(&req, before.Spec, runtime, catalog, out); err != nil {
+						return err
+					}
+				} else {
+					procs := req.Processes
+					if procs == nil {
+						procs = before.Spec.Processes
+					}
+					if err := warnRuntimeMemory(procs, runtime, catalog, out); err != nil {
+						return err
+					}
+				}
+			}
+
 			switch {
 			case image != "":
 				fmt.Fprintf(out, "==> Deploying prebuilt image %s to %s\n", image, name)

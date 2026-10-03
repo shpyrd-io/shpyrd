@@ -231,7 +231,7 @@ func processes(app *shpyrdv1.App) []namedProcess {
 	}
 	if len(out) == 0 {
 		// Only a release process was declared, which is not a workload.
-		out = append(out, namedProcess{Name: shpyrdv1.DefaultProcessType})
+		out = append(out, namedProcess{Name: shpyrdv1.DefaultProcessType, Process: shpyrdv1.Process{Size: app.Status.DefaultSize}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
