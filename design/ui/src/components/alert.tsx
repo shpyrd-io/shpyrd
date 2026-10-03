@@ -8,8 +8,11 @@ import { Button } from "./button";
 // what went well, what asks for care, what went wrong, what is offered.
 // A moment's notice goes in a toast instead.
 
+// With an icon, the icon has the first column and everything else the
+// second: the title, the description, the actions and whatever is put
+// under them, a log for one.
 const alertVariants = cva(
-  "group/alert relative grid w-full gap-y-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-data-[slot=alert-action]:pr-12 has-data-[slot=alert-icon]:grid-cols-[auto_1fr] has-data-[slot=alert-icon]:gap-x-2",
+  "group/alert relative grid w-full gap-y-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-data-[slot=alert-action]:pr-12 has-data-[slot=alert-icon]:grid-cols-[auto_minmax(0,1fr)] has-data-[slot=alert-icon]:gap-x-2 has-data-[slot=alert-icon]:*:not-data-[slot=alert-icon]:col-start-2",
   {
     variants: {
       variant: {
@@ -96,7 +99,7 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="alert-title"
       className={cn(
-        "font-medium group-has-data-[slot=alert-icon]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
+        "font-medium [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
         className,
       )}
       {...props}
@@ -112,7 +115,7 @@ function AlertDescription({
     <div
       data-slot="alert-description"
       className={cn(
-        "text-sm text-balance text-muted-foreground group-has-data-[slot=alert-icon]/alert:col-start-2 md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
+        "text-sm text-balance text-muted-foreground md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
         className,
       )}
       {...props}
@@ -126,7 +129,7 @@ function AlertActions({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="alert-actions"
       className={cn(
-        "mt-2 flex flex-wrap items-center gap-2 group-has-data-[slot=alert-icon]/alert:col-start-2",
+        "mt-2 flex flex-wrap items-center gap-2",
         className,
       )}
       {...props}
