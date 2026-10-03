@@ -8,16 +8,43 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-25 (implemented with Garage; MinIO's public images are gone)
+**Last update:** 2026-10-03 (cloud gateway follow-up implementable; local Garage already implemented)
 
 ## Summary
 
-An `object-storage` extension giving the platform an S3-compatible bucket store with a
-credential per consumer: Garage in the cluster on every profile, buckets declared as
-`ObjectBucket` resources by the extensions that need them (Postgres backups, platform
-backups, Loki). The provider's object storage (S3, OCI Object Storage)
-is the offsite tier: where data must survive the cluster, RFC-0037 writes there directly,
-and MinIO replication to it is the follow-up.
+An `object-storage` extension giving the platform an S3-compatible bucket store
+with a credential per consumer. The implemented base uses Garage in the
+cluster, with buckets declared as `ObjectBucket` resources. The cloud
+follow-up below replaces that store with a shared S3 gateway when explicitly
+configured, keeping Garage for local and legacy installations. It supersedes
+the base proposal's per-profile Garage/offsite replication approach.
+
+## Cloud storage follow-up (2026-10-03, issue #46)
+
+[Issue #46](https://github.com/shpyrd-io/shpyrd/issues/46) proposes storing
+registry images, source archives and project backups in the cloud provider's
+object storage. Registry and sources are platform-owned data: they can use
+one platform credential, kept out of project namespaces. Their configuration
+and migration are described in [the cloud storage runbook](../contrib/object-storage.md).
+
+Project backups have a different constraint. The platform must accommodate
+hundreds of thousands of projects; a physical bucket and an IAM user per
+project are not the cloud design. Use a bounded set of buckets per platform
+or region, with separate prefixes for consumers. `ObjectBucket` can remain
+the logical consumer contract without implying a physical cloud bucket.
+
+The deployment's Terraform should provision the shared buckets and the
+platform's permissions and credentials. Enabling managed backups must not
+ask the project's user to create a cloud account or supply S3 credentials.
+Terraform provisioning alone does not isolate runtime access: the credential
+given to a consumer must be unable to list, read, write, copy or delete any
+other consumer's objects, including through multipart operations.
+
+The cloud follow-up uses the S3 gateway approved on 2026-10-03. All cloud
+object consumers use that service, including registry, source archives and
+platform backups. Terraform provisions the shared physical bucket and a
+single provider credential; gateway-only credentials authorize each logical
+bucket. See the gateway decision below and the migration runbook.
 
 ## Motivation
 
@@ -37,7 +64,7 @@ and the credentials.
 - Replacing the provider's object storage for archives; MinIO here is the platform's
   working store, on the profile's block storage class.
 
-## Proposal
+## Implemented base proposal (Garage; cloud follow-up supersedes this)
 
 - **One store, every profile.** Garage (garagehq.deuxfleurs.fr, single node) in
   `shpyrd-system` on a volume of the profile's class (`SHPYRD_OBJECT_STORAGE_SIZE`: 20Gi
@@ -113,3 +140,20 @@ and the credentials.
   credentials, provider storage as the offsite tier (RFC-0037). Implementation starts.
 - 2026-09-25: implemented with Garage after MinIO's images turned out to be gone;
   verified on OKE. Released in v0.3.4.
+
+### Gateway decision (issue #46)
+
+Cloud installations use a separate `object-storage` Deployment running the
+server's `object-gateway` subcommand. Terraform provisions the physical S3
+bucket and its credential once. The gateway owns that credential; registry,
+sources, platform archives and ObjectBucket consumers receive gateway-only
+credentials. Logical buckets are isolated prefixes, not provider buckets or
+IAM users. Local installations keep Garage as the backend.
+
+Use VersityGW for S3 authentication and streaming/multipart protocol handling.
+An explicit backend allowlist maps object operations to physical prefixes;
+bucket policies, public ACLs and provider administration are unavailable to
+consumers. Consumer descriptors live in the physical bucket, so gateway
+restarts require neither a PVC nor a database during bootstrap. Large-object
+validation must include transfers above 1 GiB, integrity, peak process memory,
+and cross-consumer denial for reads, listings, copies and multipart operations.

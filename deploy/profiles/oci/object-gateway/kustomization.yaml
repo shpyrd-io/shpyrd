@@ -1,0 +1,11 @@
+resources:
+  - ../../../components/object-gateway/base
+patches:
+  - target:
+      kind: ServiceAccount
+      name: object-gateway
+    patch: |
+      - op: add
+        path: /imagePullSecrets
+        value:
+          - name: ocir-pull

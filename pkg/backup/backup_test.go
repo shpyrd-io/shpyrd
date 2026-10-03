@@ -175,7 +175,10 @@ func TestRestore(t *testing.T) {
 	imported := &store.Dump{}
 	byWorkspace := map[string]*store.Dump{}
 	r := &Restorer{Dynamic: dyn, Archive: a, System: true,
-		UploadSource: func(_ context.Context, sha string, data []byte) error { uploaded[sha] += len(data); return nil },
+		UploadSourceURL: func(_ context.Context, sha string, data []byte) (string, error) {
+			uploaded[sha] += len(data)
+			return "http://new-cluster/api/sources/" + sha + ".tgz?token=new-capability", nil
+		},
 		ImportStore: func(_ context.Context, ws string, d *store.Dump, _ bool) error {
 			if ws == "" {
 				imported = d
@@ -191,6 +194,14 @@ func TestRestore(t *testing.T) {
 	}
 	if res.Created != 6 || res.Sources != 1 || uploaded["abc123"] != 7 || len(res.Projects) != 1 {
 		t.Errorf("result = %+v uploaded=%v", res, uploaded)
+	}
+	restored, err := dyn.Resource(schema.GroupVersionResource{Group: "shpyrd.io", Version: "v1alpha1", Resource: "apps"}).Namespace("app-shop").Get(context.Background(), "shop", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredURL, _, _ := unstructured.NestedString(restored.Object, "spec", "source", "blob", "url")
+	if restoredURL != "http://new-cluster/api/sources/abc123.tgz?token=new-capability" {
+		t.Errorf("restore kept old source URL: %q", restoredURL)
 	}
 	// An archive from before the store carries Team objects: they become a dump.
 	if len(imported.Teams) != 1 || imported.Teams[0].Name != "platform" || len(imported.Teams[0].Members) != 1 {

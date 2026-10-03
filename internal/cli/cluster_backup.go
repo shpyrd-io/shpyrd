@@ -330,9 +330,22 @@ func runRestore(ctx context.Context, cmd *cobra.Command, g *globalFlags, f *rest
 	r := &backup.Restorer{
 		Dynamic: k.Dynamic, Archive: a,
 		Projects: f.projects, System: !f.noSystem, Overwrite: f.overwrite,
-		UploadSource: func(ctx context.Context, sha string, data []byte) error {
-			_, err := serverRequest(ctx, k, "POST", "api/sources", data, "application/gzip")
-			return err
+		UploadSourceURL: func(ctx context.Context, sha string, data []byte) (string, error) {
+			raw, err := serverRequest(ctx, k, "POST", "api/sources", data, "application/gzip")
+			if err != nil {
+				return "", err
+			}
+			var info struct {
+				URL    string `json:"url"`
+				SHA256 string `json:"sha256"`
+			}
+			if err = json.Unmarshal(raw, &info); err != nil {
+				return "", err
+			}
+			if info.SHA256 != sha {
+				return "", fmt.Errorf("restored source SHA mismatch")
+			}
+			return info.URL, nil
 		},
 		ImportStore: func(ctx context.Context, workspace string, dump *store.Dump, overwrite bool) error {
 			body, err := json.Marshal(dump)

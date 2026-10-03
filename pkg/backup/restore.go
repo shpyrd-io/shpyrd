@@ -33,6 +33,10 @@ type Restorer struct {
 	// UploadSource stores a source archive on the server (POST
 	// /api/sources); nil skips sources.
 	UploadSource func(ctx context.Context, sha string, data []byte) error
+	// UploadSourceURL returns a fresh source capability for the target cluster.
+	// Prefer it over UploadSource when restoring across signing keys or hosts.
+	UploadSourceURL func(ctx context.Context, sha string, data []byte) (string, error)
+	sourceURLs      map[string]string
 	// ImportStore puts a control-plane dump back (POST
 	// /api/workspace/import): the implicit workspace's when workspace is
 	// "", an explicit workspace's otherwise (recreated when gone); nil
@@ -147,7 +151,7 @@ func (r *Restorer) restoreSystem(ctx context.Context, res *Result) error {
 	// wrote what this infrastructure has. It travels in the archive for
 	// reading, not applying.
 	for _, path := range r.Archive.Paths("system/") {
-		if path == "system/configmap-shpyrd-install.yaml" {
+		if path == "system/configmap-shpyrd-install.yaml" || path == "system/secret-sources-signing.yaml" {
 			continue
 		}
 		if err := r.applyFile(ctx, path, true, res); err != nil {
@@ -271,10 +275,23 @@ func (r *Restorer) restoreProject(ctx context.Context, ns, slug string, res *Res
 				res.Warnings = append(res.Warnings, fmt.Sprintf("%s: source %s is not in the archive; deploy it again", app.GetName(), sha[:12]))
 				continue
 			}
-			if r.UploadSource == nil {
+			if r.UploadSource == nil && r.UploadSourceURL == nil {
 				continue
 			}
-			if err := r.UploadSource(ctx, sha, data); err != nil {
+			var err error
+			if r.UploadSourceURL != nil {
+				var sourceURL string
+				sourceURL, err = r.UploadSourceURL(ctx, sha, data)
+				if err == nil {
+					if r.sourceURLs == nil {
+						r.sourceURLs = map[string]string{}
+					}
+					r.sourceURLs[sha] = sourceURL
+				}
+			} else {
+				err = r.UploadSource(ctx, sha, data)
+			}
+			if err != nil {
 				return fmt.Errorf("upload source %s: %w", sha[:12], err)
 			}
 			res.Sources++
@@ -323,6 +340,12 @@ func (r *Restorer) applyFile(ctx context.Context, path string, update bool, res 
 
 // apply creates the object, or updates it when it exists and update is set.
 func (r *Restorer) apply(ctx context.Context, obj *unstructured.Unstructured, update bool) (string, error) {
+	if obj.GetKind() == "App" {
+		sha, _, _ := unstructured.NestedString(obj.Object, "spec", "source", "blob", "sha256")
+		if u := r.sourceURLs[sha]; u != "" {
+			_ = unstructured.SetNestedField(obj.Object, u, "spec", "source", "blob", "url")
+		}
+	}
 	gvr, err := gvrFor(obj)
 	if err != nil {
 		return "", err

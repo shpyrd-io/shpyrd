@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ var (
 	// server reads it at start, and the CLI reads whatever the new cluster
 	// has.
 	systemConfigMaps = []string{"shpyrd-install", "shpyrd-sizes"}
-	systemSecrets    = []string{shpyrdv1.GlobalEnvSecretName}
+	systemSecrets    = []string{shpyrdv1.GlobalEnvSecretName, "sources-signing"}
 )
 
 // Exporter reads the cluster.
@@ -220,7 +221,7 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list project namespaces: %w", err)
 	}
-	sources := map[string]bool{}
+	sources := map[string]string{}
 	for _, ns := range nsList.Items {
 		man.Projects = append(man.Projects, ns.Labels[shpyrdv1.LabelProject])
 		nsCopy := ns
@@ -237,7 +238,7 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			if gvr.Resource == "apps" {
 				for _, app := range list.Items {
 					if u, ok, _ := unstructured.NestedString(app.Object, "spec", "source", "blob", "sha256"); ok && u != "" {
-						sources[u] = true
+						sources[u], _, _ = unstructured.NestedString(app.Object, "spec", "source", "blob", "url")
 					}
 				}
 			}
@@ -279,8 +280,12 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 		if httpc == nil {
 			httpc = &http.Client{Timeout: 2 * time.Minute}
 		}
-		for sha := range sources {
-			req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(e.SourceBase, "/")+"/api/sources/"+sha+".tgz", nil)
+		for sha, sourceURL := range sources {
+			sourceQuery := ""
+			if u, err := url.Parse(sourceURL); err == nil && u.RawQuery != "" {
+				sourceQuery = "?" + u.RawQuery
+			}
+			req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(e.SourceBase, "/")+"/api/sources/"+sha+".tgz"+sourceQuery, nil)
 			resp, err := httpc.Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("source %s: %w", sha, err)

@@ -40,6 +40,8 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/objectgateway"
+	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 	"github.com/shpyrd-io/shpyrd/pkg/ui"
@@ -71,6 +73,13 @@ type Options struct {
 // Main parses flags and the environment, runs the server and exits on
 // error. It is the whole main() of cmd/shpyrd-server.
 func Main(opts Options) {
+	if len(os.Args) > 1 && os.Args[1] == "object-gateway" {
+		if err := objectgateway.Main(); err != nil {
+			slog.Error("object gateway failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server ui-export <dir>`: write the applications built into
 	// this binary to a directory, then exit. The server's init container
 	// runs it, so the server reads its applications from a directory in
@@ -217,6 +226,14 @@ func run(o runOptions, logger *slog.Logger) error {
 		resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
 	}
 
+	sources := &api.SourceStore{Dir: o.dataDir, BaseURL: internalURL, SigningKey: []byte(os.Getenv("SHPYRD_SOURCES_SIGNING_KEY"))}
+	if bucket := os.Getenv(install.VarSourcesBucket); bucket != "" {
+		sources.Bucket, err = objectstore.NewS3(os.Getenv(install.VarSourcesEndpoint), os.Getenv(install.VarSourcesRegion), bucket, "sources",
+			os.Getenv("SHPYRD_SOURCES_AWS_ACCESS_KEY_ID"), os.Getenv("SHPYRD_SOURCES_AWS_SECRET_ACCESS_KEY"))
+		if err != nil {
+			return fmt.Errorf("source storage: %w", err)
+		}
+	}
 	srv, err := api.New(k, api.Options{
 		Addr:         o.addr,
 		Store:        st,
@@ -236,7 +253,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		},
 		UI:             uiFiles(logger),
 		Pages:          o.opts.Pages,
-		Sources:        &api.SourceStore{Dir: o.dataDir, BaseURL: internalURL},
+		Sources:        sources,
 		SourcesAddr:    fmt.Sprintf(":%d", api.SourcesPort),
 		TrustedProxies: trustedProxies(os.Getenv("SHPYRD_POD_CIDR")),
 		Token:          strings.TrimSpace(os.Getenv("SHPYRD_ADMIN_TOKEN")),

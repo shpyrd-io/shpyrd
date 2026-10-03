@@ -1,0 +1,10 @@
+name: object-gateway
+description: Isolated S3 logical buckets backed by cloud object storage
+namespace: shpyrd-system
+requiredVar: SHPYRD_GATEWAY_BUCKET
+hooks: [object-storage-credentials, object-gateway-credentials]
+kustomize:
+  path: base
+wait:
+  - deployment: shpyrd-system/object-storage
+timeout: 10m

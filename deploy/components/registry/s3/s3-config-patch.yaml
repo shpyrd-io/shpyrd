@@ -13,9 +13,11 @@ data:
         regionendpoint: ${SHPYRD_REGISTRY_ENDPOINT}
         region: ${SHPYRD_REGISTRY_REGION}
         bucket: ${SHPYRD_REGISTRY_BUCKET}
-        secure: true
+        secure: ${SHPYRD_REGISTRY_S3_SECURE}
         v4auth: true
         forcepathstyle: true
+      redirect:
+        disable: true
       delete:
         enabled: true
       cache:

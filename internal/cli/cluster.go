@@ -79,6 +79,7 @@ type initFlags struct {
 	// Platform backups (RFC-0037): target bucket and its credentials file.
 	backupTarget            string
 	backupCredentialsFile   string
+	gatewayCredentialsFile  string
 	registryCredentialsFile string
 	imagePullSecretFile     string
 	// varsFile carries what the infrastructure knows (zone, addresses, file
@@ -110,6 +111,7 @@ func (f *initFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVar(&f.set, "set", nil, "override a variable, e.g. --set SHPYRD_REGISTRY_HOST=...")
 	cmd.Flags().StringVar(&f.backupTarget, "backup-target", "", "s3://bucket/prefix for the platform's encrypted backups (contrib/*/terraform prints it; empty: no backups)")
 	cmd.Flags().StringVar(&f.backupCredentialsFile, "backup-credentials-file", "", "KEY=value file with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the backup target (omit on EKS: Pod Identity)")
+	cmd.Flags().StringVar(&f.gatewayCredentialsFile, "object-storage-credentials-file", "", "KEY=value file with the shared gateway bucket, endpoint, region and S3 credential provisioned by Terraform")
 	cmd.Flags().StringVar(&f.registryCredentialsFile, "registry-credentials-file", "", "KEY=value file with S3 credentials for the registry OCI Object Storage bucket (contrib/oci/terraform/backups writes <name>-registry.env); its SHPYRD_REGISTRY_* lines set the bucket, endpoint and region unless --set overrides them")
 	cmd.Flags().StringVar(&f.imagePullSecretFile, "image-pull-secret-file", "", "Docker config.json with credentials for the private registry the server image is pulled from (OCIR on the cloud); creates Secret ocir-pull")
 	cmd.Flags().StringVar(&f.varsFile, "vars-file", "", "file of SHPYRD_NAME=value lines with the values the infrastructure produced (contrib/*/terraform writes <name>.vars); flags and --set win over it")
@@ -612,25 +614,36 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		}
 		backupCreds = creds
 	}
-	var registryVars map[string]string
+	var gatewayCreds map[string]string
+	var registryVars = map[string]string{}
+	if flags.gatewayCredentialsFile != "" {
+		creds, err := readVarsFileAny(flags.gatewayCredentialsFile)
+		if err != nil {
+			return fmt.Errorf("--object-storage-credentials-file: %w", err)
+		}
+		gatewayCreds = creds
+		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", install.VarGatewayBucket, install.VarGatewayRegion} {
+			if creds[key] == "" {
+				return fmt.Errorf("--object-storage-credentials-file requires %s", key)
+			}
+		}
+		for _, k := range []string{install.VarGatewayBucket, install.VarGatewayEndpoint, install.VarGatewayRegion} {
+			if v := creds[k]; v != "" {
+				registryVars[k] = v
+			}
+		}
+	}
+	var registryCreds map[string]string
 	if flags.registryCredentialsFile != "" {
 		creds, err := readVarsFileAny(flags.registryCredentialsFile)
 		if err != nil {
 			return fmt.Errorf("--registry-credentials-file: %w", err)
 		}
-		// Merge into backupCreds so the registryS3Hook can read them;
-		// the registry env file has the same AWS_ keys as the backup one.
-		if backupCreds == nil {
-			backupCreds = creds
-		} else {
-			for k, v := range creds {
-				backupCreds[k] = v
-			}
-		}
+		registryCreds = creds
 		// The file also names the bucket, endpoint and region: they are
 		// settings, not secrets, and nobody should have to repeat them as
 		// three --set flags on every run.
-		registryVars = map[string]string{}
+
 		for _, k := range []string{install.VarRegistryBucket, install.VarRegistryEndpoint, install.VarRegistryRegion} {
 			if v := creds[k]; v != "" {
 				registryVars[k] = v
@@ -690,19 +703,21 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		skip = append(append([]string{}, skip...), conditionalComponents(vars, prof)...)
 	}
 	opts := install.Options{
-		Profile:           flags.profile,
-		Vars:              vars,
-		Skip:              skip,
-		Only:              flags.only,
-		Version:           Version,
-		Extensions:        extComps,
-		Reporter:          &consoleReporter{out: out},
-		RegistryUser:      flags.registryUser,
-		RegistryPassword:  registryPassword,
-		DNSKeyPEM:         dnsKey,
-		DNSKeyFingerprint: flags.dnsFingerprint,
-		BackupCredentials: backupCreds,
-		ImagePullConfig:   imagePullConfig,
+		Profile:             flags.profile,
+		Vars:                vars,
+		Skip:                skip,
+		Only:                flags.only,
+		Version:             Version,
+		Extensions:          extComps,
+		Reporter:            &consoleReporter{out: out},
+		RegistryUser:        flags.registryUser,
+		RegistryPassword:    registryPassword,
+		DNSKeyPEM:           dnsKey,
+		DNSKeyFingerprint:   flags.dnsFingerprint,
+		BackupCredentials:   backupCreds,
+		RegistryCredentials: registryCreds,
+		GatewayCredentials:  gatewayCreds,
+		ImagePullConfig:     imagePullConfig,
 	}
 	eng, err := install.New(k, opts)
 	if err != nil {
@@ -878,7 +893,7 @@ func conditionalComponents(vars map[string]string, prof *install.Profile) []stri
 		skip = append(skip, "control-plane-db")
 	}
 	// Platform backups need somewhere to go (RFC-0037).
-	if effectiveVar(vars, prof, install.VarBackupTarget) == "" && prof.HasComponent("platform-backup") {
+	if effectiveVar(vars, prof, install.VarBackupTarget) == "" && effectiveVar(vars, prof, install.VarGatewayBucket) == "" && prof.HasComponent("platform-backup") {
 		skip = append(skip, "platform-backup")
 	}
 	// No DNS provider: no records automation, no wildcard certificate.
