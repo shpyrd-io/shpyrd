@@ -9,6 +9,7 @@
 @source "../../../ui/src/components/state-page.tsx";
 @source "../../../ui/src/components/button.tsx";
 @source "../../../ui/src/components/brand.tsx";
+@source "../../../ui/src/components/brand-icons.tsx";
 @source "../../../ui/src/components/shipyard.tsx";
 
 @theme inline {

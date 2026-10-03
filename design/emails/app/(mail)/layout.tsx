@@ -5,7 +5,7 @@ import { ink } from "@/src/parts";
 export default function MailLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, background: ink.background }}>{children}</body>
+      <body style={{ margin: 0, background: ink.card }}>{children}</body>
     </html>
   );
 }

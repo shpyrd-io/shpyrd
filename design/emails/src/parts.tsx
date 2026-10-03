@@ -18,8 +18,9 @@ export const ink = {
 export const sans = "Geist,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 const mono = "'Geist Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 
-// The whole email: the mark over a card, a footer under it. `preview` is
-// the line a mail client shows beside the subject; it is not drawn.
+// The whole email, on white with no box around it, as the sign-up page
+// is drawn: the mark, the words, the footer. `preview` is the
+// line a mail client shows beside the subject; it is not drawn.
 export function Email({
   preview,
   logo,
@@ -32,16 +33,16 @@ export function Email({
   children: ReactNode;
 }) {
   return (
-    <div id="email" style={{ margin: 0, padding: 0, background: ink.background }}>
+    <div id="email" style={{ margin: 0, padding: 0, background: ink.card }}>
       <div style={{ display: "none", maxHeight: 0, overflow: "hidden", opacity: 0, fontSize: 1, lineHeight: "1px" }}>{preview}</div>
-      <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={{ background: ink.background, fontFamily: sans }}>
+      <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={{ background: ink.card, fontFamily: sans }}>
         <tbody>
           <tr>
             <td align="center" style={{ padding: "40px 16px" }}>
               <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={{ maxWidth: 520 }}>
                 <tbody>
                   <tr>
-                    <td style={{ padding: "0 4px 20px" }}>
+                    <td style={{ padding: "0 0 28px" }}>
                       <table role="presentation" cellPadding={0} cellSpacing={0}>
                         <tbody>
                           <tr>
@@ -57,10 +58,10 @@ export function Email({
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ background: ink.card, border: `1px solid ${ink.border}`, borderRadius: 10, padding: 32 }}>{children}</td>
+                    <td>{children}</td>
                   </tr>
                   <tr>
-                    <td style={{ padding: "20px 4px 0", fontSize: 12, lineHeight: "18px", color: ink.muted }}>{footer}</td>
+                    <td style={{ padding: "32px 0 0", fontSize: 12, lineHeight: "18px", color: ink.muted }}>{footer}</td>
                   </tr>
                 </tbody>
               </table>

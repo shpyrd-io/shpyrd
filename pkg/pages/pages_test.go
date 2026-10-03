@@ -95,3 +95,33 @@ func TestThePageThatMovesCarriesItsScriptAndItsHash(t *testing.T) {
 		t.Errorf("a page that stands still has a script")
 	}
 }
+
+func TestTheConsentSaysWhoAsksWhereTheAnswerGoesAndAnswers(t *testing.T) {
+	page := ConsentPage{
+		Title: "Allow <Claude>?", Client: "<Claude>", Icon: "claude", Initial: "C", Workspace: "Acme", Account: "joao@acme.com",
+		Host:   "claude.ai",
+		Scopes: []Scope{{Text: "See your projects"}, {Text: "Change your projects"}},
+		Fields: []Field{{Name: "client_id", Value: "c1"}, {Name: "state", Value: `a"b`}},
+	}
+	html := HTML(Consent, page)
+	for _, want := range []string{
+		"Allow &lt;Claude&gt; to use Acme?", ">claude.ai</strong>", ">joao@acme.com</strong>",
+		"See your projects", "Change your projects",
+		`name="client_id" value="c1"`, `name="state" value="a&#34;b"`,
+		`action="/oauth/authorize"`, `value="allow" name="decision"`, `value="deny" name="decision"`,
+		`aria-label="Claude"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("the consent lacks %q", want)
+		}
+	}
+	for _, stray := range []string{"{{", "}}", "<script", "<img"} {
+		if strings.Contains(markup(html), stray) {
+			t.Errorf("the consent still has %q", stray)
+		}
+	}
+	page.Icon = ""
+	if html := HTML(Consent, page); strings.Contains(html, `aria-label="Claude"`) || !strings.Contains(html, ">C</span>") {
+		t.Errorf("a client the page has no mark for is not drawn by its initial")
+	}
+}

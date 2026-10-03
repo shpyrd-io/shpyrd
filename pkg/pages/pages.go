@@ -1,6 +1,6 @@
 // Package pages holds the pages the server serves by itself, where no
 // application answers: nothing here, no access, waking up, service
-// unavailable, and the mark alone. They are drawn from the design library
+// unavailable, the mark alone, and the consent an application asks for. They are drawn from the design library
 // by design/pages (`make pages`) and embedded here as one self-contained
 // file each: no font to fetch, the dark theme the system's, and no script
 // but the one a page that moves has, written into it here and named by
@@ -34,6 +34,9 @@ const (
 	Waking Kind = "waking"
 	// Nothing can answer right now: the shipyard at work over the words.
 	ServiceUnavailable Kind = "service-unavailable"
+	// An application asks to act for the person: allow or deny. It says
+	// a ConsentPage, not a Page.
+	Consent Kind = "consent"
 	// Nothing to say: the mark alone. The words are not shown.
 	Mark Kind = "mark"
 )
@@ -54,6 +57,30 @@ type Page struct {
 	Refresh int
 }
 
+// ConsentPage is what the consent page says: who asks, for what, as
+// whom, and the form that answers.
+type ConsentPage struct {
+	// Title names the page in the browser.
+	Title string
+	// Client is the name the application gave itself, Icon the mark of
+	// the tools the page has one for ("claude", "openai", "gemini",
+	// "copilot", "cursor", "vscode", "warp"), "" for the Initial.
+	Client, Icon, Initial string
+	Workspace, Account    string
+	// Host is where the answer goes: what the application cannot make up.
+	Host   string
+	Scopes []Scope
+	// Fields go back with the answer, hidden.
+	Fields  []Field
+	Refresh int
+}
+
+// Scope is something the application asks to do, in words.
+type Scope struct{ Text string }
+
+// Field is a hidden field of a form.
+type Field struct{ Name, Value string }
+
 var (
 	templates = map[Kind]*template.Template{}
 	// The script of a page that moves, and its hash as a policy names it.
@@ -62,7 +89,7 @@ var (
 )
 
 func init() {
-	for _, kind := range []Kind{Nothing, NoAccess, Waking, ServiceUnavailable, Mark} {
+	for _, kind := range []Kind{Nothing, NoAccess, Waking, ServiceUnavailable, Mark, Consent} {
 		src, err := files.ReadFile("html/" + string(kind) + ".html")
 		if err != nil {
 			panic(fmt.Sprintf("pages: %s: %v", kind, err))
@@ -82,8 +109,9 @@ func ScriptHash(kind Kind) string {
 	return hashes[kind]
 }
 
-// HTML is the page of a kind, saying what it is given.
-func HTML(kind Kind, page Page) string {
+// HTML is the page of a kind, saying what it is given: a Page, or a
+// ConsentPage for the consent page.
+func HTML(kind Kind, page any) string {
 	t, ok := templates[kind]
 	if !ok {
 		t = templates[Nothing]

@@ -42,7 +42,7 @@ function pack(name) {
     `<meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light">` +
     `<title>${subjects[name]}</title></head>` +
-    `<body style="margin:0;padding:0;background:#f5f5f5">${email.trim()}</body></html>\n`;
+    `<body style="margin:0;padding:0;background:#ffffff">${email.trim()}</body></html>\n`;
   writeFileSync(join(target, `${name}.html`), html);
   return html.length;
 }
