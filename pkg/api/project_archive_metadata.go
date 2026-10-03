@@ -54,6 +54,12 @@ type projectArchiveMetadata struct {
 }
 
 func (s *Server) projectArchiveMetadata(ctx context.Context, app *shpyrdv1.App) (*projectArchiveMetadata, error) {
+	return s.projectMetadata(ctx, app, true)
+}
+
+// Movement journals configuration and fences databases, but does not claim to
+// export unrelated Redis/bucket data. Those resources need not block a move.
+func (s *Server) projectMetadata(ctx context.Context, app *shpyrdv1.App, portable bool) (*projectArchiveMetadata, error) {
 	m := &projectArchiveMetadata{CreatedAt: time.Now().UTC(), Name: project.SlugOf(app), Spec: *app.Spec.DeepCopy(), Status: *app.Status.DeepCopy(), Config: map[string][]byte{}, Images: map[string]ocispec.Descriptor{}}
 	secret := &corev1.Secret{}
 	if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}, secret); err != nil && !apierrors.IsNotFound(err) {
@@ -90,21 +96,23 @@ func (s *Server) projectArchiveMetadata(ctx context.Context, app *shpyrdv1.App) 
 	for _, pg := range databases.Items {
 		m.Databases = append(m.Databases, archivedDatabase{Name: pg.Name, Spec: *pg.Spec.DeepCopy()})
 	}
-	// Refuse an incomplete export rather than implying that unsupported
-	// persistent resource contents are inside this archive.
-	var redis shpyrdv1.RedisList
-	if err := s.apps.List(ctx, &redis, client.InNamespace(app.Namespace)); err != nil {
-		return nil, err
-	}
-	if len(redis.Items) > 0 {
-		return nil, errors.New("portable archives currently support Postgres and volumes; this project also has Redis resources")
-	}
-	var buckets shpyrdv1.ObjectBucketList
-	if err := s.apps.List(ctx, &buckets, client.InNamespace(app.Namespace)); err != nil {
-		return nil, err
-	}
-	if len(buckets.Items) > 0 {
-		return nil, errors.New("portable archives currently support Postgres and volumes; object bucket contents require a separate export")
+	if portable {
+		// Refuse an incomplete export rather than implying that unsupported
+		// persistent resource contents are inside this archive.
+		var redis shpyrdv1.RedisList
+		if err := s.apps.List(ctx, &redis, client.InNamespace(app.Namespace)); err != nil {
+			return nil, err
+		}
+		if len(redis.Items) > 0 {
+			return nil, errors.New("portable archives currently support Postgres and volumes; this project also has Redis resources")
+		}
+		var buckets shpyrdv1.ObjectBucketList
+		if err := s.apps.List(ctx, &buckets, client.InNamespace(app.Namespace)); err != nil {
+			return nil, err
+		}
+		if len(buckets.Items) > 0 {
+			return nil, errors.New("portable archives currently support Postgres and volumes; object bucket contents require a separate export")
+		}
 	}
 	sort.Slice(m.Volumes, func(i, j int) bool { return m.Volumes[i].Name < m.Volumes[j].Name })
 	sort.Slice(m.Databases, func(i, j int) bool { return m.Databases[i].Name < m.Databases[j].Name })

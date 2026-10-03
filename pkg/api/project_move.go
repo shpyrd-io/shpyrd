@@ -17,7 +17,9 @@ import (
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,14 +28,18 @@ import (
 )
 
 type projectMove struct {
-	RolledBack         bool           `json:"rolledBack,omitempty"`
-	Group              placementGroup `json:"group"`
-	Destination        string         `json:"destination"`
-	BeforeProcesses    string         `json:"beforeProcesses"`
-	BeforeDatabaseNode string         `json:"beforeDatabaseNode"`
-	Claims             []moveClaim    `json:"claims"`
+	RolledBack            bool                           `json:"rolledBack,omitempty"`
+	Group                 placementGroup                 `json:"group"`
+	Destination           string                         `json:"destination"`
+	BeforeProcesses       string                         `json:"beforeProcesses"`
+	BeforeDatabaseNode    string                         `json:"beforeDatabaseNode"`
+	BeforeVolumes         map[string]shpyrdv1.VolumeSpec `json:"beforeVolumes,omitempty"`
+	BeforeDatabaseStorage map[string]interface{}         `json:"beforeDatabaseStorage,omitempty"`
+	BeforePostgresStorage *resource.Quantity             `json:"beforePostgresStorage,omitempty"`
+	Claims                []moveClaim                    `json:"claims"`
 }
 type moveClaim struct {
+	RetainSource  bool                                 `json:"retainSource,omitempty"`
 	Original      corev1.PersistentVolumeClaim         `json:"original"`
 	SourcePV      string                               `json:"sourcePV"`
 	SourceReclaim corev1.PersistentVolumeReclaimPolicy `json:"sourceReclaim"`
@@ -47,8 +53,9 @@ func (s *Server) moveProject(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Group string `json:"group"`
-		Node  string `json:"node"`
+		Group          string `json:"group"`
+		Node           string `json:"node"`
+		MigrateToLocal bool   `json:"migrateToLocal"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -69,7 +76,7 @@ func (s *Server) moveProject(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
-	original, err := s.projectArchiveMetadata(ctx, app)
+	original, err := s.projectMetadata(ctx, app, false)
 	if err != nil {
 		abort(c, http.StatusConflict, err)
 		return
@@ -78,6 +85,12 @@ func (s *Server) moveProject(c *gin.Context) {
 	if err != nil {
 		abort(c, http.StatusConflict, err)
 		return
+	}
+	for _, claim := range move.Claims {
+		if claim.RetainSource && !req.MigrateToLocal {
+			abort(c, http.StatusConflict, errors.New("provider volumes require explicit migration to local storage"))
+			return
+		}
 	}
 	op, err := s.beginProjectArchive(ctx, app, "move", original)
 	if err != nil {
@@ -95,7 +108,7 @@ func (s *Server) moveProject(c *gin.Context) {
 		recovery, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 		defer stop()
 		var recoveryErr error
-		if op.State.Phase != "releasing" && op.State.Phase != "complete" {
+		if op.canRollback() {
 			recoveryErr = s.rollbackProjectMove(recovery, app, op)
 		}
 		if recoveryErr != nil {
@@ -109,7 +122,7 @@ func (s *Server) moveProject(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "moved"})
 }
 func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, group placementGroup, node *corev1.Node) (*projectMove, error) {
-	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes]}
+	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes], BeforeVolumes: map[string]shpyrdv1.VolumeSpec{}}
 	var claims []corev1.PersistentVolumeClaim
 	if group.Database != "" {
 		pg := &shpyrdv1.Postgres{}
@@ -120,6 +133,24 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 			return nil, errors.New("this MVP moves single-instance PostgreSQL databases only")
 		}
 		move.BeforeDatabaseNode = pg.Annotations[shpyrdv1.AnnotationPlacement]
+		if pg.Spec.Storage != nil {
+			move.BeforePostgresStorage = ptr.To(pg.Spec.Storage.DeepCopy())
+		}
+		cluster := &unstructured.Unstructured{}
+		cluster.SetGroupVersionKind(controller.CNPGClusterGVK)
+		if err := s.apps.Get(ctx, client.ObjectKeyFromObject(pg), cluster); err != nil {
+			return nil, err
+		}
+		move.BeforeDatabaseStorage, _, _ = unstructured.NestedMap(cluster.Object, "spec", "storage")
+		if _, present, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "walStorage"); present {
+			return nil, errors.New("separate WAL storage cannot be migrated")
+		}
+		if tablespaces, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "tablespaces"); len(tablespaces) > 0 {
+			return nil, errors.New("databases with tablespaces cannot be migrated")
+		}
+		if _, present := move.BeforeDatabaseStorage["pvcTemplate"]; present {
+			return nil, errors.New("custom database PVC templates cannot be migrated")
+		}
 		var list corev1.PersistentVolumeClaimList
 		if err := s.apps.List(ctx, &list, client.InNamespace(app.Namespace), client.MatchingLabels{"cnpg.io/cluster": pg.Name}); err != nil {
 			return nil, err
@@ -130,6 +161,14 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		}
 	} else {
 		for _, name := range group.Volumes {
+			volume := &shpyrdv1.Volume{}
+			if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: name}, volume); err != nil {
+				return nil, err
+			}
+			if volume.Annotations[shpyrdv1.AnnotationRestoreFrom] != "" || volume.Annotations[controller.AnnotationDataMove] != "" {
+				return nil, errors.New("volume already has pending maintenance")
+			}
+			move.BeforeVolumes[name] = *volume.Spec.DeepCopy()
 			pvc := corev1.PersistentVolumeClaim{}
 			if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: shpyrdv1.PVCPrefix + name}, &pvc); err != nil {
 				return nil, err
@@ -138,7 +177,7 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		}
 	}
 	for _, claim := range claims {
-		if claim.Status.Phase != corev1.ClaimBound || claim.Spec.VolumeName == "" {
+		if claim.DeletionTimestamp != nil || claim.Status.Phase != corev1.ClaimBound || claim.Spec.VolumeName == "" {
 			return nil, fmt.Errorf("claim %s must be bound before movement", claim.Name)
 		}
 		if claim.Spec.VolumeMode != nil && *claim.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
@@ -148,13 +187,25 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		if err := s.apps.Get(ctx, types.NamespacedName{Name: claim.Spec.VolumeName}, pv); err != nil {
 			return nil, err
 		}
-		if pv.Spec.StorageClassName != controller.LocalStorageClass {
-			return nil, fmt.Errorf("claim %s uses %s; this movement flow requires node-local storage", claim.Name, pv.Spec.StorageClassName)
+		if pv.DeletionTimestamp != nil || pv.Spec.ClaimRef == nil || pv.Spec.ClaimRef.UID != claim.UID || pv.Spec.ClaimRef.Namespace != claim.Namespace || pv.Spec.ClaimRef.Name != claim.Name {
+			return nil, fmt.Errorf("claim %s no longer owns its source disk", claim.Name)
+		}
+		if len(pv.OwnerReferences) != 0 {
+			return nil, errors.New("source disk has a garbage-collection owner; cannot guarantee retention")
 		}
 		if pv.Annotations[projectOperationLabel] != "" {
 			return nil, errors.New("volume already belongs to another maintenance operation")
 		}
-		move.Claims = append(move.Claims, moveClaim{Original: claim, SourcePV: pv.Name, SourceReclaim: pv.Spec.PersistentVolumeReclaimPolicy})
+		move.Claims = append(move.Claims, moveClaim{RetainSource: pv.Spec.StorageClassName != controller.LocalStorageClass, Original: claim, SourcePV: pv.Name, SourceReclaim: pv.Spec.PersistentVolumeReclaimPolicy})
+	}
+	if len(claims) > 0 {
+		sc := &storagev1.StorageClass{}
+		if err := s.apps.Get(ctx, types.NamespacedName{Name: controller.LocalStorageClass}, sc); err != nil {
+			return nil, fmt.Errorf("local storage is not installed: %w", err)
+		}
+		if sc.Provisioner != "shpyrd.io/local-path" {
+			return nil, errors.New("unexpected local storage provisioner")
+		}
 	}
 	return move, nil
 }
@@ -280,6 +331,9 @@ func (s *Server) runProjectMove(ctx context.Context, app *shpyrdv1.App, op *proj
 			return err
 		}
 	}
+	if err := s.setMoveStorage(ctx, app, op, true); err != nil {
+		return err
+	}
 	if err := s.setMovePlacement(ctx, app, op, true); err != nil {
 		return err
 	}
@@ -322,7 +376,7 @@ func (s *Server) copyMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	if err := s.retainMovePV(ctx, claim.TargetPV, op.ID); err != nil {
 		return err
 	}
-	source, err := s.archiveClaimHelper(ctx, app, claim.Original.Name, "source-"+claim.TargetClaim, op.ID, "")
+	source, err := s.projectClaimHelper(ctx, app, claim.Original.Name, "source-"+claim.TargetClaim, op.ID, "", true)
 	if err != nil {
 		return err
 	}
@@ -479,6 +533,14 @@ func (s *Server) bindMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	}
 	restored := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: claim.Original.Name, Namespace: app.Namespace, Labels: claim.Original.Labels, OwnerReferences: claim.Original.OwnerReferences}, Spec: *claim.Original.Spec.DeepCopy()}
 	restored.Spec.VolumeName = destination
+	if forward {
+		restored.Spec.StorageClassName = ptr.To(controller.LocalStorageClass)
+		restored.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		restored.Spec.Selector = nil
+		restored.Spec.DataSource = nil
+		restored.Spec.DataSourceRef = nil
+		restored.Spec.VolumeAttributesClassName = nil
+	}
 	// Retain CNPG's instance identity annotations, excluding obsolete binder
 	// and scheduler state belonging to the old PVC UID.
 	restored.Annotations = map[string]string{}
@@ -592,6 +654,9 @@ func (s *Server) waitMovedDatabase(ctx context.Context, app *shpyrdv1.App, op *p
 	})
 }
 func (s *Server) rollbackProjectMove(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
+	if !op.canRollback() {
+		return errors.New("workloads may have resumed; automatic rollback could discard new writes")
+	}
 	if op.Move == nil {
 		if err := s.resumeProjectArchive(ctx, app, op); err != nil {
 			return err
@@ -619,6 +684,9 @@ func (s *Server) rollbackProjectMove(ctx context.Context, app *shpyrdv1.App, op 
 			return err
 		}
 	}
+	if err := s.setMoveStorage(ctx, app, op, false); err != nil {
+		return err
+	}
 	if err := s.setMovePlacement(ctx, app, op, false); err != nil {
 		return err
 	}
@@ -628,7 +696,7 @@ func (s *Server) rollbackProjectMove(ctx context.Context, app *shpyrdv1.App, op 
 	if err := s.waitMovedDatabase(ctx, app, op); err != nil {
 		return err
 	}
-	// Record which side won before resume sets the irreversible releasing phase.
+	// Record which side won before resume crosses the durable write boundary.
 	op.Move.RolledBack = true
 	if err := s.saveProjectArchive(ctx, app.Namespace, op); err != nil {
 		return err
@@ -693,6 +761,12 @@ func (s *Server) finishProjectMove(ctx context.Context, app *shpyrdv1.App, op *p
 		}
 		if old.Annotations[projectOperationLabel] != op.ID {
 			return errors.New("retired disk ownership changed")
+		}
+		if forward && claim.RetainSource {
+			if err := s.retainMigratedDisk(ctx, app, op, claim, old); err != nil {
+				return err
+			}
+			continue
 		}
 		// Reclaim through the provisioner after the winning copy is serving.
 		// Do not remove finalizers or unlink host paths from the API server.

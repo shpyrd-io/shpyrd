@@ -30,7 +30,11 @@
         "pool": "data",
         "cpuRequestedMillicores": 500,
         "memoryRequestedBytes": 2147483648,
-        "diskUsedBytes": 12884901888
+        "diskUsedBytes": 12884901888,
+        "needsMigration": true,
+        "storageClasses": [
+          "oci-bv"
+        ]
       }
     ],
     "nodes": [

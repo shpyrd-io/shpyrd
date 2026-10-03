@@ -123,6 +123,9 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if !pg.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
+	if pg.Annotations[AnnotationDataMove] != "" {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	orig := pg.DeepCopy()
 	res, err := r.reconcile(ctx, pg)
 	if apierrors.IsConflict(err) {

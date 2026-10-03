@@ -32,6 +32,7 @@ export const backend: Api = {
   archiveProjects: () => request("/api/cluster/project-archives"),
   measureProjectPlacement: (id, group) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement/measure`, { method: "POST", body: JSON.stringify({ group }) }),
   projectPlacement: (id) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement`),
+  deleteRetainedVolume: async (id, volume) => { await request(`/api/cluster/project-archives/${encodeURIComponent(id)}/retained-volumes/${encodeURIComponent(volume)}`, { method: "DELETE" }); },
   moveProject: async (id, body) => { await request(`/api/cluster/project-archives/${encodeURIComponent(id)}/move`, json("POST", body)); },
   projectArchiveStatus: (id) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).status(),
   backupProject: (id) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).backup(),

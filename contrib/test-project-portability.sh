@@ -51,7 +51,7 @@ FROM alpine:3
 COPY shpyrd-server /shpyrd-server
 ENTRYPOINT ["/shpyrd-server"]
 DOCKER
-image=shpyrd-portability-test:latest
+image=shpyrd-portability-test:test
 docker build -t "$image" "$scratch/image"
 kind load docker-image "$image" --name "$cluster"
-SHPYRD_ARCHIVE_TEST_KUBECONFIG="$scratch/kubeconfig" SHPYRD_ARCHIVE_TEST_IMAGE="$image" go test ./pkg/api -run '^TestProjectArchiveKubernetesRoundTrip$' -count=1 -v -timeout=40m
+SHPYRD_ARCHIVE_TEST_KUBECONFIG="$scratch/kubeconfig" SHPYRD_ARCHIVE_TEST_IMAGE="$image" go test ./pkg/api -run '^TestProjectArchiveKubernetesRoundTrip$' -count=1 -v -timeout=55m

@@ -8,11 +8,12 @@ export function placementCandidates(group: PlacementGroup, nodes: PlacementNode[
   const sources = nodes.filter((node) => group.nodes.includes(node.name) || group.nodes.includes(node.hostname));
   const candidates = nodes.filter((node) => !group.pool || node.pool === group.pool).map((node) => {
     const current = sources.includes(node);
+    const staying = current && group.needsMigration && sources.length === 1;
     const hasData = !!group.database || group.volumes.length > 0;
-    const cpu = group.cpuRequestedMillicores == null ? undefined : node.cpuMillicores - node.cpuRequestedMillicores - group.cpuRequestedMillicores;
-    const memory = group.memoryRequestedBytes == null ? undefined : node.memoryBytes - node.memoryRequestedBytes - group.memoryRequestedBytes;
+    const cpu = group.cpuRequestedMillicores == null ? undefined : node.cpuMillicores - node.cpuRequestedMillicores - (staying ? 0 : group.cpuRequestedMillicores);
+    const memory = group.memoryRequestedBytes == null ? undefined : node.memoryBytes - node.memoryRequestedBytes - (staying ? 0 : group.memoryRequestedBytes);
     const disk = group.diskUsedBytes == null || node.diskAvailableBytes == null ? undefined : node.diskAvailableBytes - group.diskUsedBytes;
-    let reason = current ? "Current node" : !node.eligible ? node.reason || "Unavailable" : undefined;
+    let reason = current && !staying ? "Current node" : !node.eligible ? node.reason || "Unavailable" : undefined;
     if (!reason && sources.some((source) => source.architecture && node.architecture && source.architecture !== node.architecture)) reason = "Different CPU architecture";
     if (!reason && ((cpu != null && cpu < 0) || (memory != null && memory < 0))) reason = "Insufficient CPU or memory";
     if (!reason && hasData && disk != null && disk < diskReserve) reason = "Insufficient disk (1 GiB reserve required)";

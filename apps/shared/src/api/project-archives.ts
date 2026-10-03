@@ -36,8 +36,9 @@ export function projectArchiveActions(path: string): ProjectArchiveActions {
   };
 }
 
-export type PlacementGroup = { id: string; processes: string[]; volumes: string[]; database?: string; nodes: string[]; pool: string; cpuRequestedMillicores?: number; memoryRequestedBytes?: number; diskUsedBytes?: number };
+export type PlacementGroup = { needsMigration?: boolean; storageClasses?: string[]; id: string; processes: string[]; volumes: string[]; database?: string; nodes: string[]; pool: string; cpuRequestedMillicores?: number; memoryRequestedBytes?: number; diskUsedBytes?: number };
 export type PlacementNode = { name: string; hostname: string; pool: string; eligible: boolean; reason?: string; architecture?: string; cpuMillicores: number; memoryBytes: number; cpuRequestedMillicores: number; memoryRequestedBytes: number; diskAvailableBytes?: number };
-export type ProjectPlacement = { groups: PlacementGroup[]; nodes: PlacementNode[] };
+export type RetainedVolume = { name: string; claim: string; storageClass: string; capacity: string; retainedAt: string; deleting?: boolean };
+export type ProjectPlacement = { retainedVolumes?: RetainedVolume[]; groups: PlacementGroup[]; nodes: PlacementNode[] };
 
 export type PlacementMeasurement = { group: string; diskUsedBytes: number; measuredAt: string };

@@ -59,7 +59,7 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
 	defer cancel()
 	ns := fmt.Sprintf("archive-e2e-%d", time.Now().Unix())
 	reuse := os.Getenv("SHPYRD_ARCHIVE_TEST_NAMESPACE")
@@ -75,6 +75,9 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = cr.Delete(context.Background(), namespace) }()
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "project", Namespace: ns}}
+	if os.Getenv("SHPYRD_ARCHIVE_TEST_MIGRATION") == "1" {
+		app.Spec.Processes = map[string]shpyrdv1.Process{"web": {Volumes: []shpyrdv1.VolumeMount{{Name: "uploads", Path: "/uploads"}, {Name: "documents", Path: "/documents"}}}}
+	}
 	if err := cr.Create(ctx, app); err != nil && reuse == "" {
 		t.Fatal(err)
 	}
@@ -83,7 +86,7 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 			if image := os.Getenv("SHPYRD_ARCHIVE_TEST_IMAGE"); image != "" {
 				return image
 			}
-			return "shpyrd-portability-test:latest"
+			return "shpyrd-portability-test:test"
 		}
 		return ""
 	}}, nil)
@@ -100,7 +103,12 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 	recorder := record.NewFakeRecorder(10000)
 	ar := &controller.AppReconciler{Client: cr, APIReader: cr, Scheme: scheme, Recorder: recorder, Config: controller.Config{Domain: "test.invalid"}.Defaults()}
 	vr := &controller.VolumeReconciler{Client: cr, Scheme: scheme, Recorder: recorder, DefaultClass: controller.LocalStorageClass, SharedClass: controller.LocalStorageClass}
-	pr := &controller.PostgresReconciler{Client: cr, Scheme: scheme, Recorder: recorder, SystemNamespace: k.Namespace, Storage: controller.StorageProfile{Class: controller.LocalStorageClass}}
+	sourceClass := controller.LocalStorageClass
+	migration := os.Getenv("SHPYRD_ARCHIVE_TEST_MIGRATION") == "1"
+	if migration {
+		sourceClass = "standard"
+	}
+	pr := &controller.PostgresReconciler{Client: cr, Scheme: scheme, Recorder: recorder, SystemNamespace: k.Namespace, Storage: controller.StorageProfile{Class: sourceClass}}
 	loop, stop := context.WithCancel(context.Background())
 	appKey := client.ObjectKeyFromObject(app)
 	var wg sync.WaitGroup
@@ -151,7 +159,8 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"uploads", "documents"} {
-		volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: shpyrdv1.VolumeSpec{Size: resource.MustParse("1Gi")}}
+		t.Logf("seeding %s on %s", name, sourceClass)
+		volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: shpyrdv1.VolumeSpec{Size: resource.MustParse("2Gi"), StorageClass: sourceClass}}
 		if err := cr.Create(ctx, volume); err != nil {
 			t.Fatal(err)
 		}
@@ -165,12 +174,20 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if migration && name == "uploads" {
+			// A real >1 GiB logical transfer, plus application-like ownership, modes
+			// and a relative symlink. The sparse input must not be truncated in transit.
+			if err := command(ctx, []string{"sh", "-c", "mkdir /data/nested; truncate -s 1207959552 /data/large.bin; printf tail | dd of=/data/large.bin bs=1 seek=1207959548 conv=notrunc; printf photo > /data/nested/photo.jpg; chmod 640 /data/nested/photo.jpg; chown 1001:1002 /data/nested/photo.jpg; ln -s nested/photo.jpg /data/photo-link"}, nil, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+		}
 		// The test image includes a shell solely to seed and inspect the test PVC.
 		if err := command(ctx, []string{"sh", "-c", "printf original > /data/value"}, nil, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, name := range []string{"primary", "analytics"} {
+		t.Logf("starting PostgreSQL %s on %s", name, sourceClass)
 		pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: shpyrdv1.PostgresSpec{Version: "17"}}
 		if err := cr.Create(ctx, pg); err != nil {
 			t.Fatal(err)
@@ -202,6 +219,10 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "/api/cluster/project-archives/" + archiveProjectID(app)
+	if migration {
+		runKubernetesMoves(t, ctx, s, app, base, request)
+		return
+	}
 	for _, group := range []string{"volume:uploads", "postgres:primary"} {
 		data, _ := json.Marshal(map[string]string{"group": group})
 		measurement := request("POST", base+"/placement/measure", bytes.NewReader(data))
@@ -309,9 +330,14 @@ func runKubernetesMoves(t *testing.T, ctx context.Context, s *Server, app *shpyr
 	if err := cr.List(ctx, &nodes); err != nil {
 		t.Fatal(err)
 	}
+	migration := os.Getenv("SHPYRD_ARCHIVE_TEST_MIGRATION") == "1"
+	groupIDs := []string{"volume:uploads", "postgres:primary"}
+	if migration {
+		groupIDs = []string{"process:web", "postgres:primary", "postgres:analytics"}
+	}
 	// Move an unmounted volume and a database independently. Their original
 	// PVs remain available until the destination is verified and resumed.
-	for _, group := range []string{"volume:uploads", "postgres:primary"} {
+	for _, group := range groupIDs {
 		groups, _, err := s.projectPlacement(ctx, app)
 		if err != nil {
 			t.Fatal(err)
@@ -342,7 +368,7 @@ func runKubernetesMoves(t *testing.T, ctx context.Context, s *Server, app *shpyr
 			t.Fatal("no different ready destination node")
 		}
 		t.Logf("moving %s from %v to %s", group, sources, target)
-		data, _ := json.Marshal(map[string]string{"group": group, "node": target})
+		data, _ := json.Marshal(map[string]interface{}{"group": group, "node": target, "migrateToLocal": migration})
 		request("POST", base+"/move", bytes.NewReader(data))
 		t.Logf("moved %s", group)
 	}
@@ -369,6 +395,74 @@ func runKubernetesMoves(t *testing.T, ctx context.Context, s *Server, app *shpyr
 	if strings.TrimSpace(contents.String()) != "original" {
 		t.Fatalf("moved database: %s", contents.String())
 	}
-	t.Log("both physical node moves preserved the original contents")
+	if migration {
+		contents.Reset()
+		if err := command(ctx, []string{"sh", "-c", "test $(stat -c %s /data/large.bin) = 1207959552 && test $(tail -c 4 /data/large.bin) = tail && test $(stat -c '%u:%g:%a' /data/nested/photo.jpg) = 1001:1002:640 && test $(readlink /data/photo-link) = nested/photo.jpg && cat /data/photo-link"}, nil, &contents); err != nil {
+			t.Fatal(err)
+		}
+		if contents.String() != "photo" {
+			t.Fatal("migrated application files were not preserved")
+		}
+		analytics, err := s.archiveDatabase(ctx, ns, "analytics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents.Reset()
+		if err := analytics.Exec(ctx, []string{"psql", "-U", "postgres", "-d", "app", "-Atc", "SELECT value FROM marker"}, nil, &contents); err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(contents.String()) != "original" {
+			t.Fatal("second database data changed")
+		}
+		consumer := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "verify-app-mounts", Namespace: ns}, Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers:    []corev1.Container{{Name: "app", Image: s.vars(install.VarServerImage), Command: []string{"sh", "-c", "test $(cat /uploads/value) = original && test $(cat /documents/value) = original && test $(cat /uploads/photo-link) = photo"}, VolumeMounts: []corev1.VolumeMount{{Name: "uploads", MountPath: "/uploads", ReadOnly: true}, {Name: "documents", MountPath: "/documents", ReadOnly: true}}}},
+			Volumes:       []corev1.Volume{{Name: "uploads", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "vol-uploads", ReadOnly: true}}}, {Name: "documents", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "vol-documents", ReadOnly: true}}}},
+		}}
+		if err := cr.Create(ctx, consumer); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.waitArchiveCondition(ctx, func(c context.Context) (bool, error) {
+			if err := cr.Get(c, client.ObjectKeyFromObject(consumer), consumer); err != nil {
+				return false, err
+			}
+			if consumer.Status.Phase == corev1.PodFailed {
+				return false, fmt.Errorf("application mount verification failed: %s", consumer.Status.Message)
+			}
+			return consumer.Status.Phase == corev1.PodSucceeded, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		retained, err := s.retainedMigrationDisks(ctx, app)
+		if err != nil || len(retained) != 4 {
+			t.Fatalf("retained provider disks = %v, %v", retained, err)
+		}
+		// Every original remains intact until this distinct cleanup request.
+		for _, old := range retained {
+			pv := &corev1.PersistentVolume{}
+			if err := cr.Get(ctx, client.ObjectKey{Name: old.Name}, pv); err != nil {
+				t.Fatal(err)
+			}
+			if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain || pv.Status.Phase != corev1.VolumeReleased {
+				t.Fatalf("source was not retained: %+v", pv.Spec)
+			}
+			claim := &corev1.PersistentVolumeClaim{}
+			if err := cr.Get(ctx, client.ObjectKey{Namespace: ns, Name: old.Claim}, claim); err != nil {
+				t.Fatal(err)
+			}
+			if claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName != controller.LocalStorageClass {
+				t.Fatal("claim was not converted")
+			}
+			request("DELETE", base+"/retained-volumes/"+old.Name, nil)
+		}
+		if err := s.waitArchiveCondition(ctx, func(c context.Context) (bool, error) {
+			left, err := s.retainedMigrationDisks(c, app)
+			return len(left) == 0, err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("migrated 2 volumes and 2 PostgreSQL databases; 1.125 GiB file, ownership, permissions and symlinks preserved; originals retained until separate deletion")
+	}
+	t.Log("physical node moves preserved the original contents")
 
 }

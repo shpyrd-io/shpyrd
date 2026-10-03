@@ -37,4 +37,11 @@ describe("planning a move", () => {
     const result = placementCandidates({ ...group, cpuRequestedMillicores: undefined, memoryRequestedBytes: undefined }, [node("target")], "balanced")[0];
     expect(result).toMatchObject({ cpu: undefined, memory: undefined, known: false });
   });
+  it("allows migration on the current node without counting its existing pods twice", () => {
+    const source = node("source", { cpuRequestedMillicores: 3800, memoryRequestedBytes: 15 * GiB });
+    const candidate = placementCandidates({ ...group, needsMigration: true }, [source], "balanced")[0];
+    expect(candidate.reason).toBeUndefined();
+    expect(candidate).toMatchObject({ cpu: 200, memory: GiB, disk: 25 * GiB });
+  });
+
 });

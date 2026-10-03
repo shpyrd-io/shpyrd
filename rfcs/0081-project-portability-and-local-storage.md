@@ -60,8 +60,10 @@ For the MVP, maintenance still covers the whole project while any group is
 moved, including writers on other nodes. Reuse the portable archive engine,
 validate destination capacity, preserve source data until destination
 validation, and keep HTTP maintenance throughout. Rollback to the original
-copy is allowed before releasing maintenance; after new writes are accepted,
-returning to an old copy requires another coordinated migration.
+copy is allowed only before workloads can resume writing. HTTP maintenance
+continues through startup health checks, but workers and direct database
+clients can write earlier. Once startup begins, recovery finishes on the
+winning copy; returning to an old copy requires another coordinated migration.
 Migration of existing production resources is explicit, never an install
 side effect. Node/disk loss requires an independently saved recovery copy.
 
@@ -107,11 +109,32 @@ scheduling or automatic data movement when that node fills up.
 
 ## Current implementation boundaries
 
-- New project PVCs use `shpyrd-local`; existing provider volumes are preserved.
-  The move endpoint currently accepts already-local claims only. Moving a
-  provider disk to local storage requires a separate explicit migration.
+- New project PVCs use `shpyrd-local`; upgrading preserves existing provider
+  volumes. In Placement, a provider-backed group offers **Pause and migrate**.
+  This explicitly converts all of that group's filesystem claims to local
+  storage; it may use the current node when the whole group is already there.
+  The API requires `migrateToLocal: true` on the move request.
+- Migration pauses the whole project, fences database connections, hibernates
+  the selected PostgreSQL cluster, copies through read-only source mounts and
+  verifies fingerprints before rebinding the original claim names. Mount paths,
+  database endpoints and credentials remain unchanged. Volume storage settings
+  and CNPG storage settings are journaled and updated as part of the operation.
+  A failure before workloads restart restores the original bindings and settings.
+  Shared provider volumes become shared directories on one node. Before database
+  connections are unfenced or processes restart, a durable record disables
+  automatic rollback: workers can write while HTTP is still in maintenance.
+  Recovery after that point retries startup on the winning copy and keeps HTTP
+  503 until readiness checks succeed; it never silently switches to stale data.
+- Successful migration retains the old provider PVs with their old claim
+  references. They remain billable and are shown under **Retained provider
+  disks**. **Delete old disk** is a separate cluster-admin action, available
+  after maintenance completes. It refuses disks still referenced by claims and
+  asks the original provisioner to delete a released disk without bypassing
+  finalizers. The old copy is stale once writes resume; it is not a rollback
+  target after workloads have resumed. Ordinary local-to-local moves still
+  reclaim their retired local copies automatically.
 - Database movement requires a single PostgreSQL instance and one data claim,
-  without a separate WAL volume or tablespaces.
+  without a separate WAL volume, tablespaces or custom PVC templates.
 - Project archives support PostgreSQL and volumes. Projects containing Redis
   or object-bucket resources are refused rather than producing partial backups.
 - Restore preserves the target project's identity, workspace, domains and
@@ -146,3 +169,18 @@ The PostgreSQL tests require `initdb`, `pg_ctl`, `psql`, `pg_dump` and
 `pg_restore` on PATH. They create disposable servers on private Unix sockets
 and ignore existing PG connection environment variables. The large test
 writes and restores 1.125 GiB and checks the result's hash and heap use.
+
+Provider-class migration can be exercised separately:
+
+```sh
+SHPYRD_ARCHIVE_TEST_MIGRATION=1 contrib/test-project-portability.sh
+```
+
+This migrates two volumes and two real CNPG databases from kind's `standard`
+class to `shpyrd-local`, including a 1.125 GiB file, nested files, a symlink,
+permissions and ownership. It checks that all source PVs survive migration and
+are reclaimed only after the separate cleanup requests. Kind's source class
+uses local-path, so this validates real Kubernetes rebinding and CNPG behavior,
+not a cloud provider's CSI attach/detach implementation. Production data is not
+used or changed by these tests. Node boot disks are not expanded by migration;
+destination space and transfer limits must accommodate the copy.

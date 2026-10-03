@@ -115,6 +115,9 @@ func (s *Server) projectClaimHelper(ctx context.Context, app *shpyrdv1.App, clai
 			pod.Spec.Containers[0].VolumeMounts[0].ReadOnly = true
 			pod.Spec.Containers[0].SecurityContext.Capabilities.Add = []corev1.Capability{"DAC_READ_SEARCH"}
 			pod.Spec.ActiveDeadlineSeconds = ptr.To[int64](600)
+			if strings.HasPrefix(key, "source-move-") {
+				pod.Spec.ActiveDeadlineSeconds = ptr.To[int64](3600)
+			}
 		}
 		if pool := s.vars("SHPYRD_APPS_POOL"); pool != "" && claim == shpyrdv1.PVCPrefix+key {
 			pod.Spec.NodeSelector = map[string]string{controller.PoolLabel: pool}

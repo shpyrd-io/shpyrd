@@ -52,8 +52,8 @@ func (s *Server) recoverProjectArchive(c *gin.Context) {
 		return
 	}
 	switch {
-	case op.State.Phase == "complete" || op.State.Phase == "releasing":
-		// Never roll back after external traffic could have accepted writes.
+	case !op.canRollback():
+		// Never roll back after workloads could have accepted writes.
 		// If clearing maintenance was interrupted, recheck readiness first.
 		if app.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
 			err = s.resumeProjectArchive(ctx, app, op)

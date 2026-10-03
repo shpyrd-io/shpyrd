@@ -74,7 +74,7 @@ func (s *Server) restoreProjectArchive(c *gin.Context) {
 		recovery, stop := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 		defer stop()
 		var recoveryErr error
-		if op.State.Phase != "releasing" && op.State.Phase != "complete" {
+		if op.canRollback() {
 			recoveryErr = s.rollbackProjectArchive(recovery, app, op)
 		}
 		if recoveryErr != nil {
@@ -405,8 +405,8 @@ func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *p
 }
 
 func (s *Server) rollbackProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
-	if op.State.Phase == "releasing" || op.State.Phase == "complete" {
-		return errors.New("traffic may already have resumed; an automatic rollback would discard new writes")
+	if !op.canRollback() {
+		return errors.New("workloads may have resumed; automatic rollback could discard new writes")
 	}
 	if op.State.Phase == "preparing" {
 		if err := s.resumeProjectArchive(ctx, app, op); err != nil {
@@ -474,5 +474,9 @@ func (s *Server) removeCreatedArchiveResources(ctx context.Context, app *shpyrdv
 		}
 		delete(op.Limits, name)
 	}
+	// Recovery after workload startup finalizes only resources that still
+	// exist. These newly created resources were removed during rollback.
+	op.CreatedVolumes = nil
+	op.CreatedDatabases = nil
 	return s.saveProjectArchive(ctx, app.Namespace, op)
 }

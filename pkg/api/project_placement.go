@@ -21,6 +21,8 @@ import (
 
 type placementGroup struct {
 	controller.PlacementGroup
+	NeedsMigration  bool     `json:"needsMigration,omitempty"`
+	StorageClasses  []string `json:"storageClasses,omitempty"`
 	Database        string   `json:"database,omitempty"`
 	Nodes           []string `json:"nodes"`
 	Pool            string   `json:"pool"`
@@ -109,6 +111,25 @@ func (s *Server) projectPlacement(ctx context.Context, app *shpyrdv1.App) ([]pla
 				}
 			}
 		}
+		classes := map[string]bool{}
+		for _, name := range group.Claims {
+			for _, claim := range claims.Items {
+				if claim.Name == name {
+					class := ""
+					if claim.Spec.StorageClassName != nil {
+						class = *claim.Spec.StorageClassName
+					}
+					classes[class] = true
+					if class != controller.LocalStorageClass {
+						group.NeedsMigration = true
+					}
+				}
+			}
+		}
+		for class := range classes {
+			group.StorageClasses = append(group.StorageClasses, class)
+		}
+		sort.Strings(group.StorageClasses)
 		if len(group.Claims) == 0 && group.Database == "" {
 			zero := float64(0)
 			group.DiskUsed = &zero
@@ -155,10 +176,10 @@ func (s *Server) projectPlacement(ctx context.Context, app *shpyrdv1.App) ([]pla
 				nodes[pod.Spec.NodeName] = true
 			}
 		}
-		// Volumes retain placement while the project is stopped.
-		for _, name := range groups[i].Volumes {
+		// Claims retain placement while processes or databases are stopped.
+		for _, name := range groups[i].Claims {
 			pvc := &corev1.PersistentVolumeClaim{}
-			if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: shpyrdv1.PVCPrefix + name}, pvc); err != nil {
+			if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: name}, pvc); err != nil {
 				return nil, nil, err
 			}
 			if pvc.Spec.VolumeName == "" {
@@ -234,7 +255,12 @@ func (s *Server) getProjectPlacement(c *gin.Context) {
 			placementDiskUsage(groups, samples)
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"groups": groups, "nodes": nodes})
+	retained, err := s.retainedMigrationDisks(c.Request.Context(), app)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"groups": groups, "nodes": nodes, "retainedVolumes": retained})
 }
 func (s *Server) placementDestination(ctx context.Context, app *shpyrdv1.App, groupID, nodeName string) (placementGroup, *corev1.Node, error) {
 	groups, _, err := s.projectPlacement(ctx, app)

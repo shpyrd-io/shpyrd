@@ -27,6 +27,7 @@ import (
 const projectOperationSecret = "shpyrd-project-operation"
 
 type projectArchiveOperation struct {
+	ResumeStarted    bool                            `json:"resumeStarted,omitempty"`
 	Move             *projectMove                    `json:"move,omitempty"`
 	ID               string                          `json:"id"`
 	Kind             string                          `json:"kind"`
@@ -36,6 +37,12 @@ type projectArchiveOperation struct {
 	Limits           map[string]int                  `json:"limits"`
 	CreatedVolumes   []string                        `json:"createdVolumes,omitempty"`
 	CreatedDatabases []string                        `json:"createdDatabases,omitempty"`
+}
+
+// Starting workloads (including workers and direct database clients) can
+// accept writes before HTTP maintenance is lifted. Persist that boundary.
+func (op *projectArchiveOperation) canRollback() bool {
+	return !op.ResumeStarted && op.State.Phase != "starting" && op.State.Phase != "releasing" && op.State.Phase != "complete"
 }
 
 func (s *Server) beginProjectArchive(ctx context.Context, app *shpyrdv1.App, kind string, original *projectArchiveMetadata) (*projectArchiveOperation, error) {
@@ -252,6 +259,12 @@ func (s *Server) resumeProjectArchive(ctx context.Context, app *shpyrdv1.App, op
 	if err := s.cleanupArchiveHelpers(ctx, app.Namespace, op.ID); err != nil {
 		return err
 	}
+	if !op.ResumeStarted {
+		op.ResumeStarted = true
+		if err := s.saveProjectArchive(ctx, app.Namespace, op); err != nil {
+			return err
+		}
+	}
 	for name, limit := range op.Limits {
 		db, err := s.archiveDatabase(ctx, app.Namespace, name)
 		if err != nil {
@@ -289,8 +302,8 @@ func (s *Server) resumeProjectArchive(ctx context.Context, app *shpyrdv1.App, op
 	}); err != nil {
 		return err
 	}
-	// This record is the point of no automatic rollback: traffic may have
-	// resumed even if the response or the next journal write is lost.
+	// HTTP stays in maintenance until health checks pass. The earlier
+	// ResumeStarted record already protects writes made by starting workloads.
 	op.State = projectarchive.TransactionState{Phase: "releasing"}
 	if err := s.saveProjectArchive(ctx, app.Namespace, op); err != nil {
 		return err

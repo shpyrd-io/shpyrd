@@ -29,7 +29,7 @@ import things from "../../mock/things.json";
 import placement from "../../mock/project-placement.json";
 import archiveProjects from "../../mock/archive-projects.json";
 
-const placementOf = collection<ProjectPlacement & { id: string }>("console-project-placement-v2", placement, (item) => item.id);
+const placementOf = collection<ProjectPlacement & { id: string }>("console-project-placement-v3", placement, (item) => item.id);
 const archiveActions = mockProjectArchives("console");
 
 const archiveProjectsOf = collection<ArchiveProject>("console-archive-projects", archiveProjects, (project) => project.id);
@@ -85,21 +85,34 @@ export const mock: Api = {
     if (!group) throw new ApiError(404, "Placement group not found.");
     return { group: key, diskUsedBytes: group.diskUsedBytes ?? 0, measuredAt: new Date().toISOString() };
   },
+  deleteRetainedVolume: async (id, volume) => {
+    await wait();
+    const project = await placementOf.find(id);
+    project.retainedVolumes = project.retainedVolumes?.filter((item) => item.name !== volume);
+    await placementOf.set(project);
+  },
   moveProject: async (id, body) => {
     const project = await placementOf.find(id);
     const group = project.groups.find((group) => group.id === body.group);
     const node = project.nodes.find((node) => node.name === body.node);
     if (!group || !node || !node.eligible || (group.pool && group.pool !== node.pool)) throw new ApiError(409, "Choose an eligible node in this group's pool.");
+    if (group.needsMigration && !body.migrateToLocal) throw new ApiError(409, "Confirm migration to local storage.");
     await archiveActions.simulateMove(id);
+    if (group.needsMigration) {
+      project.retainedVolumes ??= [];
+      for (const claim of group.database ? [group.database] : group.volumes) project.retainedVolumes.push({ name: `old-${claim}-${Date.now()}`, claim, storageClass: group.storageClasses?.[0] ?? "provider", capacity: "50Gi", retainedAt: now() });
+    }
     for (const source of project.nodes.filter((n) => group.nodes.includes(n.name))) {
       source.cpuRequestedMillicores = Math.max(0, source.cpuRequestedMillicores - (group.cpuRequestedMillicores ?? 0));
       source.memoryRequestedBytes = Math.max(0, source.memoryRequestedBytes - (group.memoryRequestedBytes ?? 0));
-      if (source.diskAvailableBytes != null) source.diskAvailableBytes += group.diskUsedBytes ?? 0;
+      if (!group.needsMigration && source.diskAvailableBytes != null) source.diskAvailableBytes += group.diskUsedBytes ?? 0;
     }
     node.cpuRequestedMillicores += group.cpuRequestedMillicores ?? 0;
     node.memoryRequestedBytes += group.memoryRequestedBytes ?? 0;
     if (node.diskAvailableBytes != null) node.diskAvailableBytes -= group.diskUsedBytes ?? 0;
     group.nodes = [node.name];
+    group.needsMigration = false;
+    group.storageClasses = ["shpyrd-local"];
     await placementOf.set(project);
     const summary = await archiveProjectsOf.find(id);
     summary.nodes = [...new Set(project.groups.flatMap((group) => group.nodes))];
