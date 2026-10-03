@@ -23,6 +23,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // shellFixture is a server whose exec is faked, plus an httptest server to
@@ -76,7 +77,7 @@ func newShellFixture(t *testing.T, out string) *shellFixture {
 // dial opens a shell WebSocket with a freshly minted ticket.
 func (f *shellFixture) dial(t *testing.T, instance string) *websocket.Conn {
 	t.Helper()
-	code, err := f.s.execTickets.mint(execTicket{
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: instance,
 	})
@@ -448,7 +449,7 @@ func TestShellReportsNoUsableShell(t *testing.T) {
 func TestShellRefusesMissingInstance(t *testing.T) {
 	// Review Focus 1: the instance went away during a rolling deploy.
 	f := newShellFixture(t, "")
-	code, err := f.s.execTickets.mint(execTicket{
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: "web.9",
 	})
@@ -467,7 +468,7 @@ func TestShellRefusesMissingInstance(t *testing.T) {
 
 func TestShellRefusesTicketMismatchAndReplay(t *testing.T) {
 	f := newShellFixture(t, "")
-	code, _ := f.s.execTickets.mint(execTicket{
+	code, _ := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: "web.1",
 	})
@@ -494,7 +495,7 @@ func TestShellRefusesRevokedRole(t *testing.T) {
 	if rec := do(t, f.s, "POST", "/api/teams", `{"name":"ops","members":["ops@example.test"],"platformRole":"platform-admin"}`, true); rec.Code != http.StatusCreated {
 		t.Fatalf("create team: %d %s", rec.Code, rec.Body.String())
 	}
-	code, _ := f.s.execTickets.mint(execTicket{
+	code, _ := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "u9", Email: "gone@example.test", Provider: "local"},
 		Project:  "blog", Instance: "web.1",
 	})
@@ -508,7 +509,7 @@ func TestShellRefusesRevokedRole(t *testing.T) {
 
 func TestShellRefusesForeignOrigin(t *testing.T) {
 	f := newShellFixture(t, "")
-	code, _ := f.s.execTickets.mint(execTicket{
+	code, _ := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: "web.1",
 	})
@@ -700,11 +701,11 @@ func TestShellRefusesASecondSocket(t *testing.T) {
 		return nil
 	}
 	id := ext.Identity{Subject: "admin-token", Provider: "token", Admin: true}
-	first, err := f.s.execTickets.mint(execTicket{Identity: id, Project: "blog", Instance: "web.1"})
+	first, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace, Identity: id, Project: "blog", Instance: "web.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := f.s.execTickets.mint(execTicket{Identity: id, Project: "blog", Instance: "web.1"})
+	second, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace, Identity: id, Project: "blog", Instance: "web.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +869,7 @@ func TestShellRefusesANamespaceAsASlug(t *testing.T) {
 	// repeats the slug hygiene s.require applies everywhere else — and does it
 	// before redeeming, so a malformed path cannot even burn a ticket.
 	f := newShellFixture(t, "")
-	code, err := f.s.execTickets.mint(execTicket{
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
 		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
 		Project:  "blog", Instance: "web.1",
 	})
@@ -912,5 +913,122 @@ func TestShellTicketOpensProjectWithID(t *testing.T) {
 	defer c.Close()
 	if open := readControl(t, c); open["type"] != "open" {
 		t.Fatalf("open frame = %v", open)
+	}
+}
+
+// Tickets and permission checks must stay in the workspace where they were
+// minted, even when another workspace has a project with the same slug.
+func TestShellTicketWorkspace(t *testing.T) {
+	for _, kind := range []string{"shell", "resource", "run"} {
+		for _, outcome := range []string{"accepted", "another workspace", "revoked"} {
+			t.Run(kind+"/"+outcome, func(t *testing.T) {
+				ctx := context.Background()
+				s, _, st := newTenantServer(t)
+				id := ext.Identity{Subject: "owner", Email: "owner@acme.test", Provider: "local"}
+				if _, err := st.PutMembership(ctx, "acme", id.Email, store.WorkspaceRoleOwner); err != nil {
+					t.Fatal(err)
+				}
+				// Disable console bootstrap; only wrong-door cases grant this owner
+				// access there, proving refusal comes from the ticket binding.
+				defaultOwner := "operator@example.test"
+				if outcome == "another workspace" {
+					defaultOwner = id.Email
+				}
+				if _, err := st.PutMembership(ctx, store.DefaultWorkspace, defaultOwner, store.WorkspaceRoleOwner); err != nil {
+					t.Fatal(err)
+				}
+				pod := appPod("shop", "web", "shop-web-aaa", corev1.PodRunning, true)
+				pod.Namespace = "app-acme-shop"
+				if _, err := s.kube.Kube.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				s.opts.Extensions = append(s.opts.Extensions, shellableExt{})
+				s.probeShell = func(context.Context, string, string, string) ([]string, error) { return []string{"sh"}, nil }
+				s.execStream = func(_ context.Context, namespace, pod, container string, command []string, _ io.Reader, _ io.Writer, _ <-chan remotecommand.TerminalSize) error {
+					if namespace != "app-acme-shop" {
+						t.Errorf("exec namespace = %q", namespace)
+					}
+					return nil
+				}
+				s.attachStream = func(_ context.Context, namespace, pod, container string, _ bool, _ io.Reader, _ io.Writer, _ <-chan remotecommand.TerminalSize) error {
+					if namespace != "app-acme-shop" {
+						t.Errorf("attach namespace = %q", namespace)
+					}
+					return nil
+				}
+				sess, err := s.rp.sessions.create(ctx, store.RealmWorkspace, "acme", id, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				path, body, instance := "/api/projects/shop/shell/ticket?instance=web.1", "", "web.1"
+				status := http.StatusOK
+				if kind == "resource" {
+					path, instance = "/api/projects/shop/resources/fakedb/main/shell/ticket", "fakedb/main"
+				}
+				if kind == "run" {
+					path, body, status = "/api/projects/shop/run", `{"command":["true"]}`, http.StatusCreated
+				}
+				rec := doCookie(t, s, "POST", "https://acme.shpyrd.test"+path, body, sess.ID, sess.CSRF)
+				if rec.Code != status {
+					t.Fatalf("mint: %d %s", rec.Code, rec.Body.String())
+				}
+				var minted struct{ Ticket, Name string }
+				if err := json.Unmarshal(rec.Body.Bytes(), &minted); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "run" {
+					instance = minted.Name
+					p, err := s.kube.Kube.CoreV1().Pods(pod.Namespace).Get(ctx, instance, metav1.GetOptions{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					p.Status.Phase = corev1.PodRunning
+					if _, err := s.kube.Kube.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, p, metav1.UpdateOptions{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				host := "acme.shpyrd.test"
+				if outcome == "another workspace" {
+					host = "example.test"
+				}
+				if outcome == "revoked" {
+					if err := st.DeleteMembership(ctx, "acme", id.Email); err != nil {
+						t.Fatal(err)
+					}
+					s.authz.Invalidate()
+				}
+				srv := httptest.NewServer(s.Handler())
+				defer srv.Close()
+				u := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/projects/shop/shell?instance=" + instance + "&ticket=" + minted.Ticket
+				conn, resp, err := websocket.DefaultDialer.Dial(u, http.Header{"Host": []string{host}})
+				if conn != nil {
+					defer conn.Close()
+				}
+				if outcome == "accepted" {
+					if err != nil {
+						t.Fatalf("dial: %v (response %v)", err, resp)
+					}
+					if frame := readControl(t, conn); frame["type"] != "open" {
+						t.Fatalf("open frame = %v", frame)
+					}
+					return
+				}
+				if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("dial: %v (response %v), want 403", err, resp)
+				}
+				defer resp.Body.Close()
+				b, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "another workspace"
+				if outcome == "revoked" {
+					want = "cannot run commands in project shop"
+				}
+				if !strings.Contains(string(b), want) {
+					t.Fatalf("denial = %s, want %q", b, want)
+				}
+			})
+		}
 	}
 }

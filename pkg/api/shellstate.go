@@ -26,8 +26,10 @@ const execTicketTTL = 30 * time.Second
 // signs in with a token in localStorage and so has no session cookie either.
 type execTicket struct {
 	Identity ext.Identity
-	Project  string
-	Instance string
+	// Workspace binds the ticket to the door where it was minted.
+	Workspace string
+	Project   string
+	Instance  string
 	// Command, when set, runs instead of the image's shell (the CLI's
 	// `shpyrd shell -- <cmd>`): through the buildpack launcher so the
 	// process sees its environment.
