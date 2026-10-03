@@ -4,19 +4,19 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
@@ -215,8 +215,230 @@ func TestGatesWithTheSameNameOrHostAreRefused(t *testing.T) {
 	}
 }
 
-// Unused in this task; the flow tests of Task 3 use them.
-var _ = httptest.NewRecorder
-var _ = http.StatusOK
-var _ = gin.New
-var _ client.Object
+// at a host, with a session cookie (or none) and extra cookies.
+func (w *gateWorld) get(t *testing.T, host, path, sid string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", "https://"+host+path, nil)
+	req.Host = host
+	req.Header.Set("Accept", "text/html")
+	if sid != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// session opens a workspace session for someone.
+func (w *gateWorld) session(t *testing.T, ws string, id ext.Identity) string {
+	t.Helper()
+	sess, err := w.s.rp.sessions.create(context.Background(), store.RealmWorkspace, ws, id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess.ID
+}
+
+// enter walks the gate's way in from a workspace's host and returns the gate
+// cookie the gate's host set.
+func (w *gateWorld) enter(t *testing.T, wsHost, sid string) *http.Cookie {
+	t.Helper()
+	rec := w.get(t, wsHost, "/.shpyrd/gate?name=billing", sid)
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://billing.example.test/.shpyrd/callback?code=") {
+		t.Fatalf("gate open = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	cb := strings.TrimPrefix(rec.Header().Get("Location"), "https://billing.example.test")
+	rec = w.get(t, "billing.example.test", cb, "")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
+		t.Fatalf("gate callback = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == w.s.gateCookieName() {
+			if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
+				t.Errorf("gate cookie attributes: %+v", c)
+			}
+			return c
+		}
+	}
+	t.Fatal("no gate cookie set")
+	return nil
+}
+
+// auth asks /edge/auth about a gate, as nginx does.
+func (w *gateWorld) auth(t *testing.T, gate, method string, cookie *http.Cookie) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/edge/auth?gate="+gate, nil)
+	req.Host = "shpyrd-server.shpyrd-system.svc.cluster.local"
+	req.Header.Set("X-Original-Method", method)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	var claims map[string]any
+	if bearer := strings.TrimPrefix(rec.Header().Get("Authorization"), "Bearer "); bearer != "" {
+		if err := w.s.edgeKeys.Verify(bearer, "JWT", &claims); err != nil {
+			t.Fatalf("the gate's JWT does not verify: %v", err)
+		}
+	}
+	return rec, claims
+}
+
+// Ana, owner of acme, walks in from acme's host: a code, a cookie at the
+// gate's host, and on each request a JWT for billing that says she came
+// from acme, a customer workspace, as its owner.
+func TestAnOwnerOfAnotherWorkspaceEntersTheGate(t *testing.T) {
+	w := newGateWorld(t)
+	cookie := w.enter(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	rec, claims := w.auth(t, "billing", "GET", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth = %d %s", rec.Code, rec.Body.String())
+	}
+	if claims["aud"] != "billing" || claims["ws"] != "acme" || claims["project"] != "billing" || claims["realm"] != "workspace" || claims["operator"] != nil {
+		t.Errorf("claims = %v", claims)
+	}
+	if roles := claims["roles"].([]any); len(roles) == 0 || roles[0] != "owner" {
+		t.Errorf("roles = %v", claims["roles"])
+	}
+	if rec.Header().Get("X-Shpyrd-Email") != w.ana.Email {
+		t.Errorf("X-Shpyrd-Email = %q", rec.Header().Get("X-Shpyrd-Email"))
+	}
+}
+
+// Bruno, granted the project in the gate's own workspace, enters by that
+// access: his JWT carries operator, his project role and his teams.
+func TestAPersonGrantedTheProjectEntersFromItsOwnWorkspace(t *testing.T) {
+	w := newGateWorld(t)
+	cookie := w.enter(t, "platform.shpyrd.test", w.session(t, "platform", w.bruno))
+	rec, claims := w.auth(t, "billing", "GET", cookie)
+	if rec.Code != http.StatusOK || claims["operator"] != true || claims["ws"] != "platform" {
+		t.Fatalf("auth = %d %v", rec.Code, claims)
+	}
+	if roles := claims["roles"].([]any); len(roles) == 0 || roles[0] != shpyrdv1.RoleUser {
+		t.Errorf("roles = %v", claims["roles"])
+	}
+	teams, _ := claims["teams"].([]any)
+	if !slices.Contains(teams, any("finance")) {
+		t.Errorf("teams = %v", claims["teams"])
+	}
+}
+
+// Refusals on the way in: nobody signed in goes to the sign-in page and
+// back (Review Focus 5: a path, never another host); a member of acme and
+// a member of platform without the grant get the no-access page; an
+// unknown gate is nothing.
+func TestTheWayInRefusesWhoTheGateWouldNotAdmit(t *testing.T) {
+	w := newGateWorld(t)
+	rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=billing", "")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/?next="+url.QueryEscape("/.shpyrd/gate?name=billing") {
+		t.Errorf("anonymous = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=billing", w.session(t, "acme", w.carla)); rec.Code != http.StatusForbidden {
+		t.Errorf("acme's member = %d", rec.Code)
+	}
+	if rec := w.get(t, "platform.shpyrd.test", "/.shpyrd/gate?name=billing", w.session(t, "platform", w.frank)); rec.Code != http.StatusForbidden {
+		t.Errorf("a member of platform without the grant = %d", rec.Code)
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=nope", w.session(t, "acme", w.ana)); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown gate = %d", rec.Code)
+	}
+}
+
+// A code works once, at its host; a gate's host with a port is still the
+// gate (Review Focus 1); a cookie of an app does not open a gate.
+func TestCodesAndCookiesOpenOnlyWhatTheyWereMadeFor(t *testing.T) {
+	w := newGateWorld(t)
+	rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=billing", w.session(t, "acme", w.ana))
+	cb := strings.TrimPrefix(rec.Header().Get("Location"), "https://billing.example.test")
+	if rec := w.get(t, "billing.example.test:8443", cb, ""); rec.Code != http.StatusFound {
+		t.Fatalf("callback at the gate's host with a port = %d", rec.Code)
+	}
+	if rec := w.get(t, "billing.example.test", cb, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("a code used twice = %d", rec.Code)
+	}
+	app, _ := w.s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: "x", Project: "billing"})
+	if rec, _ := w.auth(t, "billing", "GET", &http.Cookie{Name: w.s.gateCookieName(), Value: app}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("an app cookie at the gate = %d", rec.Code)
+	}
+	if rec, _ := w.auth(t, "billing", "GET", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no cookie = %d", rec.Code)
+	}
+}
+
+// Everything is checked again on each request: signing out, losing the
+// role, or a workspace re-created under the same slug (Review Focus 2)
+// closes the gate.
+func TestTheGateClosesWhenAccessEnds(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	sid := w.session(t, "acme", w.ana)
+	cookie := w.enter(t, "acme.shpyrd.test", sid)
+	if _, err := w.st.PutMembership(ctx, "acme", w.ana.Email, store.WorkspaceRoleMember); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusForbidden {
+		t.Errorf("after losing the owner role = %d", rec.Code)
+	}
+	if _, err := w.st.PutMembership(ctx, "acme", w.ana.Email, store.WorkspaceRoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("owner again = %d", rec.Code)
+	}
+	w.s.rp.sessions.delete(ctx, sid)
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusUnauthorized {
+		t.Errorf("after signing out = %d", rec.Code)
+	}
+	// A cookie naming acme's slug with another workspace's ID opens nothing.
+	acme, _ := w.st.Workspace(ctx, "acme")
+	forged, _ := w.s.edgeKeys.SignGateCookie(edge.GateClaims{SessionID: w.session(t, "acme", w.ana), Workspace: "acme", WorkspaceID: acme.ID + "-old", Gate: "billing"})
+	if rec, _ := w.auth(t, "billing", "GET", &http.Cookie{Name: w.s.gateCookieName(), Value: forged}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a cookie of an older acme = %d", rec.Code)
+	}
+}
+
+// A read-only project role passes a gate to look, never to change
+// (Review Focus 4), as at an app.
+func TestAReaderAtAGateLooksAndDoesNotTouch(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	if _, err := w.st.AddGrant(ctx, "platform", store.Grant{Project: "billing", Role: shpyrdv1.RoleReader, User: w.frank.Email}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	cookie := w.enter(t, "platform.shpyrd.test", w.session(t, "platform", w.frank))
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Errorf("reader GET = %d", rec.Code)
+	}
+	if rec, _ := w.auth(t, "billing", "POST", cookie); rec.Code != http.StatusForbidden {
+		t.Errorf("reader POST = %d", rec.Code)
+	}
+}
+
+// nginx hands a gate's 401 and 403 to the server's pages: no sign-in to
+// send anyone to, a page that says where to open it from.
+func TestAGatesHostAnswersItsErrorsWithPages(t *testing.T) {
+	w := newGateWorld(t)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "billing.example.test"
+	req.Header.Set("X-Code", "401")
+	rec := httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "from your workspace") {
+		t.Errorf("401 page = %d %s", rec.Code, rec.Body.String()[:min(200, len(rec.Body.String()))])
+	}
+	req.Header.Set("X-Code", "403")
+	rec = httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("403 page = %d", rec.Code)
+	}
+	if rec := w.get(t, "billing.example.test", "/.shpyrd/logout", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Set-Cookie"), w.s.gateCookieName()+"=;") {
+		t.Errorf("logout = %d %q", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
+}

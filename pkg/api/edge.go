@@ -273,6 +273,10 @@ func (s *Server) edgeWorkspace(c *gin.Context) (*store.Workspace, error) {
 // edgeAuth is GET /edge/auth?project=<slug>&mode=<authenticated|identified>
 // [&workspace=<slug>].
 func (s *Server) edgeAuth(c *gin.Context) {
+	if gate := c.Query("gate"); gate != "" {
+		s.gateAuth(c, gate)
+		return
+	}
 	slug := c.Query("project")
 	if !project.ValidSlug(slug) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "project is required"})
@@ -687,6 +691,9 @@ func (s *Server) edgePage(c *gin.Context, status int, title, text string, links 
 // the dashboard, which lives on its own host only).
 func (s *Server) customError(c *gin.Context) bool {
 	code := c.GetHeader("X-Code")
+	if code != "" && s.gateErrorPage(c) {
+		return true
+	}
 	if code == "" {
 		if s.foreignHost(c) {
 			// A suspended workspace's apps have no Ingress: their hosts

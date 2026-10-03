@@ -493,8 +493,11 @@ func (s *Server) routes() error {
 	tenant := s.requireTenant()
 	s.engine.GET(edgePathPrefix+"signin", tenant, s.edgeSignin)
 	s.engine.GET(edgePathPrefix+"start", tenant, s.edgeStart)
-	s.engine.GET(edgePathPrefix+"callback", tenant, s.edgeCallback)
-	s.engine.GET(edgePathPrefix+"logout", tenant, s.edgeLogout)
+	// A gate's host belongs to no workspace: its callback and logout are
+	// answered before the tenant middleware would refuse it (RFC-0083).
+	s.engine.GET(edgePathPrefix+"callback", s.onGateHost(s.gateCallback), tenant, s.edgeCallback)
+	s.engine.GET(edgePathPrefix+"logout", s.onGateHost(s.gateLogout), tenant, s.edgeLogout)
+	s.engine.GET(edgePathPrefix+"gate", tenant, s.gateOpen)
 
 	s.engine.GET("/api/healthz", s.healthz)
 	// Account self-service pages (RFC-0014): no session required.
