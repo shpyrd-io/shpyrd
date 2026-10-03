@@ -47,6 +47,8 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # --no-renames: a file moved lists both its paths, so moving code
+          # into docs/ cannot skip the jobs that would miss it.
           code=false
           while IFS= read -r f; do
             case "$f" in
@@ -55,7 +57,7 @@ jobs:
               *.md) ;;
               *) code=true ;;
             esac
-          done <<< "$(git diff --name-only "$BASE" HEAD)"
+          done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
   go:
