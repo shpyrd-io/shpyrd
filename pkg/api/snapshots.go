@@ -150,6 +150,10 @@ func (s *Server) createSnapshot(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass) == controller.LocalStorageClass {
+		abort(c, http.StatusNotImplemented, errors.New("node-local volumes use project backups; provider disk snapshots are not supported"))
+		return
+	}
 	if vol.Status.Phase != shpyrdv1.VolumeBound {
 		abort(c, http.StatusConflict, fmt.Errorf("volume %q has no disk to snapshot yet (%s): mount it once first", vol.Name, firstNonEmpty(vol.Status.Phase, shpyrdv1.VolumePending)))
 		return
@@ -290,6 +294,10 @@ func (s *Server) restoreVolume(c *gin.Context) {
 	}
 	vol, ok := s.getVolume(c)
 	if !ok {
+		return
+	}
+	if firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass) == controller.LocalStorageClass {
+		abort(c, http.StatusBadRequest, errors.New("node-local volumes restore from project archives, not provider snapshots"))
 		return
 	}
 	ctx := c.Request.Context()

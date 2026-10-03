@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/utils/ptr"
 
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
@@ -159,6 +160,10 @@ func (s *Server) appShell(c *gin.Context) {
 	}
 	app, ok := s.loadApp(c)
 	if !ok {
+		return
+	}
+	if app.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
+		abort(c, http.StatusLocked, errors.New("project is in maintenance; shell sessions are disabled"))
 		return
 	}
 	if key := projectGrantKey(app); !roles.Can(authz.ProjectExec, key) {

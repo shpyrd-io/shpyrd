@@ -10,6 +10,10 @@ import (
 
 // Well known labels and annotations.
 const (
+	// AnnotationMaintenance is a durable project operation fence. "starting"
+	// permits workloads to warm up while HTTP still answers maintenance.
+	AnnotationMaintenance = "shpyrd.io/project-maintenance"
+	AnnotationPlacement   = "shpyrd.io/project-node"
 	// LabelApp marks every object that belongs to an App (value: app name).
 	LabelApp = "shpyrd.io/app"
 	// LabelProcess marks workloads with their process type (web, worker...).

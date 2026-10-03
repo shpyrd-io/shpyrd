@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
@@ -157,7 +158,7 @@ func (s *Server) createVolume(c *gin.Context) {
 // applyVolumeMinimum rounds a request up to the profile's minimum volume
 // size and explains it.
 func (s *Server) applyVolumeMinimum(size resource.Quantity) (resource.Quantity, string) {
-	minStr := s.vars(install.VarVolumeMinSize)
+	minStr := install.ProjectVolumeMinSize(s.vars)
 	if minStr == "" {
 		return size, ""
 	}
@@ -179,10 +180,13 @@ func (s *Server) checkVolumeClass(ctx context.Context, vol *shpyrdv1.Volume) err
 	class := vol.Spec.StorageClass
 	if class == "" {
 		if vol.Shared() {
-			class = s.vars(install.VarStorageClassShared)
+			class = install.ProjectSharedStorageClass(s.vars)
 		} else {
-			class = s.vars(install.VarStorageClass)
+			class = install.ProjectStorageClass(s.vars)
 		}
+	}
+	if class == controller.LocalStorageClass && vol.Spec.FromSnapshot != "" {
+		return errors.New("node-local volumes restore from project archives, not provider snapshots")
 	}
 	if class == "" || s.kube == nil || s.kube.Kube == nil {
 		return nil
@@ -222,6 +226,10 @@ func (s *Server) resizeVolume(c *gin.Context) {
 	vol := &shpyrdv1.Volume{}
 	if err := s.apps.Get(c.Request.Context(), key, vol); err != nil {
 		abortNotFound(c, err, "volume")
+		return
+	}
+	if firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass) == controller.LocalStorageClass {
+		abort(c, http.StatusBadRequest, errors.New("node-local volumes share the node filesystem; grow that disk or move to a larger node instead"))
 		return
 	}
 	if floor := volumeFloor(vol); size.Cmp(floor) < 0 {

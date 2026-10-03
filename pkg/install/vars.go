@@ -102,11 +102,12 @@ const (
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
-	VarStorageClass       = "SHPYRD_STORAGE_CLASS"        // class for single-instance volumes ("" = the cluster default)
-	VarStorageClassShared = "SHPYRD_STORAGE_CLASS_SHARED" // class for shared (ReadWriteMany) volumes
-	VarVolumeMinSize      = "SHPYRD_VOLUME_MIN_SIZE"      // provider minimum a request is rounded up to ("" = none)
-	VarSnapshotClass      = "SHPYRD_SNAPSHOT_CLASS"       // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
-	VarObjectStorageSize  = "SHPYRD_OBJECT_STORAGE_SIZE"  // volume of the object-storage extension (RFC-0046)
+	VarProjectStorageClass = "SHPYRD_PROJECT_STORAGE_CLASS" // project data; separate from platform and legacy provider claims
+	VarStorageClass        = "SHPYRD_STORAGE_CLASS"         // class for single-instance volumes ("" = the cluster default)
+	VarStorageClassShared  = "SHPYRD_STORAGE_CLASS_SHARED"  // class for shared (ReadWriteMany) volumes
+	VarVolumeMinSize       = "SHPYRD_VOLUME_MIN_SIZE"       // provider minimum a request is rounded up to ("" = none)
+	VarSnapshotClass       = "SHPYRD_SNAPSHOT_CLASS"        // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
+	VarObjectStorageSize   = "SHPYRD_OBJECT_STORAGE_SIZE"   // volume of the object-storage extension (RFC-0046)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
 	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume
@@ -263,6 +264,8 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		}
 	}
 	out := map[string]string{
+		VarProjectStorageClass:     vars[VarProjectStorageClass],
+		VarDataPool:                vars[VarDataPool],
 		VarDashboardURL:            dashboardURL,
 		VarAuthURL:                 authURL,
 		VarAuthHost:                authHost,
@@ -470,4 +473,31 @@ func mergeVars(base, extra map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// ProjectStorageClass keeps old/custom profiles working until they opt in to
+// node-local project data. Platform claims still use the provider variables.
+func ProjectStorageClass(vars func(string) string) string {
+	if class := vars(VarProjectStorageClass); class != "" {
+		return class
+	}
+	return vars(VarStorageClass)
+}
+func ProjectSharedStorageClass(vars func(string) string) string {
+	if class := vars(VarProjectStorageClass); class != "" {
+		return class
+	}
+	return vars(VarStorageClassShared)
+}
+func ProjectVolumeMinSize(vars func(string) string) string {
+	if vars(VarProjectStorageClass) == "shpyrd-local" {
+		return ""
+	}
+	return vars(VarVolumeMinSize)
+}
+
+// ProjectDataPool uses dedicated data nodes when configured, otherwise the
+// existing platform pool. It is separate from application process placement.
+func ProjectDataPool(vars func(string) string) string {
+	return DataPool(vars)
 }

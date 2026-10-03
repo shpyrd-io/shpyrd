@@ -149,6 +149,10 @@ func (s *Server) movedTarget(c *gin.Context) string {
 // (301: browsers and crawlers update their links).
 func (s *Server) redirectMoved() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.Request.URL.Path == "/_shpyrd/maintenance" {
+			c.Next()
+			return
+		}
 		if target := s.movedTarget(c); target != "" {
 			c.Redirect(http.StatusMovedPermanently, target)
 			c.Abort()

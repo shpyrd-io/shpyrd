@@ -1,0 +1,6 @@
+name: storage-local
+description: Project volumes on node disks, provisioned when their first consumer is scheduled
+namespace: shpyrd-local-storage
+kustomize:
+  path: base
+timeout: 2m

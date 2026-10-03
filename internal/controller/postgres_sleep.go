@@ -61,6 +61,9 @@ const planDefaultNote = "(workspace plan default)"
 // plan's default), else the workspace's plan default, else none. The third
 // result says the plan's default applies.
 func (r *PostgresReconciler) effectiveSleep(ctx context.Context, pg *shpyrdv1.Postgres) (after time.Duration, suspended bool, fromPlan bool) {
+	if pg.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
+		return 0, false, false
+	}
 	if pg.Spec.Sleep != nil {
 		return sleepAfterDuration(pg.Spec.Sleep), pg.Spec.Sleep.Suspended, false
 	}
@@ -94,6 +97,9 @@ const (
 //	waking ──(CNPG primary ready)──▶ awake
 //	any ──(spec.sleep.suspended)──▶ suspended ──(resume)──▶ waking
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	if pg.Annotations[AnnotationDataMove] != "" {
+		return r.setCNPGHibernation(ctx, pg, true)
+	}
 	after, suspended, fromPlan := r.effectiveSleep(ctx, pg)
 	defer func() {
 		// The status says where the policy comes from when it is not the

@@ -1,6 +1,8 @@
 name: aws
 description: AWS (EKS) with Network Load Balancers, Let's Encrypt certificates, Route 53 and the in-cluster registry
 vars:
+  # Project data uses the node disk. Existing claims keep their storage class.
+  SHPYRD_PROJECT_STORAGE_CLASS: shpyrd-local
   # Pass --domain (the Route 53 zone) and the ACME e-mail; contrib/aws/terraform
   # creates the cluster and prints the command:
   #   --set SHPYRD_ACME_EMAIL=you@example.com --dns aws --dns-zone-id <id> --dns-region <region>
@@ -103,7 +105,7 @@ runlevels:
   - name: rc0
     components: [monitoring-crds]
   - name: rc1
-    components: [object-gateway, aws-load-balancer-controller, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-gp3, storage-efs]
+    components: [storage-local, object-gateway, aws-load-balancer-controller, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-gp3, storage-efs]
   - name: rc2
     components: [letsencrypt-issuers, ca-issuers, trust-manager, ingress-nginx, ingress-nginx-internal, registry, registry-nodes, external-dns]
   - name: rc3

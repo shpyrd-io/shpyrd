@@ -1151,6 +1151,11 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 			}
 			return nil, err
 		}
+		if app.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
+			err := errors.New("project maintenance is in progress")
+			abort(c, http.StatusLocked, err)
+			return nil, err
+		}
 		if err := mutate(app); err != nil {
 			status := http.StatusBadRequest
 			if strings.Contains(err.Error(), "rolling out") {

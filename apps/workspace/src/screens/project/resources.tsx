@@ -281,8 +281,8 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                         <Stack direction="horizontal" gap="tight" justify="end" align="center">
                           {volume ? (
                             <>
-                              {snapshots && <Snapshots slug={project.slug} volume={volume} onChanged={refresh} />}
-                              <VolumeDialog slug={project.slug} resize={volume} onDone={refresh} />
+                              {snapshots && volume.storageClass !== "shpyrd-local" && <Snapshots slug={project.slug} volume={volume} onChanged={refresh} />}
+                              {volume.storageClass !== "shpyrd-local" && <VolumeDialog slug={project.slug} resize={volume} onDone={refresh} />}
                               <ConfirmDialog
                                 trigger={<Button variant="ghost" size="icon-xs" icon={<Trash2 />} aria-label={`Remove the volume ${r.name}`} />}
                                 variant="destructive"
@@ -371,6 +371,7 @@ function VolumeDialog({ slug, resize, open: openProp, onOpenChange, onDone }: { 
   };
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const least = config.data?.volumes?.minSize;
+  const nodeLocal = resize ? resize.storageClass === "shpyrd-local" : config.data?.volumes?.nodeLocal;
   const [name, setName] = useState("");
   const [size, setSize] = useState(resize?.size ?? least ?? "5Gi");
   const [shared, setShared] = useState(false);
@@ -413,17 +414,17 @@ function VolumeDialog({ slug, resize, open: openProp, onOpenChange, onDone }: { 
             </Field>
           )}
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Size" hint={least ? `At least ${least} here; less is rounded up.` : undefined}>
+            <Field label="Size" hint={nodeLocal ? "Planning size, not a hard limit. Free space is shared with other volumes on this node." : least ? `At least ${least} here; less is rounded up.` : undefined}>
               <Input value={size} onChange={(e) => setSize(e.target.value)} placeholder={least ?? "5Gi"} className="font-mono text-xs" />
             </Field>
             {!resize && (
-              <Field label="Mode" hint={shared ? "Unsafe for SQLite: use Postgres for a database." : undefined}>
+              <Field label="Mode" hint={shared ? nodeLocal ? "Instances sharing this volume run on the same node. Use Postgres for a shared database." : "Unsafe for SQLite: use Postgres for a database." : undefined}>
                 <Select value={shared ? "shared" : "single"} onValueChange={(v) => setShared(v === "shared")}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="single">One instance, block storage</SelectItem>
+                    <SelectItem value="single">{nodeLocal ? "One instance, node disk" : "One instance, block storage"}</SelectItem>
                     <SelectItem value="shared">Shared between instances</SelectItem>
                   </SelectContent>
                 </Select>
