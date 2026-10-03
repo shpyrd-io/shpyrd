@@ -820,6 +820,11 @@ spec:
                   - type
                   type: object
                 type: array
+              defaultSize:
+                description: |-
+                  DefaultSize is the catalog size selected for this runtime. Explicit process
+                  sizes and resource overrides still win.
+                type: string
               domains:
                 description: |-
                   Domains reports each custom domain's DNS and certificate state
@@ -1045,6 +1050,10 @@ spec:
                   - number
                   type: object
                 type: array
+              runtime:
+                description: Runtime is the runtime detected in the current image's
+                  buildpack metadata.
+                type: string
               staleImages:
                 description: |-
                   StaleImages are images of releases that left the history and that no

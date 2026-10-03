@@ -32,25 +32,29 @@ import (
 // releaseProcessType is the process type that gates releases.
 const releaseProcessType = "release"
 
+// Persist an early diagnosis together with suspension, before the App status
+// write: its optimistic patch may conflict after the instance disappears.
+const releaseFailureAnnotation = "shpyrd.io/release-failure"
+
 // processTypeCache remembers what the registry said about an image digest:
 // process types never change for a digest. A failed lookup is remembered
 // for a minute so an unreachable registry does not slow every reconcile.
 type processTypeCache struct {
 	mu     sync.Mutex
-	types  map[string][]string
+	types  map[string]*registry.BuildMetadata
 	failed map[string]time.Time
 }
 
-var imageProcessTypes = &processTypeCache{types: map[string][]string{}, failed: map[string]time.Time{}}
+var imageProcessTypes = &processTypeCache{types: map[string]*registry.BuildMetadata{}, failed: map[string]time.Time{}}
 
-// processTypesOf reads the process types of an image (by its reference
+// metadataOf reads the process types and runtime of an image (by its reference
 // with digest) from the platform's registry, cached per digest. Images the
 // registry client cannot read (another registry, no label) yield none: no
 // release phase, and the rollout proceeds as before. Tests replace
 // ProcessTypes.
-func (r *AppReconciler) processTypesOf(ctx context.Context, image string) []string {
+func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.BuildMetadata {
 	if r.ProcessTypes != nil {
-		return r.ProcessTypes(ctx, image)
+		return &registry.BuildMetadata{ProcessTypes: r.ProcessTypes(ctx, image)}
 	}
 	host, repo, digest := registry.SplitReference(image)
 	if digest == "" || host == "" || host != r.Config.RegistryHost {
@@ -72,7 +76,7 @@ func (r *AppReconciler) processTypesOf(ctx context.Context, image string) []stri
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	types, err := cl.ProcessTypes(cctx, repo, digest)
+	types, err := cl.BuildMetadata(cctx, repo, digest)
 	imageProcessTypes.mu.Lock()
 	defer imageProcessTypes.mu.Unlock()
 	if err != nil {
@@ -147,13 +151,27 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 	case err != nil:
 		return false, false, fmt.Errorf("release job: %w", err)
 	}
+	diagnostic, failed, err := r.releaseDiagnostic(ctx, app, job)
+	if err != nil {
+		return false, false, err
+	}
+	if message := job.Annotations[releaseFailureAnnotation]; message != "" {
+		failed, diagnostic = true, message
+	}
+	previous := app.Status.Release
+	if previous != nil && previous.Target == target && previous.State == shpyrdv1.ReleaseFailed {
+		failed = true
+		if diagnostic == "" {
+			diagnostic = previous.Message
+		}
+	}
 	st := &shpyrdv1.ReleasePhaseStatus{Target: target, Job: job.Name}
 	switch {
 	case jobSucceeded(job):
 		st.State, st.Message = shpyrdv1.ReleaseSucceeded, releaseSucceededMessage
 		app.Status.Release = st
 		return true, false, nil
-	case jobFailed(job):
+	case jobFailed(job) || failed:
 		// A redeploy asked after the failure runs the command again: the
 		// failed Job goes, the next pass creates a fresh one carrying the
 		// request, so the same request does not retry forever.
@@ -166,10 +184,25 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 			app.Status.Release = st
 			return false, false, nil
 		}
+		// Stop a still-running attempt after an OOM event, including a child
+		// process killed while its parent waits. Keep the failure in App status.
+		if failed && !jobFailed(job) && !ptr.Deref(job.Spec.Suspend, false) {
+			base := job.DeepCopy()
+			job.Spec.Suspend = ptr.To(true)
+			job.Annotations = mergeMaps(job.Annotations, map[string]string{releaseFailureAnnotation: diagnostic})
+			if err := r.Patch(ctx, job, client.MergeFrom(base)); err != nil {
+				return false, false, err
+			}
+		}
 		st.State = shpyrdv1.ReleaseFailed
-		switch refusal := r.releaseJobRefusal(ctx, job); {
+		refusal, _ := r.releaseJobRefusal(ctx, job)
+		switch {
+		case failed && diagnostic != "":
+			st.Message = diagnostic
 		case jobDeadlineExceeded(job) && refusal != "":
 			st.Message = "The release step was given up after 30 minutes without starting. " + refusal
+		case refusal != "":
+			st.Message = refusal
 		case jobDeadlineExceeded(job):
 			st.Message = "The release step ran longer than 30 minutes and was stopped. Its log has its output. Make it shorter and deploy again; the previous release keeps running."
 		default:
@@ -179,11 +212,14 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		return false, false, nil
 	default:
 		st.State, st.Message = shpyrdv1.ReleaseRunning, releaseRunningMessage
+		if diagnostic != "" {
+			st.Message = diagnostic
+		}
 		if job.Status.Active == 0 {
-			if msg := r.releaseJobRefusal(ctx, job); msg != "" {
+			if msg, quota := r.releaseJobRefusal(ctx, job); msg != "" {
 				st.Message = msg
 				app.Status.Release = st
-				return false, true, nil
+				return false, quota, nil
 			}
 		}
 		app.Status.Release = st
