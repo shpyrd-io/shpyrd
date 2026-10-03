@@ -51,12 +51,16 @@ func (s *Server) rolesOf(c *gin.Context) (authz.Roles, error) {
 // mode; a workspace host reads that workspace, enforced from birth, and
 // platform admins own operator workspaces without a membership.
 func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
-	ctx := c.Request.Context()
 	t, err := s.door(c)
 	if err != nil || t.AtConsole() {
-		return s.authz.RolesIn(ctx, "", id)
+		return s.authz.RolesIn(c.Request.Context(), "", id)
 	}
-	ws := t.Workspace
+	return s.rolesInWorkspace(c.Request.Context(), t.Workspace, id)
+}
+
+// rolesInWorkspace is someone's roles in a workspace, as its own door would
+// give them: what the gates ask, whose visitors come from another host.
+func (s *Server) rolesInWorkspace(ctx context.Context, ws *store.Workspace, id ext.Identity) (authz.Roles, error) {
 	roles, err := s.authz.RolesIn(ctx, ws.Slug, id)
 	if err != nil {
 		return roles, err

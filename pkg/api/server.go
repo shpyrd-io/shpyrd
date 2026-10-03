@@ -182,8 +182,10 @@ type Server struct {
 	kube             *kube.Client
 	apps             client.Client
 	archiveDownloads *archiveDownloads
-	projectGates     sync.Map // namespace -> *sync.RWMutex; excludes in-flight mutations from archive capture
-	archiveActive    sync.Map // namespace -> active request; the server runs one replica
+	gates            gateSet            // RFC-0083: gates declared by extensions
+	linkProviders    []ext.LinkProvider // RFC-0083: sidebar links from extensions
+	projectGates     sync.Map           // namespace -> *sync.RWMutex; excludes in-flight mutations from archive capture
+	archiveActive    sync.Map           // namespace -> active request; the server runs one replica
 	helm             *action.Configuration
 	sources          *SourceStore
 	prom             *PromClient
@@ -393,6 +395,7 @@ func (s *Server) deps() ext.Deps {
 	// the host resolver's memory dropped, the identity provider's
 	// callbacks refreshed (RFC-0080) — not the controller poke alone.
 	d := ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.workspacesChanged, Mail: s.mailer}
+	d.GateAdmits = s.gateAdmitsHook
 	if s.store != nil {
 		d.Invite = s.inviteHook
 		d.InviteBackground = s.inviteBackgroundHook
@@ -733,6 +736,11 @@ func (s *Server) routes() error {
 		if err := x.Routes(routeGroups{pub: pub, api: api, wsAdmin: api.Group("", s.require(authz.ClusterAdmin)), admin: api.Group("", console, s.require(authz.ClusterAdmin)), platform: s.engine.Group("/api"), s: s}, deps); err != nil {
 			return fmt.Errorf("extension %s: %w", x.Name(), err)
 		}
+	}
+
+	// Gates and links (RFC-0083), once every extension has its deps.
+	if err := s.collectGates(deps); err != nil {
+		return err
 	}
 
 	if s.opts.UI != nil {
