@@ -140,6 +140,10 @@ func (s *Server) appShell(c *gin.Context) {
 		abort(c, http.StatusForbidden, err)
 		return
 	}
+	if t.Workspace != s.workspace(c) {
+		abort(c, http.StatusForbidden, errors.New("the ticket was issued for another workspace"))
+		return
+	}
 	if t.Project != slug || t.Instance != c.Query("instance") {
 		abort(c, http.StatusForbidden, errors.New("the ticket was issued for another project or instance"))
 		return
@@ -148,7 +152,7 @@ func (s *Server) appShell(c *gin.Context) {
 	// are resolved again so a grant revoked inside those 30 seconds still
 	// takes effect.
 	ext.SetIdentity(c, t.Identity)
-	roles, err := s.authz.Roles(c.Request.Context(), t.Identity)
+	roles, err := s.rolesAt(c, t.Identity)
 	if err != nil {
 		abort(c, http.StatusBadGateway, fmt.Errorf("resolve roles: %w", err))
 		return
