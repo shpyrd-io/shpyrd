@@ -54,6 +54,7 @@ type ObjectBucketReconciler struct {
 	AdminEndpoint   string
 	AdminSecret     string
 	// CapacityBytes of the store's volume, for the layout of a fresh store.
+	UseGateway    bool
 	CapacityBytes int64
 	Connect       StoreConnector
 
@@ -175,6 +176,9 @@ func (r *ObjectBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStore, b *shpyrdv1.ObjectBucket) error {
 	bucket := b.BucketName()
+	if r.UseGateway {
+		bucket = objectstore.LogicalBucketName(b.Namespace, b.Name)
+	}
 	if err := store.EnsureBucket(ctx, objectstore.BucketSpec{Name: bucket, Versioning: b.Spec.Versioning, RetentionDays: b.Spec.RetentionDays}); err != nil {
 		return err
 	}
@@ -224,7 +228,13 @@ func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStor
 	}
 	b.Status.Phase = shpyrdv1.BucketReady
 	b.Status.Message = ""
-	if cap, err := store.Usage(ctx); err == nil {
+	usage := store.Usage
+	if scoped, ok := store.(interface {
+		BucketUsage(context.Context, string) (*objectstore.Capacity, error)
+	}); ok {
+		usage = func(ctx context.Context) (*objectstore.Capacity, error) { return scoped.BucketUsage(ctx, bucket) }
+	}
+	if cap, err := usage(ctx); err == nil {
 		if u, ok := cap.Buckets[bucket]; ok {
 			b.Status.UsedBytes, b.Status.Objects = u.Bytes, u.Objects
 			now := metav1.Now()
@@ -236,6 +246,9 @@ func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStor
 
 func (r *ObjectBucketReconciler) cleanup(ctx context.Context, store BucketStore, b *shpyrdv1.ObjectBucket) error {
 	bucket := b.BucketName()
+	if r.UseGateway {
+		bucket = objectstore.LogicalBucketName(b.Namespace, b.Name)
+	}
 	sec := &corev1.Secret{}
 	accessKey := ""
 	if err := r.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.CredentialSecretName()}, sec); err == nil {

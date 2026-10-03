@@ -128,13 +128,14 @@ export type RegistryInfo = {
   tls: boolean;
   ready: boolean;
   message?: string;
-  storage?: { usedBytes: number; capacityBytes: number; size: string };
+  storage?: { usedBytes: number; capacityBytes: number; size: string; backend?: "filesystem" | "s3"; bucket?: string; endpoint?: string; error?: string; measuredAt?: string };
   images?: { repositories: number; tags: number; largest: { name: string; tags: number }[]; error?: string };
   certificate?: { issuer: string; notAfter: string };
   gc?: { schedule: string; nextRun?: string; running: boolean; startedAt?: string; lastRun?: string; lastResult?: string; lastDuration?: string; reclaimedBytes: number; usedBytes: number };
 };
 
 export type ObjectStorageSummary = {
+  backend?: "garage" | "gateway";
   endpoint: string;
   totalBytes: number;
   usedBytes: number;

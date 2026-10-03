@@ -20,6 +20,8 @@ spec:
                   key: AWS_SECRET_ACCESS_KEY
           # Only the config, TLS and auth volumes; no data PVC on OCI OS.
           volumeMounts:
+            - $patch: delete
+              mountPath: /var/lib/registry
             - name: config
               mountPath: /etc/distribution
               readOnly: true
@@ -30,6 +32,8 @@ spec:
               mountPath: /etc/registry/auth
               readOnly: true
       volumes:
+        - name: data
+          $patch: delete
         - name: config
           configMap:
             name: registry-config

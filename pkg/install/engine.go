@@ -56,7 +56,11 @@ type Options struct {
 	// (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) for the backup target; nil
 	// keeps what an earlier run stored or relies on the pod's identity.
 	BackupCredentials map[string]string
-	DNSKeyFingerprint string
+	// RegistryCredentials come from --registry-credentials-file. They must
+	// not overwrite the independently scoped platform backup credential.
+	GatewayCredentials  map[string]string
+	RegistryCredentials map[string]string
+	DNSKeyFingerprint   string
 	// Tree overrides the embedded manifests (tests, development).
 	Tree fs.FS
 	// Extensions are the enabled extensions' components, appended to the
@@ -149,6 +153,18 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 	}, profile.Vars)
 	vars = mergeVars(vars, opts.Vars)
 	vars = mergeVars(vars, derivedVars(vars, opts.Extensions))
+	for _, pair := range [][2]string{{VarGatewayBucket, VarGatewayRegion}, {VarRegistryBucket, VarRegistryRegion}, {VarSourcesBucket, VarSourcesRegion}} {
+		if vars[pair[0]] != "" && vars[pair[1]] == "" {
+			return nil, fmt.Errorf("%s requires %s", pair[0], pair[1])
+		}
+	}
+	if profile.Name == "oci" {
+		for _, pair := range [][2]string{{VarGatewayBucket, VarGatewayEndpoint}, {VarRegistryBucket, VarRegistryEndpoint}, {VarSourcesBucket, VarSourcesEndpoint}} {
+			if vars[pair[0]] != "" && vars[pair[1]] == "" {
+				return nil, fmt.Errorf("%s requires %s on OCI", pair[0], pair[1])
+			}
+		}
+	}
 
 	hc, err := newHelmClient(k, opts.Logger)
 	if err != nil {
@@ -232,6 +248,9 @@ func (p *Profile) componentNames() []string {
 func (e *Engine) selected(rl Runlevel) []*Component {
 	var out []*Component
 	for _, name := range rl.Components {
+		if name == "object-storage" && e.vars[VarGatewayBucket] != "" {
+			continue
+		}
 		if contains(e.opts.Skip, name) {
 			continue
 		}
@@ -400,7 +419,19 @@ func (e *Engine) renderComponent(c *Component) ([]*unstructured.Unstructured, er
 	if _, err := fs.Stat(e.tree, path.Join(overlay, "kustomization.yaml")); err == nil {
 		dir = overlay
 	}
-	return renderKustomize(e.tree, dir, e.vars)
+	// S3 is selected by configuration, not by the profile name. OCI also
+	// supports a filesystem registry when no bucket has been configured.
+	if c.Name == "registry" && e.vars[VarRegistryBucket] != "" {
+		dir = path.Join(c.Dir(), "s3")
+	}
+	objs, err := renderKustomize(e.tree, dir, e.vars)
+	if err != nil {
+		return nil, err
+	}
+	if c.Name == ServerComponent && e.vars[VarSourcesBucket] != "" {
+		return sourcesInBucket(objs, e.vars[VarSourcesSecret])
+	}
+	return objs, nil
 }
 
 func (e *Engine) ensureNamespace(ctx context.Context, name string) error {

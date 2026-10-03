@@ -64,6 +64,13 @@ spec:
                 optional: true
           env:
             # The applications, as the init container wrote them.
+            - name: SHPYRD_GATEWAY_BUCKET
+              value: "${SHPYRD_GATEWAY_BUCKET}"
+            - name: SHPYRD_SOURCES_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sources-signing
+                  key: key
             - name: SHPYRD_UI_DIR
               value: /ui
             - name: POD_NAMESPACE
@@ -121,6 +128,18 @@ spec:
               value: "${SHPYRD_REGISTRY_IP}"
             - name: SHPYRD_REGISTRY_SIZE
               value: "${SHPYRD_REGISTRY_SIZE}"
+            - name: SHPYRD_REGISTRY_BUCKET
+              value: "${SHPYRD_REGISTRY_BUCKET}"
+            - name: SHPYRD_REGISTRY_ENDPOINT
+              value: "${SHPYRD_REGISTRY_ENDPOINT}"
+            - name: SHPYRD_REGISTRY_REGION
+              value: "${SHPYRD_REGISTRY_REGION}"
+            - name: SHPYRD_SOURCES_BUCKET
+              value: "${SHPYRD_SOURCES_BUCKET}"
+            - name: SHPYRD_SOURCES_ENDPOINT
+              value: "${SHPYRD_SOURCES_ENDPOINT}"
+            - name: SHPYRD_SOURCES_REGION
+              value: "${SHPYRD_SOURCES_REGION}"
             - name: SHPYRD_REGISTRY_GC
               value: "${SHPYRD_REGISTRY_GC}"
             # With a DNS provider the wildcard certificate is the front

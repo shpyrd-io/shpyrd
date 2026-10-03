@@ -1,5 +1,5 @@
 name: registry
-description: In-cluster OCI registry for built application images and the kpack builder (TLS from the platform CA, one platform credential). Storage defaults to a PVC; set SHPYRD_REGISTRY_BUCKET to use OCI Object Storage instead (pass --registry-credentials-file).
+description: In-cluster OCI registry for built application images and the kpack builder (TLS from the platform CA, one platform credential). Storage defaults to a PVC; set SHPYRD_REGISTRY_BUCKET to use S3-compatible object storage instead (pass --registry-credentials-file).
 namespace: shpyrd-system
 hooks: [registry-s3]
 kustomize:

@@ -50,6 +50,8 @@ var hooks = map[string]Hook{
 	"oidc-client":                  oidcClientHook,
 	"registry-credentials":         registryCredentialsHook,
 	"object-storage-credentials":   objectStorageCredentialsHook,
+	"sources-signing-key":          sourcesSigningHook,
+	"object-gateway-credentials":   gatewayCredentialsHook,
 	"backup-target":                backupTargetHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
 	"registry-s3":                  registryS3Hook,
@@ -579,7 +581,15 @@ func backupTargetHook(ctx context.Context, e *Engine, c *Component) error {
 		"SHPYRD_BACKUP_ENDPOINT": e.vars[VarBackupEndpoint],
 		"SHPYRD_BACKUP_REGION":   e.vars[VarBackupRegion],
 	}
-	if e.opts.BackupCredentials != nil {
+	if e.vars[VarGatewayBucket] != "" {
+		sec, err := secrets.Get(ctx, "gateway-platform-backups", metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
+			data[k] = string(sec.Data[k])
+		}
+	} else if e.opts.BackupCredentials != nil {
 		for k, v := range e.opts.BackupCredentials {
 			data[k] = v
 		}
@@ -647,28 +657,31 @@ func controlPlaneDBHook(ctx context.Context, e *Engine, c *Component) error {
 const RegistryS3SecretName = "registry-s3"
 
 func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
+	if e.vars[VarGatewayBucket] != "" {
+		return nil
+	}
 	bucket := e.vars[VarRegistryBucket]
 	if bucket == "" {
 		return nil // using filesystem storage — skip
 	}
-	// Reuse existing credentials if already written.
+	// Keep existing credentials unless the operator supplied a replacement.
 	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
-	if _, err := secrets.Get(ctx, RegistryS3SecretName, metav1.GetOptions{}); err == nil {
-		e.rep.Step(c.Name, "keeping existing registry S3 credentials")
-		return nil
-	}
-	if e.opts.BackupCredentials == nil {
+	if e.opts.RegistryCredentials == nil {
+		if _, err := secrets.Get(ctx, RegistryS3SecretName, metav1.GetOptions{}); err == nil {
+			e.rep.Step(c.Name, "keeping existing registry S3 credentials")
+			return nil
+		}
 		return fmt.Errorf("registry uses OCI Object Storage (SHPYRD_REGISTRY_BUCKET=%s) but no credentials were provided: pass --registry-credentials-file (the backups Terraform module writes contrib/oci/terraform/backups/*-registry.env)", bucket)
 	}
 	data := map[string]string{
-		"AWS_ACCESS_KEY_ID":     e.opts.BackupCredentials["AWS_ACCESS_KEY_ID"],
-		"AWS_SECRET_ACCESS_KEY": e.opts.BackupCredentials["AWS_SECRET_ACCESS_KEY"],
+		"AWS_ACCESS_KEY_ID":     e.opts.RegistryCredentials["AWS_ACCESS_KEY_ID"],
+		"AWS_SECRET_ACCESS_KEY": e.opts.RegistryCredentials["AWS_SECRET_ACCESS_KEY"],
 		"region":                e.vars[VarRegistryRegion],
 		"endpoint":              e.vars[VarRegistryEndpoint],
 		"bucket":                bucket,
 	}
-	if data["AWS_ACCESS_KEY_ID"] == "" {
-		return fmt.Errorf("registry-credentials-file is missing AWS_ACCESS_KEY_ID")
+	if data["AWS_ACCESS_KEY_ID"] == "" || data["AWS_SECRET_ACCESS_KEY"] == "" {
+		return fmt.Errorf("registry-credentials-file requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
 	}
 	if err := e.applyOpaqueSecret(ctx, c.Namespace, RegistryS3SecretName, data); err != nil {
 		return err

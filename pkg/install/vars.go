@@ -57,11 +57,19 @@ const (
 	VarRegistryInsecure = "SHPYRD_REGISTRY_INSECURE" // "true" keeps the in-cluster registry on plain HTTP (escape hatch, RFC-0059)
 	VarRegistrySecret   = "SHPYRD_REGISTRY_SECRET"   // name of the registry credentials Secret ("" when the registry needs none)
 	// In-cluster registry (RFC-0059).
-	VarRegistryIP         = "SHPYRD_REGISTRY_IP"          // fixed ClusterIP of the in-cluster registry ("" with an external registry)
-	VarRegistrySize       = "SHPYRD_REGISTRY_SIZE"        // size of its volume claim (only when using filesystem storage)
-	VarRegistryBucket     = "SHPYRD_REGISTRY_BUCKET"      // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
-	VarRegistryEndpoint   = "SHPYRD_REGISTRY_ENDPOINT"    // S3-compatible endpoint for the registry bucket
-	VarRegistryRegion     = "SHPYRD_REGISTRY_REGION"      // region of the registry bucket
+	VarRegistryIP         = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
+	VarRegistrySize       = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
+	VarRegistryBucket     = "SHPYRD_REGISTRY_BUCKET"   // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
+	VarRegistryEndpoint   = "SHPYRD_REGISTRY_ENDPOINT" // S3-compatible endpoint for the registry bucket
+	VarRegistryRegion     = "SHPYRD_REGISTRY_REGION"   // region of the registry bucket
+	VarGatewayBucket      = "SHPYRD_GATEWAY_BUCKET"
+	VarGatewayEndpoint    = "SHPYRD_GATEWAY_ENDPOINT"
+	VarGatewayRegion      = "SHPYRD_GATEWAY_REGION"
+	VarRegistryS3Secure   = "SHPYRD_REGISTRY_S3_SECURE"
+	VarSourcesBucket      = "SHPYRD_SOURCES_BUCKET"
+	VarSourcesEndpoint    = "SHPYRD_SOURCES_ENDPOINT"
+	VarSourcesRegion      = "SHPYRD_SOURCES_REGION"
+	VarSourcesSecret      = "SHPYRD_SOURCES_SECRET"
 	VarBuildCacheRegistry = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
 	VarCASource           = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
@@ -339,6 +347,17 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 			out[v] = ""
 		}
 	}
+	for _, pair := range [][2]string{{VarSourcesBucket, VarRegistryBucket}, {VarSourcesEndpoint, VarRegistryEndpoint}, {VarSourcesRegion, VarRegistryRegion}} {
+		if _, ok := vars[pair[0]]; !ok {
+			out[pair[0]] = ""
+			if vars[VarProfile] == "oci" || vars[VarProfile] == "aws" {
+				out[pair[0]] = vars[pair[1]]
+			}
+		}
+	}
+	if _, ok := vars[VarSourcesSecret]; !ok {
+		out[VarSourcesSecret] = RegistryS3SecretName
+	}
 	for _, v := range []string{VarAppsPool, VarPlatformPool} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
@@ -355,6 +374,26 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	}
 	if _, ok := vars[VarNodeMaxCount]; !ok {
 		out[VarNodeMaxCount] = "5"
+	}
+	out[VarRegistryS3Secure] = "true"
+	for _, v := range []string{VarGatewayBucket, VarGatewayEndpoint, VarGatewayRegion} {
+		if _, ok := vars[v]; !ok {
+			out[v] = ""
+		}
+	}
+	if vars[VarGatewayBucket] != "" {
+		endpoint := "http://object-storage." + vars[VarSystemNS] + ".svc:3900"
+		out[VarRegistryBucket] = "registry"
+		out[VarRegistryEndpoint] = endpoint
+		out[VarRegistryRegion] = "garage"
+		out[VarRegistryS3Secure] = "false"
+		out[VarSourcesBucket] = "sources"
+		out[VarSourcesEndpoint] = endpoint
+		out[VarSourcesRegion] = "garage"
+		out[VarSourcesSecret] = "gateway-sources"
+		out[VarBackupTarget] = "s3://platform-backups/platform"
+		out[VarBackupEndpoint] = endpoint
+		out[VarBackupRegion] = "garage"
 	}
 	return out
 }

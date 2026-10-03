@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -188,6 +189,17 @@ func (g *RegistryGC) next(from time.Time) *time.Time {
 
 // run performs one collection and returns the collector's summary.
 func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used int64, err error) {
+	store, err := g.bucketStore(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	var before objectstore.Usage
+	if store != nil {
+		before, err = store.Usage(ctx)
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("measure registry bucket: %w", err)
+		}
+	}
 	if err := g.setReadOnly(ctx, true); err != nil {
 		return "", 0, 0, err
 	}
@@ -201,11 +213,17 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 			}
 		}
 	}()
-	node, err := g.registryNode(ctx)
-	if err != nil {
-		return "", 0, 0, err
+	var node string
+	if store == nil {
+		node, err = g.registryNode(ctx)
+		if err != nil {
+			return "", 0, 0, err
+		}
 	}
 	job := g.job(node)
+	if store != nil {
+		g.useBucket(job)
+	}
 	if err := g.Client.Create(ctx, job); err != nil {
 		return "", 0, 0, fmt.Errorf("create collector job: %w", err)
 	}
@@ -216,11 +234,69 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 	if err != nil {
 		return "", 0, 0, err
 	}
+	if store != nil {
+		after, err := store.Usage(ctx)
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("collection finished but bucket measurement failed: %w", err)
+		}
+		summary.Before, summary.After = before.Bytes, after.Bytes
+	}
 	reclaimed = summary.Before - summary.After
 	if reclaimed < 0 {
 		reclaimed = 0
 	}
 	return "ok", reclaimed, summary.After, nil
+}
+
+// Read the live driver configuration so GC follows storage changes on upgrades.
+func (g *RegistryGC) bucketStore(ctx context.Context) (*objectstore.S3, error) {
+	cm := &corev1.ConfigMap{}
+	if err := g.reader().Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: registryConfigName}, cm); err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Storage struct {
+			S3 *struct{ Bucket, Region, RegionEndpoint string } `json:"s3"`
+		} `json:"storage"`
+	}
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Storage.S3 == nil {
+		return nil, nil
+	}
+	sec := &corev1.Secret{}
+	if err := g.reader().Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: "registry-s3"}, sec); err != nil {
+		return nil, err
+	}
+	c := cfg.Storage.S3
+	return objectstore.NewS3(c.RegionEndpoint, c.Region, c.Bucket, "docker", string(sec.Data["AWS_ACCESS_KEY_ID"]), string(sec.Data["AWS_SECRET_ACCESS_KEY"]))
+}
+
+func (g *RegistryGC) useBucket(job *batchv1.Job) {
+	pod := &job.Spec.Template.Spec
+	pod.NodeName = ""
+	volumes := pod.Volumes[:0]
+	for _, v := range pod.Volumes {
+		if v.Name != "data" {
+			volumes = append(volumes, v)
+		}
+	}
+	pod.Volumes = volumes
+	c := &pod.Containers[0]
+	mounts := c.VolumeMounts[:0]
+	for _, m := range c.VolumeMounts {
+		if m.Name != "data" {
+			mounts = append(mounts, m)
+		}
+	}
+	c.VolumeMounts = mounts
+	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
+		c.Env = append(c.Env, corev1.EnvVar{Name: key, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "registry-s3"}, Key: key}}})
+	}
+	c.Command = []string{"sh", "-c", `set -e
+registry garbage-collect --delete-untagged /etc/distribution/config.yml
+printf '{"before":0,"after":0}' > /dev/termination-log`}
 }
 
 // setReadOnly points the registry at the read-only copy of its configuration
@@ -354,8 +430,9 @@ echo "reclaimed $((before - after)) bytes"`
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "registry-gc"}},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					NodeName:      node,
+					EnableServiceLinks: ptr.To(false),
+					RestartPolicy:      corev1.RestartPolicyNever,
+					NodeName:           node,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: ptr.To(true), RunAsUser: &uid, FSGroup: &uid,
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
