@@ -346,7 +346,7 @@ the component library in `design/ui`, all members of the npm workspace at the
 repository root. `make ui` builds both into `pkg/ui/dist/<app>`, which the server
 embeds; run it before `make dev-deploy` when an application changed. On a
 cluster the server reads them from `SHPYRD_UI_DIR` when it is set (an init
-container writes them there, RFC-0080) and falls back to the embedded ones.
+container writes them there) and falls back to the embedded ones.
 
 They are developed without rebuilding or uploading anything: each has a
 development server with hot reload that proxies `/api` to a shpyrd server.
