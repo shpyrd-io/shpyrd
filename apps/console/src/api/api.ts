@@ -1,3 +1,4 @@
+import type { ArchiveProject, ProjectArchiveStatus, ProjectPlacement, PlacementMeasurement } from "@shpyrd/shared/api/project-archives";
 import type {
   BackupInfo,
   ClusterMetrics,
@@ -26,6 +27,15 @@ import type {
 // picks one, and the build drops the other.
 
 export type Api = {
+  archiveProjects: () => Promise<ArchiveProject[]>;
+  projectPlacement: (id: string) => Promise<ProjectPlacement>;
+  measureProjectPlacement: (id: string, group: string) => Promise<PlacementMeasurement>;
+  deleteRetainedVolume: (id: string, volume: string) => Promise<void>;
+  moveProject: (id: string, body: { group: string; node: string; migrateToLocal?: boolean }) => Promise<void>;
+  projectArchiveStatus: (id: string) => Promise<ProjectArchiveStatus>;
+  backupProject: (id: string) => Promise<void>;
+  restoreProject: (id: string, file: File) => Promise<void>;
+  recoverProject: (id: string) => Promise<void>;
   config: () => Promise<PublicConfig>;
   me: () => Promise<Identity>;
   passwordLogin: (body: { email: string; password: string; next?: string }) => Promise<{ next: string }>;

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "demo-hello-world",
+    "slug": "hello-world",
+    "name": "Hello World",
+    "workspace": "acme",
+    "phase": "Running",
+    "nodes": ["application-1", "data-1"]
+  },
+  {
+    "id": "demo-billing",
+    "slug": "billing",
+    "name": "Billing",
+    "workspace": "acme",
+    "phase": "Running",
+    "nodes": ["application-2", "data-1", "data-2"]
+  },
+  {
+    "id": "demo-docs",
+    "slug": "docs",
+    "name": "Docs",
+    "workspace": "studio",
+    "phase": "Running",
+    "nodes": ["application-1"]
+  }
+]

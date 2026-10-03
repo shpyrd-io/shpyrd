@@ -102,6 +102,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		}
 		wanted[workspaceFrontDoorName(ws.Slug)] = true
 		wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
+		wanted[archivesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
 		if err := r.ensureFrontDoor(ctx, ws); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -126,6 +127,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 			wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
 			if h.Kind == store.HostCustom {
 				wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
+				wanted[archivesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
 			}
 			if err := r.ensureHostFrontDoor(ctx, ws, h); err != nil {
 				return ctrl.Result{}, err
@@ -193,8 +195,11 @@ func frontDoorAnnotations() map[string]string {
 // server as a second location. Streaming (no request buffering) lets the
 // server refuse an unauthenticated upload before the body is read.
 const (
-	SourcesPath     = "/api/sources"
-	SourcesBodySize = "512m"
+	SourcesPath                = "/api/sources"
+	SourcesBodySize            = "512m"
+	ProjectArchivesPath        = "/api/project-archives"
+	ClusterProjectArchivesPath = "/api/cluster/project-archives"
+	ProjectArchivesBodySize    = "65g"
 )
 
 func sourcesFrontDoorAnnotations() map[string]string {
@@ -209,6 +214,8 @@ func sourcesFrontDoorAnnotations() map[string]string {
 
 // sourcesFrontDoorName names the companion Ingress of a front door.
 func sourcesFrontDoorName(frontDoor string) string { return frontDoor + "-sources" }
+
+func archivesFrontDoorName(frontDoor string) string { return frontDoor + "-archives" }
 
 // ensureSourcesFrontDoor keeps the companion Ingress of the front door
 // `name`: the same host and TLS, one exact path (SourcesPath), the upload
@@ -232,7 +239,24 @@ func (r *WorkspaceReconciler) ensureSourcesFrontDoor(ctx context.Context, name s
 	if err != nil {
 		return fmt.Errorf("sources front door for %s: %w", host, err)
 	}
-	return nil
+	return r.ensureArchivesFrontDoor(ctx, name, labels, host, tls, class)
+}
+
+func (r *WorkspaceReconciler) ensureArchivesFrontDoor(ctx context.Context, name string, labels map[string]string, host string, tls networkingv1.IngressTLS, class string) error {
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: archivesFrontDoorName(name), Namespace: r.Config.SystemNamespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
+		ing.Labels = mergeMaps(ing.Labels, labels)
+		ing.Annotations = mergeMaps(ing.Annotations, sourcesFrontDoorAnnotations())
+		ing.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"] = ProjectArchivesBodySize
+		ing.Annotations["nginx.ingress.kubernetes.io/proxy-buffering"] = "off"
+		ing.Spec.IngressClassName = &class
+		ing.Spec.TLS = []networkingv1.IngressTLS{tls}
+		prefix := networkingv1.PathTypePrefix
+		backend := networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "shpyrd-server", Port: networkingv1.ServiceBackendPort{Name: "http"}}}
+		ing.Spec.Rules = []networkingv1.IngressRule{{Host: host, IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Path: ProjectArchivesPath, PathType: &prefix, Backend: backend}, {Path: ClusterProjectArchivesPath, PathType: &prefix, Backend: backend}}}}}}
+		return nil
+	})
+	return err
 }
 
 // ensureHostFrontDoor keeps the Ingress and certificate of a custom domain

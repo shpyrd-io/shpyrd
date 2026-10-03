@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"helm.sh/helm/v3/pkg/action"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -145,6 +146,7 @@ type PublicConfig struct {
 
 // VolumesConfig is what the dashboard needs to know about volumes here.
 type VolumesConfig struct {
+	NodeLocal bool `json:"nodeLocal,omitempty"`
 	// MinSize is the provider minimum requests are rounded up to ("" = none).
 	MinSize string `json:"minSize,omitempty"`
 	// Snapshots is true when the cluster can take volume snapshots.
@@ -174,19 +176,22 @@ type BrandingView struct {
 }
 
 type Server struct {
-	opts    Options
-	log     *slog.Logger
-	engine  *gin.Engine
-	kube    *kube.Client
-	apps    client.Client
-	helm    *action.Configuration
-	sources *SourceStore
-	prom    *PromClient
-	rp      *relyingParty
-	authz   *authz.Resolver
-	store   store.Store
-	tenancy tenancy.Resolver
-	realms  Realms
+	opts             Options
+	log              *slog.Logger
+	engine           *gin.Engine
+	kube             *kube.Client
+	apps             client.Client
+	archiveDownloads *archiveDownloads
+	projectGates     sync.Map // namespace -> *sync.RWMutex; excludes in-flight mutations from archive capture
+	archiveActive    sync.Map // namespace -> active request; the server runs one replica
+	helm             *action.Configuration
+	sources          *SourceStore
+	prom             *PromClient
+	rp               *relyingParty
+	authz            *authz.Resolver
+	store            store.Store
+	tenancy          tenancy.Resolver
+	realms           Realms
 	// mailer sends invitations (RFC-0013); nil without the mail extension.
 	mailer ext.Mailer
 	// The edge (RFC-0033): signing keys, one-time codes, host index.
@@ -318,6 +323,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.passwordFailures = newRateLimiter(10)
 	s.resetRateLimit = newRateLimiter(resetRequestsPerMinute)
 	s.execTickets = newTicketStore(execTicketTTL)
+	s.archiveDownloads = newArchiveDownloads()
 	s.shells = newShellRegistry()
 	s.cliDevices = newCLIDeviceStore()
 	s.execStream = s.streamExec
@@ -474,6 +480,7 @@ func (s *Server) SourcesHandler() http.Handler {
 }
 
 func (s *Server) routes() error {
+	s.engine.Any("/_shpyrd/maintenance", projectMaintenanceResponse)
 	// The edge (RFC-0033): what ingress-nginx and app hosts call.
 	// /edge/auth arrives from ingress-nginx at the service name and names
 	// its workspace in the query; the JWKS is the platform's, whatever the
@@ -603,6 +610,17 @@ func (s *Server) routes() error {
 	api.GET("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.listPlanVersions)
 	api.POST("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.addPlanVersion)
 	api.GET("/cluster/economics", console, s.require(authz.ClusterAdmin), s.clusterEconomics)
+	api.GET("/cluster/project-archives", console, s.require(authz.ClusterAdmin), s.clusterArchiveProjects)
+	archives := api.Group("/cluster/project-archives/:projectID", console, s.require(authz.ClusterAdmin), s.clusterArchiveProject)
+	archives.GET("", s.projectArchiveStatus)
+	archives.GET("/placement", s.getProjectPlacement)
+	archives.POST("/placement/measure", s.measureProjectPlacement)
+	archives.POST("/move", s.moveProject)
+	archives.DELETE("/retained-volumes/:volume", s.deleteRetainedMigrationDisk)
+	archives.POST("/export", s.exportProjectArchive)
+	archives.GET("/download", s.downloadProjectArchive)
+	archives.POST("/restore", s.restoreProjectArchive)
+	archives.POST("/recover", s.recoverProjectArchive)
 	api.GET("/workspace/connections", s.listConnections) // the caller's connected assistants (RFC-0032)
 	api.DELETE("/workspace/connections/:id", s.deleteConnection)
 	api.GET("/workspace/domains", s.require(authz.ClusterAdmin), s.listWorkspaceDomains) // custom workspace domains (RFC-0033 names)
@@ -627,6 +645,11 @@ func (s *Server) routes() error {
 	api.GET("/projects", s.listApps) // filtered to visible projects
 	api.POST("/projects", s.require(authz.ClusterCreate), s.createApp)
 	api.GET("/projects/:slug", s.require(authz.ProjectView), s.getApp)
+	api.GET("/project-archives/:slug", s.require(authz.ProjectDestroy), s.projectArchiveStatus)
+	api.POST("/project-archives/:slug/export", s.require(authz.ProjectDestroy), s.exportProjectArchive)
+	api.GET("/project-archives/:slug/download", s.require(authz.ProjectDestroy), s.downloadProjectArchive)
+	api.POST("/project-archives/:slug/restore", s.require(authz.ProjectDestroy), s.restoreProjectArchive)
+	api.POST("/project-archives/:slug/recover", s.require(authz.ProjectDestroy), s.recoverProjectArchive)
 	api.PATCH("/projects/:slug", s.require(authz.ProjectConfig), s.updateApp)
 	api.GET("/projects/:slug/icon", s.require(authz.ProjectView), s.projectIcon)
 	api.PUT("/projects/:slug/icon", s.require(authz.ProjectConfig), s.putProjectIcon)
@@ -807,7 +830,7 @@ func (s *Server) config(c *gin.Context) {
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
 	}
-	pub.Volumes = VolumesConfig{MinSize: s.vars(install.VarVolumeMinSize), Snapshots: s.vars(install.VarSnapshotClass) != ""}
+	pub.Volumes = VolumesConfig{NodeLocal: install.ProjectStorageClass(s.vars) == controller.LocalStorageClass, MinSize: install.ProjectVolumeMinSize(s.vars), Snapshots: s.vars(install.VarSnapshotClass) != ""}
 	if s.store != nil {
 		if v, err := s.store.GetSetting(c.Request.Context(), store.SettingDefaultWorkspaceID); err == nil && v != "" {
 			pub.DefaultWorkspaceID = v

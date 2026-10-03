@@ -1,0 +1,294 @@
+[
+  {
+    "id": "demo-hello-world",
+    "groups": [
+      {
+        "id": "process:web",
+        "processes": [
+          "web",
+          "worker"
+        ],
+        "volumes": [
+          "uploads"
+        ],
+        "nodes": [
+          "application-1"
+        ],
+        "pool": "apps",
+        "cpuRequestedMillicores": 1000,
+        "memoryRequestedBytes": 1073741824,
+        "diskUsedBytes": 3221225472
+      },
+      {
+        "id": "postgres:primary",
+        "processes": [],
+        "volumes": [],
+        "database": "primary",
+        "nodes": [
+          "data-1"
+        ],
+        "pool": "data",
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 2147483648,
+        "diskUsedBytes": 12884901888,
+        "needsMigration": true,
+        "storageClasses": [
+          "oci-bv"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "name": "application-1",
+        "hostname": "application-1",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 2500,
+        "memoryRequestedBytes": 10737418240,
+        "diskAvailableBytes": 83751862272,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-2",
+        "hostname": "application-2",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 700,
+        "memoryRequestedBytes": 4294967296,
+        "diskAvailableBytes": 155692564480,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-1",
+        "hostname": "data-1",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 1700,
+        "memoryRequestedBytes": 12884901888,
+        "diskAvailableBytes": 98784247808,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-2",
+        "hostname": "data-2",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 3221225472,
+        "diskAvailableBytes": 182536110080,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-3",
+        "hostname": "application-3",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 200,
+        "memoryRequestedBytes": 17179869184,
+        "diskAvailableBytes": 96636764160,
+        "architecture": "arm64"
+      }
+    ]
+  },
+  {
+    "id": "demo-billing",
+    "groups": [
+      {
+        "id": "process:web",
+        "processes": [
+          "web",
+          "worker"
+        ],
+        "volumes": [
+          "uploads"
+        ],
+        "nodes": [
+          "application-1"
+        ],
+        "pool": "apps",
+        "cpuRequestedMillicores": 1000,
+        "memoryRequestedBytes": 1073741824,
+        "diskUsedBytes": 3221225472
+      },
+      {
+        "id": "postgres:primary",
+        "processes": [],
+        "volumes": [],
+        "database": "primary",
+        "nodes": [
+          "data-1"
+        ],
+        "pool": "data",
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 2147483648,
+        "diskUsedBytes": 12884901888
+      },
+      {
+        "id": "postgres:analytics",
+        "processes": [],
+        "volumes": [],
+        "database": "analytics",
+        "nodes": [
+          "data-2"
+        ],
+        "pool": "data",
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 2147483648,
+        "diskUsedBytes": 12884901888
+      }
+    ],
+    "nodes": [
+      {
+        "name": "application-1",
+        "hostname": "application-1",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 2500,
+        "memoryRequestedBytes": 10737418240,
+        "diskAvailableBytes": 83751862272,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-2",
+        "hostname": "application-2",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 700,
+        "memoryRequestedBytes": 4294967296,
+        "diskAvailableBytes": 155692564480,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-1",
+        "hostname": "data-1",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 1700,
+        "memoryRequestedBytes": 12884901888,
+        "diskAvailableBytes": 98784247808,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-2",
+        "hostname": "data-2",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 3221225472,
+        "diskAvailableBytes": 182536110080,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-3",
+        "hostname": "application-3",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 200,
+        "memoryRequestedBytes": 17179869184,
+        "diskAvailableBytes": 96636764160,
+        "architecture": "arm64"
+      }
+    ]
+  },
+  {
+    "id": "demo-docs",
+    "groups": [
+      {
+        "id": "process:web",
+        "processes": [
+          "web"
+        ],
+        "volumes": [],
+        "nodes": [
+          "application-1"
+        ],
+        "pool": "apps",
+        "cpuRequestedMillicores": 1000,
+        "memoryRequestedBytes": 1073741824,
+        "diskUsedBytes": 0
+      }
+    ],
+    "nodes": [
+      {
+        "name": "application-1",
+        "hostname": "application-1",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 2500,
+        "memoryRequestedBytes": 10737418240,
+        "diskAvailableBytes": 83751862272,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-2",
+        "hostname": "application-2",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 700,
+        "memoryRequestedBytes": 4294967296,
+        "diskAvailableBytes": 155692564480,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-1",
+        "hostname": "data-1",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 1700,
+        "memoryRequestedBytes": 12884901888,
+        "diskAvailableBytes": 98784247808,
+        "architecture": "arm64"
+      },
+      {
+        "name": "data-2",
+        "hostname": "data-2",
+        "pool": "data",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 500,
+        "memoryRequestedBytes": 3221225472,
+        "diskAvailableBytes": 182536110080,
+        "architecture": "arm64"
+      },
+      {
+        "name": "application-3",
+        "hostname": "application-3",
+        "pool": "apps",
+        "eligible": true,
+        "cpuMillicores": 4000,
+        "memoryBytes": 25769803776,
+        "cpuRequestedMillicores": 200,
+        "memoryRequestedBytes": 17179869184,
+        "diskAvailableBytes": 96636764160,
+        "architecture": "arm64"
+      }
+    ]
+  }
+]

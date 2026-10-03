@@ -1,4 +1,5 @@
 import type { LogLine } from "@shpyrd/ui/components/log-view";
+import type { ProjectArchiveStatus } from "@shpyrd/shared/api/project-archives";
 import type {
   Access,
   AllowEntry,
@@ -53,6 +54,10 @@ export type NewProject = { slug: string; displayName?: string; description?: str
 export type LogQuery = { process?: string; tail?: number; follow?: boolean };
 
 export type Api = {
+  projectArchiveStatus: (slug: string) => Promise<ProjectArchiveStatus>;
+  backupProject: (slug: string) => Promise<void>;
+  restoreProject: (slug: string, file: File) => Promise<void>;
+  recoverProject: (slug: string) => Promise<void>;
   config: () => Promise<PublicConfig>;
   me: () => Promise<Identity>;
   // The door: a password or a token opens a session; a provider is a

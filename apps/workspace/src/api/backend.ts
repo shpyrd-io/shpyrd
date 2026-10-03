@@ -1,4 +1,5 @@
 import { parseLogLine } from "@shpyrd/shared/logs";
+import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
 import { json, request, stream } from "@shpyrd/shared/api/http";
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
@@ -104,6 +105,10 @@ export function toMetrics(answer: MetricsAnswer): Metrics {
 const gone = { method: "DELETE" };
 
 export const backend: Api = {
+  projectArchiveStatus: (slug) => projectArchiveActions(`/api/project-archives/${encodeURIComponent(slug)}`).status(),
+  backupProject: (slug) => projectArchiveActions(`/api/project-archives/${encodeURIComponent(slug)}`).backup(),
+  restoreProject: (slug, file) => projectArchiveActions(`/api/project-archives/${encodeURIComponent(slug)}`).restore(file),
+  recoverProject: (slug) => projectArchiveActions(`/api/project-archives/${encodeURIComponent(slug)}`).recover(),
   config: () => request("/api/config"),
   me: () => request("/api/me"),
   passwordLogin: (body) => request("/api/auth/password", json("POST", body)),

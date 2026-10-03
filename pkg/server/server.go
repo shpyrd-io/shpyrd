@@ -42,6 +42,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/objectgateway"
 	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
+	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 	"github.com/shpyrd-io/shpyrd/pkg/ui"
@@ -73,6 +74,13 @@ type Options struct {
 // Main parses flags and the environment, runs the server and exits on
 // error. It is the whole main() of cmd/shpyrd-server.
 func Main(opts Options) {
+	if len(os.Args) > 1 && os.Args[1] == "project-volume" {
+		if err := projectarchive.VolumeMain(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			slog.Error("project volume operation failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "object-gateway" {
 		if err := objectgateway.Main(); err != nil {
 			slog.Error("object gateway failed", "error", err)
@@ -465,6 +473,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			RegistryDeletes:       os.Getenv("SHPYRD_REGISTRY_IP") != "",
 			BuildCacheRegistry:    os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
 			AppsPool:              os.Getenv("SHPYRD_APPS_POOL"),
+			LocalStorage:          install.ProjectStorageClass(os.Getenv) == controller.LocalStorageClass,
 			PlatformPool:          os.Getenv("SHPYRD_PLATFORM_POOL"),
 			WildcardTLS:           os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
 			IngressClassExternal:  envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),
@@ -484,10 +493,13 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
 	}
+	if err := mgr.Add(&controller.LocalStorageProtection{Client: mgr.GetClient()}); err != nil {
+		return nil, err
+	}
 	volumes := &controller.VolumeReconciler{
 		Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"),
 		// Profile storage (RFC-0060).
-		DefaultClass: os.Getenv(install.VarStorageClass), SharedClass: os.Getenv(install.VarStorageClassShared), SnapshotClass: os.Getenv(install.VarSnapshotClass),
+		DefaultClass: install.ProjectStorageClass(os.Getenv), SharedClass: install.ProjectSharedStorageClass(os.Getenv), SnapshotClass: os.Getenv(install.VarSnapshotClass),
 	}
 	if err := volumes.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("volume controller: %w", err)

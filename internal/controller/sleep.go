@@ -48,6 +48,9 @@ const (
 // sleepEnabled reports whether the web process has a valid sleep policy,
 // its own or the workspace's default.
 func (r *AppReconciler) sleepEnabled(app *shpyrdv1.App) bool {
+	if maintenance(app) {
+		return false
+	}
 	spec := r.webSleepSpec(app)
 	return spec != nil && parseSleepDuration(spec.After) > 0
 }

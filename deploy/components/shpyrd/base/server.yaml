@@ -64,6 +64,8 @@ spec:
                 optional: true
           env:
             # The applications, as the init container wrote them.
+            - name: SHPYRD_SERVER_IMAGE
+              value: "${SHPYRD_SERVER_IMAGE}"
             - name: SHPYRD_GATEWAY_BUCKET
               value: "${SHPYRD_GATEWAY_BUCKET}"
             - name: SHPYRD_SOURCES_SIGNING_KEY
@@ -149,6 +151,10 @@ spec:
             - name: SHPYRD_DNS_PROVIDER
               value: "${SHPYRD_DNS_PROVIDER}"
             # Volumes (RFC-0060): classes, provider minimum and snapshot class.
+            - name: SHPYRD_DATA_POOL
+              value: "${SHPYRD_DATA_POOL}"
+            - name: SHPYRD_PROJECT_STORAGE_CLASS
+              value: "${SHPYRD_PROJECT_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS
               value: "${SHPYRD_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS_SHARED
@@ -228,6 +234,8 @@ spec:
               readOnly: true
             - name: data
               mountPath: /data
+            - name: archive-temp
+              mountPath: /tmp
             - name: webhook-tls
               mountPath: /etc/shpyrd/webhook-tls
               readOnly: true
@@ -266,6 +274,8 @@ spec:
             capabilities:
               drop: [ALL]
       volumes:
+        - name: archive-temp
+          emptyDir: {}
         - name: ui
           emptyDir: {}
         - name: data

@@ -4,6 +4,7 @@ import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-rou
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity as ActivityIcon,
+  Archive,
   ChartBar,
   Globe,
   HardDrive,
@@ -24,6 +25,7 @@ import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
 import { Access, Activity, Connections, Roles } from "./access";
+import { Backups } from "./backups";
 import { Config } from "./config";
 import { DomainsCard } from "./domains";
 import { Drains } from "./drains";
@@ -41,6 +43,7 @@ import { Shell } from "./shell";
 const pages = [
   { group: "", slug: "", title: "Overview", icon: <LayoutDashboard /> },
   { group: "Run", slug: "releases", title: "Releases", icon: <Rocket /> },
+  { group: "Run", slug: "backups", title: "Backups", icon: <Archive />, needs: "destroy" },
   { group: "Run", slug: "metrics", title: "Metrics", icon: <ChartBar /> },
   { group: "Run", slug: "logs", title: "Logs", icon: <ScrollText /> },
   { group: "Run", slug: "shell", title: "Shell", icon: <Terminal />, needs: "exec" },
@@ -105,6 +108,7 @@ export function ProjectPages() {
           <Routes>
             <Route index element={<Overview project={project.data} />} />
             <Route path="releases" element={<Releases project={project.data} perms={perms} />} />
+            <Route path="backups" element={<Backups project={project.data} perms={perms} />} />
             <Route path="metrics" element={<Metrics project={project.data} />} />
             <Route path="logs" element={<Logs project={project.data} />} />
             <Route path="shell" element={<Shell project={project.data} />} />

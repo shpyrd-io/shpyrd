@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "NEXT_TELEMETRY_DISABLED=1 NODE_EXTRA_CA_CERTS=\"${SHPYRD_DEV_CA:-/opt/homebrew/var/lib/caddy/pki/authorities/local/root.crt}\" next dev --port 4325",
-    "design": "NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_API_MODE=mock next dev --port 4325",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 NODE_EXTRA_CA_CERTS=\"${SHPYRD_DEV_CA:-/opt/homebrew/var/lib/caddy/pki/authorities/local/root.crt}\" next dev --webpack --port 4325",
+    "design": "NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_API_MODE=mock next dev --webpack --port 4325",
     "build": "NEXT_TELEMETRY_DISABLED=1 next build",
     "lint": "oxlint src app",
     "typecheck": "tsc --noEmit",

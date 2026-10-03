@@ -1,4 +1,5 @@
 import { ApiError } from "@shpyrd/shared/api/error";
+import { mockProjectArchives } from "@shpyrd/shared/api/project-archives-mock";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
 import { buildFailed } from "./types";
 import type { Api } from "./api";
@@ -126,6 +127,7 @@ function until(signal: AbortSignal, every: number, tick: () => void): Promise<vo
 }
 
 export const mock: Api = {
+  ...mockProjectArchives("workspace"),
   config: async () => {
     await wait();
     const ws = await workspaceOf.get();

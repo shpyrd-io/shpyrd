@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
@@ -106,6 +107,28 @@ func (s *Server) require(action authz.Action) gin.HandlerFunc {
 		if !roles.Can(action, key) {
 			abort(c, http.StatusForbidden, projectDenial(roles, action, project, key))
 			return
+		}
+		if project != "" && action != authz.ProjectView && strings.HasPrefix(string(action), "project.") && !strings.HasPrefix(c.FullPath(), "/api/project-archives/") {
+			if app, err := s.projectApp(c); err == nil {
+				gate := s.projectGate(app.Namespace)
+				if !gate.TryRLock() {
+					abort(c, http.StatusLocked, errors.New("project maintenance is in progress"))
+					return
+				}
+				defer gate.RUnlock()
+				// Re-read after acquiring the gate. The cached authorization lookup
+				// may predate an operation that has just persisted maintenance.
+				fresh := &shpyrdv1.App{}
+				if err := s.apps.Get(c.Request.Context(), client.ObjectKeyFromObject(app), fresh); err != nil {
+					abort(c, http.StatusBadGateway, err)
+					return
+				}
+				if fresh.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
+					c.Header("Retry-After", "60")
+					abort(c, http.StatusLocked, errors.New("project maintenance is in progress; wait for recovery to finish"))
+					return
+				}
+			}
 		}
 		c.Next()
 	}
