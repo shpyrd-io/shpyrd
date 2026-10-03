@@ -20,7 +20,7 @@ import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
 import { api, type ProjectRole } from "@/api/api";
 import type { Access as AccessMode, AllowEntry, Member, Project } from "@/api/types";
 import type { Perms } from "@/lib/perms";
-import { ago } from "@/lib/project";
+import { ago, openUrl } from "@/lib/project";
 import { Failed, Loading, when } from "./shared";
 
 const modes: Record<AccessMode, { label: string; text: string }> = {
@@ -89,7 +89,7 @@ export function Access({ project, perms }: { project: Project; perms: Perms }) {
           {project.access !== "public" && perms.deploy && (
             <div className="grid gap-3 rounded-md border p-4">
               <p className="text-sm">
-                <b className="font-medium">Open as</b> <span className="text-muted-foreground">sees the app the way a team does. The app gets a preview identity, and the preview is audited.</span>
+                <b className="font-medium">Open as</b> <span className="text-muted-foreground">sees the app the way a team does. The app gets a preview identity, and the preview is audited. Choose Open as myself to end the preview in this browser.</span>
               </p>
               <Stack direction="horizontal" wrap="wrap" align="center" gap="tight">
                 {(teams.data ?? []).map((t) => {
@@ -106,6 +106,13 @@ export function Access({ project, perms }: { project: Project; perms: Perms }) {
                 <Button size="xs" variant="ghost" disabled={preview.isPending} onClick={() => preview.mutate({ teams: [], anonymous: true })}>
                   Open as nobody
                 </Button>
+                {(project.status.url ?? project.url) && (
+                  <Button size="xs" variant="outline" icon={<ExternalLink />} asChild>
+                    <a href={openUrl(project.status.url ?? project.url, project.access)} target="_blank" rel="noreferrer">
+                      Open as myself
+                    </a>
+                  </Button>
+                )}
               </Stack>
             </div>
           )}

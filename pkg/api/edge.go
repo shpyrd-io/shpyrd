@@ -450,6 +450,7 @@ func (s *Server) jwks(c *gin.Context) {
 // edgeSignin is GET /.shpyrd/signin?rd=<uri> on an app host: off to the
 // dashboard host, which knows the session.
 func (s *Server) edgeSignin(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	app, err := s.appByHost(c, c.Request.Host)
 	if err != nil || workspaceOf(app) != s.workspace(c) {
 		s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
@@ -463,6 +464,7 @@ func (s *Server) edgeSignin(c *gin.Context) {
 
 // edgeStart is GET /.shpyrd/start?app=<host>&rd=<uri> on the dashboard host.
 func (s *Server) edgeStart(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	appHost := strings.ToLower(c.Query("app"))
 	app, err := s.appByHost(c, appHost)
 	if err != nil || workspaceOf(app) != s.workspace(c) {
@@ -491,6 +493,7 @@ func (s *Server) edgeStart(c *gin.Context) {
 // edgeCallback is GET /.shpyrd/callback?code=&rd= on an app host: the code
 // becomes the app-host cookie.
 func (s *Server) edgeCallback(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	app, err := s.appByHost(c, c.Request.Host)
 	if err != nil {
 		s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
