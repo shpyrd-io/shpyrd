@@ -157,8 +157,8 @@ func (s *Server) appShell(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !roles.Can(authz.ProjectExec, projectGrantKey(app)) {
-		abort(c, http.StatusForbidden, denial(roles, authz.ProjectExec, slug))
+	if key := projectGrantKey(app); !roles.Can(authz.ProjectExec, key) {
+		abort(c, http.StatusForbidden, projectDenial(roles, authz.ProjectExec, slug, key))
 		return
 	}
 	// The pod: named by the ticket when the server chose it at minting (a
