@@ -5,11 +5,18 @@ import { addressOf, ago, badgesOf, hostOf, openUrl, phaseOf, toneOf } from "./pr
 const summary = (over: Partial<ProjectSummary>): ProjectSummary => ({ slug: "a", displayName: "A", namespace: "p-a", phase: "Running", release: 1, createdAt: "", access: "public", ...over });
 
 describe("how a project is read for its card", () => {
-  it("is running, failed, or deploying by its phase, and asleep when a process sleeps", () => {
+  it("is running, failed, or deploying by its phase", () => {
     expect(phaseOf(summary({ phase: "Running" }))).toBe("running");
     expect(phaseOf(summary({ phase: "Failed" }))).toBe("failed");
     expect(phaseOf(summary({ phase: "Building" }))).toBe("deploying");
-    expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 1, ready: 0, sleep: { state: "asleep" } } } }))).toBe("sleeping");
+  });
+
+  it("is sleeping when the API reports a sleeping web process even if the project is running", () => {
+    expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 0, ready: 0, sleep: { state: "sleeping" } } } }))).toBe("sleeping");
+  });
+
+  it.each(["awake", "waking", "unavailable"] as const)("keeps the project phase when its web process is %s", (state) => {
+    expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 1, ready: 0, sleep: { state } } } }))).toBe("running");
   });
 
   it("opens a public app at its address, and one behind sign-in through the bounce", () => {

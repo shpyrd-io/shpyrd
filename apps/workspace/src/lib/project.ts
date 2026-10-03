@@ -7,7 +7,7 @@ import type { ProjectSummary } from "@/api/types";
 
 export function phaseOf(p: ProjectSummary): Phase {
   const processes = Object.values(p.processes ?? {});
-  if (processes.some((s) => s.sleep?.state === "asleep")) return "sleeping";
+  if (processes.some((s) => s.sleep?.state === "sleeping")) return "sleeping";
   switch (p.phase) {
     case "Running":
       return "running";

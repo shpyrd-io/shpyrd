@@ -68,6 +68,11 @@ export type WorkspaceInfo = {
   updatedAt: string;
 };
 
+export type SleepStatus = {
+  state: "awake" | "sleeping" | "waking" | "unavailable";
+  message?: string;
+};
+
 export type ProcessStatus = {
   desired: number;
   ready: number;
@@ -79,7 +84,7 @@ export type ProcessStatus = {
   memory?: string;
   // Why the process keeps to one instance, when it does.
   pinned?: string;
-  sleep?: { state: string; message?: string };
+  sleep?: SleepStatus;
 };
 
 export type Exposure = "external" | "internal";
