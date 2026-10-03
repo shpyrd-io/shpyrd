@@ -106,6 +106,81 @@ func TestCookieAndCodes(t *testing.T) {
 
 func ed25519PublicKey(b []byte) ed25519.PublicKey { return ed25519.PublicKey(b) }
 
+// A gate cookie opens its own gate and nothing else: not another gate, not
+// an app, and an app cookie does not open a gate. It names a session of
+// one workspace, by slug and ID.
+func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
+	k, _ := GenerateKeys()
+	val, err := k.SignGateCookie(GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := k.VerifyGateCookie(val, "billing")
+	if err != nil || c.SessionID != "s1" || c.Workspace != "acme" || c.WorkspaceID != "w1" || c.ExpiresAt <= time.Now().Unix() {
+		t.Fatalf("gate cookie: %v %+v", err, c)
+	}
+	if _, err := k.VerifyGateCookie(val, "reports"); err == nil {
+		t.Error("a gate cookie opened another gate")
+	}
+	if _, err := k.VerifyCookie(val, "billing"); err == nil {
+		t.Error("a gate cookie passed for an app cookie")
+	}
+	app, _ := k.SignCookie(CookieClaims{SessionID: "s1", Project: "billing"})
+	if _, err := k.VerifyGateCookie(app, "billing"); err == nil {
+		t.Error("an app cookie passed for a gate cookie")
+	}
+	nobody, _ := k.SignGateCookie(GateClaims{SessionID: "s1", Gate: "billing"})
+	if _, err := k.VerifyGateCookie(nobody, "billing"); err == nil {
+		t.Error("a gate cookie without a workspace was accepted")
+	}
+	expired, _ := k.SignGateCookie(GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
+	if _, err := k.VerifyGateCookie(expired, "billing"); err == nil {
+		t.Error("an expired gate cookie was accepted")
+	}
+}
+
+// A gate code is redeemed once, at its host, as a gate code only: never as
+// an app's edge code.
+func TestAGateCodeIsOnlyAGateCode(t *testing.T) {
+	ctx := context.Background()
+	codes := NewCodes(store.NewMemory())
+	claims := GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing"}
+	code, err := codes.MintJSON(ctx, "billing.example.test", KindGate, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got GateClaims
+	if err := codes.RedeemJSON(ctx, code, "billing.example.test", KindGate, &got); err != nil || got != claims {
+		t.Fatalf("redeem: %v %+v", err, got)
+	}
+	if err := codes.RedeemJSON(ctx, code, "billing.example.test", KindGate, &got); err == nil {
+		t.Error("a gate code was redeemed twice")
+	}
+	asApp, _ := codes.MintJSON(ctx, "billing.example.test", KindGate, claims)
+	if _, err := codes.Redeem(ctx, asApp, "billing.example.test"); err == nil {
+		t.Error("a gate code was redeemed as an app's code")
+	}
+}
+
+// The JWT of a gate says whether the visitor came from an operator-owned
+// workspace; an app's says nothing of it.
+func TestTheOperatorClaimIsOmittedWhenFalse(t *testing.T) {
+	k, _ := GenerateKeys()
+	tok, _ := k.Sign("JWT", Claims{Audience: "billing", Operator: true})
+	var c map[string]any
+	if err := k.Verify(tok, "JWT", &c); err != nil || c["operator"] != true {
+		t.Fatalf("operator claim: %v %v", err, c)
+	}
+	tok, _ = k.Sign("JWT", Claims{Audience: "shop"})
+	c = nil
+	if err := k.Verify(tok, "JWT", &c); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c["operator"]; ok {
+		t.Errorf("an app's JWT carries operator: %v", c)
+	}
+}
+
 // The signing key rotates every RotateEvery: the retired key still
 // verifies what it signed and stays in the JWKS for KeepRetired, then
 // goes; another replica loading the Secret follows; a ring saved before

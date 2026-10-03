@@ -329,6 +329,9 @@ type Claims struct {
 	// Preview marks an "Open as" session; Actor is who is really there.
 	Preview bool   `json:"preview,omitempty"`
 	Actor   *Actor `json:"act,omitempty"`
+	// Operator says the visitor came from an operator-owned workspace; set
+	// at a gate only (RFC-0083).
+	Operator bool `json:"operator,omitempty"`
 }
 
 // Actor is the real identity behind a preview.
@@ -436,6 +439,51 @@ func (k *Keys) VerifyCookie(value, project string) (*CookieClaims, error) {
 	return &c, nil
 }
 
+// GateClaims is what a gate code and a gate cookie carry (RFC-0083): the
+// session, the workspace it was opened in, by slug to find it and by ID to
+// be sure it is the same one, and the one gate it opens.
+type GateClaims struct {
+	SessionID   string `json:"sid"`
+	Workspace   string `json:"ws"`
+	WorkspaceID string `json:"wsid"`
+	Gate        string `json:"gate"`
+	IssuedAt    int64  `json:"iat,omitempty"`
+	ExpiresAt   int64  `json:"exp,omitempty"`
+}
+
+const gateCookieTyp = "shpyrd-gate"
+
+// SignGateCookie mints a gate cookie's value.
+func (k *Keys) SignGateCookie(c GateClaims) (string, error) {
+	now := time.Now()
+	if c.IssuedAt == 0 {
+		c.IssuedAt = now.Unix()
+	}
+	if c.ExpiresAt == 0 {
+		c.ExpiresAt = now.Add(CookieTTL).Unix()
+	}
+	return k.Sign(gateCookieTyp, c)
+}
+
+// VerifyGateCookie checks a gate cookie for the given gate: its type, its
+// gate, a session in a named workspace, and its expiry.
+func (k *Keys) VerifyGateCookie(value, gate string) (*GateClaims, error) {
+	var c GateClaims
+	if err := k.Verify(value, gateCookieTyp, &c); err != nil {
+		return nil, err
+	}
+	if c.Gate != gate {
+		return nil, errors.New("cookie is for another gate")
+	}
+	if c.SessionID == "" || c.Workspace == "" || c.WorkspaceID == "" {
+		return nil, errors.New("cookie names no session")
+	}
+	if time.Now().Unix() >= c.ExpiresAt {
+		return nil, errors.New("cookie expired")
+	}
+	return &c, nil
+}
+
 // Codes hands a session from the dashboard host to an app host: a one-time
 // code minted at /.shpyrd/start and redeemed at /.shpyrd/callback within a
 // minute, kept in the control-plane store so every replica can redeem it.
@@ -452,6 +500,7 @@ func NewCodes(st store.Sessions) *Codes { return &Codes{store: st, now: time.Now
 const (
 	KindEdge    = "edge"    // dashboard host → app host: an app cookie
 	KindSession = "session" // console host → workspace host: a session (RFC-0033 phase 6)
+	KindGate    = "gate"    // workspace host → a gate's host: a gate cookie (RFC-0083)
 )
 
 // envelope wraps the claims of a code with their kind.
