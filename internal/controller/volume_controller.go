@@ -77,6 +77,9 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, vol); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	if vol.Annotations[AnnotationDataMove] != "" {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	if !vol.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
@@ -126,6 +129,9 @@ func (r *VolumeReconciler) reconcile(ctx context.Context, vol *shpyrdv1.Volume) 
 	switch {
 	case apierrors.IsNotFound(err):
 		pvc = r.desiredPVC(vol, vol.Spec.FromSnapshot)
+		if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == LocalStorageClass && vol.Spec.FromSnapshot != "" {
+			return fmt.Errorf("node-local volumes restore from project archives, not provider snapshots")
+		}
 		if err := r.checkStorageClass(ctx, vol, pvc); err != nil {
 			return err
 		}
@@ -186,7 +192,7 @@ func (r *VolumeReconciler) reconcile(ctx context.Context, vol *shpyrdv1.Volume) 
 
 // reconcileExisting applies allowed changes (growth) and refuses the rest.
 func (r *VolumeReconciler) reconcileExisting(ctx context.Context, vol *shpyrdv1.Volume, pvc *corev1.PersistentVolumeClaim) error {
-	if len(pvc.Spec.AccessModes) > 0 && pvc.Spec.AccessModes[0] != vol.Mode() {
+	if len(pvc.Spec.AccessModes) > 0 && pvc.Spec.AccessModes[0] != claimMode(vol, pvc.Spec.StorageClassName) {
 		return fmt.Errorf("access mode cannot change after creation (claim is %s): delete the volume and create it again", pvc.Spec.AccessModes[0])
 	}
 	if vol.Spec.StorageClass != "" && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != vol.Spec.StorageClass {
@@ -261,7 +267,7 @@ func (r *VolumeReconciler) desiredPVC(vol *shpyrdv1.Volume, fromSnapshot string)
 			Labels:    map[string]string{LabelVolume: vol.Name, shpyrdv1.LabelManagedBy: "shpyrd"},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{vol.Mode()},
+			AccessModes: []corev1.PersistentVolumeAccessMode{claimMode(vol, ptr.To(r.storageClassFor(vol)))},
 			Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: vol.Spec.Size}},
 		},
 	}
@@ -447,4 +453,14 @@ func setVolumeCondition(vol *shpyrdv1.Volume, status metav1.ConditionStatus, rea
 		}
 	}
 	vol.Status.Conditions = append(vol.Status.Conditions, cond)
+}
+
+// Local shared volumes share one node, not a network filesystem. Kubernetes
+// RWO permits multiple pods on that node; the public Shared flag retains its
+// process/replica semantics. Never rewrite an already provisioned RWX claim.
+func claimMode(vol *shpyrdv1.Volume, class *string) corev1.PersistentVolumeAccessMode {
+	if class != nil && *class == "shpyrd-local" {
+		return corev1.ReadWriteOnce
+	}
+	return vol.Mode()
 }

@@ -13,6 +13,7 @@ import { Components } from "./components";
 import { Economics } from "./economics";
 import { Mail as MailPage } from "./mail";
 import { Overview } from "./overview";
+import { Placement } from "./placement";
 import { Registry } from "./registry";
 import { Settings as SettingsPage } from "./settings";
 import { SignIn } from "./sign-in";
@@ -90,6 +91,13 @@ const pages: Page[] = [
     title: "Instances",
     icon: <Cpu />,
     needs: "view",
+  },
+  {
+    group: "Cluster",
+    slug: "placement",
+    title: "Placement",
+    icon: <Boxes />,
+    needs: "admin",
   },
   {
     group: "Cluster",
@@ -215,6 +223,7 @@ export function Pages() {
         <Route path="registry" element={<Registry />} />
         <Route path="storage" element={<Storage />} />
         <Route path="backups" element={<Backups />} />
+        <Route path="placement" element={<Placement />} />
         <Route path="mail" element={<MailPage />} />
         <Route path="components" element={<Components />} />
         <Route path="*" element={<Navigate to="/" replace />} />

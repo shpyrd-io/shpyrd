@@ -1,6 +1,8 @@
 name: oci
 description: Oracle Cloud (OKE) with a public load balancer, Let's Encrypt certificates and the in-cluster registry
 vars:
+  # Project data uses the node disk. Existing claims keep their storage class.
+  SHPYRD_PROJECT_STORAGE_CLASS: shpyrd-local
   # Pass --domain (a wildcard DNS record you own) and the address
   # (contrib/oci/terraform creates the cluster and prints them):
   #   --set SHPYRD_ACME_EMAIL=you@example.com --set SHPYRD_LB_IP=<reserved address>
@@ -111,7 +113,7 @@ runlevels:
   - name: rc0
     components: [monitoring-crds]
   - name: rc1
-    components: [object-gateway, network-policy, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-fss]
+    components: [storage-local, object-gateway, network-policy, cert-manager, registry-credentials, platform-service, snapshot-controller, storage-fss]
   - name: rc2
     components: [letsencrypt-issuers, ca-issuers, trust-manager, ingress-nginx, ingress-nginx-internal, registry, registry-nodes, external-dns, dns01-oci]
   - name: rc3

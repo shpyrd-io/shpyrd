@@ -256,6 +256,14 @@ type outcome struct {
 func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{RequeueAfter: d}} }
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
+		return r.reconcileMaintenance(ctx, app)
+	}
+	if !maintenance(app) {
+		if err := r.resumeMaintenanceJobs(ctx, app); err != nil {
+			return outcome{}, err
+		}
+	}
 	// 0. A requested rollback restores that release's config vars first, so
 	// the release recorded below carries both the build and the config.
 	var secret *corev1.Secret
@@ -870,7 +878,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if serving && app.EffectiveAccess() != shpyrdv1.AccessPublic {
+	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenance(app)) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)

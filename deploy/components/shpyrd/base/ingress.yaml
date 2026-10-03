@@ -76,3 +76,41 @@ spec:
                 name: shpyrd-server
                 port:
                   name: http
+---
+# Project archives stream directly in both directions. The API separately
+# limits expanded bytes and authenticates before consuming an upload.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shpyrd-server-archives
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "65g"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
+  tls:
+    - hosts:
+        - ${SHPYRD_CONSOLE_HOST}
+      secretName: shpyrd-tls
+  rules:
+    - host: ${SHPYRD_CONSOLE_HOST}
+      http:
+        paths:
+          - path: /api/project-archives
+            pathType: Prefix
+            backend:
+              service:
+                name: shpyrd-server
+                port:
+                  name: http
+          - path: /api/cluster/project-archives
+            pathType: Prefix
+            backend:
+              service:
+                name: shpyrd-server
+                port:
+                  name: http

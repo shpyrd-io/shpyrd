@@ -27,7 +27,7 @@ export type PublicConfig = {
   consoleUrl?: string;
   // What the cluster can do with volumes: the least size, and whether
   // it takes snapshots.
-  volumes?: { minSize?: string; snapshots: boolean };
+  volumes?: { minSize?: string; snapshots: boolean; nodeLocal?: boolean };
 };
 
 export type WorkspaceRole = "owner" | "admin" | "member";

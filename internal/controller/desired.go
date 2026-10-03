@@ -86,6 +86,7 @@ type Config struct {
 	// two node pools (RFC-0077); empty means a single pool and no selectors.
 	// Application processes, builds and one-off runs select AppsPool; the
 	// datastores select PlatformPool.
+	LocalStorage bool
 	AppsPool     string
 	PlatformPool string
 	// BuildCacheSize is the kpack cache volume size (e.g. "2Gi"); empty disables.
@@ -687,7 +688,10 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		d.Spec.Template.Annotations[shpyrdv1.AnnotationRestartedAt] = at
 	}
 	d.Spec.Template.Spec.EnableServiceLinks = ptr.To(false)
-	d.Spec.Template.Spec.NodeSelector = c.appsNodeSelector() // RFC-0077
+	d.Spec.Template.Spec.NodeSelector = c.processNodeSelector(app, p.Name)
+	if c.LocalStorage {
+		localVolumeAffinity(app, p.Name, &d.Spec.Template)
+	}
 	d.Spec.Template.Spec.ImagePullSecrets = c.imagePullSecrets()
 	d.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	hc := p.HealthCheck
@@ -869,6 +873,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		})
 	}
 	ing.Spec.Rules = rules
+	maintenanceIngress(app, ing)
 }
 
 // Edge (RFC-0033): apps whose access is not public get the ingress-nginx
@@ -925,6 +930,7 @@ var edgeAnnotationKeys = []string{
 // mutateEdgeIngress builds the companion Ingress: the same hosts, class and
 // TLS as the app's, paths under /.shpyrd/ to the server.
 func (c Config) mutateEdgeIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
+	defer maintenanceIngress(app, ing)
 	ing.Labels = mergeMaps(ing.Labels, processLabels(app, "web"))
 	ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
 		"nginx.ingress.kubernetes.io/ssl-redirect": "true",

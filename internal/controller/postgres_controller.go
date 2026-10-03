@@ -195,6 +195,16 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 	err = r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name}, current)
 	if err == nil {
 		resources = keepMemory(current, pg.Spec.Size, resources)
+		// Switching the default class must not shrink an existing provider disk
+		// that was rounded up by the former provider minimum.
+		if r.Storage.Class == LocalStorageClass {
+			class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass")
+			previous, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "size")
+			if quantity, parseErr := resource.ParseQuantity(previous); parseErr == nil && class != LocalStorageClass && quantity.Cmp(storage) > 0 {
+				storage = quantity
+				pg.Status.Storage = quantity.String()
+			}
+		}
 	}
 	desired := desiredCNPGCluster(pg, storage, resources, r.Storage.Class, r.PlatformPool)
 	if err := controllerutil.SetControllerReference(pg, desired, r.Scheme); err != nil {
@@ -484,6 +494,13 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, res co
 		// Databases are stateful and single-instance: the platform pool,
 		// where the autoscaler never drains (RFC-0077).
 		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: platformPool}}
+	}
+	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" {
+		selector := map[string]interface{}{corev1.LabelHostname: node}
+		if platformPool != "" {
+			selector[PoolLabel] = platformPool
+		}
+		spec["affinity"] = map[string]interface{}{"nodeSelector": selector}
 	}
 	// Backups and recovery (RFC-0038).
 	if pg.Spec.Backups != nil {

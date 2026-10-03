@@ -1,5 +1,6 @@
 import { json, request } from "@shpyrd/shared/api/http";
 import type { Api } from "./api";
+import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
 import type { ClusterMetrics, NodeUsage, Series } from "./types";
 
 // The paths of the server at the console door. Where the server's shape
@@ -28,6 +29,14 @@ export function toClusterMetrics(answer: MetricsAnswer): ClusterMetrics {
 const methods = (scope: "console" | "platform") => (scope === "console" ? "/api/workspace/login-methods" : "/api/auth/connectors");
 
 export const backend: Api = {
+  archiveProjects: () => request("/api/cluster/project-archives"),
+  measureProjectPlacement: (id, group) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement/measure`, { method: "POST", body: JSON.stringify({ group }) }),
+  projectPlacement: (id) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement`),
+  moveProject: async (id, body) => { await request(`/api/cluster/project-archives/${encodeURIComponent(id)}/move`, json("POST", body)); },
+  projectArchiveStatus: (id) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).status(),
+  backupProject: (id) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).backup(),
+  restoreProject: (id, file) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).restore(file),
+  recoverProject: (id) => projectArchiveActions(`/api/cluster/project-archives/${encodeURIComponent(id)}`).recover(),
   config: () => request("/api/config"),
   me: () => request("/api/me"),
   passwordLogin: (body) => request("/api/auth/password", json("POST", body)),

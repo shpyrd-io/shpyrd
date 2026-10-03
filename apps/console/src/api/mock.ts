@@ -1,5 +1,7 @@
 import { ApiError } from "@shpyrd/shared/api/error";
-import { single, wait } from "@shpyrd/shared/api/mock-store";
+import { mockProjectArchives } from "@shpyrd/shared/api/project-archives-mock";
+import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
+import type { ArchiveProject, ProjectPlacement } from "@shpyrd/shared/api/project-archives";
 import type { Api } from "./api";
 import type {
   BackupInfo,
@@ -24,6 +26,13 @@ import cluster from "../../mock/cluster.json";
 import config from "../../mock/config.json";
 import me from "../../mock/me.json";
 import things from "../../mock/things.json";
+import placement from "../../mock/project-placement.json";
+import archiveProjects from "../../mock/archive-projects.json";
+
+const placementOf = collection<ProjectPlacement & { id: string }>("console-project-placement-v2", placement, (item) => item.id);
+const archiveActions = mockProjectArchives("console");
+
+const archiveProjectsOf = collection<ArchiveProject>("console-archive-projects", archiveProjects, (project) => project.id);
 
 // Everything the console reads, in one kept object, changed in place.
 type Things = {
@@ -62,6 +71,40 @@ const now = () => new Date().toISOString();
 const id = () => Math.random().toString(36).slice(2, 10);
 
 export const mock: Api = {
+  archiveProjects: async () => {
+    const projects = await archiveProjectsOf.list();
+    const placements = await placementOf.list();
+    return projects.map((project) => { const placement = placements.find((item) => item.id === project.id); return placement ? { ...project, nodes: [...new Set(placement.groups.flatMap((group) => group.nodes))] } : project; });
+  },
+  ...archiveActions,
+  projectPlacement: placementOf.find,
+  measureProjectPlacement: async (id, key) => {
+    await wait();
+    const project = await placementOf.find(id);
+    const group = project.groups.find((group) => group.id === key);
+    if (!group) throw new ApiError(404, "Placement group not found.");
+    return { group: key, diskUsedBytes: group.diskUsedBytes ?? 0, measuredAt: new Date().toISOString() };
+  },
+  moveProject: async (id, body) => {
+    const project = await placementOf.find(id);
+    const group = project.groups.find((group) => group.id === body.group);
+    const node = project.nodes.find((node) => node.name === body.node);
+    if (!group || !node || !node.eligible || (group.pool && group.pool !== node.pool)) throw new ApiError(409, "Choose an eligible node in this group's pool.");
+    await archiveActions.simulateMove(id);
+    for (const source of project.nodes.filter((n) => group.nodes.includes(n.name))) {
+      source.cpuRequestedMillicores = Math.max(0, source.cpuRequestedMillicores - (group.cpuRequestedMillicores ?? 0));
+      source.memoryRequestedBytes = Math.max(0, source.memoryRequestedBytes - (group.memoryRequestedBytes ?? 0));
+      if (source.diskAvailableBytes != null) source.diskAvailableBytes += group.diskUsedBytes ?? 0;
+    }
+    node.cpuRequestedMillicores += group.cpuRequestedMillicores ?? 0;
+    node.memoryRequestedBytes += group.memoryRequestedBytes ?? 0;
+    if (node.diskAvailableBytes != null) node.diskAvailableBytes -= group.diskUsedBytes ?? 0;
+    group.nodes = [node.name];
+    await placementOf.set(project);
+    const summary = await archiveProjectsOf.find(id);
+    summary.nodes = [...new Set(project.groups.flatMap((group) => group.nodes))];
+    await archiveProjectsOf.set(summary);
+  },
   config: async () => {
     await wait();
     const all = await thingsOf.get();
