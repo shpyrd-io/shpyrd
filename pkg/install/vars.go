@@ -115,6 +115,10 @@ const (
 	VarAppsPool     = "SHPYRD_APPS_POOL"     // apps, builds, one-off runs
 	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components
 	VarDataPool     = "SHPYRD_DATA_POOL"     // project databases and stores, object storage ("" = the platform pool)
+	// The Kubernetes version charts are rendered for without a cluster
+	// (`cluster export`); "" = the one the client libraries were built
+	// for. A cluster init renders for the cluster's own.
+	VarKubeVersion = "SHPYRD_KUBE_VERSION"
 	// Cluster autoscaler (RFC-0075): node pool autoscaling for OCI OKE.
 	VarNodePoolID   = "SHPYRD_NODE_POOL_ID"   // OCI node pool OCID ("" = autoscaler not deployed)
 	VarNodeMinCount = "SHPYRD_NODE_MIN_COUNT" // minimum worker nodes (1 = never fully drain)

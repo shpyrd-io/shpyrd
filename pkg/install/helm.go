@@ -8,6 +8,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"path"
+	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -188,8 +191,9 @@ func (h *helmClient) install(ctx context.Context, cfg *action.Configuration, spe
 	return rel, nil
 }
 
-// template renders the chart without a cluster, for export.
-func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, post postrender.PostRenderer) ([]*unstructured.Unstructured, error) {
+// template renders the chart without a cluster, for export, as for a
+// cluster running kube (nil: Helm's default, v1.20.0).
+func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, kube *chartutil.KubeVersion, post postrender.PostRenderer) ([]*unstructured.Unstructured, error) {
 	cfg := new(action.Configuration)
 	inst := action.NewInstall(cfg)
 	inst.ReleaseName = spec.Release
@@ -197,6 +201,7 @@ func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace str
 	inst.DryRun = true
 	inst.ClientOnly = true
 	inst.IncludeCRDs = !spec.SkipCRDs
+	inst.KubeVersion = kube
 	inst.PostRenderer = post
 	inst.SetRegistryClient(h.registry)
 	rel, err := inst.RunWithContext(ctx, ch, vals)
@@ -208,6 +213,62 @@ func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace str
 		raw = append(raw, []byte("\n---\n"+hook.Manifest)...)
 	}
 	return decodeObjects(raw)
+}
+
+// renderKubeVersion is the Kubernetes a chart is rendered for without a
+// cluster: the profile's (what contrib/*/terraform creates), else the one
+// the client libraries were built for. Helm used as a library says
+// v1.20.0, which charts that need a newer one refuse (cert-manager:
+// >= 1.22).
+func renderKubeVersion(vars map[string]string) (*chartutil.KubeVersion, error) {
+	if v := vars[VarKubeVersion]; v != "" {
+		kv, err := chartutil.ParseKubeVersion(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s %q: %w", VarKubeVersion, v, err)
+		}
+		return kv, nil
+	}
+	return kubeVersion(), nil
+}
+
+// kubeVersion is the Kubernetes the client libraries were built for, as
+// the helm CLI's own build sets it; nil when the binary does not say.
+func kubeVersion() *chartutil.KubeVersion {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
+	}
+	for _, d := range bi.Deps {
+		if d.Path != "k8s.io/client-go" {
+			continue
+		}
+		if d.Replace != nil {
+			d = d.Replace
+		}
+		return clientGoKubeVersion(d.Version)
+	}
+	return nil
+}
+
+// clientGoKubeVersion is Kubernetes v1.<minor>.<patch> for k8s.io/client-go
+// v0.<minor>.<patch>, without a pre-release; nil for anything else.
+func clientGoKubeVersion(v string) *chartutil.KubeVersion {
+	parts := strings.SplitN(strings.TrimPrefix(v, "v"), ".", 3)
+	if len(parts) != 3 || parts[0] != "0" {
+		return nil
+	}
+	patch, _, _ := strings.Cut(parts[2], "-")
+	if _, err := strconv.Atoi(parts[1]); err != nil {
+		return nil
+	}
+	if _, err := strconv.Atoi(patch); err != nil {
+		return nil
+	}
+	kv, err := chartutil.ParseKubeVersion("v1." + parts[1] + "." + patch)
+	if err != nil {
+		return nil
+	}
+	return kv
 }
 
 // uninstall removes a release; a missing release is not an error.

@@ -99,6 +99,9 @@ vars:
   SHPYRD_PLATFORM_POOL: platform
   SHPYRD_APPS_POOL: ""
   SHPYRD_DATA_POOL: ""
+  # The Kubernetes `cluster export` renders the charts for: the version
+  # contrib/oci/terraform creates. cluster init uses the cluster's own.
+  SHPYRD_KUBE_VERSION: v1.36.1
   # Cluster autoscaler (RFC-0075): pass the node pool OCID and bounds from
   # Terraform output (contrib/oci/terraform output node_pool_id).
   # Empty SHPYRD_NODE_POOL_ID disables the component.

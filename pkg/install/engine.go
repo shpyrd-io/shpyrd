@@ -436,6 +436,10 @@ func (e *Engine) Export(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	kube, err := renderKubeVersion(e.vars)
+	if err != nil {
+		return err
+	}
 	var files []string
 	n := 0
 	for _, rl := range e.profile.Runlevels {
@@ -452,7 +456,7 @@ func (e *Engine) Export(ctx context.Context, dir string) error {
 				if err != nil {
 					return fmt.Errorf("%s: %w", c.Name, err)
 				}
-				rendered, err := e.helm.template(ctx, c.Helm, c.Namespace, ch, vals, e.postRenderer(c))
+				rendered, err := e.helm.template(ctx, c.Helm, c.Namespace, ch, vals, kube, e.postRenderer(c))
 				if err != nil {
 					return fmt.Errorf("%s: %w", c.Name, err)
 				}
