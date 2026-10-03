@@ -45,7 +45,7 @@ vpn          = true                  # WireGuard instance + profile: the way to 
 
 cluster_type = "BASIC_CLUSTER"       # ENHANCED_CLUSTER for workload identity (per-cluster fee)
 node_shape   = "VM.Standard.E5.Flex" # or VM.Standard.A1.Flex (Always Free, arm64) where the region has capacity
-node_ocpus   = 2                     # the platform pool: fixed size, carries the platform and every database
+node_ocpus   = 2                     # the platform pool: fixed size, carries the platform (and the databases without a data pool)
 node_memory_gb = 12
 node_count   = 2
 
@@ -118,7 +118,7 @@ What the file carries, and where each value comes from:
 | `SHPYRD_INTERNAL_LB_SUBNET` | the private load balancer subnet for internal front doors | the `lb_private` subnet |
 | `SHPYRD_FSS_MOUNT_TARGET`, `SHPYRD_FSS_AD` | File Storage behind shared volumes | `shared_storage` |
 | `SHPYRD_DNS_*` | OCI DNS automation: provider, compartment, tenancy, region, user, key or workload identity | the zone and the DNS user |
-| `SHPYRD_APPS_POOL`, `SHPYRD_PLATFORM_POOL` | the node label values the controller schedules by ([Node pools](#node-pools)) | the two node pools |
+| `SHPYRD_PLATFORM_POOL`, `SHPYRD_APPS_POOL`, `SHPYRD_DATA_POOL` | the node label values the installer and the controller schedule by ([Node pools](#node-pools)) | the node pools |
 | `SHPYRD_NODE_POOL_ID`, `SHPYRD_NODE_MIN_COUNT`, `SHPYRD_NODE_MAX_COUNT` | the pool the cluster autoscaler manages and its bounds | the `apps` pool, `apps_min_count`, `apps_max_count` |
 
 Flags and `--set` win over the file (`--platform-exposure internal`, `--set SHPYRD_REGISTRY_SIZE=100Gi`, `--internal-lb-subnet` for another subnet). The file wins over what an earlier run recorded: when Terraform changes the infrastructure, run `terraform apply` and then `cluster init` with the same `--vars-file`, and the cluster follows.
@@ -174,14 +174,21 @@ Certificates are publicly trusted, so `https://shop.oci.example.com` opens with 
 
 ## Node pools
 
-A cloud cluster has two kinds of workload, and they scale differently. The platform's own components and every database are stateful: evicting them is a restart a customer notices, and their volumes attach to whatever node the pod lands on. Application processes, builds and one-off runs can always be moved. So the profile gives them separate node pools:
+A cloud cluster has kinds of workload that scale differently. The platform's own components and every database are stateful: evicting them is a restart a customer notices, and their volumes attach to whatever node the pod lands on. Application processes, builds and one-off runs can always be moved. So the profile gives them separate node pools:
 
 | Pool | Size | Carries |
 | --- | --- | --- |
-| `platform` | fixed, `node_count` | ingress, Prometheus, the control-plane database, KEDA, cert-manager, kpack, the operators, the wake proxy, the autoscaler; every Postgres and Redis resource |
+| `platform` | fixed, `node_count` | every pod the installer puts in place: ingress, Prometheus and Grafana, the control-plane database, KEDA, cert-manager, kpack, the operators, the server, the wake proxy, the autoscaler, Calico's controllers; the projects' data too when there is no `data` pool |
+| `data` (optional) | `data_min_count` to `data_max_count` | every Postgres and Redis resource, the object store and the Postgres wake proxy |
 | `apps` | autoscaled, `apps_min_count` to `apps_max_count` | web and worker processes, release and one-off Jobs, build pods |
 
-The nodes are told apart by the label `shpyrd.io/pool` (OKE node pools have no taints), and the console's Cluster page shows each node's pool next to its name; the controller puts a node selector for the apps pool on everything it schedules for an app and pins databases and stores to the platform pool. The cluster autoscaler manages the apps pool alone: a node joins when a process has no room, and leaves when it has been under half used for ten minutes — which, with [sleep](/docs/cli) (`shpyrd sleep`) putting idle apps to zero, actually happens. The platform pool never changes size on its own.
+The nodes are told apart by the label `shpyrd.io/pool` (OKE node pools have no taints), and the console's Cluster page shows each node's pool next to its name. The installer adds a node selector for the platform pool to every Deployment, StatefulSet and CronJob it installs, Helm's or its own (DaemonSets run on every node, as they should), and one for the data pool to the object store and the wake proxy; the controller puts one for the apps pool on everything it schedules for an app and pins databases and stores to the data pool, or to the platform pool when there is none. `cluster init` refuses to install when no node carries the platform pool's label: everything pinned there would wait forever. `cluster status`, and a warning on the Cluster page, list any pod of the platform running on an apps or data node, so nothing creeps back there.
+
+CoreDNS is OKE's and stays where OKE puts it, on every node: OKE manages it, and the cluster's names should not depend on the platform pool alone. The warning leaves it out.
+
+The cluster autoscaler manages the apps pool alone: a node joins when a process has no room, and leaves when it has been under half used for ten minutes — which, with [sleep](/docs/cli) (`shpyrd sleep`) putting idle apps to zero, actually happens. The platform pool never changes size on its own.
+
+Two E5 nodes of 1 OCPU and 12 GB hold the platform of the first cloud with room: about 2.0 of their 3.7 allocatable cores reserved, the node agents included, once the data pool takes the databases.
 
 `apps_min_count = 1` keeps one warm node so a sleeping app wakes in seconds; `0` lets the pool empty when every app sleeps, and the first request then also waits for a node (about two minutes). `apps_max_count = 0` (the default in Terraform) means no apps pool: a single-pool cluster as before.
 
@@ -196,7 +203,7 @@ At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` plat
 ## Good to know
 
 - **Network policy.** OKE with VCN-native pod networking accepts `NetworkPolicy` objects without enforcing them. The profile installs Calico in policy-only mode (Oracle's supported path) so projects are isolated from each other and from the instance metadata service; `--set SHPYRD_NETWORK_POLICY=none` skips it on a cluster that already enforces policies. `cluster init` warns on any cluster where it finds no policy engine.
-- **Block volumes start at 50 GB.** A `shpyrd volumes create data --size 1Gi` is created at 50Gi and the command says so; the registry's volume is 50 GB for that reason. Snapshots (`shpyrd volumes snapshot`) are block volume backups. See [Volumes on Oracle Cloud](/docs/resources#volumes-on-oracle-cloud).
+- **Block volumes start at 50 GB.** A `shpyrd volumes create data --size 1Gi` is created at 50Gi and the command says so; the registry's volume is 50 GB for that reason. Snapshots (`shpyrd volumes snapshot`) are block volume backups.
 - **Shared volumes need File Storage.** Set `shared_storage = true` in `terraform.tfvars` and pass the two `--set SHPYRD_FSS_MOUNT_TARGET=… --set SHPYRD_FSS_AD=…` values `next_steps` prints to `shpyrd cluster init`. It needs the File Storage service limits `Mount Target Count` and `File System Count` above zero in the availability domain (Console: Governance > Limits, Quotas and Usage > File Storage); some tenancies start at 0 and must request an increase. The mount target is free; file systems bill by the space used.
 - **CRI-O.** OKE nodes run CRI-O, which refuses unqualified image names such as `redis:7`; shpyrd's own images are fully qualified, and so should yours be in a Dockerfile.
 - **OCIR instead of the in-cluster registry.** `--registry-host <region>.ocir.io/<tenancy-namespace> --registry-user <namespace>/<user> --registry-token-file <file>` uses OCIR; the registry components are then skipped.

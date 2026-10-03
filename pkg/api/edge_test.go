@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"net/http"
 	"net/http/httptest"
@@ -230,6 +231,66 @@ func TestEdgeAuthDecisions(t *testing.T) {
 	}
 }
 
+// Returning from either kind of preview replaces the app cookie without
+// ending the workspace session or carrying preview roles into normal access.
+func TestEdgePreviewReturnsToOwnIdentity(t *testing.T) {
+	for _, preview := range []*edge.Preview{{Teams: []string{"finance"}}, {Anonymous: true}} {
+		t.Run(fmt.Sprintf("anonymous=%t", preview.Anonymous), func(t *testing.T) {
+			app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "expenses", Namespace: "app-expenses"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
+			s, _ := newTestServer(t, nil, []client.Object{app})
+			s.opts.Public.DashboardURL = "https://shpyrd.example.test"
+			if _, err := s.store.AddGrant(context.Background(), store.DefaultWorkspace, store.Grant{Project: "expenses", Role: shpyrdv1.RoleDeveloper, User: "owner@acme.test"}); err != nil {
+				t.Fatal(err)
+			}
+			sid, _ := signIn(t, s, ext.Identity{Subject: "owner", Email: "owner@acme.test", Provider: "local"})
+			raw, err := s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: sid, Project: "expenses", Preview: preview})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cookie := &http.Cookie{Name: s.edgeCookieName(), Value: raw}
+			request := func(target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+				req := httptest.NewRequest("GET", target, nil)
+				req.Header.Set("Accept", "text/html")
+				for _, ck := range cookies {
+					req.AddCookie(ck)
+				}
+				rec := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rec, req)
+				return rec
+			}
+			signin := request("https://expenses.example.test/.shpyrd/signin?rd=%2Freports", cookie)
+			start := request(signin.Header().Get("Location"), &http.Cookie{Name: sessionCookie, Value: sid})
+			callback := request(start.Header().Get("Location"), cookie)
+			for _, rec := range []*httptest.ResponseRecorder{signin, start, callback} {
+				if rec.Code != http.StatusFound || rec.Header().Get("Cache-Control") != "no-store" {
+					t.Fatalf("sign-in redirect = %d %v", rec.Code, rec.Header())
+				}
+			}
+			if callback.Header().Get("Location") != "/reports" {
+				t.Fatal("lost the return path")
+			}
+			var restored *http.Cookie
+			for _, ck := range callback.Result().Cookies() {
+				if ck.Name == cookie.Name {
+					restored = ck
+				}
+			}
+			if restored == nil || restored.Path != "/" || !restored.HttpOnly {
+				t.Fatal("app cookie was not replaced")
+			}
+			claims, err := s.edgeKeys.VerifyCookie(restored.Value, "expenses")
+			if err != nil || claims.Preview != nil || claims.SessionID != sid {
+				t.Fatalf("restored cookie = %+v, %v", claims, err)
+			}
+			rec := edgeRequest(t, s, "expenses", "authenticated", restored.Value, "")
+			var identity edge.Claims
+			if err := s.edgeKeys.Verify(strings.TrimPrefix(rec.Header().Get("Authorization"), "Bearer "), "JWT", &identity); err != nil || rec.Code != http.StatusOK || identity.Preview || identity.Actor != nil || identity.Email != "owner@acme.test" {
+				t.Fatalf("restored identity = %+v, status %d, %v", identity, rec.Code, err)
+			}
+		})
+	}
+}
+
 func TestEdgeSigninAndStart(t *testing.T) {
 	expenses := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "expenses", Namespace: "app-expenses"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
 	s, _ := newTestServer(t, nil, []client.Object{expenses})
@@ -328,6 +389,20 @@ func TestEdgeSigninAndStart(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "is available to") {
 		t.Errorf("denied page = %d %s", rec.Code, rec.Body.String()[:min(len(rec.Body.String()), 200)])
+	}
+	// nginx's own 503, while no pod of the app is ready, becomes the
+	// service-unavailable page, whose one script its policy allows.
+	req = httptest.NewRequest("GET", "/reports", nil)
+	req.Host = "expenses.example.test"
+	req.Header.Set("X-Code", "503")
+	req.Header.Set("X-Format", "text/html")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "Service unavailable") || !strings.Contains(rec.Body.String(), "<script>") {
+		t.Errorf("unavailable page = %d %s", rec.Code, rec.Body.String()[:min(len(rec.Body.String()), 200)])
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'sha256-") {
+		t.Errorf("unavailable page policy = %q: its script would not run", csp)
 	}
 	// The launcher lists what the caller may open: in bootstrap mode Maria
 	// is a platform admin, so everything.

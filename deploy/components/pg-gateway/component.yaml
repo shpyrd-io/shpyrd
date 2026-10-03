@@ -1,6 +1,9 @@
 name: pg-gateway
 description: TCP wake-on-connect proxy for sleeping PostgreSQL databases (RFC-0075)
 namespace: shpyrd-system
+# The way into the projects' databases: beside them, on the data pool
+# when the cluster has one (RFC-0077), else the platform pool.
+pool: data
 kustomize:
   path: ""
 wait:

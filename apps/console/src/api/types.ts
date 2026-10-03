@@ -91,6 +91,19 @@ export type Node = {
   pool?: string;
 };
 
+// A pod of the platform running outside the platform pool, where no
+// selector of its own put it: on an apps or data node.
+export type MisplacedPod = {
+  namespace: string;
+  name: string;
+  // What made it: "Deployment/keda-operator".
+  owner?: string;
+  node: string;
+  pool: string;
+  // The CPU it reserves there: "250m".
+  cpu?: string;
+};
+
 export type ClusterSummary = {
   install?: { profile: string; version: string; domain: string; updatedAt: string };
   components: { name: string; version?: string; appliedAt: string }[];
@@ -100,6 +113,7 @@ export type ClusterSummary = {
   phases: Record<string, number>;
   externalLBAddress?: string;
   internalLBAddress?: string;
+  misplaced?: MisplacedPod[];
 };
 
 export type NodeUsage = {

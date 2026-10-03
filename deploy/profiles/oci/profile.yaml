@@ -89,6 +89,19 @@ vars:
   # Reserved public address for the load balancer (contrib/oci/terraform output
   # load_balancer_ip); empty lets OCI pick an ephemeral one.
   SHPYRD_LB_IP: ""
+  # Node pools (RFC-0077): the shpyrd.io/pool label values. The installer
+  # puts every pod of the platform on the platform pool, and the
+  # projects' databases, stores and object storage on the data pool (the
+  # platform pool when there is none); the controller puts processes and
+  # builds on the apps pool. contrib/oci/terraform labels the pools and
+  # writes the values in the vars file; init refuses a platform pool with
+  # no node. CoreDNS is OKE's and stays where OKE puts it.
+  SHPYRD_PLATFORM_POOL: platform
+  SHPYRD_APPS_POOL: ""
+  SHPYRD_DATA_POOL: ""
+  # The Kubernetes `cluster export` renders the charts for: the version
+  # contrib/oci/terraform creates. cluster init uses the cluster's own.
+  SHPYRD_KUBE_VERSION: v1.36.1
   # Cluster autoscaler (RFC-0075): pass the node pool OCID and bounds from
   # Terraform output (contrib/oci/terraform output node_pool_id).
   # Empty SHPYRD_NODE_POOL_ID disables the component.

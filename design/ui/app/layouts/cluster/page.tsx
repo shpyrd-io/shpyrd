@@ -1,6 +1,7 @@
 "use client";
 
 import { Cpu, MemoryStick, Server } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InfoTable, InfoTableItem } from "@shpyrd/ui/components/info-table";
@@ -25,7 +26,7 @@ import { cpu, memory } from "../../samples";
 // The node pools, in the order they are listed, and what lands on each.
 const pools: Record<string, string> = {
   platform: "The platform itself, and whatever has no pool of its own.",
-  data: "Project databases and Redis.",
+  data: "Project databases, Redis and object storage.",
   apps: "Project processes, builds and one-off runs.",
 };
 
@@ -34,6 +35,13 @@ const nodes = [
   { name: "10.0.1.27", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-1", arch: "arm64", pool: "platform", cpu: [48, 65], memory: [55, 70], cores: 4, gib: 24, pods: "19 / 110", kubelet: "v1.31.2", ready: true },
   { name: "10.0.1.31", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", pool: "data", cpu: [88, 92], memory: [81, 90], cores: 4, gib: 24, pods: "27 / 110", kubelet: "v1.31.2", ready: true },
   { name: "10.0.1.40", shape: "VM.Standard.A1.Flex · sa-saopaulo-1-AD-2", arch: "arm64", pool: "apps", cpu: [0, 0], memory: [0, 0], cores: 4, gib: 24, pods: "0 / 110", kubelet: "v1.31.2", ready: false },
+];
+
+// The platform's pods running outside the platform pool, by node: what
+// made them and the CPU they reserve there.
+const misplaced = [
+  { node: "10.0.1.40", pool: "apps", owners: ["keda/keda-operator", "keda/keda-add-ons-http-interceptor", "cert-manager/cert-manager"], millicores: 120 },
+  { node: "10.0.1.31", pool: "data", owners: ["shpyrd-system/shpyrd-server"], millicores: 20 },
 ];
 
 const extensions = [
@@ -145,6 +153,21 @@ export default function Page() {
                 series={memory.map((s, i) => ({ name: nodes[i].name, points: s.points }))}
               />
             </div>
+            <Alert variant="warning">
+              <AlertTitle>4 pods of the platform outside the platform pool</AlertTitle>
+              <AlertDescription>
+                <p>
+                  They take room and pods from the projects, and keep the autoscaler from removing an idle node. <InlineCode>shpyrd cluster init</InlineCode> pins them; each moves when its workload rolls.
+                </p>
+                <ul className="grid gap-1">
+                  {misplaced.map((n) => (
+                    <li key={n.node}>
+                      <span className="font-mono text-foreground">{n.node}</span> ({n.pool}, {n.millicores}m reserved): {n.owners.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
             <Table>
               <TableHeader>
                 <TableRow>

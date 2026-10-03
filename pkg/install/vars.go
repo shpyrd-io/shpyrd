@@ -119,9 +119,14 @@ const (
 	VarFSSMountTarget = "SHPYRD_FSS_MOUNT_TARGET" // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
 	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
 	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
-	// Node pools (RFC-0077): label values of the two pools ("" = single pool).
+	// Node pools (RFC-0077): values of the shpyrd.io/pool label ("" = no such pool).
 	VarAppsPool     = "SHPYRD_APPS_POOL"     // apps, builds, one-off runs
-	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components, databases, stores
+	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components
+	VarDataPool     = "SHPYRD_DATA_POOL"     // project databases and stores, object storage ("" = the platform pool)
+	// The Kubernetes version charts are rendered for without a cluster
+	// (`cluster export`); "" = the one the client libraries were built
+	// for. A cluster init renders for the cluster's own.
+	VarKubeVersion = "SHPYRD_KUBE_VERSION"
 	// Cluster autoscaler (RFC-0075): node pool autoscaling for OCI OKE.
 	VarNodePoolID   = "SHPYRD_NODE_POOL_ID"   // OCI node pool OCID ("" = autoscaler not deployed)
 	VarNodeMinCount = "SHPYRD_NODE_MIN_COUNT" // minimum worker nodes (1 = never fully drain)
@@ -358,7 +363,7 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if _, ok := vars[VarSourcesSecret]; !ok {
 		out[VarSourcesSecret] = RegistryS3SecretName
 	}
-	for _, v := range []string{VarAppsPool, VarPlatformPool} {
+	for _, v := range []string{VarAppsPool, VarPlatformPool, VarDataPool} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
 		}

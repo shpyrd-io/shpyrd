@@ -157,6 +157,8 @@ type AppDetailSpec struct {
 }
 
 type AppDetailStatus struct {
+	Runtime     string `json:"runtime,omitempty"`
+	DefaultSize string `json:"defaultSize,omitempty"`
 	Phase       string `json:"phase"`
 	Message     string `json:"message,omitempty"`
 	Digest      string `json:"digest,omitempty"`
@@ -235,6 +237,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			LatestBuild: a.Status.LatestBuild,
 			Generation:  a.Generation, ObservedGeneration: a.Status.ObservedGeneration,
 			ProcessTypes: a.Status.ProcessTypes, Release: a.Status.Release,
+			Runtime: a.Status.Runtime, DefaultSize: a.Status.DefaultSize,
 			Releases:   []ReleaseView{},
 			Conditions: a.Status.Conditions,
 			Domains:    a.Status.Domains,

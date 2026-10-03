@@ -450,6 +450,7 @@ func (s *Server) jwks(c *gin.Context) {
 // edgeSignin is GET /.shpyrd/signin?rd=<uri> on an app host: off to the
 // dashboard host, which knows the session.
 func (s *Server) edgeSignin(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	app, err := s.appByHost(c, c.Request.Host)
 	if err != nil || workspaceOf(app) != s.workspace(c) {
 		s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
@@ -463,6 +464,7 @@ func (s *Server) edgeSignin(c *gin.Context) {
 
 // edgeStart is GET /.shpyrd/start?app=<host>&rd=<uri> on the dashboard host.
 func (s *Server) edgeStart(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	appHost := strings.ToLower(c.Query("app"))
 	app, err := s.appByHost(c, appHost)
 	if err != nil || workspaceOf(app) != s.workspace(c) {
@@ -491,6 +493,7 @@ func (s *Server) edgeStart(c *gin.Context) {
 // edgeCallback is GET /.shpyrd/callback?code=&rd= on an app host: the code
 // becomes the app-host cookie.
 func (s *Server) edgeCallback(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	app, err := s.appByHost(c, c.Request.Host)
 	if err != nil {
 		s.edgePage(c, http.StatusNotFound, "No app here", "There is no app at this address.", nil)
@@ -659,21 +662,27 @@ func joinAnd(items []string) string {
 // edgePage is the page the edge serves on app hosts, where no
 // application answers the person: what it shows over the words follows
 // the status. Not allowed is a lock; not answering, a rocket and a
-// spinner; anything else, the mark.
+// spinner; unavailable, the shipyard at work; anything else, the mark.
 func (s *Server) edgePage(c *gin.Context, status int, title, text string, links map[string]string) {
 	kind := pages.Nothing
 	switch status {
 	case http.StatusForbidden:
 		kind = pages.NoAccess
-	case http.StatusBadGateway, http.StatusServiceUnavailable:
+	case http.StatusBadGateway:
 		kind = pages.Waking
+	case http.StatusServiceUnavailable:
+		kind = pages.ServiceUnavailable
 	}
 	c.Header("Cache-Control", "no-store")
+	if hash := pages.ScriptHash(kind); hash != "" {
+		c.Header("Content-Security-Policy", basePolicy+"; script-src "+hash)
+	}
 	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(kind, pages.Page{Title: title, Text: text, Links: pages.Links(links)})))
 }
 
 // customError handles what ingress-nginx sends to its default backend:
-// custom-http-errors of an app's Ingress (the edge's 403 becomes our page),
+// custom-http-errors of an app's Ingress (the edge's 403 and nginx's 503
+// become our pages),
 // and requests for hosts no Ingress serves (a "no app here" page instead of
 // the dashboard, which lives on its own host only).
 func (s *Server) customError(c *gin.Context) bool {
@@ -696,6 +705,10 @@ func (s *Server) customError(c *gin.Context) bool {
 		s.edgeDenied(c)
 	case "401":
 		c.Redirect(http.StatusFound, edgePathPrefix+"signin?rd="+url.QueryEscape(c.GetHeader("X-Original-URI")))
+	case "503":
+		// Nothing behind the Ingress answers: the app is starting, or a
+		// new version is taking the old one's place.
+		s.edgePage(c, http.StatusServiceUnavailable, "Service unavailable", "This is not available right now. Try again in a few moments.", nil)
 	default:
 		s.edgePage(c, http.StatusBadGateway, "The app is not answering", "Try again in a moment. Its logs and status are in the dashboard.", map[string]string{"Dashboard": s.dashboardURLFor(c)})
 	}

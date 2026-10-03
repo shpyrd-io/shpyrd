@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/emails"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -485,10 +485,12 @@ func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ex
 		what += ", in team " + inv.Team
 	}
 	until := inv.ExpiresAt.UTC().Format("Jan 2, 2006")
-	door := strings.TrimPrefix(strings.TrimPrefix(s.dashboardURLOf(ws), "https://"), "http://")
+	door := emails.Host(s.dashboardURLOf(ws))
 
-	var text, body string
+	var text string
+	kind := emails.Invite
 	if setLink != "" {
+		kind = emails.InvitePassword
 		text = fmt.Sprintf(`%s invited you to join %s %s.
 
 Choose a password to get in (this link works for 24 hours):
@@ -501,11 +503,6 @@ You will then sign in at %s as %s. Prefer another way? Open the invitation and s
 
 The invitation works until %s. If you were not expecting this, ignore it.
 `, inviter, name, what, setLink, door, inv.Email, name, link, until)
-		body = fmt.Sprintf(`<p style="font-size:16px;line-height:1.5;margin:0 0 16px"><strong>%s</strong> invited you to join <strong>%s</strong> %s.</p>
-<p style="font-size:14px;line-height:1.5;margin:0 0 24px;color:#444">Choose a password to get in; you will then sign in at <strong>%s</strong> as <strong>%s</strong>. This link works for 24 hours.</p>
-<p style="margin:0 0 24px"><a href="%s" style="display:inline-block;background:#ff4f00;color:#fff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:6px">Choose a password</a></p>
-<p style="font-size:12px;line-height:1.5;color:#777;margin:0">Prefer another way? <a href="%s" style="color:#444">Open the invitation</a> and sign in with a method %s offers. The invitation works until %s. If you were not expecting this, ignore it.</p>`,
-			html.EscapeString(inviter), html.EscapeString(name), html.EscapeString(what), html.EscapeString(door), html.EscapeString(inv.Email), setLink, link, html.EscapeString(name), until)
 	} else {
 		text = fmt.Sprintf(`%s invited you to join %s %s.
 
@@ -515,17 +512,16 @@ Accept the invitation by opening this link and signing in as %s:
 
 The link works until %s. If you were not expecting this, ignore it.
 `, inviter, name, what, inv.Email, link, until)
-		body = fmt.Sprintf(`<p style="font-size:16px;line-height:1.5;margin:0 0 16px"><strong>%s</strong> invited you to join <strong>%s</strong> %s.</p>
-<p style="font-size:14px;line-height:1.5;margin:0 0 24px;color:#444">Accept by opening the link and signing in as <strong>%s</strong>.</p>
-<p style="margin:0 0 24px"><a href="%s" style="display:inline-block;background:#ff4f00;color:#fff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:6px">Accept invitation</a></p>
-<p style="font-size:12px;line-height:1.5;color:#777;margin:0">Or copy this link: <a href="%s" style="color:#444">%s</a><br>The link works until %s. If you were not expecting this, ignore it.</p>`,
-			html.EscapeString(inviter), html.EscapeString(name), html.EscapeString(what), html.EscapeString(inv.Email), link, link, link, until)
 	}
-	htmlBody := `<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111">
-<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e5e5">
-<div style="font-weight:700;font-size:20px;letter-spacing:-0.02em;color:#ff4f00;margin-bottom:24px">shpyrd</div>
-` + body + `
-</div></body></html>`
+	_, htmlBody, err := emails.Render(kind, emails.Words{
+		"Logo": emails.Logo(s.dashboardURLOf(ws)), "Door": door, "Email": inv.Email, "Inviter": inviter,
+		"Workspace": name, "What": what, "Link": link, "SetLink": setLink, "Until": until,
+	})
+	if err != nil {
+		// The text says it all; an email that could not be drawn is sent
+		// without its HTML rather than not at all.
+		s.log.Error("invitation: the email could not be drawn", "err", err)
+	}
 	subject := "You were invited to " + name
 	if who := firstNonEmpty(by.Name, by.Email); who != "" {
 		subject = who + " invited you to " + name

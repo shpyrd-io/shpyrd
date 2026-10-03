@@ -47,7 +47,7 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 	if app.Spec.Image == "" && !app.HasSource() {
 		return
 	}
-	procs := app.Spec.Processes
+	procs := app.EffectiveProcesses()
 	if len(procs) == 0 {
 		procs = map[string]shpyrdv1.Process{"web": {}}
 	}

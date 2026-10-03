@@ -54,6 +54,9 @@ type Component struct {
 	// RequiredVar names a variable that must be non-empty for this
 	// component to be installed. Leave blank to always install.
 	RequiredVar string `json:"requiredVar,omitempty"`
+	// Pool is the node pool its pods run on (RFC-0077): "platform", the
+	// default, or "data" for what holds the projects' data. See pools.go.
+	Pool string `json:"pool,omitempty"`
 
 	dir string // directory inside the manifest tree
 }
@@ -197,6 +200,13 @@ func LoadComponent(tree fs.FS, name string) (*Component, error) {
 	}
 	if c.Timeout.Duration == 0 {
 		c.Timeout.Duration = 5 * time.Minute
+	}
+	switch c.Pool {
+	case "":
+		c.Pool = PoolPlatform
+	case PoolPlatform, PoolData:
+	default:
+		return nil, fmt.Errorf("component %q: pool %q: platform or data", name, c.Pool)
 	}
 	c.dir = dir
 	return &c, nil

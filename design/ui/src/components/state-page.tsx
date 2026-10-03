@@ -11,6 +11,7 @@ import { LogoMark, Wordmark } from "./brand";
 function StatePage({
   className,
   icon,
+  picture,
   title,
   description,
   action,
@@ -20,6 +21,9 @@ function StatePage({
 }: React.ComponentProps<"div"> & {
   // Over the title: the mark, or an icon that says what happened.
   icon?: React.ReactElement;
+  // Over the title, bigger than an icon and in no box: a drawing of what
+  // is going on. It takes the place of the icon.
+  picture?: React.ReactNode;
   title?: React.ReactNode;
   description?: React.ReactNode;
   action?: React.ReactNode;
@@ -33,7 +37,9 @@ function StatePage({
       {...props}
     >
       <div className="grid justify-items-center gap-5 px-6 text-center">
-        {icon ? (
+        {picture ? (
+          picture
+        ) : icon ? (
           <span className="inline-flex size-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground [&_svg]:size-8">
             {icon}
           </span>
