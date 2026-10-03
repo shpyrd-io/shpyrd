@@ -76,8 +76,8 @@ resource "oci_containerengine_node_pool" "workers" {
     boot_volume_size_in_gbs = var.node_boot_volume_gb
   }
 
-  # The platform pool (RFC-0077): stateful things select it explicitly
-  # (databases, stores, the control-plane database, Prometheus).
+  # The platform pool (RFC-0077): the installer puts every pod of the
+  # platform here, and the projects' data too when there is no data pool.
   initial_node_labels {
     key   = "shpyrd.io/pool"
     value = "platform"
@@ -110,10 +110,11 @@ resource "oci_containerengine_node_pool" "workers" {
 }
 
 # The apps pool (RFC-0077): application processes, builds and one-off runs.
-# Labelled and tainted so only pods that ask for it land here; the cluster
-# autoscaler scales it between apps_min_count and apps_max_count. The
-# initial size is the minimum (or 1, so the pool exists); the autoscaler
-# owns the count from then on — Terraform ignores changes to it.
+# Labelled, and the platform's pods are pinned to the platform pool, so
+# only pods that ask for it land here; the cluster autoscaler scales it
+# between apps_min_count and apps_max_count. The initial size is the
+# minimum (or 1, so the pool exists); the autoscaler owns the count from
+# then on — Terraform ignores changes to it.
 resource "oci_containerengine_node_pool" "apps" {
   count = var.apps_max_count > 0 ? 1 : 0
 

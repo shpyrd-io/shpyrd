@@ -1,6 +1,9 @@
 name: object-storage
 description: "Garage: the platform's S3-compatible object store with a key per consumer (extension object-storage, RFC-0046)"
 namespace: shpyrd-system
+# The projects' buckets and their databases' backups: on the data pool
+# when the cluster has one (RFC-0077), else the platform pool.
+pool: data
 hooks: [object-storage-credentials]
 kustomize:
   path: base

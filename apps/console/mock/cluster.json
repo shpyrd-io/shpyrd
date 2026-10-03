@@ -28,5 +28,11 @@
   "apps": 14,
   "phases": { "Running": 12, "Building": 1, "Failed": 1 },
   "externalLBAddress": "129.153.44.10",
-  "internalLBAddress": "10.0.20.5"
+  "internalLBAddress": "10.0.20.5",
+  "misplaced": [
+    { "namespace": "keda", "name": "keda-operator-88b6599c7-nxth6", "owner": "Deployment/keda-operator", "node": "10.0.10.23", "pool": "apps", "cpu": "50m" },
+    { "namespace": "keda", "name": "keda-add-ons-http-interceptor-57cb74dd6f-7sz8j", "owner": "Deployment/keda-add-ons-http-interceptor", "node": "10.0.10.23", "pool": "apps", "cpu": "50m" },
+    { "namespace": "cert-manager", "name": "cert-manager-dcfdf5dbd-dhzzj", "owner": "Deployment/cert-manager", "node": "10.0.10.23", "pool": "apps", "cpu": "20m" },
+    { "namespace": "shpyrd-system", "name": "shpyrd-server-74855c7464-vfj6n", "owner": "Deployment/shpyrd-server", "node": "10.0.10.24", "pool": "data", "cpu": "20m" }
+  ]
 }

@@ -98,6 +98,7 @@ resource "local_file" "shpyrd_vars" {
     SHPYRD_DNS_REGION=${var.region}
     SHPYRD_BACKUP_TARGET=${var.backup_bucket != "" ? "s3://${var.backup_bucket}/${var.name}" : ""}
     SHPYRD_BACKUP_REGION=${var.backup_bucket != "" ? var.region : ""}
+    SHPYRD_PLATFORM_POOL=platform
   EOT
 }
 

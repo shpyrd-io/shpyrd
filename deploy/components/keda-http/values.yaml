@@ -10,3 +10,16 @@ interceptor:
     limits:
       cpu: 500m
       memory: 256Mi
+
+# The controller and the external scaler ask for 250m each by default:
+# four pods, a whole core of the platform pool. On the first cloud they
+# used 0.9m and 5.5m at most over three days (2026-10-02); the limits
+# stay the chart's.
+operator:
+  resources:
+    requests:
+      cpu: 20m
+scaler:
+  resources:
+    requests:
+      cpu: 20m

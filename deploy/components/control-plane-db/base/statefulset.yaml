@@ -21,17 +21,6 @@ spec:
         app.kubernetes.io/name: control-plane-db
         app.kubernetes.io/part-of: shpyrd
     spec:
-      # Node pools (RFC-0077): stateful, prefer the platform pool (soft; an
-      # empty SHPYRD_PLATFORM_POOL matches no node and changes nothing).
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: shpyrd.io/pool
-                    operator: In
-                    values: ["${SHPYRD_PLATFORM_POOL}"]
       securityContext:
         runAsNonRoot: true
         runAsUser: 70

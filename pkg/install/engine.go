@@ -261,6 +261,9 @@ func (e *Engine) Apply(ctx context.Context) error {
 	if e.kube == nil {
 		return fmt.Errorf("no cluster connection")
 	}
+	if err := e.checkPools(ctx); err != nil {
+		return err
+	}
 	if err := e.ensureNamespace(ctx, e.SystemNamespace()); err != nil {
 		return err
 	}
@@ -351,7 +354,7 @@ func (e *Engine) applyComponent(ctx context.Context, c *Component) error {
 			return err
 		}
 		e.rep.Step(c.Name, fmt.Sprintf("installing release %s (%s %s) in %s", c.Helm.Release, ch.Name(), ch.Metadata.Version, c.Namespace))
-		if _, err := e.helm.installOrUpgrade(ctx, c.Helm, c.Namespace, ch, vals, c.Timeout.Duration); err != nil {
+		if _, err := e.helm.installOrUpgrade(ctx, c.Helm, c.Namespace, ch, vals, e.postRenderer(c), c.Timeout.Duration); err != nil {
 			return err
 		}
 		e.kube.InvalidateCache()
@@ -393,14 +396,22 @@ func (e *Engine) chartAndValues(c *Component) (*chart.Chart, map[string]interfac
 	return loaded, vals, nil
 }
 
-// renderComponent renders the profile overlay when present, else the base.
+// renderComponent renders the profile overlay when present, else the base,
+// with its pods pinned to the component's pool.
 func (e *Engine) renderComponent(c *Component) ([]*unstructured.Unstructured, error) {
 	dir := path.Join(c.Dir(), c.Kustomize.Path)
 	overlay := path.Join("profiles", e.profile.Name, c.Name)
 	if _, err := fs.Stat(e.tree, path.Join(overlay, "kustomization.yaml")); err == nil {
 		dir = overlay
 	}
-	return renderKustomize(e.tree, dir, e.vars)
+	objs, err := renderKustomize(e.tree, dir, e.vars)
+	if err != nil {
+		return nil, err
+	}
+	if err := pinToPool(objs, e.poolOf(c)); err != nil {
+		return nil, fmt.Errorf("%s: %w", c.Name, err)
+	}
+	return objs, nil
 }
 
 func (e *Engine) ensureNamespace(ctx context.Context, name string) error {
@@ -425,6 +436,10 @@ func (e *Engine) Export(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	kube, err := renderKubeVersion(e.vars)
+	if err != nil {
+		return err
+	}
 	var files []string
 	n := 0
 	for _, rl := range e.profile.Runlevels {
@@ -441,7 +456,7 @@ func (e *Engine) Export(ctx context.Context, dir string) error {
 				if err != nil {
 					return fmt.Errorf("%s: %w", c.Name, err)
 				}
-				rendered, err := e.helm.template(ctx, c.Helm, c.Namespace, ch, vals)
+				rendered, err := e.helm.template(ctx, c.Helm, c.Namespace, ch, vals, kube, e.postRenderer(c))
 				if err != nil {
 					return fmt.Errorf("%s: %w", c.Name, err)
 				}

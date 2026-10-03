@@ -101,6 +101,8 @@ spec:
               value: "${SHPYRD_APPS_POOL}"
             - name: SHPYRD_PLATFORM_POOL
               value: "${SHPYRD_PLATFORM_POOL}"
+            - name: SHPYRD_DATA_POOL
+              value: "${SHPYRD_DATA_POOL}"
             - name: SHPYRD_REGISTRY_INSECURE
               value: "${SHPYRD_REGISTRY_INSECURE}"
             # Build pods get the platform CA (trust bundle + SSL_CERT_FILE) from

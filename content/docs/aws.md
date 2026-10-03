@@ -10,7 +10,7 @@ This page is for running shpyrd yourself, in your own AWS account. On shpyrd clo
 | | |
 | --- | --- |
 | Network | a VPC (`10.0.0.0/16`) with two public subnets (load balancers, one NAT gateway per zone) and two private `/19` subnets for nodes and pods (the VPC CNI gives pods VPC addresses) |
-| Cluster | EKS in API authentication mode (the Terraform caller is the first administrator), a **private API endpoint** (reachable over the VPN; a public one restricted to your address is opt-in), one managed node group on Amazon Linux 2023, standard support only |
+| Cluster | EKS in API authentication mode (the Terraform caller is the first administrator), a **private API endpoint** (reachable over the VPN; a public one restricted to your address is opt-in), one managed node group on Amazon Linux 2023, labelled as the platform pool (`shpyrd.io/pool=platform`: the installer pins the platform's pods to it), standard support only |
 | Credentials | EKS Pod Identity: IAM roles associated with the service accounts that need AWS (the load balancer controller, the EBS and EFS CSI drivers, ExternalDNS, cert-manager). No access keys are created or stored |
 | Front doors | Network Load Balancers from the AWS Load Balancer Controller with **pod targets**: an internet-facing one on two **Elastic IPs** (static addresses for allow-lists and apex A records), an internal one for projects marked internal ([Domains and exposure](/docs/domains)). DNS uses their hostnames as alias records |
 | Certificates | Let's Encrypt; with the zone in Route 53, one wildcard certificate for every project hostname through cert-manager's Route 53 solver |
