@@ -1,5 +1,5 @@
-// Package objectstorage is the object-storage extension (RFC-0046): MinIO
-// in the cluster as the platform's S3-compatible store, a bucket and a
+// Package objectstorage is the object-storage extension (RFC-0046): a
+// cloud-backed gateway or local Garage, a logical bucket and a
 // scoped credential per consumer through ObjectBucket resources, usage on
 // the cluster page.
 package objectstorage
@@ -47,10 +47,10 @@ func New() ext.Extension { return extension{} }
 
 func (extension) Name() string { return Name }
 func (extension) Description() string {
-	return "S3-compatible object store in the cluster (Garage) with a key per consumer: the backing store for Postgres backups and platform backups (RFC-0046)"
+	return "S3-compatible storage through the cloud gateway or local Garage with a key per consumer: the backing store for Postgres backups and platform backups (RFC-0046)"
 }
 
-// Component installs MinIO after the platform CA exists.
+// Components installs local Garage; cloud profiles with a gateway skip it.
 func (extension) Components() []ext.ComponentRef {
 	return []ext.ComponentRef{{Name: "object-storage", Runlevel: "rc3"}}
 }
@@ -66,6 +66,12 @@ func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 		SystemNamespace: deps.SystemNamespace, Endpoint: Endpoint(deps.SystemNamespace), AdminEndpoint: AdminEndpoint(deps.SystemNamespace),
 		AdminSecret: install.ObjectStorageAdminSecretName, CapacityBytes: capacity,
 	}
+	if deps.Var(install.VarGatewayBucket) != "" {
+		r.UseGateway = true
+		r.Connect = func(endpoint, admin, token string) (controller.BucketStore, error) {
+			return objectstore.ConnectGateway(endpoint, admin, token)
+		}
+	}
 	return r.SetupWithManager(mgr)
 }
 
@@ -76,6 +82,7 @@ func (extension) Types() []ext.ResourceType {
 
 // Summary is what the cluster page shows.
 type Summary struct {
+	Backend    string       `json:"backend"`
 	Endpoint   string       `json:"endpoint"`
 	TotalBytes int64        `json:"totalBytes"`
 	UsedBytes  int64        `json:"usedBytes"`
@@ -110,7 +117,10 @@ func (extension) Routes(r ext.Router, deps ext.Deps) error {
 }
 
 func summarize(ctx context.Context, deps ext.Deps) (*Summary, error) {
-	out := &Summary{Endpoint: Endpoint(deps.SystemNamespace), Buckets: []BucketView{}}
+	out := &Summary{Endpoint: Endpoint(deps.SystemNamespace), Backend: "garage", Buckets: []BucketView{}}
+	if deps.Var(install.VarGatewayBucket) != "" {
+		out.Backend = "gateway"
+	}
 	var list shpyrdv1.ObjectBucketList
 	if deps.Client != nil {
 		if err := deps.Client.List(ctx, &list); err != nil {
@@ -133,7 +143,14 @@ func summarize(ctx context.Context, deps ext.Deps) (*Summary, error) {
 			out.Message = "object storage is not installed yet"
 			return out, nil
 		}
-		store, err := objectstore.Connect(out.Endpoint, AdminEndpoint(deps.SystemNamespace), string(sec.Data["adminToken"]))
+		var store interface {
+			Usage(context.Context) (*objectstore.Capacity, error)
+		}
+		if deps.Var(install.VarGatewayBucket) != "" {
+			store, err = objectstore.ConnectGateway(out.Endpoint, AdminEndpoint(deps.SystemNamespace), string(sec.Data["adminToken"]))
+		} else {
+			store, err = objectstore.Connect(out.Endpoint, AdminEndpoint(deps.SystemNamespace), string(sec.Data["adminToken"]))
+		}
 		if err != nil {
 			out.Message = err.Error()
 			return out, nil

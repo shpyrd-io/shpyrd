@@ -23,13 +23,13 @@ export function Storage() {
       <Card>
         <CardHeader>
           <CardTitle>Object storage</CardTitle>
-          <CardDescription>The platform's S3-compatible store, Garage. An extension that needs durable storage, database backups, platform backups, gets a bucket here with a credential that opens only that bucket.</CardDescription>
+          <CardDescription>S3-compatible storage for platform files and backups. Each consumer gets an isolated bucket and credential.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <p className="text-sm">
             Endpoint: <InlineCode>{r.endpoint}</InlineCode>
           </p>
-          {r.totalBytes > 0 ? <Meter label="Volume" unit="GiB" icon={<Database />} used={gib(r.usedBytes)} capacity={gib(r.totalBytes)} /> : <p className="text-sm text-muted-foreground">{r.message || "Measuring."}</p>}
+          {r.totalBytes > 0 ? <Meter label="Volume" unit="GiB" icon={<Database />} used={gib(r.usedBytes)} capacity={gib(r.totalBytes)} /> : <p className="text-sm text-muted-foreground">{r.message || (r.measuredAt ? `${bytes(r.usedBytes)} stored${r.backend === "gateway" ? " in cloud object storage" : ""}.` : "Measuring.")}</p>}
         </CardContent>
       </Card>
       <Card>

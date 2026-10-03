@@ -80,7 +80,13 @@ export function Registry() {
             )}
           </InfoTable>
           {r.storage &&
-            (cap > 0 ? (
+            (r.storage.backend === "s3" ? (
+              <div className="text-sm">
+                <p>Images in <InlineCode>s3://{r.storage.bucket}/docker/</InlineCode></p>
+                {r.storage.endpoint && <p className="text-xs text-muted-foreground">{r.storage.endpoint}</p>}
+                <p className="text-muted-foreground">{r.storage.error ? "Storage usage is unavailable." : `${bytes(used)} stored`}</p>
+              </div>
+            ) : cap > 0 ? (
               <Meter label="Storage" unit="GiB" icon={<Package />} used={gib(used)} capacity={gib(cap)} />
             ) : (
               <p className="text-sm text-muted-foreground">{r.storage.size} asked for; the use needs the monitoring component.</p>

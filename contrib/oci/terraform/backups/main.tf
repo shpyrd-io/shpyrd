@@ -77,10 +77,10 @@ locals {
   namespace   = data.oci_objectstorage_namespace.this.namespace
   # Buckets the S3 API can see live in the namespace's designated
   # compartment (the root compartment by default).
-  s3_compartment = coalesce(data.oci_objectstorage_namespace_metadata.this.default_s3compartment_id, var.tenancy_ocid)
-  bucket         = "${var.name}-backups"
+  s3_compartment  = coalesce(data.oci_objectstorage_namespace_metadata.this.default_s3compartment_id, var.tenancy_ocid)
+  bucket          = "${var.name}-backups"
   registry_bucket = "${var.name}-registry"
-  endpoint       = "https://${local.namespace}.compat.objectstorage.${var.region}.oraclecloud.com"
+  endpoint        = "https://${local.namespace}.compat.objectstorage.${var.region}.oraclecloud.com"
 }
 
 # Registry bucket: app images and kpack cache images. Same credentials
@@ -209,4 +209,43 @@ output "next_steps" {
     # shpyrd cluster init ... --backup-credentials-file ${abspath(local_sensitive_file.credentials.filename)}
     # (a new Customer Secret Key takes a few minutes to work: SignatureDoesNotMatch until then)
   EOT
+}
+
+# Shared gateway backend: a constant number of provider resources regardless
+# of project count. Legacy buckets stay intact for explicit data migration.
+resource "oci_objectstorage_bucket" "gateway" {
+  compartment_id = local.s3_compartment
+  namespace      = local.namespace
+  name           = "${var.name}-objects"
+  access_type    = "NoPublicAccess"
+  storage_tier   = "Standard"
+  versioning     = "Disabled"
+}
+
+resource "oci_identity_policy" "gateway" {
+  provider       = oci.home
+  compartment_id = var.tenancy_ocid
+  name           = "${var.name}-object-gateway"
+  description    = "Gateway access to the shared object bucket; no per-project IAM resources"
+  statements = [
+    "Allow group ${oci_identity_group.backup.name} to read buckets in tenancy where target.bucket.name='${oci_objectstorage_bucket.gateway.name}'",
+    "Allow group ${oci_identity_group.backup.name} to manage objects in tenancy where target.bucket.name='${oci_objectstorage_bucket.gateway.name}'",
+  ]
+}
+
+resource "local_sensitive_file" "gateway_credentials" {
+  filename        = "${path.module}/${var.name}-objects.env"
+  file_permission = "0600"
+  content         = <<-EOT
+    AWS_ACCESS_KEY_ID=${oci_identity_customer_secret_key.backup.id}
+    AWS_SECRET_ACCESS_KEY=${oci_identity_customer_secret_key.backup.key}
+    SHPYRD_GATEWAY_ENDPOINT=${local.endpoint}
+    SHPYRD_GATEWAY_REGION=${var.region}
+    SHPYRD_GATEWAY_BUCKET=${oci_objectstorage_bucket.gateway.name}
+  EOT
+}
+
+output "object_storage_credentials_file" {
+  description = "Pass to cluster init --object-storage-credentials-file after migrating any existing objects."
+  value       = abspath(local_sensitive_file.gateway_credentials.filename)
 }

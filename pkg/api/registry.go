@@ -16,6 +16,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	"github.com/shpyrd-io/shpyrd/pkg/registry"
 )
 
@@ -43,11 +44,16 @@ type RegistryInfo struct {
 	GC          *controller.GCStatus `json:"gc,omitempty"`
 }
 
-// RegistryStorage is the volume usage of the in-cluster registry.
+// RegistryStorage describes the registry's volume or cloud bucket usage.
 type RegistryStorage struct {
-	UsedBytes     float64 `json:"usedBytes"`
-	CapacityBytes float64 `json:"capacityBytes"`
-	Size          string  `json:"size"` // the requested size (SHPYRD_REGISTRY_SIZE)
+	Backend       string     `json:"backend,omitempty"`
+	Bucket        string     `json:"bucket,omitempty"`
+	Endpoint      string     `json:"endpoint,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	MeasuredAt    *time.Time `json:"measuredAt,omitempty"`
+	UsedBytes     float64    `json:"usedBytes"`
+	CapacityBytes float64    `json:"capacityBytes"`
+	Size          string     `json:"size"` // the requested size (SHPYRD_REGISTRY_SIZE)
 }
 
 // RegistryImages summarises the catalog.
@@ -72,9 +78,11 @@ type RegistryCertificate struct {
 
 // registryCache avoids hitting the registry catalog on every dashboard poll.
 type registryCache struct {
-	mu     sync.Mutex
-	at     time.Time
-	images *RegistryImages
+	mu        sync.Mutex
+	at        time.Time
+	images    *RegistryImages
+	storageAt time.Time
+	storage   *RegistryStorage
 }
 
 func (s *Server) registryInfo(c *gin.Context) {
@@ -126,7 +134,10 @@ func (s *Server) registryReady(ctx context.Context) (bool, string) {
 }
 
 func (s *Server) registryStorage(ctx context.Context) *RegistryStorage {
-	st := &RegistryStorage{Size: s.vars(install.VarRegistrySize)}
+	if bucket := s.vars(install.VarRegistryBucket); bucket != "" {
+		return s.registryBucketStorage(ctx, bucket)
+	}
+	st := &RegistryStorage{Backend: "filesystem", Size: s.vars(install.VarRegistrySize)}
 	if s.prom == nil {
 		return st
 	}
@@ -137,6 +148,42 @@ func (s *Server) registryStorage(ctx context.Context) *RegistryStorage {
 	if smp, err := s.prom.Query(ctx, "kubelet_volume_stats_capacity_bytes"+sel); err == nil && len(smp) > 0 {
 		st.CapacityBytes = smp[0].Value
 	}
+	return st
+}
+
+func (s *Server) registryBucketStorage(ctx context.Context, bucket string) *RegistryStorage {
+	s.regCache.mu.Lock()
+	defer s.regCache.mu.Unlock()
+	ttl := 10 * time.Minute
+	if s.regCache.storage != nil && s.regCache.storage.Error != "" {
+		ttl = time.Minute
+	}
+	if s.regCache.storage != nil && time.Since(s.regCache.storageAt) < ttl {
+		return s.regCache.storage
+	}
+	st := &RegistryStorage{Backend: "s3", Bucket: bucket, Endpoint: s.vars(install.VarRegistryEndpoint)}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	sec, err := s.kube.Kube.CoreV1().Secrets(s.kube.Namespace).Get(ctx, install.RegistryS3SecretName, metav1.GetOptions{})
+	if err == nil {
+		var store *objectstore.S3
+		// Distribution stores its blobs under docker/; sources in the same
+		// bucket must not count toward the registry's usage.
+		store, err = objectstore.NewS3(st.Endpoint, s.vars(install.VarRegistryRegion), bucket, "docker", string(sec.Data["AWS_ACCESS_KEY_ID"]), string(sec.Data["AWS_SECRET_ACCESS_KEY"]))
+		if err == nil {
+			var usage objectstore.Usage
+			usage, err = store.Usage(ctx)
+			if err == nil {
+				st.UsedBytes = float64(usage.Bytes)
+				now := time.Now()
+				st.MeasuredAt = &now
+			}
+		}
+	}
+	if err != nil {
+		st.Error = "bucket usage unavailable: " + err.Error()
+	}
+	s.regCache.storage, s.regCache.storageAt = st, time.Now()
 	return st
 }
 

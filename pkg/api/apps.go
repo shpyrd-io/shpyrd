@@ -651,6 +651,10 @@ func (s *Server) deployApp(c *gin.Context) {
 	}
 	hasGit := req.Git != nil && req.Git.URL != ""
 	hasBlob := req.Blob != nil && req.Blob.URL != ""
+	if hasBlob && s.sources != nil && s.sources.ownsURL(req.Blob.URL) && !s.sources.validURL(req.Blob.URL) {
+		abort(c, http.StatusBadRequest, fmt.Errorf("invalid source capability; upload the archive again"))
+		return
+	}
 	sources := 0
 	for _, has := range []bool{hasGit, hasBlob, req.Image != ""} {
 		if has {
