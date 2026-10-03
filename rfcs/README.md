@@ -109,6 +109,7 @@ declare what they depend on.
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting, OSS creates one workspace at init, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
+| [0081](0081-workspace-private-network.md) | Workspace private network: a WireGuard gateway as a pod of the workspace, a virtual block and `.internal` names per workspace, VPN profiles and site-to-site for enterprise customers; the operator VPN tightened; every alternative (per-workspace front door, cloud segmentation, dedicated clusters, overlay meshes, IPsec, no-VPN HTTP) weighed | provisional | 0033, 0008, 0035, 0036, 0070, 0076, 0080 |
 
 ## Phases
 
@@ -132,6 +133,7 @@ declare what they depend on.
 | O | 0077 | node pools: fixed platform pool, autoscaled apps pool; the node side of scaling next to RFC-0047's pod side |
 | P | 0079 | Node.js builds: pnpm, Next.js 16 on buildpacks — the builder's Node group and what the `next` profile knows |
 | Q | 0080 | two doors: console and workspaces as separate applications and realms |
+| R | 0081 | workspace private network: the enterprise intranet and VPN, contained by the isolation that exists |
 
 Anyone may pick an `implementable` RFC in any phase; the phases only suggest an order that
 keeps dependencies satisfied.
