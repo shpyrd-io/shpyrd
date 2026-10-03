@@ -340,21 +340,34 @@ make dev-deploy      # build the server image, load it into the cluster, apply t
 make test vet
 ```
 
-The UI is developed without rebuilding or uploading anything: `cd ui && npm run
-dev` serves it with hot reload and proxies the API to a shpyrd server. Point it
-at a cluster's server with `SHPYRD_DEV_API`:
+The applications are Next applications compiled to static files: `apps/console`
+(the console door) and `apps/workspace` (a workspace's), with `apps/shared` and
+the component library in `design/ui`, all members of the npm workspace at the
+repository root. `make ui` builds both into `pkg/ui/dist/<app>`, which the server
+embeds; run it before `make dev-deploy` when an application changed. On a
+cluster the server reads them from `SHPYRD_UI_DIR` when it is set (an init
+container writes them there) and falls back to the embedded ones.
+
+They are developed without rebuilding or uploading anything: each has a
+development server with hot reload that proxies `/api` to a shpyrd server.
+Point it at a cluster's door with `SHPYRD_DEV_API`, and at the CA that signs the
+door's certificate with `SHPYRD_DEV_CA` (for a kind cluster,
+`~/.shpyrd/ca/rootCA.pem`; by default, the CA of a local Caddy):
 
 ```sh
+npm install                                                                # at the repository root, once
 shpyrd-ctl cluster create --name dev --enable auth-local,postgres,redis   # once
-cd ui && SHPYRD_DEV_API=https://shpyrd.127.0.0.1.nip.io npm run dev       # http://localhost:5173
+export SHPYRD_DEV_CA=~/.shpyrd/ca/rootCA.pem
+SHPYRD_DEV_API=https://shpyrd.127.0.0.1.nip.io npm --prefix apps/console run dev   # http://localhost:4326
+SHPYRD_DEV_API=https://127.0.0.1.nip.io npm --prefix apps/workspace run dev        # http://localhost:4325
 ```
 
 The server sees the target's host, so the door follows the URL: the console's
-host opens the console application, a workspace address the workspace one. Sign
-in with email and password or the admin token (`shpyrd-ctl cluster token`);
-sign-in through an external provider redirects back to the real host. Without
-`SHPYRD_DEV_API` the proxy targets a `go run ./cmd/shpyrd-server` on
-localhost:8080. A local cluster is switched off and on with `make dev-pause
+host answers as the console, a workspace address as that workspace. Sign in
+with email and password or the admin token (`shpyrd-ctl cluster token`);
+sign-in through an external provider redirects back to the real host. Without a
+server at all, `npm --prefix apps/<app> run design` answers from the Mock
+(`apps/<app>/mock`). A local cluster is switched off and on with `make dev-pause
 CLUSTER=dev` / `make dev-resume CLUSTER=dev` (the kind nodes stop in place, state
 kept) and deleted with `shpyrd-ctl cluster destroy --name dev --yes`.
 
