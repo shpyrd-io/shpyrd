@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
@@ -77,7 +78,11 @@ Processes pick a size in shpyrd.yaml (processes.<type>.size) or with
 'shpyrd resize'; without one they get the catalog default. Databases pick
 one with 'shpyrd pg create --size'; they take at least 128Mi, 256Mi when
 they name none, and db-xs (128Mi, PostgreSQL tuned for about 20
-connections) on a plan with less than 512Mi of memory.`,
+connections) on a plan with less than 512Mi of memory.
+
+Without a subcommand, the catalog is listed.`,
+		Args: cobra.NoArgs,
+		RunE: sizesList(g),
 	}
 	cmd.AddCommand(newSizesListCmd(g), newSizesSetCmd(g), newSizesDeleteCmd(g), newSizesDefaultCmd(g))
 	return cmd
@@ -88,35 +93,58 @@ func newSizesListCmd(g *globalFlags) *cobra.Command {
 		Use:     "list",
 		Short:   "List instance sizes",
 		Aliases: []string{"ls"},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := signalContext()
-			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+		RunE:    sizesList(g),
+	}
+}
+
+// sizesList prints the catalog. Signed in to a workspace it reads the API,
+// as every developer command does (RFC-0052), so an agent with a session and
+// no kubeconfig sees the sizes it must choose from (issue #63); with a
+// cluster it reads the ConfigMap. Both answer the API's shape.
+func sizesList(g *globalFlags) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		ctx := signalContext()
+		ac, err := newAppClient(g, g.progress(cmd))
+		if err != nil {
+			return err
+		}
+		var resp api.SizesResponse
+		if ac.session {
+			body, err := ac.serverRequest(ctx, "GET", "api/sizes", nil, "")
 			if err != nil {
 				return err
 			}
-			cat, _, err := loadCatalog(ctx, k)
+			if err := json.Unmarshal(body, &resp); err != nil {
+				return fmt.Errorf("decode sizes: %w", err)
+			}
+		} else {
+			cat, _, err := loadCatalog(ctx, ac.k)
 			if err != nil {
 				return err
 			}
-			return g.print(cmd, cat, func(w io.Writer) {
-				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
-				for _, s := range cat.Sorted() {
-					res := s.Resources()
-					name := s.Name
-					if s.Name == cat.Default {
-						name += " (default)"
-					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
+			resp = api.SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), DatabaseMinMemory: sizes.DBMinMemory, DatabaseDefaultMemory: sizes.DBDefaultMemory}
+			if _, ok := cat.Get(sizes.DBXS); ok {
+				resp.DatabaseSmallSize = sizes.DBXS
+			}
+		}
+		return g.print(cmd, resp, func(w io.Writer) {
+			tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
+			for _, s := range resp.Sizes {
+				res := s.Resources()
+				name := s.Name
+				if s.Name == resp.Default {
+					name += " (default)"
 				}
-				_ = tw.Flush()
-				fmt.Fprintf(w, "\nDatabases take at least %s (a smaller size is raised to it) and %s when they name no size.\n", sizes.DBMinMemory, sizes.DBDefaultMemory)
-				fmt.Fprintf(w, "Under %s PostgreSQL is tuned for it: a small app's database, about 20 connections; not a reporting database.\n", sizes.DBDefaultMemory)
-				if _, ok := cat.Get(sizes.DBXS); ok {
-					fmt.Fprintf(w, "On a plan with less than %s of memory a database is given %s unless it names a size.\n", sizes.DBXSPlanBelow, sizes.DBXS)
-				}
-			})
-		},
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
+			}
+			_ = tw.Flush()
+			fmt.Fprintf(w, "\nDatabases take at least %s (a smaller size is raised to it) and %s when they name no size.\n", resp.DatabaseMinMemory, resp.DatabaseDefaultMemory)
+			fmt.Fprintf(w, "Under %s PostgreSQL is tuned for it: a small app's database, about 20 connections; not a reporting database.\n", resp.DatabaseDefaultMemory)
+			if resp.DatabaseSmallSize != "" {
+				fmt.Fprintf(w, "On a plan with less than %s of memory a database is given %s unless it names a size.\n", sizes.DBXSPlanBelow, resp.DatabaseSmallSize)
+			}
+		})
 	}
 }
 

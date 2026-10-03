@@ -142,9 +142,9 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
 | `shpyrd scale web=N worker=M` | Set instance counts per process type. |
 | `shpyrd resize web=SIZE worker=SIZE` | Set instance sizes per process type (a release). |
-| `shpyrd sizes list` | The cluster's instance size catalog with kind, cpu, burst and memory. |
-| `shpyrd sizes set <name> --kind shared\|dedicated --cpu <cores> --memory <bytes> [--default]` | Add or change a size; processes using it are resized. |
-| `shpyrd sizes delete <name>`, `shpyrd sizes default <name>` | Remove a size (not the default), choose the default. |
+| `shpyrd sizes list` | The instance size catalog to choose from, with kind, cpu, guaranteed cpu and memory, and what a database gets (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |
+| `shpyrd-ctl sizes set <name> --kind shared\|dedicated --cpu <cores> --memory <bytes> [--default]` | Operator: add or change a size; processes using it are resized. |
+| `shpyrd-ctl sizes delete <name>`, `shpyrd-ctl sizes default <name>` | Operator: remove a size (not the default), choose the default. |
 | `shpyrd secrets set K=V ...` | Set config vars (new release, rolling restart). |
 | `shpyrd secrets unset K ...` | Remove config vars. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |
