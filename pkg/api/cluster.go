@@ -29,6 +29,10 @@ type ClusterSummary struct {
 	// Front doors (RFC-0036).
 	ExternalLBAddress string `json:"externalLBAddress,omitempty"`
 	InternalLBAddress string `json:"internalLBAddress,omitempty"`
+	// Misplaced are the platform's pods running outside the platform pool
+	// (RFC-0077), a warning on the page; empty when every one is in place
+	// or the cluster has no pools.
+	Misplaced []install.MisplacedPod `json:"misplaced"`
 }
 
 // ExtensionInfo is one optional capability (RFC-0002).
@@ -77,11 +81,14 @@ type NodeInfo struct {
 
 func (s *Server) clusterSummary(c *gin.Context) {
 	ctx := c.Request.Context()
-	out := ClusterSummary{Components: []ComponentInfo{}, Nodes: []NodeInfo{}, Phases: map[string]int{}}
+	out := ClusterSummary{Components: []ComponentInfo{}, Nodes: []NodeInfo{}, Phases: map[string]int{}, Misplaced: []install.MisplacedPod{}}
 
 	if info, err := install.ReadInstallInfo(ctx, s.kube, ""); err == nil {
 		out.Install = &InstallInfo{Profile: info.Profile, Version: info.Version, Domain: info.Vars[install.VarDomain], UpdatedAt: info.UpdatedAt}
 		out.Vars = info.Vars
+		if pods, err := install.MisplacedPods(ctx, s.kube, info.Vars); err == nil && pods != nil {
+			out.Misplaced = pods
+		}
 	}
 	out.Extensions = []ExtensionInfo{}
 	for _, x := range all.All() {

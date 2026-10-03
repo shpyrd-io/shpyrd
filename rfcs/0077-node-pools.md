@@ -12,7 +12,7 @@ scaling; RFC-0047 is the pod side.
 
 **Creation date:** 2026-09-28
 
-**Last update:** 2026-09-28 (implemented)
+**Last update:** 2026-10-02 (the platform pinned to its pool, the data pool used, #61)
 
 ---
 
@@ -46,16 +46,17 @@ demand.
 | Pool | Size | Shape | Carries |
 | --- | --- | --- | --- |
 | `platform` (the existing `workers` pool) | fixed, `node_count` | as today | platform components; Postgres, Redis and any stateful extension resource; anything without a pool selector |
+| `data` (optional, #61) | `data_min_count..data_max_count` | as the platform | Postgres, Redis, the object store and the Postgres wake proxy, taken off the platform pool |
 | `apps` | autoscaled `apps_min_count..apps_max_count` | smaller flexible shape, e.g. 2 OCPU / 8 GB | web/worker processes, release and one-off Jobs, kpack build pods |
 
 Both pools are told apart by one node label, `shpyrd.io/pool`, set by the node pool
 (`apps` and `platform`). The label works on both sides: app pods carry a hard node
-selector for `apps`; the platform's stateful pods (databases, stores, Prometheus, the
-control-plane database) carry a selector or a preferred affinity for `platform`. OKE's node
-pool API has no taint field, so the design does not lean on taints: a pod with no selector
-at all can still land on an apps node and be evicted with it — acceptable for platform
-Deployments that are replicated or stateless, which is why only the stateful ones are
-pinned. Smaller apps nodes let the autoscaler scale in finer steps and pack sleeping apps'
+selector for `apps`; the platform's pods carry one for `platform`. OKE's node pool API has
+no taint field, so the design does not lean on taints: a pod with no selector at all can
+still land on an apps node. At first only the stateful ones were pinned, the rest being
+replicated or stateless; #61 showed the cost of the rest (room and pods taken from the apps
+node, and a node the autoscaler could not drain), and since then every pod the installer
+puts in place is pinned (below). Smaller apps nodes let the autoscaler scale in finer steps and pack sleeping apps'
 neighbours tighter.
 
 Databases stay on the platform pool because their eviction is a 30-second outage a
@@ -73,11 +74,28 @@ nodeSelector:
   shpyrd.io/pool: apps
 ```
 
-The Postgres and Redis reconcilers pin CNPG clusters and Redis StatefulSets to the platform
-pool (`Config.PlatformPool`, from `SHPYRD_PLATFORM_POOL`) with the same kind of selector;
-Prometheus and the control-plane database prefer it through the profile's values. A future
-`data` pool would be the same mechanism with a different label on the datastore
-reconcilers.
+The Postgres and Redis reconcilers pin CNPG clusters and Redis StatefulSets to the data
+pool (`SHPYRD_DATA_POOL`), or to the platform pool (`SHPYRD_PLATFORM_POOL`) on a cluster
+without one, with the same kind of selector.
+
+### What the installer schedules where
+
+The installer pins what it installs. Every Deployment, StatefulSet, Job, CronJob and
+Prometheus a component renders gets a node selector for the component's pool, beside the
+selectors it already has: Helm's output through a post-renderer, Kustomize's after the
+build. DaemonSets are left alone (they run everywhere by design), and so are Helm hooks
+(Helm does not post-render them; they run once). A component's pool is the platform's
+unless its `component.yaml` says `pool: data`. Without a pool variable nothing is pinned:
+kind has one node and no label. The oci and aws profiles name the platform pool, and
+`cluster init` refuses to install when it is empty or no node carries it.
+
+CoreDNS is the provider's and stays where the provider puts it, spread over every node. #61
+asked to pin it too and was decided against: OKE reconciles CoreDNS on a basic cluster
+(RFC-0059 avoided touching it for the same reason) and takes add-on settings on enhanced
+clusters only, so a patch would be undone and put back, restarting the cluster's DNS each
+time; and the cluster's names would hang on the platform pool alone, for 100m and a pod
+slot per apps node. `cluster status` and the Cluster page list the platform's pods running
+on apps or data nodes, whatever put them there, the provider's DNS excepted.
 
 ### Autoscaler
 
@@ -141,18 +159,22 @@ on committed pricing, and the two can differ in shape.
 | Cluster autoscaler bound to the apps pool alone (`--nodes=<min>:<max>:<apps pool>`) | v0.9.41 |
 | `cluster init`: a value in `--vars-file` beats a `--set` recorded by an earlier run (a remembered pool OCID had pinned the autoscaler to the platform pool) | v0.9.42 |
 | First cloud: platform pool 2 × 4 OCPU, apps pool 1–3 × 1 OCPU / 8 GB; apps moved, apps pool scaled 1 → 2 on the Pending replacements | applied |
-| The cluster summary (`/api/cluster`) carries each node's pool from the label; the console's Cluster page lists nodes by pool and says what each pool carries | pending |
+| The cluster summary (`/api/cluster`) carries each node's pool from the label; the console's Cluster page lists nodes by pool and says what each pool carries | v0.9.66 |
+| The installer pins every pod of the platform: a node selector for `SHPYRD_PLATFORM_POOL` on each Deployment, StatefulSet, Job, CronJob and Prometheus a component renders (Helm through a post-renderer, Kustomize after the build; DaemonSets and Helm hooks left alone). A component may ask for the data pool instead (`pool: data` in `component.yaml`: object storage, the Postgres wake proxy). The oci and aws profiles name the platform pool; `cluster init` refuses an empty one there and a pool no node carries. The soft preferences of Prometheus and the control-plane database are gone | #61 |
+| The data pool (open question 1): `SHPYRD_DATA_POOL`; Postgres and Redis select it, or the platform pool without one | #61 |
+| `cluster status` and the Cluster page list the platform's pods on apps or data nodes | #61 |
+| KEDA's HTTP add-on asks for 20m per controller and scaler pod, not the chart's 250m (they used under 6m) | #61 |
 
 Known gaps:
 
 - The autoscaler logs `node pool not found for instance` for every platform node each loop:
   harmless (it only knows the apps pool) but noisy. A filter or an upstream flag later.
-- Platform Deployments without a selector (ingress, KEDA, cert-manager, kpack, operators)
-  may land on apps nodes and be evicted with them; they are replicated or stateless, so a
-  scale-down is a restart, not an outage. Pin them if it shows up in the wake numbers.
+- ~~Platform Deployments without a selector may land on apps nodes~~: pinned (#61). On the
+  first cloud (2026-10-02) thirteen of them held 690m and 13 of the 35 pods of the apps node,
+  and kept the autoscaler from draining it; the data node held thirteen more.
 - Apps pool minimum is 1 on the first cloud; 0 is untested end to end (node boot inside the
   wake path, RFC-0075's resuming page would need to cover ~2 min).
-- `data` pool (open question 1) not started.
+- The data pool is not one the autoscaler manages yet: one more `--nodes` line.
 
 ## History
 
@@ -164,3 +186,6 @@ Known gaps:
   platform pool (a `--set` recorded from the first install beat the new vars file), and it
   drained `10.0.1.204` — Prometheus and the control-plane database moved cleanly, the
   platform pool went 3 → 2 on its own. Fixed in the CLI; the RFC now says rebind first.
+- 2026-10-02: #61. The platform's Deployments, unpinned, filled the apps node (1.06 cores and
+  13 pods of 35 reserved) and the data node; the installer now pins every pod it installs,
+  the projects' data goes to the data pool, and status lists what is out of place.

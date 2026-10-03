@@ -37,8 +37,9 @@ type RedisReconciler struct {
 	SystemNamespace string
 	// Storage is the profile's disk rules (RFC-0060).
 	Storage StorageProfile
-	// PlatformPool is the node pool stores run on (RFC-0077); "" = any.
-	PlatformPool string
+	// DataPool is the node pool stores run on (RFC-0077): the data pool,
+	// or the platform pool on a cluster without one; "" = any.
+	DataPool string
 }
 
 // Engine images, pinned.
@@ -268,8 +269,8 @@ func (r *RedisReconciler) podTemplate(rd *shpyrdv1.Redis, engine, image string, 
 		container.VolumeMounts = []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}
 	}
 	var nodeSelector map[string]string
-	if r.PlatformPool != "" {
-		nodeSelector = map[string]string{PoolLabel: r.PlatformPool} // RFC-0077
+	if r.DataPool != "" {
+		nodeSelector = map[string]string{PoolLabel: r.DataPool} // RFC-0077
 	}
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: redisLabels(rd)},

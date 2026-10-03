@@ -15,6 +15,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/postrender"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
@@ -117,7 +118,8 @@ func valuesFiles(tree fs.FS, c *Component, profile string) []string {
 
 // installOrUpgrade makes the release match the chart and values. Interrupted
 // runs (pending-* status) are recovered first.
-func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, timeout time.Duration) (*release.Release, error) {
+// post, when not nil, rewrites the rendered manifests (pools.go).
+func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, post postrender.PostRenderer, timeout time.Duration) (*release.Release, error) {
 	cfg, err := h.config(namespace)
 	if err != nil {
 		return nil, err
@@ -128,7 +130,7 @@ func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, names
 	rels, err := hist.Run(spec.Release)
 	switch {
 	case errors.Is(err, driver.ErrReleaseNotFound):
-		return h.install(ctx, cfg, spec, namespace, ch, vals, timeout)
+		return h.install(ctx, cfg, spec, namespace, ch, vals, post, timeout)
 	case err != nil:
 		return nil, fmt.Errorf("helm history %s: %w", spec.Release, err)
 	}
@@ -143,7 +145,7 @@ func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, names
 			if _, err := un.Run(spec.Release); err != nil {
 				return nil, fmt.Errorf("helm uninstall pending %s: %w", spec.Release, err)
 			}
-			return h.install(ctx, cfg, spec, namespace, ch, vals, timeout)
+			return h.install(ctx, cfg, spec, namespace, ch, vals, post, timeout)
 		}
 		rb := action.NewRollback(cfg)
 		rb.Version = last.Version - 1
@@ -159,6 +161,7 @@ func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, names
 	up.MaxHistory = 5
 	up.SkipCRDs = spec.SkipCRDs
 	up.Wait = false
+	up.PostRenderer = post
 	up.SetRegistryClient(h.registry)
 	rel, err := up.RunWithContext(ctx, spec.Release, ch, vals)
 	if err != nil {
@@ -167,7 +170,7 @@ func (h *helmClient) installOrUpgrade(ctx context.Context, spec *HelmSpec, names
 	return rel, nil
 }
 
-func (h *helmClient) install(ctx context.Context, cfg *action.Configuration, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, timeout time.Duration) (*release.Release, error) {
+func (h *helmClient) install(ctx context.Context, cfg *action.Configuration, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, post postrender.PostRenderer, timeout time.Duration) (*release.Release, error) {
 	inst := action.NewInstall(cfg)
 	inst.ReleaseName = spec.Release
 	inst.Namespace = namespace
@@ -176,6 +179,7 @@ func (h *helmClient) install(ctx context.Context, cfg *action.Configuration, spe
 	inst.SkipCRDs = spec.SkipCRDs
 	inst.Wait = false
 	inst.Labels = map[string]string{"app.kubernetes.io/managed-by": "shpyrd"}
+	inst.PostRenderer = post
 	inst.SetRegistryClient(h.registry)
 	rel, err := inst.RunWithContext(ctx, ch, vals)
 	if err != nil {
@@ -185,7 +189,7 @@ func (h *helmClient) install(ctx context.Context, cfg *action.Configuration, spe
 }
 
 // template renders the chart without a cluster, for export.
-func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}) ([]*unstructured.Unstructured, error) {
+func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace string, ch *chart.Chart, vals map[string]interface{}, post postrender.PostRenderer) ([]*unstructured.Unstructured, error) {
 	cfg := new(action.Configuration)
 	inst := action.NewInstall(cfg)
 	inst.ReleaseName = spec.Release
@@ -193,6 +197,7 @@ func (h *helmClient) template(ctx context.Context, spec *HelmSpec, namespace str
 	inst.DryRun = true
 	inst.ClientOnly = true
 	inst.IncludeCRDs = !spec.SkipCRDs
+	inst.PostRenderer = post
 	inst.SetRegistryClient(h.registry)
 	rel, err := inst.RunWithContext(ctx, ch, vals)
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -83,9 +84,9 @@ type Config struct {
 	// name one.
 	DefaultBuilder string
 	// AppsPool and PlatformPool are the shpyrd.io/pool label values of the
-	// two node pools (RFC-0077); empty means a single pool and no selectors.
+	// node pools (RFC-0077); empty means a single pool and no selectors.
 	// Application processes, builds and one-off runs select AppsPool; the
-	// datastores select PlatformPool.
+	// datastores select the data pool (their reconcilers' DataPool).
 	AppsPool     string
 	PlatformPool string
 	// BuildCacheSize is the kpack cache volume size (e.g. "2Gi"); empty disables.
@@ -970,7 +971,7 @@ func (c Config) mutateEdgeService(app *shpyrdv1.App, svc *corev1.Service) {
 }
 
 // PoolLabel is the node label naming a node pool (RFC-0077).
-const PoolLabel = "shpyrd.io/pool"
+const PoolLabel = install.PoolLabel
 
 // appsNodeSelector pins a pod to the apps pool, nil in single-pool mode.
 func (c Config) appsNodeSelector() map[string]string {
