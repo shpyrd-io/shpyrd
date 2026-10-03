@@ -80,7 +80,9 @@ func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
 
 // require refuses the request unless the caller may perform action; project
 // actions take the project from the :slug parameter. A malformed slug is a
-// 404: no such project can exist.
+// 404: no such project can exist. Roles on a project are keyed by its id
+// (RFC-0076), so the slug is looked up first; a project that does not exist
+// is checked by its slug, and the handler answers 404.
 func (s *Server) require(action authz.Action) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		project := c.Param("slug")
@@ -95,8 +97,14 @@ func (s *Server) require(action authz.Action) gin.HandlerFunc {
 			abort(c, http.StatusBadGateway, fmt.Errorf("resolve roles: %w", err))
 			return
 		}
-		if !roles.Can(action, project) {
-			abort(c, http.StatusForbidden, denial(roles, action, project))
+		key := project
+		if project != "" {
+			if app, err := s.projectApp(c); err == nil {
+				key = projectGrantKey(app)
+			}
+		}
+		if !roles.Can(action, key) {
+			abort(c, http.StatusForbidden, projectDenial(roles, action, project, key))
 			return
 		}
 		c.Next()
@@ -105,6 +113,12 @@ func (s *Server) require(action authz.Action) gin.HandlerFunc {
 
 // denial explains a refusal in the user's terms.
 func denial(roles authz.Roles, action authz.Action, project string) error {
+	return projectDenial(roles, action, project, project)
+}
+
+// projectDenial is denial for a project named by its slug whose roles are
+// held under its grant key (see projectGrantKey).
+func projectDenial(roles authz.Roles, action authz.Action, project, grantKey string) error {
 	verb := map[authz.Action]string{
 		authz.ProjectView: "view", authz.ProjectDeploy: "deploy or roll back", authz.ProjectScale: "scale or resize",
 		authz.ProjectConfig: "change config vars of", authz.ProjectExec: "run commands in", authz.ProjectResource: "manage resources of",
@@ -118,7 +132,7 @@ func denial(roles authz.Roles, action authz.Action, project string) error {
 	if project == "" || strings.HasPrefix(string(action), "cluster.") {
 		return fmt.Errorf("your role cannot %s (needs a platform role)", verb)
 	}
-	if role := roles.ProjectRole(project); role != "" {
+	if role := roles.ProjectRole(grantKey); role != "" {
 		return fmt.Errorf("your role on project %s is %s: it cannot %s the project", project, role, verb)
 	}
 	return fmt.Errorf("you have no access to project %s", project)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -232,5 +234,83 @@ func TestExtensionAdminRoutesNeedPlatformAdmin(t *testing.T) {
 	}
 	if rec := do(t, s, "GET", "/api/admin-only", "", true); rec.Code != http.StatusOK {
 		t.Errorf("admin token on an admin route: %d", rec.Code)
+	}
+}
+
+// idNamedShop is a project created after RFC-0076: its App is named by its
+// id, the slug is in its spec, and the store mirrors it, so grants and
+// token scopes are keyed by the id while paths name the slug (issue #30).
+func idNamedShop(t *testing.T, s *Server) *shpyrdv1.App {
+	t.Helper()
+	const id = "3f2b0a6e-1d4c-4e8a-9b7f-5c6d7e8f9a0b"
+	short := ids.Short(id)
+	if _, err := s.store.UpsertProject(t.Context(), store.Project{ID: id, WorkspaceID: store.DefaultWorkspace, Slug: "shop", Name: "shop", Namespace: "app-" + short}); err != nil {
+		t.Fatal(err)
+	}
+	return &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: "app-" + short, Labels: map[string]string{shpyrdv1.LabelProject: "shop"}},
+		Spec:       shpyrdv1.AppSpec{ID: id, Slug: "shop"},
+	}
+}
+
+// A member granted a role on a project reaches it by its slug, though the
+// grant is keyed by the project's id (issue #30).
+func TestAMemberReachesAnIDNamedProjectTheyAreGranted(t *testing.T) {
+	s, cr := newTestServer(t, nil, nil)
+	s.authz.TTL = 1
+	if err := cr.Create(t.Context(), idNamedShop(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "dev@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, s, "PATCH", "/api/workspace/people/dev@example.test", `{"role":"member"}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("make dev a member = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/members", `{"user":"dev@example.test","role":"developer"}`, true); rec.Code != http.StatusCreated {
+		t.Fatalf("grant dev developer on shop = %d %s", rec.Code, rec.Body.String())
+	}
+	s.authz.Invalidate()
+	sid, _ := signIn(t, s, ext.Identity{Email: "dev@example.test", Provider: "local"})
+
+	if rec := doCookie(t, s, "GET", "/api/projects/shop", "", sid, ""); rec.Code != http.StatusOK {
+		t.Fatalf("a developer on shop reads it = %d %s", rec.Code, rec.Body.String())
+	}
+	// Still held to the grant: managing members needs admin.
+	if rec := doCookie(t, s, "GET", "/api/projects/shop/members", "", sid, ""); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "your role on project shop is developer") {
+		t.Errorf("a developer lists members = %d %s, want 403 naming the slug and the role", rec.Code, rec.Body.String())
+	}
+}
+
+// A token scoped to a project reaches it by its slug, though the scope is
+// stored under the project's id (issue #30).
+func TestAProjectScopedTokenReachesAnIDNamedProject(t *testing.T) {
+	s, cr := newTestServer(t, nil, nil)
+	s.authz.TTL = 1
+	if err := cr.Create(t.Context(), idNamedShop(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "ada@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, s, "PATCH", "/api/workspace/people/ada@example.test", `{"role":"admin"}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("make ada a workspace admin = %d %s", rec.Code, rec.Body.String())
+	}
+	s.authz.Invalidate()
+	sid, csrf := signIn(t, s, ext.Identity{Email: "ada@example.test", Provider: "local"})
+	rec := doCookie(t, s, "POST", "/api/tokens", `{"name":"ci","projectRoles":{"shop":"developer"}}`, sid, csrf)
+	var created TokenCreateView
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Token == "" {
+		t.Fatalf("create token = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req := httptest.NewRequest("GET", "/api/projects/shop", nil)
+	req.Header.Set("Authorization", "Bearer "+created.Token)
+	out := httptest.NewRecorder()
+	s.Handler().ServeHTTP(out, req)
+	if out.Code != http.StatusOK {
+		t.Fatalf("the token reads its project = %d %s", out.Code, out.Body.String())
 	}
 }
