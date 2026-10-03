@@ -2,44 +2,24 @@
 # manifests render test, and an end-to-end run on a kind cluster that
 # deploys the sample projects with buildpacks and a Dockerfile.
 #
-# paths-ignore: web and prose changes (apps/, design/, content/, rfcs/, docs/,
-# *.md) run neither this workflow nor website.yml, so such a pull request
-# reports no checks at all. That is fine while main is unprotected.
+# What changed decides what runs: a pull request or a push that touches only
+# the website, the brand, content, RFCs, docs or the Markdown at the root
+# (the "changes" job) runs neither the Go tests, the applications nor the
+# end-to-end job, which takes about 45 minutes on a cluster it does not need.
+# examples/ is at the repository root, not under apps/, so the projects the
+# end-to-end job deploys still trigger it.
 #
-# design/ and content/ are ignored here deliberately: a change to a component
-# or a paragraph used to start the end-to-end job, which takes about 45
-# minutes on a cluster it does not need. examples/ is at the repository root,
-# not under apps/, so the five the end-to-end job deploys still trigger it.
-#
-# Do NOT mark any job here, or website / Build, as a required status check while
-# these path filters exist. A workflow that is not triggered reports no status,
-# so a required check would leave the other side's pull requests stuck on
-# "Expected - waiting for status" forever: a required job from this workflow
-# blocks every website-only PR, and a required website / Build blocks every
-# Go-only PR. To require checks, first replace both filters with a
-# dorny/paths-filter gate job that always reports a conclusion.
+# The workflow itself always runs, and its last job, "CI", always reports:
+# it passes when every job that ran passed and the others were skipped. That
+# is the one status check main requires (the "main" ruleset). A path filter on
+# the trigger would leave a skipped workflow reporting nothing, and a pull
+# request waiting forever for a required check.
 name: ci
 
 on:
   push:
     branches: [main]
-    # Repeated under pull_request below: GitHub Actions does not support YAML
-    # anchors, so the two lists have to be kept in sync by hand.
-    paths-ignore:
-      - 'apps/website/**'
-      - 'design/brand/**'
-      - 'content/**'
-      - 'rfcs/**'
-      - 'docs/**'
-      - '*.md'
   pull_request:
-    paths-ignore:
-      - 'apps/website/**'
-      - 'design/brand/**'
-      - 'content/**'
-      - 'rfcs/**'
-      - 'docs/**'
-      - '*.md'
 
 permissions:
   contents: read
@@ -49,8 +29,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Without a base to compare with (a new branch, a force-push), all of it.
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: a file moved lists both its paths, so moving code
+          # into docs/ cannot skip the jobs that would miss it.
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              "" | apps/website/* | design/brand/* | content/* | rfcs/* | docs/*) ;;
+              */*) code=true ;;
+              *.md) ;;
+              *) code=true ;;
+            esac
+          done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   go:
     name: Go tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     services:
       # The control-plane store's tests run against PostgreSQL too (RFC-0033).
@@ -80,6 +93,8 @@ jobs:
 
   ui:
     name: Applications
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -195,3 +210,20 @@ jobs:
           kubectl --context kind-ci -n shpyrd-system logs deployment/shpyrd-server --tail=200 || true
           kubectl --context kind-ci get apps.shpyrd.io -A -o yaml || true
           kubectl --context kind-ci get events -A --sort-by=.lastTimestamp | tail -60 || true
+
+  ci:
+    name: CI
+    needs: [changes, go, ui, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job that ran passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) echo "A job ended: $result"; exit 1 ;;
+            esac
+          done
