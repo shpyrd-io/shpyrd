@@ -1,0 +1,42 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "web-5fb55bdf9c-gtj9n": {
+        "name": "web-5fb55bdf9c-gtj9n",
+        "properties": {
+          "node": "worker-1", "namespace": "p-47zzbjzdu14c07ueautsg6p8s", "pod": "web-5fb55bdf9c-gtj9n",
+          "labels": {"shpyrd_io_process": "web", "shpyrd_io_project_id": "47zzbjzdu14c07ueautsg6p8s"},
+          "namespaceLabels": {"shpyrd_io_project_id": "47zzbjzdu14c07ueautsg6p8s", "shpyrd_io_workspace_id": "5wt3dhu441tpry4dveibwh82o"}
+        },
+        "cpuCoreHours": 0.25, "cpuCost": 0.008, "ramByteHours": 536870912, "ramCost": 0.002,
+        "gpuHours": 0, "gpuCost": 0, "networkCost": 0, "loadBalancerCost": 0, "pvs": null
+      },
+      "db-1": {
+        "name": "db-1",
+        "properties": {
+          "node": "worker-1", "namespace": "p-47zzbjzdu14c07ueautsg6p8s", "pod": "db-1",
+          "labels": {"cnpg_io_cluster": "db"},
+          "namespaceLabels": {"shpyrd_io_project_id": "47zzbjzdu14c07ueautsg6p8s", "shpyrd_io_workspace_id": "5wt3dhu441tpry4dveibwh82o"}
+        },
+        "cpuCoreHours": 0.1, "cpuCost": 0.003, "ramByteHours": 1073741824, "ramCost": 0.004,
+        "pvs": {"cluster=default-cluster:name=pvc-aaa": {"byteHours": 10737418240, "cost": 0.0004, "providerID": "ocid1.volume.oc1.iad.vol1"}}
+      },
+      "p-47zzbjzdu14c07ueautsg6p8s-unmounted-pvcs": {
+        "name": "p-47zzbjzdu14c07ueautsg6p8s-unmounted-pvcs",
+        "properties": {"namespace": "p-47zzbjzdu14c07ueautsg6p8s", "namespaceLabels": {"shpyrd_io_project_id": "47zzbjzdu14c07ueautsg6p8s", "shpyrd_io_workspace_id": "5wt3dhu441tpry4dveibwh82o"}},
+        "pvs": {"cluster=default-cluster:name=pvc-bbb": {"byteHours": 5368709120, "cost": 0.0002, "providerID": ""}}
+      },
+      "coredns-559f6c778d-d9bgh": {
+        "name": "coredns-559f6c778d-d9bgh",
+        "properties": {"node": "worker-1", "namespace": "kube-system", "pod": "coredns-559f6c778d-d9bgh", "labels": {"k8s_app": "kube-dns"}},
+        "cpuCoreHours": 0.1, "cpuCost": 0.003, "ramByteHours": 0, "ramCost": 0
+      },
+      "worker-1/__idle__": {
+        "name": "worker-1/__idle__",
+        "properties": {"node": "worker-1"},
+        "cpuCoreHours": 1.5, "cpuCost": 0.05, "ramByteHours": 2147483648, "ramCost": 0.01
+      }
+    }
+  ]
+}

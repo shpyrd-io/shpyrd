@@ -10,6 +10,15 @@
 
 **Last update:** 2026-09-22
 
+
+## Amendment (2026-10-04)
+
+There are no plans any more (RFC-0075, amended). A workspace's ceilings are its own
+settings (`workspaces.settings.limits`): `shpyrd-ctl workspace limits` on the open-source
+platform, the operator's tools on a platform that hosts many. Every workspace that had a
+plan kept the ceilings the plan gave it. The ResourceQuota backstop follows the
+workspace's settings as it followed the plan's.
+
 ## Summary
 
 Per-project ceilings on total CPU, memory, storage and instances, set by platform admins,

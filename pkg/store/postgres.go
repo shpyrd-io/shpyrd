@@ -1545,227 +1545,11 @@ func (p *Postgres) DeleteOAuthToken(ctx context.Context, ws, id string) error {
 	return nil
 }
 
-// ---- billing (RFC-0075) -------------------------------------------------------
+// ---- usage (RFC-0075) ---------------------------------------------------------
 
-func (p *Postgres) CreatePlan(ctx context.Context, pl Plan) (*Plan, error) {
-	var n int
-	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM plans WHERE name = $1`, pl.Name).Scan(&n); err != nil {
-		return nil, err
-	}
-	if n > 0 {
-		return nil, ErrConflict
-	}
-	return p.insertPlan(ctx, pl)
-}
-
-// AddPlanVersion adds a version of an existing plan, later than every
-// version it has.
-func (p *Postgres) AddPlanVersion(ctx context.Context, pl Plan) (*Plan, error) {
-	var n int
-	var latest *time.Time
-	if err := p.pool.QueryRow(ctx, `SELECT count(*), max(effective_from) FROM plans WHERE name = $1`, pl.Name).Scan(&n, &latest); err != nil {
-		return nil, err
-	}
-	if n == 0 {
-		return nil, ErrNotFound
-	}
-	if latest != nil && !pl.EffectiveFrom.After(*latest) {
-		return nil, ErrConflict
-	}
-	return p.insertPlan(ctx, pl)
-}
-
-func (p *Postgres) insertPlan(ctx context.Context, pl Plan) (*Plan, error) {
-	if pl.Currency == "" {
-		pl.Currency = "USD"
-	}
-	if pl.EffectiveFrom.IsZero() {
-		pl.EffectiveFrom = time.Now().UTC()
-	}
-	var out Plan
-	var limits []byte
-	if pl.Limits != nil {
-		limits, _ = json.Marshal(pl.Limits)
-	}
-	var row planRow
-	err := p.pool.QueryRow(ctx, `INSERT INTO plans (name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, sleep_after, sleep_resuming, postgres_sleep_after, monthly_budget, self_serve, limits, free, cost_budget)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING `+planColumns,
-		pl.Name, pl.CPUHour, pl.MemoryGiBHour, pl.StorageGiBMonth, pl.EgressGiB, pl.MinMonthly, pl.Currency, pl.EffectiveFrom, pl.SleepAfter, pl.SleepResuming, pl.PostgresSleepAfter, pl.MonthlyBudget, pl.SelfServe, limits, pl.Free, pl.CostBudget).
-		Scan(row.fields(&out)...)
-	row.finish(&out)
-	if isUnique(err) {
-		return nil, ErrConflict
-	}
-	return &out, err
-}
-
-// planColumns and planFields keep the plan's SELECT list and Scan targets
-// in one place.
-const planColumns = `id, name, cpu_hour, memory_gib_hour, storage_gib_month, egress_gib, min_monthly, currency, effective_from, created_at, sleep_after, sleep_resuming, postgres_sleep_after, monthly_budget, self_serve, limits, free, cost_budget`
-
-// planRow holds what a plan's row carries that is not scanned straight
-// into the Plan: the limits, JSON or null.
-type planRow struct{ limits []byte }
-
-func (r *planRow) fields(pl *Plan) []any {
-	return []any{&pl.ID, &pl.Name, &pl.CPUHour, &pl.MemoryGiBHour, &pl.StorageGiBMonth, &pl.EgressGiB, &pl.MinMonthly, &pl.Currency, &pl.EffectiveFrom, &pl.CreatedAt, &pl.SleepAfter, &pl.SleepResuming, &pl.PostgresSleepAfter, &pl.MonthlyBudget, &pl.SelfServe, &r.limits, &pl.Free, &pl.CostBudget}
-}
-
-func (r *planRow) finish(pl *Plan) {
-	if len(r.limits) > 0 {
-		var l Limits
-		if json.Unmarshal(r.limits, &l) == nil {
-			pl.Limits = &l
-		}
-	}
-}
-
-// ListPlans answers the version in force of every plan.
-func (p *Postgres) ListPlans(ctx context.Context) ([]Plan, error) {
-	all, err := p.queryPlans(ctx, `SELECT `+planColumns+` FROM plans ORDER BY name, effective_from`)
-	if err != nil {
-		return nil, err
-	}
-	return currentPlans(all, time.Now()), nil
-}
-
-// currentPlans keeps the version in force of each name, in name order.
-func currentPlans(all []Plan, now time.Time) []Plan {
-	var out []Plan
-	byName := map[string][]Plan{}
-	var names []string
-	for _, pl := range all {
-		if _, seen := byName[pl.Name]; !seen {
-			names = append(names, pl.Name)
-		}
-		byName[pl.Name] = append(byName[pl.Name], pl)
-	}
-	for _, name := range names {
-		if cur := PlanAt(byName[name], now); cur != nil {
-			out = append(out, *cur)
-		}
-	}
-	return out
-}
-
-func (p *Postgres) queryPlans(ctx context.Context, sql string, args ...any) ([]Plan, error) {
-	rows, err := p.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Plan
-	for rows.Next() {
-		var pl Plan
-		var row planRow
-		if err := rows.Scan(row.fields(&pl)...); err != nil {
-			return nil, err
-		}
-		row.finish(&pl)
-		out = append(out, pl)
-	}
-	return out, rows.Err()
-}
-
-// GetPlan finds a version by id, or a plan's version in force by name.
-func (p *Postgres) GetPlan(ctx context.Context, nameOrID string) (*Plan, error) {
-	var pl Plan
-	var row planRow
-	err := p.pool.QueryRow(ctx, `SELECT `+planColumns+` FROM plans WHERE id::text = $1`, nameOrID).Scan(row.fields(&pl)...)
-	if err == nil {
-		row.finish(&pl)
-		return &pl, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) && !isInvalidUUID(err) {
-		return nil, err
-	}
-	versions, err := p.PlanVersions(ctx, nameOrID)
-	if err != nil {
-		return nil, err
-	}
-	cur := PlanAt(versions, time.Now())
-	if cur == nil {
-		return nil, ErrNotFound
-	}
-	return cur, nil
-}
-
-// PlanVersions lists a plan's versions, oldest first.
-func (p *Postgres) PlanVersions(ctx context.Context, name string) ([]Plan, error) {
-	out, err := p.queryPlans(ctx, `SELECT `+planColumns+` FROM plans WHERE name = $1 ORDER BY effective_from`, name)
-	if err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, ErrNotFound
-	}
-	return out, nil
-}
-
-// isInvalidUUID says Postgres refused a text that is not a uuid (an id
-// lookup given a name).
 func isInvalidUUID(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "22P02"
-}
-func (p *Postgres) AssignPlan(ctx context.Context, ws, nameOrID string) (*WorkspacePlan, error) {
-	plan, err := p.GetPlan(ctx, nameOrID)
-	if err != nil {
-		return nil, err
-	}
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, `UPDATE workspace_plans SET ends_at = now() WHERE workspace_id = $1 AND ends_at IS NULL`, wsID); err != nil {
-		return nil, err
-	}
-	var wp WorkspacePlan
-	err = tx.QueryRow(ctx, `INSERT INTO workspace_plans (workspace_id, plan_id) VALUES ($1,$2) RETURNING id, workspace_id, plan_id, starts_at`, wsID, plan.ID).
-		Scan(&wp.ID, &wp.WorkspaceID, &wp.PlanID, &wp.StartsAt)
-	if err != nil {
-		return nil, err
-	}
-	wp.PlanName = plan.Name
-	return &wp, tx.Commit(ctx)
-}
-func (p *Postgres) WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error) {
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return nil, err
-	}
-	var wp WorkspacePlan
-	err = p.pool.QueryRow(ctx, `SELECT wp.id, wp.workspace_id, wp.plan_id, pl.name, wp.starts_at, wp.ends_at FROM workspace_plans wp JOIN plans pl ON pl.id = wp.plan_id WHERE wp.workspace_id = $1 AND wp.ends_at IS NULL`, wsID).
-		Scan(&wp.ID, &wp.WorkspaceID, &wp.PlanID, &wp.PlanName, &wp.StartsAt, &wp.EndsAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	return &wp, err
-}
-func (p *Postgres) WorkspacePlanHistory(ctx context.Context, ws string) ([]WorkspacePlan, error) {
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := p.pool.Query(ctx, `SELECT wp.id, wp.workspace_id, wp.plan_id, pl.name, wp.starts_at, wp.ends_at FROM workspace_plans wp JOIN plans pl ON pl.id = wp.plan_id WHERE wp.workspace_id = $1 ORDER BY wp.starts_at DESC`, wsID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []WorkspacePlan
-	for rows.Next() {
-		var wp WorkspacePlan
-		if err := rows.Scan(&wp.ID, &wp.WorkspaceID, &wp.PlanID, &wp.PlanName, &wp.StartsAt, &wp.EndsAt); err != nil {
-			return nil, err
-		}
-		out = append(out, wp)
-	}
-	return out, rows.Err()
 }
 func (p *Postgres) WriteBuckets(ctx context.Context, buckets []UsageBucket) error {
 	if len(buckets) == 0 {
@@ -1865,74 +1649,6 @@ func (p *Postgres) QueryBuckets(ctx context.Context, ws, project string, from, t
 	for rows.Next() {
 		var b UsageBucket
 		if err := rows.Scan(&b.WorkspaceID, &b.Project, &b.Component, &b.Metric, &b.PeriodStart, &b.PeriodEnd, &b.Quantity, &b.Unit, &b.Quality, &b.Revision, &b.Source); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
-}
-func (p *Postgres) UpsertInvoiceLine(ctx context.Context, line InvoiceLine) error {
-	wsID, err := p.wsID(ctx, p.pool, strings.Split(line.WorkspaceID, "/")[0]) // accepts slug or id
-	if err != nil {
-		wsID = line.WorkspaceID
-	} // already an ID
-	_, err = p.pool.Exec(ctx, `INSERT INTO invoice_lines (workspace_id, period_start, period_end, component, metric, quantity, unit, unit_price, gross_amount, plan_id, quality, revision, finalized)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid,$11,$12,$13)
-		ON CONFLICT (id) DO UPDATE SET quantity=EXCLUDED.quantity, gross_amount=EXCLUDED.gross_amount, finalized=EXCLUDED.finalized`,
-		wsID, line.PeriodStart, line.PeriodEnd, line.Component, line.Metric, line.Quantity, line.Unit, line.UnitPrice, line.GrossAmount, line.PlanID, line.Quality, line.Revision, line.Finalized)
-	return err
-}
-func (p *Postgres) QueryInvoiceLines(ctx context.Context, ws string, from, to time.Time, finalized *bool) ([]InvoiceLine, error) {
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return nil, err
-	}
-	q := `SELECT id::text, workspace_id::text, period_start, period_end, component, metric, quantity, unit, unit_price, gross_amount, COALESCE(plan_id::text,''), quality, revision, finalized, created_at FROM invoice_lines WHERE workspace_id=$1 AND period_start<$3 AND period_end>$2`
-	args := []any{wsID, from, to}
-	if finalized != nil {
-		q += ` AND finalized=$4`
-		args = append(args, *finalized)
-	}
-	rows, err := p.pool.Query(ctx, q+` ORDER BY period_start`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []InvoiceLine
-	for rows.Next() {
-		var l InvoiceLine
-		if err := rows.Scan(&l.ID, &l.WorkspaceID, &l.PeriodStart, &l.PeriodEnd, &l.Component, &l.Metric, &l.Quantity, &l.Unit, &l.UnitPrice, &l.GrossAmount, &l.PlanID, &l.Quality, &l.Revision, &l.Finalized, &l.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
-	}
-	return out, rows.Err()
-}
-func (p *Postgres) WriteCOGSBucket(ctx context.Context, b COGSBucket) error {
-	wsID, err := p.wsID(ctx, p.pool, b.WorkspaceID)
-	if err != nil {
-		wsID = b.WorkspaceID
-	}
-	_, err = p.pool.Exec(ctx, `INSERT INTO cogs_buckets (workspace_id, project, period_start, period_end, cpu_cost, memory_cost, storage_cost, network_cost, shared_cost, idle_cost, total_cost, currency, allocation_policy, quality)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-		ON CONFLICT (workspace_id, project, period_start) DO UPDATE SET cpu_cost=EXCLUDED.cpu_cost, memory_cost=EXCLUDED.memory_cost, storage_cost=EXCLUDED.storage_cost, network_cost=EXCLUDED.network_cost, shared_cost=EXCLUDED.shared_cost, idle_cost=EXCLUDED.idle_cost, total_cost=EXCLUDED.total_cost, quality=EXCLUDED.quality`,
-		wsID, b.Project, b.PeriodStart, b.PeriodEnd, b.CPUCost, b.MemoryCost, b.StorageCost, b.NetworkCost, b.SharedCost, b.IdleCost, b.TotalCost, b.Currency, b.AllocationPolicy, b.Quality)
-	return err
-}
-func (p *Postgres) QueryCOGSBuckets(ctx context.Context, ws string, from, to time.Time) ([]COGSBucket, error) {
-	wsID, err := p.wsID(ctx, p.pool, ws)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := p.pool.Query(ctx, `SELECT workspace_id::text, project, period_start, period_end, cpu_cost, memory_cost, storage_cost, network_cost, shared_cost, idle_cost, total_cost, currency, allocation_policy, quality FROM cogs_buckets WHERE workspace_id=$1 AND period_start<$3 AND period_end>$2 ORDER BY period_start`, wsID, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []COGSBucket
-	for rows.Next() {
-		var b COGSBucket
-		if err := rows.Scan(&b.WorkspaceID, &b.Project, &b.PeriodStart, &b.PeriodEnd, &b.CPUCost, &b.MemoryCost, &b.StorageCost, &b.NetworkCost, &b.SharedCost, &b.IdleCost, &b.TotalCost, &b.Currency, &b.AllocationPolicy, &b.Quality); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -2173,7 +1889,6 @@ func (p *Postgres) RekeyProject(ctx context.Context, ws, slug, id string) (int, 
 	for _, t := range []struct{ table, cols string }{
 		{"usage_buckets", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
 		{"usage_hourly", "workspace_id, project, component, metric, period_start, period_end, quantity, unit, quality, revision, source, labels"},
-		{"cogs_buckets", "workspace_id, project, period_start, period_end, cpu_cost, memory_cost, storage_cost, network_cost, shared_cost, idle_cost, total_cost, currency, allocation_policy, quality"},
 	} {
 		newCols := strings.Replace(t.cols, "project,", "$3::text AS project,", 1)
 		if _, err := tx.Exec(ctx, `INSERT INTO `+t.table+` (`+t.cols+`) SELECT `+newCols+` FROM `+t.table+` WHERE workspace_id = $1 AND project = $2 ON CONFLICT DO NOTHING`, wsID, slug, short); err != nil {
@@ -2235,6 +1950,59 @@ func (p *Postgres) GetSetting(ctx context.Context, key string) (string, error) {
 func (p *Postgres) SetSetting(ctx context.Context, key, value string) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, key, value)
 	return err
+}
+
+// ---- console users -------------------------------------------------------------
+
+func (p *Postgres) ListConsoleUsers(ctx context.Context) ([]ConsoleUser, error) {
+	rows, err := p.pool.Query(ctx, `SELECT email, added_at, added_by FROM console_users ORDER BY email`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ConsoleUser{}
+	for rows.Next() {
+		var u ConsoleUser
+		if err := rows.Scan(&u.Email, &u.AddedAt, &u.AddedBy); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) AddConsoleUser(ctx context.Context, email, by string) (*ConsoleUser, error) {
+	email = normEmail(email)
+	if email == "" {
+		return nil, errors.New("a console user needs an email")
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO console_users (email, added_by) VALUES ($1,$2) ON CONFLICT (email) DO NOTHING`, email, by); err != nil {
+		return nil, err
+	}
+	var u ConsoleUser
+	err := p.pool.QueryRow(ctx, `SELECT email, added_at, added_by FROM console_users WHERE email = $1`, email).Scan(&u.Email, &u.AddedAt, &u.AddedBy)
+	return &u, err
+}
+
+func (p *Postgres) RemoveConsoleUser(ctx context.Context, email string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM console_users WHERE email = $1`, normEmail(email))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) IsConsoleUser(ctx context.Context, email string) (bool, error) {
+	email = normEmail(email)
+	if email == "" {
+		return false, nil
+	}
+	var ok bool
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM console_users WHERE email = $1)`, email).Scan(&ok)
+	return ok, err
 }
 
 var _ Store = (*Postgres)(nil)

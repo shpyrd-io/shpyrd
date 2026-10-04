@@ -6,8 +6,11 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
@@ -127,29 +130,33 @@ type WorkspaceSettings struct {
 	// itself (its company SSO) are offered (RFC-0033). Never true for the
 	// implicit workspace.
 	OwnMethodsOnly bool `json:"ownMethodsOnly,omitempty"`
-	// Limits are the workspace's own ceilings (RFC-0033, RFC-0042), an
-	// exception to its billing plan's (#51): nil means it follows its
-	// plan's (Plan.Limits), and has none without a plan, the open-source
-	// default. The API checks the ceilings in force (EffectiveLimits)
-	// before changing anything; the controller backs them with a
-	// ResourceQuota per project namespace.
+	// Limits are the workspace's ceilings (RFC-0033, RFC-0042): nil means
+	// none, the open-source default. The API checks them before changing
+	// anything; the controller backs them with a ResourceQuota per project
+	// namespace.
 	Limits *Limits `json:"limits,omitempty"`
+	// Sleep is what the workspace's projects do by default when nobody
+	// uses them (RFC-0075): nil means they never sleep unless they say so.
+	Sleep *SleepDefaults `json:"sleep,omitempty"`
 	// Branding is how the workspace looks to its people: the launcher and
 	// the login page show its logo and use its colour (RFC-0033).
 	Branding *Branding `json:"branding,omitempty"`
 	// MCPName is what an assistant shows for the workspace's MCP server
 	// (RFC-0032); "<name> on shpyrd" when empty.
 	MCPName string `json:"mcpName,omitempty"`
-	// Budget is how the plan's monthly budget (RFC-0075) has touched this
-	// workspace: the month (YYYY-MM) its owners were warned, and the month
-	// it was paused for, so it is resumed when that month ends.
-	Budget *BudgetState `json:"budget,omitempty"`
 }
 
-// BudgetState records what the monthly budget did to a workspace.
-type BudgetState struct {
-	WarnedMonth string `json:"warnedMonth,omitempty"`
-	PausedMonth string `json:"pausedMonth,omitempty"`
+// SleepDefaults are a workspace's default sleep: projects and databases
+// without a policy of their own inherit them; an explicit "off" opts out.
+// Durations are Go's ("10m"); empty means no default.
+type SleepDefaults struct {
+	// AppsAfter is the quiet period after which a web process sleeps;
+	// AppsResuming how it wakes: "page" (a waiting page) or "wait" (the
+	// request is held).
+	AppsAfter    string `json:"appsAfter,omitempty"`
+	AppsResuming string `json:"appsResuming,omitempty"`
+	// DatabasesAfter is the idle period after which a database hibernates.
+	DatabasesAfter string `json:"databasesAfter,omitempty"`
 }
 
 // Branding is a workspace's look.
@@ -423,98 +430,7 @@ type OAuth interface {
 	DeleteOAuthToken(ctx context.Context, ws, id string) error
 }
 
-// ---- Billing and usage (RFC-0075) -----------------------------------------
-
-// Plan defines the prices a workspace is charged at plan prices.
-type Plan struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	CPUHour         float64   `json:"cpuHour"`         // per core-hour of actual use
-	MemoryGiBHour   float64   `json:"memoryGibHour"`   // per GiB-hour working set
-	StorageGiBMonth float64   `json:"storageGibMonth"` // per GiB-month provisioned
-	EgressGiB       float64   `json:"egressGib"`       // per GiB HTTP egress
-	MinMonthly      float64   `json:"minMonthly"`      // workspace floor
-	Currency        string    `json:"currency"`
-	EffectiveFrom   time.Time `json:"effectiveFrom"`
-	CreatedAt       time.Time `json:"createdAt"`
-	// SleepAfter and SleepResuming are the plan's default HTTP sleep policy
-	// (RFC-0075): projects without one of their own inherit it. Empty
-	// SleepAfter means no default.
-	SleepAfter    string `json:"sleepAfter,omitempty"`
-	SleepResuming string `json:"sleepResuming,omitempty"`
-	// PostgresSleepAfter is the plan's default sleep for databases:
-	// databases without a policy of their own hibernate after this quiet
-	// period. Empty means no default.
-	PostgresSleepAfter string `json:"postgresSleepAfter,omitempty"`
-	// MonthlyBudget caps what a month may come to at plan prices: owners
-	// are warned near it and the workspace is paused at it until the
-	// month ends. Zero means no cap.
-	MonthlyBudget float64 `json:"monthlyBudget,omitempty"`
-	// CostBudget caps what a month may cost the platform (OpenCost's COGS,
-	// the operator's number): the same warning and pause, measured on
-	// cost. Zero means no cap. Never shown to a customer.
-	CostBudget float64 `json:"costBudget,omitempty"`
-	// SelfServe says people may pick this plan for themselves when they
-	// sign up; the others are assigned by the operator.
-	SelfServe bool `json:"selfServe,omitempty"`
-	// Limits are the ceilings of every workspace on this plan that has
-	// none of its own (#51); nil means none. A new version with other
-	// limits reaches those workspaces when it takes effect.
-	Limits *Limits `json:"limits,omitempty"`
-	// Free says the plan charges nothing: the bill shows the consumption
-	// with nothing to pay. Such a plan is capped by CostBudget.
-	Free bool `json:"free,omitempty"`
-}
-
-// EffectiveLimits are the ceilings a workspace is held to (#51): its own
-// when it has some, else its plan's; nil for none. own says they are the
-// workspace's own.
-func EffectiveLimits(w *Workspace, plan *Plan) (limits *Limits, own bool) {
-	if w != nil && w.Settings.Limits != nil {
-		return w.Settings.Limits, true
-	}
-	if plan != nil {
-		return plan.Limits, false
-	}
-	return nil, false
-}
-
-// PlanReader is the part of the store that answers a workspace's plan.
-type PlanReader interface {
-	WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error)
-	GetPlan(ctx context.Context, nameOrID string) (*Plan, error)
-}
-
-// PlanOf is the version in force of a workspace's plan, nil when it has
-// none.
-func PlanOf(ctx context.Context, st PlanReader, ws string) (*Plan, error) {
-	wp, err := st.WorkspacePlan(ctx, ws)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	p, err := st.GetPlan(ctx, wp.PlanName)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	return p, err
-}
-
-// WorkspaceLimits are the ceilings a workspace is held to, its plan read
-// from the store when it has none of its own (EffectiveLimits).
-func WorkspaceLimits(ctx context.Context, st PlanReader, w *Workspace) (limits *Limits, own bool, err error) {
-	if w.Settings.Limits != nil {
-		return w.Settings.Limits, true, nil
-	}
-	p, err := PlanOf(ctx, st, w.Slug)
-	if err != nil {
-		return nil, false, err
-	}
-	limits, own = EffectiveLimits(w, p)
-	return limits, own, nil
-}
+// ---- Usage (RFC-0075) ------------------------------------------------------
 
 // MergeLimits applies the ceilings patch gives (its non-zero fields) over
 // base; a nil base is no ceiling at all.
@@ -542,37 +458,6 @@ func MergeLimits(base, patch *Limits) *Limits {
 		out.Storage = patch.Storage
 	}
 	return &out
-}
-
-// PlanAt is the version of a plan in force at t: the latest whose
-// EffectiveFrom is not after t, else the earliest. Nil for no versions.
-func PlanAt(versions []Plan, t time.Time) *Plan {
-	var pick *Plan
-	for i := range versions {
-		v := &versions[i]
-		if !v.EffectiveFrom.After(t) && (pick == nil || v.EffectiveFrom.After(pick.EffectiveFrom)) {
-			pick = v
-		}
-	}
-	if pick == nil {
-		for i := range versions {
-			v := &versions[i]
-			if pick == nil || v.EffectiveFrom.Before(pick.EffectiveFrom) {
-				pick = v
-			}
-		}
-	}
-	return pick
-}
-
-// WorkspacePlan is a workspace's current or historical plan assignment.
-type WorkspacePlan struct {
-	ID          string     `json:"id"`
-	WorkspaceID string     `json:"workspaceId"`
-	PlanID      string     `json:"planId"`
-	PlanName    string     `json:"planName,omitempty"`
-	StartsAt    time.Time  `json:"startsAt"`
-	EndsAt      *time.Time `json:"endsAt,omitempty"`
 }
 
 // UsageBucket is one 5-minute (or hourly) usage record for a project
@@ -615,43 +500,6 @@ const (
 	QualityPartial  = "partial"
 	QualityMissing  = "missing"
 )
-
-// InvoiceLine is a computed billing line for one (workspace, period, component, metric).
-type InvoiceLine struct {
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspaceId"`
-	PeriodStart time.Time `json:"periodStart"`
-	PeriodEnd   time.Time `json:"periodEnd"`
-	Component   string    `json:"component"`
-	Metric      string    `json:"metric"`
-	Quantity    float64   `json:"quantity"`
-	Unit        string    `json:"unit"`
-	UnitPrice   float64   `json:"unitPrice"`
-	GrossAmount float64   `json:"grossAmount"`
-	PlanID      string    `json:"planId,omitempty"`
-	Quality     string    `json:"quality"`
-	Revision    int       `json:"revision"`
-	Finalized   bool      `json:"finalized"`
-	CreatedAt   time.Time `json:"createdAt"`
-}
-
-// COGSBucket is operator economics from OpenCost (never shown to customers).
-type COGSBucket struct {
-	WorkspaceID      string    `json:"workspaceId"`
-	Project          string    `json:"project"` // "" = workspace aggregate
-	PeriodStart      time.Time `json:"periodStart"`
-	PeriodEnd        time.Time `json:"periodEnd"`
-	CPUCost          float64   `json:"cpuCost"`
-	MemoryCost       float64   `json:"memoryCost"`
-	StorageCost      float64   `json:"storageCost"`
-	NetworkCost      float64   `json:"networkCost"`
-	SharedCost       float64   `json:"sharedCost"`
-	IdleCost         float64   `json:"idleCost"`
-	TotalCost        float64   `json:"totalCost"`
-	Currency         string    `json:"currency"`
-	AllocationPolicy string    `json:"allocationPolicy"`
-	Quality          string    `json:"quality"`
-}
 
 // SleepEvent records a sleep or wake of a process or database.
 type SleepEvent struct {
@@ -717,28 +565,9 @@ type Projects interface {
 	SetProjectIcon(ctx context.Context, id string, data []byte, typ string) error
 }
 
-// Billing is the metering and economics part of the Store (RFC-0075).
-type Billing interface {
-	// Plans.
-	// CreatePlan makes a new plan; a name in use is ErrConflict. Prices
-	// change by versions: AddPlanVersion adds a row for an existing name
-	// with a later EffectiveFrom (earlier or equal is ErrConflict). GetPlan
-	// by name and ListPlans answer the version in force now (the latest
-	// whose EffectiveFrom has come; the earliest when none has);
-	// PlanVersions lists them all, oldest first. PlanAt picks the version
-	// in force at a time from such a list.
-	CreatePlan(ctx context.Context, p Plan) (*Plan, error)
-	AddPlanVersion(ctx context.Context, p Plan) (*Plan, error)
-	ListPlans(ctx context.Context) ([]Plan, error)
-	GetPlan(ctx context.Context, nameOrID string) (*Plan, error)
-	PlanVersions(ctx context.Context, name string) ([]Plan, error)
-	// AssignPlan sets the plan for a workspace (closes the previous assignment).
-	AssignPlan(ctx context.Context, ws, planNameOrID string) (*WorkspacePlan, error)
-	// WorkspacePlan returns the current plan assignment, ErrNotFound when none.
-	WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error)
-	// WorkspacePlanHistory returns all assignments, newest first.
-	WorkspacePlanHistory(ctx context.Context, ws string) ([]WorkspacePlan, error)
-
+// Usage is the metering part of the Store (RFC-0075): what projects use,
+// in quantities, and when they sleep.
+type Usage interface {
 	// Usage ledger.
 	// WriteBuckets writes or revises usage buckets; existing (workspace, project,
 	// component, metric, period_start, revision) rows are skipped (idempotent).
@@ -751,17 +580,6 @@ type Billing interface {
 	// hour's buckets) and deletes the folded five-minute rows. Idempotent: an
 	// hour already rolled up is left alone. Returns hours rolled up.
 	RollupHourly(ctx context.Context, before time.Time) (int, error)
-
-	// Invoice lines.
-	// UpsertInvoiceLine writes or replaces an invoice line (same (ws, period,
-	// component, metric, revision) = replace; new revision = insert).
-	UpsertInvoiceLine(ctx context.Context, line InvoiceLine) error
-	// QueryInvoiceLines returns lines for a workspace and period.
-	QueryInvoiceLines(ctx context.Context, ws string, from, to time.Time, finalized *bool) ([]InvoiceLine, error)
-
-	// COGS buckets (operator only).
-	WriteCOGSBucket(ctx context.Context, b COGSBucket) error
-	QueryCOGSBuckets(ctx context.Context, ws string, from, to time.Time) ([]COGSBucket, error)
 
 	// Sleep events.
 	WriteSleepEvent(ctx context.Context, e SleepEvent) error
@@ -782,6 +600,131 @@ const (
 	// host resolves to (RFC-0078).
 	SettingDefaultWorkspaceID = "default_workspace_id"
 )
+
+// ConsoleUser is someone who may open the operator's console: an email,
+// independent of every workspace. All of them are its admins for now.
+type ConsoleUser struct {
+	Email   string    `json:"email"`
+	AddedAt time.Time `json:"addedAt"`
+	AddedBy string    `json:"addedBy,omitempty"`
+}
+
+// normEmail is an email as the store keeps it.
+func normEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
+
+// ConsoleUsers is the console's own list of people.
+type ConsoleUsers interface {
+	// ListConsoleUsers lists them by email.
+	ListConsoleUsers(ctx context.Context) ([]ConsoleUser, error)
+	// AddConsoleUser puts an email on the list (lowercased); adding one
+	// already there changes nothing.
+	AddConsoleUser(ctx context.Context, email, by string) (*ConsoleUser, error)
+	// RemoveConsoleUser takes an email off; ErrNotFound when it was not on.
+	RemoveConsoleUser(ctx context.Context, email string) error
+	// IsConsoleUser says whether an email is on the list.
+	IsConsoleUser(ctx context.Context, email string) (bool, error)
+}
+
+// ---- Costs (ee/costs) ------------------------------------------------------
+
+// Kinds and sources of cost lines.
+const (
+	CostUsage     = "usage"     // quantities the platform measured (metering)
+	CostEstimated = "estimated" // OpenCost's allocation at list prices
+	CostReal      = "real"      // the provider's bill (oci)
+)
+
+// CostLine is one line of what the cluster used or cost: for a window, a
+// workspace, project and process where it applies, a metric, a resource
+// (the OCID of a node or a volume) and the provider's tags.
+type CostLine struct {
+	ID           string            `json:"id"`
+	Kind         string            `json:"kind"`
+	Source       string            `json:"source"`
+	Start        time.Time         `json:"start"`
+	End          time.Time         `json:"end"`
+	Workspace    string            `json:"workspace,omitempty"`
+	Project      string            `json:"project,omitempty"`
+	Process      string            `json:"process,omitempty"`
+	Metric       string            `json:"metric,omitempty"`
+	Quantity     *float64          `json:"quantity,omitempty"`
+	Unit         string            `json:"unit,omitempty"`
+	Cost         *float64          `json:"cost,omitempty"`
+	Currency     string            `json:"currency,omitempty"`
+	Resource     string            `json:"resource,omitempty"`
+	ResourceType string            `json:"resourceType,omitempty"`
+	Service      string            `json:"service,omitempty"`
+	SKU          string            `json:"sku,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	ChangedAt    time.Time         `json:"-"`
+}
+
+// Key is what a line is about: two lines with the same key are the same
+// line, read again.
+func (l CostLine) Key() string {
+	return strings.Join([]string{l.Kind, l.Source, l.Start.UTC().Format(time.RFC3339), l.End.UTC().Format(time.RFC3339), l.Workspace, l.Project, l.Process, l.Metric, l.Resource, l.Service, l.SKU}, "|")
+}
+
+// CostQuery selects lines whose window starts in [From, To); empty fields
+// do not filter.
+type CostQuery struct {
+	From, To  time.Time
+	Kind      string
+	Workspace string
+}
+
+// CostDrain sends cost lines to a URL (ee/costs). Header values live in a
+// Secret; the store keeps their names.
+type CostDrain struct {
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	URL            string     `json:"url"`
+	Headers        []string   `json:"headers,omitempty"`
+	CursorAt       *time.Time `json:"cursorAt,omitempty"`
+	CursorID       string     `json:"-"`
+	LastDeliveryAt *time.Time `json:"lastDeliveryAt,omitempty"`
+	Sent           int64      `json:"sent"`
+	Errors         int64      `json:"errors"`
+	Message        string     `json:"message,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+// CostDelivery is what one attempt of a drain did: lines sent and the
+// cursor reached, or an error.
+type CostDelivery struct {
+	At       time.Time
+	Sent     int
+	CursorAt *time.Time
+	CursorID string
+	Err      string
+}
+
+// Costs is the cost part of the Store (ee/costs).
+type Costs interface {
+	// UpsertCostLines writes lines by key (ID is set from it); a line whose
+	// numbers or tags did not change keeps its changed_at. Returns how many
+	// changed.
+	UpsertCostLines(ctx context.Context, lines []CostLine) (int, error)
+	QueryCostLines(ctx context.Context, q CostQuery) ([]CostLine, error)
+	// CostLinesChangedSince lists lines changed after the cursor (at, then
+	// id), oldest first, at most limit.
+	CostLinesChangedSince(ctx context.Context, at time.Time, id string, limit int) ([]CostLine, error)
+
+	ListCostDrains(ctx context.Context) ([]CostDrain, error)
+	// CreateCostDrain adds a drain; ErrConflict when the name is taken.
+	CreateCostDrain(ctx context.Context, d CostDrain) (*CostDrain, error)
+	// DeleteCostDrain removes one by name; ErrNotFound when none.
+	DeleteCostDrain(ctx context.Context, name string) error
+	// RecordCostDelivery records an attempt: lines sent, cursor moved, or
+	// an error.
+	RecordCostDelivery(ctx context.Context, id string, d CostDelivery) error
+}
+
+// CostLineID is the stable id of a line: a hash of its key.
+func CostLineID(l CostLine) string {
+	sum := sha256.Sum256([]byte(l.Key()))
+	return "cl_" + hex.EncodeToString(sum[:12])
+}
 
 // Memberships is the workspace-role part of the Store.
 type Memberships interface {
@@ -887,9 +830,11 @@ type Store interface {
 	Memberships
 	Hosts
 	OAuth
-	Billing
+	Usage
 	Projects
 	Settings
+	ConsoleUsers
+	Costs
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

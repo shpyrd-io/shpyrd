@@ -224,7 +224,7 @@ func (rp *relyingParty) providerList() []ProviderInfo {
 	defer rp.mu.Unlock()
 	out := make([]ProviderInfo, 0, len(rp.order))
 	for _, id := range rp.order {
-		if p := rp.providers[id]; !p.Password {
+		if p := rp.providers[id]; !p.Password && p.available() {
 			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Realm: firstNonEmpty(p.Realm, ext.RealmPlatform), Workspace: p.Workspace})
 		}
 	}
@@ -242,6 +242,9 @@ func (rp *relyingParty) passwordProvider() *oidcProvider {
 	}
 	return nil
 }
+
+// available says whether the provider may be used now (ext.OIDCProvider).
+func (p *oidcProvider) available() bool { return p.Available == nil || p.Available() }
 
 // provider looks a registered provider up by id.
 func (rp *relyingParty) provider(id string) *oidcProvider {
@@ -359,7 +362,7 @@ func (rp *relyingParty) begin(providerID, next, redirect string) (string, error)
 		providerID = rp.order[0]
 	}
 	rp.mu.Unlock()
-	if !ok {
+	if !ok || !p.available() {
 		return "", fmt.Errorf("unknown login provider %q", providerID)
 	}
 	state, err := randomToken(24)

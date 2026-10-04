@@ -71,7 +71,7 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd members add <project> --user <email>\|--team <name> --role reader\|user\|viewer\|developer\|admin` | Grant a role on a project (`reader` opens the app read-only, `user` opens it; see [Sign-in for your app](/docs/app-access)). |
 | `shpyrd projects describe <project> [--description "…"] [--icon name] [--color name] [--icon-file path] [--featured\|--unfeatured]` | What the launcher shows for a project: the line under its name, its symbol (by the name lucide gives it) and the symbol's colour, or an image of its own (`.svg`, `.png` or `.webp`; empty removes it), and whether it is shown first and larger. |
 | `shpyrd workspace` | The workspace you are signed in to: name, address, dashboard, owners. `workspace address <label>` moves it (owners; the old address redirects 30 days); `workspace domains add\|verify\|primary\|alias\|remove <host>` manage custom domains. |
-| `shpyrd sso add google\|microsoft\|github\|oidc --client-id ... --client-secret <secret\|@file> [--hosted-domain] [--tenant] [--org] [--issuer] [--label]` | Add a sign-in method of this workspace (its login page only). `sso list`, `sso remove <id>`, `sso platform-methods on\|off`. |
+| `shpyrd sso add google\|microsoft\|github\|oidc --client-id ... --client-secret <secret\|@file> [--hosted-domain] [--tenant] [--org] [--issuer] [--label]` | Add a sign-in method of this workspace (its login page only; enterprise). `sso list`, `sso remove <id>`, `sso platform-methods on\|off`. |
 | `shpyrd members list [project]`, `remove <project> --user\|--team` | List and remove grants. |
 
 ## Log drains
@@ -92,29 +92,29 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 
 ## Sign-in providers
 
-Self-hosted: the platform-wide sign-in methods of a cluster you run yourself. A workspace's own sign-in, on shpyrd cloud too, is `shpyrd sso` (above) or the dashboard's Workspace › Sign-in tab.
+Self-hosted: the sign-in methods of a cluster you run yourself. Email and password (extension `auth-local`) is the platform's own; GitHub, Google, Microsoft and any OpenID Connect provider are enterprise features, on with a license (`shpyrd-ctl license set`) and always on shpyrd cloud. A workspace's own sign-in is `shpyrd sso` (above) or the dashboard's Workspace › Sign-in tab.
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd auth oidc set --id <id> --label <text> --issuer <url> --client-id <id> --client-secret <secret\|@file>` | Add or update a company identity provider (extension `auth-oidc`); `--scopes` replaces the extra scopes (`-` for none). Prints the redirect URIs to register. |
-| `shpyrd auth oidc list` / `remove <id>` | List or remove providers (roles are kept, they are keyed by email). |
-| `shpyrd auth oidc check <id\|issuer-url>` | Fetch the issuer's discovery document: endpoints, PKCE, scopes, claims, sign-out support. |
-| `shpyrd auth connector add github\|google\|microsoft\|oidc --client-id ... --client-secret ... [--org] [--hosted-domain] [--tenant] [--issuer]` | A sign-in method through the bundled issuer (extension `auth-local`): GitHub, Google, Microsoft or any OpenID Connect provider; the button appears at once. Also on the dashboard's Workspace › Sign-in tab. |
-| `shpyrd auth connector list` / `remove <id>` | List or remove connectors. |
+| `shpyrd-ctl auth connector add github\|google\|microsoft\|oidc --client-id ... --client-secret <secret\|@file> [--realm console\|platform] [--org] [--hosted-domain] [--tenant] [--issuer]` | A sign-in method through the bundled issuer (enterprise): on the console's login page (`--realm console`) or among the methods every workspace offers (`platform`, the default); the button appears at once. Also on the console's Sign-in page. |
+| `shpyrd-ctl auth connector list` / `remove <id>` | List or remove connectors. |
 
-## Plans and economics
+## The platform
 
-Self-hosted: platform-level, for the operator:
+Self-hosted: the operator's, in `shpyrd-ctl`.
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd-ctl plans create <name> --cpu-hour 0.02 --memory-gib-hour 0.005 --storage-gib-month 0.10 --egress-gib 0.05 [--min-monthly 0] [--currency USD] [--free] [--sleep-after 15m --sleep-resuming page] [--postgres-sleep-after 10m] [--monthly-budget 10] [--cost-budget 0.50] [--self-serve] [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi]` | Define the unit prices a workspace is billed at, and optionally: `--free` (nothing to pay; `shpyrd billing` shows the consumption alone); the plan's default sleep for projects (they sleep after the quiet period unless they set their own; `shpyrd sleep <project> --after off` opts out) and for databases (`shpyrd pg sleep` the same way); two monthly caps, `--monthly-budget` at the plan's prices and `--cost-budget` on what the workspace costs the platform (OpenCost; the operator's number, shown nowhere), either of which warns the owners at 80% and pauses the workspace at 100% until the month ends; whether people may pick the plan when they sign up; and the plan's ceilings, which every workspace on it is held to unless it has ceilings of its own. |
-| `shpyrd-ctl plans update <name> [--effective-from YYYY-MM-DD] [the flags of create]` | Change a plan's prices or settings from a date on: a new version is written, and every five minutes of use is priced at the version in force at its time, so past months keep theirs. Only the flags given change, the ceilings too (`--projects 4` leaves `--memory` as it was); new ceilings reach every workspace on the plan without ceilings of its own. `--clear-limits` removes them all and cannot be given with the limit flags. |
-| `shpyrd-ctl plans history <name>` | A plan's versions, oldest first. |
-| `shpyrd-ctl plans list` | Plans and their prices, the version in force of each. |
-| `shpyrd-ctl plans assign <plan> --workspace <slug> [--keep-limits]` | Bill a workspace at a plan (its history is kept). The workspace follows the plan's ceilings: ceilings of its own are removed unless `--keep-limits`. |
-| `shpyrd-ctl workspaces limits <slug> [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi \| --clear]` | Give one workspace ceilings of its own, an exception to its plan's (the flags given are set over the ceilings in force, the others keep their value); the plan's changes no longer reach it. `--clear` removes them and it follows its plan again. `shpyrd-ctl workspaces list` marks them `(own)`. |
-| `shpyrd-ctl economics [--month YYYY-MM]` | Revenue at plan prices, infrastructure cost from OpenCost (extension `opencost`) and gross margin per workspace. Operator-only; customers see usage and their plan's prices, never cost. |
+| `shpyrd-ctl workspace status` | The platform's workspace: its address, its limits and its sleep defaults, and what its projects use against them. |
+| `shpyrd-ctl workspace limits [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi \| --none]` | What the workspace may use; the flags given are set over the limits in force. A project, a deploy or a database beyond them is refused with the limit it would cross. |
+| `shpyrd-ctl workspace sleep [--apps 15m --resuming page\|wait] [--databases 30m] [--none]` | The sleep its apps and databases take when they set none of their own (enterprise: auto sleep). `off` for either turns it off. |
+| `shpyrd-ctl console-users list` | Who may open the console: its own list, apart from every workspace's people. Each is an admin of the console. |
+| `shpyrd-ctl console-users add <email> [--password <secret\|@file>]` / `remove <email>` | Add someone to the list, with an email and password account when `--password` is given; with sign-in through a provider, the email it gives must be on the list. Removing yourself is refused. |
+| `shpyrd-ctl license set <file>` / `license status` | Install the enterprise license (a file from shpyrd): GitHub, Google, Microsoft and OIDC sign-in, auto sleep, costs and the MCP server switch on until it expires, and off on that day. |
+| `shpyrd-ctl license renew` / `license billing` | A license bought online renews by itself a week before it expires, sending the last 30 days of what the cluster used and cost; `renew` does it now. `billing` prints a link of one use to your account at shpyrd's billing (also the console's Settings › License › Open billing). |
+| `shpyrd-ctl costs [--from YYYY-MM-DD --to YYYY-MM-DD] [--kind estimated\|real\|usage] [--by project\|process\|resource\|service]` | What the cluster uses and costs (enterprise): OpenCost's estimate (extension `opencost`), the provider's bill (`costs oci set`) or the usage the platform measured. |
+| `shpyrd-ctl costs drains add <name> <url> [--header "Name=value"]...` / `list` / `remove <name>` | Send every cost line, as it is written or revised, to an HTTPS receiver: by workspace, project, process and resource. |
+| `shpyrd-ctl costs oci set --tenancy … --user … --fingerprint … --region … --key @oci.pem` / `status` / `remove` | Read the real bill from Oracle Cloud's Usage API, resource by resource. |
 
 ## Email
 
@@ -162,7 +162,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd pg list\|info\|psql\|delete` | Manage databases; `psql <name> -- <args>` opens psql on the primary; delete is refused while attached (`--force`). |
 | `shpyrd pg backups enable\|disable\|list <name>` | Backups of a database (needs extension `object-storage`): continuous WAL archiving and a scheduled base backup (`--retention 14d`, `--schedule "0 2 * * *"`); list shows the base backups and the recovery window. |
 | `shpyrd pg backup <name>` | Take a base backup now. |
-| `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables — also when the workspace's plan has a default for databases. Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
+| `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables — also when the workspace has a default for databases. Sleep is an enterprise feature (auto sleep). Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
 | `shpyrd pg suspend <name>`, `shpyrd pg resume <name>` | Stop a database now and refuse connections until resumed (data kept), and bring it back. |
 | `shpyrd pg restore <name> --as <new> [--to <RFC 3339>]` | Restore into a new database at a point in time (latest when omitted); attach the app to it when ready. |
 | `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size`, `--persistent`, `--storage`. |
@@ -177,8 +177,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd domains list`, `rm <host>` | Custom domains with DNS and certificate state; stop serving one. |
 | `shpyrd exposure internal\|external` | Which front door serves the project on cloud profiles (public or private load balancer). Release-free. |
 | `shpyrd access [set public\|authenticated\|identified]` | Who may open the app: sign-in required (the default), public, or public with signed-in visitors identified; without `set`, shows the mode and the roles that open it. |
-| `shpyrd sleep <project> --after 15m [--resuming page\|wait]` | Scale the web process to zero after a quiet period (5m to 24h); the first request wakes it (about 6–7 s), either behind a branded "resuming" page or by holding the connection. `--after off` disables — also when the workspace's plan has a default. Needs the `sleep` extension on the cluster (`shpyrd-ctl extensions enable sleep`); the command says so otherwise. Nothing sleeps unless a project or its plan says so. While a project sleeps, its page and `projects info` say so instead of "0 of 1 running". |
-| `shpyrd billing` | Month-to-date usage of the workspace and the estimate at its plan's prices, one line per project and component: `web`/`worker` (CPU core-hours, memory GiB-hours, egress GiB), `postgres/<name>`, `redis/<name>`, `volume/<name>` and `build-cache` (storage in GiB-months of provisioned capacity — on cloud profiles that is the provider's minimum volume size), `build` (build instances). Informational: no money changes hands until a payment provider is connected. |
+| `shpyrd sleep <project> --after 15m [--resuming page\|wait]` | Scale the web process to zero after a quiet period (5m to 24h); the first request wakes it (about 6–7 s), either behind a branded "resuming" page or by holding the connection. `--after off` disables — also when the workspace has a default. Needs the `sleep` extension on the cluster (`shpyrd-ctl extensions enable sleep`) and auto sleep, an enterprise feature; the command says so otherwise. Nothing sleeps unless a project or its workspace says so. While a project sleeps, its page and `projects info` say so instead of "0 of 1 running". |
 | `shpyrd open` | Open the project URL in the browser. |
 
 ## Where things are

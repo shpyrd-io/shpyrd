@@ -356,9 +356,11 @@ type Resolver struct {
 	// store.DefaultWorkspace.
 	DefaultSlug func(ctx context.Context) string
 
-	mu    sync.Mutex
-	snaps map[string]cached
-	now   func() time.Time
+	mu        sync.Mutex
+	snaps     map[string]cached
+	console   map[string]bool
+	consoleAt time.Time
+	now       func() time.Time
 }
 
 type cached struct {
@@ -421,19 +423,78 @@ func (r *Resolver) defaultSlug(ctx context.Context) string {
 	return store.DefaultWorkspace
 }
 
-// ConsoleAdmin says the identity is a platform admin by the console's
-// roles, bootstrap excluded: an owner or admin of the operator's default
-// workspace, or the operator's own credentials. Used at workspace hosts to
-// let platform admins own operator workspaces (RFC-0080).
-func (r *Resolver) ConsoleAdmin(ctx context.Context, id ext.Identity) bool {
+// ConsoleRoles is someone's roles at the console, the operator's door: the
+// admin token and kubeconfig sessions are platform admins, and so is every
+// email on the console's own list of users (store.ConsoleUsers), all
+// admins for now. Workspaces have no say there; nobody else has a role.
+// A fresh cluster, whose list is empty and where no role has been written
+// in the operator's default workspace either, is in bootstrap mode, as it
+// always was: whoever signs in is an admin until someone defines who is
+// who.
+func (r *Resolver) ConsoleRoles(ctx context.Context, id ext.Identity) (Roles, error) {
+	out := Roles{Projects: map[string]string{}, Enforced: true}
 	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
-		return true
+		out.Platform, out.Workspace = shpyrdv1.RolePlatformAdmin, store.WorkspaceRoleOwner
+		return out, nil
 	}
-	snap, err := r.SnapshotFor(ctx, "")
-	if err != nil || !snap.Enforced() {
-		return false
+	users, err := r.consoleUsers(ctx)
+	if err != nil {
+		return out, err
 	}
-	return snap.RolesFor(id).Platform == shpyrdv1.RolePlatformAdmin
+	if email := strings.ToLower(strings.TrimSpace(id.Email)); email != "" && users[email] {
+		out.Platform = shpyrdv1.RolePlatformAdmin
+		return out, nil
+	}
+	if len(users) == 0 {
+		snap, err := r.SnapshotFor(ctx, "")
+		if err != nil {
+			return out, err
+		}
+		if !snap.Enforced() {
+			out.Platform, out.Enforced = shpyrdv1.RolePlatformAdmin, false
+		}
+	}
+	return out, nil
+}
+
+// ConsoleAdmin says the identity is an admin of the console, bootstrap
+// excluded: the operator's own credentials or an email on the list. Used
+// at workspace hosts to let console users own the operator's workspaces
+// (RFC-0080).
+func (r *Resolver) ConsoleAdmin(ctx context.Context, id ext.Identity) bool {
+	roles, err := r.ConsoleRoles(ctx, id)
+	return err == nil && roles.Enforced && roles.Platform == shpyrdv1.RolePlatformAdmin
+}
+
+// consoleUsers is the console's list, cached like the snapshots; a store
+// that fails keeps the last list read.
+func (r *Resolver) consoleUsers(ctx context.Context) (map[string]bool, error) {
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	ttl := r.TTL
+	if ttl == 0 {
+		ttl = 5 * time.Second
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.console != nil && now().Sub(r.consoleAt) < ttl {
+		return r.console, nil
+	}
+	list, err := r.Store.ListConsoleUsers(ctx)
+	if err != nil {
+		if r.console != nil {
+			return r.console, nil // stale beats down
+		}
+		return nil, err
+	}
+	r.console = map[string]bool{}
+	for _, u := range list {
+		r.console[strings.ToLower(u.Email)] = true
+	}
+	r.consoleAt = now()
+	return r.console, nil
 }
 
 // Invalidate drops every cached snapshot (after membership changes
@@ -441,6 +502,7 @@ func (r *Resolver) ConsoleAdmin(ctx context.Context, id ext.Identity) bool {
 func (r *Resolver) Invalidate() {
 	r.mu.Lock()
 	r.snaps = nil
+	r.console = nil
 	r.mu.Unlock()
 }
 

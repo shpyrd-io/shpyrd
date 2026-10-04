@@ -1,6 +1,6 @@
 # RFC-0075 Usage, billing and sleep: the platform's economics and scale to zero
 
-**Status:** in progress (v0.9.18: phases 1–2 shipped, 3–4 shipped opt-in, 5 scaffolding)
+**Status:** replaced (history, 2026-10-04): billing left the platform; sleep and costs are enterprise features
 
 **Owner:** Patrick Negri
 
@@ -21,6 +21,28 @@ margin, and replaces it).
 **Last update:** 2026-09-27
 
 ---
+
+
+## Amendment (2026-10-04)
+
+This RFC is kept as the record of how the platform's economics were first built. On
+2026-10-04 they were split:
+
+- **Billing left the platform.** Plans, prices, invoices, budgets, the billing preview,
+  `shpyrd billing`, `shpyrd-ctl plans` and `shpyrd-ctl economics` are gone, with the
+  `plans`, `workspace_plans`, `invoice_lines` and `cogs_buckets` tables (migration
+  `000022_billing_leaves`). What a workspace may use and its default sleep are its own
+  settings (`shpyrd-ctl workspace limits|sleep`); whoever sells the platform prices it
+  outside it.
+- **The usage ledger stays** in the core (the metering loop, `usage_buckets`,
+  `sleep_events`): it is what the platform measures.
+- **Sleep** (sections 4 and 5: HTTP scale to zero and PostgreSQL hibernation) is the
+  enterprise's *auto sleep* (`ee/autosleep`): the machinery stays in the core, and a
+  policy only applies with a license. Without one nothing sleeps by itself; a manual
+  `shpyrd pg suspend` still works.
+- **Costs** (section 3's COGS) are the enterprise's *Costs* and *Cost drains* (`ee/costs`):
+  cost lines per workspace, project, process and resource from OpenCost's estimate and the
+  provider's bill, kept and sent to HTTPS receivers. The COGS history was not carried over.
 
 ## Summary
 

@@ -5,4 +5,4 @@ package main
 
 import "github.com/shpyrd-io/shpyrd/pkg/server"
 
-func main() { server.Main(server.Options{}) }
+func main() { server.Main(server.Options{Extensions: enterprise()}) }

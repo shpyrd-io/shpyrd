@@ -258,7 +258,16 @@ func TestTenancyIsolation(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec.Code, rec.Body.String()
 	}
-	// Sessions work at their own door...
+	// Sessions work at their own door. Maria's platform team in the default
+	// workspace no longer reaches the console: it has its own users...
+	if code, body := me("shpyrd.example.test", mariaSID.ID); code != 200 || strings.Contains(body, "platform-admin") || strings.Contains(body, `"console":true`) {
+		t.Errorf("maria at the console, not a console user = %d %s", code, body)
+	}
+	// ...and once she is one, the console is hers.
+	if _, err := st.AddConsoleUser(ctx, "Maria@example.test", "test"); err != nil {
+		t.Fatal(err)
+	}
+	s.authz.Invalidate()
 	if code, body := me("shpyrd.example.test", mariaSID.ID); code != 200 || !strings.Contains(body, "platform-admin") || !strings.Contains(body, `"console":true`) {
 		t.Errorf("maria at the console = %d %s", code, body)
 	}
@@ -506,20 +515,20 @@ func TestPlanLimits(t *testing.T) {
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":2}`); rec.Code != http.StatusOK {
 		t.Errorf("scale to 2 = %d %s", rec.Code, rec.Body.String())
 	}
-	// ...to 3 is one instance over the plan.
+	// ...to 3 is one instance over the limit.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":3}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "run 4 instances; the plan allows 3") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "run 4 instances; the workspace allows 3") {
 		t.Errorf("scale to 3 = %d %s", rec.Code, rec.Body.String())
 	}
 	// CPU: shop at shared-xl (2 CPU × 2 instances) + wiki's shared-s (0.5)
 	// = 4.5 > 2.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resize", `{"process":"web","size":"shared-xl"}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "CPU; the plan allows 2") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "CPU; the workspace allows 2") {
 		t.Errorf("resize over CPU = %d %s", rec.Code, rec.Body.String())
 	}
 	// Storage: a 20Gi volume exceeds 10Gi.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"data","size":"20Gi"}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "storage; the plan allows 10Gi") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "storage; the workspace allows 10Gi") {
 		t.Errorf("volume over storage = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"data","size":"5Gi"}`); rec.Code != http.StatusCreated {
@@ -886,74 +895,54 @@ func TestDatabaseSizeOnASmallPlan(t *testing.T) {
 	}
 }
 
-// A plan's ceilings reach the workspaces on it (#51): a new version with
-// other limits applies to every workspace without ceilings of its own;
-// one with its own keeps them; assigning a plan removes them unless asked
-// to keep them; clearing a plan's limits and setting some at once is
-// refused; the limits given change and the others stay.
-func TestPlanLimitsReachTheirWorkspaces(t *testing.T) {
-	s, _, st := newTenantServer(t)
-	ctx := context.Background()
-	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
+// The open-source platform's workspace takes its ceilings and sleep
+// defaults from the console (they used to come from a billing plan): the
+// limits hold its projects to them, nothing set is no limit, and values
+// that cannot be ceilings or durations are refused.
+func TestTheConsoleSetsTheWorkspaceSettings(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	call := func(method, body string, want int) map[string]any {
 		t.Helper()
-		rec := at(t, s, "shpyrd.example.test", method, path, body)
+		rec := at(t, s, "shpyrd.example.test", method, "/api/cluster/workspace-settings", body)
 		if rec.Code != want {
-			t.Fatalf("%s %s = %d %s", method, path, rec.Code, rec.Body.String())
+			t.Fatalf("%s = %d %s", method, rec.Code, rec.Body.String())
 		}
-		return rec
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
 	}
-	view := func() WorkspaceView {
-		t.Helper()
-		var v WorkspaceView
-		_ = json.Unmarshal(at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "").Body.Bytes(), &v)
-		return v
+	if got := call("GET", "", http.StatusOK); got["workspace"] != "default" || got["limits"] != nil || got["sleep"] != nil {
+		t.Fatalf("fresh = %v", got)
 	}
-	call("POST", "/api/cluster/plans", `{"name":"free","free":true,"limits":{"projects":1,"instances":1,"memory":"256Mi"}}`, http.StatusCreated)
-	call("POST", "/api/cluster/plans/free/assign?workspace=acme", "", http.StatusOK)
-
-	// acme follows the plan: one project, and it has two already.
-	if v := view(); v.Limits == nil || v.Limits.Projects != 1 || v.LimitsOverride {
-		t.Fatalf("acme on free = %+v own %v", v.Limits, v.LimitsOverride)
+	got := call("PUT", `{"limits":{"projects":1,"memory":"0.5Gi"},"sleep":{"appsAfter":"10m","appsResuming":"page","databasesAfter":"10m"}}`, http.StatusOK)
+	limits, _ := got["limits"].(map[string]any)
+	sleep, _ := got["sleep"].(map[string]any)
+	if limits["projects"] != float64(1) || limits["memory"] != "512Mi" || sleep["appsAfter"] != "10m" || sleep["databasesAfter"] != "10m" || sleep["appsResuming"] != "page" {
+		t.Fatalf("after PUT = %v", got)
 	}
-	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"third"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "allows 1 projects") {
-		t.Errorf("third project on the plan's ceilings = %d %s", rec.Code, rec.Body.String())
+	// The default workspace has a project already (shop): a second is refused.
+	if rec := at(t, s, "example.test", "POST", "/api/projects", `{"name":"second"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "the workspace allows 1") {
+		t.Errorf("second project = %d %s", rec.Code, rec.Body.String())
 	}
-
-	// The plan is raised: acme follows without anyone touching it; the
-	// ceilings not given stay.
-	call("POST", "/api/cluster/plans/free/versions", `{"limits":{"projects":4,"cpu":"2"}}`, http.StatusCreated)
-	if v := view(); v.Limits == nil || v.Limits.Projects != 4 || v.Limits.CPU != "2" || v.Limits.Memory != "256Mi" || v.Limits.Instances != 1 || v.LimitsOverride {
-		t.Errorf("acme after the plan rose = %+v own %v", v.Limits, v.LimitsOverride)
+	var v WorkspaceView
+	_ = json.Unmarshal(at(t, s, "example.test", "GET", "/api/workspace", "").Body.Bytes(), &v)
+	if v.Limits == nil || v.Limits.Projects != 1 || v.Sleep == nil || v.Sleep.AppsAfter != "10m" || v.Usage == nil {
+		t.Errorf("the workspace's own view = %+v %+v %+v", v.Limits, v.Sleep, v.Usage)
 	}
-	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"third"}`); rec.Code != http.StatusCreated {
-		t.Errorf("third project after the plan rose = %d %s", rec.Code, rec.Body.String())
+	for _, bad := range []string{
+		`{"limits":{"projects":-1}}`,
+		`{"limits":{"cpu":"lots"}}`,
+		`{"sleep":{"appsAfter":"1m"}}`,
+		`{"sleep":{"appsAfter":"10m","appsResuming":"never"}}`,
+		`{"sleep":{"databasesAfter":"2d"}}`,
+	} {
+		call("PUT", bad, http.StatusBadRequest)
 	}
-
-	// Clearing and setting at once is refused, not half done.
-	rec := call("POST", "/api/cluster/plans/free/versions", `{"clearLimits":true,"limits":{"projects":9}}`, http.StatusBadRequest)
-	if !strings.Contains(rec.Body.String(), "not both") {
-		t.Errorf("clear and set = %s", rec.Body.String())
+	// Nothing given is no limit and no default.
+	if got := call("PUT", `{}`, http.StatusOK); got["limits"] != nil || got["sleep"] != nil {
+		t.Errorf("cleared = %v", got)
 	}
-
-	// An exception: acme gets ceilings of its own; the plan moving does
-	// not move them.
-	w, _ := st.Workspace(ctx, "acme")
-	settings := w.Settings
-	settings.Limits = &store.Limits{Projects: 10}
-	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", settings); err != nil {
-		t.Fatal(err)
-	}
-	call("POST", "/api/cluster/plans/free/versions", `{"limits":{"projects":5}}`, http.StatusCreated)
-	if v := view(); v.Limits == nil || v.Limits.Projects != 10 || !v.LimitsOverride {
-		t.Errorf("acme with its own = %+v own %v", v.Limits, v.LimitsOverride)
-	}
-	// Assigned again with keepLimits, they stay; without, they go.
-	call("POST", "/api/cluster/plans/free/assign?workspace=acme&keepLimits=true", "", http.StatusOK)
-	if v := view(); v.Limits == nil || v.Limits.Projects != 10 {
-		t.Errorf("keepLimits = %+v", v.Limits)
-	}
-	call("POST", "/api/cluster/plans/free/assign?workspace=acme", "", http.StatusOK)
-	if v := view(); v.Limits == nil || v.Limits.Projects != 5 || v.LimitsOverride {
-		t.Errorf("assigned again = %+v own %v", v.Limits, v.LimitsOverride)
+	if rec := at(t, s, "example.test", "POST", "/api/projects", `{"name":"second"}`); rec.Code != http.StatusCreated {
+		t.Errorf("second project without limits = %d %s", rec.Code, rec.Body.String())
 	}
 }

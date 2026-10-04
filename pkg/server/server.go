@@ -53,8 +53,8 @@ import (
 // boundary). The zero value is the open-source platform.
 type Options struct {
 	// Tenancy builds the resolver mapping request hosts to workspaces. Nil:
-	// every host is the implicit workspace (or, with SHPYRD_DEV_TENANCY=
-	// address, host-based resolution for developing the seam).
+	// the platform runs one workspace, which every host is, and the store
+	// shows no other.
 	Tenancy func(st store.Store, domain, dashboardURL string) tenancy.Resolver
 	// Realms decides which login methods each workspace offers. Nil: all.
 	Realms api.Realms
@@ -212,6 +212,11 @@ func run(o runOptions, logger *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
+	// The open-source platform runs one workspace: the server and the
+	// controllers see only it, whatever else the database holds.
+	if o.opts.Tenancy == nil {
+		st = store.OneWorkspace(st)
+	}
 
 	// The RBAC mirror runs in the controller manager; the API pokes it
 	// after every team or grant write. The workspace reconciler publishes
@@ -220,18 +225,9 @@ func run(o runOptions, logger *slog.Logger) error {
 	workspaces := &controller.WorkspaceReconciler{Store: st}
 
 	// The open-source platform resolves every host to its one workspace.
-	// SHPYRD_DEV_TENANCY=address switches to host-based resolution for
-	// developing the seam: nothing in this binary creates a second
-	// workspace, so it changes nothing on an install (RFC-0033 phase 6).
-	var resolver tenancy.Resolver
-	switch {
-	case o.opts.Tenancy != nil:
+	var resolver tenancy.Resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
+	if o.opts.Tenancy != nil {
 		resolver = o.opts.Tenancy(st, domain, dashboard)
-	case os.Getenv("SHPYRD_DEV_TENANCY") == "address":
-		resolver = ByAddress(st, domain, dashboard)
-		logger.Info("tenancy: workspaces resolved from the request host (development switch)")
-	default:
-		resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
 	}
 
 	sources := &api.SourceStore{Dir: o.dataDir, BaseURL: internalURL, SigningKey: []byte(os.Getenv("SHPYRD_SOURCES_SIGNING_KEY"))}
@@ -455,6 +451,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceExtraDomains: workspaceCache.ExtraDomains,
 			WorkspaceLimits:       workspaceCache.Limits,
 			WorkspaceSleepDefault: workspaceCache.SleepDefault,
+			SleepAllowed:          apiDeps.SleepAllowed,
 			WorkspaceSuspended:    workspaceCache.Suspended,
 			WorkspaceID:           workspaceCache.ID,
 			Projects:              memberships.Store,

@@ -32,6 +32,8 @@ import (
 type gateSet struct {
 	byName map[string]ext.Gate
 	byHost map[string]ext.Gate
+	// suspended names the gate that receives suspended workspaces.
+	suspended string
 }
 
 // collectGates asks the extensions for their gates and links, after their
@@ -67,6 +69,12 @@ func (s *Server) addGates(gates []ext.Gate) error {
 		if _, taken := s.gates.byHost[g.Host]; taken {
 			return fmt.Errorf("gate %q: host %s is another gate's", g.Name, g.Host)
 		}
+		if g.OpenWhenSuspended {
+			if s.gates.suspended != "" {
+				return fmt.Errorf("gate %q: gate %q already receives suspended workspaces", g.Name, s.gates.suspended)
+			}
+			s.gates.suspended = g.Name
+		}
 		s.gates.byName[g.Name] = g
 		s.gates.byHost[g.Host] = g
 	}
@@ -76,6 +84,15 @@ func (s *Server) addGates(gates []ext.Gate) error {
 func (s *Server) gateByName(name string) (ext.Gate, bool) {
 	g, ok := s.gates.byName[name]
 	return g, ok
+}
+
+// suspendedGate is the gate a suspended workspace's people are sent to,
+// if there is one.
+func (s *Server) suspendedGate() (ext.Gate, bool) {
+	if s.gates.suspended == "" {
+		return ext.Gate{}, false
+	}
+	return s.gateByName(s.gates.suspended)
 }
 
 // gateByHost finds the gate a request's host is, port or not.
@@ -234,7 +251,16 @@ func (s *Server) gateOpen(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	suspended := ws.Status == store.WorkspaceSuspended
+	if suspended && !g.OpenWhenSuspended {
+		s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended.", nil)
+		return
+	}
 	if _, ok := s.gateAdmits(ctx, g, v, roles); !ok {
+		if suspended {
+			s.edgePage(c, http.StatusForbidden, "Workspace suspended", "This workspace is suspended. Talk to its owner to bring it back.", nil)
+			return
+		}
 		s.edgePage(c, http.StatusForbidden, "Not open to you", "Ask the people who run it for access.", nil)
 		return
 	}
@@ -439,7 +465,7 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 		signIn()
 		return
 	}
-	if ws.Status == store.WorkspaceSuspended {
+	if ws.Status == store.WorkspaceSuspended && !g.OpenWhenSuspended {
 		c.JSON(http.StatusForbidden, gin.H{"error": "this workspace is suspended"})
 		return
 	}
@@ -473,6 +499,7 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 		Issuer: s.dashboardURLOf(ws), Subject: sess.Identity.Subject, Audience: gateAudience(g.Name),
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(edge.TokenTTL).Unix(),
 		Email: sess.Identity.Email, Name: sess.Identity.Name, Workspace: ws.Slug, Project: g.Project,
+		WorkspaceID: ws.ID, WorkspaceURL: s.dashboardURLOf(ws),
 		Roles: roleList, Teams: v.Teams, Realm: "workspace", Provider: sess.Identity.Provider,
 		Operator: ws.OwnedByOperator(),
 	})
@@ -519,26 +546,42 @@ func (s *Server) gateErrorPage(c *gin.Context) bool {
 }
 
 // links is GET /api/links: what the extensions add to this person's
-// sidebar in this workspace (RFC-0083).
+// sidebar here (RFC-0083): the workspace's at a workspace's host, the
+// console's at the console.
 func (s *Server) links(c *gin.Context) {
 	out := []ext.Link{}
-	ws, err := s.tenant(c)
-	if err != nil {
-		c.JSON(http.StatusOK, out) // the console has no sidebar of links
-		return
-	}
 	id, ok := ext.IdentityFrom(c)
 	if !ok || (id.Subject == "" && id.Email == "") {
 		c.JSON(http.StatusOK, out) // no identity: ask no provider for links
 		return
 	}
-	v, _, err := s.visitorIn(c.Request.Context(), ws, id)
-	if err != nil {
-		abort(c, http.StatusBadGateway, err)
-		return
+	ctx := c.Request.Context()
+	area := ext.AreaWorkspace
+	var v ext.Visitor
+	if s.atConsole(c) {
+		roles, err := s.rolesOf(c)
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		area, v = ext.AreaConsole, ext.Visitor{Identity: id, PlatformRole: roles.Platform, Teams: []string{}}
+	} else {
+		ws, err := s.tenant(c)
+		if err != nil {
+			c.JSON(http.StatusOK, out)
+			return
+		}
+		if v, _, err = s.visitorIn(ctx, ws, id); err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
 	}
 	for _, p := range s.linkProviders {
-		out = append(out, p.Links(c.Request.Context(), v)...)
+		for _, l := range p.Links(ctx, v) {
+			if firstNonEmpty(l.Area, ext.AreaWorkspace) == area {
+				out = append(out, l)
+			}
+		}
 	}
 	c.JSON(http.StatusOK, out)
 }

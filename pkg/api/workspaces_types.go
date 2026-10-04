@@ -28,13 +28,11 @@ type CreateWorkspaceRequest struct {
 	// (RFC-0078, RFC-0080): its costs are the operator's, it is never
 	// invoiced, platform admins own it and see the way to the console.
 	OperatorOwned bool `json:"operatorOwned,omitempty"`
-	// Plan names the billing plan (RFC-0075) the workspace is metered
-	// against from birth. Empty: none yet. Refused for the operator's own
-	// workspaces, which are never invoiced.
-	Plan string `json:"plan,omitempty"`
-	// Limits gives the workspace ceilings of its own, an exception to its
-	// plan's (#51); nil: it follows its plan's, or has none without one.
-	Limits *store.Limits `json:"limits,omitempty"`
+	// Limits and Sleep are the workspace's ceilings and sleep defaults
+	// (WorkspaceSettings); both nil: the defaults of the platform that
+	// creates it, none for the operator's own.
+	Limits *store.Limits        `json:"limits,omitempty"`
+	Sleep  *store.SleepDefaults `json:"sleep,omitempty"`
 }
 
 // CreatedWorkspace is what POST /api/workspaces answers: the workspace,
@@ -56,16 +54,12 @@ type UpdateWorkspaceRequest struct {
 	Name    *string `json:"name,omitempty"`
 	Address *string `json:"address,omitempty"`
 	Status  *string `json:"status,omitempty"` // active or suspended
-	// Limits sets ceilings of the workspace's own over those in force
-	// (those not given keep their value), an exception to its plan's.
-	Limits *store.Limits `json:"limits,omitempty"`
-	// ClearLimits removes the workspace's own ceilings: it follows its
-	// plan's again (none without a plan).
-	ClearLimits bool `json:"clearLimits,omitempty"`
 }
 
 // WorkspaceSummary is one workspace as the console lists them.
 type WorkspaceSummary struct {
+	// ID is the workspace's id, the wsid of the JWTs it serves.
+	ID      string `json:"id"`
 	Slug    string `json:"slug"`
 	Name    string `json:"name"`
 	Address string `json:"address,omitempty"`
@@ -73,15 +67,12 @@ type WorkspaceSummary struct {
 	Status  string `json:"status"`
 	// Owner is "operator" or "customer" (RFC-0078).
 	Owner string `json:"owner,omitempty"`
-	// Plan is the billing plan the workspace is metered against (RFC-0075);
-	// empty when none, always empty for the operator's own.
-	Plan string `json:"plan,omitempty"`
-	// Limits are the ceilings in force: the workspace's own when
-	// LimitsOverride, else its plan's (#51); nil for none.
-	Limits         *store.Limits `json:"limits,omitempty"`
-	LimitsOverride bool          `json:"limitsOverride,omitempty"`
-	Usage          *Usage        `json:"usage,omitempty"`
-	Owners         []string      `json:"owners"`
+	// Limits are the workspace's ceilings, nil for none; Sleep its default
+	// sleep, nil for none.
+	Limits *store.Limits        `json:"limits,omitempty"`
+	Sleep  *store.SleepDefaults `json:"sleep,omitempty"`
+	Usage  *Usage               `json:"usage,omitempty"`
+	Owners []string             `json:"owners"`
 	// Readiness is the controller's last look at the workspace's door
 	// (nil before the first), ReadyAt when it first answered (nil until
 	// then): the moment an invitation link to it can be followed.

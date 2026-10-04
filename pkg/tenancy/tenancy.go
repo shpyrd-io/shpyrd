@@ -342,7 +342,6 @@ type Addresses struct {
 	mu    sync.Mutex
 	cache map[string]wsEntry
 	hosts map[string]hostsEntry
-	plans map[string]planEntry
 }
 
 type wsEntry struct {
@@ -481,74 +480,37 @@ func (a *Addresses) Suspended(slug string) bool {
 	return ws != nil && ws.Status == store.WorkspaceSuspended
 }
 
-// Limits are the ceilings a workspace is held to: its own, else its
-// plan's (#51); nil when it has none, or when the store is unreachable.
+// Limits are a workspace's ceilings; nil when it has none, or when the
+// store is unreachable.
 func (a *Addresses) Limits(slug string) *store.Limits {
-	ws := a.Workspace(slug)
-	if ws == nil {
-		return nil
-	}
-	if ws.Settings.Limits != nil {
+	if ws := a.Workspace(slug); ws != nil {
 		return ws.Settings.Limits
 	}
-	plan, ok := a.Plan(slug)
-	if !ok {
-		return nil
-	}
-	l, _ := store.EffectiveLimits(ws, plan)
-	return l
+	return nil
 }
 
-// SleepDefault is the workspace's plan's default HTTP sleep policy (RFC-0075):
-// after and resuming, or "" when the workspace has no plan or the plan sets
-// none. Cached like Workspace; a plan change shows within the TTL.
+// SleepDefault is the workspace's default HTTP sleep policy (RFC-0075):
+// after and resuming, or "" when it sets none. Cached like Workspace; a
+// change shows within the TTL.
 func (a *Addresses) SleepDefault(slug string) (after, resuming string) {
-	if p, ok := a.Plan(slug); ok && p != nil {
-		return p.SleepAfter, p.SleepResuming
+	if ws := a.Workspace(slug); ws != nil && ws.Settings.Sleep != nil {
+		return ws.Settings.Sleep.AppsAfter, ws.Settings.Sleep.AppsResuming
 	}
 	return "", ""
 }
 
-// Plan is the version in force of a workspace's plan, nil when it has none;
-// ok is false when the store could not say. Cached like Workspace.
-func (a *Addresses) Plan(slug string) (plan *store.Plan, ok bool) {
-	if slug == "" {
-		slug = a.defaultSlug()
+// DatabaseSleepDefault is the workspace's default idle period before a
+// database hibernates, "" when it sets none.
+func (a *Addresses) DatabaseSleepDefault(slug string) string {
+	if ws := a.Workspace(slug); ws != nil && ws.Settings.Sleep != nil {
+		return ws.Settings.Sleep.DatabasesAfter
 	}
-	ttl := a.TTL
-	if ttl <= 0 {
-		ttl = 10 * time.Second
-	}
-	now := time.Now()
-	a.mu.Lock()
-	if e, ok := a.plans[slug]; ok && now.Before(e.expires) {
-		a.mu.Unlock()
-		return e.plan, true
-	}
-	a.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p, err := store.PlanOf(ctx, a.Store, slug)
-	if err != nil {
-		return nil, false // store trouble: not cached
-	}
-	a.mu.Lock()
-	if a.plans == nil {
-		a.plans = map[string]planEntry{}
-	}
-	a.plans[slug] = planEntry{plan: p, expires: now.Add(ttl)}
-	a.mu.Unlock()
-	return p, true
+	return ""
 }
 
-// Forget drops what is remembered: a workspace or a plan changed.
+// Forget drops what is remembered: a workspace changed.
 func (a *Addresses) Forget() {
 	a.mu.Lock()
-	a.cache, a.hosts, a.plans = nil, nil, nil
+	a.cache, a.hosts = nil, nil
 	a.mu.Unlock()
-}
-
-type planEntry struct {
-	plan    *store.Plan // nil: no plan
-	expires time.Time
 }

@@ -27,13 +27,13 @@ const (
 // plan's ceilings on requests and storage, per project namespace. A
 // namespace cannot hold more than the whole plan; the API keeps the sum
 // across projects under it. Workspaces without a plan get no quota, and a
-// quota left behind by a plan that went away is removed.
+// quota left behind by ceilings that went away is removed.
 //
 // The compute quota is scoped to pods that ask for resources: buildpack
 // builds run as pods with none (BestEffort) and must not be refused for
 // failing to declare them. It counts requests, the coarse backstop behind
 // the API's count of instance sizes (a shared size requests a share of
-// its CPU); it is not the plan itself.
+// its CPU); it is not the ceiling itself.
 func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) error {
 	var limits *store.Limits
 	if r.Config.WorkspaceLimits != nil {
@@ -52,9 +52,9 @@ func (r *AppReconciler) applyQuota(ctx context.Context, app *shpyrdv1.App, name 
 }
 
 // syncQuotas keeps the quotas of every project in step with its
-// workspace's ceilings (#51): a plan whose limits change, or a workspace
-// given ceilings of its own, reaches the projects already running within a
-// pass of the workspace reconciler, not at their next deploy.
+// workspace's ceilings (#51): ceilings that change reach the projects
+// already running within a pass of the workspace reconciler, not at their
+// next deploy.
 func (r *WorkspaceReconciler) syncQuotas(ctx context.Context, all []store.Workspace) error {
 	var apps shpyrdv1.AppList
 	if err := r.List(ctx, &apps); err != nil {
@@ -77,10 +77,7 @@ func (r *WorkspaceReconciler) syncQuotas(ctx context.Context, all []store.Worksp
 			if ws == nil {
 				continue // a workspace the store does not know: leave it be
 			}
-			var err error
-			if l, _, err = store.WorkspaceLimits(ctx, r.Store, ws); err != nil {
-				return err
-			}
+			l = ws.Settings.Limits
 			limits[slug] = l
 		}
 		compute, storage := quotaHard(l)

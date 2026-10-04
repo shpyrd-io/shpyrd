@@ -33,43 +33,39 @@ export type Identity = {
   roles?: { workspace?: string; platform?: PlatformRole | ""; projects?: Record<string, string>; enforced: boolean };
 };
 
-// One workspace as the console lists them: the operator's own or a
-// customer's, each a door of its own.
+// A workspace as the console knows it: on the open-source platform, the
+// one it hosts, where the sidebar's Workspace goes.
 export type WorkspaceSummary = {
   slug: string;
   name: string;
   address?: string;
   url: string;
   status: "active" | "suspended" | string;
-  owner?: "operator" | "customer";
-  plan?: string;
-  limits?: { projects?: number; instances?: number; cpu?: string; memory?: string; storage?: string };
-  usage?: { projects: number; instances: number; cpu: string; memory: string; storage: string };
-  owners: string[];
-  // What the controller last saw at the workspace's door, and when it
-  // first answered: before that moment a link to it leads nowhere.
-  readiness?: { ready: boolean; checkedAt: string; checks: { name: string; ok: boolean; detail?: string }[] };
-  readyAt?: string;
-  createdAt: string;
 };
 
-// doorState says, in a word or two, whether a workspace's door answers:
-// "ready", the first check that does not pass, or "not looked at yet".
-export function doorState(w: WorkspaceSummary): { ready: boolean; text: string } {
-  if (!w.readiness) return { ready: false, text: "not looked at yet" };
-  if (w.readiness.ready) return { ready: true, text: "ready" };
-  const failing = w.readiness.checks.find((c) => !c.ok);
-  return { ready: false, text: failing ? `${failing.name}: ${failing.detail ?? "not yet"}` : "not ready" };
-}
 
-// What became of the first owner's invitation when a workspace was made.
-// `setPasswordLink` is the other way in for someone without a password:
-// where they choose one, good for a day.
-export type InviteOutcome = { applied: boolean; link?: string; expiresAt?: string; setPasswordLink?: string; emailed: boolean; mailError?: string; error?: string };
-export type CreatedWorkspace = WorkspaceSummary & { ownerInvitation?: InviteOutcome; ownerInvitationPending?: boolean };
-export type NewWorkspace = { slug: string; name?: string; address?: string; owner?: string; operatorOwned?: boolean; plan?: string };
+// Who may open the console: its own list, independent of every workspace.
+// account is the auth-local account's state, "" when there is none.
+export type ConsoleUser = { email: string; addedAt: string; addedBy?: string; account: "" | "active" | "pending" | "locked" };
 
-export type Plan = { id: string; name: string; currency: string; minMonthly: number };
+// What the open-source platform's one workspace may use, and when its
+// projects and databases sleep by default; null is none.
+export type Limits = { projects?: number; instances?: number; cpu?: string; memory?: string; storage?: string };
+export type SleepDefaults = { appsAfter?: string; appsResuming?: "page" | "wait" | ""; databasesAfter?: string };
+export type WorkspaceSettings = {
+  workspace: string;
+  limits: Limits | null;
+  sleep: SleepDefaults | null;
+  usage?: { projects: number; instances: number; cpu: string; memory: string; storage: string } | null;
+};
+
+// Costs (enterprise): lines summed by a group, cost by currency.
+export type CostKind = "estimated" | "real" | "usage";
+export type CostGroup = "project" | "process" | "resource" | "service";
+export type CostRow = { key: string; workspace?: string; project?: string; slug?: string; process?: string; resource?: string; service?: string; cost: Record<string, number>; lines: number };
+export type CostSummary = { from: string; to: string; kind: CostKind; group: CostGroup; rows: CostRow[]; total: Record<string, number> };
+export type CostDrain = { id: string; name: string; url: string; headers?: string[]; lastDeliveryAt?: string; sent: number; errors: number; message?: string; createdAt: string };
+export type OCIStatus = { configured: boolean; tenancy?: string; region?: string };
 
 export type ClusterSettings = { defaultWorkspaceId: string; consolePasswordSignIn: boolean };
 
@@ -173,10 +169,16 @@ export type BackupInfo = {
   error?: string;
 };
 
+// The enterprise license (ee/licensing): on with a license in force, or
+// unlocked where the build runs the platform itself.
+// `issuer` is the billing app that issued it, where it renews online and
+// where the customer's account is; none for a license issued by hand.
+export type License = { id: string; customer: string; issuedAt: string; expiresAt: string; issuer?: string };
+export type LicenseRenewal = { at: string; error?: string };
+export type LicenseStatus = { active: boolean; unlocked?: boolean; license?: License; error?: string; renewal?: LicenseRenewal };
+
 export type MailStatus = { configured: boolean; host?: string; port?: number; from?: string; security?: string; auth: boolean };
 
-export type EconomicsRow = { workspace?: string; owner?: "operator" | "customer"; revenue: number; directCogs: number; sharedCogs: number; idleCogs: number; totalCogs: number; grossMargin: number; marginPct: number };
-export type Economics = { month: string; workspaces: EconomicsRow[]; totals: EconomicsRow };
 
 export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string };
 export type SizeCatalog = { default: string; sizes: InstanceSize[] };

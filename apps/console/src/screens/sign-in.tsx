@@ -37,6 +37,21 @@ export function SignIn() {
       </Card>
     );
   }
+  if (!config.data?.extensions.includes("sso")) {
+    return (
+      <>
+        <Card>
+          <CardHeader>
+            <CardTitle>Sign-in methods</CardTitle>
+            <CardDescription>
+              The console and every workspace sign people in with an email and a password. Signing in through an identity provider (Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider) comes with the enterprise license.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <ConsolePassword />
+      </>
+    );
+  }
   return (
     <>
       <Methods scope="console" />

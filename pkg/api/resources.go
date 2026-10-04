@@ -276,7 +276,7 @@ func (s *Server) databaseSize(ctx context.Context, ws string, spec map[string]in
 		}
 		return ""
 	}
-	if l := s.planOf(ctx, ws); l != nil && l.Memory != "" {
+	if l := s.limitsOf(ctx, ws); l != nil && l.Memory != "" {
 		ceiling, err := resource.ParseQuantity(l.Memory)
 		xs, ok := cat.Get(sizes.DBXS)
 		if err == nil && ok && ceiling.Cmp(resource.MustParse(sizes.DBXSPlanBelow)) < 0 {
@@ -461,6 +461,10 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 			return
 		}
 		after = d.String()
+		if !s.sleepAllowed() {
+			abort(c, http.StatusPaymentRequired, errSleepLicensed)
+			return
+		}
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
 		if after != "" && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {

@@ -6,7 +6,8 @@
   "exports": {
     "./api/*": "./src/api/*.ts",
     "./project-backups": "./src/project-backups.tsx",
-    "./logs": "./src/logs/logs.ts"
+    "./logs": "./src/logs/logs.ts",
+    "./links": "./src/links/links.ts"
   },
   "scripts": {
     "lint": "oxlint src",

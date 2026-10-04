@@ -95,6 +95,8 @@ For apps that also accept calls from elsewhere, or that want proof rather than a
   "email": "joao@example.com",
   "name": "João Silva",
   "ws": "default",
+  "wsid": "6f1c2a4e-…",
+  "ws_url": "https://shpyrd.example.com",
   "project": "expenses",
   "roles": ["user"],
   "teams": ["finance", "everyone"],
@@ -105,7 +107,7 @@ For apps that also accept calls from elsewhere, or that want proof rather than a
 }
 ```
 
-Check `iss`, `aud` (your project's slug) and `exp` with any JWT library that supports EdDSA (`jose`, `PyJWT[crypto]`, `github.com/lestrrat-go/jwx`). `roles` holds the caller's role on this project and, for platform admins, their platform role; `teams` the teams they belong to.
+Check `iss`, `aud` (your project's slug) and `exp` with any JWT library that supports EdDSA (`jose`, `PyJWT[crypto]`, `github.com/lestrrat-go/jwx`). `roles` holds the caller's role on this project and, for platform admins, their platform role; `teams` the teams they belong to. `wsid` is the workspace's id, which stays the same when its address changes; `ws_url` is its dashboard on its primary domain, for a link back to it.
 
 The keys live at **`<iss>/.well-known/jwks.json`** — the issuer is the dashboard URL of the workspace the app belongs to, so the same code works wherever the app runs. Every process is told what to expect through the environment (since v0.9.4):
 

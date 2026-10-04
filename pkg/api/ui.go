@@ -26,6 +26,11 @@ import (
 // the page with the policy of every response plus `script-src 'self'` and
 // those hashes.
 //
+// A binary built on the core may ship other applications in the same file
+// system, a folder each: the console serves each under /apps/<folder>/
+// (Next's basePath), the same way. They are the binary's pages, linked
+// from the console's sidebar (ext.Link), and carry their own way back.
+//
 // A binary built on the core may add to every page (Options.Pages): HTML
 // before </head> and before </body>, and the origins those additions
 // load scripts from, connect to and show images from. The additions are
@@ -35,6 +40,8 @@ import (
 const (
 	uiConsole   = "console"
 	uiWorkspace = "workspace"
+	// uiOthers is where the console serves the other applications.
+	uiOthers = "/apps/"
 )
 
 // PageAdditions is what a binary built on the core writes into every page
@@ -125,6 +132,9 @@ type application struct {
 	serve   http.Handler
 	pages   map[string]page
 	origins []string
+	// prefix is where the application answers ("" for the console's and
+	// the workspace's, /apps/<folder> for the others).
+	prefix string
 }
 
 type page struct {
@@ -134,7 +144,7 @@ type page struct {
 
 // loadApplication reads an application's folder; nil when it was not
 // built into the file system.
-func loadApplication(root fs.FS, name string, add PageAdditions) *application {
+func loadApplication(root fs.FS, name string, add PageAdditions, prefix string) *application {
 	files, err := fs.Sub(root, name)
 	if err != nil {
 		return nil
@@ -142,7 +152,11 @@ func loadApplication(root fs.FS, name string, add PageAdditions) *application {
 	if _, err := fs.Stat(files, "index.html"); err != nil {
 		return nil
 	}
-	a := &application{files: files, serve: http.FileServer(http.FS(files)), pages: map[string]page{}, origins: add.Origins}
+	var serve http.Handler = http.FileServer(http.FS(files))
+	if prefix != "" {
+		serve = http.StripPrefix(prefix, serve)
+	}
+	a := &application{files: files, serve: serve, pages: map[string]page{}, origins: add.Origins, prefix: prefix}
 	_ = fs.WalkDir(files, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".html") {
 			return nil
@@ -160,7 +174,7 @@ func loadApplication(root fs.FS, name string, add PageAdditions) *application {
 
 // handle answers an address of the application.
 func (a *application) handle(c *gin.Context) {
-	p := strings.TrimPrefix(path.Clean("/"+c.Request.URL.Path), "/")
+	p := strings.TrimPrefix(strings.TrimPrefix(path.Clean("/"+c.Request.URL.Path), a.prefix), "/")
 	if p == "" {
 		a.page(c, "index.html")
 		return
@@ -198,8 +212,18 @@ func (a *application) page(c *gin.Context, name string) {
 func (s *Server) serveUI() gin.HandlerFunc {
 	apps := map[string]*application{}
 	for _, name := range []string{uiConsole, uiWorkspace} {
-		if a := loadApplication(s.opts.UI, name, s.opts.Pages); a != nil {
+		if a := loadApplication(s.opts.UI, name, s.opts.Pages, ""); a != nil {
 			apps[name] = a
+		}
+	}
+	others := map[string]*application{}
+	if dirs, err := fs.ReadDir(s.opts.UI, "."); err == nil {
+		for _, d := range dirs {
+			if name := d.Name(); d.IsDir() && name != uiConsole && name != uiWorkspace {
+				if a := loadApplication(s.opts.UI, name, s.opts.Pages, uiOthers+name); a != nil {
+					others[name] = a
+				}
+			}
 		}
 	}
 	return func(c *gin.Context) {
@@ -211,6 +235,9 @@ func (s *Server) serveUI() gin.HandlerFunc {
 		if s.customError(c) { // ingress-nginx's error backend for app hosts
 			return
 		}
+		if s.toSuspendedGate(c) {
+			return
+		}
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -218,6 +245,13 @@ func (s *Server) serveUI() gin.HandlerFunc {
 		name := uiWorkspace
 		if s.atConsole(c) {
 			name = uiConsole
+			if rest, ok := strings.CutPrefix(c.Request.URL.Path, uiOthers); ok {
+				folder, _, _ := strings.Cut(rest, "/")
+				if a := others[folder]; a != nil {
+					a.handle(c)
+					return
+				}
+			}
 		}
 		app := apps[name]
 		if app == nil {

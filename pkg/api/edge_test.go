@@ -100,6 +100,9 @@ func TestEdgeAuthDecisions(t *testing.T) {
 	if err := s.edgeKeys.Verify(tok, "JWT", &claims); err != nil || claims.Audience != "expenses" || claims.Email != "joao@acme.test" || claims.Teams[1] != "finance" || claims.Preview {
 		t.Errorf("jwt: %v %+v", err, claims)
 	}
+	if ws, err := s.store.Workspace(ctx, store.DefaultWorkspace); err != nil || claims.WorkspaceID != ws.ID || claims.WorkspaceURL != s.dashboardURLOf(ws) || claims.WorkspaceURL == "" {
+		t.Errorf("wsid = %q, ws_url = %q: the app has no way back to its workspace (%v)", claims.WorkspaceID, claims.WorkspaceURL, err)
+	}
 	// A cookie for another project does not open this one.
 	if rec := edgeRequest(t, s, "expenses", "authenticated", cookieFor(joaoSID, "crm", nil), ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("foreign cookie = %d", rec.Code)

@@ -10,6 +10,15 @@
 
 **Last update:** 2026-09-23
 
+
+## Amendment (2026-10-04)
+
+Sign-in through GitHub, Google, Microsoft and the generic `oidc` connector is an
+enterprise feature: the connectors and their routes and commands moved to `ee/sso`, for
+the console, the platform's defaults and each workspace's own methods. A provider
+registered without a license is not offered (`ext.OIDCProvider.Available`). The core
+keeps the bundled issuer with email and password (`auth-local`).
+
 ## Summary
 
 Company and public identity providers on the sign-in page: any OpenID Connect issuer

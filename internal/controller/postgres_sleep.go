@@ -53,24 +53,28 @@ func sleepAfterDuration(spec *shpyrdv1.PostgresSleepSpec) time.Duration {
 }
 
 // planDefaultNote marks a status message of a database sleeping by its
-// workspace's plan rather than a policy of its own.
-const planDefaultNote = "(workspace plan default)"
+// workspace's default rather than a policy of its own.
+const planDefaultNote = "(workspace default)"
 
 // effectiveSleep is the database's sleep policy as it applies: its own
 // when it has one (an explicit "off" is a policy too, and opts out of the
-// plan's default), else the workspace's plan default, else none. The third
-// result says the plan's default applies.
+// workspace's default), else the workspace's default, else none. The third
+// result says the workspace's default applies.
 func (r *PostgresReconciler) effectiveSleep(ctx context.Context, pg *shpyrdv1.Postgres) (after time.Duration, suspended bool, fromPlan bool) {
 	if pg.Annotations[shpyrdv1.AnnotationMaintenance] != "" {
 		return 0, false, false
 	}
+	allowed := r.SleepAllowed != nil && r.SleepAllowed()
 	if pg.Spec.Sleep != nil {
+		if !allowed {
+			return 0, pg.Spec.Sleep.Suspended, false
+		}
 		return sleepAfterDuration(pg.Spec.Sleep), pg.Spec.Sleep.Suspended, false
 	}
-	if r.PlanSleepDefault == nil {
+	if !allowed || r.WorkspaceSleepDefault == nil {
 		return 0, false, false
 	}
-	after = parseSleepDuration(r.PlanSleepDefault(ctx, pg.Namespace))
+	after = parseSleepDuration(r.WorkspaceSleepDefault(ctx, pg.Namespace))
 	return after, false, after > 0
 }
 
@@ -85,6 +89,9 @@ const (
 	pgSleeping  = "sleeping"
 	pgWaking    = "waking"
 	pgSuspended = "suspended"
+	// pgWorkspaceSuspended is the message of a database down with its
+	// workspace.
+	pgWorkspaceSuspended = "workspace suspended: hibernated, volumes kept, until the workspace is activated"
 )
 
 // reconcilePostgresSleep manages the shpyrd-owned Service and the
@@ -101,6 +108,12 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 		return r.setCNPGHibernation(ctx, pg, true)
 	}
 	after, suspended, fromPlan := r.effectiveSleep(ctx, pg)
+	// A suspended workspace costs nothing: its databases hibernate, HA ones
+	// too, volumes kept, and wake when it is activated.
+	byWorkspace := suspendedWithWorkspace(pg)
+	if byWorkspace {
+		suspended = true
+	}
 	defer func() {
 		// The status says where the policy comes from when it is not the
 		// database's own, as a web process's does.
@@ -111,7 +124,7 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 
 	// No policy, or an HA database (never sleeps): make sure it is awake
 	// and carry no Service of ours.
-	if (after == 0 && !suspended) || instances(pg) > 1 {
+	if (after == 0 && !suspended) || (instances(pg) > 1 && !byWorkspace) {
 		if err := r.ensurePostgresAwake(ctx, pg); err != nil {
 			return err
 		}
@@ -139,12 +152,15 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 
 	// Explicit suspend wins over everything: down now, no wake on connect.
 	if suspended {
-		if sleep.State != pgSuspended {
+		if sleep.State != pgSuspended || (byWorkspace && sleep.Message != pgWorkspaceSuspended) {
 			if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
 				return err
 			}
 			sleep.State = pgSuspended
 			sleep.Message = "suspended by request; shpyrd pg resume brings it back"
+			if byWorkspace {
+				sleep.Message = pgWorkspaceSuspended
+			}
 		}
 		return r.ensurePostgresService(ctx, pg)
 	}
@@ -469,6 +485,9 @@ func pgSleepDescription(pg *shpyrdv1.Postgres) string {
 	case pgWaking:
 		return "waking up — connections will succeed shortly"
 	case pgSuspended:
+		if pg.Status.Sleep.Message == pgWorkspaceSuspended {
+			return pgWorkspaceSuspended
+		}
 		return "suspended — resume with shpyrd pg resume"
 	}
 	return ""

@@ -45,15 +45,18 @@ type Config struct {
 	// primary; other verified custom domains). Nil: none.
 	WorkspaceExtraDomains func(slug string) []string
 	// WorkspaceSleepDefault answers a workspace's default HTTP sleep policy
-	// from its plan (RFC-0075): after and resuming, "" when none. Projects
+	// from its settings (RFC-0075): after and resuming, "" when none. Projects
 	// without a policy of their own inherit it; an explicit "off" opts out.
 	WorkspaceSleepDefault func(slug string) (after, resuming string)
-	// WorkspaceLimits answers a workspace's plan, nil when it has none; the
+	// SleepAllowed says whether processes may sleep by themselves now (the
+	// enterprise's auto sleep, with a license). Nil: never.
+	SleepAllowed func() bool
+	// WorkspaceLimits answers a workspace's ceilings, nil when it has none; the
 	// controller backs it with a ResourceQuota per project namespace.
 	WorkspaceLimits func(slug string) *store.Limits
-	// WorkspaceSuspended says a workspace is suspended: its apps keep
-	// running but are not served (their Ingresses go; the front door
-	// answers with a page saying so). Nil: never.
+	// WorkspaceSuspended says a workspace is suspended: its apps are not
+	// served (their Ingresses go; the front door answers with a page saying
+	// so) and stopped (every process at zero). Nil: never.
 	WorkspaceSuspended func(slug string) bool
 	// WorkspaceID answers a workspace's id (the store's UUID), "" when it
 	// is not known yet: image repositories are keyed by it. Nil: no store,
@@ -648,7 +651,12 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		// The selector is immutable; only set it on creation.
 		d.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(app, p.Name)}
 	}
-	if !scaledExternally || d.Spec.Replicas == nil {
+	switch {
+	case c.suspended(app):
+		// A suspended workspace costs nothing: every process is stopped,
+		// and comes back as it was when the workspace is activated.
+		d.Spec.Replicas = ptr.To[int32](0)
+	case !scaledExternally || d.Spec.Replicas == nil:
 		d.Spec.Replicas = ptr.To(p.replicas())
 	}
 	d.Spec.RevisionHistoryLimit = ptr.To[int32](3)

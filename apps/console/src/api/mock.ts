@@ -2,23 +2,28 @@ import { ApiError } from "@shpyrd/shared/api/error";
 import { mockProjectArchives } from "@shpyrd/shared/api/project-archives-mock";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
 import type { ArchiveProject, ProjectPlacement } from "@shpyrd/shared/api/project-archives";
+import type { Link } from "@shpyrd/shared/links";
 import type { Api } from "./api";
 import type {
   BackupInfo,
   ClusterSettings,
   ClusterSummary,
-  Economics,
+  ConsoleUser,
+  CostDrain,
+  CostSummary,
   HelmRelease,
   Identity,
+  LicenseStatus,
   LocalUser,
   LoginMethods,
   MailStatus,
   NodeUsage,
+  OCIStatus,
   ObjectStorageSummary,
-  Plan,
   PublicConfig,
   RegistryInfo,
   SizeCatalog,
+  WorkspaceSettings,
   WorkspaceSummary,
 } from "./types";
 import { byNode } from "@/lib/samples";
@@ -41,13 +46,18 @@ type Things = {
   registry: RegistryInfo;
   storage: ObjectStorageSummary;
   backups: BackupInfo;
+  license: LicenseStatus;
+  costs: Record<string, CostSummary>;
+  costDrains: CostDrain[];
+  oci: OCIStatus;
+  workspaceSettings: WorkspaceSettings;
   mail: MailStatus;
-  economics: Economics;
   sizes: SizeCatalog;
+  consoleUsers: ConsoleUser[];
   users: LocalUser[];
   methods: { console: LoginMethods; platform: LoginMethods };
   workspaces: WorkspaceSummary[];
-  plans: Plan[];
+  links: Link[];
   settings: ClusterSettings;
 };
 
@@ -144,40 +154,7 @@ export const mock: Api = {
   },
 
   workspaces: async () => (await thingsOf.get()).workspaces,
-  createWorkspace: async (body) => {
-    const all = await thingsOf.get();
-    if (!/^[a-z0-9-]{2,}$/.test(body.slug)) throw new ApiError(400, "the slug has lowercase letters, digits and dashes");
-    if (all.workspaces.some((w) => w.slug === body.slug)) throw new ApiError(409, `a workspace named ${body.slug} exists`);
-    const made: WorkspaceSummary = {
-      slug: body.slug,
-      name: body.name || body.slug,
-      address: body.address || `${body.slug}.shpyrd.app`,
-      url: `https://${body.address || `${body.slug}.shpyrd.app`}`,
-      status: "active",
-      owner: body.operatorOwned ? "operator" : "customer",
-      plan: body.operatorOwned ? undefined : body.plan,
-      owners: body.operatorOwned ? (me as Identity).email ? [(me as Identity).email!] : [] : body.owner ? [body.owner] : [],
-      createdAt: now(),
-    };
-    all.workspaces.push(made);
-    await thingsOf.set(all);
-    if (body.operatorOwned) return made;
-    // Mail is set up in the Mock: the first owner was emailed. Without
-    // mail, both links are handed over: the invitation, and where a
-    // person without a password chooses one.
-    const link = all.mail.configured ? undefined : `${made.url}/invite/${id()}`;
-    return {
-      ...made,
-      ownerInvitation: {
-        applied: false,
-        emailed: all.mail.configured,
-        link,
-        setPasswordLink: link && `${made.url}/account/set-password/${id()}`,
-        expiresAt: new Date(Date.now() + 7 * 86400e3).toISOString(),
-      },
-    };
-  },
-  plans: async () => (await thingsOf.get()).plans,
+  links: async () => (await thingsOf.get()).links,
   patchSettings: async (body) => {
     const all = await thingsOf.get();
     all.settings = { ...all.settings, ...body };
@@ -234,16 +211,72 @@ export const mock: Api = {
     }, 8000);
     return { job: name, status: "running" };
   },
+  license: async () => (await thingsOf.get()).license,
+  renewLicense: async () => {
+    const all = await thingsOf.get();
+    const l = all.license.license;
+    if (!l?.issuer) throw new ApiError(502, "this license was issued by hand: it renews offline, with a new one (shpyrd-ctl license set)");
+    const next = new Date(Date.parse(l.expiresAt) + 30 * 86400e3).toISOString();
+    all.license = { ...all.license, active: true, license: { ...l, id: `lic_${id().slice(0, 22)}`, issuedAt: now(), expiresAt: next }, renewal: { at: now() } };
+    await thingsOf.set(all);
+    return all.license;
+  },
+  billingLink: async () => {
+    const l = (await thingsOf.get()).license.license;
+    if (!l?.issuer) throw new ApiError(502, "this license was issued by hand: it names no billing app");
+    return { url: `${l.issuer}/c/session?t=mock` };
+  },
+  costs: async (q) => {
+    await wait();
+    const all = await thingsOf.get();
+    const kind = q.kind ?? "estimated";
+    const group = q.group ?? "project";
+    const found = all.costs[`${kind}/${group}`] ?? { ...all.costs["estimated/project"], rows: [], total: {} };
+    return { ...found, kind, group };
+  },
+  costDrains: async () => (await thingsOf.get()).costDrains,
+  addCostDrain: async (body) => {
+    await wait();
+    const all = await thingsOf.get();
+    if (!/^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$/.test(body.name)) throw new ApiError(400, "name: lowercase letters, digits and dashes, 40 at most");
+    if (all.costDrains.some((d) => d.name === body.name)) throw new ApiError(409, "a cost drain with this name exists");
+    const d: CostDrain = { id: id(), name: body.name, url: body.url, headers: Object.keys(body.headers ?? {}).sort(), sent: 0, errors: 0, createdAt: now() };
+    all.costDrains.push(d);
+    await thingsOf.set(all);
+    return d;
+  },
+  removeCostDrain: async (name) => {
+    await wait();
+    const all = await thingsOf.get();
+    all.costDrains = all.costDrains.filter((d) => d.name !== name);
+    await thingsOf.set(all);
+  },
+  ociStatus: async () => (await thingsOf.get()).oci,
+  putOCI: async (body) => {
+    await wait();
+    const all = await thingsOf.get();
+    all.oci = { configured: true, tenancy: body.tenancy, region: body.region };
+    await thingsOf.set(all);
+    return all.oci;
+  },
+  deleteOCI: async () => {
+    const all = await thingsOf.get();
+    all.oci = { configured: false };
+    await thingsOf.set(all);
+  },
+  workspaceSettings: async () => (await thingsOf.get()).workspaceSettings,
+  putWorkspaceSettings: async (body) => {
+    await wait();
+    const all = await thingsOf.get();
+    all.workspaceSettings = { ...all.workspaceSettings, limits: body.limits, sleep: body.sleep };
+    await thingsOf.set(all);
+    return all.workspaceSettings;
+  },
   mailStatus: async () => (await thingsOf.get()).mail,
   mailTest: async (to) => {
     await wait(900);
     if (!to.includes("@")) throw new ApiError(400, "that is not an address");
     return { ok: true, to, took: "412ms" };
-  },
-  economics: async (month) => {
-    await wait();
-    const e = (await thingsOf.get()).economics;
-    return month ? { ...e, month } : e;
   },
   sizes: async () => (await thingsOf.get()).sizes,
   saveSizes: async (catalog) => {
@@ -253,6 +286,32 @@ export const mock: Api = {
     return catalog;
   },
 
+  consoleUsers: async () => (await thingsOf.get()).consoleUsers,
+  addConsoleUser: async ({ email, password }) => {
+    await wait();
+    const all = await thingsOf.get();
+    const address = email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(address)) throw new ApiError(400, "a console user is an email");
+    const account = all.users.find((u) => u.email === address);
+    if (password && account) throw new ApiError(409, `${address} already has an account: leave the password out, or change it under Accounts`);
+    if (password) all.users.push({ email: address, createdAt: now() });
+    let user = all.consoleUsers.find((u) => u.email === address);
+    if (!user) {
+      user = { email: address, addedAt: now(), addedBy: (me as Identity).email, account: account || password ? "active" : "" };
+      all.consoleUsers.push(user);
+      all.consoleUsers.sort((a, b) => a.email.localeCompare(b.email));
+    }
+    await thingsOf.set(all);
+    return user;
+  },
+  removeConsoleUser: async (email) => {
+    await wait();
+    const all = await thingsOf.get();
+    if (email === (me as Identity).email) throw new ApiError(400, "you cannot take yourself off the console");
+    if (!all.consoleUsers.some((u) => u.email === email)) throw new ApiError(404, `${email} is not a console user`);
+    all.consoleUsers = all.consoleUsers.filter((u) => u.email !== email);
+    await thingsOf.set(all);
+  },
   users: async () => (await thingsOf.get()).users,
   createUser: async (body) => {
     const all = await thingsOf.get();

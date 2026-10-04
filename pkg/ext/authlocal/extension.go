@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,7 +17,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
-	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
@@ -70,18 +68,8 @@ func (extension) Routes(r ext.Router, deps ext.Deps) error {
 	api.POST("/users", h.create)
 	api.PUT("/users/:email/password", h.setPassword)
 	api.DELETE("/users/:email", h.delete)
-	// Login methods (RFC-0058 connectors) managed from the Workspace page:
-	// the platform's at the console, a workspace's own at its host
-	// (RFC-0033 per-workspace SSO).
-	ch := &connectorHandlers{deps: deps, issuer: issuer}
-	api.GET("/auth/connectors", ch.list)
-	api.POST("/auth/connectors", ch.add)
-	api.DELETE("/auth/connectors/:id", ch.remove)
-	wh := &connectorHandlers{deps: deps, issuer: issuer, scoped: true}
-	wa := r.WorkspaceAdmin()
-	wa.GET("/workspace/login-methods", wh.list)
-	wa.POST("/workspace/login-methods", wh.add)
-	wa.DELETE("/workspace/login-methods/:id", wh.remove)
+	// Sign-in through other identity providers (GitHub, Google, Microsoft,
+	// any OIDC issuer) is the enterprise's: ee/sso adds them to this issuer.
 	return nil
 }
 
@@ -98,11 +86,6 @@ func registerProvider(ctx context.Context, deps ext.Deps, issuer string) {
 				ID: ProviderID, Label: "Email and password", Issuer: issuer, Password: true,
 				ClientID: clientID, ClientSecret: secret,
 			})
-			if err == nil {
-				// One button per Dex connector (GitHub, Google; RFC-0058):
-				// same issuer and client, Dex sent straight to the connector.
-				err = registerConnectors(ctx, deps, issuer, clientID, secret)
-			}
 		}
 		if err == nil {
 			return
@@ -201,44 +184,5 @@ func fail(c *gin.Context, err error) {
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
 	// Accounts and the platform's login methods are the operator's; a
 	// workspace's own sign-in methods are its admins' (RFC-0033).
-	return []*cobra.Command{ext.ForOperator(newUsersCmd(g)), ext.ForOperator(newAuthConnectorCmd(g)), newSSOCmd(g)}
-}
-
-func registerConnectors(ctx context.Context, deps ext.Deps, issuer, clientID, secret string) error {
-	if deps.Kube.Dynamic == nil {
-		return nil
-	}
-	cs := &ConnectorStore{Dynamic: deps.Kube.Dynamic, Namespace: deps.SystemNamespace, Issuer: issuer}
-	// Connectors from before RFC-0080 are keyed by workspace slug: move
-	// them to the id form once, so a workspace rename cannot orphan them.
-	if deps.Store != nil {
-		moved, err := cs.Rekey(ctx, func(slug string) string {
-			if ws, err := deps.Store.Workspace(ctx, slug); err == nil {
-				return ids.Short(ws.ID)
-			}
-			return ""
-		})
-		if err != nil && !errors.Is(err, ErrNotEnabled) {
-			return fmt.Errorf("rekey connectors: %w", err)
-		}
-		if moved > 0 {
-			slog.Info("workspace connectors rekeyed to workspace ids (RFC-0080)", "moved", moved)
-		}
-	}
-	list, err := cs.List(ctx)
-	if err != nil {
-		if errors.Is(err, ErrNotEnabled) {
-			return nil // Dex has not created its CRDs yet; nothing to register
-		}
-		return fmt.Errorf("list connectors: %w", err)
-	}
-	for _, c := range list {
-		if err := deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
-			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, Issuer: issuer,
-			ClientID: clientID, ClientSecret: secret, Realm: c.Realm, Workspace: c.Workspace,
-		}); err != nil {
-			return fmt.Errorf("connector %s: %w", c.FullID, err)
-		}
-	}
-	return nil
+	return []*cobra.Command{ext.ForOperator(newUsersCmd(g))}
 }

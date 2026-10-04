@@ -59,7 +59,7 @@ Backups live in the cluster's object store and go with the cluster: a [platform 
 
 ### Sleep
 
-A database nobody is connected to can be put to sleep: its instance stops, its volume and data stay, and the first connection wakes it. While it sleeps you pay for the volume only.
+A database nobody is connected to can be put to sleep: its instance stops, its volume and data stay, and the first connection wakes it. While it sleeps you pay for the volume only. Sleep is an enterprise feature (auto sleep): always on shpyrd cloud, with a license on a self-hosted install.
 
 ```shell
 shpyrd pg sleep db --project shop --after 30m      # sleep after 30 min without client connections

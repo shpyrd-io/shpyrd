@@ -11,5 +11,8 @@
     "apps/console",
     "content",
     "apps/website"
-  ]
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  }
 }

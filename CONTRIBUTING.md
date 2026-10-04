@@ -15,6 +15,10 @@ Documentation is Markdown under [`content/docs/`](content/docs) and contribution
 are welcome; [`content/README.md`](content/README.md) says where each kind of text
 lives.
 
+The enterprise features in [`ee/`](ee) are governed by [`ee/LICENSE`](ee/LICENSE),
+not MPL-2.0, and are changed by the shpyrd team only for now: pull requests
+there are not accepted.
+
 Design changes go through the [RFC process](rfcs/README.md); see
 [RFC-0001](rfcs/0001-mvp-local-platform.md) for the current architecture.
 

@@ -137,7 +137,7 @@ func (s *Server) createVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.checkPlanStorage(c.Request.Context(), s.workspace(c), vol.Spec.Size); err != nil {
+	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), vol.Spec.Size); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
@@ -243,7 +243,7 @@ func (s *Server) resizeVolume(c *gin.Context) {
 	}
 	growth := size.DeepCopy()
 	growth.Sub(vol.Spec.Size)
-	if err := s.checkPlanStorage(c.Request.Context(), s.workspace(c), growth); err != nil {
+	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), growth); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}

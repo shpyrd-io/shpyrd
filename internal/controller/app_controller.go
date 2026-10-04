@@ -559,7 +559,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionTrue, "Running", summary)
 	}
 	if r.Config.suspended(app) {
-		app.Status.Message = "workspace suspended: the app runs but is not served; " + app.Status.Message
+		app.Status.Message = "workspace suspended: the app is stopped and not served until it is activated; " + app.Status.Message
 	}
 	return out, nil
 }
@@ -861,9 +861,9 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			ps.Sleep.State = "sleeping"
 			ps.Desired = 0 // the scaler's decision, not a failure
 		}
-		if ps.Sleep.Message == "" && r.sleepSource(app) == "plan" {
+		if ps.Sleep.Message == "" && r.sleepSource(app) == "workspace" {
 			if sp := r.webSleepSpec(app); sp != nil {
-				ps.Sleep.Message = "the workspace plan's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
+				ps.Sleep.Message = "the workspace's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
 			}
 		}
 		status["web"] = ps

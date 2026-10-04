@@ -225,6 +225,192 @@
       }
     ]
   },
+  "license": {
+    "active": true,
+    "license": {
+      "id": "lic_8Kq2xM4nT0aWc7Rz1VbY5g",
+      "customer": "Acme Corp",
+      "issuedAt": "2026-10-04T00:00:00Z",
+      "expiresAt": "2027-10-04T00:00:00Z",
+      "issuer": "https://billing.example.com"
+    },
+    "renewal": {
+      "at": "2026-10-04T09:12:00Z"
+    }
+  },
+  "costs": {
+    "estimated/project": {
+      "from": "2026-10-01T00:00:00Z",
+      "to": "2026-10-05T00:00:00Z",
+      "kind": "estimated",
+      "group": "project",
+      "rows": [
+        {
+          "key": "/",
+          "workspace": "",
+          "project": "",
+          "cost": {
+            "USD": 21.4
+          },
+          "lines": 412
+        },
+        {
+          "key": "ws1/afj92qvh6bm6sstaaw47darog",
+          "workspace": "ws1",
+          "project": "afj92qvh6bm6sstaaw47darog",
+          "slug": "example-rails",
+          "cost": {
+            "USD": 6.12
+          },
+          "lines": 96
+        },
+        {
+          "key": "ws1/47zzbjzdu14c07ueautsg6p8s",
+          "workspace": "ws1",
+          "project": "47zzbjzdu14c07ueautsg6p8s",
+          "slug": "shop",
+          "cost": {
+            "USD": 2.03
+          },
+          "lines": 72
+        }
+      ],
+      "total": {
+        "USD": 29.55
+      }
+    },
+    "estimated/process": {
+      "from": "2026-10-01T00:00:00Z",
+      "to": "2026-10-05T00:00:00Z",
+      "kind": "estimated",
+      "group": "process",
+      "rows": [
+        {
+          "key": "/idle",
+          "process": "idle",
+          "cost": {
+            "USD": 12.8
+          },
+          "lines": 96
+        },
+        {
+          "key": "/kube-system",
+          "process": "kube-system",
+          "cost": {
+            "USD": 5.1
+          },
+          "lines": 220
+        },
+        {
+          "key": "afj92qvh6bm6sstaaw47darog/postgres/db",
+          "project": "afj92qvh6bm6sstaaw47darog",
+          "slug": "example-rails",
+          "process": "postgres/db",
+          "cost": {
+            "USD": 3.9
+          },
+          "lines": 48
+        },
+        {
+          "key": "afj92qvh6bm6sstaaw47darog/web",
+          "project": "afj92qvh6bm6sstaaw47darog",
+          "slug": "example-rails",
+          "process": "web",
+          "cost": {
+            "USD": 2.22
+          },
+          "lines": 48
+        },
+        {
+          "key": "47zzbjzdu14c07ueautsg6p8s/web",
+          "project": "47zzbjzdu14c07ueautsg6p8s",
+          "slug": "shop",
+          "process": "web",
+          "cost": {
+            "USD": 2.03
+          },
+          "lines": 72
+        }
+      ],
+      "total": {
+        "USD": 26.05
+      }
+    },
+    "real/service": {
+      "from": "2026-10-01T00:00:00Z",
+      "to": "2026-10-05T00:00:00Z",
+      "kind": "real",
+      "group": "service",
+      "rows": [
+        {
+          "key": "Compute",
+          "service": "Compute",
+          "cost": {
+            "BRL": 121.64
+          },
+          "lines": 40
+        },
+        {
+          "key": "Block Storage",
+          "service": "Block Storage",
+          "cost": {
+            "BRL": 14.32
+          },
+          "lines": 56
+        },
+        {
+          "key": "DNS",
+          "service": "DNS",
+          "cost": {
+            "BRL": 0.2
+          },
+          "lines": 8
+        }
+      ],
+      "total": {
+        "BRL": 136.16
+      }
+    }
+  },
+  "costDrains": [
+    {
+      "id": "cd1",
+      "name": "finance",
+      "url": "https://billing.example.com/api/costs",
+      "headers": [
+        "Authorization"
+      ],
+      "lastDeliveryAt": "2026-10-04T13:05:00Z",
+      "sent": 1840,
+      "errors": 0,
+      "createdAt": "2026-10-01T09:00:00Z"
+    }
+  ],
+  "oci": {
+    "configured": true,
+    "tenancy": "ocid1.tenancy.oc1..aaaa",
+    "region": "us-ashburn-1"
+  },
+  "workspaceSettings": {
+    "workspace": "default",
+    "limits": {
+      "projects": 2,
+      "cpu": "2",
+      "memory": "512Mi"
+    },
+    "sleep": {
+      "appsAfter": "10m0s",
+      "appsResuming": "page",
+      "databasesAfter": "10m0s"
+    },
+    "usage": {
+      "projects": 1,
+      "instances": 2,
+      "cpu": "250m",
+      "memory": "256Mi",
+      "storage": "1Gi"
+    }
+  },
   "mail": {
     "configured": true,
     "host": "smtp.postmarkapp.com",
@@ -232,65 +418,6 @@
     "from": "shpyrd <no-reply@shpyrd.app>",
     "security": "starttls",
     "auth": true
-  },
-  "economics": {
-    "month": "2026-09",
-    "workspaces": [
-      {
-        "workspace": "acme",
-        "owner": "customer",
-        "revenue": 412.7,
-        "directCogs": 121.3,
-        "sharedCogs": 38.2,
-        "idleCogs": 19.9,
-        "totalCogs": 179.4,
-        "grossMargin": 233.3,
-        "marginPct": 56.5
-      },
-      {
-        "workspace": "globex",
-        "owner": "customer",
-        "revenue": 890.0,
-        "directCogs": 302.1,
-        "sharedCogs": 71.6,
-        "idleCogs": 40.2,
-        "totalCogs": 413.9,
-        "grossMargin": 476.1,
-        "marginPct": 53.5
-      },
-      {
-        "workspace": "initech",
-        "owner": "customer",
-        "revenue": 96.0,
-        "directCogs": 61.8,
-        "sharedCogs": 12.4,
-        "idleCogs": 8.1,
-        "totalCogs": 82.3,
-        "grossMargin": 13.7,
-        "marginPct": 14.3
-      },
-      {
-        "workspace": "shpyrd",
-        "owner": "operator",
-        "revenue": 0,
-        "directCogs": 88.0,
-        "sharedCogs": 24.0,
-        "idleCogs": 11.0,
-        "totalCogs": 123.0,
-        "grossMargin": 0,
-        "marginPct": 0
-      }
-    ],
-    "totals": {
-      "workspace": "total",
-      "revenue": 1398.7,
-      "directCogs": 573.2,
-      "sharedCogs": 146.2,
-      "idleCogs": 79.2,
-      "totalCogs": 798.6,
-      "grossMargin": 600.1,
-      "marginPct": 42.9
-    }
   },
   "sizes": {
     "default": "shared-s",
@@ -323,6 +450,20 @@
       }
     ]
   },
+  "consoleUsers": [
+    {
+      "email": "marcelo@shpyrd.io",
+      "addedAt": "2026-10-04T12:00:00Z",
+      "addedBy": "patrick@shpyrd.io",
+      "account": "active"
+    },
+    {
+      "email": "patrick@shpyrd.io",
+      "addedAt": "2026-10-04T12:00:00Z",
+      "addedBy": "migration",
+      "account": "active"
+    }
+  ],
   "users": [
     {
       "email": "patrick@shpyrd.io",
@@ -399,7 +540,6 @@
       "url": "https://acme.shpyrd.app",
       "status": "active",
       "owner": "customer",
-      "plan": "Team",
       "owners": [
         "ana@acme.com"
       ],
@@ -426,7 +566,6 @@
       "url": "https://globex.shpyrd.app",
       "status": "active",
       "owner": "customer",
-      "plan": "Business",
       "owners": [
         "hank@globex.com",
         "cto@globex.com"
@@ -460,22 +599,18 @@
       "createdAt": "2026-08-30T16:45:00Z"
     }
   ],
-  "plans": [
-    {
-      "id": "p1",
-      "name": "Team",
-      "currency": "BRL",
-      "minMonthly": 99
-    },
-    {
-      "id": "p2",
-      "name": "Business",
-      "currency": "BRL",
-      "minMonthly": 499
-    }
-  ],
   "settings": {
     "defaultWorkspaceId": "shpyrd",
     "consolePasswordSignIn": true
-  }
+  },
+  "links": [
+    {
+      "area": "console",
+      "section": "Platform",
+      "label": "Workspaces",
+      "url": "/apps/workspaces/",
+      "icon": "building-2",
+      "after": "workspaces"
+    }
+  ]
 }

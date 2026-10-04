@@ -170,6 +170,12 @@ type Deps struct {
 	// project's access in the gate's own workspace, the gate's rule
 	// elsewhere (RFC-0083). False for a gate that does not exist.
 	GateAdmits func(ctx context.Context, gate string, v Visitor) bool
+	// SleepAllowed says whether processes and databases may sleep by
+	// themselves now (SleepGate); nil never.
+	SleepAllowed func() bool
+	// WorkspaceUsage is what a workspace holds now, counted as its limits
+	// count it; nil when it cannot be told.
+	WorkspaceUsage func(ctx context.Context, slug string) *Usage
 }
 
 // ErrAccountHasPassword says the person has a password already: the one
@@ -194,6 +200,13 @@ type InviteOutcome struct {
 	// Error is set when the invitation itself could not be made; the role
 	// the caller granted stands regardless.
 	Error string `json:"error,omitempty"`
+}
+
+// SleepGate is implemented by an extension that lets processes and
+// databases sleep by themselves (the enterprise's auto sleep). Without one,
+// nothing sleeps by itself; a database put to sleep by hand still is.
+type SleepGate interface {
+	SleepAllowed() bool
 }
 
 // LocalAccountStore is the interface the server uses from the auth-local
@@ -276,6 +289,10 @@ type OIDCProvider struct {
 	Password bool
 	// Kind picks the button's icon: "oidc" (default), "github", "google".
 	Kind string
+	// Available says whether the method may be used now; nil is always.
+	// The enterprise's sign-in methods are there only with a license in
+	// force: without one they leave the login pages and refuse to start.
+	Available func() bool
 	// ConnectorID preselects a Dex connector (connector_id in the
 	// authorization request) so Dex's chooser is skipped (RFC-0058).
 	ConnectorID string
@@ -350,6 +367,17 @@ type APIClient interface {
 	// the pod and the command (Shellable); the local terminal is bridged
 	// until it ends. Returns the remote exit code as a *kexec.ExitError.
 	Exec(ctx context.Context, project, kind, name string, args []string, stderr io.Writer) error
+}
+
+// Usage is what a workspace holds at once, as its limits count it:
+// projects, instances of every process, and the CPU, memory and storage of
+// their sizes, volumes and databases.
+type Usage struct {
+	Projects  int    `json:"projects"`
+	Instances int    `json:"instances"`
+	CPU       string `json:"cpu"`
+	Memory    string `json:"memory"`
+	Storage   string `json:"storage"`
 }
 
 // Names returns the names of extensions, in order.

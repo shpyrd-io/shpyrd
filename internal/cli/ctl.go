@@ -11,8 +11,10 @@ import (
 )
 
 // NewCtl builds the shpyrd-ctl command tree: cluster operations that need a
-// kubeconfig (RFC-0052). Developers use `shpyrd` instead.
-func NewCtl() *cobra.Command {
+// kubeconfig (RFC-0052). Developers use `shpyrd` instead. The operator
+// commands of the extensions given join those of the built-in ones (the
+// ee extensions, where ee is built in).
+func NewCtl(extra ...ext.Extension) *cobra.Command {
 	g := &globalFlags{}
 	root := &cobra.Command{
 		Use:           "shpyrd-ctl",
@@ -38,12 +40,11 @@ func NewCtl() *cobra.Command {
 	root.AddCommand(newExtensionsCmd(g))
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
-	root.AddCommand(newWorkspacesCmd(g)) // RFC-0033 phase 8: servers with the workspaces capability
-	root.AddCommand(newPlansCmd(g))      // RFC-0075: billing plans
-	root.AddCommand(newEconomicsCmd(g))  // RFC-0075: revenue and margin
+	root.AddCommand(newConsoleUsersCmd(g))
+	root.AddCommand(newCtlWorkspaceCmd(g))
 	// The operator's extension commands (users, auth, object-storage);
 	// project resources (pg, redis) are the developer's, in `shpyrd`.
-	addExtensionCommands(root, g, ext.AudienceOperator)
+	addExtensionCommands(root, g, ext.AudienceOperator, extra...)
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",

@@ -22,7 +22,9 @@
     "postgres",
     "redis",
     "logs-agent",
-    "object-storage"
+    "object-storage",
+    "sso",
+    "mcp"
   ],
   "workspace": {
     "slug": "acme",

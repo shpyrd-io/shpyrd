@@ -55,11 +55,15 @@ func (r *AppReconciler) sleepEnabled(app *shpyrdv1.App) bool {
 	return spec != nil && parseSleepDuration(spec.After) > 0
 }
 
-// webSleepSpec returns the effective SleepSpec of the web process: the
-// process's own when set (an explicit "off" is a policy too — it opts the
-// project out of the workspace default), else the workspace's plan default,
+// webSleepSpec returns the effective SleepSpec of the web process, when
+// processes may sleep at all (Config.SleepAllowed): the process's own when
+// set (an explicit "off" is a policy too — it opts the
+// project out of the workspace default), else the workspace's default,
 // else nil.
 func (r *AppReconciler) webSleepSpec(app *shpyrdv1.App) *shpyrdv1.SleepSpec {
+	if r.Config.SleepAllowed == nil || !r.Config.SleepAllowed() {
+		return nil // nothing sleeps by itself without auto sleep
+	}
 	for _, p := range processes(app) {
 		if p.Name == "web" && p.Sleep != nil {
 			return p.Sleep
@@ -82,7 +86,7 @@ func (r *AppReconciler) sleepSource(app *shpyrdv1.App) string {
 			return "project"
 		}
 	}
-	return "plan"
+	return "workspace"
 }
 
 // parseSleepDuration parses the after value; returns 0 when disabled.

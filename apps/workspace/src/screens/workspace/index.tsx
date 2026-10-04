@@ -2,10 +2,10 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
+import { ArrowLeft, CreditCard, ExternalLink, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
+import { placeLinks, shown as visibleIn } from "@shpyrd/shared/links";
 import { NavList, NavListDivider, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
-import { bySection } from "@/lib/links";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
 import { Connections } from "./connections";
@@ -26,20 +26,42 @@ const pages = [
   { group: "Access", slug: "teams", title: "Teams", icon: <UsersRound />, needs: "admin" },
   { group: "Access", slug: "sign-in", title: "Sign-in", icon: <LogIn />, needs: "admin" },
   { group: "Access", slug: "tokens", title: "API tokens", icon: <KeyRound /> },
-  { group: "Access", slug: "connections", title: "Connections", icon: <Link2 /> },
+  { group: "Access", slug: "connections", title: "Connections", icon: <Link2 />, extension: "mcp" },
   { group: "Platform", slug: "globals", title: "Config vars", icon: <KeyRound />, needs: "admin" },
   { group: "Platform", slug: "drains", title: "Log drains", icon: <Waves />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
-  { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug /> },
+  { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug />, extension: "mcp" },
 ] as const;
+
+// The icons a link may name; another gets the external one.
+const linkIcons: Record<string, React.ReactElement> = {
+  "credit-card": <CreditCard />,
+};
 
 export function WorkspacePages() {
   const { pathname } = useLocation();
   const perms = usePerms();
   const links = useQuery({ queryKey: ["links"], queryFn: api.links, staleTime: 60_000 });
   const here = pathname.replace("/workspace", "").replace(/^\//, "").split("/")[0];
-  const shown = pages.filter((p) => !("needs" in p) || perms[p.needs]);
-  const groups = [...new Set(shown.map((p) => p.group))];
+  const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
+  // The MCP server is the enterprise's (ee/mcp): its pages where it is built in.
+  const visible = (p: (typeof pages)[number]) => (!("needs" in p) || perms[p.needs]) && (!("extension" in p) || !!config.data?.extensions.includes(p.extension));
+  // What extensions add goes in place: each link opens an application as
+  // a page of its own, which has its way back here.
+  const groups = visibleIn(placeLinks(pages, links.data ?? []), visible);
+
+  const entries = (group: (typeof groups)[number]) =>
+    group.entries.map((e) =>
+      e.link ? (
+        <NavListItem key={`link-${e.link.url}`} asChild icon={linkIcons[e.link.icon ?? ""] ?? <ExternalLink />}>
+          <a href={e.link.url}>{e.link.label}</a>
+        </NavListItem>
+      ) : (
+        <NavListItem key={e.page.slug} asChild icon={e.page.icon} aria-current={here === e.page.slug ? "page" : undefined}>
+          <Link to={e.page.slug ? `/workspace/${e.page.slug}` : "/workspace"}>{e.page.title}</Link>
+        </NavListItem>
+      ),
+    );
 
   const nav = (
     <NavList aria-label="Workspace">
@@ -49,34 +71,14 @@ export function WorkspacePages() {
       </NavListItem>
       <NavListDivider />
       {groups.map((group) =>
-        group === "" ? (
-          shown.filter((p) => p.group === "").map((p) => (
-            <NavListItem key={p.slug} asChild icon={p.icon} aria-current={here === p.slug ? "page" : undefined}>
-              <Link to="/workspace">{p.title}</Link>
-            </NavListItem>
-          ))
+        group.group === "" ? (
+          entries(group)
         ) : (
-          <NavListGroup key={group} title={group}>
-            {shown.filter((p) => p.group === group).map((p) => (
-              <NavListItem key={p.slug} asChild icon={p.icon} aria-current={here === p.slug ? "page" : undefined}>
-                <Link to={`/workspace/${p.slug}`}>{p.title}</Link>
-              </NavListItem>
-            ))}
+          <NavListGroup key={group.group} title={group.group}>
+            {entries(group)}
           </NavListGroup>
         ),
       )}
-      {/* What extensions add: each link opens an app at another host. */}
-      {bySection(links.data ?? []).map(([section, items]) => (
-        <NavListGroup key={`links-${section}`} title={section}>
-          {items.map((link) => (
-            <NavListItem key={link.url} asChild iconEnd={<ExternalLink />}>
-              <a href={link.url} target="_blank" rel="noopener">
-                {link.label}
-              </a>
-            </NavListItem>
-          ))}
-        </NavListGroup>
-      ))}
     </NavList>
   );
 
