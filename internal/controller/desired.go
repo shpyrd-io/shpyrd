@@ -901,8 +901,12 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		server += "&workspace=" + ws
 	}
 	ann := map[string]string{
-		"nginx.ingress.kubernetes.io/auth-url":              server,
-		"nginx.ingress.kubernetes.io/auth-response-headers": "Authorization,X-Shpyrd-User,X-Shpyrd-Email,X-Shpyrd-Name,X-Shpyrd-Teams,X-Shpyrd-Roles",
+		"nginx.ingress.kubernetes.io/auth-url": server,
+		// Every X-Shpyrd-* header the edge can answer is listed, so nginx
+		// replaces a client's own with the edge's, or drops it: the gates'
+		// X-Shpyrd-Workspace and X-Shpyrd-Operator (RFC-0083) included,
+		// which an app's edge never sets, so no client can claim them here.
+		"nginx.ingress.kubernetes.io/auth-response-headers": "Authorization,X-Shpyrd-User,X-Shpyrd-Email,X-Shpyrd-Name,X-Shpyrd-Teams,X-Shpyrd-Roles,X-Shpyrd-Workspace,X-Shpyrd-Operator",
 		// The decision differs for a browser and an API client with the
 		// same (absent) credentials: a sign-in redirect for one, a JSON 401
 		// for the other. Accept is part of the key so a cached answer is
