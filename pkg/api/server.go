@@ -561,6 +561,7 @@ func (s *Server) routes() error {
 	// caller's roles decide.
 	api := s.engine.Group("/api", tenant, s.auth())
 	api.GET("/me", s.me)
+	api.GET("/links", s.links)
 	api.POST("/auth/logout", s.authLogout)
 	// The cluster is the operator's (RFC-0033 phase 6): a workspace's
 	// platform admin runs their workspace, not the machines under it. These

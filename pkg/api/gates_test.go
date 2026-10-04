@@ -683,3 +683,20 @@ func TestSigningOutOfAGateEndsItsPass(t *testing.T) {
 		t.Errorf("auth with the cookie after signing out = %d", rec.Code)
 	}
 }
+
+// /api/links is per person: acme's owner sees the extension's link, its
+// member does not, and a workspace without a provider gets an empty list.
+func TestLinksArePerPerson(t *testing.T) {
+	w := newGateWorld(t)
+	rec := w.get(t, "acme.shpyrd.test", "/api/links", w.session(t, "acme", w.ana))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"label":"Billing"`) || !strings.Contains(rec.Body.String(), `"section":"Cloud"`) {
+		t.Errorf("owner's links = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = w.get(t, "acme.shpyrd.test", "/api/links", w.session(t, "acme", w.carla))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Errorf("member's links = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/api/links", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous links = %d", rec.Code)
+	}
+}

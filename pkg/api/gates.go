@@ -510,3 +510,24 @@ func (s *Server) gateErrorPage(c *gin.Context) bool {
 	}
 	return true
 }
+
+// links is GET /api/links: what the extensions add to this person's
+// sidebar in this workspace (RFC-0083).
+func (s *Server) links(c *gin.Context) {
+	out := []ext.Link{}
+	ws, err := s.tenant(c)
+	if err != nil {
+		c.JSON(http.StatusOK, out) // the console has no sidebar of links
+		return
+	}
+	id, _ := ext.IdentityFrom(c)
+	v, _, err := s.visitorIn(c.Request.Context(), ws, id)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	for _, p := range s.linkProviders {
+		out = append(out, p.Links(c.Request.Context(), v)...)
+	}
+	c.JSON(http.StatusOK, out)
+}
