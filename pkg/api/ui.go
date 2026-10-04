@@ -208,6 +208,11 @@ func (s *Server) serveUI() gin.HandlerFunc {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.Mark, pages.Page{})))
 			return
 		}
+		// The platform address behind a primary custom domain still signs
+		// people in on their way to a gate (RFC-0083).
+		if s.gateSignIn(c, apps[uiWorkspace]) {
+			return
+		}
 		if s.customError(c) { // ingress-nginx's error backend for app hosts
 			return
 		}

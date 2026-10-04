@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -921,5 +922,139 @@ func TestASuspendedWorkspaceClosesItsGates(t *testing.T) {
 	rec, _ := w.auth(t, "billing", "GET", cookie)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "suspended") {
 		t.Errorf("after acme was suspended = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// behindDomain gives acme a verified custom domain, intranet.acme.com, as
+// its primary door, the password sign-in (Ana's password is
+// correct-horse) and a provider, Okta; and serves a workspace application.
+func (w *gateWorld) behindDomain(t *testing.T) {
+	t.Helper()
+	now := time.Now()
+	if _, err := w.st.PutWorkspaceHost(context.Background(), "acme", store.WorkspaceHost{Host: "intranet.acme.com", Kind: store.HostCustom, Primary: true, VerifiedAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.forgetHosts()
+	issuer := newFakeIssuer(t)
+	issuer.passwords[w.ana.Email] = "correct-horse"
+	for _, p := range []ext.OIDCProvider{
+		{ID: "local", Label: "Email and password", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", Password: true},
+		{ID: "okta", Label: "Okta", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret"},
+	} {
+		if err := w.s.rp.AddOIDC(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.s.opts.UI = fstest.MapFS{
+		"console/index.html":   {Data: []byte("<html>console</html>")},
+		"workspace/index.html": {Data: []byte("<html>workspace</html>")},
+		"workspace/404.html":   {Data: []byte("<html>404</html>")},
+		"workspace/app.js":     {Data: []byte("js")},
+	}
+	w.s.engine.NoRoute(w.s.serveUI())
+}
+
+// noApp says a response is the "No app here" page the platform address
+// answers for the dashboard's pages once a custom domain is the door.
+func noApp(rec *httptest.ResponseRecorder) bool {
+	return rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), "No app here")
+}
+
+// A workspace whose door is its custom domain: the link there sends the
+// browser to the platform address, where the gate's way in runs; signed
+// out there, the person gets the workspace's sign-in page, signs in with
+// the password, and walks into the gate from the platform address.
+func TestAGateIsEnteredFromAWorkspaceWhoseDoorIsACustomDomain(t *testing.T) {
+	w := newGateWorld(t)
+	w.behindDomain(t)
+	const gate = "/.shpyrd/gate?name=billing"
+	rec := w.get(t, "intranet.acme.com", gate, w.session(t, "acme", w.ana))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://acme.shpyrd.test"+gate {
+		t.Fatalf("the link at the custom domain = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = w.get(t, "acme.shpyrd.test", gate, "")
+	signIn := "/?next=" + url.QueryEscape(gate)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != signIn {
+		t.Fatalf("signed out at the platform address = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = w.get(t, "acme.shpyrd.test", signIn, "")
+	if rec.Code != http.StatusOK || rec.Body.String() != "<html>workspace</html>" || rec.Header().Get("Content-Security-Policy") == "" {
+		t.Fatalf("the sign-in page = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/app.js", ""); rec.Code != http.StatusOK || rec.Body.String() != "js" {
+		t.Errorf("the application's file = %d %s", rec.Code, rec.Body.String())
+	}
+	// The password sign-in opens the session at the platform address and
+	// sends the person back to the gate.
+	req := httptest.NewRequest("POST", "https://acme.shpyrd.test/api/auth/password", strings.NewReader(`{"email":"`+w.ana.Email+`","password":"correct-horse","next":"`+gate+`"}`))
+	req.Host = "acme.shpyrd.test"
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"next":"/.shpyrd/gate?name=billing"`) {
+		t.Fatalf("password sign-in = %d %s", rec.Code, rec.Body.String())
+	}
+	sid := cookieValue(rec, sessionCookie)
+	if sid == "" {
+		t.Fatal("no session opened")
+	}
+	// Signed in, the sign-in page goes on to the gate.
+	if rec := w.get(t, "acme.shpyrd.test", signIn, sid); rec.Code != http.StatusFound || rec.Header().Get("Location") != gate {
+		t.Errorf("the sign-in page signed in = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	rec, claims := w.auth(t, "billing", "GET", w.enter(t, "acme.shpyrd.test", sid))
+	if rec.Code != http.StatusOK || claims["ws"] != "acme" {
+		t.Fatalf("auth = %d %v", rec.Code, claims)
+	}
+	// A provider's sign-in there returns to the platform address.
+	rec = w.get(t, "acme.shpyrd.test", "/api/auth/login?provider=okta&next="+url.QueryEscape(gate), "")
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "redirect_uri="+url.QueryEscape("https://acme.shpyrd.test/api/auth/callback")) {
+		t.Errorf("provider sign-in = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	uris, err := w.s.redirectURIs(context.Background())
+	if err != nil || !slices.Contains(uris, "https://acme.shpyrd.test/api/auth/callback") || !slices.Contains(uris, "https://intranet.acme.com/api/auth/callback") {
+		t.Errorf("the identity provider's callbacks = %v %v", uris, err)
+	}
+}
+
+// The platform address behind a custom domain is no second dashboard: no
+// page but the sign-in on the way to a gate answers there, signed in or
+// not; the custom domain is the dashboard, and a workspace without one is
+// its dashboard at its address as before.
+func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
+	w := newGateWorld(t)
+	w.behindDomain(t)
+	sid := w.session(t, "acme", w.ana)
+	for _, p := range []string{
+		"/", "/workspace", "/projects/shop", "/404.html", "/index.html?next=" + url.QueryEscape("/.shpyrd/gate?name=billing"),
+		"/?next=" + url.QueryEscape("/workspace"),
+		"/?next=" + url.QueryEscape("/.shpyrd/start?app=shop.acme.shpyrd.test"),
+		"/?next=" + url.QueryEscape("https://evil.test/.shpyrd/gate?name=billing"),
+		"/?next=" + url.QueryEscape("//evil.test/.shpyrd/gate?name=billing"),
+		"/workspace?next=" + url.QueryEscape("/.shpyrd/gate?name=billing"),
+	} {
+		if rec := w.get(t, "acme.shpyrd.test", p, ""); !noApp(rec) {
+			t.Errorf("%s signed out = %d %s", p, rec.Code, rec.Body.String())
+		}
+		if rec := w.get(t, "acme.shpyrd.test", p, sid); !noApp(rec) {
+			t.Errorf("%s signed in = %d %s", p, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest("POST", "https://acme.shpyrd.test/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), nil)
+	req.Host = "acme.shpyrd.test"
+	rec := httptest.NewRecorder()
+	w.s.Handler().ServeHTTP(rec, req)
+	if !noApp(rec) {
+		t.Errorf("POST to the sign-in page = %d", rec.Code)
+	}
+	for host, p := range map[string]string{"intranet.acme.com": "/workspace", "beta.shpyrd.test": "/workspace"} {
+		if rec := w.get(t, host, p, ""); rec.Code != http.StatusOK || rec.Body.String() != "<html>workspace</html>" {
+			t.Errorf("%s%s = %d %s", host, p, rec.Code, rec.Body.String())
+		}
+	}
+	// Without a custom domain, the address is the door: a signed-in person
+	// at its sign-in page sees the dashboard, not a redirect.
+	if rec := w.get(t, "beta.shpyrd.test", "/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), w.session(t, "beta", w.eve)); rec.Code != http.StatusOK {
+		t.Errorf("beta's sign-in page signed in = %d", rec.Code)
 	}
 }
