@@ -103,7 +103,7 @@ type Options struct {
 	// host, leaves every host as it is.
 	SignInHost string
 	// Capabilities names what this server offers beyond the core
-	// ("workspaces", "billing", ...), returned by GET /api/config so one
+	// ("workspaces", ...), returned by GET /api/config so one
 	// dashboard and one CLI adapt. The core adds nothing.
 	Capabilities []string
 	// Logger defaults to slog.Default().
@@ -210,6 +210,12 @@ type Server struct {
 	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
 	// REST mapper (tests inject one).
 	sleepAvailable func() bool
+	// sleepGate says whether things may sleep by themselves; nil asks the
+	// extensions (ext.SleepGate). Tests inject one.
+	sleepGate func() bool
+	// identifiers are the ways extensions added to identify a bearer token
+	// (Host.AddIdentifier).
+	identifiers []func(c *gin.Context) bool
 	// hosts caches workspaces' host records (custom domains, moved
 	// addresses; RFC-0033 names).
 	hosts hostsCache
@@ -396,6 +402,8 @@ func (s *Server) deps() ext.Deps {
 	// callbacks refreshed (RFC-0080) — not the controller poke alone.
 	d := ext.Deps{Kube: s.kube, Client: s.apps, SystemNamespace: ns, Vars: s.opts.Vars, Auth: s.rp, Store: s.store, WorkspacesChanged: s.workspacesChanged, Mail: s.mailer}
 	d.GateAdmits = s.gateAdmitsHook
+	d.SleepAllowed = s.sleepAllowed
+	d.WorkspaceUsage = s.usageOf
 	if s.store != nil {
 		d.Invite = s.inviteHook
 		d.InviteBackground = s.inviteBackgroundHook
@@ -531,35 +539,21 @@ func (s *Server) routes() error {
 	pub.GET("/invitations/:token", login, s.getInvitation)    // an invitation link, before signing in (RFC-0033)
 	pub.GET("/auth/route", login, s.authRoute)                // the method a claimed email domain routes to
 	pub.GET("/workspace/logo", s.workspaceLogo)               // the workspace's logo, for the login page too
-	// The workspace's OAuth 2.1 server and MCP endpoint (RFC-0032). The
-	// well-known documents sit at the root, with and without the resource
-	// path (RFC 8414 §3.1, RFC 9728 §3.1); the endpoints are throttled
-	// like sign-in.
-	for _, p := range []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/mcp"} {
-		s.engine.GET(p, tenant, s.oauthMetadata)
-	}
-	for _, p := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"} {
-		s.engine.GET(p, tenant, s.protectedResourceMetadata)
-	}
 	// The CLI's browser sign-in (RFC-0052): a device code the CLI polls
 	// and a page where the person approves it, with the dashboard session.
 	pub.POST("/cli/device", login, s.cliDeviceStart)
 	pub.POST("/cli/device/token", login, s.cliDevicePoll)
 	s.engine.GET("/cli/activate", tenant, login, s.cliActivatePage)
 	s.engine.POST("/cli/activate", tenant, login, s.cliActivateDecide)
-	oauth := s.engine.Group("/oauth", tenant, login)
-	oauth.POST("/register", s.oauthRegister)
-	oauth.GET("/authorize", s.oauthAuthorize)
-	oauth.POST("/authorize", s.oauthDecide)
-	oauth.POST("/token", s.oauthToken)
-	oauth.POST("/revoke", s.oauthRevoke)
-	s.engine.POST("/mcp", tenant, s.mcpAuth(), s.mcpHandle)
-	s.engine.GET("/mcp", tenant, s.mcpOther)
-	s.engine.DELETE("/mcp", tenant, s.mcpOther)
 
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
 	api := s.engine.Group("/api", tenant, s.auth())
+	// Extensions that serve at the workspace's root (the MCP server and its
+	// OAuth, ee/mcp) get the server's Host.
+	if err := s.mountRoot(api, tenant, login); err != nil {
+		return err
+	}
 	api.GET("/me", s.me)
 	api.GET("/links", s.links)
 	api.POST("/auth/logout", s.authLogout)
@@ -578,6 +572,9 @@ func (s *Server) routes() error {
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
 	api.PUT("/sizes", console, s.require(authz.ClusterAdmin), s.putSizes)
 	api.PATCH("/cluster/settings", console, s.require(authz.ClusterAdmin), s.patchClusterSettings) // RFC-0078
+	api.GET("/cluster/console-users", console, s.require(authz.ClusterAdmin), s.listConsoleUsers)
+	api.POST("/cluster/console-users", console, s.require(authz.ClusterAdmin), s.addConsoleUser)
+	api.DELETE("/cluster/console-users/:email", console, s.require(authz.ClusterAdmin), s.removeConsoleUser)
 	if !s.hasCapability("workspaces") {
 		// The console lists the workspaces it hosts (RFC-0080); with the
 		// workspaces capability the cloud layer serves the full routes.
@@ -606,19 +603,11 @@ func (s *Server) routes() error {
 	api.DELETE("/workspace/invitations/:id", s.require(authz.ClusterAdmin), s.deleteInvitation)
 	api.POST("/invitations/:token/accept", s.acceptInvitation) // any signed-in person: the email must match
 
-	// Billing (RFC-0075): usage and invoice preview (workspace admins).
-	api.GET("/workspace/billing/current", s.billingAdmin, s.workspaceBillingCurrent)
-	api.GET("/workspace/billing/invoices", s.billingAdmin, s.workspaceBillingInvoices)
-	api.GET("/workspace/usage", s.require(authz.ClusterAdmin), s.workspaceUsage)
-	api.GET("/projects/:slug/usage", s.require(authz.ProjectView), s.projectUsage)
+	// The workspace's settings, at the console: the one workspace of the
+	// open-source platform, its ceilings and sleep defaults.
+	api.GET("/cluster/workspace-settings", console, s.require(authz.ClusterAdmin), s.getWorkspaceSettings)
+	api.PUT("/cluster/workspace-settings", console, s.require(authz.ClusterAdmin), s.putWorkspaceSettings)
 
-	// Operator economics and plan management (cluster admins, console only).
-	api.GET("/cluster/plans", console, s.require(authz.ClusterAdmin), s.listPlans)
-	api.POST("/cluster/plans", console, s.require(authz.ClusterAdmin), s.createPlan)
-	api.POST("/cluster/plans/:name/assign", console, s.require(authz.ClusterAdmin), s.assignPlan)
-	api.GET("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.listPlanVersions)
-	api.POST("/cluster/plans/:name/versions", console, s.require(authz.ClusterAdmin), s.addPlanVersion)
-	api.GET("/cluster/economics", console, s.require(authz.ClusterAdmin), s.clusterEconomics)
 	api.GET("/cluster/project-archives", console, s.require(authz.ClusterAdmin), s.clusterArchiveProjects)
 	archives := api.Group("/cluster/project-archives/:projectID", console, s.require(authz.ClusterAdmin), s.clusterArchiveProject)
 	archives.GET("", s.projectArchiveStatus)
@@ -630,8 +619,6 @@ func (s *Server) routes() error {
 	archives.GET("/download", s.downloadProjectArchive)
 	archives.POST("/restore", s.restoreProjectArchive)
 	archives.POST("/recover", s.recoverProjectArchive)
-	api.GET("/workspace/connections", s.listConnections) // the caller's connected assistants (RFC-0032)
-	api.DELETE("/workspace/connections/:id", s.deleteConnection)
 	api.GET("/workspace/domains", s.require(authz.ClusterAdmin), s.listWorkspaceDomains) // custom workspace domains (RFC-0033 names)
 	api.POST("/workspace/domains", s.require(authz.ClusterAdmin), s.addWorkspaceDomain)
 	api.POST("/workspace/domains/:host/verify", s.require(authz.ClusterAdmin), s.verifyWorkspaceDomain)
@@ -753,7 +740,7 @@ func (s *Server) routes() error {
 		s.engine.NoRoute(s.serveUI())
 	} else {
 		s.engine.NoRoute(func(c *gin.Context) {
-			if s.customError(c) {
+			if s.customError(c) || s.toSuspendedGate(c) {
 				return
 			}
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -777,13 +764,16 @@ func (s *Server) auth() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		// Then one of our OAuth access tokens (RFC-0032): an assistant
-		// acting for a person, within the token's scope.
-		if s.identifyWithOAuth(c) {
-			if !c.IsAborted() {
-				c.Next()
+		// Then the identifiers extensions added (the MCP's OAuth access
+		// tokens, ee/mcp): an assistant acting for a person, within the
+		// token's scope.
+		for _, identify := range s.identifiers {
+			if identify(c) {
+				if !c.IsAborted() {
+					c.Next()
+				}
+				return
 			}
-			return
 		}
 		tok := c.GetHeader("X-Shpyrd-Token")
 		if h := c.GetHeader("Authorization"); tok == "" && strings.HasPrefix(strings.ToLower(h), "bearer ") {

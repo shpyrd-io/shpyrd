@@ -120,9 +120,12 @@ func (s *Server) redirectURIs(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A suspended workspace is signed in to only on the way to the gate
+	// that receives it.
+	_, gated := s.suspendedGate()
 	for i := range all {
 		ws := &all[i]
-		if ws.Address == "" || ws.Status == store.WorkspaceSuspended {
+		if ws.Address == "" || (ws.Status == store.WorkspaceSuspended && !gated) {
 			continue
 		}
 		add("https://" + s.withPort(ws.Address) + "/api/auth/callback")

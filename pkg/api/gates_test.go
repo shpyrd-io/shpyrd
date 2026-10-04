@@ -36,6 +36,8 @@ type gateExt struct {
 	deps       ext.Deps
 	linkCalls  int
 	admitCalls int
+	// receivesSuspended makes billing the gate suspended workspaces go to.
+	receivesSuspended bool
 }
 
 func (*gateExt) Name() string                          { return "gates-test" }
@@ -54,16 +56,22 @@ func (g *gateExt) Gates(ext.Deps) []ext.Gate {
 		return v.WorkspaceRole == store.WorkspaceRoleOwner
 	}
 	return []ext.Gate{
-		{Name: "billing", Host: "billing.example.test", Workspace: "platform", Project: "billing", Admit: admit},
+		{Name: "billing", Host: "billing.example.test", Workspace: "platform", Project: "billing", Admit: admit, OpenWhenSuspended: g.receivesSuspended},
 		{Name: "reports", Host: "reports.example.test", Workspace: "platform", Project: "reports", Admit: admit},
 	}
 }
 func (g *gateExt) Links(ctx context.Context, v ext.Visitor) []ext.Link {
 	g.linkCalls++
-	if !g.deps.GateAdmits(ctx, "billing", v) {
-		return nil
+	// The console's link, for those who may open it; the workspace's
+	// sidebar never shows it.
+	out := []ext.Link{}
+	if v.Workspace.Slug == "" && v.PlatformRole == shpyrdv1.RolePlatformAdmin {
+		out = append(out, ext.Link{Area: ext.AreaConsole, Section: "Platform", Label: "Workspaces", URL: "/apps/workspaces/", After: "workspaces"})
 	}
-	return []ext.Link{{Section: "Cloud", Label: "Billing", URL: "/.shpyrd/gate?name=billing", Icon: "credit-card"}}
+	if v.Workspace.Slug == "" || !g.deps.GateAdmits(ctx, "billing", v) {
+		return out
+	}
+	return append(out, ext.Link{Section: "Cloud", Label: "Billing", URL: "/.shpyrd/gate?name=billing", Icon: "credit-card"})
 }
 
 // gateWorld is a server with the gate above and three workspaces:
@@ -79,7 +87,7 @@ type gateWorld struct {
 	ana, carla, bruno, dora, eve, frank ext.Identity
 }
 
-func newGateWorld(t *testing.T) *gateWorld {
+func newGateWorld(t *testing.T, opts ...func(*gateExt)) *gateWorld {
 	t.Helper()
 	ctx := context.Background()
 	st := store.NewMemory()
@@ -132,6 +140,9 @@ func newGateWorld(t *testing.T) *gateWorld {
 	k := &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
 	public := PublicConfig{Domain: "example.test", DashboardURL: "https://shpyrd.example.test"}
 	gateExtInstance := &gateExt{}
+	for _, o := range opts {
+		o(gateExtInstance)
+	}
 	s, err := newServer(k, Options{
 		Token: testToken, Apps: cr, Store: st, Public: public,
 		Tenancy:      &tenancy.ByAddress{Store: st, Domain: public.Domain, ConsoleHost: "shpyrd.example.test"},
@@ -223,6 +234,11 @@ func TestGatesWithTheSameNameOrHostAreRefused(t *testing.T) {
 	other.Name = "reports"
 	if err := s.addGates([]ext.Gate{g, other}); err == nil {
 		t.Error("two gates on one host accepted")
+	}
+	s = &Server{}
+	g.OpenWhenSuspended, other.OpenWhenSuspended, other.Host = true, true, "reports.example.test"
+	if err := s.addGates([]ext.Gate{g, other}); err == nil {
+		t.Error("two gates receiving suspended workspaces accepted")
 	}
 	s = &Server{}
 	bad := g
@@ -377,6 +393,15 @@ func TestAnOwnerOfAnotherWorkspaceEntersTheGate(t *testing.T) {
 	}
 	if roles := claims["roles"].([]any); len(roles) == 0 || roles[0] != "owner" {
 		t.Errorf("roles = %v", claims["roles"])
+	}
+	// The way back: the workspace's id, stable across address changes, and
+	// its dashboard on its primary domain.
+	acme, err := w.st.Workspace(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims["wsid"] != acme.ID || claims["ws_url"] != w.s.dashboardURLOf(acme) || claims["ws_url"] == "" {
+		t.Errorf("wsid = %v, ws_url = %v; want %s and %s", claims["wsid"], claims["ws_url"], acme.ID, w.s.dashboardURLOf(acme))
 	}
 	if rec.Header().Get("X-Shpyrd-Email") != w.ana.Email {
 		t.Errorf("X-Shpyrd-Email = %q", rec.Header().Get("X-Shpyrd-Email"))
@@ -738,6 +763,30 @@ func TestLinksArePerPerson(t *testing.T) {
 	}
 }
 
+// At the console, /api/links is the console's sidebar: a console user gets
+// the links for it and none of a workspace's; a workspace's sidebar gets
+// none of the console's.
+func TestTheConsoleHasLinksOfItsOwn(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	if _, err := w.st.AddConsoleUser(ctx, w.dora.Email, "test"); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	sess, err := w.s.rp.sessions.create(ctx, store.RealmConsole, "", w.dora, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := w.get(t, "shpyrd.example.test", "/api/links", sess.ID)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"area":"console"`) || !strings.Contains(rec.Body.String(), `"after":"workspaces"`) || strings.Contains(rec.Body.String(), "Billing") {
+		t.Errorf("the console's links = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = w.get(t, "acme.shpyrd.test", "/api/links", w.session(t, "acme", w.ana))
+	if strings.Contains(rec.Body.String(), `"area":"console"`) {
+		t.Errorf("a workspace's sidebar got the console's link: %s", rec.Body.String())
+	}
+}
+
 // Links asks no provider without an identity set.
 func TestLinksWithoutIdentityAskNoProvider(t *testing.T) {
 	w := newGateWorld(t)
@@ -922,6 +971,76 @@ func TestASuspendedWorkspaceClosesItsGates(t *testing.T) {
 	rec, _ := w.auth(t, "billing", "GET", cookie)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "suspended") {
 		t.Errorf("after acme was suspended = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A suspended workspace whose people a gate receives (the cloud's billing)
+// sends its dashboard there: signed in or not, a page of the dashboard goes
+// to the gate, which goes to sign-in and back; the API stays refused but
+// for signing in and who is signed in. The gate lets in whom its rule
+// admits and tells the others to talk to the owner; another gate stays
+// closed.
+func TestASuspendedWorkspaceGoesToTheGateThatReceivesIt(t *testing.T) {
+	w := newGateWorld(t, func(g *gateExt) { g.receivesSuspended = true })
+	if _, err := w.st.SetWorkspaceStatus(context.Background(), "acme", store.WorkspaceSuspended); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	ana := w.session(t, "acme", w.ana)
+	toGate := "/.shpyrd/gate?name=billing"
+
+	for _, sid := range []string{ana, ""} {
+		if rec := w.get(t, "acme.shpyrd.test", "/projects/shop", sid); rec.Code != http.StatusFound || rec.Header().Get("Location") != toGate {
+			t.Errorf("a dashboard page (session %t) = %d %s", sid != "", rec.Code, rec.Header().Get("Location"))
+		}
+	}
+	// Not signed in: the gate sends to sign-in, whose page loads.
+	rec := w.get(t, "acme.shpyrd.test", toGate, "")
+	signIn := rec.Header().Get("Location")
+	if rec.Code != http.StatusFound || !strings.HasPrefix(signIn, "/?next=") {
+		t.Fatalf("the gate, signed out = %d %s", rec.Code, signIn)
+	}
+	if rec := w.get(t, "acme.shpyrd.test", signIn, ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
+		t.Errorf("the sign-in page on the way to the gate = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := w.get(t, "acme.shpyrd.test", signIn, ana); rec.Code != http.StatusFound || rec.Header().Get("Location") != toGate {
+		t.Errorf("the sign-in page, signed in = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/_next/static/chunks/app.js", ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
+		t.Errorf("the dashboard's files = %d", rec.Code)
+	}
+	api := func(path, sid string) int {
+		req := httptest.NewRequest("GET", "https://acme.shpyrd.test"+path, nil)
+		req.Host = "acme.shpyrd.test"
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+		rec := httptest.NewRecorder()
+		w.s.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := api("/api/me", ana); code != http.StatusOK {
+		t.Errorf("who is signed in = %d", code)
+	}
+	if code := api("/api/auth/providers", ""); code != http.StatusOK {
+		t.Errorf("the sign-in methods = %d", code)
+	}
+	if code := api("/api/projects", ana); code != http.StatusForbidden {
+		t.Errorf("the rest of the API = %d", code)
+	}
+
+	// The owner goes through; the gate stays open to them.
+	cookie := w.enter(t, "acme.shpyrd.test", ana)
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Errorf("the owner at the gate = %d %s", rec.Code, rec.Body.String())
+	}
+	// A member is told to talk to the owner.
+	rec = w.get(t, "acme.shpyrd.test", toGate, w.session(t, "acme", w.carla))
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "owner") {
+		t.Errorf("a member at the gate = %d %s", rec.Code, rec.Body.String())
+	}
+	// Another gate stays closed.
+	rec = w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=reports", ana)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "suspended") {
+		t.Errorf("another gate = %d %s", rec.Code, rec.Body.String())
 	}
 }
 

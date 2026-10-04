@@ -166,14 +166,14 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 	ws := s.workspaceOfApp(ctx, app)
-	if err := s.checkPlanStorage(ctx, ws, extra); err != nil {
+	if err := s.checkStorageLimit(ctx, ws, extra); err != nil {
 		return err
 	}
 	after := app.DeepCopy()
 	after.Spec = restored.Spec
 	after.Spec.ID = app.Spec.ID
 	after.Spec.Slug = app.Spec.Slug
-	return s.checkPlan(ctx, ws, after)
+	return s.checkLimits(ctx, ws, after)
 }
 
 func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, m *projectArchiveMetadata) error {

@@ -14,7 +14,7 @@ shpyrd is developed in the open at [github.com/shpyrd-io/shpyrd](https://github.
 
 ## Development environment
 
-Docker, Go 1.27 and Node.js 22 (for the applications, the design library and the website). Run `npm install` once at the repository root: the applications, `design/ui` and `content/` are one npm workspace.
+Docker, Go 1.27 and Node.js 24, the version in `.nvmrc` (`nvm use`; for the applications, the design library and the website). Run `npm install` once at the repository root: the applications, `design/ui` and `content/` are one npm workspace. Another Node brings another npm, which writes `package-lock.json` in another order; npm warns when the version is not 24.
 
 ```shell
 git clone https://github.com/shpyrd-io/shpyrd && cd shpyrd

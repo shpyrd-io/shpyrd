@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shpyrd-io/shpyrd/internal/cli"
+	"github.com/shpyrd-io/shpyrd/pkg/ctl"
 	"github.com/shpyrd-io/shpyrd/pkg/version"
 )
 
 func main() {
-	cli.Version = version.Version
-	cmd := cli.NewCtl()
+	ctl.SetVersion(version.Version)
+	cmd := ctl.New(enterprise()...)
 	if err := cmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

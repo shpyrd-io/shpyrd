@@ -41,7 +41,7 @@ func TestPostgresSleepStateMachine(t *testing.T) {
 		Subsets:    []corev1.EndpointSubset{{Addresses: []corev1.EndpointAddress{{IP: "10.0.0.9"}}}},
 	}
 	base, c := newTestReconciler(t, pg, cluster, gateway, rw)
-	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system"}
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", SleepAllowed: always}
 	ctx := context.Background()
 
 	reconcile := func() {
@@ -186,7 +186,7 @@ func TestPostgresSleepNeedsGateway(t *testing.T) {
 	cluster.SetName("db")
 	cluster.SetNamespace("app-shop")
 	base, c := newTestReconciler(t, pg, cluster)
-	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system"}
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", SleepAllowed: always}
 	ctx := context.Background()
 	if err := r.reconcilePostgresSleep(ctx, pg); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestPostgresSleepHANeverSleeps(t *testing.T) {
 		Spec:       shpyrdv1.PostgresSpec{Storage: &storage, Instances: ptr.To[int32](3), Sleep: &shpyrdv1.PostgresSleepSpec{After: "5m"}},
 	}
 	base, c := newTestReconciler(t, pg)
-	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system"}
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", SleepAllowed: always}
 	if err := r.reconcilePostgresSleep(context.Background(), pg); err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestPostgresSleepHANeverSleeps(t *testing.T) {
 // its own wins over the plan.
 func TestPostgresSleepFollowsThePlanDefault(t *testing.T) {
 	ctx := context.Background()
-	r := &PostgresReconciler{PlanSleepDefault: func(_ context.Context, namespace string) string {
+	r := &PostgresReconciler{SleepAllowed: always, WorkspaceSleepDefault: func(_ context.Context, namespace string) string {
 		if namespace == "p-free" {
 			return "10m0s"
 		}
@@ -250,5 +250,26 @@ func TestPostgresSleepFollowsThePlanDefault(t *testing.T) {
 	// Without the lookup there are no plan defaults at all.
 	if after, _, _ := (&PostgresReconciler{}).effectiveSleep(ctx, own(nil, "p-free")); after != 0 {
 		t.Errorf("no lookup, no default: %s", after)
+	}
+}
+
+// always opens the sleep gate (the enterprise's auto sleep, licensed).
+func always() bool { return true }
+
+// Without auto sleep a database never sleeps by itself, its own policy or
+// its workspace's; one put to sleep by hand still is.
+func TestDatabasesDoNotSleepByThemselvesWithoutAutoSleep(t *testing.T) {
+	ctx := context.Background()
+	pg := &shpyrdv1.Postgres{Spec: shpyrdv1.PostgresSpec{Sleep: &shpyrdv1.PostgresSleepSpec{After: "10m"}}}
+	r := &PostgresReconciler{WorkspaceSleepDefault: func(context.Context, string) string { return "10m" }}
+	if after, suspended, _ := r.effectiveSleep(ctx, pg); after != 0 || suspended {
+		t.Errorf("its own policy without auto sleep: %s %v", after, suspended)
+	}
+	if after, _, _ := r.effectiveSleep(ctx, &shpyrdv1.Postgres{}); after != 0 {
+		t.Errorf("the workspace's default without auto sleep: %s", after)
+	}
+	pg.Spec.Sleep.Suspended = true
+	if _, suspended, _ := r.effectiveSleep(ctx, pg); !suspended {
+		t.Error("a database put to sleep by hand woke up")
 	}
 }

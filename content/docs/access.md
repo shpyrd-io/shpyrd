@@ -43,7 +43,7 @@ The first five are granted **per project**, to a user (by email) or to a **team*
 
 ## Your company's sign-in
 
-Every workspace can bring its own sign-in: on **Workspace › Sign-in**, owners and admins add Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider (Okta, Keycloak, Auth0…) with the callback URL the page shows. The method appears on **this workspace's** login page only; groups of the provider map to teams. The platform's methods stay offered until you switch them off — do that once your company's method works, and only it can sign in here. Claim your email domain (same tab) and route it to the method: the login page then asks for the work email first and sends people straight to your company's sign-in, no chooser.
+Every workspace can bring its own sign-in (an enterprise feature: always on shpyrd cloud, with a license on a self-hosted install): on **Workspace › Sign-in**, owners and admins add Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider (Okta, Keycloak, Auth0…) with the callback URL the page shows. The method appears on **this workspace's** login page only; groups of the provider map to teams. The platform's methods stay offered until you switch them off — do that once your company's method works, and only it can sign in here. Claim your email domain (same tab) and route it to the method: the login page then asks for the work email first and sends people straight to your company's sign-in, no chooser.
 
 ```shell
 shpyrd sso add google --client-id ... --client-secret @secret.txt --hosted-domain acme.com
@@ -53,6 +53,10 @@ shpyrd sso platform-methods off
 ```
 
 On a self-hosted install the platform's own methods are managed by the operator at the console (`shpyrd-ctl auth connector add`), and offered to every workspace.
+
+## The console
+
+The console, the operator's application at its own address, has its own people: the console users, a list apart from every workspace's people (the console's **Console users** page, or `shpyrd-ctl console-users add <email>`). Each is an admin of the console. They sign in with email and password or, with a license, through a method of the console's login page; either way, the address must be on the list. The admin token (`shpyrd cluster dashboard`) always opens it. A new install's list starts with the owners and admins of its workspace.
 
 ## Teams and members
 

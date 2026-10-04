@@ -5,6 +5,8 @@ description: Every workspace is a remote MCP server. Add it to Claude, sign in t
 
 Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.app/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
 
+The MCP server is an enterprise feature: always on shpyrd cloud, and on a self-hosted install with a license (`shpyrd-ctl license set`); without one, `/mcp` answers that it needs a license and the AI assistants card is not shown.
+
 ## Connecting Claude
 
 1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp` - on shpyrd cloud, `https://acme.shpyrd.app/mcp`).

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,15 +49,26 @@ func (s *Server) rolesOf(c *gin.Context) (authz.Roles, error) {
 }
 
 // rolesAt resolves an identity's roles for the request's door (RFC-0080).
-// The console realm reads the operator's default workspace in bootstrap
-// mode; a workspace host reads that workspace, enforced from birth, and
-// platform admins own operator workspaces without a membership.
+// The console has its own users; a workspace host reads that workspace,
+// enforced from birth, and console users own operator workspaces without
+// a membership. An internal host (the kubeconfig proxy, callers inside the
+// cluster, a server with no console host) is the default workspace with
+// the operator's rights, read as it always was; console users are its
+// platform admins too.
 func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
+	ctx := c.Request.Context()
 	t, err := s.door(c)
-	if err != nil || t.AtConsole() {
-		return s.authz.RolesIn(c.Request.Context(), "", id)
+	if err == nil && t.Internal {
+		roles, err := s.authz.RolesIn(ctx, "", id)
+		if err == nil && roles.Platform != shpyrdv1.RolePlatformAdmin && s.authz.ConsoleAdmin(ctx, id) {
+			roles.Platform = shpyrdv1.RolePlatformAdmin
+		}
+		return roles, err
 	}
-	return s.rolesInWorkspace(c.Request.Context(), t.Workspace, id)
+	if err != nil || t.AtConsole() {
+		return s.authz.ConsoleRoles(ctx, id)
+	}
+	return s.rolesInWorkspace(ctx, t.Workspace, id)
 }
 
 // rolesInWorkspace is someone's roles in a workspace, as its own door would
@@ -66,11 +79,8 @@ func (s *Server) rolesInWorkspace(ctx context.Context, ws *store.Workspace, id e
 		return roles, err
 	}
 	if ws.OwnedByOperator() && roles.Workspace == "" && !roles.Suspended {
-		// The operator's workspaces follow the console's roles, bootstrap
-		// included: on a fresh cluster the first person through the
-		// operator's doors is its admin everywhere, until the first role
-		// is written — the same rule the console applies to itself.
-		console, err := s.authz.RolesIn(ctx, "", id)
+		// The operator's workspaces follow the console: its users own them.
+		console, err := s.authz.ConsoleRoles(ctx, id)
 		if err != nil {
 			return roles, err
 		}
@@ -347,6 +357,17 @@ func (s *Server) requireTenant() gin.HandlerFunc {
 		case t.Workspace == nil:
 			// The console's own routes.
 		case t.Workspace.Status == store.WorkspaceSuspended && !t.Internal:
+			if g, ok := s.suspendedGate(); ok {
+				switch s.atSuspended(c, t.Workspace) {
+				case suspendedPass:
+					c.Next()
+					return
+				case suspendedToGate:
+					c.Redirect(http.StatusFound, edgePathPrefix+"gate?"+url.Values{"name": {g.Name}}.Encode())
+					c.Abort()
+					return
+				}
+			}
 			if asJSON {
 				abort(c, http.StatusForbidden, errors.New("this workspace is suspended"))
 			} else {
@@ -357,6 +378,62 @@ func (s *Server) requireTenant() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// What a suspended workspace does with a request when a gate receives its
+// people (ext.Gate.OpenWhenSuspended).
+const (
+	suspendedRefuse = iota
+	suspendedPass
+	suspendedToGate
+)
+
+// atSuspended lets through, at a suspended workspace, what it takes to sign
+// in and go to the gate: the gate's way in, sign-in and who is signed in,
+// the dashboard's files, and its sign-in page on the way to the gate. Any
+// other page of the dashboard goes to the gate; the rest of the API is
+// refused.
+func (s *Server) atSuspended(c *gin.Context, ws *store.Workspace) int {
+	p := c.Request.URL.Path
+	switch {
+	case p == edgePathPrefix+"gate":
+		return suspendedPass
+	case strings.HasPrefix(p, "/api/auth/"), p == "/api/config", p == "/api/me", p == "/api/workspace/logo":
+		return suspendedPass
+	case strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, edgePathPrefix) || wantsJSON(c):
+		return suspendedRefuse
+	case c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead:
+		return suspendedRefuse
+	case strings.HasPrefix(p, "/_next/") || path.Ext(p) != "":
+		return suspendedPass
+	}
+	// The sign-in page, for someone not signed in here yet: the gate sent
+	// them, and they go back to it once signed in.
+	if p == "/" && c.Query("next") != "" {
+		sid, _ := c.Cookie(sessionCookie)
+		if _, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID); !ok {
+			return suspendedPass
+		}
+	}
+	return suspendedToGate
+}
+
+// toSuspendedGate sends a page of a suspended workspace's dashboard to the
+// gate that receives it; the dashboard is served past the tenant check.
+func (s *Server) toSuspendedGate(c *gin.Context) bool {
+	g, ok := s.suspendedGate()
+	if !ok {
+		return false
+	}
+	t, err := s.door(c)
+	if err != nil || t.Workspace == nil || t.Internal || t.Workspace.Status != store.WorkspaceSuspended {
+		return false
+	}
+	if s.atSuspended(c, t.Workspace) != suspendedToGate {
+		return false
+	}
+	c.Redirect(http.StatusFound, edgePathPrefix+"gate?"+url.Values{"name": {g.Name}}.Encode())
+	return true
 }
 
 // storeErr maps store errors to HTTP statuses.

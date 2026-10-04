@@ -21,6 +21,23 @@ UI is two applications served by host)
 
 ---
 
+
+## Amendment (2026-10-04)
+
+- **Console users.** The console has its own people: a list of emails
+  (`console_users`), each an admin of the console, managed on its Console users page or
+  with `shpyrd-ctl console-users`. They sign in with email and password or through a
+  method of the console's realm; a provider only proves who someone is, and the email
+  must be on the list. The admin token always opens it. While the list is empty and the
+  workspace's roles are not enforced, the first admin is let in, as at install. Migration
+  `000021_console_users` filled the list with the owners and admins of the default
+  workspace. The console's Accounts page still lists every local account.
+- **The console's Workspaces page** left the core: the open-source console keeps a
+  Workspace link to its one workspace. A binary built on the core may ship applications of
+  its own beside the two (a folder each in the UI directory), which the console serves
+  under `/apps/<folder>/`, and link them from the console's sidebar with an `ext.Link` of
+  area `console`.
+
 ## Summary
 
 The platform has two kinds of users and today one application for both. The **operator**

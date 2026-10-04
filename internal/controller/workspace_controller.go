@@ -159,6 +159,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err := r.syncQuotas(ctx, all); err != nil {
 		logger.Error(err, "workspace quotas")
 	}
+	// What a suspended workspace runs stops; what an activated one ran
+	// comes back.
+	if err := r.syncSuspension(ctx, all); err != nil {
+		logger.Error(err, "workspace suspension")
+	}
 	if pending {
 		return ctrl.Result{RequeueAfter: readinessRetry}, nil
 	}

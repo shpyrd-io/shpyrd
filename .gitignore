@@ -22,6 +22,8 @@ coverage
 
 # local certificates and state
 *.pem
+# A public key the license tests verify with is no secret.
+!ee/licensing/testdata/*.public.pem
 *.tfstate
 *.tfstate.*
 .terraform
@@ -45,7 +47,7 @@ terraform.tfvars
 *-vpn.conf
 # terraform (contrib/*/terraform/backups): S3 credentials (RFC-0037)
 *-backups.env
-shpyrd-ctl
+/shpyrd-ctl
 contrib/oci/terraform/backups/shpyrd-dev-registry.env
 contrib/oci/terraform/backups/tfplan
 /pg-gateway

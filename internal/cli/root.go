@@ -95,7 +95,7 @@ func (t *apiTransport) Exec(ctx context.Context, project, kind, name string, arg
 }
 
 // New builds the root command.
-func New() *cobra.Command {
+func New(extra ...ext.Extension) *cobra.Command {
 	g := &globalFlags{}
 	root := &cobra.Command{
 		Use:           "shpyrd",
@@ -138,14 +138,13 @@ func New() *cobra.Command {
 	root.AddCommand(newMembersCmd(g))
 	root.AddCommand(newPeopleCmd(g))
 	root.AddCommand(newWorkspaceCmd(g))
-	root.AddCommand(newBillingCmd(g))
 	root.AddCommand(newSleepCmd(g))
 	root.AddCommand(newInviteCmd(g))
 	root.AddCommand(newInvitationsCmd(g))
 	// Commands contributed by extensions (they explain themselves when the
 	// extension is not enabled on the cluster): the developer's here (pg,
 	// redis), the operator's in shpyrd-ctl (users, auth, object-storage).
-	addExtensionCommands(root, g, ext.AudienceDeveloper)
+	addExtensionCommands(root, g, ext.AudienceDeveloper, extra...)
 	root.AddCommand(newLogsCmd(g))
 	root.AddCommand(newShellCmd(g))
 	root.AddCommand(newRunCmd(g))
@@ -181,11 +180,12 @@ func findCommand(parent *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// addExtensionCommands mounts the extension commands of one audience.
-// Extensions may share a top-level command (`shpyrd-ctl auth`): the later
-// ones add their subcommands to the first.
-func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string) {
-	for _, x := range all.All() {
+// addExtensionCommands mounts the extension commands of one audience: the
+// built-in extensions' and those given. Extensions may share a top-level
+// command (`shpyrd-ctl auth`): the later ones add their subcommands to the
+// first.
+func addExtensionCommands(root *cobra.Command, g *globalFlags, audience string, extra ...ext.Extension) {
+	for _, x := range append(all.All(), extra...) {
 		for _, c := range x.CLI(g) {
 			if ext.Audience(c) != audience {
 				continue

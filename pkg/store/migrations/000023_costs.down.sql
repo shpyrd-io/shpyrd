@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS cost_drains;
+DROP TABLE IF EXISTS cost_lines;

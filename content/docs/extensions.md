@@ -16,18 +16,21 @@ shpyrd extensions disable auth-local --yes
 ```
 NAME        STATUS   COMPONENT  DESCRIPTION
 auth-local  enabled  dex        Sign in with email and password: a bundled Dex issuer stores local accounts (shpyrd users add)
-auth-oidc   enabled  -          Sign in with a company identity provider: Okta or any OpenID Connect issuer (shpyrd auth oidc set)
 postgres        enabled  cnpg            PostgreSQL databases for projects (CloudNativePG), attached to apps as DATABASE_URL (shpyrd pg create)
 redis           enabled  -               Redis-compatible caches and queues for projects (Valkey or Redis), attached to apps as REDIS_URL (shpyrd redis create)
 object-storage  enabled  object-storage  S3-compatible object store in the cluster (Garage) with a key per consumer: the backing store for Postgres backups and platform backups
 mail            enabled  -               Send email from the platform: invitations and notifications over SMTP (shpyrd-ctl mail set)
 sleep           disabled keda, keda-http Scale web processes to zero after a quiet period and wake them on the first request: KEDA and its HTTP add-on (shpyrd sleep)
-opencost        disabled opencost        Infrastructure cost allocation via OpenCost — operator economics dashboard (RFC-0075)
+opencost        disabled opencost        Infrastructure cost allocation via OpenCost: the estimate behind the console's Costs (enterprise)
 ```
 
 Enabling installs the extension's component with the same runlevel installer as the base stack (ordering, readiness waits, install record) and restarts the server with the extension; the choice is recorded in the cluster, so `shpyrd cluster init` and `shpyrd cluster status` keep it. Disabling removes the component and is refused while resources of the extension still exist. The **Cluster** page lists every extension with its state.
 
 Extensions contribute an installer component, resource types with controllers, API routes, CLI commands and login providers through a few small Go interfaces. Databases (Postgres, Redis) and shared storage arrive as extensions.
+
+## Enterprise features
+
+Some features are the enterprise's: sign-in through GitHub, Google, Microsoft or any OpenID Connect provider, auto sleep, costs and cost drains, and the MCP server. Their source is public, in `ee/` of the repository, under the shpyrd Enterprise License; they are built into the released binaries and switch on with a license: `shpyrd-ctl license set <file>`, shown on the console's Settings page. A license switches them all on until its expiry date, and off on that day. One bought from shpyrd renews online: a week before it expires the cluster sends it back, with the last 30 days of what it used and cost (summed, nothing per project), and installs the next one; the console's Settings › License shows the last renewal and opens your billing account. Without one the platform runs as it does today with email and password sign-in, and without sleep, costs or MCP. On shpyrd cloud they are always on.
 
 ## Object storage
 

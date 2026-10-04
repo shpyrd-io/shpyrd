@@ -41,7 +41,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"cost_drains", "cost_lines", "console_users", "settings", "project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -491,45 +491,11 @@ func TestOAuthRecords(t *testing.T) {
 	}
 }
 
-func TestBillingStore(t *testing.T) {
+func TestUsageStore(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
-			// Plans: create, list, get, assign to workspace, history.
-			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, StorageGiBMonth: 0.10, MinMonthly: 5.0, SleepAfter: "15m0s", SleepResuming: "page", PostgresSleepAfter: "10m0s", MonthlyBudget: 0.5, SelfServe: true, Limits: &Limits{Projects: 1, Memory: "256Mi"}, Free: true, CostBudget: 0.5}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.CreatePlan(ctx, Plan{Name: "starter"}); !errors.Is(err, ErrConflict) {
-				t.Error("duplicate plan: want conflict")
-			}
-			plans, _ := s.ListPlans(ctx)
-			if len(plans) != 1 || plans[0].Name != "starter" {
-				t.Fatalf("list plans: %+v", plans)
-			}
-			pl, err := s.GetPlan(ctx, "starter")
-			if err != nil || pl.CPUHour != 0.02 || pl.SleepAfter != "15m0s" || pl.SleepResuming != "page" || pl.PostgresSleepAfter != "10m0s" || pl.MonthlyBudget != 0.5 || !pl.SelfServe || pl.Limits == nil || pl.Limits.Projects != 1 || !pl.Free || pl.CostBudget != 0.5 {
-				t.Fatalf("get plan: %+v %v", pl, err)
-			}
-			wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter")
-			if err != nil || wp.PlanName != "starter" {
-				t.Fatalf("assign plan: %+v %v", wp, err)
-			}
-			cur, err := s.WorkspacePlan(ctx, DefaultWorkspace)
-			if err != nil || cur.PlanName != "starter" {
-				t.Fatalf("current plan: %+v %v", cur, err)
-			}
-			// Assign again replaces.
-			if _, err := s.CreatePlan(ctx, Plan{Name: "grow", CPUHour: 0.015}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.AssignPlan(ctx, DefaultWorkspace, "grow"); err != nil {
-				t.Fatal(err)
-			}
-			hist, _ := s.WorkspacePlanHistory(ctx, DefaultWorkspace)
-			if len(hist) != 2 {
-				t.Errorf("history: %+v", hist)
-			}
 			// Usage buckets: write + query (dedup on conflict). The metering
 			// loop writes with the workspace slug (off the namespace label);
 			// the store resolves it to the id.
@@ -607,24 +573,6 @@ func TestBillingStore(t *testing.T) {
 			// The recent bucket is untouched.
 			if recent, _ := s.QueryBuckets(ctx, DefaultWorkspace, "", now.Add(-time.Minute), now.Add(10*time.Minute)); len(recent) != 1 {
 				t.Errorf("recent buckets after rollup: %+v", recent)
-			}
-			// Invoice lines: upsert.
-			line := InvoiceLine{WorkspaceID: ws.ID, PeriodStart: now, PeriodEnd: now.Add(time.Hour), Component: "web", Metric: MetricCPUUsed, Quantity: 3600, Unit: UnitCoreSeconds, UnitPrice: 0.02, GrossAmount: 0.02, Quality: QualityComplete, Revision: 1}
-			if err := s.UpsertInvoiceLine(ctx, line); err != nil {
-				t.Fatal(err)
-			}
-			lines, _ := s.QueryInvoiceLines(ctx, DefaultWorkspace, now.Add(-time.Minute), now.Add(2*time.Hour), nil)
-			if len(lines) != 1 || lines[0].GrossAmount != 0.02 {
-				t.Errorf("invoice lines: %+v", lines)
-			}
-			// COGS bucket.
-			cogs := COGSBucket{WorkspaceID: ws.ID, Project: "shop", PeriodStart: now, PeriodEnd: now.Add(time.Hour), CPUCost: 0.005, TotalCost: 0.005, Currency: "USD", Quality: QualityComplete}
-			if err := s.WriteCOGSBucket(ctx, cogs); err != nil {
-				t.Fatal(err)
-			}
-			cb, _ := s.QueryCOGSBuckets(ctx, DefaultWorkspace, now.Add(-time.Minute), now.Add(2*time.Hour))
-			if len(cb) != 1 || cb[0].CPUCost != 0.005 {
-				t.Errorf("cogs: %+v", cb)
 			}
 			// Sleep events.
 			dur := 42
@@ -1068,14 +1016,11 @@ func TestProjectsStore(t *testing.T) {
 			if err := s.WriteBuckets(ctx, []UsageBucket{row("shop", t0, 1), row("shop", t0.Add(5*time.Minute), 2), row("shop", t0.Add(10*time.Minute), 3), row(short, t0.Add(10*time.Minute), 30)}); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.WriteCOGSBucket(ctx, COGSBucket{WorkspaceID: DefaultWorkspace, Project: "shop", PeriodStart: t0, PeriodEnd: t0.Add(time.Hour), TotalCost: 1, Currency: "USD"}); err != nil {
-				t.Fatal(err)
-			}
 			if err := s.WriteSleepEvent(ctx, SleepEvent{WorkspaceID: DefaultWorkspace, Project: "shop", Component: "web", Event: "sleep", At: t0}); err != nil {
 				t.Fatal(err)
 			}
 			moved, err := s.RekeyProject(ctx, DefaultWorkspace, "shop", id)
-			if err != nil || moved != 5 {
+			if err != nil || moved != 4 {
 				t.Fatalf("rekey moved %d, err %v", moved, err)
 			}
 			buckets, err := s.QueryBuckets(ctx, DefaultWorkspace, short, t0, t0.Add(time.Hour))
@@ -1089,10 +1034,6 @@ func TestProjectsStore(t *testing.T) {
 			}
 			if left, _ := s.QueryBuckets(ctx, DefaultWorkspace, "shop", t0, t0.Add(time.Hour)); len(left) != 0 {
 				t.Errorf("legacy rows left: %d", len(left))
-			}
-			cogs, _ := s.QueryCOGSBuckets(ctx, DefaultWorkspace, t0, t0.Add(time.Hour))
-			if len(cogs) != 1 || cogs[0].Project != short {
-				t.Errorf("cogs after rekey: %+v", cogs)
 			}
 			ev, _ := s.QuerySleepEvents(ctx, DefaultWorkspace, short, t0.Add(-time.Minute), t0.Add(time.Hour))
 			if len(ev) != 1 {
@@ -1137,71 +1078,312 @@ func TestProjectIcons(t *testing.T) {
 	}
 }
 
-// A plan's prices change by versions: a later version with its effective
-// date, the name answering the version in force, every version kept so an
-// old month is priced as it was.
-func TestPlanVersions(t *testing.T) {
+// The console's own users: an email list, case-insensitive, added once.
+func TestConsoleUsers(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
-			jan := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-			v1, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.02, MemoryGiBHour: 0.003, EffectiveFrom: jan})
-			if err != nil {
+			if list, err := s.ListConsoleUsers(ctx); err != nil || len(list) != 0 {
+				t.Fatalf("fresh: %v %v", list, err)
+			}
+			u, err := s.AddConsoleUser(ctx, " Ana@Example.test ", "ops@example.test")
+			if err != nil || u.Email != "ana@example.test" || u.AddedBy != "ops@example.test" || u.AddedAt.IsZero() {
+				t.Fatalf("add: %+v %v", u, err)
+			}
+			if again, err := s.AddConsoleUser(ctx, "ana@example.test", "someone else"); err != nil || again.AddedBy != "ops@example.test" {
+				t.Fatalf("add again keeps the first: %+v %v", again, err)
+			}
+			if _, err := s.AddConsoleUser(ctx, "bob@example.test", ""); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.CreatePlan(ctx, Plan{Name: "starter", CPUHour: 0.04, EffectiveFrom: jan.AddDate(0, 1, 0)}); !errors.Is(err, ErrConflict) {
-				t.Errorf("create with a name in use: %v, want conflict (versions go through AddPlanVersion)", err)
+			if ok, err := s.IsConsoleUser(ctx, "ANA@example.test"); err != nil || !ok {
+				t.Fatalf("is ana: %v %v", ok, err)
 			}
-			if _, err := s.AddPlanVersion(ctx, Plan{Name: "nope", CPUHour: 1, EffectiveFrom: jan}); !errors.Is(err, ErrNotFound) {
-				t.Errorf("version of an unknown plan: %v", err)
+			list, err := s.ListConsoleUsers(ctx)
+			if err != nil || len(list) != 2 || list[0].Email != "ana@example.test" || list[1].Email != "bob@example.test" {
+				t.Fatalf("list: %+v %v", list, err)
 			}
-			if _, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.04, EffectiveFrom: jan}); !errors.Is(err, ErrConflict) {
-				t.Errorf("version not later than the last: %v, want conflict", err)
-			}
-			v2, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.04, MemoryGiBHour: 0.03, EffectiveFrom: jan.AddDate(0, 2, 0)})
-			if err != nil || v2.ID == v1.ID {
-				t.Fatalf("second version: %+v %v", v2, err)
-			}
-			// By name, the version in force (March is past); by id, that version.
-			if cur, err := s.GetPlan(ctx, "starter"); err != nil || cur.ID != v2.ID || cur.CPUHour != 0.04 {
-				t.Errorf("current by name = %+v %v", cur, err)
-			}
-			if old, err := s.GetPlan(ctx, v1.ID); err != nil || old.CPUHour != 0.02 {
-				t.Errorf("by id = %+v %v", old, err)
-			}
-			// A version for the future is not in force yet.
-			future, err := s.AddPlanVersion(ctx, Plan{Name: "starter", CPUHour: 0.08, EffectiveFrom: time.Now().AddDate(1, 0, 0)})
-			if err != nil {
+			if err := s.RemoveConsoleUser(ctx, "Ana@example.test"); err != nil {
 				t.Fatal(err)
 			}
-			if cur, _ := s.GetPlan(ctx, "starter"); cur.ID != v2.ID {
-				t.Errorf("a future version must not be in force: %+v", cur)
+			if err := s.RemoveConsoleUser(ctx, "ana@example.test"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("remove twice: %v", err)
 			}
-			list, _ := s.ListPlans(ctx)
-			if len(list) != 1 || list[0].ID != v2.ID {
-				t.Errorf("list shows one row per name, the version in force: %+v", list)
+			if ok, _ := s.IsConsoleUser(ctx, "ana@example.test"); ok {
+				t.Fatal("still on the list")
 			}
-			versions, err := s.PlanVersions(ctx, "starter")
-			if err != nil || len(versions) != 3 || versions[0].ID != v1.ID || versions[2].ID != future.ID {
-				t.Errorf("versions = %+v %v", versions, err)
+			if _, err := s.AddConsoleUser(ctx, " ", ""); err == nil {
+				t.Fatal("an empty email was added")
 			}
-			if _, err := s.PlanVersions(ctx, "nope"); !errors.Is(err, ErrNotFound) {
-				t.Errorf("versions of unknown: %v", err)
+		})
+	}
+}
+
+// Migration 000021 copies the owners and admins of the operator's default
+// workspace, the console's admins until then, onto the console's list.
+func TestConsoleUsersMigrationCopiesTheConsoleAdmins(t *testing.T) {
+	url := os.Getenv("SHPYRD_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("SHPYRD_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	p, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	dropAll(t, p)
+	if err := p.Migrate(ctx, DefaultWorkspaceSpec{Slug: DefaultWorkspace, Name: "test platform", Address: "example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateWorkspace(ctx, Workspace{Slug: "internal", Name: "Internal", Address: "internal.example.test", Owner: WorkspaceOwnerOperator}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateWorkspace(ctx, Workspace{Slug: "acme", Name: "Acme", Address: "acme.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct{ ws, email, role string }{
+		{"internal", "Owner@Example.test", WorkspaceRoleOwner},
+		{"internal", "admin@example.test", WorkspaceRoleAdmin},
+		{"internal", "member@example.test", WorkspaceRoleMember},
+		{DefaultWorkspace, "default-owner@example.test", WorkspaceRoleOwner},
+		{"acme", "customer@acme.test", WorkspaceRoleOwner},
+	} {
+		if _, err := p.PutMembership(ctx, m.ws, m.email, m.role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The operator had made "internal" the default workspace.
+	if err := p.SetSetting(ctx, SettingDefaultWorkspaceID, "internal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.pool.Exec(ctx, `DELETE FROM console_users`); err != nil {
+		t.Fatal(err)
+	}
+	sql, err := migrationFiles.ReadFile("migrations/000021_console_users.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	list, err := p.ListConsoleUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, u := range list {
+		got = append(got, u.Email+"/"+u.AddedBy)
+	}
+	if strings.Join(got, ",") != "admin@example.test/migration,owner@example.test/migration" {
+		t.Fatalf("console users after the migration: %v", got)
+	}
+}
+
+// Migration 000022: billing leaves. A workspace that followed a plan keeps
+// the ceilings and sleep defaults of the plan's version in force as its
+// own; one with its own keeps them; the budget state goes; the billing
+// tables are dropped.
+func TestBillingLeavesMigrationKeepsWhatPlansGave(t *testing.T) {
+	url := os.Getenv("SHPYRD_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("SHPYRD_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	p, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	dropAll(t, p)
+	if err := p.Migrate(ctx, DefaultWorkspaceSpec{Slug: DefaultWorkspace, Name: "test platform", Address: "example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"follows", "own", "none"} {
+		if _, err := p.CreateWorkspace(ctx, Workspace{Slug: slug, Name: slug, Address: slug + ".example.test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := p.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	// The billing tables as they were, with what the migration reads.
+	exec(`CREATE TABLE plans (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, effective_from TIMESTAMPTZ NOT NULL, limits JSONB, sleep_after TEXT NOT NULL DEFAULT '', sleep_resuming TEXT NOT NULL DEFAULT '', postgres_sleep_after TEXT NOT NULL DEFAULT '')`)
+	exec(`CREATE TABLE workspace_plans (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL, plan_id uuid NOT NULL, ends_at TIMESTAMPTZ)`)
+	exec(`CREATE TABLE invoice_lines (id uuid PRIMARY KEY)`)
+	exec(`CREATE TABLE cogs_buckets (workspace_id uuid)`)
+	exec(`INSERT INTO plans (name, effective_from, limits, sleep_after, sleep_resuming, postgres_sleep_after) VALUES
+		('free', now() - interval '30 days', '{"projects":4,"memory":"256Mi"}', '10m0s', 'page', '10m0s'),
+		('free', now() - interval '1 day', '{"projects":2,"memory":"512Mi","cpu":"2"}', '15m0s', 'page', '5m0s'),
+		('free', now() + interval '30 days', '{"projects":9}', '1h0m0s', 'wait', '')`)
+	for _, slug := range []string{"follows", "own"} {
+		exec(`INSERT INTO workspace_plans (workspace_id, plan_id) SELECT w.id, (SELECT id FROM plans ORDER BY effective_from LIMIT 1) FROM workspaces w WHERE w.slug = $1`, slug)
+	}
+	exec(`UPDATE workspaces SET settings = settings || '{"limits":{"projects":7},"budget":{"pausedMonth":"2026-09"}}' WHERE slug = 'own'`)
+
+	sql, err := migrationFiles.ReadFile("migrations/000022_billing_leaves.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+
+	follows, _ := p.Workspace(ctx, "follows")
+	if l := follows.Settings.Limits; l == nil || l.Projects != 2 || l.Memory != "512Mi" || l.CPU != "2" {
+		t.Errorf("follows: limits %+v, want the version in force", l)
+	}
+	if sl := follows.Settings.Sleep; sl == nil || *sl != (SleepDefaults{AppsAfter: "15m0s", AppsResuming: "page", DatabasesAfter: "5m0s"}) {
+		t.Errorf("follows: sleep %+v", sl)
+	}
+	own, _ := p.Workspace(ctx, "own")
+	if l := own.Settings.Limits; l == nil || l.Projects != 7 || l.Memory != "" {
+		t.Errorf("own: limits %+v, want its own kept", l)
+	}
+	var budget bool
+	if err := p.pool.QueryRow(ctx, `SELECT settings ? 'budget' FROM workspaces WHERE slug = 'own'`).Scan(&budget); err != nil || budget {
+		t.Errorf("own: the budget state stays (%v)", err)
+	}
+	none, _ := p.Workspace(ctx, "none")
+	if none.Settings.Limits != nil || none.Settings.Sleep != nil {
+		t.Errorf("none: %+v %+v, want nothing", none.Settings.Limits, none.Settings.Sleep)
+	}
+	for _, table := range []string{"plans", "workspace_plans", "invoice_lines", "cogs_buckets"} {
+		var exists bool
+		if err := p.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil || exists {
+			t.Errorf("table %s still there (%v)", table, err)
+		}
+	}
+}
+
+// Cost lines are keyed by what they are about: a re-read with the same
+// numbers changes nothing, new numbers move changed_at, and a drain reads
+// what changed after its cursor, in order.
+func TestCostLines(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			h := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+			f := func(v float64) *float64 { return &v }
+			lines := []CostLine{
+				{Kind: CostEstimated, Source: "opencost", Start: h, End: h.Add(time.Hour), Project: "p1", Process: "web", Metric: "cpu", Quantity: f(0.5), Unit: "core-hours", Cost: f(0.01), Currency: "USD", Resource: "ocid1.instance.a", ResourceType: "node"},
+				{Kind: CostReal, Source: "oci", Start: h, End: h.Add(24 * time.Hour), Service: "Compute", SKU: "E5", Resource: "ocid1.instance.a", Cost: f(18.85), Currency: "BRL", Tags: map[string]string{"orcl-containerengine.NodePool": "ocid1.nodepool.x"}},
 			}
-			// The version in force at a time.
-			if got := PlanAt(versions, jan.AddDate(0, 1, 15)); got == nil || got.ID != v1.ID {
-				t.Errorf("February is priced by the first version: %+v", got)
+			if n, err := s.UpsertCostLines(ctx, lines); err != nil || n != 2 {
+				t.Fatalf("first write: %d %v", n, err)
 			}
-			if got := PlanAt(versions, jan.AddDate(0, 3, 0)); got == nil || got.ID != v2.ID {
-				t.Errorf("April is priced by the second: %+v", got)
+			got, err := s.QueryCostLines(ctx, CostQuery{From: h, To: h.Add(time.Hour)})
+			if err != nil || len(got) != 2 {
+				t.Fatalf("query: %d %v", len(got), err)
 			}
-			if got := PlanAt(versions, jan.AddDate(-1, 0, 0)); got == nil || got.ID != v1.ID {
-				t.Errorf("before every version, the earliest: %+v", got)
+			for _, l := range got {
+				if l.ID != CostLineID(l) || l.ChangedAt.IsZero() {
+					t.Errorf("line %+v", l)
+				}
+				if l.Kind == CostReal && (l.Tags["orcl-containerengine.NodePool"] != "ocid1.nodepool.x" || *l.Cost != 18.85) {
+					t.Errorf("real line %+v", l)
+				}
 			}
-			// The assignment follows the name: the version in force applies.
-			if wp, err := s.AssignPlan(ctx, DefaultWorkspace, "starter"); err != nil || wp.PlanName != "starter" {
-				t.Errorf("assign: %+v %v", wp, err)
+			if only, _ := s.QueryCostLines(ctx, CostQuery{From: h, To: h.Add(time.Hour), Kind: CostReal}); len(only) != 1 {
+				t.Errorf("by kind: %d", len(only))
+			}
+			all, _ := s.CostLinesChangedSince(ctx, time.Time{}, "", 10)
+			if len(all) != 2 {
+				t.Fatalf("changed since the start: %d", len(all))
+			}
+			cursorAt, cursorID := all[1].ChangedAt, all[1].ID
+			// The same numbers again: nothing changed, nothing to send.
+			if n, err := s.UpsertCostLines(ctx, lines); err != nil || n != 0 {
+				t.Fatalf("same again: %d %v", n, err)
+			}
+			if after, _ := s.CostLinesChangedSince(ctx, cursorAt, cursorID, 10); len(after) != 0 {
+				t.Fatalf("unchanged lines came back: %+v", after)
+			}
+			// The bill settles: the real line changes, and only it is new.
+			lines[1].Cost = f(19.10)
+			if n, err := s.UpsertCostLines(ctx, lines); err != nil || n != 1 {
+				t.Fatalf("revised: %d %v", n, err)
+			}
+			after, _ := s.CostLinesChangedSince(ctx, cursorAt, cursorID, 10)
+			if len(after) != 1 || after[0].Kind != CostReal || *after[0].Cost != 19.10 {
+				t.Fatalf("after the revision: %+v", after)
+			}
+			if first, _ := s.CostLinesChangedSince(ctx, time.Time{}, "", 1); len(first) != 1 {
+				t.Errorf("limit: %d", len(first))
+			}
+		})
+	}
+}
+
+// A cost drain records how far it got: lines sent move its cursor; a
+// failure counts and says why, and leaves the cursor where it was.
+func TestCostDrains(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			d, err := s.CreateCostDrain(ctx, CostDrain{Name: "finance", URL: "https://finance.example.test/costs", Headers: []string{"Authorization"}})
+			if err != nil || d.ID == "" {
+				t.Fatalf("create: %+v %v", d, err)
+			}
+			if _, err := s.CreateCostDrain(ctx, CostDrain{Name: "finance", URL: "https://x.test"}); !errors.Is(err, ErrConflict) {
+				t.Errorf("same name: %v", err)
+			}
+			at := time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC)
+			if err := s.RecordCostDelivery(ctx, d.ID, CostDelivery{At: at, Sent: 2, CursorAt: &at, CursorID: "cl_b"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RecordCostDelivery(ctx, d.ID, CostDelivery{At: at, Err: "503 from the receiver"}); err != nil {
+				t.Fatal(err)
+			}
+			list, _ := s.ListCostDrains(ctx)
+			if len(list) != 1 {
+				t.Fatalf("list: %+v", list)
+			}
+			got := list[0]
+			if got.Sent != 2 || got.Errors != 1 || got.Message != "503 from the receiver" || got.CursorAt == nil || !got.CursorAt.Equal(at) || got.CursorID != "cl_b" || len(got.Headers) != 1 || got.LastDeliveryAt == nil {
+				t.Errorf("drain: %+v", got)
+			}
+			if err := s.DeleteCostDrain(ctx, "finance"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteCostDrain(ctx, "finance"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("delete twice: %v", err)
+			}
+		})
+	}
+}
+
+// The open-source platform sees one workspace, the default one: another
+// added to the database by hand is not listed, found by slug, address or
+// host, and no workspace can be created through it.
+func TestOneWorkspaceShowsOnlyTheDefault(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := open(t)
+			if _, err := st.CreateWorkspace(ctx, Workspace{Slug: "byhand", Name: "By hand", Address: "byhand.example.test"}); err != nil {
+				t.Fatal(err)
+			}
+			one := OneWorkspace(st)
+			all, err := one.ListWorkspaces(ctx)
+			if err != nil || len(all) != 1 || all[0].Slug != DefaultWorkspace {
+				t.Fatalf("list = %+v %v", all, err)
+			}
+			if _, err := one.Workspace(ctx, "byhand"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("by slug: %v", err)
+			}
+			if _, err := one.WorkspaceByAddress(ctx, "byhand.example.test"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("by address: %v", err)
+			}
+			if _, err := one.Workspace(ctx, DefaultWorkspace); err != nil {
+				t.Errorf("the default one: %v", err)
+			}
+			if _, err := one.CreateWorkspace(ctx, Workspace{Slug: "another", Name: "Another"}); !errors.Is(err, ErrOneWorkspace) {
+				t.Errorf("create: %v", err)
 			}
 		})
 	}

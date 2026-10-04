@@ -455,7 +455,7 @@ func (s *Server) createApp(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	if limits := s.planOf(ctx, ws.Slug); limits != nil && limits.Projects > 0 {
+	if limits := s.limitsOf(ctx, ws.Slug); limits != nil && limits.Projects > 0 {
 		cat, err := s.catalog(ctx)
 		if err != nil {
 			abort(c, http.StatusBadGateway, err)
@@ -467,7 +467,7 @@ func (s *Server) createApp(c *gin.Context) {
 			return
 		}
 		if u.projects+1 > limits.Projects {
-			abort(c, http.StatusBadRequest, fmt.Errorf("plan limit: the plan allows %d projects and the workspace has %d", limits.Projects, u.projects))
+			abort(c, http.StatusBadRequest, fmt.Errorf("workspace limit: the workspace allows %d projects and has %d", limits.Projects, u.projects))
 			return
 		}
 	}
@@ -1166,7 +1166,7 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 		}
 		// The workspace's plan (RFC-0033): checked on the App as it would
 		// be stored, whatever the change was.
-		if err := s.checkPlan(c.Request.Context(), s.workspace(c), app); err != nil {
+		if err := s.checkLimits(c.Request.Context(), s.workspace(c), app); err != nil {
 			abort(c, http.StatusBadRequest, err)
 			return nil, err
 		}

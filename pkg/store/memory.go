@@ -46,6 +46,8 @@ type Memory struct {
 	projects    []Project
 	icons       map[string]projectIcon
 	settings    map[string]string
+	console     map[string]ConsoleUser
+	cost        *costsMemory
 	now         func() time.Time
 }
 
@@ -136,6 +138,53 @@ func (m *Memory) SetSetting(_ context.Context, key, value string) error {
 	}
 	m.settings[key] = value
 	return nil
+}
+
+func (m *Memory) ListConsoleUsers(_ context.Context) ([]ConsoleUser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []ConsoleUser{}
+	for _, u := range m.console {
+		out = append(out, u)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out, nil
+}
+
+func (m *Memory) AddConsoleUser(_ context.Context, email, by string) (*ConsoleUser, error) {
+	email = normEmail(email)
+	if email == "" {
+		return nil, errors.New("a console user needs an email")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.console == nil {
+		m.console = map[string]ConsoleUser{}
+	}
+	u, ok := m.console[email]
+	if !ok {
+		u = ConsoleUser{Email: email, AddedAt: m.now(), AddedBy: by}
+		m.console[email] = u
+	}
+	return &u, nil
+}
+
+func (m *Memory) RemoveConsoleUser(_ context.Context, email string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	email = normEmail(email)
+	if _, ok := m.console[email]; !ok {
+		return ErrNotFound
+	}
+	delete(m.console, email)
+	return nil
+}
+
+func (m *Memory) IsConsoleUser(_ context.Context, email string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.console[normEmail(email)]
+	return ok, nil
 }
 
 func (m *Memory) ws(slug string) (*Workspace, error) {
@@ -1483,15 +1532,11 @@ func (m *Memory) DeleteOAuthToken(_ context.Context, ws, id string) error {
 	return ErrNotFound
 }
 
-// ---- billing (RFC-0075) -------------------------------------------------------
+// ---- usage (RFC-0075) ---------------------------------------------------------
 
 type billingMemory struct {
-	plans       []Plan
-	wplans      []WorkspacePlan
 	buckets     []UsageBucket
 	hourly      []UsageBucket
-	invoices    []InvoiceLine
-	cogs        []COGSBucket
 	sleepEvents []SleepEvent
 }
 
@@ -1500,152 +1545,6 @@ func (m *Memory) billing() *billingMemory {
 		m.bill = &billingMemory{}
 	}
 	return m.bill
-}
-
-func (m *Memory) CreatePlan(_ context.Context, p Plan) (*Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, e := range m.billing().plans {
-		if e.Name == p.Name {
-			return nil, ErrConflict
-		}
-	}
-	return m.insertPlan(p), nil
-}
-
-func (m *Memory) AddPlanVersion(_ context.Context, p Plan) (*Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	found := false
-	for _, e := range m.billing().plans {
-		if e.Name != p.Name {
-			continue
-		}
-		found = true
-		if !p.EffectiveFrom.After(e.EffectiveFrom) {
-			return nil, ErrConflict
-		}
-	}
-	if !found {
-		return nil, ErrNotFound
-	}
-	return m.insertPlan(p), nil
-}
-
-func (m *Memory) insertPlan(p Plan) *Plan {
-	p.ID, p.CreatedAt = newID(), m.now()
-	if p.Currency == "" {
-		p.Currency = "USD"
-	}
-	if p.EffectiveFrom.IsZero() {
-		p.EffectiveFrom = m.now()
-	}
-	m.billing().plans = append(m.billing().plans, p)
-	out := p
-	return &out
-}
-
-func (m *Memory) ListPlans(_ context.Context) ([]Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	all := append([]Plan(nil), m.billing().plans...)
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Name != all[j].Name {
-			return all[i].Name < all[j].Name
-		}
-		return all[i].EffectiveFrom.Before(all[j].EffectiveFrom)
-	})
-	return currentPlans(all, m.now()), nil
-}
-
-func (m *Memory) GetPlan(ctx context.Context, nameOrID string) (*Plan, error) {
-	m.mu.Lock()
-	for _, p := range m.billing().plans {
-		if p.ID == nameOrID {
-			out := p
-			m.mu.Unlock()
-			return &out, nil
-		}
-	}
-	m.mu.Unlock()
-	versions, err := m.PlanVersions(ctx, nameOrID)
-	if err != nil {
-		return nil, err
-	}
-	cur := PlanAt(versions, m.now())
-	if cur == nil {
-		return nil, ErrNotFound
-	}
-	return cur, nil
-}
-
-func (m *Memory) PlanVersions(_ context.Context, name string) ([]Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []Plan
-	for _, p := range m.billing().plans {
-		if p.Name == name {
-			out = append(out, p)
-		}
-	}
-	if len(out) == 0 {
-		return nil, ErrNotFound
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].EffectiveFrom.Before(out[j].EffectiveFrom) })
-	return out, nil
-}
-func (m *Memory) AssignPlan(ctx context.Context, ws, nameOrID string) (*WorkspacePlan, error) {
-	p, err := m.GetPlan(ctx, nameOrID)
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w, err := m.ws(ws)
-	if err != nil {
-		return nil, err
-	}
-	now := m.now()
-	for i := range m.billing().wplans {
-		if m.billing().wplans[i].WorkspaceID == w.ID && m.billing().wplans[i].EndsAt == nil {
-			m.billing().wplans[i].EndsAt = &now
-		}
-	}
-	wp := WorkspacePlan{ID: newID(), WorkspaceID: w.ID, PlanID: p.ID, PlanName: p.Name, StartsAt: now}
-	m.billing().wplans = append(m.billing().wplans, wp)
-	out := wp
-	return &out, nil
-}
-func (m *Memory) WorkspacePlan(ctx context.Context, ws string) (*WorkspacePlan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w, err := m.ws(ws)
-	if err != nil {
-		return nil, err
-	}
-	for i := range m.billing().wplans {
-		wp := &m.billing().wplans[i]
-		if wp.WorkspaceID == w.ID && wp.EndsAt == nil {
-			out := *wp
-			return &out, nil
-		}
-	}
-	return nil, ErrNotFound
-}
-func (m *Memory) WorkspacePlanHistory(ctx context.Context, ws string) ([]WorkspacePlan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w, err := m.ws(ws)
-	if err != nil {
-		return nil, err
-	}
-	var out []WorkspacePlan
-	for _, wp := range m.billing().wplans {
-		if wp.WorkspaceID == w.ID {
-			out = append(out, wp)
-		}
-	}
-	return out, nil
 }
 
 func (m *Memory) WriteBuckets(_ context.Context, buckets []UsageBucket) error {
@@ -1770,84 +1669,6 @@ func (m *Memory) QueryBuckets(_ context.Context, ws, project string, from, to ti
 			continue
 		}
 		out = append(out, b)
-	}
-	return out, nil
-}
-func (m *Memory) UpsertInvoiceLine(_ context.Context, line InvoiceLine) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if line.ID == "" {
-		line.ID = newID()
-	}
-	if line.CreatedAt.IsZero() {
-		line.CreatedAt = m.now()
-	}
-	for i, e := range m.billing().invoices {
-		if e.WorkspaceID == line.WorkspaceID && e.PeriodStart.Equal(line.PeriodStart) &&
-			e.Component == line.Component && e.Metric == line.Metric && e.Revision == line.Revision {
-			m.billing().invoices[i] = line
-			return nil
-		}
-	}
-	m.billing().invoices = append(m.billing().invoices, line)
-	return nil
-}
-func (m *Memory) QueryInvoiceLines(_ context.Context, ws string, from, to time.Time, finalized *bool) ([]InvoiceLine, error) {
-	m.mu.Lock()
-	w, err := m.ws(ws)
-	m.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []InvoiceLine
-	for _, l := range m.billing().invoices {
-		if l.WorkspaceID != w.ID {
-			continue
-		}
-		if !l.PeriodStart.Before(to) || !l.PeriodEnd.After(from) {
-			continue
-		}
-		if finalized != nil && l.Finalized != *finalized {
-			continue
-		}
-		out = append(out, l)
-	}
-	return out, nil
-}
-func (m *Memory) WriteCOGSBucket(_ context.Context, b COGSBucket) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Accept a slug or an id, like the Postgres store.
-	w, err := m.wsAny(b.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	b.WorkspaceID = w.ID
-	for i, e := range m.billing().cogs {
-		if e.WorkspaceID == b.WorkspaceID && e.Project == b.Project && e.PeriodStart.Equal(b.PeriodStart) {
-			m.billing().cogs[i] = b
-			return nil
-		}
-	}
-	m.billing().cogs = append(m.billing().cogs, b)
-	return nil
-}
-func (m *Memory) QueryCOGSBuckets(_ context.Context, ws string, from, to time.Time) ([]COGSBucket, error) {
-	m.mu.Lock()
-	w, err := m.ws(ws)
-	m.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []COGSBucket
-	for _, b := range m.billing().cogs {
-		if b.WorkspaceID == w.ID && b.PeriodStart.Before(to) && b.PeriodEnd.After(from) {
-			out = append(out, b)
-		}
 	}
 	return out, nil
 }
@@ -2015,12 +1836,6 @@ func (m *Memory) RekeyProject(_ context.Context, ws, slug, id string) (int, erro
 	}
 	b.buckets = rekeyBuckets(b.buckets)
 	b.hourly = rekeyBuckets(b.hourly)
-	for i := range b.cogs {
-		if b.cogs[i].WorkspaceID == w.ID && b.cogs[i].Project == slug {
-			b.cogs[i].Project = short
-			moved++
-		}
-	}
 	for i := range b.sleepEvents {
 		if b.sleepEvents[i].WorkspaceID == w.ID && b.sleepEvents[i].Project == slug {
 			b.sleepEvents[i].Project = short

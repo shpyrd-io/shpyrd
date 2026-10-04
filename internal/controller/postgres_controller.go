@@ -42,11 +42,15 @@ type PostgresReconciler struct {
 	// DataPool is the node pool databases run on (RFC-0077): the data
 	// pool, or the platform pool on a cluster without one; "" = any.
 	DataPool string
-	// PlanSleepDefault answers the default idle period before a database
-	// of the project namespace hibernates, from its workspace's plan
-	// (RFC-0075); "" when there is none. A database with a policy of its
-	// own does not ask. Nil: no plan defaults.
-	PlanSleepDefault func(ctx context.Context, namespace string) string
+	// WorkspaceSleepDefault answers the default idle period before a
+	// database of the project namespace hibernates, from its workspace's
+	// settings (RFC-0075); "" when there is none. A database with a policy
+	// of its own does not ask. Nil: no defaults.
+	WorkspaceSleepDefault func(ctx context.Context, namespace string) string
+	// SleepAllowed says whether databases may sleep by themselves now (the
+	// enterprise's auto sleep). Nil: never; one put to sleep by hand
+	// (suspended) still is.
+	SleepAllowed func() bool
 }
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
@@ -562,7 +566,7 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 	// With a sleep policy apps connect through the shpyrd-owned Service
 	// "<name>": it points at the primary while awake and at the wake proxy
 	// while asleep (RFC-0075). Without one, CNPG's "-rw" as always. The
-	// policy may be the database's own or its workspace plan's default;
+	// policy may be the database's own or its workspace's default;
 	// the Service exists exactly when one applies, so it is what is asked.
 	host := firstNonEmpty(get("host"), name+"-rw")
 	sleeps := sleepAfterDuration(pg.Spec.Sleep) > 0 || (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended)

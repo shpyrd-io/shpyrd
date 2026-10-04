@@ -18,6 +18,21 @@ cluster init creates the first workspace)
 
 ---
 
+
+## Amendment (2026-10-04)
+
+- **The default workspace setting is no longer changed.** Its only use was the console's
+  way to its workspace and who could open the console; the console now has its own users
+  (RFC-0080, amended), and `PATCH /api/cluster/settings` refuses `defaultWorkspaceId`.
+- **The open-source platform runs one workspace.** Without a tenancy of its own, the server
+  wraps its store in a view that shows only the default workspace
+  (`store.OneWorkspace`): a workspace added to the database by hand gets no front door,
+  no login callback and no request; none can be created. The development switch
+  `SHPYRD_DEV_TENANCY` is gone. Creating and running many workspaces is a platform built
+  on the core, which passes its tenancy (`server.Options.Tenancy`).
+- **Workspace commands.** `shpyrd-ctl workspaces` left the core; `shpyrd-ctl workspace
+  status|limits|sleep` shows and sets the one workspace.
+
 ## Summary
 
 The cluster and the default workspace are two different things. Today the open-source

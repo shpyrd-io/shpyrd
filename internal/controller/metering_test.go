@@ -189,6 +189,7 @@ func TestSleepWorkspaceDefault(t *testing.T) {
 		Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080)}}},
 	}
 	r, _ := newTestReconciler(t, app)
+	r.Config.SleepAllowed = always
 	r.Config.WorkspaceSleepDefault = func(slug string) (string, string) {
 		if slug == "acme" {
 			return "15m", "page"
@@ -196,9 +197,9 @@ func TestSleepWorkspaceDefault(t *testing.T) {
 		return "", ""
 	}
 	if !r.sleepEnabled(app) {
-		t.Fatal("plan default should enable sleep")
+		t.Fatal("the workspace default should enable sleep")
 	}
-	if sp := r.webSleepSpec(app); sp == nil || sp.After != "15m" || sp.Resuming != "page" || r.sleepSource(app) != "plan" {
+	if sp := r.webSleepSpec(app); sp == nil || sp.After != "15m" || sp.Resuming != "page" || r.sleepSource(app) != "workspace" {
 		t.Errorf("effective spec = %+v source=%s", sp, r.sleepSource(app))
 	}
 	// Explicit off wins.
@@ -251,7 +252,7 @@ func TestSleepObjectsFollowIDNamedWorkloads(t *testing.T) {
 	r := &AppReconciler{
 		ProcessTypes: func(context.Context, string) []string { return nil },
 		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
-		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system"}.Defaults(),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
 	}
 	runReconcile(t, r, app)
 
@@ -330,6 +331,7 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		app := newApp()
 		r, c := newTestReconciler(t, app)
 		r.Config.SystemNamespace = "shpyrd-system"
+		r.Config.SleepAllowed = always
 		runReconcile(t, r, app)
 		ing := ingressOf(t, c)
 		if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != "shop-web" {
@@ -366,7 +368,7 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		r := &AppReconciler{
 			ProcessTypes: func(context.Context, string) []string { return nil },
 			Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
-			Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system"}.Defaults(),
+			Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
 		}
 		runReconcile(t, r, app)
 		ing := ingressOf(t, c)

@@ -1,51 +1,29 @@
-// Package opencost is the OpenCost extension (RFC-0075): infrastructure cost
-// allocation for the operator economics dashboard. It polls the OpenCost
-// Allocation API once per hour, writes COGS buckets into the control-plane
-// store, and exposes a status route for the Cluster page. Cost data is
-// operator-only and is never shown to workspace owners or customers.
+// Package opencost is the OpenCost extension (RFC-0075): it installs
+// OpenCost, which allocates what the cluster costs to namespaces, pods and
+// nodes, and answers a status route for the console. What the platform
+// does with those costs is the enterprise Costs (ee/costs).
 package opencost
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Name of the extension.
 const Name = "opencost"
 
-// allocationURL is the OpenCost service address.
+// AllocationURL is the OpenCost service's Allocation API.
 // OpenCost 1.121+ uses /allocation/compute (not /model/allocation).
-const allocationURL = "http://opencost.opencost.svc:9003/allocation/compute"
+const AllocationURL = "http://opencost.opencost.svc:9003/allocation/compute"
 
-// metricsURL is the OpenCost Prometheus metrics endpoint. The COGS writer
-// uses it to derive the true node cost (and therefore idle cost) rather than
-// relying on the Allocation API's shareIdle parameter, which does not
-// distribute idle in v1.121.3 with namespace-level aggregation.
-const metricsURL = "http://opencost.opencost.svc:9003/metrics"
-
-// sharedNamespaces are infrastructure namespaces whose costs are split
-// proportionally across workspaces (they serve every workspace equally).
-var sharedNamespaces = map[string]bool{
-	"kube-system": true, "keda": true, "monitoring": true, "kpack": true,
-	"ingress-nginx": true, "ingress-nginx-internal": true,
-	"cert-manager": true, "cnpg-system": true, "opencost": true,
-	"shpyrd-system": true,
-}
+// MetricsURL is OpenCost's Prometheus metrics endpoint: node costs.
+const MetricsURL = "http://opencost.opencost.svc:9003/metrics"
 
 type extension struct{}
 
@@ -53,7 +31,7 @@ func New() ext.Extension { return extension{} }
 
 func (extension) Name() string { return Name }
 func (extension) Description() string {
-	return "Infrastructure cost allocation via OpenCost — operator economics dashboard (RFC-0075)"
+	return "Infrastructure cost allocation via OpenCost (RFC-0075)"
 }
 func (extension) Components() []ext.ComponentRef {
 	return []ext.ComponentRef{{Name: "opencost", Runlevel: "rc4"}}
@@ -65,291 +43,20 @@ func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
 }
 
 // Routes mounts GET /api/cluster/opencost/status (operator console).
-func (e extension) Routes(r ext.Router, deps ext.Deps) error {
-	if deps.Store == nil {
-		return nil
-	}
-	h := &handlers{store: deps.Store}
-	r.Admin().GET("/cluster/opencost/status", h.status)
-	// Start the hourly COGS writer in the background.
-	go func() {
-		w := &cogsWriter{store: deps.Store}
-		w.run(context.Background())
-	}()
+func (extension) Routes(r ext.Router, _ ext.Deps) error {
+	r.Admin().GET("/cluster/opencost/status", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"source": "opencost", "url": AllocationURL})
+	})
 	return nil
 }
 
-type handlers struct{ store store.Store }
-
-func (h *handlers) status(c *gin.Context) {
-	// Return the last COGS bucket timestamp, or "unconfigured".
-	c.JSON(http.StatusOK, gin.H{"source": "opencost", "url": allocationURL})
-}
-
-// ---- COGS writer -----------------------------------------------------------
-
-// cogsWriter polls the OpenCost Allocation API every hour and writes
-// cogs_buckets into the store. It is idempotent: a restart re-queries the
-// last 24 hours and upserts.
-type cogsWriter struct {
-	store store.Store
-}
-
-func (w *cogsWriter) run(ctx context.Context) {
-	h := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
-	w.writeHour(ctx, h)
-	t := time.NewTicker(time.Hour)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-t.C:
-			w.writeHour(ctx, now.UTC().Truncate(time.Hour).Add(-time.Hour))
-		}
-	}
-}
-
-// writeHour aggregates OpenCost Allocation API data by namespace and maps it
-// to workspaces. Label-based aggregation is unreliable when the pod label
-// configuration is unknown; namespace is always available in the allocation.
-// Costs are summed per workspace and stored as a single COGS bucket
-// (project = "" = workspace total; project-level breakdown requires
-// per-project namespace queries or label configuration changes in OpenCost).
-// writeHour fetches the Allocation API for the given hour and writes one
-// COGSBucket per workspace. Idle and shared costs are computed explicitly:
-// OpenCost 1.121.3 does not distribute them via shareIdle/shareNamespaces
-// when aggregating by namespace.
-//
-//	Direct  = costs of pods in the workspace's own namespaces.
-//	Shared  = costs of platform infrastructure (kube-system, monitoring,
-//	          ingress, etc.), split proportionally by direct cost share.
-//	Idle    = unused node capacity (node total − all allocated), split
-//	          proportionally by direct cost share.
-//	Total   = Direct + Shared + Idle.
-func (w *cogsWriter) writeHour(ctx context.Context, hour time.Time) {
-	end := hour.Add(time.Hour)
-	window := fmt.Sprintf("%s,%s", hour.Format(time.RFC3339), end.Format(time.RFC3339))
-
-	workspaces, err := w.store.ListWorkspaces(ctx)
-	if err != nil {
-		return
-	}
-
-	// ---- Allocation API: per-namespace costs ----------------------------
-	q := url.Values{}
-	q.Set("window", window)
-	q.Set("aggregate", "namespace")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allocationURL+"?"+q.Encode(), nil)
-	if err != nil {
-		return
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		slog.Error("opencost: allocation request failed", "err", err)
-		return
-	}
-	defer resp.Body.Close()
-	var body struct {
-		Data []map[string]allocationItem `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		slog.Error("opencost: allocation decode failed", "err", err)
-		return
-	}
-	if len(body.Data) == 0 {
-		return
-	}
-	batch := body.Data[0]
-
-	// ---- Node total cost: cpu + ram ----------------------------------------
-	// Pull from OpenCost's own Prometheus metrics so we get the actual OCI
-	// price (not just what is allocated to pods).
-	_, idleFromMetrics := w.nodeMetrics(ctx)
-
-	// ---- Build namespace → workspace mapping --------------------------------
-	// Exact: every project the store knows names its namespace (RFC-0076,
-	// p-<id> or a legacy app-<...>). Legacy namespaces the controller has
-	// not mirrored yet fall back to the slug prefix.
-	nsToWS := map[string]string{}
-	prefixToWS := map[string]string{}
-	var implicitWS string
-	for _, ws := range workspaces {
-		prefixToWS["app-"+ws.Slug] = ws.ID
-		if implicitWS == "" {
-			implicitWS = ws.ID
-		}
-		if projects, err := w.store.ListProjects(ctx, ws.ID, true); err == nil {
-			for _, p := range projects {
-				if p.Namespace != "" {
-					nsToWS[p.Namespace] = ws.ID
-				}
-			}
-		}
-	}
-
-	type wsAgg struct{ cpu, mem, storage, net, direct float64 }
-	wsCosts := map[string]*wsAgg{}
-	for _, ws := range workspaces {
-		wsCosts[ws.ID] = &wsAgg{}
-	}
-	var sharedTotal, allocatedTotal float64
-
-	for ns, item := range batch {
-		total := item.TotalCost
-		allocatedTotal += total
-		if sharedNamespaces[ns] {
-			sharedTotal += total
-			continue
-		}
-		wsID := nsToWS[ns]
-		if wsID == "" && strings.HasPrefix(ns, "app-") {
-			for prefix, id := range prefixToWS {
-				if ns == prefix || (len(ns) > len(prefix)+1 && ns[:len(prefix)+1] == prefix+"-") {
-					wsID = id
-					break
-				}
-			}
-			if wsID == "" {
-				wsID = implicitWS
-			}
-		}
-		if wsID == "" {
-			continue // not a project namespace, or one the store has not seen yet
-		}
-		a := wsCosts[wsID]
-		a.cpu += item.CPUCost
-		a.mem += item.RAMCost
-		a.storage += item.PVCost
-		a.net += item.NetworkCost
-		a.direct += total
-	}
-
-	// Sum of workspace direct costs — used as the weight for splits.
-	totalDirect := 0.0
-	for _, a := range wsCosts {
-		totalDirect += a.direct
-	}
-	idleTotal := idleFromMetrics
-
-	for _, ws := range workspaces {
-		a := wsCosts[ws.ID]
-		if a.direct == 0 {
-			continue
-		}
-		weight := 0.0
-		if totalDirect > 0 {
-			weight = a.direct / totalDirect
-		}
-		shared := sharedTotal * weight
-		idle := idleTotal * weight
-		total := a.direct + shared + idle
-		b := store.COGSBucket{
-			WorkspaceID: ws.ID, Project: "",
-			PeriodStart: hour, PeriodEnd: end,
-			CPUCost: a.cpu, MemoryCost: a.mem,
-			StorageCost: a.storage, NetworkCost: a.net,
-			SharedCost: shared, IdleCost: idle,
-			TotalCost: total, Currency: "USD",
-			AllocationPolicy: "namespace;idle=node_metrics;shared=proportional",
-			Quality:          store.QualityComplete,
-		}
-		if err := w.store.WriteCOGSBucket(ctx, b); err != nil {
-			slog.Error("opencost: write cogs bucket failed", "workspace", ws.Slug, "err", err)
-		} else {
-			slog.Info("opencost: wrote cogs bucket", "workspace", ws.Slug,
-				"direct", a.direct, "shared", shared, "idle", idle, "total", total)
-		}
-	}
-}
-
-// nodeMetrics reads OpenCost's Prometheus metrics endpoint and returns:
-//
-//	nodeCost  = sum of node_cpu_hourly_cost + node_ram_hourly_cost ($/hr)
-//	idleCost  = nodeCost × (1 − cpuAllocated / cpuCapacity)
-//
-// cpuAllocated comes from container_cpu_allocation (request-based allocation
-// in fractional CPUs). cpuCapacity = sum of node_cpu_capacity{} in cores.
-// This gives the true idle fraction without relying on the Allocation API's
-// shareIdle parameter (which does not work in v1.121.3 namespace aggregation).
-func (w *cogsWriter) nodeMetrics(ctx context.Context) (nodeCost, idleCost float64) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
-	if err != nil {
-		return
-	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		slog.Error("opencost: node metrics request failed", "err", err)
-		return
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
-	var cpuAllocated, cpuCapacity float64
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		v := 0.0
-		if len(parts) >= 2 {
-			v, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
-		}
-		switch {
-		case strings.HasPrefix(line, "node_cpu_hourly_cost{") ||
-			strings.HasPrefix(line, "node_ram_hourly_cost{"):
-			nodeCost += v
-		case strings.HasPrefix(line, "container_cpu_allocation{"):
-			cpuAllocated += v
-		case strings.HasPrefix(line, "kube_node_status_allocatable{") && strings.Contains(line, "resource=\"cpu\""):
-			cpuCapacity += v
-		}
-	}
-	if cpuCapacity > 0 && nodeCost > 0 {
-		idleFraction := 1 - cpuAllocated/cpuCapacity
-		if idleFraction < 0 {
-			idleFraction = 0
-		}
-		idleCost = nodeCost * idleFraction
-	}
-	if cpuCapacity == 0 {
-		slog.Warn("opencost: no node capacity in metrics; idle cost recorded as 0")
-	}
-	return
-}
-
-type allocationItem struct {
-	// Properties contains cluster, namespace, node etc. and a nested
-	// "labels" map. We only need namespace for workspace attribution.
-	Properties  allocationProperties `json:"properties"`
-	CPUCost     float64              `json:"cpuCost"`
-	RAMCost     float64              `json:"ramCost"`
-	PVCost      float64              `json:"pvCost"`
-	NetworkCost float64              `json:"networkCost"`
-	SharedCost  float64              `json:"sharedCost"`
-	IdleCost    float64              `json:"idleCost"`
-	TotalCost   float64              `json:"totalCost"`
-}
-
-type allocationProperties struct {
-	Cluster   string            `json:"cluster"`
-	Namespace string            `json:"namespace"`
-	Node      string            `json:"node"`
-	Labels    map[string]string `json:"labels"`
-}
-
-// ---- CLI -------------------------------------------------------------------
-
-func newOpenCostCmd(g ext.CLIGlobals) *cobra.Command {
+func newOpenCostCmd(ext.CLIGlobals) *cobra.Command {
 	return &cobra.Command{
 		Use:   "opencost",
 		Short: "OpenCost extension status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "OpenCost is enabled. The server writes COGS buckets hourly from the Allocation API.")
-			fmt.Fprintln(cmd.OutOrStdout(), "Operator economics: shpyrd-ctl economics --month YYYY-MM")
+			fmt.Fprintln(cmd.OutOrStdout(), "OpenCost is enabled: it allocates what the cluster costs to namespaces, pods and nodes.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Costs and cost drains, with a license: shpyrd-ctl costs")
 			return nil
 		},
 	}

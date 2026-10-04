@@ -6,7 +6,6 @@ import (
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -131,10 +130,10 @@ func TestWorkspaceFrontDoors(t *testing.T) {
 	}
 }
 
-// A suspended workspace's apps keep running but are not served: their
-// Ingresses go (the front door's default backend answers with the
-// suspension page) and come back on resume. The implicit workspace is
-// never suspended.
+// A suspended workspace's apps stop and are not served: their processes go
+// to zero, their Ingresses go (the front door's default backend answers
+// with the suspension page), and both come back on resume. The implicit
+// workspace is never suspended.
 func TestSuspendedWorkspaceIsNotServed(t *testing.T) {
 	ctx := context.Background()
 	app := &shpyrdv1.App{
@@ -158,8 +157,11 @@ func TestSuspendedWorkspaceIsNotServed(t *testing.T) {
 			t.Errorf("suspended workspace: ingress %s still there: %v", name, err)
 		}
 	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop-web"}, &appsv1.Deployment{}); err != nil {
-		t.Errorf("the app must keep running while suspended: %v", err)
+	dep := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop-web"}, dep); err != nil {
+		t.Errorf("the app's Deployment must stay while suspended: %v", err)
+	} else if *dep.Spec.Replicas != 0 {
+		t.Errorf("a suspended workspace's processes must stop, got %d replicas", *dep.Spec.Replicas)
 	}
 	if !strings.Contains(got.Status.Message, "workspace suspended") {
 		t.Errorf("status must say why: %q", got.Status.Message)
@@ -168,6 +170,9 @@ func TestSuspendedWorkspaceIsNotServed(t *testing.T) {
 	runReconcile(t, r, got)
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop"}, &networkingv1.Ingress{}); err != nil {
 		t.Errorf("resumed workspace: ingress missing: %v", err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop-web"}, dep); err != nil || *dep.Spec.Replicas != 1 {
+		t.Errorf("resumed workspace: the processes must come back: %v", err)
 	}
 }
 
@@ -337,10 +342,10 @@ func checkByName(r *store.WorkspaceReadiness, name string) *store.ReadinessCheck
 	return nil
 }
 
-// A plan's ceilings reach the quotas of projects already running (#51):
-// the workspace reconciler writes them on its pass, with no deploy; a
-// workspace with ceilings of its own keeps those.
-func TestQuotasFollowThePlan(t *testing.T) {
+// A workspace's ceilings reach the quotas of projects already running
+// (#51): the workspace reconciler writes them on its pass, with no deploy;
+// a workspace without ceilings has no quota.
+func TestQuotasFollowTheWorkspace(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemory()
 	for _, slug := range []string{"acme", "beta"} {
@@ -348,15 +353,7 @@ func TestQuotasFollowThePlan(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.CreatePlan(ctx, store.Plan{Name: "free", EffectiveFrom: time.Now().Add(-time.Hour), Limits: &store.Limits{Memory: "256Mi"}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, slug := range []string{"acme", "beta"} {
-		if _, err := st.AssignPlan(ctx, slug, "free"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := st.UpdateWorkspaceSettings(ctx, "beta", store.WorkspaceSettings{Limits: &store.Limits{Memory: "2Gi"}}); err != nil {
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Memory: "256Mi"}}); err != nil {
 		t.Fatal(err)
 	}
 	acme := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "p-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme"}}}
@@ -372,21 +369,26 @@ func TestQuotasFollowThePlan(t *testing.T) {
 		m := q.Spec.Hard[corev1.ResourceRequestsMemory]
 		return m.String()
 	}
-	all, _ := st.ListWorkspaces(ctx)
-	if err := r.syncQuotas(ctx, all); err != nil {
-		t.Fatal(err)
+	sync := func() {
+		t.Helper()
+		all, _ := st.ListWorkspaces(ctx)
+		if err := r.syncQuotas(ctx, all); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if memory("p-shop") != "256Mi" || memory("p-wiki") != "2Gi" {
+	sync()
+	if memory("p-shop") != "256Mi" || memory("p-wiki") != "none" {
 		t.Fatalf("quotas = %s %s", memory("p-shop"), memory("p-wiki"))
 	}
-	// The plan is raised: acme's quota follows, beta keeps its own.
-	if _, err := st.AddPlanVersion(ctx, store.Plan{Name: "free", EffectiveFrom: time.Now().Add(-time.Minute), Limits: &store.Limits{Memory: "512Mi"}}); err != nil {
+	// acme's ceilings are raised and beta gets some: both follow.
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Memory: "512Mi"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.syncQuotas(ctx, all); err != nil {
+	if _, err := st.UpdateWorkspaceSettings(ctx, "beta", store.WorkspaceSettings{Limits: &store.Limits{Memory: "2Gi"}}); err != nil {
 		t.Fatal(err)
 	}
+	sync()
 	if memory("p-shop") != "512Mi" || memory("p-wiki") != "2Gi" {
-		t.Errorf("after the plan rose = %s %s", memory("p-shop"), memory("p-wiki"))
+		t.Errorf("after the change = %s %s", memory("p-shop"), memory("p-wiki"))
 	}
 }

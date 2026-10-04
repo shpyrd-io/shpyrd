@@ -63,6 +63,7 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 		t.Fatal(err)
 	}
 	s.sleepAvailable = func() bool { return true } // the fake mapper knows no KEDA kinds
+	s.sleepGate = func() bool { return true }      // auto sleep, as the enterprise's would be
 	return s, cr
 }
 

@@ -37,8 +37,9 @@ func (extension) Components() []ext.ComponentRef {
 // Register runs the Postgres controller and makes the kind attachable.
 func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	r := &controller.PostgresReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.ProjectStorageClass(deps.Var), MinSize: install.ProjectVolumeMinSize(deps.Var)}, DataPool: install.DataPool(deps.Var)}
+	r.SleepAllowed = deps.SleepAllowed
 	if deps.Store != nil {
-		r.PlanSleepDefault = planSleepDefault(mgr.GetClient(), deps.Store)
+		r.WorkspaceSleepDefault = workspaceSleepDefault(mgr.GetClient(), deps.Store)
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
@@ -56,11 +57,11 @@ func (extension) Types() []ext.ResourceType {
 // CLI returns `shpyrd pg`.
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command { return []*cobra.Command{newPgCmd(g)} }
 
-// planSleepDefault answers a project namespace's workspace plan default
+// workspaceSleepDefault answers a project namespace's workspace default
 // for databases (RFC-0075): the namespace carries its workspace's slug as
 // a label; a namespace without one is the default workspace's. Asked once
 // a minute per database with no policy of its own, so no cache.
-func planSleepDefault(c client.Client, st store.Store) func(ctx context.Context, namespace string) string {
+func workspaceSleepDefault(c client.Client, st store.Store) func(ctx context.Context, namespace string) string {
 	return func(ctx context.Context, namespace string) string {
 		ns := &corev1.Namespace{}
 		if err := c.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
@@ -70,14 +71,10 @@ func planSleepDefault(c client.Client, st store.Store) func(ctx context.Context,
 		if slug == "" {
 			slug = store.DefaultWorkspaceSlug(ctx, st)
 		}
-		wp, err := st.WorkspacePlan(ctx, slug)
-		if err != nil || wp == nil {
+		ws, err := st.Workspace(ctx, slug)
+		if err != nil || ws.Settings.Sleep == nil {
 			return ""
 		}
-		p, err := st.GetPlan(ctx, wp.PlanName)
-		if err != nil || p == nil {
-			return ""
-		}
-		return p.PostgresSleepAfter
+		return ws.Settings.Sleep.DatabasesAfter
 	}
 }

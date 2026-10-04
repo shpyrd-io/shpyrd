@@ -2,7 +2,8 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, Building2, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Settings, TrendingUp, Users } from "lucide-react";
+import { Boxes, Building2, CreditCard, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Receipt, Send, Settings, ShieldCheck, Users } from "lucide-react";
+import { placeLinks, shown as visibleIn } from "@shpyrd/shared/links";
 import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
@@ -10,7 +11,9 @@ import { Frame } from "@/shell/frame";
 import { Accounts } from "./accounts";
 import { Backups } from "./backups";
 import { Components } from "./components";
-import { Economics } from "./economics";
+import { ConsoleUsers } from "./console-users";
+import { CostDrains } from "./cost-drains";
+import { Costs } from "./costs";
 import { Mail as MailPage } from "./mail";
 import { Overview } from "./overview";
 import { Placement } from "./placement";
@@ -19,16 +22,16 @@ import { Settings as SettingsPage } from "./settings";
 import { SignIn } from "./sign-in";
 import { Sizes } from "./sizes";
 import { Storage } from "./storage";
-import { Workspaces } from "./workspaces";
 
 // The console, in pages down a list at the side. Overview is the
 // cluster as it is; Platform is what the operator runs for others;
 // Cluster is the machinery under it.
-// A page may need a role, an extension, or one of several: the billing
-// capability of the cloud layer, or the opencost extension, for Economics.
-// One may be a door without a capability: where the platform hosts only
-// the workspace made at install, Workspaces is a link, Workspace, straight
-// to that workspace's address; there is nothing to list.
+// A page may need a role, an extension, or one of several capabilities or
+// extensions.
+// One may be a door: where the platform hosts one workspace, Workspace is
+// a link straight to its address. Where it hosts many, the binary's own
+// application lists them, and its link takes the door's place
+// (GET /api/links).
 type Page = {
   group: string;
   slug: string;
@@ -50,10 +53,17 @@ const pages: Page[] = [
   {
     group: "Platform",
     slug: "workspaces",
-    title: "Workspaces",
+    title: "Workspace",
     icon: <Building2 />,
     needs: "admin",
     door: { capability: "workspaces", title: "Workspace" },
+  },
+  {
+    group: "Platform",
+    slug: "console-users",
+    title: "Console users",
+    icon: <ShieldCheck />,
+    needs: "admin",
   },
   {
     group: "Platform",
@@ -72,11 +82,19 @@ const pages: Page[] = [
   },
   {
     group: "Platform",
-    slug: "economics",
-    title: "Economics",
-    icon: <TrendingUp />,
+    slug: "costs",
+    title: "Costs",
+    icon: <Receipt />,
     needs: "admin",
-    any: { capabilities: ["billing"], extensions: ["opencost"] },
+    extension: "costs",
+  },
+  {
+    group: "Platform",
+    slug: "cost-drains",
+    title: "Cost drains",
+    icon: <Send />,
+    needs: "admin",
+    extension: "costs",
   },
   {
     group: "Platform",
@@ -138,6 +156,13 @@ const pages: Page[] = [
   },
 ];
 
+// The icons a link may name; another gets the external one.
+const linkIcons: Record<string, React.ReactElement> = {
+  "building-2": <Building2 />,
+  "credit-card": <CreditCard />,
+  receipt: <Receipt />,
+};
+
 export function Pages() {
   const { pathname } = useLocation();
   const perms = usePerms();
@@ -158,37 +183,41 @@ export function Pages() {
   const one = !!config.data && !config.data.capabilities?.includes("workspaces");
   const list = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces, enabled: one && perms.admin, staleTime: 60_000 });
   const theWorkspace = list.data?.find((w) => w.slug === config.data?.defaultWorkspaceId) ?? list.data?.[0];
-  const isDoor = (p: Page) => !!p.door && one;
-  const shown = pages.filter((p) => has(p) && (!isDoor(p) || !!theWorkspace?.url));
-  const groups = [...new Set(shown.map((p) => p.group))];
+  // A door is only a door: without one workspace to go to, it is not there.
+  const visible = (p: Page) => has(p) && (!p.door || (one && !!theWorkspace?.url));
+  const links = useQuery({ queryKey: ["links"], queryFn: api.links, enabled: perms.view, staleTime: 60_000 });
+  const groups = visibleIn(placeLinks(pages, links.data ?? []), visible);
+
+  const entries = (group: (typeof groups)[number]) =>
+    group.entries.map((e) =>
+      e.link ? (
+        // Another application: it opens as a page of its own, and has its
+        // way back here.
+        <NavListItem key={`link-${e.link.url}`} asChild icon={linkIcons[e.link.icon ?? ""] ?? <ExternalLink />}>
+          <a href={e.link.url}>{e.link.label}</a>
+        </NavListItem>
+      ) : (
+        <NavListItem key={e.page.slug} asChild icon={e.page.icon} aria-current={here === e.page.slug ? "page" : undefined}>
+          {e.page.door ? (
+            <a href={theWorkspace!.url} target="_blank" rel="noreferrer">
+              {e.page.door.title}
+              <ExternalLink className="ml-auto size-3.5 text-muted-foreground" aria-hidden />
+            </a>
+          ) : (
+            <Link to={`/${e.page.slug}`}>{e.page.title}</Link>
+          )}
+        </NavListItem>
+      ),
+    );
 
   const nav = (
     <NavList aria-label="Console">
       {groups.map((group) =>
-        group === "" ? (
-          shown
-            .filter((p) => p.group === "")
-            .map((p) => (
-              <NavListItem key={p.slug} asChild icon={p.icon} aria-current={here === p.slug ? "page" : undefined}>
-                <Link to="/">{p.title}</Link>
-              </NavListItem>
-            ))
+        group.group === "" ? (
+          entries(group)
         ) : (
-          <NavListGroup key={group} title={group}>
-            {shown
-              .filter((p) => p.group === group)
-              .map((p) => (
-                <NavListItem key={p.slug} asChild icon={p.icon} aria-current={here === p.slug ? "page" : undefined}>
-                  {isDoor(p) ? (
-                    <a href={theWorkspace!.url} target="_blank" rel="noreferrer">
-                      {p.door!.title}
-                      <ExternalLink className="ml-auto size-3.5 text-muted-foreground" aria-hidden />
-                    </a>
-                  ) : (
-                    <Link to={`/${p.slug}`}>{p.title}</Link>
-                  )}
-                </NavListItem>
-              ))}
+          <NavListGroup key={group.group} title={group.group}>
+            {entries(group)}
           </NavListGroup>
         ),
       )}
@@ -214,10 +243,11 @@ export function Pages() {
       <Routes>
         <Route index element={<Overview />} />
         <Route path="cluster" element={<Navigate to="/" replace />} />
-        <Route path="workspaces" element={one ? <Navigate to="/" replace /> : <Workspaces />} />
+        <Route path="console-users" element={<ConsoleUsers />} />
+        <Route path="costs" element={<Costs />} />
+        <Route path="cost-drains" element={<CostDrains />} />
         <Route path="accounts" element={<Accounts />} />
         <Route path="sign-in" element={<SignIn />} />
-        <Route path="economics" element={<Economics />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="sizes" element={<Sizes />} />
         <Route path="registry" element={<Registry />} />

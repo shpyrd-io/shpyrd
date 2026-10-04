@@ -19,6 +19,10 @@ type Gate struct {
 	// project's access, as at any app's host. Nil admits nobody from
 	// elsewhere.
 	Admit func(ctx context.Context, v Visitor) bool
+	// OpenWhenSuspended keeps the gate open to a suspended workspace, and
+	// sends that workspace's dashboard here: where it is activated again
+	// (the cloud's billing). One gate at most says so.
+	OpenWhenSuspended bool
 }
 
 // Visitor is who stands at a gate: resolved now, in the workspace they
@@ -37,17 +41,32 @@ type GateProvider interface {
 	Gates(Deps) []Gate
 }
 
-// Link is an entry an extension adds to a workspace's sidebar, under its
-// own section.
+// Link is an entry an extension adds to a sidebar: a workspace's or the
+// console's (Area), in a section, after a page. A section the sidebar has
+// takes the link after the page named by After, or at its end; another
+// section comes after the sidebar's own. The URL is another application's:
+// it opens as a page of its own and carries its own way back.
 type Link struct {
+	// Area is the sidebar: AreaWorkspace (the default) or AreaConsole.
+	Area    string `json:"area,omitempty"`
 	Section string `json:"section"`
 	Label   string `json:"label"`
 	URL     string `json:"url"`
 	Icon    string `json:"icon,omitempty"`
+	// After is the slug of the page the link follows; "" is the end of its
+	// section.
+	After string `json:"after,omitempty"`
 }
 
-// LinkProvider is implemented by extensions that add links to a
-// workspace's sidebar, per person.
+// The sidebars a link may go in.
+const (
+	AreaWorkspace = "workspace"
+	AreaConsole   = "console"
+)
+
+// LinkProvider is implemented by extensions that add links to the
+// sidebars, per person. At the console the visitor has no workspace, and
+// a platform role when they may open it.
 type LinkProvider interface {
 	Links(ctx context.Context, v Visitor) []Link
 }

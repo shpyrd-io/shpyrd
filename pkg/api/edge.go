@@ -367,6 +367,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 	claims := edge.Claims{
 		Issuer: s.dashboardURLOf(ws), Subject: subject, Audience: slug,
 		Email: caller.identity.Email, Name: name, Workspace: ws.Slug, Project: slug,
+		WorkspaceID: ws.ID, WorkspaceURL: s.dashboardURLOf(ws),
 		Realm: "workspace", Provider: caller.identity.Provider,
 	}
 	if caller.identity.Provider == "token" {

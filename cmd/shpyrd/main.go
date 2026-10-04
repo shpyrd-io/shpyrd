@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	if err := cli.New().Execute(); err != nil {
+	if err := cli.New(enterprise()...).Execute(); err != nil {
 		if code := kexec.ExitCode(err); code != 1 {
 			os.Exit(code) // remote command's exit code (shpyrd run)
 		}

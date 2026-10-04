@@ -313,19 +313,24 @@ func (k *Keys) publicFor(kid string) (ed25519.PublicKey, bool) {
 
 // Claims is what an app receives about the caller.
 type Claims struct {
-	Issuer    string   `json:"iss"`
-	Subject   string   `json:"sub"`
-	Audience  string   `json:"aud"` // the project slug
-	IssuedAt  int64    `json:"iat"`
-	ExpiresAt int64    `json:"exp"`
-	Email     string   `json:"email,omitempty"`
-	Name      string   `json:"name,omitempty"`
-	Workspace string   `json:"ws"`
-	Project   string   `json:"project"`
-	Roles     []string `json:"roles"`
-	Teams     []string `json:"teams"`
-	Realm     string   `json:"realm"` // workspace, console:<name>, operator
-	Provider  string   `json:"provider,omitempty"`
+	Issuer    string `json:"iss"`
+	Subject   string `json:"sub"`
+	Audience  string `json:"aud"` // the project slug
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	Email     string `json:"email,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Workspace string `json:"ws"`
+	// WorkspaceID is the workspace's store id: stable where the slug may
+	// change with its address. WorkspaceURL is its dashboard on its
+	// primary domain, for a way back to it.
+	WorkspaceID  string   `json:"wsid,omitempty"`
+	WorkspaceURL string   `json:"ws_url,omitempty"`
+	Project      string   `json:"project"`
+	Roles        []string `json:"roles"`
+	Teams        []string `json:"teams"`
+	Realm        string   `json:"realm"` // workspace, console:<name>, operator
+	Provider     string   `json:"provider,omitempty"`
 	// Preview marks an "Open as" session; Actor is who is really there.
 	Preview bool   `json:"preview,omitempty"`
 	Actor   *Actor `json:"act,omitempty"`

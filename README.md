@@ -401,3 +401,8 @@ until a deploy proves its replacement, and goes with the carve-out when it does.
 The site that replaces it, `apps/website/`, draws with `design/ui` and carries
 nothing of that template, so it is MPL-2.0 like everything else — the platform,
 the CLI, the dashboard, the examples and the RFCs.
+
+The enterprise features are the other exception: [`ee/`](ee) is governed by
+[`ee/LICENSE`](ee/LICENSE). Its source is public, and running it in production
+needs an agreement and a license; without a license it is built in and does
+nothing. `go build -tags foss ./...` builds without any of it.

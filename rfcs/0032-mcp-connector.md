@@ -10,6 +10,15 @@
 
 **Last update:** 2026-09-27
 
+
+## Amendment (2026-10-04)
+
+The MCP server and its OAuth 2.1 authorization server are an enterprise feature: they
+moved to `ee/mcp` (source public, under the shpyrd Enterprise License) and serve with a
+license; without one `/mcp` and the OAuth routes answer 402 and the dashboard hides the
+Connections and MCP pages. The OAuth tables stay in the core's store. The server reaches
+the API through `api.Host` (`pkg/api/host.go`), which a `RootExtension` receives.
+
 ## Summary
 
 A Model Context Protocol server exposing shpyrd to AI agents (Claude Code, Cursor, Claude

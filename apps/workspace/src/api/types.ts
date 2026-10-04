@@ -2,7 +2,7 @@
 // application reads.
 
 // A link an extension adds to the workspace's sidebar (GET /api/links).
-export type Link = { section: string; label: string; url: string; icon?: string };
+export type { Link } from "@shpyrd/shared/links";
 
 export type PublicConfig = {
   version: string;

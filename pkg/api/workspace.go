@@ -45,12 +45,12 @@ type WorkspaceView struct {
 	// URL is where this workspace's dashboard answers.
 	URL    string `json:"url"`
 	Status string `json:"status"`
-	// Limits are the ceilings the workspace is held to (nil: none), its
-	// own when LimitsOverride, else its billing plan's (#51); Usage what
-	// it uses today, in the same terms.
-	Limits         *store.Limits `json:"limits,omitempty"`
-	LimitsOverride bool          `json:"limitsOverride,omitempty"`
-	Usage          *Usage        `json:"usage,omitempty"`
+	// Limits are the ceilings the workspace is held to (nil: none); Usage
+	// what it uses today, in the same terms; Sleep its projects' and
+	// databases' default sleep (nil: none).
+	Limits *store.Limits        `json:"limits,omitempty"`
+	Usage  *Usage               `json:"usage,omitempty"`
+	Sleep  *store.SleepDefaults `json:"sleep,omitempty"`
 	// JoinPolicy says who becomes a person on first sign-in: open,
 	// company (through a claimed domain's method) or listed (already named
 	// in a team or a grant, holding a role, or invited).
@@ -139,8 +139,9 @@ func (s *Server) getWorkspace(c *gin.Context) {
 		return
 	}
 	view := s.workspaceView(c, w)
-	if l, own, err := store.WorkspaceLimits(c.Request.Context(), s.store, w); err == nil && l != nil {
-		view.Limits, view.LimitsOverride = l, own
+	view.Sleep = w.Settings.Sleep
+	if l := w.Settings.Limits; l != nil {
+		view.Limits = l
 		view.Usage = s.usageOf(c.Request.Context(), w.Slug)
 	}
 	c.JSON(http.StatusOK, view)
@@ -871,31 +872,10 @@ func (s *Server) patchClusterSettings(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	if req.DefaultWorkspaceID != nil {
-		slug := strings.TrimSpace(*req.DefaultWorkspaceID)
-		if slug == "" {
-			abort(c, http.StatusBadRequest, errors.New("defaultWorkspaceId must not be empty"))
-			return
-		}
-		ws, err := s.store.Workspace(ctx, slug)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				abort(c, http.StatusBadRequest, fmt.Errorf("workspace %q not found", slug))
-				return
-			}
-			storeErr(c, err, "workspace")
-			return
-		}
-		if !ws.OwnedByOperator() {
-			abort(c, http.StatusBadRequest, fmt.Errorf("workspace %q is a customer's; the default workspace is one of the operator's", slug))
-			return
-		}
-		if err := s.store.SetSetting(ctx, store.SettingDefaultWorkspaceID, slug); err != nil {
-			storeErr(c, err, "setting")
-			return
-		}
-		s.forgetDefaultSlug()
-		s.forgetTenants()
-		s.audit(c, "", "cluster.settings", "default_workspace", slug)
+		// The console no longer has a default workspace: it has its own
+		// users (console_users), and no workspace's roles reach it.
+		abort(c, http.StatusBadRequest, errors.New("the default workspace is no longer a setting: the console has its own users"))
+		return
 	}
 	if req.ConsolePasswordSignIn != nil {
 		if !*req.ConsolePasswordSignIn {
@@ -934,10 +914,7 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 	for i := range all {
 		w := &all[i]
 		sum := WorkspaceSummary{Slug: w.Slug, Name: w.Name, Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive), Owner: w.Owner, Owners: []string{}, Readiness: w.Readiness, ReadyAt: w.ReadyAt, CreatedAt: w.CreatedAt}
-		if wp, err := s.store.WorkspacePlan(ctx, w.Slug); err == nil && wp != nil {
-			sum.Plan = wp.PlanName
-		}
-		sum.Limits, sum.LimitsOverride, _ = store.WorkspaceLimits(ctx, s.store, w)
+		sum.Limits, sum.Sleep = w.Settings.Limits, w.Settings.Sleep
 		if roles, err := s.store.ListMemberships(ctx, w.Slug); err == nil {
 			for _, m := range roles {
 				if m.Role == store.WorkspaceRoleOwner {

@@ -81,6 +81,18 @@ function Methods() {
       </Card>
     );
   }
+  if (!config.data?.extensions.includes("sso") || (methods.error as { status?: number } | null)?.status === 402) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Sign-in methods</CardTitle>
+          <CardDescription>
+            People sign in with their email and a password. Bringing the company&apos;s identity provider (Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider) comes with the enterprise license.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
   const platform = (config.data?.auth.providers ?? []).filter((p) => (p.realm ?? "platform") === "platform");
   const own = methods.data?.connectors ?? [];
   return (

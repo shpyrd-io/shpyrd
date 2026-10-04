@@ -1,24 +1,29 @@
+import type { Link } from "@shpyrd/shared/links";
 import type { ArchiveProject, ProjectArchiveStatus, ProjectPlacement, PlacementMeasurement } from "@shpyrd/shared/api/project-archives";
 import type {
   BackupInfo,
   ClusterMetrics,
   ClusterSettings,
   ClusterSummary,
-  CreatedWorkspace,
-  Economics,
+  ConsoleUser,
+  CostDrain,
+  CostGroup,
+  CostKind,
+  CostSummary,
   HelmRelease,
   Identity,
+  LicenseStatus,
   LocalUser,
   LoginMethods,
   MailStatus,
   MethodsScope,
   NewLoginMethod,
-  NewWorkspace,
+  OCIStatus,
   ObjectStorageSummary,
-  Plan,
   PublicConfig,
   RegistryInfo,
   SizeCatalog,
+  WorkspaceSettings,
   WorkspaceSummary,
 } from "./types";
 
@@ -41,10 +46,11 @@ export type Api = {
   passwordLogin: (body: { email: string; password: string; next?: string }) => Promise<{ next: string }>;
   tokenLogin: (body: { token: string; next?: string }) => Promise<{ next: string }>;
   logout: () => Promise<{ redirect: string }>;
-  // The workspaces the platform hosts.
+  // The workspaces the platform hosts: the open-source platform's one, as
+  // the way to it.
   workspaces: () => Promise<WorkspaceSummary[]>;
-  createWorkspace: (body: NewWorkspace) => Promise<CreatedWorkspace>;
-  plans: () => Promise<Plan[]>;
+  // What the extensions add to the console's sidebar.
+  links: () => Promise<Link[]>;
   patchSettings: (body: Partial<ClusterSettings>) => Promise<ClusterSettings>;
   // The cluster.
   cluster: () => Promise<ClusterSummary>;
@@ -55,12 +61,28 @@ export type Api = {
   objectStorage: () => Promise<ObjectStorageSummary>;
   backups: () => Promise<BackupInfo>;
   runBackup: () => Promise<{ job: string; status: string }>;
+  license: () => Promise<LicenseStatus>;
+  // Renew now at the billing app that issued the license; a link of one
+  // use to the customer's account there.
+  renewLicense: () => Promise<LicenseStatus>;
+  billingLink: () => Promise<{ url: string }>;
+  costs: (q: { from?: string; to?: string; kind?: CostKind; group?: CostGroup }) => Promise<CostSummary>;
+  costDrains: () => Promise<CostDrain[]>;
+  addCostDrain: (body: { name: string; url: string; headers?: Record<string, string> }) => Promise<CostDrain>;
+  removeCostDrain: (name: string) => Promise<void>;
+  ociStatus: () => Promise<OCIStatus>;
+  putOCI: (body: { tenancy: string; user: string; fingerprint: string; region: string; key: string }) => Promise<OCIStatus>;
+  deleteOCI: () => Promise<void>;
+  workspaceSettings: () => Promise<WorkspaceSettings>;
+  putWorkspaceSettings: (body: Pick<WorkspaceSettings, "limits" | "sleep">) => Promise<WorkspaceSettings>;
   mailStatus: () => Promise<MailStatus>;
   mailTest: (to: string) => Promise<{ ok: boolean; to: string; took: string }>;
-  economics: (month?: string) => Promise<Economics>;
   sizes: () => Promise<SizeCatalog>;
   saveSizes: (catalog: SizeCatalog) => Promise<SizeCatalog>;
   // The accounts of the auth-local extension.
+  consoleUsers: () => Promise<ConsoleUser[]>;
+  addConsoleUser: (body: { email: string; password?: string }) => Promise<ConsoleUser>;
+  removeConsoleUser: (email: string) => Promise<void>;
   users: () => Promise<LocalUser[]>;
   createUser: (body: { email: string; name?: string; password: string }) => Promise<LocalUser>;
   setUserPassword: (email: string, password: string) => Promise<void>;

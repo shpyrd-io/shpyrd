@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
@@ -166,6 +167,23 @@ type ProcessChange struct {
 	Sleep *shpyrdv1.SleepSpec `json:"sleep,omitempty"`
 }
 
+// sleepAllowed says whether an extension lets things sleep by themselves
+// now (ext.SleepGate: the enterprise's auto sleep, with a license).
+func (s *Server) sleepAllowed() bool {
+	if s.sleepGate != nil {
+		return s.sleepGate()
+	}
+	for _, x := range s.opts.Extensions {
+		if g, ok := x.(ext.SleepGate); ok && g.SleepAllowed() {
+			return true
+		}
+	}
+	return false
+}
+
+// errSleepLicensed answers a sleep policy asked for without auto sleep.
+var errSleepLicensed = errors.New("available with a license: apps and databases sleeping by themselves is an enterprise feature")
+
 // canSleep reports whether the KEDA HTTP add-on is installed, by asking the
 // REST mapper for its InterceptorRoute kind.
 func (s *Server) canSleep() bool {
@@ -236,6 +254,10 @@ func (s *Server) applyProcesses(c *gin.Context) {
 			sp, err := validateSleep(name, ch.Sleep)
 			if err != nil {
 				abort(c, http.StatusBadRequest, err)
+				return
+			}
+			if sp != nil && !s.sleepAllowed() {
+				abort(c, http.StatusPaymentRequired, errSleepLicensed)
 				return
 			}
 			if sp != nil && !s.canSleep() {

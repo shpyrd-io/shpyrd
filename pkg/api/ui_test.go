@@ -24,6 +24,8 @@ func uiServer(t *testing.T) *Server {
 		"workspace/projects.html":  {Data: []byte("<html><script>projects()</script>workspace: the projects</html>")},
 		"workspace/logo.svg":       {Data: []byte("<svg/>")},
 		"workspace/_next/a/b/c.js": {Data: []byte("chunk")},
+		"workspaces/index.html":    {Data: []byte("<html><script>list()</script>the cloud's workspaces</html>")},
+		"workspaces/_next/x.js":    {Data: []byte("their chunk")},
 	}
 	s.engine.NoRoute(s.serveUI())
 	return s
@@ -200,5 +202,27 @@ func TestWithoutAdditionsThePagesAreWhatTheBuildWrote(t *testing.T) {
 	}
 	if got := policy(nil, nil); got != basePolicy {
 		t.Errorf("policy without origins or hashes = %s", got)
+	}
+}
+
+// Another application of the binary is served at the console under
+// /apps/<folder>/, with its files and the policy of its scripts; not at a
+// workspace's host, where the address is the workspace's own.
+func TestTheConsoleServesTheOtherApplicationsUnderApps(t *testing.T) {
+	s := uiServer(t)
+	for _, p := range []string{"/apps/workspaces", "/apps/workspaces/", "/apps/workspaces/acme"} {
+		rec := get(t, s, "shpyrd.example.test", p)
+		if !strings.HasSuffix(rec.Body.String(), "the cloud's workspaces</html>") || !strings.Contains(rec.Header().Get("Content-Security-Policy"), hashOf("list()")) {
+			t.Errorf("%s = %q %q", p, rec.Body.String(), rec.Header().Get("Content-Security-Policy"))
+		}
+	}
+	if got := get(t, s, "shpyrd.example.test", "/apps/workspaces/_next/x.js").Body.String(); got != "their chunk" {
+		t.Errorf("their file = %q", got)
+	}
+	if got := get(t, s, "shpyrd.example.test", "/apps/nothing").Body.String(); !strings.HasSuffix(got, "console</html>") {
+		t.Errorf("no such application = %q", got)
+	}
+	if got := get(t, s, "acme.shpyrd.test", "/apps/workspaces").Body.String(); got != "<html>workspace</html>" {
+		t.Errorf("at a workspace = %q", got)
 	}
 }

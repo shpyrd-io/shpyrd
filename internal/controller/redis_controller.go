@@ -198,6 +198,11 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 		}
 		sts.Labels = mergeMaps(sts.Labels, redisLabels(rd))
 		sts.Spec.Replicas = ptr.To[int32](1)
+		if suspendedWithWorkspace(rd) {
+			// Down with its workspace; a Redis without persistence comes
+			// back empty, as from any restart.
+			sts.Spec.Replicas = ptr.To[int32](0)
+		}
 		sts.Spec.Template = r.podTemplate(rd, engine, image, resources)
 		return controllerutil.SetControllerReference(rd, sts, r.Scheme)
 	})
@@ -210,6 +215,12 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 	mode := "cache (data is lost on restart)"
 	if rd.Spec.Persistent {
 		mode = "persistent (" + storage.String() + ")"
+	}
+	if suspendedWithWorkspace(rd) {
+		rd.Status.Phase = shpyrdv1.ResourceReady
+		rd.Status.Message = "workspace suspended: stopped until the workspace is activated"
+		setResourceCondition(&rd.Status, rd.Generation, metav1.ConditionTrue, "Suspended", rd.Status.Message)
+		return ctrl.Result{}, nil
 	}
 	if sts.Status.ReadyReplicas >= 1 && sts.Status.ObservedGeneration >= sts.Generation {
 		rd.Status.Phase = shpyrdv1.ResourceReady

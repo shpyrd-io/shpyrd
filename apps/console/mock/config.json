@@ -26,11 +26,15 @@
     "logs-agent",
     "object-storage",
     "mail",
-    "opencost"
+    "opencost",
+    "license",
+    "costs",
+    "sso",
+    "mcp",
+    "auto-sleep"
   ],
   "capabilities": [
-    "workspaces",
-    "billing"
+    "workspaces"
   ],
   "workspace": {
     "slug": "shpyrd",
