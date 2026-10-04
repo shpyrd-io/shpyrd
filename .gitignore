@@ -22,6 +22,8 @@ coverage
 
 # local certificates and state
 *.pem
+# A public key the license tests verify with is no secret.
+!ee/licensing/testdata/*.public.pem
 *.tfstate
 *.tfstate.*
 .terraform
