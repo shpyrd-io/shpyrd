@@ -13,8 +13,10 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -228,20 +230,14 @@ func (s *Server) gateOpen(c *gin.Context) {
 		self := edgePathPrefix + "gate?" + url.Values{"name": {g.Name}}.Encode()
 		c.Redirect(http.StatusFound, "/?next="+url.QueryEscape(self))
 	}
-	if ok, _ := s.sessionAuth(c); !ok {
-		signIn()
-		return
-	}
 	ctx := c.Request.Context()
 	ws, err := s.tenant(c)
 	if err != nil {
 		s.edgePage(c, http.StatusNotFound, "Nothing here", "Open this from your workspace.", nil)
 		return
 	}
-	// sessionAuth lets a session without a workspace through; a gate takes
-	// only a session of exactly this workspace.
-	sid, _ := c.Cookie(sessionCookie)
-	if sess, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID); !ok || sess.WorkspaceID != ws.ID {
+	sid, ok := s.gateSession(c, ws)
+	if !ok {
 		signIn()
 		return
 	}
@@ -294,6 +290,77 @@ func (s *Server) gateOpen(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusFound, "https://"+s.withPort(g.Host)+edgePathPrefix+"callback?"+url.Values{"code": {code}}.Encode())
+}
+
+// gateSession is the request's session when it is one of exactly this
+// workspace: sessionAuth lets a session without a workspace through, a
+// gate takes only one of this workspace.
+func (s *Server) gateSession(c *gin.Context, ws *store.Workspace) (string, bool) {
+	if ok, _ := s.sessionAuth(c); !ok {
+		return "", false
+	}
+	sid, _ := c.Cookie(sessionCookie)
+	sess, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID)
+	return sid, ok && sess.WorkspaceID == ws.ID
+}
+
+// The sign-in a gate needs at the platform address. Once a custom domain
+// is a workspace's primary door, the dashboard answers there and the
+// platform address shows no page of it; but the way in runs only at the
+// platform address (gateHome), and a session lives at one host. So the
+// platform address still serves the sign-in page, for a way back to a
+// gate only, and the files of the application that page loads. Signing
+// in there opens the session there, with the sign-in's own protections;
+// nothing is carried over from the custom domain, a host the customer
+// controls.
+
+// atAddressBehindDomain is the request's workspace when the request came
+// to its platform address while a custom domain is its primary door.
+func (s *Server) atAddressBehindDomain(c *gin.Context) (*store.Workspace, bool) {
+	t, err := s.door(c)
+	if err != nil || t.Workspace == nil || t.Workspace.Address == "" || t.Workspace.Status == store.WorkspaceSuspended {
+		return nil, false
+	}
+	ws := t.Workspace
+	h := hostOnly(c.Request.Host)
+	return ws, h == ws.Address && h != hostOnly(s.dashboardHostOf(ws))
+}
+
+// gateSignIn answers, at such an address, what signing in on the way to a
+// gate needs: the sign-in page at / when next is the gate's own route,
+// and a file of the application that is not a page. Someone already
+// signed in there goes on to the gate. Anything else it leaves alone
+// (false): the address answers as it did.
+func (s *Server) gateSignIn(c *gin.Context, app *application) bool {
+	if app == nil || c.GetHeader("X-Code") != "" || (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) {
+		return false
+	}
+	ws, ok := s.atAddressBehindDomain(c)
+	if !ok {
+		return false
+	}
+	p := strings.TrimPrefix(path.Clean("/"+c.Request.URL.Path), "/")
+	if p == "" {
+		next := safeNext(c.Query("next"))
+		if u, err := url.Parse(next); err != nil || u.Path != edgePathPrefix+"gate" {
+			return false
+		}
+		if _, ok := s.gateSession(c, ws); ok {
+			c.Header("Cache-Control", "no-store")
+			c.Redirect(http.StatusFound, next)
+			return true
+		}
+		app.page(c, "index.html")
+		return true
+	}
+	if _, page := app.pages[p]; page {
+		return false
+	}
+	if st, err := fs.Stat(app.files, p); err != nil || st.IsDir() {
+		return false
+	}
+	app.serve.ServeHTTP(c.Writer, c.Request)
+	return true
 }
 
 // gateBegin is GET /.shpyrd/begin?t=<ticket> on a gate's host: the

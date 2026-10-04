@@ -66,8 +66,8 @@ func ExportVolume(ctx context.Context, directory string, w io.Writer) error {
 		}
 		h.Name = name
 		h.Mode &= 0777 // never transfer setuid, setgid or sticky privileges
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			h.Uid, h.Gid = int(st.Uid), int(st.Gid)
+		if u, g, ok := ownerOf(info); ok {
+			h.Uid, h.Gid = u, g
 		}
 		if err := tw.WriteHeader(h); err != nil {
 			return err
@@ -290,9 +290,8 @@ func rootMetadata(root *os.Root) (*volumeRoot, error) {
 		return nil, err
 	}
 	m := &volumeRoot{Mode: uint32(info.Mode().Perm())}
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		m.UID = int(st.Uid)
-		m.GID = int(st.Gid)
+	if u, g, ok := ownerOf(info); ok {
+		m.UID, m.GID = u, g
 	}
 	return m, nil
 }
