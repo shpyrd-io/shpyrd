@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -30,7 +29,10 @@ import (
 // gateExt declares one gate, "billing", in front of the project billing of
 // the operator's workspace "platform": owners of any other workspace come in
 // by its rule. It adds one link, shown when the gate would admit.
-type gateExt struct{ deps ext.Deps }
+type gateExt struct {
+	deps      ext.Deps
+	linkCalls int
+}
 
 func (*gateExt) Name() string                          { return "gates-test" }
 func (*gateExt) Description() string                   { return "test" }
@@ -49,6 +51,7 @@ func (*gateExt) Gates(ext.Deps) []ext.Gate {
 	}}
 }
 func (g *gateExt) Links(ctx context.Context, v ext.Visitor) []ext.Link {
+	g.linkCalls++
 	if !g.deps.GateAdmits(ctx, "billing", v) {
 		return nil
 	}
@@ -64,6 +67,7 @@ func (g *gateExt) Links(ctx context.Context, v ext.Visitor) []ext.Link {
 type gateWorld struct {
 	s                                   *Server
 	st                                  store.Store
+	ext                                 *gateExt
 	ana, carla, bruno, dora, eve, frank ext.Identity
 }
 
@@ -119,17 +123,19 @@ func newGateWorld(t *testing.T) *gateWorld {
 	cr := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(billing).WithStatusSubresource(&shpyrdv1.App{}).Build()
 	k := &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
 	public := PublicConfig{Domain: "example.test", DashboardURL: "https://shpyrd.example.test"}
+	gateExtInstance := &gateExt{}
 	s, err := newServer(k, Options{
 		Token: testToken, Apps: cr, Store: st, Public: public,
 		Tenancy:      &tenancy.ByAddress{Store: st, Domain: public.Domain, ConsoleHost: "shpyrd.example.test"},
 		Capabilities: []string{"workspaces"},
-		Extensions:   []ext.Extension{&gateExt{}},
+		Extensions:   []ext.Extension{gateExtInstance},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.authz.TTL = 1
 	w.s = s
+	w.ext = gateExtInstance
 	return w
 }
 
@@ -703,16 +709,19 @@ func TestLinksArePerPerson(t *testing.T) {
 }
 
 // Links asks no provider without an identity set.
-func TestLinksAskNoProviderWithoutIdentity(t *testing.T) {
+func TestLinksWithoutIdentityAskNoProvider(t *testing.T) {
 	w := newGateWorld(t)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest("GET", "https://acme.shpyrd.test/api/links", nil)
-	c.Request.Host = "acme.shpyrd.test"
-	// Do not set an identity; IdentityFrom will return false.
-	// The tenant lookup will fail, but the handler returns empty list for console.
-	w.s.links(c)
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
-		t.Errorf("links without identity = %d %s", rec.Code, rec.Body.String())
+	// Set the server to open mode so auth() lets requests through without identity.
+	w.s.opts.Token = ""
+	// Make a request with no session cookie, so no identity is set.
+	rec := w.get(t, "acme.shpyrd.test", "/api/links", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+	if w.ext.linkCalls != 0 {
+		t.Errorf("linkCalls = %d, want 0", w.ext.linkCalls)
 	}
 }
