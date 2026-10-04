@@ -25,7 +25,6 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
-	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // gateSet is the gates the extensions declared, by name and by host.
@@ -238,11 +237,17 @@ func (s *Server) gateOpen(c *gin.Context) {
 		s.edgePage(c, http.StatusForbidden, "Not open to you", "Ask the people who run it for access.", nil)
 		return
 	}
+	// The way in runs only at the workspace's platform address: begin sends
+	// the browser back there, never to a host a request named.
+	home := s.gateHome(ws)
+	atHome := hostOnly(c.Request.Host) == hostOnly(home)
 	nonce, asked := c.GetQuery("nonce")
 	if !asked {
-		// The host to come back to is signed, never a parameter anyone
-		// could set: begin sends a nonce nowhere a workspace did not name.
-		ticket, err := s.edgeKeys.SignGateBegin(edge.GateBegin{Host: hostOnly(c.Request.Host), Gate: g.Name})
+		if !atHome {
+			c.Redirect(http.StatusFound, "https://"+home+edgePathPrefix+"gate?"+url.Values{"name": {g.Name}}.Encode())
+			return
+		}
+		ticket, err := s.edgeKeys.SignGateBegin(edge.GateBegin{Workspace: ws.Slug, WorkspaceID: ws.ID, Gate: g.Name})
 		if err != nil {
 			abort(c, http.StatusInternalServerError, err)
 			return
@@ -250,7 +255,9 @@ func (s *Server) gateOpen(c *gin.Context) {
 		c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"begin?"+url.Values{"t": {ticket}}.Encode())
 		return
 	}
-	if !validGateNonce(nonce) {
+	// begin sent no nonce to any other host: one arriving there is not a
+	// way in.
+	if !atHome || !validGateNonce(nonce) {
 		s.edgePage(c, http.StatusBadRequest, "This link is not valid", "Open it again from your workspace.", nil)
 		return
 	}
@@ -264,30 +271,27 @@ func (s *Server) gateOpen(c *gin.Context) {
 
 // gateBegin is GET /.shpyrd/begin?t=<ticket> on a gate's host: the
 // browser gets a nonce here, at the gate's host, and goes back to its
-// workspace to ask for a code bound to it. It goes back only to the host a
-// workspace signed into the ticket for this gate, and only when that host
-// is a plain name that is still a workspace's.
+// workspace to ask for a code bound to it. It goes back only to the
+// platform address of the workspace a ticket for this gate names, still
+// that workspace by ID; the ticket carries no host.
 func (s *Server) gateBegin(c *gin.Context, g ext.Gate) {
 	c.Header("Cache-Control", "no-store")
 	invalid := func() {
 		s.edgePage(c, http.StatusBadRequest, "This link is not valid", "Open it again from your workspace.", nil)
 	}
 	ticket, err := s.edgeKeys.VerifyGateBegin(c.Query("t"), g.Name)
-	if err != nil || !validHostname(ticket.Host) {
+	if err != nil {
 		invalid()
 		return
 	}
-	host := ticket.Host
-	// An internal host is no browser's workspace. Under tenancy.Single with
-	// no console host every host is internal, so gates need a console host
-	// there.
-	t, err := s.tenancy.Resolve(c.Request.Context(), host)
-	if err != nil || t == nil || t.Realm != tenancy.RealmWorkspace || t.Workspace == nil || t.Internal {
-		invalid()
+	ws, err := s.store.Workspace(c.Request.Context(), ticket.Workspace)
+	if err != nil || ws.ID != ticket.WorkspaceID {
+		invalid() // gone, or another workspace under the same slug
 		return
 	}
-	back := url.URL{Scheme: "https", Host: host, Path: edgePathPrefix + "gate"}
-	if back.Hostname() != host {
+	home := s.gateHome(ws)
+	back := url.URL{Scheme: "https", Host: home, Path: edgePathPrefix + "gate"}
+	if !validHostname(hostOnly(home)) || back.Host != home {
 		invalid()
 		return
 	}
@@ -302,6 +306,17 @@ func (s *Server) gateBegin(c *gin.Context, g ext.Gate) {
 		SameSite: http.SameSiteLaxMode, MaxAge: gateNonceTTL,
 	})
 	c.Redirect(http.StatusFound, back.String())
+}
+
+// gateHome is where a gate sends a browser back to start: the workspace's
+// platform address (the operator gives it; a customer's custom domain is
+// DNS they control, so never that), or the dashboard's configured host for
+// a workspace without one. Never the request's Host.
+func (s *Server) gateHome(ws *store.Workspace) string {
+	if ws.Address != "" {
+		return s.withPort(ws.Address)
+	}
+	return s.dashboardHost()
 }
 
 // validHostname says whether a host is a plain DNS name: lowercase labels

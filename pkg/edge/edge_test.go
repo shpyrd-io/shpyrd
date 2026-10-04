@@ -144,15 +144,16 @@ func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
 }
 
 // A begin ticket starts the way in to its own gate only, for a minute, and
-// names a host to come back to; no cookie passes for one.
+// names the workspace, by slug and ID, to send the browser back to; no
+// cookie passes for one.
 func TestABeginTicketStartsOnlyItsGate(t *testing.T) {
 	k, _ := GenerateKeys()
-	val, err := k.SignGateBegin(GateBegin{Host: "acme.example.test", Gate: "billing"})
+	val, err := k.SignGateBegin(GateBegin{Workspace: "acme", WorkspaceID: "w1", Gate: "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, err := k.VerifyGateBegin(val, "billing")
-	if err != nil || b.Host != "acme.example.test" || b.Gate != "billing" || b.ExpiresAt <= time.Now().Unix() || b.ExpiresAt > time.Now().Add(CodeTTL).Unix()+1 {
+	if err != nil || b.Workspace != "acme" || b.WorkspaceID != "w1" || b.Gate != "billing" || b.ExpiresAt <= time.Now().Unix() || b.ExpiresAt > time.Now().Add(CodeTTL).Unix()+1 {
 		t.Fatalf("begin ticket: %v %+v", err, b)
 	}
 	if _, err := k.VerifyGateBegin(val, "reports"); err == nil {
@@ -161,15 +162,17 @@ func TestABeginTicketStartsOnlyItsGate(t *testing.T) {
 	if _, err := k.VerifyGateBegin(val, ""); err == nil {
 		t.Error("a begin ticket started no gate")
 	}
-	expired, _ := k.SignGateBegin(GateBegin{Host: "acme.example.test", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
+	expired, _ := k.SignGateBegin(GateBegin{Workspace: "acme", WorkspaceID: "w1", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
 	if _, err := k.VerifyGateBegin(expired, "billing"); err == nil {
 		t.Error("an expired begin ticket was accepted")
 	}
-	nohost, _ := k.SignGateBegin(GateBegin{Gate: "billing"})
-	if _, err := k.VerifyGateBegin(nohost, "billing"); err == nil {
-		t.Error("a begin ticket without a host was accepted")
+	for _, partial := range []GateBegin{{WorkspaceID: "w1", Gate: "billing"}, {Workspace: "acme", Gate: "billing"}} {
+		v, _ := k.SignGateBegin(partial)
+		if _, err := k.VerifyGateBegin(v, "billing"); err == nil {
+			t.Errorf("a begin ticket without a whole workspace was accepted: %+v", partial)
+		}
 	}
-	gate, _ := k.SignGateCookie(GateCookie{Pass: "acme.example.test", Gate: "billing"})
+	gate, _ := k.SignGateCookie(GateCookie{Pass: "p1", Gate: "billing"})
 	if _, err := k.VerifyGateBegin(gate, "billing"); err == nil {
 		t.Error("a gate cookie passed for a begin ticket")
 	}

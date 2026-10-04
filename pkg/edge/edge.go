@@ -498,12 +498,15 @@ func (k *Keys) VerifyGateCookie(value, gate string) (*GateCookie, error) {
 }
 
 // GateBegin is what a workspace hands a gate's host to start the way in:
-// the host to come back to and the gate, signed so that begin sends the
-// browser nowhere a workspace did not name, for a minute.
+// the workspace, by slug and by ID, whose platform address the browser goes
+// back to, and the gate, signed so that begin sends the browser nowhere a
+// workspace did not name, for a minute. It carries no host: the host is
+// the workspace's own, looked up when the ticket is used.
 type GateBegin struct {
-	Host      string `json:"host"`
-	Gate      string `json:"gate"`
-	ExpiresAt int64  `json:"exp"`
+	Workspace   string `json:"ws"`
+	WorkspaceID string `json:"wsid"`
+	Gate        string `json:"gate"`
+	ExpiresAt   int64  `json:"exp"`
 }
 
 const gateBeginTyp = "shpyrd-gate-begin"
@@ -518,7 +521,7 @@ func (k *Keys) SignGateBegin(b GateBegin) (string, error) {
 }
 
 // VerifyGateBegin checks a begin ticket for the given gate: its type, its
-// gate, a host to come back to, and its expiry.
+// gate, a workspace by slug and ID, and its expiry.
 func (k *Keys) VerifyGateBegin(value, gate string) (*GateBegin, error) {
 	var b GateBegin
 	if err := k.Verify(value, gateBeginTyp, &b); err != nil {
@@ -527,8 +530,8 @@ func (k *Keys) VerifyGateBegin(value, gate string) (*GateBegin, error) {
 	if gate == "" || b.Gate != gate {
 		return nil, errors.New("ticket is for another gate")
 	}
-	if b.Host == "" {
-		return nil, errors.New("ticket names no host")
+	if b.Workspace == "" || b.WorkspaceID == "" {
+		return nil, errors.New("ticket names no workspace")
 	}
 	if time.Now().Unix() >= b.ExpiresAt {
 		return nil, errors.New("ticket expired")

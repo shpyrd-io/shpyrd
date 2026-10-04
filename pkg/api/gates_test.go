@@ -256,7 +256,11 @@ func (w *gateWorld) wayIn(t *testing.T, wsHost, sid string) (string, *http.Cooki
 		t.Fatalf("gate open = %d %s", rec.Code, begin)
 	}
 	bq, _ := url.ParseQuery(strings.TrimPrefix(begin, "https://billing.example.test/.shpyrd/begin?"))
-	if ticket, err := w.s.edgeKeys.VerifyGateBegin(bq.Get("t"), "billing"); err != nil || ticket.Host != hostOnly(wsHost) || len(bq) != 1 {
+	home, err := w.st.WorkspaceByAddress(context.Background(), wsHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket, err := w.s.edgeKeys.VerifyGateBegin(bq.Get("t"), "billing"); err != nil || ticket.Workspace != home.Slug || ticket.WorkspaceID != home.ID || len(bq) != 1 {
 		t.Fatalf("begin ticket: %v %+v %v", err, ticket, bq)
 	}
 	rec = w.get(t, "billing.example.test", strings.TrimPrefix(begin, "https://billing.example.test"), "")
@@ -551,12 +555,16 @@ func TestACallbackLinkWorksOnlyInTheBrowserThatBeganIt(t *testing.T) {
 }
 
 // begin starts only from a ticket a workspace signed for this gate, and
-// sends the browser back only to a workspace's host by a plain name: no
-// ticket, a forged, stale or other gate's ticket, or a signed one naming a
-// host that is no workspace's or would bend the URL, gets no nonce. At a
-// host that is no gate's there is no begin.
-func TestBeginStartsOnlyFromASignedTicketBackToAWorkspace(t *testing.T) {
+// sends the browser back to that workspace's platform address, looked up
+// then: no ticket, a forged, stale or other gate's ticket, or one for a
+// workspace re-created under its slug, gets no nonce. At a host that is no
+// gate's there is no begin.
+func TestBeginStartsOnlyFromASignedTicketBackToTheWorkspacesAddress(t *testing.T) {
 	w := newGateWorld(t)
+	acme, err := w.st.Workspace(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
 	sign := func(b edge.GateBegin) string {
 		v, err := w.s.edgeKeys.SignGateBegin(b)
 		if err != nil {
@@ -565,15 +573,12 @@ func TestBeginStartsOnlyFromASignedTicketBackToAWorkspace(t *testing.T) {
 		return v
 	}
 	refused := map[string]string{
-		"no ticket":          "",
-		"a garbage ticket":   "not.a.ticket",
-		"another gate's":     sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "reports"}),
-		"an expired ticket":  sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()}),
-		"an encoded slash":   sign(edge.GateBegin{Host: "evil%2ecom/.acme.shpyrd.test", Gate: "billing"}),
-		"a question mark":    sign(edge.GateBegin{Host: "evil?.acme.shpyrd.test", Gate: "billing"}),
-		"a slash":            sign(edge.GateBegin{Host: "evil/.acme.shpyrd.test", Gate: "billing"}),
-		"no workspace's":     sign(edge.GateBegin{Host: "evil.com", Gate: "billing"}),
-		"the console's host": sign(edge.GateBegin{Host: "shpyrd.example.test", Gate: "billing"}),
+		"no ticket":                "",
+		"a garbage ticket":         "not.a.ticket",
+		"another gate's":           sign(edge.GateBegin{Workspace: "acme", WorkspaceID: acme.ID, Gate: "reports"}),
+		"an expired ticket":        sign(edge.GateBegin{Workspace: "acme", WorkspaceID: acme.ID, Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()}),
+		"an older acme's":          sign(edge.GateBegin{Workspace: "acme", WorkspaceID: acme.ID + "-old", Gate: "billing"}),
+		"a workspace that is none": sign(edge.GateBegin{Workspace: "nope", WorkspaceID: acme.ID, Gate: "billing"}),
 	}
 	for what, ticket := range refused {
 		path := "/.shpyrd/begin"
@@ -589,12 +594,46 @@ func TestBeginStartsOnlyFromASignedTicketBackToAWorkspace(t *testing.T) {
 	if rec := w.get(t, "billing.example.test", "/.shpyrd/begin?from=acme.shpyrd.test", ""); rec.Code != http.StatusBadRequest || setsCookie(rec, w.s.gateNonceCookieName()) {
 		t.Errorf("begin with from = %d", rec.Code)
 	}
-	ok := sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "billing"})
-	if rec := w.get(t, "billing.example.test", "/.shpyrd/begin?"+url.Values{"t": {ok}}.Encode(), ""); rec.Code != http.StatusFound || !setsCookie(rec, w.s.gateNonceCookieName()) {
-		t.Errorf("begin with a good ticket = %d", rec.Code)
+	ok := sign(edge.GateBegin{Workspace: "acme", WorkspaceID: acme.ID, Gate: "billing"})
+	rec := w.get(t, "billing.example.test", "/.shpyrd/begin?"+url.Values{"t": {ok}}.Encode(), "")
+	back, _ := url.Parse(rec.Header().Get("Location"))
+	if rec.Code != http.StatusFound || !setsCookie(rec, w.s.gateNonceCookieName()) || back == nil || back.Host != acme.Address || back.Path != "/.shpyrd/gate" {
+		t.Errorf("begin with a good ticket = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/begin?"+url.Values{"t": {ok}}.Encode(), ""); rec.Code != http.StatusNotFound || setsCookie(rec, w.s.gateNonceCookieName()) {
 		t.Errorf("begin at a workspace's host = %d", rec.Code)
+	}
+}
+
+// The way in runs only at the workspace's platform address, never at a
+// host the request names: from any other host of the workspace the browser
+// is sent to the address first, with no ticket signed, and a nonce brought
+// to another host is refused.
+func TestTheWayInRunsOnlyAtTheWorkspacesAddress(t *testing.T) {
+	w := newGateWorld(t)
+	sid := w.session(t, "acme", w.ana)
+	rec := w.get(t, "x.acme.shpyrd.test", "/.shpyrd/gate?name=billing", sid)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://acme.shpyrd.test/.shpyrd/gate?name=billing" {
+		t.Errorf("gate open at another host of acme = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(make([]byte, 24))
+	rec = w.get(t, "x.acme.shpyrd.test", "/.shpyrd/gate?"+url.Values{"name": {"billing"}, "nonce": {nonce}}.Encode(), sid)
+	if rec.Code != http.StatusBadRequest || rec.Header().Get("Location") != "" {
+		t.Errorf("gate open with a nonce at another host of acme = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// The default workspace answers at its address too, and its people enter
+// a gate from there like anyone's.
+func TestAGateIsEnteredFromTheDefaultWorkspacesAddress(t *testing.T) {
+	w := newGateWorld(t)
+	owner := ext.Identity{Subject: "u-olga", Email: "olga@example.test", Provider: "local"}
+	if _, err := w.st.PutMembership(context.Background(), store.DefaultWorkspace, owner.Email, store.WorkspaceRoleOwner); err != nil {
+		t.Fatal(err)
+	}
+	cookie := w.enter(t, "example.test", w.session(t, store.DefaultWorkspace, owner))
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Errorf("auth = %d", rec.Code)
 	}
 }
 
