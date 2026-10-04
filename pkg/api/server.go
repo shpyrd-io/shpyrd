@@ -493,8 +493,10 @@ func (s *Server) routes() error {
 	tenant := s.requireTenant()
 	s.engine.GET(edgePathPrefix+"signin", tenant, s.edgeSignin)
 	s.engine.GET(edgePathPrefix+"start", tenant, s.edgeStart)
-	// A gate's host belongs to no workspace: its callback and logout are
-	// answered before the tenant middleware would refuse it (RFC-0083).
+	// A gate's host belongs to no workspace: its begin, callback and logout
+	// are answered before the tenant middleware would refuse it (RFC-0083).
+	// Only a gate's host begins; anywhere else there is nothing there.
+	s.engine.GET(edgePathPrefix+"begin", s.onGateHost(s.gateBegin), s.notAGate)
 	s.engine.GET(edgePathPrefix+"callback", s.onGateHost(s.gateCallback), tenant, s.edgeCallback)
 	s.engine.GET(edgePathPrefix+"logout", s.onGateHost(s.gateLogout), tenant, s.edgeLogout)
 	s.engine.GET(edgePathPrefix+"gate", tenant, s.gateOpen)

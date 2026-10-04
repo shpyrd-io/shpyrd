@@ -938,6 +938,9 @@ type Sessions interface {
 	// TakeCode returns the code once and removes it (expired ones too, as
 	// ErrNotFound).
 	TakeCode(ctx context.Context, code string) (*Code, error)
+	// PeekCode returns a code without consuming it; ErrNotFound when it is
+	// unknown or expired. A gate's pass is read on every request (RFC-0083).
+	PeekCode(ctx context.Context, code string) (*Code, error)
 }
 
 // Dump is a workspace's content as the backup carries it. Invitations are

@@ -935,6 +935,17 @@ func (m *Memory) TakeCode(_ context.Context, code string) (*Code, error) {
 	return &cc, nil
 }
 
+func (m *Memory) PeekCode(_ context.Context, code string) (*Code, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.codes[code]
+	if !ok || m.now().After(c.ExpiresAt) {
+		return nil, ErrNotFound
+	}
+	cc := *c
+	return &cc, nil
+}
+
 // ---- API tokens (RFC-0031) -------------------------------------------------
 
 func (m *Memory) CreateToken(_ context.Context, ws string, t APIToken, hash string) (*APIToken, error) {

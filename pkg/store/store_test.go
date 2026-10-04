@@ -706,6 +706,42 @@ func TestSessionsAndCodes(t *testing.T) {
 	}
 }
 
+// A peeked code stays: a gate's pass is read on every request until it is
+// taken or expires (RFC-0083).
+func TestAPeekedCodeStaysUntilItIsTaken(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			if err := s.PutCode(ctx, Code{Code: "p1", Host: "gate.acme.test", Claims: json.RawMessage(`{"sid":"sid-1"}`), ExpiresAt: now.Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			first, err := s.PeekCode(ctx, "p1")
+			if err != nil || first.Host != "gate.acme.test" || !strings.Contains(string(first.Claims), "sid-1") {
+				t.Fatalf("first peek: %v %+v", err, first)
+			}
+			second, err := s.PeekCode(ctx, "p1")
+			if err != nil || string(second.Claims) != string(first.Claims) {
+				t.Fatalf("second peek: %v %+v", err, second)
+			}
+			if _, err := s.TakeCode(ctx, "p1"); err != nil {
+				t.Fatalf("take after peeks: %v", err)
+			}
+			if _, err := s.PeekCode(ctx, "p1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("peek after take: %v", err)
+			}
+			_ = s.PutCode(ctx, Code{Code: "p2", Host: "h", Claims: json.RawMessage(`{}`), ExpiresAt: now.Add(-time.Second)})
+			if _, err := s.PeekCode(ctx, "p2"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("expired peek: %v", err)
+			}
+			if _, err := s.PeekCode(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown peek: %v", err)
+			}
+		})
+	}
+}
+
 func TestTokens(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {

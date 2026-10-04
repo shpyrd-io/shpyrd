@@ -2,13 +2,16 @@ package api
 
 // Gates (RFC-0083): a project of one workspace at a host of its own, which
 // people enter from their own workspace. The edge carries their session
-// there with a one-time code, keeps a cookie that names it, and checks it,
-// and their access, on every request. People of the gate's own workspace
+// there with a one-time code bound to the browser that asked for it, keeps
+// a cookie that holds a pass standing for the session (never the session
+// itself), and checks it, and their access, on every request. People of the gate's own workspace
 // enter by the project's access; people of any other workspace by the
 // gate's rule.
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // gateSet is the gates the extensions declared, by name and by host.
@@ -137,8 +141,15 @@ func (s *Server) gateAdmitsHook(ctx context.Context, gate string, v ext.Visitor)
 }
 
 const (
-	gateCookieSecure   = "__Host-shpyrd_gate"
-	gateCookieInsecure = "shpyrd_gate"
+	gateCookieSecure        = "__Host-shpyrd_gate"
+	gateCookieInsecure      = "shpyrd_gate"
+	gateNonceCookieSecure   = "__Host-shpyrd_gate_nonce"
+	gateNonceCookieInsecure = "shpyrd_gate_nonce"
+	// gateNonceBytes is the size of a way in's nonce, before base64url.
+	gateNonceBytes = 24
+	// gateNonceTTL is how long a browser has to come back from its
+	// workspace with a code, in seconds.
+	gateNonceTTL = 300
 )
 
 // gateCookieName depends on HTTPS: the __Host- prefix needs Secure.
@@ -147,6 +158,22 @@ func (s *Server) gateCookieName() string {
 		return gateCookieSecure
 	}
 	return gateCookieInsecure
+}
+
+// gateNonceCookieName is the cookie that binds a way in to the browser that
+// began it, at the gate's host; like the gate cookie, it depends on HTTPS.
+func (s *Server) gateNonceCookieName() string {
+	if s.platformHTTPS() {
+		return gateNonceCookieSecure
+	}
+	return gateNonceCookieInsecure
+}
+
+// validGateNonce says whether a value can be a nonce begin made: base64url
+// of exactly gateNonceBytes.
+func validGateNonce(n string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(n)
+	return err == nil && len(b) == gateNonceBytes
 }
 
 // onGateHost answers a /.shpyrd/ route itself when the host is a gate's,
@@ -162,9 +189,17 @@ func (s *Server) onGateHost(h func(*gin.Context, ext.Gate)) gin.HandlerFunc {
 	}
 }
 
-// gateOpen is GET /.shpyrd/gate?name=<gate> on a workspace's host: the
+// notAGate answers a route only a gate's host has, at any other host.
+func (s *Server) notAGate(c *gin.Context) {
+	s.edgePage(c, http.StatusNotFound, "Nothing here", "There is nothing at this address.", nil)
+}
+
+// gateOpen is GET /.shpyrd/gate?name=<gate> on a workspace's host. Without
+// a nonce it sends an admitted visitor to the gate's host to begin, which
+// gives their browser a nonce and sends it back here; with one, the
 // workspace vouches for its signed-in visitor with a one-time code for the
-// gate's host.
+// gate's host, bound to that nonce. Who would be refused is refused here,
+// before going anywhere.
 func (s *Server) gateOpen(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	g, ok := s.gateByName(c.Query("name"))
@@ -172,15 +207,25 @@ func (s *Server) gateOpen(c *gin.Context) {
 		s.edgePage(c, http.StatusNotFound, "Nothing here", "No app answers by that name.", nil)
 		return
 	}
-	if ok, _ := s.sessionAuth(c); !ok {
+	signIn := func() {
 		self := edgePathPrefix + "gate?" + url.Values{"name": {g.Name}}.Encode()
 		c.Redirect(http.StatusFound, "/?next="+url.QueryEscape(self))
+	}
+	if ok, _ := s.sessionAuth(c); !ok {
+		signIn()
 		return
 	}
 	ctx := c.Request.Context()
 	ws, err := s.tenant(c)
 	if err != nil {
 		s.edgePage(c, http.StatusNotFound, "Nothing here", "Open this from your workspace.", nil)
+		return
+	}
+	// sessionAuth lets a session without a workspace through; a gate takes
+	// only a session of exactly this workspace.
+	sid, _ := c.Cookie(sessionCookie)
+	if sess, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID); !ok || sess.WorkspaceID != ws.ID {
+		signIn()
 		return
 	}
 	id, _ := ext.IdentityFrom(c)
@@ -193,8 +238,16 @@ func (s *Server) gateOpen(c *gin.Context) {
 		s.edgePage(c, http.StatusForbidden, "Not open to you", "Ask the people who run it for access.", nil)
 		return
 	}
-	sid, _ := c.Cookie(sessionCookie)
-	code, err := s.edgeCodes.MintJSON(ctx, g.Host, edge.KindGate, edge.GateClaims{SessionID: sid, Workspace: ws.Slug, WorkspaceID: ws.ID, Gate: g.Name})
+	nonce, asked := c.GetQuery("nonce")
+	if !asked {
+		c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"begin?"+url.Values{"from": {hostOnly(c.Request.Host)}}.Encode())
+		return
+	}
+	if !validGateNonce(nonce) {
+		s.edgePage(c, http.StatusBadRequest, "This link is not valid", "Open it again from your workspace.", nil)
+		return
+	}
+	code, err := s.edgeCodes.MintJSON(ctx, g.Host, edge.KindGate, edge.GateClaims{SessionID: sid, Workspace: ws.Slug, WorkspaceID: ws.ID, Gate: g.Name, Nonce: nonce})
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -202,17 +255,59 @@ func (s *Server) gateOpen(c *gin.Context) {
 	c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"callback?"+url.Values{"code": {code}}.Encode())
 }
 
-// gateCallback is GET /.shpyrd/callback?code= on a gate's host: the code
-// becomes the gate cookie.
-func (s *Server) gateCallback(c *gin.Context, g ext.Gate) {
+// gateBegin is GET /.shpyrd/begin?from=<workspace host> on a gate's host:
+// the browser gets a nonce here, at the gate's host, and goes back to its
+// workspace to ask for a code bound to it. Only a workspace's host is gone
+// back to.
+func (s *Server) gateBegin(c *gin.Context, g ext.Gate) {
 	c.Header("Cache-Control", "no-store")
-	var claims edge.GateClaims
-	if err := s.edgeCodes.RedeemJSON(c.Request.Context(), c.Query("code"), hostOnly(c.Request.Host), edge.KindGate, &claims); err != nil || claims.Gate != g.Name {
-		s.edgePage(c, http.StatusBadRequest, "This link expired", "Open it again from your workspace.", nil)
+	from := hostOnly(c.Query("from"))
+	t, err := s.tenancy.Resolve(c.Request.Context(), from)
+	if from == "" || err != nil || t == nil || t.Realm != tenancy.RealmWorkspace || t.Workspace == nil || t.Internal {
+		s.edgePage(c, http.StatusBadRequest, "This link is not valid", "Open it again from your workspace.", nil)
 		return
 	}
-	claims.IssuedAt, claims.ExpiresAt = 0, 0 // the cookie's own lifetime
-	value, err := s.edgeKeys.SignGateCookie(claims)
+	nonce, err := randomToken(gateNonceBytes)
+	if err != nil {
+		abort(c, http.StatusInternalServerError, err)
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name: s.gateNonceCookieName(), Value: nonce, Path: "/", HttpOnly: true, Secure: s.platformHTTPS(),
+		SameSite: http.SameSiteLaxMode, MaxAge: gateNonceTTL,
+	})
+	c.Redirect(http.StatusFound, "https://"+from+edgePathPrefix+"gate?"+url.Values{"name": {g.Name}, "nonce": {nonce}}.Encode())
+}
+
+// gateCallback is GET /.shpyrd/callback?code= on a gate's host: a code
+// asked for by this browser (its nonce cookie says so) becomes a pass, and
+// the gate cookie holds it.
+func (s *Server) gateCallback(c *gin.Context, g ext.Gate) {
+	c.Header("Cache-Control", "no-store")
+	expired := func() {
+		s.edgePage(c, http.StatusBadRequest, "This link expired", "Open it again from your workspace.", nil)
+	}
+	ctx := c.Request.Context()
+	var claims edge.GateClaims
+	if err := s.edgeCodes.RedeemJSON(ctx, c.Query("code"), hostOnly(c.Request.Host), edge.KindGate, &claims); err != nil || claims.Gate != g.Name {
+		expired()
+		return
+	}
+	// A code is worth something only in the browser that began the way in:
+	// handed to anyone else, it would sign them in as someone else.
+	nonce, err := c.Cookie(s.gateNonceCookieName())
+	if err != nil || nonce == "" || claims.Nonce == "" || subtle.ConstantTimeCompare([]byte(nonce), []byte(claims.Nonce)) != 1 {
+		expired()
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{Name: s.gateNonceCookieName(), Value: "", Path: "/", HttpOnly: true, Secure: s.platformHTTPS(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	claims.Nonce, claims.IssuedAt, claims.ExpiresAt = "", 0, 0
+	pass, err := s.edgeCodes.MintPass(ctx, g.Host, claims)
+	if err != nil {
+		abort(c, http.StatusInternalServerError, err)
+		return
+	}
+	value, err := s.edgeKeys.SignGateCookie(edge.GateCookie{Pass: pass, Gate: g.Name})
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -224,15 +319,24 @@ func (s *Server) gateCallback(c *gin.Context, g ext.Gate) {
 	c.Redirect(http.StatusFound, "/")
 }
 
-// gateLogout is GET /.shpyrd/logout on a gate's host: the gate cookie goes,
-// the workspace's session stays.
+// gateLogout is GET /.shpyrd/logout on a gate's host: the gate's pass ends
+// and its cookie goes; the workspace's session stays.
 func (s *Server) gateLogout(c *gin.Context, g ext.Gate) {
+	if raw, err := c.Cookie(s.gateCookieName()); err == nil && raw != "" {
+		if cookie, err := s.edgeKeys.VerifyGateCookie(raw, g.Name); err == nil {
+			if err := s.edgeCodes.DropPass(c.Request.Context(), cookie.Pass); err != nil {
+				abort(c, http.StatusInternalServerError, err)
+				return
+			}
+		}
+	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: s.gateCookieName(), Value: "", Path: "/", HttpOnly: true, Secure: s.platformHTTPS(), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	s.edgePage(c, http.StatusOK, "Signed out of "+g.Name, "Open it again from your workspace.", nil)
 }
 
-// gateAuth is GET /edge/auth?gate=<gate>: the gate cookie's session, still
-// alive in exactly its workspace, and the visitor still admitted, now.
+// gateAuth is GET /edge/auth?gate=<gate>: the session the gate cookie's
+// pass stands for, still alive in exactly its workspace, and the visitor
+// still admitted, now.
 func (s *Server) gateAuth(c *gin.Context, name string) {
 	g, ok := s.gateByName(name)
 	if !ok {
@@ -249,9 +353,14 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 		signIn()
 		return
 	}
-	claims, err := s.edgeKeys.VerifyGateCookie(raw, g.Name)
+	cookie, err := s.edgeKeys.VerifyGateCookie(raw, g.Name)
 	if err != nil {
 		signIn()
+		return
+	}
+	claims, err := s.edgeCodes.Pass(ctx, cookie.Pass, g.Host)
+	if err != nil || claims.Gate != g.Name || claims.SessionID == "" {
+		signIn() // signed out of the gate, expired, or never a pass
 		return
 	}
 	ws, err := s.store.Workspace(ctx, claims.Workspace)
@@ -295,7 +404,7 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 	}
 	now := time.Now()
 	jwt, err := s.edgeKeys.Sign("JWT", edge.Claims{
-		Issuer: s.dashboardURLOf(ws), Subject: sess.Identity.Subject, Audience: g.Name,
+		Issuer: s.dashboardURLOf(ws), Subject: sess.Identity.Subject, Audience: gateAudience(g.Name),
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(edge.TokenTTL).Unix(),
 		Email: sess.Identity.Email, Name: sess.Identity.Name, Workspace: ws.Slug, Project: g.Project,
 		Roles: roleList, Teams: v.Teams, Realm: "workspace", Provider: sess.Identity.Provider,
@@ -313,6 +422,10 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 	c.Header("Authorization", "Bearer "+jwt)
 	c.Status(http.StatusOK)
 }
+
+// gateAudience is a gate's JWT audience: "gate:" and its name, which no
+// app's audience can be, since a project's slug has no colon.
+func gateAudience(name string) string { return "gate:" + name }
 
 // gateErrorPage answers what nginx hands over for a gate's host: a 401 has
 // no sign-in to go to (the gate cannot know the workspace), a 403 is no

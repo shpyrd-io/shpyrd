@@ -107,16 +107,16 @@ func TestCookieAndCodes(t *testing.T) {
 func ed25519PublicKey(b []byte) ed25519.PublicKey { return ed25519.PublicKey(b) }
 
 // A gate cookie opens its own gate and nothing else: not another gate, not
-// an app, and an app cookie does not open a gate. It names a session of
-// one workspace, by slug and ID.
+// an app, and an app cookie does not open a gate. It holds a pass, never a
+// session.
 func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
 	k, _ := GenerateKeys()
-	val, err := k.SignGateCookie(GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing"})
+	val, err := k.SignGateCookie(GateCookie{Pass: "p1", Gate: "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c, err := k.VerifyGateCookie(val, "billing")
-	if err != nil || c.SessionID != "s1" || c.Workspace != "acme" || c.WorkspaceID != "w1" || c.ExpiresAt <= time.Now().Unix() {
+	if err != nil || c.Pass != "p1" || c.Gate != "billing" || c.ExpiresAt <= time.Now().Unix() {
 		t.Fatalf("gate cookie: %v %+v", err, c)
 	}
 	if _, err := k.VerifyGateCookie(val, "reports"); err == nil {
@@ -129,13 +129,61 @@ func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
 	if _, err := k.VerifyGateCookie(app, "billing"); err == nil {
 		t.Error("an app cookie passed for a gate cookie")
 	}
-	nobody, _ := k.SignGateCookie(GateClaims{SessionID: "s1", Gate: "billing"})
-	if _, err := k.VerifyGateCookie(nobody, "billing"); err == nil {
-		t.Error("a gate cookie without a workspace was accepted")
+	nopass, _ := k.SignGateCookie(GateCookie{Gate: "billing"})
+	if _, err := k.VerifyGateCookie(nopass, "billing"); err == nil {
+		t.Error("a gate cookie without a pass was accepted")
 	}
-	expired, _ := k.SignGateCookie(GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
+	nogate, _ := k.SignGateCookie(GateCookie{Pass: "p1"})
+	if _, err := k.VerifyGateCookie(nogate, ""); err == nil {
+		t.Error("a gate cookie for no gate was accepted")
+	}
+	expired, _ := k.SignGateCookie(GateCookie{Pass: "p1", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
 	if _, err := k.VerifyGateCookie(expired, "billing"); err == nil {
 		t.Error("an expired gate cookie was accepted")
+	}
+}
+
+// A pass is read as often as needed, at its host only, and ends when it is
+// dropped; a code of another kind is no pass.
+func TestAPassIsReadAtItsHostUntilDropped(t *testing.T) {
+	ctx := context.Background()
+	codes := NewCodes(store.NewMemory())
+	claims := GateClaims{SessionID: "s1", Workspace: "acme", WorkspaceID: "w1", Gate: "billing"}
+	pass, err := codes.MintPass(ctx, "Billing.example.test", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		got, err := codes.Pass(ctx, pass, "billing.example.test")
+		if err != nil || *got != claims {
+			t.Fatalf("read %d: %v %+v", i, err, got)
+		}
+	}
+	if _, err := codes.Pass(ctx, pass, "reports.example.test"); err == nil {
+		t.Error("a pass was read at another host")
+	}
+	edgeCode, _ := codes.Mint(ctx, "billing.example.test", CookieClaims{SessionID: "s1", Project: "billing"})
+	if _, err := codes.Pass(ctx, edgeCode, "billing.example.test"); err == nil {
+		t.Error("an app's edge code was read as a pass")
+	}
+	gateCode, _ := codes.MintJSON(ctx, "billing.example.test", KindGate, claims)
+	if _, err := codes.Pass(ctx, gateCode, "billing.example.test"); err == nil {
+		t.Error("a gate code was read as a pass")
+	}
+	if err := codes.DropPass(ctx, pass); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codes.Pass(ctx, pass, "billing.example.test"); err == nil {
+		t.Error("a dropped pass was read")
+	}
+	if err := codes.DropPass(ctx, pass); err != nil {
+		t.Errorf("dropping a pass twice: %v", err)
+	}
+	codes.now = func() time.Time { return time.Now().Add(-2 * CookieTTL) } // minted in the past: already expired
+	late, _ := codes.MintPass(ctx, "billing.example.test", claims)
+	codes.now = time.Now
+	if _, err := codes.Pass(ctx, late, "billing.example.test"); err == nil {
+		t.Error("an expired pass was read")
 	}
 }
 

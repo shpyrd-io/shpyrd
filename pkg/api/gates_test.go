@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -242,29 +243,79 @@ func (w *gateWorld) session(t *testing.T, ws string, id ext.Identity) string {
 	return sess.ID
 }
 
+// wayIn walks the first three hops of the gate's way in: the workspace's
+// host sends the browser to the gate's host to begin, which sets a nonce
+// and sends it back, and the workspace's host then vouches with a code. It
+// returns the callback's path and the nonce cookie the browser holds.
+func (w *gateWorld) wayIn(t *testing.T, wsHost, sid string) (string, *http.Cookie) {
+	t.Helper()
+	rec := w.get(t, wsHost, "/.shpyrd/gate?name=billing", sid)
+	begin := "https://billing.example.test/.shpyrd/begin?" + url.Values{"from": {wsHost}}.Encode()
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != begin {
+		t.Fatalf("gate open = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = w.get(t, "billing.example.test", strings.TrimPrefix(begin, "https://billing.example.test"), "")
+	back := "https://" + wsHost + "/.shpyrd/gate?"
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), back) {
+		t.Fatalf("gate begin = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	var nonce *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == w.s.gateNonceCookieName() {
+			nonce = c
+		}
+	}
+	if nonce == nil || !nonce.HttpOnly || !nonce.Secure || nonce.SameSite != http.SameSiteLaxMode || nonce.Path != "/" || nonce.MaxAge != 300 {
+		t.Fatalf("nonce cookie: %+v", nonce)
+	}
+	q, _ := url.ParseQuery(strings.TrimPrefix(rec.Header().Get("Location"), back))
+	if q.Get("name") != "billing" || q.Get("nonce") != nonce.Value {
+		t.Fatalf("gate begin sent back %s", rec.Header().Get("Location"))
+	}
+	rec = w.get(t, wsHost, strings.TrimPrefix(rec.Header().Get("Location"), "https://"+wsHost), sid)
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://billing.example.test/.shpyrd/callback?code=") {
+		t.Fatalf("gate open with a nonce = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	return strings.TrimPrefix(rec.Header().Get("Location"), "https://billing.example.test"), &http.Cookie{Name: nonce.Name, Value: nonce.Value}
+}
+
 // enter walks the gate's way in from a workspace's host and returns the gate
 // cookie the gate's host set.
 func (w *gateWorld) enter(t *testing.T, wsHost, sid string) *http.Cookie {
 	t.Helper()
-	rec := w.get(t, wsHost, "/.shpyrd/gate?name=billing", sid)
-	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://billing.example.test/.shpyrd/callback?code=") {
-		t.Fatalf("gate open = %d %s", rec.Code, rec.Header().Get("Location"))
-	}
-	cb := strings.TrimPrefix(rec.Header().Get("Location"), "https://billing.example.test")
-	rec = w.get(t, "billing.example.test", cb, "")
+	cb, nonce := w.wayIn(t, wsHost, sid)
+	rec := w.get(t, "billing.example.test", cb, "", nonce)
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
 		t.Fatalf("gate callback = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
+	var gate *http.Cookie
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == w.s.gateCookieName() {
+		switch c.Name {
+		case w.s.gateCookieName():
 			if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
 				t.Errorf("gate cookie attributes: %+v", c)
 			}
-			return c
+			gate = c
+		case w.s.gateNonceCookieName():
+			if c.MaxAge >= 0 {
+				t.Errorf("the nonce cookie was not cleared: %+v", c)
+			}
 		}
 	}
-	t.Fatal("no gate cookie set")
-	return nil
+	if gate == nil {
+		t.Fatal("no gate cookie set")
+	}
+	return gate
+}
+
+// setsCookie says whether a response sets a cookie of that name.
+func setsCookie(rec *httptest.ResponseRecorder, name string) bool {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // auth asks /edge/auth about a gate, as nginx does.
@@ -297,7 +348,7 @@ func TestAnOwnerOfAnotherWorkspaceEntersTheGate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("auth = %d %s", rec.Code, rec.Body.String())
 	}
-	if claims["aud"] != "billing" || claims["ws"] != "acme" || claims["project"] != "billing" || claims["realm"] != "workspace" || claims["operator"] != nil {
+	if claims["aud"] != "gate:billing" || claims["ws"] != "acme" || claims["project"] != "billing" || claims["realm"] != "workspace" || claims["operator"] != nil {
 		t.Errorf("claims = %v", claims)
 	}
 	if roles := claims["roles"].([]any); len(roles) == 0 || roles[0] != "owner" {
@@ -351,12 +402,11 @@ func TestTheWayInRefusesWhoTheGateWouldNotAdmit(t *testing.T) {
 // gate (Review Focus 1); a cookie of an app does not open a gate.
 func TestCodesAndCookiesOpenOnlyWhatTheyWereMadeFor(t *testing.T) {
 	w := newGateWorld(t)
-	rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?name=billing", w.session(t, "acme", w.ana))
-	cb := strings.TrimPrefix(rec.Header().Get("Location"), "https://billing.example.test")
-	if rec := w.get(t, "billing.example.test:8443", cb, ""); rec.Code != http.StatusFound {
+	cb, nonce := w.wayIn(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	if rec := w.get(t, "billing.example.test:8443", cb, "", nonce); rec.Code != http.StatusFound {
 		t.Fatalf("callback at the gate's host with a port = %d", rec.Code)
 	}
-	if rec := w.get(t, "billing.example.test", cb, ""); rec.Code != http.StatusBadRequest {
+	if rec := w.get(t, "billing.example.test", cb, "", nonce); rec.Code != http.StatusBadRequest {
 		t.Errorf("a code used twice = %d", rec.Code)
 	}
 	app, _ := w.s.edgeKeys.SignCookie(edge.CookieClaims{SessionID: "x", Project: "billing"})
@@ -394,9 +444,13 @@ func TestTheGateClosesWhenAccessEnds(t *testing.T) {
 	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusUnauthorized {
 		t.Errorf("after signing out = %d", rec.Code)
 	}
-	// A cookie naming acme's slug with another workspace's ID opens nothing.
+	// A pass naming acme's slug with another workspace's ID opens nothing.
 	acme, _ := w.st.Workspace(ctx, "acme")
-	forged, _ := w.s.edgeKeys.SignGateCookie(edge.GateClaims{SessionID: w.session(t, "acme", w.ana), Workspace: "acme", WorkspaceID: acme.ID + "-old", Gate: "billing"})
+	pass, err := w.s.edgeCodes.MintPass(ctx, "billing.example.test", edge.GateClaims{SessionID: w.session(t, "acme", w.ana), Workspace: "acme", WorkspaceID: acme.ID + "-old", Gate: "billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, _ := w.s.edgeKeys.SignGateCookie(edge.GateCookie{Pass: pass, Gate: "billing"})
 	if rec, _ := w.auth(t, "billing", "GET", &http.Cookie{Name: w.s.gateCookieName(), Value: forged}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("a cookie of an older acme = %d", rec.Code)
 	}
@@ -440,5 +494,85 @@ func TestAGatesHostAnswersItsErrorsWithPages(t *testing.T) {
 	}
 	if rec := w.get(t, "billing.example.test", "/.shpyrd/logout", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Set-Cookie"), w.s.gateCookieName()+"=;") {
 		t.Errorf("logout = %d %q", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
+}
+
+// The gate's cookie reaches the app behind the gate, so it holds a pass,
+// never the dashboard session it stands for.
+func TestTheGateCookieDoesNotRevealTheSession(t *testing.T) {
+	w := newGateWorld(t)
+	sid := w.session(t, "acme", w.ana)
+	cookie := w.enter(t, "acme.shpyrd.test", sid)
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 3 {
+		t.Fatalf("gate cookie is not a signed token: %q", cookie.Value)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), sid) || strings.Contains(cookie.Value, sid) {
+		t.Errorf("the gate cookie carries the session: %s", payload)
+	}
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Errorf("auth = %d", rec.Code)
+	}
+}
+
+// A callback link is bound to the browser that began the way in: handed to
+// another browser, without the nonce cookie or with another one, it sets no
+// cookie (login CSRF); a nonce that cannot be one is refused at the
+// workspace's host.
+func TestACallbackLinkWorksOnlyInTheBrowserThatBeganIt(t *testing.T) {
+	w := newGateWorld(t)
+	sid := w.session(t, "acme", w.ana)
+	cb, nonce := w.wayIn(t, "acme.shpyrd.test", sid)
+	rec := w.get(t, "billing.example.test", cb, "")
+	if rec.Code != http.StatusBadRequest || setsCookie(rec, w.s.gateCookieName()) {
+		t.Errorf("callback without the nonce cookie = %d %q", rec.Code, rec.Header().Values("Set-Cookie"))
+	}
+	cb, _ = w.wayIn(t, "acme.shpyrd.test", sid)
+	other := &http.Cookie{Name: nonce.Name, Value: base64.RawURLEncoding.EncodeToString(make([]byte, 24))}
+	rec = w.get(t, "billing.example.test", cb, "", other)
+	if rec.Code != http.StatusBadRequest || setsCookie(rec, w.s.gateCookieName()) {
+		t.Errorf("callback with another nonce cookie = %d %q", rec.Code, rec.Header().Values("Set-Cookie"))
+	}
+	for _, bad := range []string{"short", strings.Repeat("a", 33), strings.Repeat("!", 32)} {
+		rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/gate?"+url.Values{"name": {"billing"}, "nonce": {bad}}.Encode(), sid)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("gate open with nonce %q = %d %s", bad, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+}
+
+// begin sends the browser back only to a workspace's host: never to the
+// console, an unknown host or none, and it sets no nonce for them. At a
+// host that is no gate's there is no begin.
+func TestBeginGoesBackOnlyToAWorkspace(t *testing.T) {
+	w := newGateWorld(t)
+	for _, from := range []string{"shpyrd.example.test", "evil.example.org", ""} {
+		rec := w.get(t, "billing.example.test", "/.shpyrd/begin?"+url.Values{"from": {from}}.Encode(), "")
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Location") != "" || setsCookie(rec, w.s.gateNonceCookieName()) {
+			t.Errorf("begin from %q = %d %s %q", from, rec.Code, rec.Header().Get("Location"), rec.Header().Values("Set-Cookie"))
+		}
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/begin?from=acme.shpyrd.test", ""); rec.Code != http.StatusNotFound || setsCookie(rec, w.s.gateNonceCookieName()) {
+		t.Errorf("begin at a workspace's host = %d", rec.Code)
+	}
+}
+
+// Signing out of a gate ends its pass: the same cookie, kept and replayed,
+// opens nothing.
+func TestSigningOutOfAGateEndsItsPass(t *testing.T) {
+	w := newGateWorld(t)
+	cookie := w.enter(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("auth before signing out = %d", rec.Code)
+	}
+	if rec := w.get(t, "billing.example.test", "/.shpyrd/logout", "", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("logout = %d", rec.Code)
+	}
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusUnauthorized {
+		t.Errorf("auth with the cookie after signing out = %d", rec.Code)
 	}
 }

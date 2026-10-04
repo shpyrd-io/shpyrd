@@ -439,22 +439,35 @@ func (k *Keys) VerifyCookie(value, project string) (*CookieClaims, error) {
 	return &c, nil
 }
 
-// GateClaims is what a gate code and a gate cookie carry (RFC-0083): the
+// GateClaims is what a gate code and a gate's pass carry (RFC-0083): the
 // session, the workspace it was opened in, by slug to find it and by ID to
-// be sure it is the same one, and the one gate it opens.
+// be sure it is the same one, and the one gate it opens. A code also
+// carries the nonce of the browser that asked for it, which its callback
+// checks; a pass does not need it.
 type GateClaims struct {
 	SessionID   string `json:"sid"`
 	Workspace   string `json:"ws"`
 	WorkspaceID string `json:"wsid"`
 	Gate        string `json:"gate"`
+	Nonce       string `json:"nonce,omitempty"`
 	IssuedAt    int64  `json:"iat,omitempty"`
 	ExpiresAt   int64  `json:"exp,omitempty"`
+}
+
+// GateCookie is what a gate's cookie holds: a pass, a random handle the
+// server maps to the session (never the session itself, which the app
+// behind the gate would receive), and the one gate it opens.
+type GateCookie struct {
+	Pass      string `json:"pass"`
+	Gate      string `json:"gate"`
+	IssuedAt  int64  `json:"iat,omitempty"`
+	ExpiresAt int64  `json:"exp,omitempty"`
 }
 
 const gateCookieTyp = "shpyrd-gate"
 
 // SignGateCookie mints a gate cookie's value.
-func (k *Keys) SignGateCookie(c GateClaims) (string, error) {
+func (k *Keys) SignGateCookie(c GateCookie) (string, error) {
 	now := time.Now()
 	if c.IssuedAt == 0 {
 		c.IssuedAt = now.Unix()
@@ -466,17 +479,17 @@ func (k *Keys) SignGateCookie(c GateClaims) (string, error) {
 }
 
 // VerifyGateCookie checks a gate cookie for the given gate: its type, its
-// gate, a session in a named workspace, and its expiry.
-func (k *Keys) VerifyGateCookie(value, gate string) (*GateClaims, error) {
-	var c GateClaims
+// gate, a pass, and its expiry.
+func (k *Keys) VerifyGateCookie(value, gate string) (*GateCookie, error) {
+	var c GateCookie
 	if err := k.Verify(value, gateCookieTyp, &c); err != nil {
 		return nil, err
 	}
-	if c.Gate != gate {
+	if gate == "" || c.Gate != gate {
 		return nil, errors.New("cookie is for another gate")
 	}
-	if c.SessionID == "" || c.Workspace == "" || c.WorkspaceID == "" {
-		return nil, errors.New("cookie names no session")
+	if c.Pass == "" {
+		return nil, errors.New("cookie holds no pass")
 	}
 	if time.Now().Unix() >= c.ExpiresAt {
 		return nil, errors.New("cookie expired")
@@ -487,6 +500,7 @@ func (k *Keys) VerifyGateCookie(value, gate string) (*GateClaims, error) {
 // Codes hands a session from the dashboard host to an app host: a one-time
 // code minted at /.shpyrd/start and redeemed at /.shpyrd/callback within a
 // minute, kept in the control-plane store so every replica can redeem it.
+// It also keeps gates' passes, read there on every request (RFC-0083).
 type Codes struct {
 	store store.Sessions
 	now   func() time.Time
@@ -498,9 +512,10 @@ func NewCodes(st store.Sessions) *Codes { return &Codes{store: st, now: time.Now
 // Kinds of one-time codes: what a code may be redeemed as. A code minted
 // for one purpose is worthless for another.
 const (
-	KindEdge    = "edge"    // dashboard host → app host: an app cookie
-	KindSession = "session" // console host → workspace host: a session (RFC-0033 phase 6)
-	KindGate    = "gate"    // workspace host → a gate's host: a gate cookie (RFC-0083)
+	KindEdge     = "edge"      // dashboard host → app host: an app cookie
+	KindSession  = "session"   // console host → workspace host: a session (RFC-0033 phase 6)
+	KindGate     = "gate"      // workspace host → a gate's host: a gate's pass (RFC-0083)
+	KindGatePass = "gate-pass" // a gate's host, every request: the session behind a gate cookie (RFC-0083)
 )
 
 // envelope wraps the claims of a code with their kind.
@@ -516,6 +531,17 @@ func (c *Codes) Mint(ctx context.Context, host string, claims CookieClaims) (str
 
 // MintJSON stores any claims of a kind for the host and returns the code.
 func (c *Codes) MintJSON(ctx context.Context, host, kind string, claims any) (string, error) {
+	return c.mint(ctx, host, kind, claims, CodeTTL)
+}
+
+// MintPass stores a gate's pass: the claims under a random handle for the
+// gate's host, kept for CookieTTL and read on every request.
+func (c *Codes) MintPass(ctx context.Context, host string, claims GateClaims) (string, error) {
+	return c.mint(ctx, host, KindGatePass, claims, CookieTTL)
+}
+
+// mint stores claims of a kind for the host under a random handle, for ttl.
+func (c *Codes) mint(ctx context.Context, host, kind string, claims any, ttl time.Duration) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -529,7 +555,7 @@ func (c *Codes) MintJSON(ctx context.Context, host, kind string, claims any) (st
 	if err != nil {
 		return "", err
 	}
-	if err := c.store.PutCode(ctx, store.Code{Code: code, Host: strings.ToLower(host), Claims: body, ExpiresAt: c.now().Add(CodeTTL)}); err != nil {
+	if err := c.store.PutCode(ctx, store.Code{Code: code, Host: strings.ToLower(host), Claims: body, ExpiresAt: c.now().Add(ttl)}); err != nil {
 		return "", err
 	}
 	return code, nil
@@ -567,4 +593,32 @@ func (c *Codes) RedeemJSON(ctx context.Context, code, host, kind string, into an
 		return errors.New("code is of another kind")
 	}
 	return json.Unmarshal(env.Claims, into)
+}
+
+// Pass reads a pass without consuming it: for its host, of its kind.
+func (c *Codes) Pass(ctx context.Context, pass, host string) (*GateClaims, error) {
+	e, err := c.store.PeekCode(ctx, pass)
+	if err != nil {
+		return nil, errors.New("unknown or expired pass")
+	}
+	if e.Host != strings.ToLower(host) {
+		return nil, fmt.Errorf("pass is for %s", e.Host)
+	}
+	var env envelope
+	if err := json.Unmarshal(e.Claims, &env); err != nil || env.Kind != KindGatePass {
+		return nil, errors.New("code is of another kind")
+	}
+	var claims GateClaims
+	if err := json.Unmarshal(env.Claims, &claims); err != nil {
+		return nil, err
+	}
+	return &claims, nil
+}
+
+// DropPass ends a pass (a gate's logout).
+func (c *Codes) DropPass(ctx context.Context, pass string) error {
+	if _, err := c.store.TakeCode(ctx, pass); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return nil
 }
