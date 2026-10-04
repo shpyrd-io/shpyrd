@@ -26,12 +26,15 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
-// gateExt declares one gate, "billing", in front of the project billing of
-// the operator's workspace "platform": owners of any other workspace come in
-// by its rule. It adds one link, shown when the gate would admit.
+// gateExt declares two gates in front of projects of the operator's
+// workspace "platform": "billing", in front of the project billing, and
+// "reports", in front of the project reports. Owners of any other workspace
+// come in by their rule, which counts how often it is asked. It adds one
+// link, shown when billing would admit.
 type gateExt struct {
-	deps      ext.Deps
-	linkCalls int
+	deps       ext.Deps
+	linkCalls  int
+	admitCalls int
 }
 
 func (*gateExt) Name() string                          { return "gates-test" }
@@ -44,11 +47,15 @@ func (g *gateExt) Routes(_ ext.Router, d ext.Deps) error {
 	g.deps = d
 	return nil
 }
-func (*gateExt) Gates(ext.Deps) []ext.Gate {
-	return []ext.Gate{{
-		Name: "billing", Host: "billing.example.test", Workspace: "platform", Project: "billing",
-		Admit: func(_ context.Context, v ext.Visitor) bool { return v.WorkspaceRole == store.WorkspaceRoleOwner },
-	}}
+func (g *gateExt) Gates(ext.Deps) []ext.Gate {
+	admit := func(_ context.Context, v ext.Visitor) bool {
+		g.admitCalls++
+		return v.WorkspaceRole == store.WorkspaceRoleOwner
+	}
+	return []ext.Gate{
+		{Name: "billing", Host: "billing.example.test", Workspace: "platform", Project: "billing", Admit: admit},
+		{Name: "reports", Host: "reports.example.test", Workspace: "platform", Project: "reports", Admit: admit},
+	}
 }
 func (g *gateExt) Links(ctx context.Context, v ext.Visitor) []ext.Link {
 	g.linkCalls++
@@ -373,6 +380,20 @@ func TestAnOwnerOfAnotherWorkspaceEntersTheGate(t *testing.T) {
 	if rec.Header().Get("X-Shpyrd-Email") != w.ana.Email {
 		t.Errorf("X-Shpyrd-Email = %q", rec.Header().Get("X-Shpyrd-Email"))
 	}
+	cameFrom(t, rec, "acme", "false")
+}
+
+// cameFrom checks the headers that say where a visitor came from: an app
+// behind a gate reads them before it trusts roles or teams, which mean
+// something only in that workspace.
+func cameFrom(t *testing.T, rec *httptest.ResponseRecorder, ws, operator string) {
+	t.Helper()
+	if got := rec.Header().Get("X-Shpyrd-Workspace"); got != ws {
+		t.Errorf("X-Shpyrd-Workspace = %q, want %q", got, ws)
+	}
+	if got := rec.Header().Get("X-Shpyrd-Operator"); got != operator {
+		t.Errorf("X-Shpyrd-Operator = %q, want %q", got, operator)
+	}
 }
 
 // Bruno, granted the project in the gate's own workspace, enters by that
@@ -391,6 +412,14 @@ func TestAPersonGrantedTheProjectEntersFromItsOwnWorkspace(t *testing.T) {
 	if !slices.Contains(teams, any("finance")) {
 		t.Errorf("teams = %v", claims["teams"])
 	}
+	cameFrom(t, rec, "platform", "true")
+	// Dora, an owner there, enters by the same access and says the same.
+	cookie = w.enter(t, "platform.shpyrd.test", w.session(t, "platform", w.dora))
+	rec, claims = w.auth(t, "billing", "GET", cookie)
+	if rec.Code != http.StatusOK || claims["operator"] != true || claims["ws"] != "platform" {
+		t.Fatalf("auth as the owner = %d %v", rec.Code, claims)
+	}
+	cameFrom(t, rec, "platform", "true")
 }
 
 // Refusals on the way in: nobody signed in goes to the sign-in page and
@@ -723,5 +752,174 @@ func TestLinksWithoutIdentityAskNoProvider(t *testing.T) {
 	}
 	if w.ext.linkCalls != 0 {
 		t.Errorf("linkCalls = %d, want 0", w.ext.linkCalls)
+	}
+}
+
+// A platform on another HTTPS port keeps it on every hop of the way in:
+// the gate's host is sent to with the port, as the workspace's is.
+func TestTheWayInKeepsThePlatformsPort(t *testing.T) {
+	w := newGateWorld(t)
+	w.s.opts.Public.HTTPSPort = "8443"
+	sid := w.session(t, "acme", w.ana)
+	rec := w.get(t, "acme.shpyrd.test:8443", "/.shpyrd/gate?name=billing", sid)
+	begin := rec.Header().Get("Location")
+	if rec.Code != http.StatusFound || !strings.HasPrefix(begin, "https://billing.example.test:8443/.shpyrd/begin?t=") {
+		t.Fatalf("gate open = %d %s", rec.Code, begin)
+	}
+	rec = w.get(t, "billing.example.test:8443", strings.TrimPrefix(begin, "https://billing.example.test:8443"), "")
+	back := rec.Header().Get("Location")
+	if rec.Code != http.StatusFound || !strings.HasPrefix(back, "https://acme.shpyrd.test:8443/.shpyrd/gate?") {
+		t.Fatalf("gate begin = %d %s", rec.Code, back)
+	}
+	rec = w.get(t, "acme.shpyrd.test:8443", strings.TrimPrefix(back, "https://acme.shpyrd.test:8443"), sid)
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://billing.example.test:8443/.shpyrd/callback?code=") {
+		t.Errorf("gate open with a nonce = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// A code of an app's kind is no gate's code, even at the gate's host, in
+// the browser that holds a nonce, and even when it names the gate and
+// carries that nonce: it sets no gate cookie.
+func TestAnAppsCodeDoesNotOpenAGate(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	_, nonce := w.wayIn(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	plain, err := w.s.edgeCodes.Mint(ctx, "billing.example.test", edge.CookieClaims{SessionID: w.session(t, "acme", w.ana), Project: "billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acme, _ := w.st.Workspace(ctx, "acme")
+	dressed, err := w.s.edgeCodes.MintJSON(ctx, "billing.example.test", edge.KindEdge, edge.GateClaims{
+		SessionID: w.session(t, "acme", w.ana), Workspace: "acme", WorkspaceID: acme.ID, Gate: "billing", Nonce: nonce.Value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, code := range map[string]string{"an app's code": plain, "an app's code with a gate's claims": dressed} {
+		rec := w.get(t, "billing.example.test", "/.shpyrd/callback?"+url.Values{"code": {code}}.Encode(), "", nonce)
+		if rec.Code != http.StatusBadRequest || setsCookie(rec, w.s.gateCookieName()) {
+			t.Errorf("%s at the gate = %d %q", what, rec.Code, rec.Header().Values("Set-Cookie"))
+		}
+	}
+}
+
+// One gate's cookie opens only that gate: at another gate it is refused.
+// So is each part of one made over: a cookie signed for this gate around
+// the other gate's pass, or a cookie signed for the other gate around a
+// pass kept for this gate's host, or around one that names this gate.
+func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	sid := w.session(t, "acme", w.ana)
+	cookie := w.enter(t, "acme.shpyrd.test", sid)
+	if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("at its own gate = %d", rec.Code)
+	}
+	if rec, _ := w.auth(t, "reports", "GET", cookie); rec.Code != http.StatusUnauthorized {
+		t.Errorf("billing's cookie at reports = %d", rec.Code)
+	}
+	acme, _ := w.st.Workspace(ctx, "acme")
+	claims := edge.GateClaims{SessionID: sid, Workspace: "acme", WorkspaceID: acme.ID}
+	rewrap := func(cookieGate, host, gate string) *http.Cookie {
+		c := claims
+		c.Gate = gate
+		pass, err := w.s.edgeCodes.MintPass(ctx, host, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := w.s.edgeKeys.SignGateCookie(edge.GateCookie{Pass: pass, Gate: cookieGate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Cookie{Name: w.s.gateCookieName(), Value: v}
+	}
+	// A cookie signed for billing, though its pass is reports' own.
+	if rec, _ := w.auth(t, "reports", "GET", rewrap("billing", "reports.example.test", "reports")); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a cookie of billing at reports = %d", rec.Code)
+	}
+	// A pass kept for billing's host, though it names reports.
+	if rec, _ := w.auth(t, "reports", "GET", rewrap("reports", "billing.example.test", "reports")); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a pass of billing's host at reports = %d", rec.Code)
+	}
+	// A pass kept for reports' host, though it names billing.
+	if rec, _ := w.auth(t, "reports", "GET", rewrap("reports", "reports.example.test", "billing")); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a pass naming billing at reports = %d", rec.Code)
+	}
+	// The same cookie, made right, opens reports: the refusals above are
+	// the gate's, not Ana's.
+	if rec, _ := w.auth(t, "reports", "GET", rewrap("reports", "reports.example.test", "reports")); rec.Code != http.StatusOK {
+		t.Errorf("a pass of reports at reports = %d", rec.Code)
+	}
+}
+
+// Taking access away closes the gate on the next request: Bruno's team
+// losing its grant on the project, Ana leaving acme.
+func TestTheGateClosesWhenAGrantOrAMembershipGoes(t *testing.T) {
+	w := newGateWorld(t)
+	ctx := context.Background()
+	bruno := w.enter(t, "platform.shpyrd.test", w.session(t, "platform", w.bruno))
+	ana := w.enter(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	for who, c := range map[string]*http.Cookie{"Bruno": bruno, "Ana": ana} {
+		if rec, _ := w.auth(t, "billing", "GET", c); rec.Code != http.StatusOK {
+			t.Fatalf("%s before = %d", who, rec.Code)
+		}
+	}
+	grants, err := w.st.ListProjectGrants(ctx, "platform", "billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range grants {
+		if err := w.st.DeleteGrant(ctx, "platform", g.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.s.authz.Invalidate()
+	if rec, _ := w.auth(t, "billing", "GET", bruno); rec.Code != http.StatusForbidden {
+		t.Errorf("Bruno after his team's grant went = %d", rec.Code)
+	}
+	if err := w.st.DeleteMembership(ctx, "acme", w.ana.Email); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	if rec, _ := w.auth(t, "billing", "GET", ana); rec.Code != http.StatusForbidden {
+		t.Errorf("Ana after leaving acme = %d", rec.Code)
+	}
+}
+
+// The gate's rule is for people of other workspaces only: people of the
+// gate's own workspace enter, and are checked on every request, without it
+// ever being asked.
+func TestTheGatesRuleIsNeverAskedAtHome(t *testing.T) {
+	w := newGateWorld(t)
+	for _, id := range []ext.Identity{w.bruno, w.dora} {
+		cookie := w.enter(t, "platform.shpyrd.test", w.session(t, "platform", id))
+		for range 2 {
+			if rec, _ := w.auth(t, "billing", "GET", cookie); rec.Code != http.StatusOK {
+				t.Fatalf("%s = %d", id.Email, rec.Code)
+			}
+		}
+	}
+	if w.ext.admitCalls != 0 {
+		t.Errorf("the rule was asked %d times at home", w.ext.admitCalls)
+	}
+	// It is asked for someone of another workspace, so the count is real.
+	w.enter(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	if w.ext.admitCalls == 0 {
+		t.Error("the rule was never asked for acme's owner")
+	}
+}
+
+// A visitor whose workspace is suspended after they entered is refused at
+// the gate as suspended.
+func TestASuspendedWorkspaceClosesItsGates(t *testing.T) {
+	w := newGateWorld(t)
+	cookie := w.enter(t, "acme.shpyrd.test", w.session(t, "acme", w.ana))
+	if _, err := w.st.SetWorkspaceStatus(context.Background(), "acme", store.WorkspaceSuspended); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	rec, _ := w.auth(t, "billing", "GET", cookie)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "suspended") {
+		t.Errorf("after acme was suspended = %d %s", rec.Code, rec.Body.String())
 	}
 }

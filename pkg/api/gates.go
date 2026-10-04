@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -252,7 +253,7 @@ func (s *Server) gateOpen(c *gin.Context) {
 			abort(c, http.StatusInternalServerError, err)
 			return
 		}
-		c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"begin?"+url.Values{"t": {ticket}}.Encode())
+		c.Redirect(http.StatusFound, "https://"+s.withPort(g.Host)+edgePathPrefix+"begin?"+url.Values{"t": {ticket}}.Encode())
 		return
 	}
 	// begin sent no nonce to any other host: one arriving there is not a
@@ -266,7 +267,7 @@ func (s *Server) gateOpen(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"callback?"+url.Values{"code": {code}}.Encode())
+	c.Redirect(http.StatusFound, "https://"+s.withPort(g.Host)+edgePathPrefix+"callback?"+url.Values{"code": {code}}.Encode())
 }
 
 // gateBegin is GET /.shpyrd/begin?t=<ticket> on a gate's host: the
@@ -408,7 +409,7 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no such gate"})
 		return
 	}
-	for _, h := range []string{"X-Shpyrd-User", "X-Shpyrd-Email", "X-Shpyrd-Name", "X-Shpyrd-Teams", "X-Shpyrd-Roles", "Authorization"} {
+	for _, h := range []string{"X-Shpyrd-User", "X-Shpyrd-Email", "X-Shpyrd-Name", "X-Shpyrd-Teams", "X-Shpyrd-Roles", "X-Shpyrd-Workspace", "X-Shpyrd-Operator", "Authorization"} {
 		c.Header(h, "")
 	}
 	ctx := c.Request.Context()
@@ -484,6 +485,12 @@ func (s *Server) gateAuth(c *gin.Context, name string) {
 	c.Header("X-Shpyrd-Name", sess.Identity.Name)
 	c.Header("X-Shpyrd-Teams", strings.Join(v.Teams, ","))
 	c.Header("X-Shpyrd-Roles", strings.Join(roleList, ","))
+	// Roles and team names mean something only in the workspace they come
+	// from: an owner of any workspace is its platform-admin, and any
+	// workspace can have a team called finance. The app behind a gate reads
+	// where the visitor came from before it trusts either.
+	c.Header("X-Shpyrd-Workspace", ws.Slug)
+	c.Header("X-Shpyrd-Operator", strconv.FormatBool(ws.OwnedByOperator()))
 	c.Header("Authorization", "Bearer "+jwt)
 	c.Status(http.StatusOK)
 }
