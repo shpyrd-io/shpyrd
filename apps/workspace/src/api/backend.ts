@@ -3,7 +3,7 @@ import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
 import { json, request, stream } from "@shpyrd/shared/api/http";
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
-import type { APIToken, AuditEntry, Billing, DomainStatus, Metrics, Project, ProjectSummary, Series, Team } from "./types";
+import type { APIToken, AuditEntry, DomainStatus, Metrics, Project, ProjectSummary, Series, Team } from "./types";
 
 // The paths of the server. Where the server's shape is not the one the
 // screens read, it is turned into it here, so the Mock and the Backend
@@ -46,16 +46,6 @@ export function toProject(d: DetailAnswer): Project {
 
 // What the server answers for the domains of a project.
 type DomainsAnswer = { host?: string; target: string; address?: string; domains: DomainStatus[] };
-
-type BillingAnswer = {
-  period: string;
-  projection?: number;
-  plan?: { name?: string; slug?: string };
-  lines: { project?: string; component: string; metric: string; quantity: number; unit: string; unitPrice: number; grossAmount: number }[];
-  total: number;
-  currency: string;
-  free?: boolean;
-};
 
 // `17:04:12` from the time a record carries, or nothing.
 function clock(t?: string): string | undefined {
@@ -111,6 +101,7 @@ export const backend: Api = {
   recoverProject: (slug) => projectArchiveActions(`/api/project-archives/${encodeURIComponent(slug)}`).recover(),
   config: () => request("/api/config"),
   me: () => request("/api/me"),
+  links: () => request("/api/links"),
   passwordLogin: (body) => request("/api/auth/password", json("POST", body)),
   tokenLogin: (body) => request("/api/auth/token", json("POST", body)),
   logout: () => request("/api/auth/logout", { method: "POST" }),
@@ -149,23 +140,6 @@ export const backend: Api = {
   claimDomain: (domain, connector) => request("/api/workspace/domain-claims", json("POST", { domain, connector })),
   verifyDomainClaim: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
   unclaimDomain: (domain) => request(`/api/workspace/domain-claims/${encodeURIComponent(domain)}`, gone),
-  billing: async (month) => {
-    // The usage of the month at the prices of the plan, this one without
-    // a month. A month that went by has no projection.
-    const r = await request<BillingAnswer>(`/api/workspace/billing/current${month ? `?month=${encodeURIComponent(month)}` : ""}`);
-    const past = r.period !== new Date().toISOString().slice(0, 7);
-    const billing: Billing = {
-      plan: r.plan?.name ?? r.plan?.slug ?? "",
-      currency: r.currency,
-      month: r.period,
-      past,
-      free: r.free,
-      total: r.total,
-      projection: past ? undefined : r.projection,
-      lines: r.lines.map((l) => ({ project: l.project, component: l.component, metric: l.metric, quantity: l.quantity, unit: l.unit, price: l.unitPrice, amount: l.grossAmount })),
-    };
-    return billing;
-  },
   sizes: () => request("/api/sizes"),
   projects: () => request("/api/projects"),
   project: async (slug) => toProject(await request<DetailAnswer>(project(slug))),

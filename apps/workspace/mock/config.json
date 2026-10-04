@@ -35,7 +35,6 @@
     "snapshots": true
   },
   "capabilities": [
-    "workspaces",
-    "billing"
+    "workspaces"
   ]
 }

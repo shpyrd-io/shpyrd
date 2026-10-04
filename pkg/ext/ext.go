@@ -166,6 +166,10 @@ type Deps struct {
 	// a workspace for straight into it. The person must be admitted there
 	// as any sign-in is (a membership, the join policy). Nil without a store.
 	SignInTicket func(ctx context.Context, workspace, email string) (string, error)
+	// GateAdmits says whether a gate would let a visitor in now: the
+	// project's access in the gate's own workspace, the gate's rule
+	// elsewhere (RFC-0083). False for a gate that does not exist.
+	GateAdmits func(ctx context.Context, gate string, v Visitor) bool
 }
 
 // ErrAccountHasPassword says the person has a password already: the one

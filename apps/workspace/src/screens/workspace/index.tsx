@@ -2,9 +2,10 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, CreditCard, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
+import { ArrowLeft, ExternalLink, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
 import { NavList, NavListDivider, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
+import { bySection } from "@/lib/links";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
 import { Connections } from "./connections";
@@ -12,7 +13,7 @@ import { Drains } from "./drains";
 import { General } from "./general";
 import { Globals } from "./globals";
 import { People } from "./people";
-import { Billing, MCP, WorkspaceDomains } from "./platform";
+import { MCP, WorkspaceDomains } from "./platform";
 import { SignIn } from "./sign-in";
 import { Teams } from "./teams";
 import { Tokens } from "./tokens";
@@ -29,18 +30,15 @@ const pages = [
   { group: "Platform", slug: "globals", title: "Config vars", icon: <KeyRound />, needs: "admin" },
   { group: "Platform", slug: "drains", title: "Log drains", icon: <Waves />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
-  { group: "Platform", slug: "billing", title: "Billing", icon: <CreditCard />, needs: "admin", capability: "billing" },
   { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug /> },
 ] as const;
 
 export function WorkspacePages() {
   const { pathname } = useLocation();
   const perms = usePerms();
-  const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
+  const links = useQuery({ queryKey: ["links"], queryFn: api.links, staleTime: 60_000 });
   const here = pathname.replace("/workspace", "").replace(/^\//, "").split("/")[0];
-  // A page may need a role, or a capability of the platform: Billing is
-  // the cloud layer's; a self-hosted platform prices nothing.
-  const shown = pages.filter((p) => (!("needs" in p) || perms[p.needs]) && (!("capability" in p) || config.data?.capabilities?.includes(p.capability)));
+  const shown = pages.filter((p) => !("needs" in p) || perms[p.needs]);
   const groups = [...new Set(shown.map((p) => p.group))];
 
   const nav = (
@@ -67,6 +65,18 @@ export function WorkspacePages() {
           </NavListGroup>
         ),
       )}
+      {/* What extensions add: each link opens an app at another host. */}
+      {bySection(links.data ?? []).map(([section, items]) => (
+        <NavListGroup key={`links-${section}`} title={section}>
+          {items.map((link) => (
+            <NavListItem key={link.url} asChild iconEnd={<ExternalLink />}>
+              <a href={link.url} target="_blank" rel="noopener">
+                {link.label}
+              </a>
+            </NavListItem>
+          ))}
+        </NavListGroup>
+      ))}
     </NavList>
   );
 
@@ -84,7 +94,6 @@ export function WorkspacePages() {
         <Route path="globals" element={<Globals />} />
         <Route path="drains" element={<Drains />} />
         <Route path="domains" element={<WorkspaceDomains />} />
-        <Route path="billing" element={<Billing />} />
         <Route path="mcp" element={<MCP />} />
         <Route path="*" element={<Navigate to="/workspace" replace />} />
       </Routes>

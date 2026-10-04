@@ -937,6 +937,22 @@ func (p *Postgres) TakeCode(ctx context.Context, code string) (*Code, error) {
 	return &c, nil
 }
 
+func (p *Postgres) PeekCode(ctx context.Context, code string) (*Code, error) {
+	var c Code
+	err := p.pool.QueryRow(ctx, `SELECT code, host, claims, expires_at FROM edge_codes WHERE code = $1`, code).
+		Scan(&c.Code, &c.Host, &c.Claims, &c.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().After(c.ExpiresAt) {
+		return nil, ErrNotFound
+	}
+	return &c, nil
+}
+
 // ---- API tokens (RFC-0031) -------------------------------------------------
 
 func (p *Postgres) CreateToken(ctx context.Context, ws string, t APIToken, hash string) (*APIToken, error) {

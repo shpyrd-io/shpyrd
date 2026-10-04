@@ -5,7 +5,6 @@ import type {
   AllowEntry,
   APIToken,
   AuditEntry,
-  Billing,
   BuildInfo,
   ConfigChange,
   ConfigVars,
@@ -18,6 +17,7 @@ import type {
   Drain,
   Exposure,
   Identity,
+  Link,
   Instance,
   Invitation,
   InvitationPublic,
@@ -60,6 +60,7 @@ export type Api = {
   recoverProject: (slug: string) => Promise<void>;
   config: () => Promise<PublicConfig>;
   me: () => Promise<Identity>;
+  links: () => Promise<Link[]>;
   // The door: a password or a token opens a session; a provider is a
   // link (`/api/auth/login?provider=`), not a call.
   passwordLogin: (body: { email: string; password: string; next?: string }) => Promise<{ next: string }>;
@@ -100,7 +101,6 @@ export type Api = {
   verifyDomainClaim: (domain: string) => Promise<DomainClaim>;
   unclaimDomain: (domain: string) => Promise<void>;
   // This month without a month; the one given otherwise (YYYY-MM).
-  billing: (month?: string) => Promise<Billing>;
   sizes: () => Promise<SizeCatalog>;
   // The projects.
   projects: () => Promise<ProjectSummary[]>;
