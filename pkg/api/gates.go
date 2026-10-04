@@ -240,7 +240,14 @@ func (s *Server) gateOpen(c *gin.Context) {
 	}
 	nonce, asked := c.GetQuery("nonce")
 	if !asked {
-		c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"begin?"+url.Values{"from": {hostOnly(c.Request.Host)}}.Encode())
+		// The host to come back to is signed, never a parameter anyone
+		// could set: begin sends a nonce nowhere a workspace did not name.
+		ticket, err := s.edgeKeys.SignGateBegin(edge.GateBegin{Host: hostOnly(c.Request.Host), Gate: g.Name})
+		if err != nil {
+			abort(c, http.StatusInternalServerError, err)
+			return
+		}
+		c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"begin?"+url.Values{"t": {ticket}}.Encode())
 		return
 	}
 	if !validGateNonce(nonce) {
@@ -255,16 +262,33 @@ func (s *Server) gateOpen(c *gin.Context) {
 	c.Redirect(http.StatusFound, "https://"+g.Host+edgePathPrefix+"callback?"+url.Values{"code": {code}}.Encode())
 }
 
-// gateBegin is GET /.shpyrd/begin?from=<workspace host> on a gate's host:
-// the browser gets a nonce here, at the gate's host, and goes back to its
-// workspace to ask for a code bound to it. Only a workspace's host is gone
-// back to.
+// gateBegin is GET /.shpyrd/begin?t=<ticket> on a gate's host: the
+// browser gets a nonce here, at the gate's host, and goes back to its
+// workspace to ask for a code bound to it. It goes back only to the host a
+// workspace signed into the ticket for this gate, and only when that host
+// is a plain name that is still a workspace's.
 func (s *Server) gateBegin(c *gin.Context, g ext.Gate) {
 	c.Header("Cache-Control", "no-store")
-	from := hostOnly(c.Query("from"))
-	t, err := s.tenancy.Resolve(c.Request.Context(), from)
-	if from == "" || err != nil || t == nil || t.Realm != tenancy.RealmWorkspace || t.Workspace == nil || t.Internal {
+	invalid := func() {
 		s.edgePage(c, http.StatusBadRequest, "This link is not valid", "Open it again from your workspace.", nil)
+	}
+	ticket, err := s.edgeKeys.VerifyGateBegin(c.Query("t"), g.Name)
+	if err != nil || !validHostname(ticket.Host) {
+		invalid()
+		return
+	}
+	host := ticket.Host
+	// An internal host is no browser's workspace. Under tenancy.Single with
+	// no console host every host is internal, so gates need a console host
+	// there.
+	t, err := s.tenancy.Resolve(c.Request.Context(), host)
+	if err != nil || t == nil || t.Realm != tenancy.RealmWorkspace || t.Workspace == nil || t.Internal {
+		invalid()
+		return
+	}
+	back := url.URL{Scheme: "https", Host: host, Path: edgePathPrefix + "gate"}
+	if back.Hostname() != host {
+		invalid()
 		return
 	}
 	nonce, err := randomToken(gateNonceBytes)
@@ -272,11 +296,37 @@ func (s *Server) gateBegin(c *gin.Context, g ext.Gate) {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
+	back.RawQuery = url.Values{"name": {g.Name}, "nonce": {nonce}}.Encode()
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name: s.gateNonceCookieName(), Value: nonce, Path: "/", HttpOnly: true, Secure: s.platformHTTPS(),
 		SameSite: http.SameSiteLaxMode, MaxAge: gateNonceTTL,
 	})
-	c.Redirect(http.StatusFound, "https://"+from+edgePathPrefix+"gate?"+url.Values{"name": {g.Name}, "nonce": {nonce}}.Encode())
+	c.Redirect(http.StatusFound, back.String())
+}
+
+// validHostname says whether a host is a plain DNS name: lowercase labels
+// of letters, digits and inner hyphens, at least two of them, 253
+// characters at most. Nothing that could bend a URL gets through.
+func validHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, l := range labels {
+		if len(l) == 0 || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			ch := l[i]
+			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // gateCallback is GET /.shpyrd/callback?code= on a gate's host: a code

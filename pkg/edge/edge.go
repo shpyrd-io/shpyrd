@@ -497,6 +497,45 @@ func (k *Keys) VerifyGateCookie(value, gate string) (*GateCookie, error) {
 	return &c, nil
 }
 
+// GateBegin is what a workspace hands a gate's host to start the way in:
+// the host to come back to and the gate, signed so that begin sends the
+// browser nowhere a workspace did not name, for a minute.
+type GateBegin struct {
+	Host      string `json:"host"`
+	Gate      string `json:"gate"`
+	ExpiresAt int64  `json:"exp"`
+}
+
+const gateBeginTyp = "shpyrd-gate-begin"
+
+// SignGateBegin mints a begin ticket, good for CodeTTL unless it says
+// otherwise.
+func (k *Keys) SignGateBegin(b GateBegin) (string, error) {
+	if b.ExpiresAt == 0 {
+		b.ExpiresAt = time.Now().Add(CodeTTL).Unix()
+	}
+	return k.Sign(gateBeginTyp, b)
+}
+
+// VerifyGateBegin checks a begin ticket for the given gate: its type, its
+// gate, a host to come back to, and its expiry.
+func (k *Keys) VerifyGateBegin(value, gate string) (*GateBegin, error) {
+	var b GateBegin
+	if err := k.Verify(value, gateBeginTyp, &b); err != nil {
+		return nil, err
+	}
+	if gate == "" || b.Gate != gate {
+		return nil, errors.New("ticket is for another gate")
+	}
+	if b.Host == "" {
+		return nil, errors.New("ticket names no host")
+	}
+	if time.Now().Unix() >= b.ExpiresAt {
+		return nil, errors.New("ticket expired")
+	}
+	return &b, nil
+}
+
 // Codes hands a session from the dashboard host to an app host: a one-time
 // code minted at /.shpyrd/start and redeemed at /.shpyrd/callback within a
 // minute, kept in the control-plane store so every replica can redeem it.

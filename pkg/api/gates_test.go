@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -250,9 +251,13 @@ func (w *gateWorld) session(t *testing.T, ws string, id ext.Identity) string {
 func (w *gateWorld) wayIn(t *testing.T, wsHost, sid string) (string, *http.Cookie) {
 	t.Helper()
 	rec := w.get(t, wsHost, "/.shpyrd/gate?name=billing", sid)
-	begin := "https://billing.example.test/.shpyrd/begin?" + url.Values{"from": {wsHost}}.Encode()
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != begin {
-		t.Fatalf("gate open = %d %s", rec.Code, rec.Header().Get("Location"))
+	begin := rec.Header().Get("Location")
+	if rec.Code != http.StatusFound || !strings.HasPrefix(begin, "https://billing.example.test/.shpyrd/begin?t=") {
+		t.Fatalf("gate open = %d %s", rec.Code, begin)
+	}
+	bq, _ := url.ParseQuery(strings.TrimPrefix(begin, "https://billing.example.test/.shpyrd/begin?"))
+	if ticket, err := w.s.edgeKeys.VerifyGateBegin(bq.Get("t"), "billing"); err != nil || ticket.Host != hostOnly(wsHost) || len(bq) != 1 {
+		t.Fatalf("begin ticket: %v %+v %v", err, ticket, bq)
 	}
 	rec = w.get(t, "billing.example.test", strings.TrimPrefix(begin, "https://billing.example.test"), "")
 	back := "https://" + wsHost + "/.shpyrd/gate?"
@@ -545,19 +550,82 @@ func TestACallbackLinkWorksOnlyInTheBrowserThatBeganIt(t *testing.T) {
 	}
 }
 
-// begin sends the browser back only to a workspace's host: never to the
-// console, an unknown host or none, and it sets no nonce for them. At a
+// begin starts only from a ticket a workspace signed for this gate, and
+// sends the browser back only to a workspace's host by a plain name: no
+// ticket, a forged, stale or other gate's ticket, or a signed one naming a
+// host that is no workspace's or would bend the URL, gets no nonce. At a
 // host that is no gate's there is no begin.
-func TestBeginGoesBackOnlyToAWorkspace(t *testing.T) {
+func TestBeginStartsOnlyFromASignedTicketBackToAWorkspace(t *testing.T) {
 	w := newGateWorld(t)
-	for _, from := range []string{"shpyrd.example.test", "evil.example.org", ""} {
-		rec := w.get(t, "billing.example.test", "/.shpyrd/begin?"+url.Values{"from": {from}}.Encode(), "")
+	sign := func(b edge.GateBegin) string {
+		v, err := w.s.edgeKeys.SignGateBegin(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	refused := map[string]string{
+		"no ticket":          "",
+		"a garbage ticket":   "not.a.ticket",
+		"another gate's":     sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "reports"}),
+		"an expired ticket":  sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()}),
+		"an encoded slash":   sign(edge.GateBegin{Host: "evil%2ecom/.acme.shpyrd.test", Gate: "billing"}),
+		"a question mark":    sign(edge.GateBegin{Host: "evil?.acme.shpyrd.test", Gate: "billing"}),
+		"a slash":            sign(edge.GateBegin{Host: "evil/.acme.shpyrd.test", Gate: "billing"}),
+		"no workspace's":     sign(edge.GateBegin{Host: "evil.com", Gate: "billing"}),
+		"the console's host": sign(edge.GateBegin{Host: "shpyrd.example.test", Gate: "billing"}),
+	}
+	for what, ticket := range refused {
+		path := "/.shpyrd/begin"
+		if ticket != "" {
+			path += "?" + url.Values{"t": {ticket}}.Encode()
+		}
+		rec := w.get(t, "billing.example.test", path, "")
 		if rec.Code != http.StatusBadRequest || rec.Header().Get("Location") != "" || setsCookie(rec, w.s.gateNonceCookieName()) {
-			t.Errorf("begin from %q = %d %s %q", from, rec.Code, rec.Header().Get("Location"), rec.Header().Values("Set-Cookie"))
+			t.Errorf("begin with %s = %d %s %q", what, rec.Code, rec.Header().Get("Location"), rec.Header().Values("Set-Cookie"))
 		}
 	}
-	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/begin?from=acme.shpyrd.test", ""); rec.Code != http.StatusNotFound || setsCookie(rec, w.s.gateNonceCookieName()) {
+	// The old unsigned parameter starts nothing.
+	if rec := w.get(t, "billing.example.test", "/.shpyrd/begin?from=acme.shpyrd.test", ""); rec.Code != http.StatusBadRequest || setsCookie(rec, w.s.gateNonceCookieName()) {
+		t.Errorf("begin with from = %d", rec.Code)
+	}
+	ok := sign(edge.GateBegin{Host: "acme.shpyrd.test", Gate: "billing"})
+	if rec := w.get(t, "billing.example.test", "/.shpyrd/begin?"+url.Values{"t": {ok}}.Encode(), ""); rec.Code != http.StatusFound || !setsCookie(rec, w.s.gateNonceCookieName()) {
+		t.Errorf("begin with a good ticket = %d", rec.Code)
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/.shpyrd/begin?"+url.Values{"t": {ok}}.Encode(), ""); rec.Code != http.StatusNotFound || setsCookie(rec, w.s.gateNonceCookieName()) {
 		t.Errorf("begin at a workspace's host = %d", rec.Code)
+	}
+}
+
+// A host to send a browser to is a plain DNS name: lowercase labels of
+// letters, digits and inner hyphens, at least two, nothing else.
+func TestValidHostnameTakesOnlyPlainNames(t *testing.T) {
+	for host, want := range map[string]bool{
+		"acme.shpyrd.test":                true,
+		"a.b":                             true,
+		"x-1.example.test":                true,
+		"localhost":                       false,
+		"":                                false,
+		"Acme.shpyrd.test":                false,
+		"-acme.shpyrd.test":               false,
+		"acme-.shpyrd.test":               false,
+		"acme..shpyrd.test":               false,
+		".acme.shpyrd.test":               false,
+		"acme.shpyrd.test.":               false,
+		"evil%2ecom/.acme.shpyrd.test":    false,
+		"evil?.acme.shpyrd.test":          false,
+		"evil/.acme.shpyrd.test":          false,
+		"evil@acme.shpyrd.test":           false,
+		"acme.shpyrd.test:443":            false,
+		"acme_x.shpyrd.test":              false,
+		strings.Repeat("a", 64) + ".test": false,
+		strings.Repeat(strings.Repeat("a", 63)+".", 4) + "a": false,
+		strings.Repeat(strings.Repeat("a", 62)+".", 4) + "a": true,
+	} {
+		if got := validHostname(host); got != want {
+			t.Errorf("validHostname(%q) = %v, want %v", host, got, want)
+		}
 	}
 }
 

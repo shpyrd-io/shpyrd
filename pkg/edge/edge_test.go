@@ -143,6 +143,45 @@ func TestAGateCookieOpensOnlyItsGate(t *testing.T) {
 	}
 }
 
+// A begin ticket starts the way in to its own gate only, for a minute, and
+// names a host to come back to; no cookie passes for one.
+func TestABeginTicketStartsOnlyItsGate(t *testing.T) {
+	k, _ := GenerateKeys()
+	val, err := k.SignGateBegin(GateBegin{Host: "acme.example.test", Gate: "billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := k.VerifyGateBegin(val, "billing")
+	if err != nil || b.Host != "acme.example.test" || b.Gate != "billing" || b.ExpiresAt <= time.Now().Unix() || b.ExpiresAt > time.Now().Add(CodeTTL).Unix()+1 {
+		t.Fatalf("begin ticket: %v %+v", err, b)
+	}
+	if _, err := k.VerifyGateBegin(val, "reports"); err == nil {
+		t.Error("a begin ticket started another gate")
+	}
+	if _, err := k.VerifyGateBegin(val, ""); err == nil {
+		t.Error("a begin ticket started no gate")
+	}
+	expired, _ := k.SignGateBegin(GateBegin{Host: "acme.example.test", Gate: "billing", ExpiresAt: time.Now().Add(-time.Second).Unix()})
+	if _, err := k.VerifyGateBegin(expired, "billing"); err == nil {
+		t.Error("an expired begin ticket was accepted")
+	}
+	nohost, _ := k.SignGateBegin(GateBegin{Gate: "billing"})
+	if _, err := k.VerifyGateBegin(nohost, "billing"); err == nil {
+		t.Error("a begin ticket without a host was accepted")
+	}
+	gate, _ := k.SignGateCookie(GateCookie{Pass: "acme.example.test", Gate: "billing"})
+	if _, err := k.VerifyGateBegin(gate, "billing"); err == nil {
+		t.Error("a gate cookie passed for a begin ticket")
+	}
+	app, _ := k.SignCookie(CookieClaims{SessionID: "s1", Project: "billing"})
+	if _, err := k.VerifyGateBegin(app, "billing"); err == nil {
+		t.Error("an app cookie passed for a begin ticket")
+	}
+	if _, err := k.VerifyGateCookie(val, "billing"); err == nil {
+		t.Error("a begin ticket passed for a gate cookie")
+	}
+}
+
 // A pass is read as often as needed, at its host only, and ends when it is
 // dropped; a code of another kind is no pass.
 func TestAPassIsReadAtItsHostUntilDropped(t *testing.T) {
