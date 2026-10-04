@@ -8,7 +8,6 @@ import type {
   AllowEntry,
   APIToken,
   AuditEntry,
-  Billing,
   BuildInfo,
   ConfigVar,
   Connection,
@@ -64,7 +63,6 @@ type Things = {
   loginMethods: LoginMethods;
   domainClaims: DomainClaim[];
   sizes: SizeCatalog;
-  billing: Billing;
   globals: Globals;
 };
 
@@ -137,6 +135,7 @@ export const mock: Api = {
     await wait();
     return me as Identity;
   },
+  links: async () => [{ section: "Cloud", label: "Billing", url: "/.shpyrd/gate?name=billing", icon: "credit-card" }],
 
   passwordLogin: async ({ email, password, next }) => {
     await wait();
@@ -331,11 +330,6 @@ export const mock: Api = {
     all.globals.vars.sort((a, b) => a.name.localeCompare(b.name));
     await thingsOf.set(all);
     return all.globals;
-  },
-  billing: async (month) => {
-    const billing = (await thingsOf.get()).billing;
-    // The Mock has one month of usage, and shows it for any month asked.
-    return month && month !== billing.month ? { ...billing, month, past: true, projection: undefined } : billing;
   },
   sizes: async () => (await thingsOf.get()).sizes,
 
