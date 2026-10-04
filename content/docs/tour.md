@@ -109,7 +109,7 @@ The **Workspace** page, for its owners and admins. **Overview**: the name, the l
 
 ![Sign-in tab](/screenshots/workspace-signin.png)
 
-**Sign-in**: your company's login methods, who may join on first sign-in, and your claimed email domains. **API tokens** holds the tokens for CI and scripts, and **Billing** the plan.
+**Sign-in**: your company's login methods, who may join on first sign-in, and your claimed email domains. **API tokens** holds the tokens for CI and scripts. Billing is not a page of the workspace here: on shpyrd cloud it opens from the sidebar's **Cloud** section.
 
 ## Try it yourself
 
