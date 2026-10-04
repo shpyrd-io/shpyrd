@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
@@ -698,5 +699,20 @@ func TestLinksArePerPerson(t *testing.T) {
 	}
 	if rec := w.get(t, "acme.shpyrd.test", "/api/links", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous links = %d", rec.Code)
+	}
+}
+
+// Links asks no provider without an identity set.
+func TestLinksAskNoProviderWithoutIdentity(t *testing.T) {
+	w := newGateWorld(t)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest("GET", "https://acme.shpyrd.test/api/links", nil)
+	c.Request.Host = "acme.shpyrd.test"
+	// Do not set an identity; IdentityFrom will return false.
+	// The tenant lookup will fail, but the handler returns empty list for console.
+	w.s.links(c)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Errorf("links without identity = %d %s", rec.Code, rec.Body.String())
 	}
 }

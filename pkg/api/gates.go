@@ -520,7 +520,11 @@ func (s *Server) links(c *gin.Context) {
 		c.JSON(http.StatusOK, out) // the console has no sidebar of links
 		return
 	}
-	id, _ := ext.IdentityFrom(c)
+	id, ok := ext.IdentityFrom(c)
+	if !ok || (id.Subject == "" && id.Email == "") {
+		c.JSON(http.StatusOK, out) // no identity: ask no provider for links
+		return
+	}
 	v, _, err := s.visitorIn(c.Request.Context(), ws, id)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
