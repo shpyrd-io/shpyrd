@@ -302,7 +302,7 @@ func (s *Server) edgeAuth(c *gin.Context) {
 		return
 	}
 	// Nothing from the client survives; every header below is set by us.
-	for _, h := range []string{"X-Shpyrd-User", "X-Shpyrd-Email", "X-Shpyrd-Name", "X-Shpyrd-Teams", "X-Shpyrd-Roles", "Authorization"} {
+	for _, h := range []string{"X-Shpyrd-User", "X-Shpyrd-Email", "X-Shpyrd-Name", "X-Shpyrd-Teams", "X-Shpyrd-Roles", "X-Shpyrd-Workspace", "X-Shpyrd-Operator", "Authorization"} {
 		c.Header(h, "")
 	}
 	if caller == nil || (caller.preview != nil && caller.preview.Anonymous) {

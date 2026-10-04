@@ -505,6 +505,12 @@ func TestEdgeObjects(t *testing.T) {
 	if ing.Annotations["nginx.ingress.kubernetes.io/auth-signin"] == "" || ing.Annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "403,503" {
 		t.Errorf("edge annotations = %v", ing.Annotations)
 	}
+	// Every header the edge can answer is overwritten or dropped by nginx,
+	// so a client cannot send the gates' X-Shpyrd-Workspace or
+	// X-Shpyrd-Operator to an app (RFC-0083).
+	if got := ing.Annotations["nginx.ingress.kubernetes.io/auth-response-headers"]; got != "Authorization,X-Shpyrd-User,X-Shpyrd-Email,X-Shpyrd-Name,X-Shpyrd-Teams,X-Shpyrd-Roles,X-Shpyrd-Workspace,X-Shpyrd-Operator" {
+		t.Errorf("auth-response-headers = %q", got)
+	}
 	edgeIng := &networkingv1.Ingress{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-expenses", Name: "expenses-edge"}, edgeIng); err != nil {
 		t.Fatalf("edge ingress: %v", err)
