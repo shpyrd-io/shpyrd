@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"syscall"
 )
 
 // FingerprintVolume verifies the copied tree independently from the transfer.
@@ -45,8 +44,8 @@ func FingerprintVolume(ctx context.Context, directory string, out io.Writer) err
 			}
 		}
 		uid, gid := 0, 0
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			uid, gid = int(st.Uid), int(st.Gid)
+		if u, g, ok := ownerOf(info); ok {
+			uid, gid = u, g
 		}
 		size := int64(0)
 		if info.Mode().IsRegular() {
