@@ -1,0 +1,12 @@
+id: established-team
+
+description: >
+  The workspace "Acme" with two projects, Website (slug website) and API
+  (slug api), and three people: owner@acme.test ("Olivia Owner", owner),
+  ada@acme.test ("Ada Admin", admin) and dev@acme.test ("Dev Member",
+  member, in the team "platform"). Every account's password is
+  VOYAGER_PASSWORD.
+
+seed:
+  command: .voyager/seed.sh established-team
+  timeout: 3m

@@ -1,0 +1,93 @@
+id: invite-member
+
+title: Invite someone to the workspace
+
+area: workspace
+
+tags: [core]
+
+scenario: established-team
+
+goal: >
+  The workspace owner invites a new person as a member, and the invitation
+  waits in the people list.
+
+steps:
+  - action: goto
+    path: /workspace/people
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: dev@acme.test
+    narration: Everyone in the workspace, and what each of them may do.
+
+  - action: capture
+    name: people
+    description: The people of an established workspace and their roles.
+    use: { docs: true }
+
+  # One `do` per screen, so each state of the invitation gets a screenshot.
+  - action: do
+    instruction: Open the dialog to invite someone to the workspace
+    narration: Bringing someone in starts with their email address.
+
+  - action: wait
+    text: Invite someone
+
+  - action: capture
+    name: invite-dialog
+    description: The invitation dialog, empty, with its role and team.
+    use: { docs: true }
+
+  - action: do
+    instruction: Fill in "bo@acme.test" as the email to invite, without sending the invitation yet
+    narration: Pick the role they join with, and optionally a team.
+
+  - action: verify
+    instruction: The invitation dialog is still open, with "bo@acme.test" in its email field and the role member
+
+  - action: capture
+    name: invite-filled
+    description: The invitation dialog filled in, before it is sent.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click the dialog's Invite button to create the invitation, until the dialog shows a link to hand them
+    narration: They get an email, or a link you can hand them yourself.
+
+  - action: wait
+    text: hand them this link
+
+  - action: capture
+    name: invite-link
+    description: >
+      The link to hand the person when no email goes out. The link's token
+      differs on every run.
+
+  # Opening the page again closes the dialog and shows what the server kept.
+  - action: goto
+    path: /workspace/people
+
+  - action: wait
+    text: bo@acme.test
+    narration: The invitation waits here until they sign in.
+
+  - action: verify
+    instruction: The Invitations section lists "bo@acme.test" with the role member, and no dialog is open
+
+  - action: capture
+    name: invited
+    description: The people of the workspace with one open invitation.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

@@ -1,0 +1,61 @@
+# Voyager configuration — https://github.com/shpyrd-io/shpyrd-voyager
+#
+# Voyager is not a dependency of the repository yet (it is not published).
+# Install it from a checkout beside this one, without saving it:
+#
+#   npm install --no-save ../shpyrd-voyager && npx playwright install chromium
+#
+# It drives the workspace application of the local kind cluster, which must
+# have the auth-local extension (the journeys sign in with email and
+# password) and the default ports 80/443:
+#
+#   make cli
+#   ./bin/shpyrd cluster create --name shpyrd --skip shpyrd --enable auth-local,mail
+#   make ui && make dev-deploy
+#
+# The cluster's certificates come from the development CA in ~/.shpyrd/ca.
+# The browser trusts it through ~/.pki/nssdb (`shpyrd-ctl cluster trust-ca`);
+# Voyager's own health check is Node, which needs it named:
+#
+#   export NODE_EXTRA_CA_CERTS=$HOME/.shpyrd/ca/rootCA.pem
+#
+# The seed needs `make cli` and VOYAGER_PASSWORD, which is also the password
+# the journeys sign in with.
+version: 1
+
+product:
+  name: shpyrd
+
+environment:
+  base_url: https://127.0.0.1.nip.io
+
+  # The cluster outlives a run: when it is paused (`make dev-pause`), bring
+  # it back; it is never stopped by Voyager.
+  start:
+    command: make dev-resume
+    timeout: 3m
+
+  health:
+    url: https://127.0.0.1.nip.io/healthz
+    timeout: 3m
+
+browser:
+  viewport:
+    width: 1440
+    height: 900
+
+outputs:
+  directory: .voyager-output
+  screenshots: true
+  videos: true
+  reports: true
+  traces: true
+
+# Semantic steps (do, verify) use TypeSafe Jev. Set TYPESAFE_API_KEY.
+semantic:
+  engine: jev
+
+# Voice-over for `voyager demo`, from each step's `narration` line. Set
+# ELEVENLABS_API_KEY; `--no-narration` records a silent demo instead.
+narration:
+  provider: elevenlabs
