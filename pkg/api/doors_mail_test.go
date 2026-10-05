@@ -185,3 +185,34 @@ func TestSignInTicketOpensTheDoorOnce(t *testing.T) {
 		t.Fatalf("second use: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+// The rest of a sign-in ticket's link goes on past the redirect, which no
+// page sees: the device id the signup adds and Google's linker reach the
+// launcher, where the analytics read them, as they came; the code stays
+// behind. Refused, the link still carries them on to the login page,
+// whose reason the link cannot replace.
+func TestSignInTicketCarriesTheRestOfTheLink(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	ctx := context.Background()
+	const rest = "&ampDeviceId=dev-1&_gl=1*x9k2*_ga*MTIzLjQ1Ng.."
+	redeem := func(link string) (int, string) {
+		req := httptest.NewRequest("GET", link, nil)
+		req.Host = "acme.shpyrd.test"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Header().Get("Location")
+	}
+	link, err := s.signInTicketHook(ctx, "acme", "new@person.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, at := redeem(link + rest)
+	if code != http.StatusFound || at != "/?ampDeviceId=dev-1&_gl=1*x9k2*_ga*MTIzLjQ1Ng.." {
+		t.Fatalf("own door: %d %s", code, at)
+	}
+	code, at = redeem(link + rest + "&login_error=forged")
+	if code != http.StatusFound || !strings.HasPrefix(at, "/?login_error=this+sign-in+link") || !strings.HasSuffix(at, rest) || strings.Contains(at, "code=") || strings.Contains(at, "forged") {
+		t.Fatalf("second use: %d %s", code, at)
+	}
+}

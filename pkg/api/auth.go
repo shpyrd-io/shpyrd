@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -735,40 +736,78 @@ func (s *Server) signInTicketHook(ctx context.Context, wsSlug, email string) (st
 
 // authSignupTicket is GET /api/auth/signup-ticket?code=…: the door takes
 // the code once, admits the person as any sign-in would and opens their
-// session here, then sends them to the launcher.
+// session here, then sends them to the launcher. Whatever else the link
+// carries goes on with them, refused or not (carryQuery).
 func (s *Server) authSignupTicket(c *gin.Context) {
+	redirect := func(to string) { c.Redirect(http.StatusFound, carryQuery(c, to, "code")) }
+	fail := func(err error) { redirect(loginErrorURL(err)) }
 	code := c.Query("code")
 	if code == "" || s.store == nil || s.rp == nil {
-		s.loginFailed(c, errors.New("no such sign-in link"))
+		fail(errors.New("no such sign-in link"))
 		return
 	}
 	ticket, err := s.store.TakeCode(c.Request.Context(), code)
 	if err != nil || ticket == nil || time.Now().After(ticket.ExpiresAt) {
 		s.auditAnonymous(c, "auth.signup_ticket_failed", "unknown or expired")
-		s.loginFailed(c, errors.New("this sign-in link was used already or expired; sign in with your email and password"))
+		fail(errors.New("this sign-in link was used already or expired; sign in with your email and password"))
 		return
 	}
 	if ws := s.workspace(c); ticket.Host != tenancy.Host(c.Request.Host) && (ws == "" || ticket.Host != s.workspaceAddress(c)) {
 		s.auditAnonymous(c, "auth.signup_ticket_failed", "another door")
-		s.loginFailed(c, errors.New("this sign-in link is for another workspace"))
+		fail(errors.New("this sign-in link is for another workspace"))
 		return
 	}
 	var claims signupTicketClaims
 	if json.Unmarshal(ticket.Claims, &claims) != nil || claims.Email == "" {
-		s.loginFailed(c, errors.New("this sign-in link is not valid"))
+		fail(errors.New("this sign-in link is not valid"))
 		return
 	}
 	id := ext.Identity{Subject: claims.Email, Email: claims.Email, Name: firstNonEmpty(claims.Name, claims.Email), Provider: "signup"}
 	if err := s.admitAt(c, id); err != nil {
 		s.auditFailure(c, "auth.refused", id.Email, err.Error())
-		s.loginFailed(c, err)
+		fail(err)
 		return
 	}
 	next, ok := s.openSession(c, id, "", "signup ticket")
 	if !ok {
 		return
 	}
-	c.Redirect(http.StatusFound, next)
+	redirect(next)
+}
+
+// carryQuery is where a link that ends in a redirect sends the browser,
+// with the rest of the link's query. No page sees the link itself, only
+// the one it redirects to, and that page is the first to load the pages'
+// additions (the analytics): what they read on arrival rides on the
+// query (the device id the signup hands on, Google's linker, a
+// campaign's tags), so it must reach that page. The core names none of
+// them: every parameter goes on except the ones dropped (the link's own,
+// such as a ticket's code) and the ones the destination sets itself. The
+// parameters go as they came, not encoded again, since the scripts read
+// some of them byte for byte.
+func carryQuery(c *gin.Context, to string, drop ...string) string {
+	u, err := url.Parse(to)
+	if err != nil {
+		return to
+	}
+	own := u.Query()
+	var rest []string
+	for _, pair := range strings.Split(c.Request.URL.RawQuery, "&") {
+		raw, _, _ := strings.Cut(pair, "=")
+		key, err := url.QueryUnescape(raw)
+		if pair == "" || err != nil || slices.Contains(drop, key) || own.Has(key) {
+			continue
+		}
+		rest = append(rest, pair)
+	}
+	if len(rest) == 0 {
+		return to
+	}
+	if u.RawQuery != "" {
+		rest = append([]string{u.RawQuery}, rest...)
+	}
+	u.RawQuery = strings.Join(rest, "&")
+	return u.String()
 }
 
 // workspaceAddress is the address of the request's workspace, "" at the
@@ -782,7 +821,12 @@ func (s *Server) workspaceAddress(c *gin.Context) string {
 
 // loginFailed sends the browser back to the login page with the reason.
 func (s *Server) loginFailed(c *gin.Context, err error) {
-	c.Redirect(http.StatusFound, "/?login_error="+url.QueryEscape(err.Error()))
+	c.Redirect(http.StatusFound, loginErrorURL(err))
+}
+
+// loginErrorURL is the login page with the reason.
+func loginErrorURL(err error) string {
+	return "/?login_error=" + url.QueryEscape(err.Error())
 }
 
 // secureCookies says the cookies of this request are Secure: the browser
