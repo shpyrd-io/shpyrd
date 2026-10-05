@@ -152,17 +152,27 @@ func (h *handlers) summary(c *gin.Context) {
 // slugs names projects by the short ids the lines carry.
 func (h *handlers) slugs(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	all, err := h.store.ListWorkspaces(ctx)
+	for short, p := range projectsByShortID(ctx, h.store) {
+		out[short] = p.Slug
+	}
+	return out
+}
+
+// projectsByShortID is every project, deleted ones too, by the short id
+// the lines carry.
+func projectsByShortID(ctx context.Context, st store.Store) map[string]store.Project {
+	out := map[string]store.Project{}
+	all, err := st.ListWorkspaces(ctx)
 	if err != nil {
 		return out
 	}
 	for _, w := range all {
-		projects, err := h.store.ListProjects(ctx, w.Slug, true)
+		projects, err := st.ListProjects(ctx, w.Slug, true)
 		if err != nil {
 			continue
 		}
 		for _, p := range projects {
-			out[ids.Short(p.ID)] = p.Slug
+			out[ids.Short(p.ID)] = p
 		}
 	}
 	return out

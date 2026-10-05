@@ -4,6 +4,7 @@ package costs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/shpyrd-io/shpyrd/ee/licensing"
+	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -36,9 +38,33 @@ const batchSize = 500
 
 // Payload is the body of a POST to a drain.
 type Payload struct {
-	Cluster string           `json:"cluster"`
-	SentAt  time.Time        `json:"sentAt"`
-	Lines   []store.CostLine `json:"lines"`
+	Cluster string    `json:"cluster"`
+	SentAt  time.Time `json:"sentAt"`
+	Lines   []Line    `json:"lines"`
+}
+
+// Line is a cost line as a drain gets it: its project by the project's
+// UUID, as its workspace is, where the cluster keeps the short id the
+// namespace labels carry; and the project's name as it is when sent, so a
+// receiver that keeps projects by id renames them.
+type Line struct {
+	store.CostLine
+	ProjectName string `json:"projectName,omitempty"`
+}
+
+// sent turns the lines kept into the lines sent.
+func sent(lines []store.CostLine, projects map[string]store.Project) []Line {
+	out := make([]Line, len(lines))
+	for i, l := range lines {
+		out[i].CostLine = l
+		if p, ok := projects[l.Project]; ok {
+			out[i].Project = p.ID
+			out[i].ProjectName = cmp.Or(p.Name, p.Slug)
+		} else if id, err := ids.Decode(l.Project); err == nil {
+			out[i].Project = id
+		}
+	}
+	return out
 }
 
 // Sender is the drains' loop.
@@ -87,14 +113,18 @@ func (s *Sender) Send(ctx context.Context) {
 		log.Warn("cost drains", "error", err)
 		return
 	}
+	if len(drains) == 0 {
+		return
+	}
+	projects := projectsByShortID(ctx, s.Store)
 	for _, d := range drains {
-		if err := s.drain(ctx, d); err != nil {
+		if err := s.drain(ctx, d, projects); err != nil {
 			log.Warn("cost drain", "drain", d.Name, "error", err)
 		}
 	}
 }
 
-func (s *Sender) drain(ctx context.Context, d store.CostDrain) error {
+func (s *Sender) drain(ctx context.Context, d store.CostDrain, projects map[string]store.Project) error {
 	headers, err := s.headers(ctx, d.ID)
 	if err != nil {
 		return err
@@ -117,7 +147,7 @@ func (s *Sender) drain(ctx context.Context, d store.CostDrain) error {
 		if err != nil || len(lines) == 0 {
 			return err
 		}
-		if err := post(ctx, client, d.URL, headers, Payload{Cluster: s.Cluster, SentAt: time.Now().UTC(), Lines: lines}); err != nil {
+		if err := post(ctx, client, d.URL, headers, Payload{Cluster: s.Cluster, SentAt: time.Now().UTC(), Lines: sent(lines, projects)}); err != nil {
 			return s.Store.RecordCostDelivery(ctx, d.ID, store.CostDelivery{At: time.Now(), Err: err.Error()})
 		}
 		last := lines[len(lines)-1]

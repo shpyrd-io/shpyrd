@@ -80,7 +80,7 @@ export function Costs() {
         <CardHeader>
           <CardTitle>Costs</CardTitle>
           <CardDescription>
-            What the cluster costs, line by line. Estimated is OpenCost&apos;s share of each node and volume at list prices; real is the provider&apos;s bill, read once a day. The cost drains send every line, with the node&apos;s or volume&apos;s OCID, to whoever reconciles them.
+            What the cluster costs, line by line. Estimated is OpenCost&apos;s share of each node and volume at list prices, read every quarter of an hour, the hour under way included; real is the provider&apos;s bill, read once a day. The cost drains send every line, with the node&apos;s or volume&apos;s OCID, to whoever reconciles them.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">

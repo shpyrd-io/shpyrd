@@ -150,7 +150,8 @@ func TestTheCollectorWritesTheClosedHours(t *testing.T) {
 	}
 	withLicense(t)
 	c.Collect(ctx)
-	if len(windows) != 1 || windows[0] != "2026-10-04T12:00:00Z,2026-10-04T13:00:00Z" {
+	// The hour closed, then the five minutes of the next.
+	if len(windows) != 2 || windows[0] != "2026-10-04T12:00:00Z,2026-10-04T13:00:00Z" || windows[1] != "2026-10-04T13:00:00Z,2026-10-04T13:05:00Z" {
 		t.Fatalf("windows = %v", windows)
 	}
 	usage, _ := st.QueryCostLines(ctx, store.CostQuery{From: hour, To: hour.Add(time.Hour), Kind: store.CostUsage})
@@ -168,6 +169,73 @@ func TestTheCollectorWritesTheClosedHours(t *testing.T) {
 	after, _ := st.CostLinesChangedSince(ctx, time.Time{}, "", 1000)
 	if len(before) != len(after) || before[len(before)-1].ChangedAt != after[len(after)-1].ChangedAt {
 		t.Errorf("a re-read changed lines: %d %d", len(before), len(after))
+	}
+}
+
+// The hour under way is read up to now and written as the whole hour: the
+// next pass revises the same line, never adds one beside it.
+func TestTheHourUnderWayGrowsPassByPass(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	ws, _ := st.Workspace(ctx, store.DefaultWorkspace)
+	bucket := func(at time.Time, q float64) {
+		t.Helper()
+		if err := st.WriteBuckets(ctx, []store.UsageBucket{{WorkspaceID: store.DefaultWorkspace, Project: "p", Component: "web", Metric: store.MetricCPUUsed, PeriodStart: at, PeriodEnd: at.Add(5 * time.Minute), Quantity: &q, Unit: store.UnitCoreSeconds, Quality: store.QualityComplete, Revision: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage := func() []store.CostLine {
+		t.Helper()
+		lines, err := st.QueryCostLines(ctx, store.CostQuery{From: hour, To: hour.Add(time.Hour), Kind: store.CostUsage})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lines
+	}
+	withLicense(t)
+	now := hour.Add(10 * time.Minute)
+	c := &Collector{Store: st, Kube: fake.NewSimpleClientset(), Namespace: "shpyrd-system", HoursBack: 1, now: func() time.Time { return now }}
+
+	bucket(hour, 300)
+	bucket(hour.Add(10*time.Minute), 120) // still being measured at 12:10
+	c.Collect(ctx)
+	first := usage()
+	if len(first) != 1 || *first[0].Quantity != 300 || !first[0].Start.Equal(hour) || !first[0].End.Equal(hour.Add(time.Hour)) {
+		t.Fatalf("at 12:10 = %+v", first)
+	}
+
+	now = hour.Add(20 * time.Minute)
+	c.Collect(ctx)
+	then := usage()
+	if len(then) != 1 || then[0].ID != first[0].ID || then[0].Workspace != ws.ID || *then[0].Quantity != 420 {
+		t.Errorf("at 12:20 = %+v", then)
+	}
+}
+
+// A pass comes five minutes past each step of the clock.
+func TestPassesComeFivePastEachStep(t *testing.T) {
+	at := func(hm string) time.Time {
+		t.Helper()
+		p, err := time.Parse("15:04", hm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return time.Date(2026, 10, 4, p.Hour(), p.Minute(), 0, 0, time.UTC)
+	}
+	for _, tc := range []struct {
+		now   string
+		every time.Duration
+		want  string
+	}{
+		{"10:02", 15 * time.Minute, "10:05"},
+		{"10:05", 15 * time.Minute, "10:20"},
+		{"10:49", 15 * time.Minute, "10:50"},
+		{"10:51", 15 * time.Minute, "11:05"},
+		{"10:06", time.Hour, "11:05"},
+	} {
+		if got := nextPass(at(tc.now), tc.every); !got.Equal(at(tc.want)) {
+			t.Errorf("nextPass(%s, %s) = %s, want %s", tc.now, tc.every, got.Format("15:04"), tc.want)
+		}
 	}
 }
 
@@ -204,8 +272,14 @@ func TestADrainSendsWhatChanged(t *testing.T) {
 	}
 	kube := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: drainSecret(d.ID), Namespace: "shpyrd-system"}, Data: map[string][]byte{"Authorization": []byte("Bearer s3cret")}})
 	s := &Sender{Store: st, Kube: kube, Namespace: "shpyrd-system", Cluster: "prod"}
+	ws, _ := st.Workspace(ctx, store.DefaultWorkspace)
+	shop := store.Project{ID: "0192a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", WorkspaceID: ws.ID, Slug: "shop", Name: "The shop", Namespace: "p-shop"}
+	if _, err := st.UpsertProject(ctx, shop); err != nil {
+		t.Fatal(err)
+	}
 	f := func(v float64) *float64 { return &v }
-	line := store.CostLine{Kind: store.CostEstimated, Source: "opencost", Start: hour, End: hour.Add(time.Hour), Project: "p1", Process: "web", Metric: "cpu", Quantity: f(1), Cost: f(0.03), Currency: "USD", Resource: "ocid1.instance.a"}
+	// The cluster keeps the project by the short id its namespace carries.
+	line := store.CostLine{Kind: store.CostEstimated, Source: "opencost", Start: hour, End: hour.Add(time.Hour), Workspace: ws.ID, Project: ids.Short(shop.ID), Process: "web", Metric: "cpu", Quantity: f(1), Cost: f(0.03), Currency: "USD", Resource: "ocid1.instance.a"}
 	if _, err := st.UpsertCostLines(ctx, []store.CostLine{line}); err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +287,10 @@ func TestADrainSendsWhatChanged(t *testing.T) {
 	s.Send(ctx)
 	if len(got) != 1 || len(got[0].Lines) != 1 || got[0].Cluster != "prod" || got[0].Lines[0].ID == "" || got[0].Lines[0].Resource != "ocid1.instance.a" || auth[0] != "Bearer s3cret" {
 		t.Fatalf("first delivery = %+v %v", got, auth)
+	}
+	// The drain gets it by its UUID, as the workspace, and by its name.
+	if l := got[0].Lines[0]; l.Project != shop.ID || l.ProjectName != "The shop" || l.Workspace != ws.ID {
+		t.Errorf("the line's project = %q %q", l.Project, l.ProjectName)
 	}
 	s.Send(ctx)
 	if len(got) != 1 {
@@ -234,6 +312,16 @@ func TestADrainSendsWhatChanged(t *testing.T) {
 	}
 	if drains, _ := st.ListCostDrains(ctx); drains[0].Sent != 2 || drains[0].Message != "" {
 		t.Errorf("after recovery = %+v", drains[0])
+	}
+}
+
+// A project the cluster no longer lists still goes by its UUID, with no
+// name; a line of no project (the platform's) stays as it is.
+func TestALineSentNamesItsProjectByUUID(t *testing.T) {
+	gone := "0192a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c"
+	out := sent([]store.CostLine{{Project: ids.Short(gone)}, {Project: ""}}, map[string]store.Project{})
+	if out[0].Project != gone || out[0].ProjectName != "" || out[1].Project != "" {
+		t.Errorf("sent = %+v", out)
 	}
 }
 
