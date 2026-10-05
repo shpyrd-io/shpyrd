@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import type { Redirect } from "next/dist/lib/load-custom-routes";
 import vercel from "./vercel.json";
 
 // Everything is compiled to static files (out/): no Node at run time. A static
@@ -21,7 +22,9 @@ const base: NextConfig = {
 
 export default function config(phase: string): NextConfig {
   if (phase === PHASE_DEVELOPMENT_SERVER) {
-    return { ...base, output: undefined, redirects: async () => vercel.redirects };
+    // JSON types "header" as any string; the file holds Vercel's redirects,
+    // which are Next's too (has, missing).
+    return { ...base, output: undefined, redirects: async () => vercel.redirects as Redirect[] };
   }
   return base;
 }
