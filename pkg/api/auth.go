@@ -880,8 +880,13 @@ type Me struct {
 	// Person is the stable id the workspace knows the person by (the
 	// store's identity id): what the pages report as who acted, and what
 	// the audit trail carries as Subject. Empty for the admin token.
-	Person string      `json:"person,omitempty"`
-	Roles  authz.Roles `json:"roles"`
+	Person string `json:"person,omitempty"`
+	// WorkspaceID is the id of the workspace the door belongs to, the
+	// store's UUID: what the pages report as the workspace, as the
+	// server's events and the billing app name it, since a workspace's
+	// address changes and its id does not. Empty at the console.
+	WorkspaceID string      `json:"workspaceId,omitempty"`
+	Roles       authz.Roles `json:"roles"`
 	// Console says the person is a platform admin by the console's roles
 	// (RFC-0080): a workspace owned by the operator shows them the way to
 	// the console.
@@ -908,7 +913,11 @@ func (s *Server) me(c *gin.Context) {
 	if !console && s.authz != nil {
 		console = s.authz.ConsoleAdmin(c.Request.Context(), id)
 	}
-	c.JSON(http.StatusOK, Me{Identity: id, Person: s.subjectOf(c, id), Roles: roles, Console: console})
+	var workspaceID string
+	if ws, err := s.tenant(c); err == nil {
+		workspaceID = ws.ID
+	}
+	c.JSON(http.StatusOK, Me{Identity: id, Person: s.subjectOf(c, id), WorkspaceID: workspaceID, Roles: roles, Console: console})
 }
 
 // securityHeaders hardens every response (RFC-0008). The dashboard is a

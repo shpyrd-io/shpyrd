@@ -216,3 +216,38 @@ func TestSignInTicketCarriesTheRestOfTheLink(t *testing.T) {
 		t.Fatalf("second use: %d %s", code, at)
 	}
 }
+
+// /api/me names the workspace of the door by its id, beside the person:
+// what the pages report as the workspace, as the server's events do.
+func TestMeNamesTheWorkspaceByItsID(t *testing.T) {
+	s, _, _ := newTenantServer(t)
+	ctx := context.Background()
+	at := func(method, link string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, link, nil)
+		req.Host = "acme.shpyrd.test"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		for _, ck := range cookies {
+			req.AddCookie(ck)
+		}
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	link, err := s.signInTicketHook(ctx, "acme", "new@person.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedIn := at("GET", link, nil)
+	rec := at("GET", "https://acme.shpyrd.test/api/me", signedIn.Result().Cookies())
+	var me Me
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &me) != nil {
+		t.Fatalf("/api/me: %d %s", rec.Code, rec.Body.String())
+	}
+	ws, err := s.store.Workspace(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if me.WorkspaceID != ws.ID || me.Person == "" {
+		t.Errorf("workspaceId = %q, want %q; person %q", me.WorkspaceID, ws.ID, me.Person)
+	}
+}
