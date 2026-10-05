@@ -63,8 +63,9 @@ jobs:
           file: Dockerfile.release
           platforms: linux/amd64,linux/arm64
           push: ${{ env.PUBLISH == 'true' }}
+          # A dry run's branch name may hold a slash, which no tag may.
           tags: |
-            ghcr.io/shpyrd-io/shpyrd-server:${{ github.ref_name }}
+            ghcr.io/shpyrd-io/shpyrd-server:${{ env.PUBLISH == 'true' && github.ref_name || 'dry-run' }}
             ghcr.io/shpyrd-io/shpyrd-server:latest
           labels: |
             org.opencontainers.image.source=https://github.com/shpyrd-io/shpyrd
