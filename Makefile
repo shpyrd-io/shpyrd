@@ -3,7 +3,7 @@ CLUSTER      ?= shpyrd
 SERVER_IMAGE ?= shpyrd-server:dev
 LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
-.PHONY: all build cli server ui pages emails website website-dev image dev-image generate \
+.PHONY: all build cli server ui pages emails website website-dev image dev-image release-binaries generate \
         test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
         dev-pause dev-resume installclint commitlint
 
@@ -63,6 +63,17 @@ dev-image:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH_HOST) go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/shpyrd-server-linux-$(GOARCH_HOST) ./cmd/shpyrd-server
 	docker build -f Dockerfile.dev --build-arg TARGETARCH=$(GOARCH_HOST) -t $(SERVER_IMAGE) .
+
+## The release image's binaries: the server and the PostgreSQL gateway for
+## both architectures (the applications embedded from pkg/ui/dist), for
+## Dockerfile.release. CI builds them on every change, so a release finds
+## them compiled.
+release-binaries:
+	mkdir -p bin
+	for arch in amd64 arm64; do \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/shpyrd-server-linux-$$arch ./cmd/shpyrd-server && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/pg-gateway-linux-$$arch ./cmd/pg-gateway || exit 1; \
+	done
 
 ## Regenerate deepcopy code and the App CRD from api/
 generate:

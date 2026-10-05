@@ -1,0 +1,14 @@
+# Release image: packages the server and the PostgreSQL gateway compiled
+# outside Docker (`make ui release-binaries`), for linux/amd64 and
+# linux/arm64 alike. The release compiles them with Go's cache, which a
+# build inside Docker starts without; the Dockerfile at the root builds the
+# same image from source.
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETARCH
+COPY bin/shpyrd-server-linux-${TARGETARCH} /shpyrd-server
+# The PostgreSQL wake-on-connect proxy (RFC-0075) rides in the same image;
+# the pg-gateway component runs it with args [/pg-gateway].
+COPY bin/pg-gateway-linux-${TARGETARCH} /pg-gateway
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/shpyrd-server"]

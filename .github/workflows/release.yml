@@ -1,15 +1,28 @@
 # Release (RFC-0045): on a tag vX.Y.Z, build the server image for amd64 and
 # arm64 and push it to GHCR, then let GoReleaser publish the CLI archives,
-# checksums, release notes and the Homebrew formula.
+# checksums, release notes and the Homebrew cask.
+#
+# Both compile with the packages CI keeps on main (the "Every system a
+# release builds" job): a tag's run can read main's caches only, and CI has
+# compiled this commit's binaries for every system already, so a release
+# mostly links. The image packages binaries compiled here
+# (Dockerfile.release) rather than compiling inside Docker without a cache.
+#
+# Run by hand on a branch, it is a dry run: the image is built but not
+# pushed, and GoReleaser builds a snapshot and publishes nothing.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
+
+env:
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   image:
@@ -17,9 +30,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-release-${{ hashFiles('go.sum') }}-
+            go-release-
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: The applications, and the binaries for both architectures
+        run: make ui release-binaries VERSION=${{ github.ref_name }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -27,9 +60,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.release
           platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: VERSION=${{ github.ref_name }}
+          push: ${{ env.PUBLISH == 'true' }}
           tags: |
             ghcr.io/shpyrd-io/shpyrd-server:${{ github.ref_name }}
             ghcr.io/shpyrd-io/shpyrd-server:latest
@@ -37,8 +70,6 @@ jobs:
             org.opencontainers.image.source=https://github.com/shpyrd-io/shpyrd
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=MPL-2.0
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   cli:
     name: CLI, checksums, Homebrew
@@ -51,12 +82,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-release-${{ hashFiles('go.sum') }}-
+            go-release-
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: ${{ env.PUBLISH == 'true' && 'release --clean' || 'release --snapshot --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

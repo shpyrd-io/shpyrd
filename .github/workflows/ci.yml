@@ -1,14 +1,20 @@
 # CI (RFC-0045): Go tests and vet (and the foss build, without ee/), the
 # applications' tests, build and lint, the
-# manifests render test, and an end-to-end run on a kind cluster that
-# deploys the sample projects with buildpacks and a Dockerfile.
+# manifests render test, every binary a release builds for every system it
+# builds them for, and an end-to-end run on a kind cluster that deploys the
+# sample projects with buildpacks and a Dockerfile.
 #
-# What changed decides what runs: a pull request or a push that touches only
-# the website, the brand, content, RFCs, docs or the Markdown at the root
-# (the "changes" job) runs neither the Go tests, the applications nor the
-# end-to-end job, which takes about 45 minutes on a cluster it does not need.
-# examples/ is at the repository root, not under apps/, so the projects the
-# end-to-end job deploys still trigger it.
+# What changed decides what runs (the "changes" job): a pull request or a
+# push that touches only the website, the brand, content, RFCs, docs or the
+# Markdown at the root runs none of it; one that touches only the
+# applications (apps/ but the website, design/ui, design/pages, the npm
+# files) runs the applications' job alone: the end-to-end job drives the
+# CLI, never a browser. examples/ is at the repository root, not under
+# apps/, so the projects the end-to-end job deploys still trigger it.
+#
+# The jobs run side by side: the end-to-end job builds the applications
+# itself and creates its cluster while it compiles, rather than waiting for
+# the others.
 #
 # The workflow itself always runs, and its last job, "CI", always reports:
 # it passes when every job that ran passed and the others were skipped. That
@@ -34,7 +40,8 @@ jobs:
     name: What changed
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.diff.outputs.code }}
+      go: ${{ steps.diff.outputs.go }}
+      ui: ${{ steps.diff.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,26 +52,30 @@ jobs:
         run: |
           # Without a base to compare with (a new branch, a force-push), all of it.
           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "ui=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # --no-renames: a file moved lists both its paths, so moving code
-          # into docs/ cannot skip the jobs that would miss it.
-          code=false
+          # into docs/ cannot skip the jobs that would miss it. Anything not
+          # named here is Go's (the workflows, deploy/, examples/, ...).
+          go=false ui=false
           while IFS= read -r f; do
             case "$f" in
               "" | apps/website/* | design/brand/* | content/* | rfcs/* | docs/*) ;;
-              */*) code=true ;;
+              apps/* | design/ui/* | design/pages/* | package.json | package-lock.json | .nvmrc) ui=true ;;
+              */*) go=true ;;
               *.md) ;;
-              *) code=true ;;
+              *) go=true ;;
             esac
           done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
 
   go:
     name: Go tests
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     services:
       # The control-plane store's tests run against PostgreSQL too (RFC-0033).
@@ -102,7 +113,7 @@ jobs:
   ui:
     name: Applications
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,16 +127,58 @@ jobs:
       - run: npm run typecheck --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: npm run test --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: make ui
-      - uses: actions/upload-artifact@v4
+
+  # What a release builds (the CLIs for every system, the server and the
+  # PostgreSQL gateway for both architectures), built here so a change that
+  # does not compile on one of them fails its pull request, not its release.
+  # main keeps the compiled packages: a tag's run can read the caches of
+  # main only, so this is also what makes a release compile little.
+  systems:
+    name: Every system a release builds
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          name: ui-dist
-          path: pkg/ui/dist
-          retention-days: 1
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-release-${{ hashFiles('go.sum') }}-
+            go-release-
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+      - name: The CLIs, for every system
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: build --snapshot --clean
+      - name: The server image's binaries, for both architectures
+        run: make release-binaries
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   e2e:
     name: End to end on kind
     runs-on: ubuntu-latest
-    needs: [go, ui]
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -133,16 +186,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: ui-dist
-          path: pkg/ui/dist
-      - name: Build the CLI and the server image
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Build the CLI
+        run: make cli
+      # The cluster needs nothing of this commit but the CLI: it is created
+      # (everything but the server) while the applications and the server
+      # build, and the next step but one waits for it.
+      - name: Create the cluster, in the background
         run: |
-          make cli
+          ( ./bin/shpyrd cluster create --name ci --skip shpyrd --http-port 8080 --https-port 8443 \
+              > "$RUNNER_TEMP/cluster.log" 2>&1; echo $? > "$RUNNER_TEMP/cluster.exit" ) &
+      - name: Build the applications and the server image
+        run: |
+          make ui
           make dev-image SERVER_IMAGE=shpyrd-server:ci
-      - name: Create the cluster (everything but the server)
-        run: ./bin/shpyrd cluster create --name ci --skip shpyrd --http-port 8080 --https-port 8443
+      - name: The cluster (everything but the server)
+        run: |
+          while [ ! -f "$RUNNER_TEMP/cluster.exit" ]; do sleep 5; done
+          cat "$RUNNER_TEMP/cluster.log"
+          exit "$(cat "$RUNNER_TEMP/cluster.exit")"
       - name: Install the server built from this commit
         run: |
           make dev-load SERVER_IMAGE=shpyrd-server:ci CLUSTER=ci
@@ -221,7 +287,7 @@ jobs:
 
   ci:
     name: CI
-    needs: [changes, go, ui, e2e]
+    needs: [changes, go, ui, systems, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
