@@ -29,6 +29,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/prom"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -507,13 +508,13 @@ func TestNodePools(t *testing.T) {
 	// Databases go to the platform pool.
 	storage := resource.MustParse("10Gi")
 	pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &storage}}
-	cl := desiredCNPGCluster(pg, storage, corev1.ResourceRequirements{}, "", "platform")
+	cl := desiredCNPGCluster(pg, storage, sizes.Defaults().Postgres.Sizes[0], corev1.ResourceRequirements{}, "", "platform")
 	sel, _, _ := unstructured.NestedMap(cl.Object, "spec", "affinity", "nodeSelector")
 	if sel[PoolLabel] != "platform" {
 		t.Errorf("cnpg nodeSelector = %v", sel)
 	}
 	// Single pool: no selectors anywhere.
-	cl = desiredCNPGCluster(pg, storage, corev1.ResourceRequirements{}, "", "")
+	cl = desiredCNPGCluster(pg, storage, sizes.Defaults().Postgres.Sizes[0], corev1.ResourceRequirements{}, "", "")
 	if _, found, _ := unstructured.NestedMap(cl.Object, "spec", "affinity"); found {
 		t.Errorf("single pool must not set affinity")
 	}

@@ -699,10 +699,18 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/resources", s.require(authz.ProjectView), s.listProjectResources)
 	api.POST("/projects/:slug/resources", s.require(authz.ProjectResource), s.createResource)
 	api.DELETE("/projects/:slug/resources/:kind/:name", s.require(authz.ProjectResource), s.deleteResource)
+	// A database's or store's size, from the list of its kind (#57).
+	api.POST("/projects/:slug/resources/:kind/:name/resize", s.require(authz.ProjectResource), s.resizeResource)
 	// Postgres sleep (RFC-0075): policy, suspend and resume.
 	api.PATCH("/projects/:slug/resources/postgres/:name/sleep", s.require(authz.ProjectResource), s.patchPostgresSleep)
 	api.POST("/projects/:slug/resources/postgres/:name/suspend", s.require(authz.ProjectResource), s.suspendPostgres)
 	api.POST("/projects/:slug/resources/postgres/:name/resume", s.require(authz.ProjectResource), s.resumePostgres)
+	// Backups and restore (RFC-0038) with the account alone (#74).
+	api.GET("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectView), s.listPostgresBackups)
+	api.PUT("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectResource), s.putPostgresBackups)
+	api.DELETE("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectResource), s.deletePostgresBackups)
+	api.POST("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectResource), s.takePostgresBackup)
+	api.POST("/projects/:slug/resources/postgres/:name/restore", s.require(authz.ProjectResource), s.restorePostgres)
 	api.POST("/projects/:slug/bindings", s.require(authz.ProjectResource), s.attachResource)
 	api.DELETE("/projects/:slug/bindings/:kind/:name", s.require(authz.ProjectResource), s.detachResource)
 	api.GET("/projects/:slug/volumes", s.require(authz.ProjectView), s.listVolumes)

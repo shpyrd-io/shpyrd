@@ -41,7 +41,7 @@ Two size kinds exist:
 - **shared**: the `cpu` value is a ceiling the process may use; it is guaranteed a 1/8 share of it and borrows the rest from idle neighbours (Kubernetes burstable QoS). Many small shared instances fit on one node.
 - **dedicated**: requests equal limits — whole cores, Guaranteed QoS.
 
-Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-s` (up to 0.5 CPU, 64 MiB). `shpyrd sizes list` shows the full catalog.
+Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-s` (up to 0.5 CPU, 64 MiB). Databases and stores have lists of their own with the same names ([Databases](/docs/databases#sizes)). `shpyrd sizes list` shows the full catalog.
 
 Instances are named the way Heroku names dynos: `web.1`, `web.2`, `worker.1`, in creation order. Logs and the dashboard use these names.
 

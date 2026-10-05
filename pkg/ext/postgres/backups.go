@@ -2,49 +2,93 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
-	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/resources"
 )
 
 // Backups (RFC-0038): `shpyrd pg backups enable|disable|list`, `shpyrd pg
-// backup` for one now, `shpyrd pg restore` into a new database.
+// backup` for one now, `shpyrd pg restore` into a new database. All go
+// through the API (#74): signed in with `shpyrd login` they need no
+// kubeconfig, and with a kubeconfig they reach the same routes through
+// its proxy.
 
-func backupsLine(pg *shpyrdv1.Postgres) string {
-	if pg.Spec.Backups == nil {
-		return "off (shpyrd pg backups enable " + pg.Name + ")"
+// backup is one base backup as the API lists it (api.BackupView).
+type backup struct {
+	Name    string `json:"name"`
+	Started string `json:"started,omitempty"`
+	Phase   string `json:"phase"`
+	Kind    string `json:"kind"`
+	Error   string `json:"error,omitempty"`
+}
+
+// backups is a database's backups as the API gives them (api.BackupsView).
+type backups struct {
+	Name            string                    `json:"name"`
+	Policy          *shpyrdv1.PostgresBackups `json:"policy"`
+	LastBackup      *time.Time                `json:"lastBackup,omitempty"`
+	RecoverableFrom *time.Time                `json:"recoverableFrom,omitempty"`
+	Backups         []backup                  `json:"backups"`
+}
+
+func backupsPath(project, name string) string {
+	return "api/projects/" + url.PathEscape(project) + "/resources/postgres/" + url.PathEscape(name)
+}
+
+// backupsCall sends one request about a database's backups and decodes
+// the answer into out (when not nil).
+func backupsCall(ctx context.Context, g ext.CLIGlobals, method, path string, body any, out any) error {
+	var raw []byte
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		raw = b
+	}
+	resp, err := g.API().Request(ctx, method, path, raw, "application/json")
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(resp, out); err != nil {
+		return fmt.Errorf("unexpected response: %s", resp)
+	}
+	return nil
+}
+
+func backupsLine(b backups) string {
+	if b.Policy == nil {
+		return "off (shpyrd pg backups enable " + b.Name + ")"
 	}
 	schedule, retention := "daily at 02:00 UTC", "14d"
-	if pg.Spec.Backups.Schedule != "" {
-		schedule = "cron " + pg.Spec.Backups.Schedule
+	if b.Policy.Schedule != "" {
+		schedule = "cron " + b.Policy.Schedule
 	}
-	if pg.Spec.Backups.Retention != "" {
-		retention = pg.Spec.Backups.Retention
+	if b.Policy.Retention != "" {
+		retention = b.Policy.Retention
 	}
 	out := fmt.Sprintf("on, %s, kept %s", schedule, retention)
-	if pg.Status.LastBackup != nil {
-		out += ", last " + pg.Status.LastBackup.UTC().Format(time.RFC3339)
+	if b.LastBackup != nil {
+		out += ", last " + b.LastBackup.UTC().Format(time.RFC3339)
 	} else {
 		out += ", no backup completed yet"
 	}
-	if pg.Status.RecoverableFrom != nil {
-		out += ", recoverable from " + pg.Status.RecoverableFrom.UTC().Format(time.RFC3339)
+	if b.RecoverableFrom != nil {
+		out += ", recoverable from " + b.RecoverableFrom.UTC().Format(time.RFC3339)
 	}
 	return out
 }
@@ -68,30 +112,14 @@ inside that window into a new database.`,
 		Short: "Turn backups on (or change retention and schedule)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
+			var b backups
+			body := shpyrdv1.PostgresBackups{Retention: retention, Schedule: schedule}
+			if err := backupsCall(cliContext(), g, "PUT", backupsPath(project, args[0])+"/backups", body, &b); err != nil {
 				return err
 			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			if pg.Spec.Backups == nil {
-				pg.Spec.Backups = &shpyrdv1.PostgresBackups{}
-			}
-			if retention != "" {
-				pg.Spec.Backups.Retention = retention
-			}
-			if schedule != "" {
-				pg.Spec.Backups.Schedule = schedule
-			}
-			if err := c.Update(ctx, pg); err != nil {
-				return err
-			}
-			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backups": pg.Spec.Backups}, func(w io.Writer) {
-				fmt.Fprintf(w, "Backups of %s: %s\n", pg.Name, backupsLine(pg))
-				fmt.Fprintln(w, "The first base backup starts now; follow it with `shpyrd pg backups list "+pg.Name+"`.")
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": b.Name, "backups": b.Policy}, func(w io.Writer) {
+				fmt.Fprintf(w, "Backups of %s: %s\n", b.Name, backupsLine(b))
+				fmt.Fprintln(w, "The first base backup starts now; follow it with `shpyrd pg backups list "+b.Name+"`.")
 			})
 		},
 	}
@@ -105,24 +133,15 @@ inside that window into a new database.`,
 		Short: "Turn backups off (existing backups stay until the database is deleted)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
-				return err
-			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
 			if !yes {
-				return fmt.Errorf("this stops WAL archiving and scheduled backups of %q; re-run with --yes to confirm", pg.Name)
+				return fmt.Errorf("this stops WAL archiving and scheduled backups of %q; re-run with --yes to confirm", args[0])
 			}
-			pg.Spec.Backups = nil
-			if err := c.Update(ctx, pg); err != nil {
+			var b backups
+			if err := backupsCall(cliContext(), g, "DELETE", backupsPath(project, args[0])+"/backups", nil, &b); err != nil {
 				return err
 			}
-			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backups": nil}, func(w io.Writer) {
-				fmt.Fprintf(w, "Backups of %s are off. Existing backups remain restorable until the database is deleted.\n", pg.Name)
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": b.Name, "backups": nil}, func(w io.Writer) {
+				fmt.Fprintf(w, "Backups of %s are off. Existing backups remain restorable until the database is deleted.\n", b.Name)
 			})
 		},
 	}
@@ -135,32 +154,27 @@ inside that window into a new database.`,
 		Short:   "List the base backups of a database",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
+			var b backups
+			if err := backupsCall(cliContext(), g, "GET", backupsPath(project, args[0])+"/backups", nil, &b); err != nil {
 				return err
 			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
+			if b.Backups == nil {
+				b.Backups = []backup{}
 			}
-			backups, err := listBackups(ctx, c, pg)
-			if err != nil {
-				return err
-			}
-			if backups == nil {
-				backups = []backupRow{}
-			}
-			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "policy": pg.Spec.Backups, "backups": backups}, func(out io.Writer) {
-				fmt.Fprintf(out, "Backups:    %s\n\n", backupsLine(pg))
-				if len(backups) == 0 {
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": b.Name, "policy": b.Policy, "backups": b.Backups}, func(out io.Writer) {
+				fmt.Fprintf(out, "Backups:    %s\n\n", backupsLine(b))
+				if len(b.Backups) == 0 {
 					fmt.Fprintln(out, "No base backups yet.")
 					return
 				}
 				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tSTARTED\tSTATUS\tKIND")
-				for _, b := range backups {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.Started, b.Phase, b.Kind)
+				for _, x := range b.Backups {
+					phase := x.Phase
+					if x.Error != "" {
+						phase += ": " + x.Error
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", x.Name, firstNonEmpty(x.Started, "-"), phase, x.Kind)
 				}
 				_ = tw.Flush()
 			})
@@ -171,50 +185,8 @@ inside that window into a new database.`,
 	return cmd
 }
 
-type backupRow struct {
-	Name    string `json:"name"`
-	Started string `json:"started"`
-	Phase   string `json:"phase"`
-	Kind    string `json:"kind"`
-	at      time.Time
-}
-
-func listBackups(ctx context.Context, c client.Client, pg *shpyrdv1.Postgres) ([]backupRow, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(controller.CNPGBackupGVK.GroupVersion().WithKind("BackupList"))
-	if err := c.List(ctx, list, client.InNamespace(pg.Namespace)); err != nil {
-		if strings.Contains(err.Error(), "no matches for kind") {
-			return nil, errors.New(resources.ExtensionHint(Name))
-		}
-		return nil, err
-	}
-	var out []backupRow
-	for _, item := range list.Items {
-		if cl, _, _ := unstructured.NestedString(item.Object, "spec", "cluster", "name"); cl != pg.Name {
-			continue
-		}
-		phase, _, _ := unstructured.NestedString(item.Object, "status", "phase")
-		started, _, _ := unstructured.NestedString(item.Object, "status", "startedAt")
-		kind := "on demand"
-		for _, o := range item.GetOwnerReferences() {
-			if o.Kind == "ScheduledBackup" {
-				kind = "scheduled"
-			}
-		}
-		row := backupRow{Name: item.GetName(), Phase: firstNonEmpty(phase, "pending"), Kind: kind, Started: "-"}
-		if t, err := time.Parse(time.RFC3339, started); err == nil {
-			row.at, row.Started = t, t.UTC().Format(time.RFC3339)
-		} else {
-			row.at = item.GetCreationTimestamp().Time
-		}
-		if msg, _, _ := unstructured.NestedString(item.Object, "status", "error"); msg != "" {
-			row.Phase += ": " + msg
-		}
-		out = append(out, row)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].at.After(out[j].at) })
-	return out, nil
-}
+// backupPoll is how often `shpyrd pg backup` asks how its backup goes.
+var backupPoll = 3 * time.Second
 
 func newBackupCmd(g ext.CLIGlobals) *cobra.Command {
 	var project string
@@ -224,52 +196,38 @@ func newBackupCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			_, c, err := resources.Connect(g)
-			if err != nil {
+			path := backupsPath(project, args[0]) + "/backups"
+			var started backup
+			if err := backupsCall(ctx, g, "POST", path, nil, &started); err != nil {
 				return err
 			}
-			pg, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			if pg.Spec.Backups == nil {
-				return fmt.Errorf("backups of %q are off: `shpyrd pg backups enable %s --project %s` first", pg.Name, pg.Name, project)
-			}
-			b := &unstructured.Unstructured{}
-			b.SetGroupVersionKind(controller.CNPGBackupGVK)
-			b.SetName(fmt.Sprintf("%s-%s", pg.Name, time.Now().UTC().Format("20060102-150405")))
-			b.SetNamespace(pg.Namespace)
-			b.SetLabels(map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
-			b.Object["spec"] = map[string]interface{}{
-				"cluster":             map[string]interface{}{"name": pg.Name},
-				"method":              "plugin",
-				"pluginConfiguration": map[string]interface{}{"name": controller.BarmanPluginName},
-			}
-			if err := c.Create(ctx, b); err != nil {
-				return err
-			}
-			fmt.Fprintf(ext.Progress(g, cmd), "Backup %s started...\n", b.GetName())
-			deadline := time.Now().Add(10 * time.Minute)
-			for time.Now().Before(deadline) {
-				time.Sleep(3 * time.Second)
-				cur := &unstructured.Unstructured{}
-				cur.SetGroupVersionKind(controller.CNPGBackupGVK)
-				if err := c.Get(ctx, client.ObjectKeyFromObject(b), cur); err != nil {
+			fmt.Fprintf(ext.Progress(g, cmd), "Backup %s started...\n", started.Name)
+			for deadline := time.Now().Add(10 * time.Minute); time.Now().Before(deadline); {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backupPoll):
+				}
+				var b backups
+				if err := backupsCall(ctx, g, "GET", path, nil, &b); err != nil {
 					return err
 				}
-				phase, _, _ := unstructured.NestedString(cur.Object, "status", "phase")
-				switch phase {
-				case "completed":
-					return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backup": b.GetName(), "phase": phase}, func(w io.Writer) {
-						fmt.Fprintf(w, "Backup %s completed.\n", b.GetName())
-					})
-				case "failed":
-					msg, _, _ := unstructured.NestedString(cur.Object, "status", "error")
-					return fmt.Errorf("backup failed: %s", msg)
+				for _, x := range b.Backups {
+					if x.Name != started.Name {
+						continue
+					}
+					switch x.Phase {
+					case "completed":
+						return ext.Print(g, cmd, map[string]any{"project": project, "name": args[0], "backup": x.Name, "phase": x.Phase}, func(w io.Writer) {
+							fmt.Fprintf(w, "Backup %s completed.\n", x.Name)
+						})
+					case "failed":
+						return fmt.Errorf("backup failed: %s", firstNonEmpty(x.Error, "no reason given"))
+					}
 				}
 			}
-			return ext.Print(g, cmd, map[string]any{"project": project, "name": pg.Name, "backup": b.GetName(), "phase": "running"}, func(w io.Writer) {
-				fmt.Fprintln(w, "Still running; check with `shpyrd pg backups list "+pg.Name+"`.")
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": args[0], "backup": started.Name, "phase": "running"}, func(w io.Writer) {
+				fmt.Fprintln(w, "Still running; check with `shpyrd pg backups list "+args[0]+"`.")
 			})
 		},
 	}
@@ -290,67 +248,55 @@ func newRestoreCmd(g ext.CLIGlobals) *cobra.Command {
 		Short: "Restore a database's backups into a new database, at a point in time",
 		Long: `Creates a new database from the backups of an existing one, recovered to
 the given moment (RFC 3339, e.g. 2026-09-25T10:00:00Z; the latest possible
-when omitted). The source keeps running; attach the app to the new database
-with "shpyrd attach" when it is ready.`,
+when omitted), which must lie inside the window its backups cover. The
+source keeps running; attach the app to the new database with
+"shpyrd attach" when it is ready.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
 			if as == "" {
 				return errors.New("--as names the new database")
 			}
-			_, c, err := resources.Connect(g)
-			if err != nil {
-				return err
-			}
-			source, err := get(ctx, c, project, args[0])
-			if err != nil {
-				return err
-			}
-			rec := &shpyrdv1.PostgresRecovery{From: source.Name}
 			if to != "" {
-				t, err := time.Parse(time.RFC3339, to)
-				if err != nil {
+				if _, err := time.Parse(time.RFC3339, to); err != nil {
 					return fmt.Errorf("--to %q: use RFC 3339, e.g. 2026-09-25T10:00:00Z", to)
 				}
-				rec.TargetTime = &metav1.Time{Time: t}
 			}
-			pg := &shpyrdv1.Postgres{
-				ObjectMeta: metav1.ObjectMeta{Name: as, Namespace: source.Namespace, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: project}},
-				Spec:       shpyrdv1.PostgresSpec{Version: source.Spec.Version, Size: firstNonEmpty(size, source.Spec.Size), Storage: source.Spec.Storage, Instances: source.Spec.Instances, Recovery: rec},
-			}
-			if storage != "" {
-				q, err := parseStorage(storage)
-				if err != nil {
-					return err
-				}
-				pg.Spec.Storage = &q
-			}
-			if err := c.Create(ctx, pg); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("database %q already exists in project %s", as, project)
-				}
+			body := map[string]string{"as": as, "to": to, "size": size, "storage": storage}
+			var created resources.View
+			if err := backupsCall(ctx, g, "POST", backupsPath(project, args[0])+"/restore", body, &created); err != nil {
 				return err
 			}
 			when := "the latest point"
-			if rec.TargetTime != nil {
-				when = rec.TargetTime.UTC().Format(time.RFC3339)
+			if to != "" {
+				when = to
 			}
-			fmt.Fprintf(ext.Progress(g, cmd), "Restoring %s from the backups of %s to %s...\n", as, source.Name, when)
-			return waitReady(ctx, g, cmd, c, pg, 15*time.Minute)
+			out := ext.Progress(g, cmd)
+			fmt.Fprintf(out, "Restoring %s from the backups of %s to %s...\n", as, args[0], when)
+			v, err := resources.WaitReadyAPI(ctx, g.API(), out, project, "Postgres", as, 15*time.Minute)
+			if err != nil {
+				return err
+			}
+			switch {
+			case v == nil:
+				return ext.Print(g, cmd, map[string]any{"project": project, "name": as, "ready": false}, func(w io.Writer) {
+					fmt.Fprintln(w, "Still restoring; check with `shpyrd pg list`.")
+				})
+			case v.Phase == shpyrdv1.ResourceFailed:
+				if strings.Contains(v.Message, "extension is not installed") {
+					return errors.New(resources.ExtensionHint(Name))
+				}
+				return errors.New(v.Message)
+			}
+			return ext.Print(g, cmd, v, func(w io.Writer) {
+				fmt.Fprintf(w, "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", as, v.Endpoint, as, project)
+			})
 		},
 	}
 	projectFlag(cmd, &project)
 	cmd.Flags().StringVar(&as, "as", "", "name of the new database (required)")
 	cmd.Flags().StringVar(&to, "to", "", "point in time to recover to, RFC 3339 (default: latest)")
-	cmd.Flags().StringVar(&size, "size", "", "instance size of the new database (default: the source's)")
+	cmd.Flags().StringVar(&size, "size", "", "a Postgres size for the new database (default: the source's)")
 	cmd.Flags().StringVar(&storage, "storage", "", "data volume of the new database (default: the source's)")
 	return cmd
-}
-
-func parseStorage(v string) (resource.Quantity, error) {
-	q, err := resource.ParseQuantity(v)
-	if err != nil || q.Sign() <= 0 {
-		return q, fmt.Errorf("invalid --storage %q (use e.g. 10Gi)", v)
-	}
-	return q, nil
 }

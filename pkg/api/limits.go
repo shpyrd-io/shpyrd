@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -80,6 +81,51 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 	}
 }
 
+// addSized adds n instances of resources sized res: CPU at the limit,
+// memory at the request, as addApp counts a process.
+func (u *usage) addSized(res corev1.ResourceRequirements, n int32) {
+	for i := int32(0); i < n; i++ {
+		if cpu, ok := res.Limits[corev1.ResourceCPU]; ok {
+			u.cpu.Add(cpu)
+		}
+		if mem, ok := res.Requests[corev1.ResourceMemory]; ok {
+			u.memory.Add(mem)
+		}
+	}
+}
+
+// subSized takes back what addSized added.
+func (u *usage) subSized(res corev1.ResourceRequirements, n int32) {
+	for i := int32(0); i < n; i++ {
+		if cpu, ok := res.Limits[corev1.ResourceCPU]; ok {
+			u.cpu.Sub(cpu)
+		}
+		if mem, ok := res.Requests[corev1.ResourceMemory]; ok {
+			u.memory.Sub(mem)
+		}
+	}
+}
+
+// storeResources is what a database or store of a kind and a size takes,
+// with how many instances of it run; ok is false for a size not in its
+// list (a database from before #57 the controller has not moved yet).
+func storeResources(cat *sizes.Catalog, kind, size string, instances *int32) (corev1.ResourceRequirements, int32, bool) {
+	what := strings.ToLower(kind)
+	list := cat.For(what)
+	if list == nil {
+		return corev1.ResourceRequirements{}, 0, false
+	}
+	s, err := list.Pick(what, size)
+	if err != nil {
+		return corev1.ResourceRequirements{}, 0, false
+	}
+	n := int32(1)
+	if instances != nil && *instances > 0 {
+		n = *instances
+	}
+	return s.Resources(), n, true
+}
+
 // limitsOf returns the ceilings the workspace is held to; nil when it has
 // none.
 func (s *Server) limitsOf(ctx context.Context, ws string) *store.Limits {
@@ -100,11 +146,13 @@ func (s *Server) workspaceQuotaUsage(ctx context.Context, ws string, cat *sizes.
 		return u, err
 	}
 	seen := false
+	namespaces := map[string]bool{} // the workspace's projects
 	for i := range apps.Items {
 		a := &apps.Items[i]
 		if workspaceOf(a) != ws {
 			continue
 		}
+		namespaces[a.Namespace] = true
 		if replace != nil && a.Namespace == replace.Namespace && a.Name == replace.Name {
 			u.addApp(replace, cat)
 			seen = true
@@ -114,6 +162,24 @@ func (s *Server) workspaceQuotaUsage(ctx context.Context, ws string, cat *sizes.
 	}
 	if replace != nil && !seen {
 		u.addApp(replace, cat)
+	}
+	// Databases and stores, by their sizes (#57); a CRD missing is an
+	// extension off, nothing of that kind.
+	var pgs shpyrdv1.PostgresList
+	if err := s.apps.List(ctx, &pgs); err == nil {
+		for _, pg := range pgs.Items {
+			if res, n, ok := storeResources(cat, "Postgres", pg.Spec.Size, pg.Spec.Instances); ok && namespaces[pg.Namespace] {
+				u.addSized(res, n)
+			}
+		}
+	}
+	var rds shpyrdv1.RedisList
+	if err := s.apps.List(ctx, &rds); err == nil {
+		for _, rd := range rds.Items {
+			if res, n, ok := storeResources(cat, "Redis", rd.Spec.Size, nil); ok && namespaces[rd.Namespace] {
+				u.addSized(res, n)
+			}
+		}
 	}
 	var vols shpyrdv1.VolumeList
 	if err := s.apps.List(ctx, &vols); err == nil {
@@ -217,6 +283,30 @@ func (s *Server) checkStorageLimit(ctx context.Context, ws string, extra resourc
 	}
 	u.storage.Add(extra)
 	if msg := exceeds(limits, u, axisStorage); msg != "" {
+		return fmt.Errorf("workspace limit: %s", msg)
+	}
+	return nil
+}
+
+// checkStoreLimits refuses a database or store that would take the
+// workspace past its CPU or memory: add is what it takes, sub what it
+// took before (a resize).
+func (s *Server) checkStoreLimits(ctx context.Context, ws string, add, sub corev1.ResourceRequirements, addN, subN int32) error {
+	limits := s.limitsOf(ctx, ws)
+	if limits == nil {
+		return nil
+	}
+	cat, err := s.catalog(ctx)
+	if err != nil {
+		return err
+	}
+	u, err := s.workspaceQuotaUsage(ctx, ws, cat, nil)
+	if err != nil {
+		return err
+	}
+	u.subSized(sub, subN)
+	u.addSized(add, addN)
+	if msg := exceeds(limits, u, axisCompute); msg != "" {
 		return fmt.Errorf("workspace limit: %s", msg)
 	}
 	return nil

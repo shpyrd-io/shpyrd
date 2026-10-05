@@ -36,7 +36,7 @@ it to the app:
   shpyrd attach cache --project shop                        # REDIS_URL, REDIS_HOST, ... in the app
   shpyrd redis cli cache --project shop`,
 	}
-	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newCliCmd(g), newDeleteCmd(g))
+	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newCliCmd(g), newDeleteCmd(g))
 	return cmd
 }
 
@@ -112,7 +112,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	projectFlag(cmd, &project)
 	cmd.Flags().StringVar(&engine, "engine", "valkey", "valkey or redis")
 	cmd.Flags().StringVar(&version, "version", "", "engine major version (default: valkey 8, redis 7)")
-	cmd.Flags().StringVar(&size, "size", "", "instance size from the catalog (default: the catalog default)")
+	cmd.Flags().StringVar(&size, "size", "", "a Redis size (shpyrd sizes list; default: the smallest, shared-s)")
 	cmd.Flags().BoolVar(&persistent, "persistent", false, "keep data on a volume (append-only file); default is a cache that loses data on restart")
 	cmd.Flags().StringVar(&storage, "storage", "1Gi", "volume size when --persistent")
 	return cmd
@@ -179,7 +179,7 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 					if v.Details["persistent"] == "true" {
 						mode = "persistent " + firstNonEmpty(v.Details["storage"], "")
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["engine"], "valkey"), firstNonEmpty(v.Details["size"], "default"), strings.TrimSpace(mode), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["engine"], "valkey"), firstNonEmpty(v.Details["size"], "-"), strings.TrimSpace(mode), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 				}
 				_ = tw.Flush()
 			})
@@ -206,8 +206,32 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 				fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
 				fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
 				fmt.Fprintf(out, "Engine:     %s %s\n", firstNonEmpty(v.Details["engine"], "valkey"), v.Details["version"])
+				fmt.Fprintf(out, "Size:       %s (shpyrd redis resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
 				fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
 				fmt.Fprintf(out, "Config vars: REDIS_URL, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (values are never shown)\n")
+			})
+		},
+	}
+	projectFlag(cmd, &project)
+	return cmd
+}
+
+func newResizeCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "resize <name> <size>",
+		Short: "Give a store another size (it restarts; a cache comes back empty)",
+		Long: `Gives a store another size from the Redis list (shpyrd sizes list): its
+CPU, memory and clients. It restarts with it: a cache comes back empty, a
+persistent store reloads its file.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			v, err := resources.ResizeAPI(cliContext(), g.API(), project, "Redis", args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, v, func(w io.Writer) {
+				fmt.Fprintln(w, v.Note)
 			})
 		},
 	}

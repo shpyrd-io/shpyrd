@@ -63,7 +63,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "1";
+const shape = "2";
 const seed = things as unknown as Things;
 const kept = single<Things>(`console-things${shape}`, seed);
 const thingsOf = {

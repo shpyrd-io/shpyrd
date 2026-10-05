@@ -17,7 +17,7 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
-import type { Project, ResourceInfo, SnapshotInfo, VolumeInfo } from "@/api/types";
+import type { InstanceSize, Project, ResourceInfo, SizeCatalog, SnapshotInfo, VolumeInfo } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import { ago } from "@/lib/project";
 import { busy } from "./heading";
@@ -180,7 +180,8 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
 
 const prefixOf = (kind: string) => (kind === "Postgres" ? "DATABASE" : kind === "Redis" ? "REDIS" : kind.toUpperCase());
 
-// What the details of a resource say, in one line.
+// What the details of a resource say, in one line; a database's or a
+// store's address goes on a line of its own, beside it.
 function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
   const d = r.details ?? {};
   if (r.kind === "App") return [d.release, d.build, r.endpoint?.replace(/^https:\/\//, "")].filter(Boolean).join(" · ");
@@ -194,7 +195,6 @@ function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
     d.instances && `${d.instances} instance${d.instances === "1" ? "" : "s"}`,
     d.backups && `backups ${d.backups}${d.lastBackup ? `, last ${ago(d.lastBackup)}` : ", none yet"}`,
     d.restoredFrom && `restored from ${d.restoredFrom}`,
-    r.endpoint,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -274,7 +274,14 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                       </StatusBadge>
                       {r.message && !settled && <div className="mt-1 max-w-64 text-[11px] text-muted-foreground">{r.message}</div>}
                     </TableCell>
-                    <TableCell className="max-w-72 font-mono text-xs text-muted-foreground">{detailsOf(r, volume)}</TableCell>
+                    <TableCell className="max-w-72 font-mono text-xs whitespace-normal text-muted-foreground">
+                      {detailsOf(r, volume)}
+                      {r.kind !== "Volume" && r.endpoint && (
+                        <div className="truncate" title={r.endpoint}>
+                          {r.endpoint}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{r.attachedTo.length ? r.attachedTo.join(", ") : volume?.mountedBy.length ? volume.mountedBy.join(", ") : "-"}</TableCell>
                     <TableCell className="text-right">
                       {perms.resource && (
@@ -295,6 +302,7 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                             </>
                           ) : (
                             <>
+                              {(r.kind === "Postgres" || r.kind === "Redis") && <SizeDialog slug={project.slug} resource={r} onDone={refresh} />}
                               {r.bindable &&
                                 (attached(r) ? (
                                   <Button variant="outline" size="xs" icon={<Unlink2 />} disabled={detach.isPending} onClick={() => detach.mutate(r)}>
@@ -447,27 +455,35 @@ function VolumeDialog({ slug, resize, open: openProp, onOpenChange, onDone }: { 
   );
 }
 
-// A Postgres or a Redis, with the few things that matter.
-// mebibytes reads a memory quantity of the catalog ("64Mi", "1Gi").
-const mebibytes = (q: string) => {
-  const m = /^(\d+(?:\.\d+)?)(Mi|Gi|Ti)?$/.exec(q.trim());
-  if (!m) return Number.NaN;
-  return Number(m[1]) * ({ Mi: 1, Gi: 1024, Ti: 1024 * 1024 }[m[2] ?? ""] ?? 1 / (1024 * 1024));
-};
+// The sizes of a Postgres or a Redis: lists of their own, with the
+// processes' names (#57).
+const sizesOf = (catalog: SizeCatalog | undefined, kind: string) => (kind === "Postgres" ? catalog?.postgres : catalog?.redis);
 
+// A size as a choice reads: name · CPU · memory · connections.
+function SizeOption({ size }: { size: InstanceSize }) {
+  return (
+    <>
+      {size.name} · {size.cpu} CPU · {size.memory}
+      {size.connections ? <span className="text-xs text-muted-foreground"> · {size.connections} connections</span> : null}
+    </>
+  );
+}
+
+// A Postgres or a Redis, with the few things that matter.
 function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "Postgres" | "Redis"; onDone: () => void; onClose: () => void }) {
   const catalog = useQuery({ queryKey: ["sizes"], queryFn: api.sizes, staleTime: 60_000 });
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const objectStorage = config.data?.extensions.includes("object-storage") ?? false;
+  const list = sizesOf(catalog.data, kind);
   const [name, setName] = useState(kind === "Postgres" ? "db" : "cache");
-  const [size, setSize] = useState("");
+  const [picked, setPicked] = useState<string>();
+  const size = picked ?? list?.default ?? "";
   const [storage, setStorage] = useState(kind === "Postgres" ? "5Gi" : "1Gi");
   const [version, setVersion] = useState("17");
   const [instances, setInstances] = useState("1");
   const [engine, setEngine] = useState("valkey");
   const [persistent, setPersistent] = useState(false);
   const [backups, setBackups] = useState("off");
-  const floor = catalog.data?.databaseMinMemory;
   const save = useMutation({
     mutationFn: () => {
       const spec: Record<string, unknown> = {};
@@ -497,7 +513,7 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
         <DialogHeader divider>
           <DialogTitle>{kind === "Postgres" ? "New Postgres database" : "New Redis-compatible store"}</DialogTitle>
           <DialogDescription>
-            {kind === "Postgres" ? `A PostgreSQL cluster in the project, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars. A database takes at least ${floor ?? "128Mi"} of memory; without a size it has ${catalog.data?.databaseDefaultMemory ?? "256Mi"}, or the small size on a plan with little memory.` : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
+            {kind === "Postgres" ? "A PostgreSQL cluster in the project, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars." : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -512,20 +528,14 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
               <Input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus />
             </Field>
             <Field label="Instance size">
-              <Select value={size || "default"} onValueChange={(v) => setSize(v === "default" ? "" : v)}>
+              <Select value={size} onValueChange={setPicked} disabled={!list}>
                 <SelectTrigger className="w-full">
-                  <SelectValue />
+                  <SelectValue placeholder="size" />
                 </SelectTrigger>
                 <SelectContent>
-                  {kind === "Postgres" ? (
-                    <SelectItem value="default">the default for a database</SelectItem>
-                  ) : (
-                    <SelectItem value="default">the default, {catalog.data?.default ?? "…"}</SelectItem>
-                  )}
-                  {(catalog.data?.sizes ?? []).map((s) => (
+                  {(list?.sizes ?? []).map((s) => (
                     <SelectItem key={s.name} value={s.name}>
-                      {s.name} · {s.cpu} CPU · {s.memory}
-                      {kind === "Postgres" && floor && mebibytes(s.memory) < mebibytes(floor) && <span className="text-xs text-muted-foreground"> raised to {floor}</span>}
+                      <SizeOption size={s} />
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -616,8 +626,83 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || save.isPending}>
+            <Button type="submit" disabled={!name.trim() || !size || save.isPending}>
               Make it
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Another size for a Postgres or a Redis, from its kind's list. A
+// database's instances restart one at a time; a store restarts, a cache
+// comes back empty.
+function SizeDialog({ slug, resource, onDone }: { slug: string; resource: ResourceInfo; onDone: () => void }) {
+  const catalog = useQuery({ queryKey: ["sizes"], queryFn: api.sizes, staleTime: 60_000 });
+  const list = sizesOf(catalog.data, resource.kind);
+  const current = resource.details?.size ?? "";
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<string>();
+  const size = picked ?? current;
+  const save = useMutation({
+    mutationFn: () => api.resizeResource(slug, resource.kind, resource.name, size),
+    onSuccess: (r) => {
+      toast.success(`${resource.name} goes to ${size}`, { description: r.note, duration: 12_000 });
+      setOpen(false);
+      onDone();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const what = resource.kind === "Postgres" ? "Its instances restart with the new size, one at a time; with one instance the database is unavailable for a moment." : resource.details?.persistent === "true" ? "It restarts with the new size and reloads its file." : "It restarts with the new size and comes back empty: it is a cache.";
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        setPicked(undefined);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs">
+          Resize
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>Resize {resource.name}</DialogTitle>
+          <DialogDescription>{what}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+        >
+          <Field label="Instance size">
+            <Select value={size} onValueChange={setPicked} disabled={!list}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="size" />
+              </SelectTrigger>
+              <SelectContent>
+                {(list?.sizes ?? []).map((s) => (
+                  <SelectItem key={s.name} value={s.name}>
+                    <SizeOption size={s} />
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={!size || size === current || save.isPending}>
+              Resize
             </Button>
           </DialogFooter>
         </form>

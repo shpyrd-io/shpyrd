@@ -63,6 +63,16 @@ func backupSchedule(spec *shpyrdv1.PostgresBackups) (string, error) {
 	return "", fmt.Errorf("backups.schedule %q: five cron fields expected (minute hour day month weekday)", s)
 }
 
+// CheckBackups refuses a schedule or a retention the controller could not
+// apply, so the API answers before the database is changed.
+func CheckBackups(spec *shpyrdv1.PostgresBackups) error {
+	if _, err := backupSchedule(spec); err != nil {
+		return err
+	}
+	_, _, err := backupRetention(spec)
+	return err
+}
+
 func backupRetention(spec *shpyrdv1.PostgresBackups) (string, int32, error) {
 	ret := defaultBackupRetention
 	if spec != nil && spec.Retention != "" {

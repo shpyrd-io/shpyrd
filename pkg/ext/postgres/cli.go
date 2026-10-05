@@ -36,11 +36,16 @@ func newPgCmd(g ext.CLIGlobals) *cobra.Command {
   shpyrd pg create db --project shop --size shared-m --storage 10Gi
   shpyrd attach db --project shop        # DATABASE_URL, DATABASE_HOST, ... in the app
   shpyrd pg psql db --project shop       # a psql session on the primary
+  shpyrd pg resize db shared-l --project shop
+
+A database takes a size from the Postgres list (shpyrd sizes list), the
+smallest when it names none: CPU, memory, connections and PostgreSQL's
+settings for them.
 
 Databases run on CloudNativePG; one cluster per database, 1 instance by
 default (2-3 for high availability with --instances).`,
 	}
-	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
+	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
 	return cmd
 }
 
@@ -203,12 +208,36 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	}
 	projectFlag(cmd, &project)
 	cmd.Flags().StringVar(&version, "version", "17", "PostgreSQL major version")
-	cmd.Flags().StringVar(&size, "size", "", "instance size from the catalog, at least 128Mi of memory (default: 256Mi, or db-xs on a plan with less than 512Mi)")
+	cmd.Flags().StringVar(&size, "size", "", "a Postgres size (shpyrd sizes list; default: the smallest, shared-s)")
 	cmd.Flags().StringVar(&storage, "storage", "5Gi", "data volume size")
 	cmd.Flags().Int32Var(&instances, "instances", 1, "number of instances (2-3 for high availability)")
 	cmd.Flags().BoolVar(&backups, "backups", false, "back up to the platform's object store: continuous WAL archiving and a daily base backup (needs the object-storage extension)")
 	cmd.Flags().StringVar(&retention, "retention", "", "how long backups are kept, e.g. 14d (default 14d; implies --backups)")
 	cmd.Flags().StringVar(&schedule, "backup-schedule", "", "cron of the base backup in UTC, e.g. \"0 2 * * *\" (default daily at 02:00; implies --backups)")
+	return cmd
+}
+
+func newResizeCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "resize <name> <size>",
+		Short: "Give a database another size (its instances restart)",
+		Long: `Gives a database another size from the Postgres list (shpyrd sizes list):
+its CPU, memory and connections, and PostgreSQL's settings for them. Its
+instances restart with it, one at a time; a database with one instance is
+unavailable for a moment.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			v, err := resources.ResizeAPI(cliContext(), g.API(), project, "Postgres", args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, v, func(w io.Writer) {
+				fmt.Fprintln(w, v.Note)
+			})
+		},
+	}
+	projectFlag(cmd, &project)
 	return cmd
 }
 
@@ -235,7 +264,7 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tVERSION\tSIZE\tSTORAGE\tINSTANCES\tSTATUS\tATTACHED TO")
 				for _, v := range list {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), firstNonEmpty(v.Details["size"], "default"), firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), firstNonEmpty(v.Details["size"], "-"), firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 				}
 				_ = tw.Flush()
 			})
@@ -262,6 +291,7 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 				fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
 				fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
 				fmt.Fprintf(out, "Version:    PostgreSQL %s\n", firstNonEmpty(v.Details["version"], "17"))
+				fmt.Fprintf(out, "Size:       %s (shpyrd pg resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
 				fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
 				fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
 				backups := "off (create with --backups, or restore from another database's backup)"
@@ -382,41 +412,4 @@ func suffix(msg string) string {
 		return ""
 	}
 	return " (" + msg + ")"
-}
-
-// waitReady follows a Postgres until it is Ready or Failed, through the
-// cluster (restore still runs that way).
-func waitReady(ctx context.Context, g ext.CLIGlobals, cmd *cobra.Command, c client.Client, pg *shpyrdv1.Postgres, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	last := ""
-	out := ext.Progress(g, cmd)
-	for time.Now().Before(deadline) {
-		cur := &shpyrdv1.Postgres{}
-		if err := c.Get(ctx, client.ObjectKeyFromObject(pg), cur); err != nil {
-			return err
-		}
-		if msg := cur.Status.Phase + " " + cur.Status.Message; msg != last && cur.Status.Phase != "" {
-			fmt.Fprintf(out, "    %s\n", strings.TrimSpace(msg))
-			last = msg
-		}
-		switch cur.Status.Phase {
-		case shpyrdv1.ResourceReady:
-			return ext.Print(g, cmd, cur, func(w io.Writer) {
-				fmt.Fprintf(w, "Database %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", pg.Name, cur.Status.Endpoint, pg.Name, strings.TrimPrefix(pg.Namespace, "app-"))
-			})
-		case shpyrdv1.ResourceFailed:
-			if strings.Contains(cur.Status.Message, "extension is not installed") {
-				return errors.New(resources.ExtensionHint(Name))
-			}
-			return errors.New(cur.Status.Message)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
-	return ext.Print(g, cmd, map[string]any{"name": pg.Name, "ready": false}, func(w io.Writer) {
-		fmt.Fprintln(w, "Still provisioning; check with `shpyrd pg list`.")
-	})
 }

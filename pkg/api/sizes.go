@@ -23,16 +23,20 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
-// SizesResponse is the instance size catalog as the dashboard sees it.
+// SizesResponse is the instance size catalog as the dashboard sees it:
+// the processes' sizes, and those of databases and stores (#57), each
+// list sorted.
 type SizesResponse struct {
-	Default string       `json:"default"`
-	Sizes   []sizes.Size `json:"sizes"`
-	// DatabaseMinMemory is the least a database runs with (a smaller size
-	// is raised to it); DatabaseDefaultMemory what one that names no size
-	// gets, unless the plan is small and it is given DatabaseSmallSize.
-	DatabaseMinMemory     string `json:"databaseMinMemory"`
-	DatabaseDefaultMemory string `json:"databaseDefaultMemory"`
-	DatabaseSmallSize     string `json:"databaseSmallSize,omitempty"`
+	Default  string       `json:"default"`
+	Sizes    []sizes.Size `json:"sizes"`
+	Postgres sizes.List   `json:"postgres"`
+	Redis    sizes.List   `json:"redis"`
+}
+
+// SizesOf renders a catalog for the API.
+func SizesOf(cat *sizes.Catalog) SizesResponse {
+	sorted := func(l *sizes.List) sizes.List { return sizes.List{Default: l.Default, Sizes: l.Sorted()} }
+	return SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), Postgres: sorted(cat.Postgres), Redis: sorted(cat.Redis)}
 }
 
 // loadCatalog reads the catalog ConfigMap, falling back to defaults.
@@ -69,19 +73,29 @@ func (s *Server) getSizes(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	out := SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), DatabaseMinMemory: sizes.DBMinMemory, DatabaseDefaultMemory: sizes.DBDefaultMemory}
-	if _, ok := cat.Get(sizes.DBXS); ok {
-		out.DatabaseSmallSize = sizes.DBXS
-	}
-	c.JSON(http.StatusOK, out)
+	c.JSON(http.StatusOK, SizesOf(cat))
 }
 
-// putSizes replaces the whole catalog (the dashboard edits it as a list).
+// putSizes replaces the whole catalog (the dashboard edits it as lists);
+// a body without the lists of databases and stores keeps them.
 func (s *Server) putSizes(c *gin.Context) {
 	var req sizes.Catalog
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
+	}
+	if req.Postgres == nil || req.Redis == nil {
+		cur, _, err := s.loadCatalog(c)
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		if req.Postgres == nil {
+			req.Postgres = cur.Postgres
+		}
+		if req.Redis == nil {
+			req.Redis = cur.Redis
+		}
 	}
 	if err := req.Validate(); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -91,7 +105,7 @@ func (s *Server) putSizes(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	c.JSON(http.StatusOK, SizesResponse{Default: req.Default, Sizes: req.Sorted()})
+	c.JSON(http.StatusOK, SizesOf(&req))
 }
 
 func (s *Server) saveCatalog(c *gin.Context, cat sizes.Catalog) error {

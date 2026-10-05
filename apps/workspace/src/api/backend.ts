@@ -183,6 +183,7 @@ export const backend: Api = {
   },
   resources: (slug) => request(`${project(slug)}/resources`),
   createResource: (slug, body) => request(`${project(slug)}/resources`, json("POST", body)),
+  resizeResource: (slug, kind, name, size) => request(`${project(slug)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/resize`, json("POST", { size })),
   removeResource: (slug, kind, name, force = false) => request(`${project(slug)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}${force ? "?force=true" : ""}`, gone),
   attach: async (slug, body) => {
     await request(`${project(slug)}/bindings`, json("POST", body));

@@ -75,10 +75,13 @@ Fly machine sizes or Render instance types. The catalog is cluster-wide.
   dedicated requests equal limits, whole cores (Guaranteed QoS)
 
 Processes pick a size in shpyrd.yaml (processes.<type>.size) or with
-'shpyrd resize'; without one they get the catalog default. Databases pick
-one with 'shpyrd pg create --size'; they take at least 128Mi, 256Mi when
-they name none, and db-xs (128Mi, PostgreSQL tuned for about 20
-connections) on a plan with less than 512Mi of memory.
+'shpyrd resize'; without one they get the default. Databases and stores
+have lists of their own, with the same names, as Heroku's add-ons have
+plans of their own: a Postgres shared-s (128Mi, PostgreSQL tuned for 20
+connections) is not a process shared-s. They pick one with
+'shpyrd pg create --size' or 'shpyrd redis create --size', change it with
+'shpyrd pg resize' or 'shpyrd redis resize', and get their list's default
+without one. Edit those lists with --for postgres or --for redis.
 
 Without a subcommand, the catalog is listed.`,
 		Args: cobra.NoArgs,
@@ -122,39 +125,73 @@ func sizesList(g *globalFlags) func(*cobra.Command, []string) error {
 			if err != nil {
 				return err
 			}
-			resp = api.SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), DatabaseMinMemory: sizes.DBMinMemory, DatabaseDefaultMemory: sizes.DBDefaultMemory}
-			if _, ok := cat.Get(sizes.DBXS); ok {
-				resp.DatabaseSmallSize = sizes.DBXS
-			}
+			resp = api.SizesOf(cat)
 		}
 		return g.print(cmd, resp, func(w io.Writer) {
-			tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY\tDESCRIPTION")
-			for _, s := range resp.Sizes {
-				res := s.Resources()
-				name := s.Name
-				if s.Name == resp.Default {
-					name += " (default)"
+			table := func(title string, list sizes.List, connections bool) {
+				fmt.Fprintln(w, title)
+				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+				head := "NAME\tKIND\tCPU\tGUARANTEED\tMEMORY"
+				if connections {
+					head += "\tCONNECTIONS"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory, s.Description)
+				fmt.Fprintln(tw, head+"\tDESCRIPTION")
+				for _, s := range list.Sizes {
+					res := s.Resources()
+					name := s.Name
+					if s.Name == list.Default {
+						name += " (default)"
+					}
+					row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", name, s.Kind, s.CPU, res.Requests.Cpu().String(), s.Memory)
+					if connections {
+						row += fmt.Sprintf("\t%d", s.Connections)
+					}
+					fmt.Fprintf(tw, "%s\t%s\n", row, s.Description)
+				}
+				_ = tw.Flush()
 			}
-			_ = tw.Flush()
-			fmt.Fprintf(w, "\nDatabases take at least %s (a smaller size is raised to it) and %s when they name no size.\n", resp.DatabaseMinMemory, resp.DatabaseDefaultMemory)
-			fmt.Fprintf(w, "Under %s PostgreSQL is tuned for it: a small app's database, about 20 connections; not a reporting database.\n", resp.DatabaseDefaultMemory)
-			if resp.DatabaseSmallSize != "" {
-				fmt.Fprintf(w, "On a plan with less than %s of memory a database is given %s unless it names a size.\n", sizes.DBXSPlanBelow, resp.DatabaseSmallSize)
-			}
+			table("Processes", sizes.List{Default: resp.Default, Sizes: resp.Sizes}, false)
+			fmt.Fprintln(w)
+			table("Postgres (shpyrd pg create --size)", resp.Postgres, true)
+			fmt.Fprintln(w)
+			table("Redis (shpyrd redis create --size)", resp.Redis, true)
 		})
 	}
 }
 
+// forFlag picks the list a sizes command edits: processes, or with
+// --for postgres|redis the list of databases or stores.
+func forFlag(cmd *cobra.Command, dst *string) {
+	cmd.Flags().StringVar(dst, "for", "", "the list to edit: postgres or redis (default: processes)")
+}
+
+// listFor is the list of the catalog --for names.
+func listFor(cat *sizes.Catalog, what string) (*sizes.List, error) {
+	if l := cat.For(what); l != nil {
+		return l, nil
+	}
+	return nil, fmt.Errorf("--for %q: postgres or redis (or nothing, for processes)", what)
+}
+
+// thoseUsing says who follows a change of a size of a list.
+func thoseUsing(what string) string {
+	switch what {
+	case sizes.ForPostgres:
+		return "Databases"
+	case sizes.ForRedis:
+		return "Stores"
+	}
+	return "Processes"
+}
+
 func newSizesSetCmd(g *globalFlags) *cobra.Command {
 	var (
-		kind, cpu, memory, desc string
-		makeDefault             bool
+		kind, cpu, memory, desc, what string
+		connections                   int
+		makeDefault                   bool
 	)
 	cmd := &cobra.Command{
-		Use:   "set <name> --kind shared|dedicated --cpu <cores> --memory <bytes>",
+		Use:   "set <name> --kind shared|dedicated --cpu <cores> --memory <bytes> [--for postgres|redis --connections <n>]",
 		Short: "Add or change an instance size",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -167,16 +204,23 @@ func newSizesSetCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cur, exists := cat.Get(args[0])
-			size := sizes.Size{Name: args[0], Kind: firstNonEmpty(kind, cur.Kind, sizes.Shared), CPU: firstNonEmpty(cpu, cur.CPU), Memory: firstNonEmpty(memory, cur.Memory), Description: firstNonEmpty(desc, cur.Description)}
+			list, err := listFor(cat, what)
+			if err != nil {
+				return err
+			}
+			cur, exists := list.Get(args[0])
+			size := sizes.Size{Name: args[0], Kind: firstNonEmpty(kind, cur.Kind, sizes.Shared), CPU: firstNonEmpty(cpu, cur.CPU), Memory: firstNonEmpty(memory, cur.Memory), Description: firstNonEmpty(desc, cur.Description), Connections: cur.Connections}
+			if cmd.Flags().Changed("connections") {
+				size.Connections = connections
+			}
 			if !exists && (cpu == "" || memory == "") {
 				return errors.New("--cpu and --memory are required for a new size")
 			}
-			if err := cat.Upsert(size); err != nil {
+			if err := list.Upsert(size); err != nil {
 				return err
 			}
 			if makeDefault {
-				cat.Default = size.Name
+				list.Default = size.Name
 			}
 			if err := saveCatalog(ctx, k, cm, cat); err != nil {
 				return err
@@ -186,7 +230,7 @@ func newSizesSetCmd(g *globalFlags) *cobra.Command {
 				verb = "Added"
 			}
 			return g.print(cmd, size, func(w io.Writer) {
-				fmt.Fprintf(w, "%s size %s (%s, %s cpu, %s memory). Processes using it are being resized.\n", verb, size.Name, size.Kind, size.CPU, size.Memory)
+				fmt.Fprintf(w, "%s size %s for %s (%s, %s cpu, %s memory). %s using it are being resized.\n", verb, size.Name, sizes.Of(what), size.Kind, size.CPU, size.Memory, thoseUsing(what))
 			})
 		},
 	}
@@ -194,13 +238,16 @@ func newSizesSetCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&cpu, "cpu", "", "cores, e.g. 0.25, 500m, 2")
 	cmd.Flags().StringVar(&memory, "memory", "", "memory, e.g. 64Mi, 1Gi")
 	cmd.Flags().StringVar(&desc, "description", "", "free text shown in the dashboard")
-	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default size")
+	cmd.Flags().IntVar(&connections, "connections", 0, "clients a database or store of this size takes (max_connections, maxclients)")
+	cmd.Flags().BoolVar(&makeDefault, "default", false, "make this the default size of its list")
+	forFlag(cmd, &what)
 	return cmd
 }
 
 func newSizesDeleteCmd(g *globalFlags) *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete <name>",
+	var what string
+	cmd := &cobra.Command{
+		Use:   "delete <name> [--for postgres|redis]",
 		Short: "Remove an instance size (processes still naming it fall back to the default)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -213,22 +260,29 @@ func newSizesDeleteCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := cat.Remove(args[0]); err != nil {
+			list, err := listFor(cat, what)
+			if err != nil {
+				return err
+			}
+			if err := list.Remove(args[0]); err != nil {
 				return err
 			}
 			if err := saveCatalog(ctx, k, cm, cat); err != nil {
 				return err
 			}
-			return g.print(cmd, map[string]any{"size": args[0], "removed": true}, func(w io.Writer) {
-				fmt.Fprintf(w, "Removed size %s\n", args[0])
+			return g.print(cmd, map[string]any{"size": args[0], "for": firstNonEmpty(what, "processes"), "removed": true}, func(w io.Writer) {
+				fmt.Fprintf(w, "Removed size %s for %s\n", args[0], sizes.Of(what))
 			})
 		},
 	}
+	forFlag(cmd, &what)
+	return cmd
 }
 
 func newSizesDefaultCmd(g *globalFlags) *cobra.Command {
-	return &cobra.Command{
-		Use:   "default <name>",
+	var what string
+	cmd := &cobra.Command{
+		Use:   "default <name> [--for postgres|redis]",
 		Short: "Set the default instance size",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -241,18 +295,24 @@ func newSizesDefaultCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, ok := cat.Get(args[0]); !ok {
-				return fmt.Errorf("unknown size %q", args[0])
+			list, err := listFor(cat, what)
+			if err != nil {
+				return err
 			}
-			cat.Default = args[0]
+			if _, err := list.Pick(what, args[0]); err != nil {
+				return err
+			}
+			list.Default = args[0]
 			if err := saveCatalog(ctx, k, cm, cat); err != nil {
 				return err
 			}
-			return g.print(cmd, map[string]string{"default": args[0]}, func(w io.Writer) {
-				fmt.Fprintf(w, "Default size is now %s\n", args[0])
+			return g.print(cmd, map[string]string{"default": args[0], "for": firstNonEmpty(what, "processes")}, func(w io.Writer) {
+				fmt.Fprintf(w, "The default size for %s is now %s\n", sizes.Of(what), args[0])
 			})
 		},
 	}
+	forFlag(cmd, &what)
+	return cmd
 }
 
 // ---- resize -----------------------------------------------------------------
