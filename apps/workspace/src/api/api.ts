@@ -134,6 +134,9 @@ export type Api = {
   changeConfigVars: (slug: string, change: ConfigChange) => Promise<void>;
   resources: (slug: string) => Promise<ResourceInfo[]>;
   createResource: (slug: string, body: { kind: string; name: string; spec: Record<string, unknown> }) => Promise<ResourceInfo>;
+  // Another size of its kind's list for a Postgres or a Redis; the note
+  // says what follows.
+  resizeResource: (slug: string, kind: string, name: string, size: string) => Promise<ResourceInfo>;
   removeResource: (slug: string, kind: string, name: string, force?: boolean) => Promise<void>;
   attach: (slug: string, body: { kind: string; name: string; prefix?: string }) => Promise<void>;
   detach: (slug: string, kind: string, name: string) => Promise<void>;

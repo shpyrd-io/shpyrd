@@ -180,8 +180,12 @@ export type LicenseStatus = { active: boolean; unlocked?: boolean; license?: Lic
 export type MailStatus = { configured: boolean; host?: string; port?: number; from?: string; security?: string; auth: boolean };
 
 
-export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string };
-export type SizeCatalog = { default: string; sizes: InstanceSize[] };
+// connections: the clients a database or store of the size takes.
+export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string; connections?: number };
+export type SizeList = { default: string; sizes: InstanceSize[] };
+// The processes' sizes, and the lists of databases and stores: the same
+// names, each list with its own memory and default.
+export type SizeCatalog = SizeList & { postgres: SizeList; redis: SizeList };
 
 
 

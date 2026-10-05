@@ -24,12 +24,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 // RedisReconciler runs a Redis-compatible store (Valkey by default) as a
 // single-instance StatefulSet (RFC-0010): a generated password in a Secret,
-// memory limits derived from the instance size, an optional volume for
-// persistence. The Binder exposes REDIS_URL and friends.
+// memory and clients from its size in the catalog's Redis list (#57), an
+// optional volume for persistence. The Binder exposes REDIS_URL and friends.
 type RedisReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
@@ -71,6 +72,12 @@ func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if !rd.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
+	}
+	if moved, err := r.moveToRedisSize(ctx, rd); err != nil || moved {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{Requeue: moved}, err
 	}
 	orig := rd.DeepCopy()
 	res, err := r.reconcile(ctx, rd)
@@ -116,6 +123,33 @@ func redisEngine(rd *shpyrdv1.Redis) (engine, version, image string, err error) 
 	return engine, version, image, nil
 }
 
+// moveToRedisSize gives a store whose size is not in the Redis list (one
+// made before stores had sizes of their own, #57, naming a process size)
+// the Redis size with the CPU and memory its pod runs with. It says
+// whether the spec was updated.
+func (r *RedisReconciler) moveToRedisSize(ctx context.Context, rd *shpyrdv1.Redis) (bool, error) {
+	catalog := loadCatalog(ctx, r.Client, r.SystemNamespace)
+	if _, ok := catalog.Redis.Get(rd.Spec.Size); ok || rd.Spec.Size == "" {
+		return false, nil
+	}
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: rd.Namespace, Name: rd.Name}, sts); err != nil || len(sts.Spec.Template.Spec.Containers) == 0 {
+		return false, client.IgnoreNotFound(err) // a new store naming no Redis size: refused below
+	}
+	limits := sts.Spec.Template.Spec.Containers[0].Resources.Limits
+	name := sizeLike(catalog.Redis, limits.Cpu().String(), limits.Memory().String())
+	if name == "" {
+		return false, nil
+	}
+	was := rd.Spec.Size
+	rd.Spec.Size = name
+	if err := r.Update(ctx, rd); err != nil {
+		return false, err
+	}
+	r.Recorder.Eventf(rd, corev1.EventTypeNormal, "Sized", "the store had the size %s from before stores had sizes of their own; it now has the Redis size %s", was, name)
+	return true, nil
+}
+
 // RedisSecretName holds the password and URL of a Redis.
 func RedisSecretName(name string) string { return name + "-redis" }
 
@@ -125,7 +159,7 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 		return ctrl.Result{}, err
 	}
 	catalog := loadCatalog(ctx, r.Client, r.SystemNamespace)
-	resources, _, err := catalog.Resolve(rd.Spec.Size, corev1.ResourceRequirements{})
+	size, err := catalog.Redis.Pick(sizes.ForRedis, rd.Spec.Size)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -203,7 +237,7 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 			// back empty, as from any restart.
 			sts.Spec.Replicas = ptr.To[int32](0)
 		}
-		sts.Spec.Template = r.podTemplate(rd, engine, image, resources)
+		sts.Spec.Template = r.podTemplate(rd, engine, image, size)
 		return controllerutil.SetControllerReference(rd, sts, r.Scheme)
 	})
 	if err != nil {
@@ -239,10 +273,12 @@ func redisLabels(rd *shpyrdv1.Redis) map[string]string {
 }
 
 // podTemplate runs the engine with a password, a memory ceiling at 75% of
-// the allocation and LRU eviction in cache mode, AOF on the volume when
-// persistent. Both images have the service user at uid 999.
-func (r *RedisReconciler) podTemplate(rd *shpyrdv1.Redis, engine, image string, res corev1.ResourceRequirements) corev1.PodTemplateSpec {
+// the size's memory, the size's clients, LRU eviction in cache mode, AOF
+// on the volume when persistent. Both images have the service user at
+// uid 999.
+func (r *RedisReconciler) podTemplate(rd *shpyrdv1.Redis, engine, image string, size sizes.Size) corev1.PodTemplateSpec {
 	server := engine + "-server"
+	res := size.Resources()
 	maxmemory := int64(0)
 	if mem, ok := res.Requests[corev1.ResourceMemory]; ok {
 		maxmemory = mem.Value() * 3 / 4
@@ -250,6 +286,9 @@ func (r *RedisReconciler) podTemplate(rd *shpyrdv1.Redis, engine, image string, 
 	args := []string{server, "--requirepass", "$(REDIS_PASSWORD)", "--protected-mode", "no"}
 	if maxmemory > 0 {
 		args = append(args, "--maxmemory", fmt.Sprint(maxmemory))
+	}
+	if size.Connections > 0 {
+		args = append(args, "--maxclients", fmt.Sprint(size.Connections))
 	}
 	if rd.Spec.Persistent {
 		args = append(args, "--appendonly", "yes", "--dir", "/data", "--maxmemory-policy", "noeviction")

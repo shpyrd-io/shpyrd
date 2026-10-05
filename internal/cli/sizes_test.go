@@ -16,7 +16,7 @@ import (
 // sees the catalog it must choose a size from, through the API (issue #63).
 func TestSizesListThroughTheAPI(t *testing.T) {
 	cat := sizes.Defaults()
-	served := api.SizesResponse{Default: cat.Default, Sizes: cat.Sorted(), DatabaseMinMemory: sizes.DBMinMemory, DatabaseDefaultMemory: sizes.DBDefaultMemory}
+	served := api.SizesOf(&cat)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/sizes" || r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -48,10 +48,10 @@ func TestSizesListThroughTheAPI(t *testing.T) {
 		return out.String()
 	}
 
-	// `sizes list`, and `sizes` alone, print the table.
+	// `sizes list`, and `sizes` alone, print the three lists.
 	for _, args := range [][]string{{"sizes", "list"}, {"sizes"}} {
 		text := run(args...)
-		if !strings.HasPrefix(text, "NAME") || !strings.Contains(text, cat.Default+" (default)") {
+		if !strings.HasPrefix(text, "Processes\nNAME") || !strings.Contains(text, cat.Default+" (default)") || !strings.Contains(text, "Postgres (shpyrd pg create --size)") || !strings.Contains(text, "CONNECTIONS") {
 			t.Errorf("%v:\n%s", args, text)
 		}
 	}
@@ -61,7 +61,7 @@ func TestSizesListThroughTheAPI(t *testing.T) {
 	if err := json.Unmarshal([]byte(run("sizes", "list", "--json")), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Default != served.Default || len(got.Sizes) != len(served.Sizes) || got.DatabaseMinMemory != sizes.DBMinMemory {
+	if got.Default != served.Default || len(got.Sizes) != len(served.Sizes) || got.Postgres.Default != "shared-s" || len(got.Redis.Sizes) != len(cat.Redis.Sizes) {
 		t.Errorf("--json = %+v, want %+v", got, served)
 	}
 }

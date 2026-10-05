@@ -426,29 +426,187 @@
         "name": "shared-s",
         "kind": "shared",
         "cpu": "0.5",
-        "memory": "512Mi",
-        "description": "Small sites and APIs"
+        "memory": "64Mi",
+        "description": "Default: static sites, Go services"
       },
       {
         "name": "shared-m",
         "kind": "shared",
-        "cpu": "1",
-        "memory": "1Gi"
+        "cpu": "0.5",
+        "memory": "256Mi",
+        "description": "Node.js, Python, Ruby"
       },
       {
         "name": "shared-l",
         "kind": "shared",
+        "cpu": "1",
+        "memory": "512Mi",
+        "description": "JVM, heavier web apps"
+      },
+      {
+        "name": "shared-xl",
+        "kind": "shared",
         "cpu": "2",
-        "memory": "2Gi"
+        "memory": "1Gi"
+      },
+      {
+        "name": "dedicated-s",
+        "kind": "dedicated",
+        "cpu": "1",
+        "memory": "1Gi",
+        "description": "Guaranteed CPU"
+      },
+      {
+        "name": "dedicated-m",
+        "kind": "dedicated",
+        "cpu": "2",
+        "memory": "4Gi"
       },
       {
         "name": "dedicated-l",
         "kind": "dedicated",
-        "cpu": "2",
-        "memory": "4Gi",
-        "description": "Whole cores, for what cannot share"
+        "cpu": "4",
+        "memory": "8Gi"
+      },
+      {
+        "name": "dedicated-xl",
+        "kind": "dedicated",
+        "cpu": "8",
+        "memory": "16Gi"
+      },
+      {
+        "name": "dedicated-2xl",
+        "kind": "dedicated",
+        "cpu": "16",
+        "memory": "32Gi"
       }
-    ]
+    ],
+    "postgres": {
+      "default": "shared-s",
+      "sizes": [
+        {
+          "name": "shared-s",
+          "kind": "shared",
+          "cpu": "0.5",
+          "memory": "128Mi",
+          "connections": 20,
+          "description": "Default: a small app's database; not for reporting"
+        },
+        {
+          "name": "shared-m",
+          "kind": "shared",
+          "cpu": "0.5",
+          "memory": "256Mi",
+          "connections": 40
+        },
+        {
+          "name": "shared-l",
+          "kind": "shared",
+          "cpu": "1",
+          "memory": "512Mi",
+          "connections": 80
+        },
+        {
+          "name": "shared-xl",
+          "kind": "shared",
+          "cpu": "2",
+          "memory": "1Gi",
+          "connections": 120
+        },
+        {
+          "name": "dedicated-s",
+          "kind": "dedicated",
+          "cpu": "1",
+          "memory": "1Gi",
+          "connections": 120,
+          "description": "Guaranteed CPU"
+        },
+        {
+          "name": "dedicated-m",
+          "kind": "dedicated",
+          "cpu": "2",
+          "memory": "4Gi",
+          "connections": 200
+        },
+        {
+          "name": "dedicated-l",
+          "kind": "dedicated",
+          "cpu": "4",
+          "memory": "8Gi",
+          "connections": 300
+        },
+        {
+          "name": "dedicated-xl",
+          "kind": "dedicated",
+          "cpu": "8",
+          "memory": "16Gi",
+          "connections": 400
+        },
+        {
+          "name": "dedicated-2xl",
+          "kind": "dedicated",
+          "cpu": "16",
+          "memory": "32Gi",
+          "connections": 500
+        }
+      ]
+    },
+    "redis": {
+      "default": "shared-s",
+      "sizes": [
+        {
+          "name": "shared-s",
+          "kind": "shared",
+          "cpu": "0.5",
+          "memory": "64Mi",
+          "connections": 100,
+          "description": "Default: a cache or a small queue"
+        },
+        {
+          "name": "shared-m",
+          "kind": "shared",
+          "cpu": "0.5",
+          "memory": "256Mi",
+          "connections": 400
+        },
+        {
+          "name": "shared-l",
+          "kind": "shared",
+          "cpu": "1",
+          "memory": "512Mi",
+          "connections": 1000
+        },
+        {
+          "name": "shared-xl",
+          "kind": "shared",
+          "cpu": "2",
+          "memory": "1Gi",
+          "connections": 2000
+        },
+        {
+          "name": "dedicated-s",
+          "kind": "dedicated",
+          "cpu": "1",
+          "memory": "1Gi",
+          "connections": 2000,
+          "description": "Guaranteed CPU"
+        },
+        {
+          "name": "dedicated-m",
+          "kind": "dedicated",
+          "cpu": "2",
+          "memory": "4Gi",
+          "connections": 5000
+        },
+        {
+          "name": "dedicated-l",
+          "kind": "dedicated",
+          "cpu": "4",
+          "memory": "8Gi",
+          "connections": 10000
+        }
+      ]
+    }
   },
   "consoleUsers": [
     {

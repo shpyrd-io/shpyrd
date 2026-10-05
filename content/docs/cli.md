@@ -142,7 +142,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
 | `shpyrd scale web=N worker=M` | Set instance counts per process type. |
 | `shpyrd resize web=SIZE worker=SIZE` | Set instance sizes per process type (a release). |
-| `shpyrd sizes list` | The instance size catalog to choose from, with kind, cpu, guaranteed cpu and memory, and what a database gets (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |
+| `shpyrd sizes list` | The instance sizes to choose from, in three lists with the same names: processes, Postgres and Redis (with their connections), each with its default (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |
 | `shpyrd-ctl sizes set <name> --kind shared\|dedicated --cpu <cores> --memory <bytes> [--default]` | Operator: add or change a size; processes using it are resized. |
 | `shpyrd-ctl sizes delete <name>`, `shpyrd-ctl sizes default <name>` | Operator: remove a size (not the default), choose the default. |
 | `shpyrd secrets set K=V ...` | Set config vars (new release, rolling restart). |
@@ -158,14 +158,16 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd volumes snapshots <volume>` | List the volume's snapshots (also `snapshot list`); `snapshot rm <volume> <snapshot> --yes` deletes one. |
 | `shpyrd volumes restore <volume> --from <snapshot> [--to <new-volume>]` | Restore a snapshot into a new volume, or in place (`--yes`: the mounting instances stop while the disk is replaced). |
 | `shpyrd object-storage list` | Buckets of the platform's object store with usage (extension object-storage). |
-| `shpyrd pg create <name> --project <p>` | Create a PostgreSQL database (extension `postgres`): `--backups`/`--retention`/`--backup-schedule`, `--version`, `--size`, `--storage`, `--instances`. |
+| `shpyrd pg create <name> --project <p>` | Create a PostgreSQL database (extension `postgres`): `--backups`/`--retention`/`--backup-schedule`, `--version`, `--size` (a Postgres size; the smallest when omitted), `--storage`, `--instances`. |
+| `shpyrd pg resize <name> <size> --project <p>` | Give a database another Postgres size; its instances restart one at a time. |
 | `shpyrd pg list\|info\|psql\|delete` | Manage databases; `psql <name> -- <args>` opens psql on the primary; delete is refused while attached (`--force`). |
 | `shpyrd pg backups enable\|disable\|list <name>` | Backups of a database (needs extension `object-storage`): continuous WAL archiving and a scheduled base backup (`--retention 14d`, `--schedule "0 2 * * *"`); list shows the base backups and the recovery window. |
 | `shpyrd pg backup <name>` | Take a base backup now. |
 | `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables — also when the workspace has a default for databases. Sleep is an enterprise feature (auto sleep). Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
 | `shpyrd pg suspend <name>`, `shpyrd pg resume <name>` | Stop a database now and refuse connections until resumed (data kept), and bring it back. |
 | `shpyrd pg restore <name> --as <new> [--to <RFC 3339>]` | Restore into a new database at a point in time (latest when omitted); attach the app to it when ready. |
-| `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size`, `--persistent`, `--storage`. |
+| `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size` (a Redis size; the smallest when omitted), `--persistent`, `--storage`. |
+| `shpyrd redis resize <name> <size> --project <p>` | Give a store another Redis size; it restarts (a cache comes back empty). |
 | `shpyrd redis list\|info\|cli\|delete` | Manage stores; `cli <name> -- <args>` runs valkey-cli or redis-cli. |
 | `shpyrd attach <resource>` | Attach a database or store to the app as config vars (`--kind` when ambiguous, `--prefix`). A release. |
 | `shpyrd detach <resource>` | Remove the attachment (a release). |

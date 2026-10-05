@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
 
 func TestPostgresReconcile(t *testing.T) {
@@ -56,7 +57,7 @@ func TestPostgresReconcile(t *testing.T) {
 	if inst != 2 || img != "ghcr.io/cloudnative-pg/postgresql:16" || size != "10Gi" || owner != "app" || cpu == "" {
 		t.Errorf("cluster spec = %v", cluster.Object["spec"])
 	}
-	// Small sizes are raised to the database floor.
+	// The smallest Postgres size is 128Mi, no floor raises it.
 	small := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "tiny", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
 	if err := c.Create(context.Background(), small); err != nil {
 		t.Fatal(err)
@@ -68,7 +69,7 @@ func TestPostgresReconcile(t *testing.T) {
 	tiny.SetGroupVersionKind(CNPGClusterGVK)
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "tiny"}, tiny)
 	if mem, _, _ := unstructured.NestedString(tiny.Object, "spec", "resources", "limits", "memory"); mem != "128Mi" {
-		t.Errorf("memory floor not applied: %q", mem)
+		t.Errorf("Postgres shared-s memory = %q", mem)
 	}
 	if len(cluster.GetOwnerReferences()) != 1 || cluster.GetOwnerReferences()[0].Kind != "Postgres" {
 		t.Error("cluster must be owned by the Postgres")
@@ -177,7 +178,7 @@ func TestRedisReconcile(t *testing.T) {
 	}
 	ct := sts.Spec.Template.Spec.Containers[0]
 	args := strings.Join(ct.Args, " ")
-	if ct.Image != "docker.io/valkey/valkey:8.1.10-alpine" || !strings.HasPrefix(args, "valkey-server --requirepass $(REDIS_PASSWORD)") || !strings.Contains(args, "allkeys-lru") || !strings.Contains(args, "--maxmemory ") || strings.Contains(args, "appendonly") {
+	if ct.Image != "docker.io/valkey/valkey:8.1.10-alpine" || !strings.HasPrefix(args, "valkey-server --requirepass $(REDIS_PASSWORD)") || !strings.Contains(args, "allkeys-lru") || !strings.Contains(args, "--maxmemory 50331648") || !strings.Contains(args, "--maxclients 100") || strings.Contains(args, "appendonly") {
 		t.Errorf("cache container = %s %s", ct.Image, args)
 	}
 	if *ct.SecurityContext.RunAsUser != 999 || len(sts.Spec.VolumeClaimTemplates) != 0 {
@@ -245,6 +246,45 @@ func TestRedisReconcile(t *testing.T) {
 
 // RFC-0060: datastores claim on the profile's class and are rounded up to
 // the provider minimum, which the status reports.
+// A store from before stores had sizes of their own (#57), naming a size
+// the Redis list does not have, is given the Redis size its pod runs with;
+// a new store naming one is refused with the sizes there are.
+func TestRedisMovesToARedisSize(t *testing.T) {
+	ctx := context.Background()
+	old := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "app-shop"}, Spec: shpyrdv1.RedisSpec{Size: "db-xs"}}
+	running := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "app-shop"},
+		Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "redis", Resources: sizes.Size{Kind: sizes.Shared, CPU: "0.5", Memory: "256Mi"}.Resources(),
+		}}}}},
+	}
+	fresh := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "fresh", Namespace: "app-shop"}, Spec: shpyrdv1.RedisSpec{Size: "db-xs"}}
+	base, c := newTestReconciler(t, old, running, fresh)
+	r := &RedisReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system"}
+	run := func(name string) *shpyrdv1.Redis {
+		key := types.NamespacedName{Namespace: "app-shop", Name: name}
+		for i := 0; i < 2; i++ {
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("reconcile %s: %v", name, err)
+			}
+		}
+		out := &shpyrdv1.Redis{}
+		_ = c.Get(ctx, key, out)
+		return out
+	}
+	if got := run("old"); got.Spec.Size != "shared-m" {
+		t.Errorf("a store from before = %q", got.Spec.Size)
+	}
+	sts := &appsv1.StatefulSet{}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "old"}, sts)
+	if args := strings.Join(sts.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--maxclients 400") || sts.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String() != "256Mi" {
+		t.Errorf("moved store = %s %v", args, sts.Spec.Template.Spec.Containers[0].Resources.Limits)
+	}
+	if got := run("fresh"); got.Status.Phase != shpyrdv1.ResourceFailed || !strings.Contains(got.Status.Message, `unknown size "db-xs" for a Redis store`) {
+		t.Errorf("a new store naming a process size = %s %q", got.Status.Phase, got.Status.Message)
+	}
+}
+
 func TestDatastoresFollowStorageProfile(t *testing.T) {
 	pgStorage := resource.MustParse("5Gi")
 	pg := &shpyrdv1.Postgres{
@@ -439,32 +479,49 @@ func TestPostgresBackupsAndRecovery(t *testing.T) {
 	}
 }
 
-// A small database (#53): db-xs runs in 128Mi with PostgreSQL tuned for it
-// and a patient liveness probe; one without a size keeps 256Mi and CNPG's
-// defaults; a database that was running before keeps its memory until its
-// own size changes, and CNPG's parameters are never touched.
-func TestSmallPostgres(t *testing.T) {
+// Database sizes (#57). The Postgres shared-s runs in 128Mi with
+// PostgreSQL tuned for it (#53) and a patient liveness probe; one that
+// names no size gets the default, shared-s; a larger size gets the rule's
+// settings. A database from before (a process size raised to a floor, or
+// none) is given the Postgres size with the CPU and memory it runs with,
+// keeps its pod and CNPG's own parameters, and is tuned for that size.
+func TestPostgresSizes(t *testing.T) {
 	ctx := context.Background()
-	xs := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "xs", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "db-xs"}}
+	xs := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "xs", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
 	plain := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "app-shop"}}
-	// A database an older platform made: shared-s raised to 256Mi, no
-	// size recorded, CNPG's own parameters on it.
+	m := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-m"}}
+	wrong := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "wrong", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "db-xs"}}
+	// Databases an older platform made: shared-s raised to 256Mi with
+	// its name recorded (#53); none named and nothing recorded (before
+	// #53); db-xs.
+	cluster := func(name string, size string, cpu, mem string, record *string) *unstructured.Unstructured {
+		pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: size}}
+		u := desiredCNPGCluster(pg, resource.MustParse("5Gi"), sizes.Size{Name: size, Kind: sizes.Shared, CPU: cpu, Memory: mem}, sizes.Size{Name: size, Kind: sizes.Shared, CPU: cpu, Memory: mem}.Resources(), "", "")
+		u.SetAnnotations(nil)
+		if record != nil {
+			u.SetAnnotations(map[string]string{AnnotationPostgresSize: *record})
+		}
+		unstructured.RemoveNestedField(u.Object, "spec", "livenessProbeTimeout")
+		_ = unstructured.SetNestedStringMap(u.Object, map[string]string{"archive_mode": "on", "wal_level": "logical"}, "spec", "postgresql", "parameters")
+		return u
+	}
+	sharedS, xsName := "shared-s", "db-xs"
 	legacy := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
-	old := desiredCNPGCluster(legacy, resource.MustParse("5Gi"), withMemoryFloor(corev1.ResourceRequirements{}, resource.MustParse("256Mi")), "", "")
-	old.SetAnnotations(nil)
-	_ = unstructured.SetNestedStringMap(old.Object, map[string]string{"archive_mode": "on", "wal_level": "logical"}, "spec", "postgresql", "parameters")
-	base, c := newTestReconciler(t, xs, plain, legacy, old)
+	older := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "older", Namespace: "app-shop"}}
+	small := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "small", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "db-xs"}}
+	base, c := newTestReconciler(t, xs, plain, m, wrong, legacy, older, small,
+		cluster("legacy", "shared-s", "500m", "256Mi", &sharedS), cluster("older", "", "500m", "256Mi", nil), cluster("small", "db-xs", "500m", "128Mi", &xsName))
 	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(50), SystemNamespace: "shpyrd-system"}
-	cluster := func(name string) *unstructured.Unstructured {
+	reconcile := func(name string) *unstructured.Unstructured {
 		t.Helper()
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: name}}); err != nil {
-			t.Fatal(err)
+		for i := 0; i < 3; i++ { // a database from before is moved first, then rendered
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: name}}); err != nil {
+				t.Fatal(err)
+			}
 		}
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(CNPGClusterGVK)
-		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, u); err != nil {
-			t.Fatal(err)
-		}
+		_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, u)
 		return u
 	}
 	shape := func(u *unstructured.Unstructured) (mem string, params map[string]string, liveness int64) {
@@ -473,42 +530,62 @@ func TestSmallPostgres(t *testing.T) {
 		liveness, _, _ = unstructured.NestedInt64(u.Object, "spec", "livenessProbeTimeout")
 		return
 	}
+	sizeOf := func(name string) string {
+		pg := &shpyrdv1.Postgres{}
+		_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, pg)
+		return pg.Spec.Size
+	}
 
-	mem, params, live := shape(cluster("xs"))
+	mem, params, live := shape(reconcile("xs"))
 	if mem != "128Mi" || params["shared_buffers"] != "16MB" || params["max_connections"] != "20" || live != 120 {
-		t.Errorf("db-xs = %s %v liveness %d", mem, params, live)
+		t.Errorf("shared-s = %s %v liveness %d", mem, params, live)
 	}
-	mem, params, live = shape(cluster("plain"))
-	if mem != "256Mi" || len(params) != 0 || live != 0 {
-		t.Errorf("no size = %s %v liveness %d", mem, params, live)
+	u := reconcile("plain")
+	mem, params, _ = shape(u)
+	if mem != "128Mi" || params["max_connections"] != "20" || u.GetAnnotations()[AnnotationPostgresSize] != "postgres:shared-s" {
+		t.Errorf("no size = %s %v %v", mem, params, u.GetAnnotations())
+	}
+	mem, params, live = shape(reconcile("m"))
+	if mem != "256Mi" || params["shared_buffers"] != "64MB" || params["max_connections"] != "40" || params["work_mem"] != "1228kB" || params["wal_buffers"] != "" || live != 0 {
+		t.Errorf("shared-m = %s %v liveness %d", mem, params, live)
+	}
+	reconcile("wrong")
+	pg := &shpyrdv1.Postgres{}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "wrong"}, pg)
+	if pg.Status.Phase != shpyrdv1.ResourceFailed || !strings.Contains(pg.Status.Message, `unknown size "db-xs" for a Postgres database`) {
+		t.Errorf("a new database naming a process size = %s %q", pg.Status.Phase, pg.Status.Message)
 	}
 
-	u := cluster("legacy")
-	mem, params, live = shape(u)
-	if mem != "256Mi" || params["shared_buffers"] != "" || params["archive_mode"] != "on" || live != 0 {
-		t.Errorf("a running database changed with the floor: %s %v liveness %d", mem, params, live)
+	for _, tc := range []struct{ name, size, mem, buffers string }{
+		{"legacy", "shared-m", "256Mi", "64MB"},
+		{"older", "shared-m", "256Mi", "64MB"},
+		{"small", "shared-s", "128Mi", "16MB"},
+	} {
+		u := reconcile(tc.name)
+		mem, params, _ := shape(u)
+		if got := sizeOf(tc.name); got != tc.size || mem != tc.mem || params["shared_buffers"] != tc.buffers || params["archive_mode"] != "on" || u.GetAnnotations()[AnnotationPostgresSize] != "postgres:"+tc.size {
+			t.Errorf("%s from before = size %q, %s %v %v", tc.name, got, mem, params, u.GetAnnotations())
+		}
 	}
-	if u.GetAnnotations()[AnnotationPostgresSize] != "shared-s" {
-		t.Errorf("size not recorded: %v", u.GetAnnotations())
-	}
-	// Its own size changes: now it goes down, and is tuned.
+
+	// A smaller size: memory goes down, the small settings come.
 	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "legacy"}, legacy)
-	legacy.Spec.Size = "db-xs"
+	legacy.Spec.Size = "shared-s"
 	if err := c.Update(ctx, legacy); err != nil {
 		t.Fatal(err)
 	}
-	mem, params, live = shape(cluster("legacy"))
+	mem, params, live = shape(reconcile("legacy"))
 	if mem != "128Mi" || params["shared_buffers"] != "16MB" || params["archive_mode"] != "on" || live != 120 {
-		t.Errorf("resized to db-xs = %s %v liveness %d", mem, params, live)
+		t.Errorf("resized to shared-s = %s %v liveness %d", mem, params, live)
 	}
-	// And back up: the tuning goes, CNPG's parameters stay.
+	// And up: the small settings go, CNPG's parameters stay.
 	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "legacy"}, legacy)
-	legacy.Spec.Size = "shared-m"
+	legacy.Spec.Size = "shared-l"
 	if err := c.Update(ctx, legacy); err != nil {
 		t.Fatal(err)
 	}
-	mem, params, live = shape(cluster("legacy"))
-	if mem != "256Mi" || params["shared_buffers"] != "" || params["archive_mode"] != "on" || live != 0 {
-		t.Errorf("resized to shared-m = %s %v liveness %d", mem, params, live)
+	mem, params, live = shape(reconcile("legacy"))
+	if mem != "512Mi" || params["shared_buffers"] != "128MB" || params["max_connections"] != "80" || params["wal_buffers"] != "" || params["archive_mode"] != "on" || live != 0 {
+		t.Errorf("resized to shared-l = %s %v liveness %d", mem, params, live)
 	}
 }

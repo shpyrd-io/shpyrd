@@ -19,8 +19,9 @@ shpyrd extensions enable redis
 ## PostgreSQL
 
 ```shell
-shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi, 1 instance, 256Mi (db-xs on a small plan)
+shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi, 1 instance, size shared-s (128Mi)
 shpyrd pg create db --project shop --size shared-m --storage 20Gi --instances 3   # HA with replicas
+shpyrd pg resize db shared-l --project shop               # another size; the instances restart one at a time
 shpyrd pg list --project shop
 shpyrd pg psql db --project shop -- -c 'select version()'
 shpyrd pg delete db --project shop --yes                  # refused while attached (or --force)
@@ -28,18 +29,29 @@ shpyrd pg delete db --project shop --yes                  # refused while attach
 
 Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; storage grows (`shpyrd pg create` again is not needed, edit the resource) but never shrinks.
 
-### Memory
+### Sizes
 
-| The database | Memory | PostgreSQL |
-|---|---|---|
-| names no size | 256 MiB | CloudNativePG's defaults |
-| names no size, on a plan with less than 512 MiB of memory | `db-xs`: 128 MiB, 0.5 CPU | tuned for 128 MiB |
-| names a size under 128 MiB (`shared-s`) | raised to 128 MiB | tuned for 128 MiB |
-| names a size of 256 MiB or more | the size's | CloudNativePG's defaults |
+Databases have a list of sizes of their own, as Heroku's add-ons have plans of their own: the names are the processes' (`shpyrd sizes list` shows the three lists), but a Postgres `shared-s` is not a process `shared-s`. A database takes only a Postgres size, and gets the smallest when it names none. Each size sets the CPU, the memory, the connections and PostgreSQL's settings for them:
 
-128 MiB is the floor: under 256 MiB PostgreSQL runs with `shared_buffers` 16MB, `work_mem` 1MB, `maintenance_work_mem` 16MB, `effective_cache_size` 48MB, `wal_buffers` 1MB, `autovacuum_work_mem` 16MB and **20 connections** (17 for the app; the rest are reserved for the platform). That fits a small app's database: a Prisma or Rails migration with its `CREATE INDEX`, a web process with a pool of 5 to 10 connections. It is not a reporting database, and a pool larger than 17 connections is refused. On kind a 128 MiB database ran a million-row index build and 17 concurrent clients with no memory kill; give it `shared-m` (256 MiB) or more when it does more than that.
+| Size | CPU | Memory | Connections | `shared_buffers` | `work_mem` |
+|---|---|---|---|---|---|
+| `shared-s` (default) | 0.5, shared | 128 MiB | 20 | 16MB | 1MB |
+| `shared-m` | 0.5, shared | 256 MiB | 40 | 64MB | 1.2MB |
+| `shared-l` | 1, shared | 512 MiB | 80 | 128MB | 1.2MB |
+| `shared-xl` | 2, shared | 1 GiB | 120 | 256MB | 1.6MB |
+| `dedicated-s` | 1 | 1 GiB | 120 | 256MB | 1.6MB |
+| `dedicated-m` | 2 | 4 GiB | 200 | 1GB | 3.8MB |
+| `dedicated-l` | 4 | 8 GiB | 300 | 2GB | 5.1MB |
+| `dedicated-xl` | 8 | 16 GiB | 400 | 4GB | 7.7MB |
+| `dedicated-2xl` | 16 | 32 GiB | 500 | 8GB | 12.3MB |
 
-Creating a database says which memory it got and why, in the CLI and the dashboard. A database's memory changes only when its own size does: a newer platform version never shrinks a database that is running.
+From 256 MiB up, `shared_buffers` is a quarter of the memory, `effective_cache_size` three quarters, `maintenance_work_mem` a sixteenth (at most 2GB) and `work_mem` what remains shared by four sorts or hashes per connection. Under 256 MiB, `shared-s` keeps the settings measured for it (`maintenance_work_mem` 16MB, `effective_cache_size` 48MB, `wal_buffers` 1MB, `autovacuum_work_mem` 16MB) and a patient liveness probe: a small app's database, a Prisma or Rails migration with its `CREATE INDEX`, a web process with a pool of 5 to 10 connections; not a reporting database. A few connections of each size are kept for the platform (17 of 20 are the app's).
+
+How they were chosen: each size up to 1 GiB ran PostgreSQL 17 in its memory, less what CloudNativePG's instance manager keeps, with pgbench on every connection the app may open, a write load and then hash-and-sort queries on all of them while an index was built. None was killed for memory; the peaks were 86% (`shared-s`), 87% (`shared-m`), 57% (`shared-l`) and 41% (`shared-xl`) of what was left.
+
+`shpyrd pg resize`, or **Resize** on the project's Resources card, gives a database another size of the list; its instances restart with it one at a time, so a database with one instance is unavailable for a moment. Memory goes down only when the size does. The workspace's memory and CPU limits count databases with the processes: a database or a resize that would pass them is refused, and so is a process scaled into memory a database holds.
+
+A database made before databases had sizes of their own is given the Postgres size with the CPU and memory it runs with (one that named no size ran 256 MiB: `shared-m`), and restarts once with that size's settings: its connections become the size's.
 
 ### Backups and point-in-time recovery
 
@@ -53,7 +65,7 @@ shpyrd pg backup db --project shop                                 # one now, be
 shpyrd pg restore db --as db-restored --to 2026-09-25T16:58:02Z --project shop
 ```
 
-`pg info` and the dashboard show the state (`on, daily at 02:00 UTC, kept 7d, last …, recoverable from …`). A restore never touches the source: it creates a **new** database recovered to the moment you name (RFC 3339, UTC; the latest possible when omitted), any second inside the window, with its own credentials; when it is ready, `shpyrd attach db-restored` and detach the old one. Restores are refused before the earliest recoverable point and onto the database itself. `shpyrd pg backups disable` stops archiving; existing backups stay restorable until the database is deleted, when its bucket goes with it.
+These commands speak the workspace API: signed in with `shpyrd login`, they need no kubeconfig. `pg info` and the dashboard show the state (`on, daily at 02:00 UTC, kept 7d, last …, recoverable from …`). A restore never touches the source: it creates a **new** database recovered to the moment you name (RFC 3339, UTC; the latest possible when omitted), any second inside the window, with its own credentials; when it is ready, `shpyrd attach db-restored` and detach the old one. Restores are refused before the earliest recoverable point, in the future and onto the database itself; the new database takes the source's size unless `--size` names another Postgres size. `shpyrd pg backups disable` stops archiving; existing backups stay restorable until the database is deleted, when its bucket goes with it.
 
 Backups live in the cluster's object store and go with the cluster: a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents. Copying the in-cluster store to the provider's bucket is the open follow-up; until then, `pg_dump` what must survive the cluster.
 
@@ -82,8 +94,23 @@ Not there yet: connection pooling and credential rotation.
 shpyrd redis create cache --project shop                  # Valkey 8, cache mode
 shpyrd redis create queue --project shop --persistent --storage 2Gi   # append-only file on a volume
 shpyrd redis create legacy --project shop --engine redis  # upstream Redis 7
+shpyrd redis resize cache shared-m --project shop         # another size; the store restarts
 shpyrd redis cli cache --project shop -- INFO memory
 ```
+
+A store takes a size from the Redis list, the processes' names with clients of their own, and gets the smallest when it names none:
+
+| Size | CPU | Memory | `maxmemory` | Clients |
+|---|---|---|---|---|
+| `shared-s` (default) | 0.5, shared | 64 MiB | 48 MiB | 100 |
+| `shared-m` | 0.5, shared | 256 MiB | 192 MiB | 400 |
+| `shared-l` | 1, shared | 512 MiB | 384 MiB | 1000 |
+| `shared-xl` | 2, shared | 1 GiB | 768 MiB | 2000 |
+| `dedicated-s` | 1 | 1 GiB | 768 MiB | 2000 |
+| `dedicated-m` | 2 | 4 GiB | 3 GiB | 5000 |
+| `dedicated-l` | 4 | 8 GiB | 6 GiB | 10000 |
+
+A resize restarts the store: a cache comes back empty, a persistent store reloads its file. A store made before stores had sizes of their own and naming a size the list does not have is given the Redis size its pod runs with.
 
 [Valkey](https://valkey.io) (BSD licensed, protocol compatible) is the default engine; `--engine redis` selects upstream Redis. A store is a single instance run by the shpyrd controller: `maxmemory` is 75% of the size's memory; a **cache** evicts with `allkeys-lru` and loses its content on restart, which is the expected behaviour of a cache; a **persistent** store keeps an append-only file on a volume and refuses writes instead of evicting when full. Persistence cannot change after creation. High availability through an operator comes later.
 

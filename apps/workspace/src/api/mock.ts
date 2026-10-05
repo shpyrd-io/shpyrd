@@ -68,7 +68,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "3";
+const shape = "4";
 const projectsOf = collection<Project>(`projects${shape}`, projects as Project[], (p) => p.slug);
 const workspaceOf = single<WorkspaceInfo>(`workspace${shape}`, workspace as WorkspaceInfo);
 const seed = things as unknown as Things;
@@ -485,11 +485,14 @@ export const mock: Api = {
   createResource: async (slug, body) => {
     const [all, t] = await ofProject(slug);
     if (t.resources.some((r) => r.kind === body.kind && r.name === body.name)) throw new ApiError(409, `${body.kind} ${body.name} exists`);
-    const details = Object.fromEntries(Object.entries(body.spec).filter(([, v]) => typeof v !== "object").map(([k, v]) => [k, String(v)]));
+    const list = body.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
+    const size = list.sizes.find((x) => x.name === (body.spec.size || list.default));
+    if (!size) throw new ApiError(400, `unknown size "${body.spec.size}" for a ${body.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`);
+    const details = Object.fromEntries(Object.entries({ ...body.spec, size: size.name }).filter(([, v]) => typeof v !== "object").map(([k, v]) => [k, String(v)]));
     const r: ResourceInfo = { kind: body.kind, name: body.name, phase: "Pending", details, attachedTo: [], data: true, bindable: true, createdAt: now() };
     t.resources.push(r);
     await thingsOf.set(all);
-    if (body.kind === "Postgres" && !body.spec.size) r.note = "The database has 256Mi of memory, what a database gets when it names no size.";
+    if (!body.spec.size) r.note = `It has the size ${size.name}, the default: ${size.cpu} CPU, ${size.memory} of memory, ${size.connections} connections.`;
     setTimeout(async () => {
       const [all2, t2] = await ofProject(slug);
       const x = t2.resources.find((y) => y.kind === body.kind && y.name === body.name);
@@ -497,6 +500,18 @@ export const mock: Api = {
       await thingsOf.set(all2);
     }, 6000);
     return r;
+  },
+  resizeResource: async (slug, kind, name, size) => {
+    const [all, t] = await ofProject(slug);
+    const r = t.resources.find((x) => x.kind.toLowerCase() === kind.toLowerCase() && x.name === name);
+    if (!r) throw new ApiError(404, `no ${kind} named ${name}`);
+    const list = r.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
+    const s = list.sizes.find((x) => x.name === size);
+    if (!s) throw new ApiError(400, `unknown size "${size}" for a ${r.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`);
+    r.details = { ...r.details, size };
+    await thingsOf.set(all);
+    const restart = r.kind === "Redis" ? "It restarts with it: a cache comes back empty, a persistent store reloads its file." : "Its instances restart with it, one at a time; with one instance the database is unavailable for a moment.";
+    return { ...r, note: `${name} now has the size ${size}: ${s.cpu} CPU, ${s.memory} of memory, ${s.connections} connections. ${restart}` };
   },
   removeResource: async (slug, kind, name, force) => {
     const [all, t] = await ofProject(slug);

@@ -167,6 +167,24 @@ func DeleteAPI(ctx context.Context, api ext.APIClient, project, kind, name strin
 	return err
 }
 
+// ResizeAPI gives a database or store another size of its kind's list;
+// the view's note says what follows (a restart).
+func ResizeAPI(ctx context.Context, api ext.APIClient, project, kind, name, size string) (*View, error) {
+	body, err := json.Marshal(map[string]string{"size": size})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := api.Request(ctx, "POST", "api/projects/"+project+"/resources/"+url.PathEscape(kind)+"/"+url.PathEscape(name)+"/resize", body, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("unexpected response: %s", raw)
+	}
+	return &v, nil
+}
+
 // WaitReadyAPI follows a resource until it is Ready or Failed, printing
 // phase changes, and returns the final view.
 func WaitReadyAPI(ctx context.Context, api ext.APIClient, out io.Writer, project, kind, name string, timeout time.Duration) (*View, error) {

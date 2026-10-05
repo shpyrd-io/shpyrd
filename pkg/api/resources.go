@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -218,7 +218,18 @@ func (s *Server) createResource(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("resources of kind %q are not available on this cluster (enable the extension that provides them)", req.Kind))
 		return
 	}
-	if !volumeName.MatchString(req.Name) {
+	if req.Spec == nil {
+		req.Spec = map[string]interface{}{}
+	}
+	s.createResourceOf(c, t, req.Name, req.Spec, "resource.create")
+}
+
+// createResourceOf makes a resource of kind t named name in the request's
+// project, audited as action: a database or store gets its size recorded
+// and counted against the workspace's limits, a database restored from
+// another's backups has its source and moment checked first (#74).
+func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name string, spec map[string]interface{}, action string) {
+	if !volumeName.MatchString(name) {
 		abort(c, http.StatusBadRequest, errors.New("name must be lowercase letters, digits and dashes (max 40 chars)"))
 		return
 	}
@@ -226,26 +237,47 @@ func (s *Server) createResource(c *gin.Context) {
 	if !ok {
 		return
 	}
+	ctx := c.Request.Context()
+	if t.Kind == "Postgres" {
+		if rec, ok := spec["recovery"].(map[string]interface{}); ok {
+			from, _ := rec["from"].(string)
+			var to *time.Time
+			if raw, _ := rec["targetTime"].(string); raw != "" {
+				at, err := time.Parse(time.RFC3339, raw)
+				if err != nil {
+					abort(c, http.StatusBadRequest, fmt.Errorf("recovery.targetTime %q: use RFC 3339, e.g. 2026-09-25T10:00:00Z", raw))
+					return
+				}
+				to = &at
+			}
+			if err := s.checkRecovery(ctx, ns, name, from, to); err != nil {
+				abort(c, http.StatusBadRequest, err)
+				return
+			}
+		}
+	}
 	u := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": t.Group + "/" + t.Version,
 		"kind":       t.Kind,
 		"metadata": map[string]interface{}{
-			"name": req.Name, "namespace": ns,
+			"name": name, "namespace": ns,
 			"labels": map[string]interface{}{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: c.Param("slug")},
 		},
-		"spec": req.Spec,
+		"spec": spec,
 	}}
-	if u.Object["spec"] == nil {
-		u.Object["spec"] = map[string]interface{}{}
-	}
 	note := ""
-	if t.Kind == "Postgres" {
-		note = s.databaseSize(c.Request.Context(), s.workspace(c), u.Object["spec"].(map[string]interface{}))
+	if t.Kind == "Postgres" || t.Kind == "Redis" {
+		n, err := s.storeSize(ctx, s.workspace(c), t.Kind, spec)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		note = n
 	}
-	if err := s.apps.Create(c.Request.Context(), u); err != nil {
+	if err := s.apps.Create(ctx, u); err != nil {
 		switch {
 		case apierrors.IsAlreadyExists(err):
-			abort(c, http.StatusConflict, fmt.Errorf("%s %q already exists", t.Kind, req.Name))
+			abort(c, http.StatusConflict, fmt.Errorf("%s %q already exists", t.Kind, name))
 		case apierrors.IsInvalid(err):
 			abort(c, http.StatusBadRequest, err)
 		default:
@@ -253,45 +285,139 @@ func (s *Server) createResource(c *gin.Context) {
 		}
 		return
 	}
-	s.audit(c, c.Param("slug"), "resource.create", t.Kind+" "+req.Name, "")
+	s.audit(c, c.Param("slug"), action, t.Kind+" "+name, "")
 	view := resourceViewOf(t, *u)
 	view.Note = note
 	c.JSON(http.StatusCreated, view)
 }
 
-// databaseSize gives a new database that names no size db-xs when the
-// workspace's memory ceiling is small (#53), and says in words which
-// memory the database has and why; "" when it got what it asked for.
-func (s *Server) databaseSize(ctx context.Context, ws string, spec map[string]interface{}) string {
+// storeSize records the size of a new database or store (#57): the one
+// it names from the list of its kind, or that list's default, which the
+// note says; one past the workspace's CPU or memory is refused.
+func (s *Server) storeSize(ctx context.Context, ws, kind string, spec map[string]interface{}) (string, error) {
 	cat, err := s.catalog(ctx)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	floor := resource.MustParse(sizes.DBMinMemory)
-	name, _ := spec["size"].(string)
-	if name != "" {
-		size, ok := cat.Get(name)
-		if mem, err := resource.ParseQuantity(size.Memory); ok && err == nil && mem.Cmp(floor) < 0 {
-			return fmt.Sprintf("The size %s has %s of memory; a database takes at least %s, so this one has %s.", name, size.Memory, sizes.DBMinMemory, sizes.DBMinMemory)
+	what := strings.ToLower(kind)
+	named, _ := spec["size"].(string)
+	size, err := cat.For(what).Pick(what, named)
+	if err != nil {
+		return "", err
+	}
+	spec["size"] = size.Name
+	var instances *int32
+	switch n := spec["instances"].(type) {
+	case float64:
+		instances = ptrTo(int32(n))
+	case int64:
+		instances = ptrTo(int32(n))
+	}
+	res, count, _ := storeResources(cat, kind, size.Name, instances)
+	if err := s.checkStoreLimits(ctx, ws, res, corev1.ResourceRequirements{}, count, 0); err != nil {
+		return "", err
+	}
+	if named != "" {
+		return "", nil
+	}
+	return fmt.Sprintf("It has the size %s, the default: %s.", size.Name, sizeWords(size)), nil
+}
+
+// sizeWords says what a size gives: "0.5 CPU, 128Mi of memory, 20 connections".
+func sizeWords(size sizes.Size) string {
+	out := fmt.Sprintf("%s CPU, %s of memory", size.CPU, size.Memory)
+	if size.Connections > 0 {
+		out += fmt.Sprintf(", %d connections", size.Connections)
+	}
+	return out
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
+// resizeResourceRequest is POST /api/projects/:slug/resources/:kind/:name/resize.
+type resizeResourceRequest struct {
+	Size string `json:"size" binding:"required"`
+}
+
+// resizeResource gives a database or store another size of its kind's
+// list (#57), counted against the workspace's limits instead of the size
+// it had. The controller applies it: a Postgres's instances restart one
+// at a time, a Redis restarts (a cache comes back empty).
+func (s *Server) resizeResource(c *gin.Context) {
+	var req resizeResourceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		abort(c, http.StatusBadRequest, errors.New(`body must be {"size":"shared-m"}`))
+		return
+	}
+	t, ok := s.resourceType(c.Param("kind"))
+	if !ok || (t.Kind != "Postgres" && t.Kind != "Redis") {
+		abort(c, http.StatusBadRequest, fmt.Errorf("resources of kind %q have no size", c.Param("kind")))
+		return
+	}
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	cat, err := s.catalog(ctx)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	what := strings.ToLower(t.Kind)
+	size, err := cat.For(what).Pick(what, req.Size)
+	if err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	name := c.Param("name")
+	var u *unstructured.Unstructured
+	was := ""
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		u = &unstructured.Unstructured{}
+		u.SetGroupVersionKind(schema.GroupVersionKind{Group: t.Group, Version: t.Version, Kind: t.Kind})
+		if err := s.apps.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, u); err != nil {
+			return err
 		}
-		return ""
-	}
-	if l := s.limitsOf(ctx, ws); l != nil && l.Memory != "" {
-		ceiling, err := resource.ParseQuantity(l.Memory)
-		xs, ok := cat.Get(sizes.DBXS)
-		if err == nil && ok && ceiling.Cmp(resource.MustParse(sizes.DBXSPlanBelow)) < 0 {
-			spec["size"] = sizes.DBXS
-			usual := resource.MustParse(sizes.DBDefaultMemory)
-			left := "none of it for the app's processes"
-			if ceiling.Cmp(usual) > 0 {
-				rest := ceiling.DeepCopy()
-				rest.Sub(usual)
-				left = rest.String() + " of it for the app's processes"
-			}
-			return fmt.Sprintf("The database has the size %s: %s of memory, enough for a small app's database (about 20 connections), not for reporting. The workspace's memory ceiling is %s; a database's usual %s would leave %s.", sizes.DBXS, xs.Memory, l.Memory, sizes.DBDefaultMemory, left)
+		was, _, _ = unstructured.NestedString(u.Object, "spec", "size")
+		if was == size.Name {
+			return nil
 		}
+		var instances *int32
+		if n, found, _ := unstructured.NestedInt64(u.Object, "spec", "instances"); found {
+			instances = ptrTo(int32(n))
+		}
+		before, beforeN, _ := storeResources(cat, t.Kind, was, instances)
+		after, afterN, _ := storeResources(cat, t.Kind, size.Name, instances)
+		if err := s.checkStoreLimits(ctx, s.workspace(c), after, before, afterN, beforeN); err != nil {
+			return &userError{err}
+		}
+		_ = unstructured.SetNestedField(u.Object, size.Name, "spec", "size")
+		return s.apps.Update(ctx, u)
+	})
+	if err != nil {
+		var ue *userError
+		switch {
+		case errors.As(err, &ue):
+			abort(c, http.StatusBadRequest, ue.error)
+		default:
+			abortNotFound(c, err, strings.ToLower(t.Kind)+" "+name)
+		}
+		return
 	}
-	return fmt.Sprintf("The database has %s of memory, what a database gets when it names no size.", sizes.DBDefaultMemory)
+	view := resourceViewOf(t, *u)
+	if was == size.Name {
+		view.Note = fmt.Sprintf("%s already has the size %s.", name, size.Name)
+		c.JSON(http.StatusOK, view)
+		return
+	}
+	s.audit(c, c.Param("slug"), "resource.resize", t.Kind+" "+name, firstNonEmpty(was, "none")+" → "+size.Name)
+	restart := "Its instances restart with it, one at a time; with one instance the database is unavailable for a moment."
+	if t.Kind == "Redis" {
+		restart = "It restarts with it: a cache comes back empty, a persistent store reloads its file."
+	}
+	view.Note = fmt.Sprintf("%s now has the size %s: %s. %s", name, size.Name, sizeWords(size), restart)
+	c.JSON(http.StatusOK, view)
 }
 
 // deleteResource removes an extension resource; attached ones need ?force=true.

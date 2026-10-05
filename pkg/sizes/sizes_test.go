@@ -1,6 +1,7 @@
 package sizes
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -82,5 +83,54 @@ func TestUpsertRemove(t *testing.T) {
 	}
 	if err := (Catalog{Default: "x", Sizes: []Size{{Name: "a", Kind: Shared, CPU: "1", Memory: "1Gi"}}}).Validate(); err == nil {
 		t.Error("default not in catalog must fail")
+	}
+}
+
+// Databases and stores have lists of their own (#57), with the processes'
+// names: a catalog saved before them gets the built-in ones and keeps its
+// own processes, db-xs included; a Postgres size under 128Mi is refused.
+func TestListsOfDatabasesAndStores(t *testing.T) {
+	old := []byte(`default: shared-s
+sizes:
+- {name: shared-s, kind: shared, cpu: "0.5", memory: 64Mi}
+- {name: db-xs, kind: shared, cpu: "0.5", memory: 128Mi}
+`)
+	c, err := Parse(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Sizes) != 2 || c.For(ForPostgres).Default != "shared-s" || c.For(ForRedis).Default != "shared-s" {
+		t.Fatalf("old catalog = %+v %+v %+v", c.List, c.Postgres, c.Redis)
+	}
+	pg, err := c.For(ForPostgres).Pick(ForPostgres, "")
+	if err != nil || pg.Memory != "128Mi" || pg.Connections != 20 {
+		t.Errorf("Postgres default = %+v %v", pg, err)
+	}
+	rd, err := c.For(ForRedis).Pick(ForRedis, "shared-s")
+	if err != nil || rd.Memory != "64Mi" || rd.Connections == 0 {
+		t.Errorf("Redis shared-s = %+v %v", rd, err)
+	}
+	if _, err := c.For(ForPostgres).Pick(ForPostgres, "db-xs"); err == nil || !strings.Contains(err.Error(), "shared-s, shared-m") {
+		t.Errorf("a process size for a database = %v", err)
+	}
+	// Saved again, the lists are written out and read back the same.
+	b, _ := c.Marshal()
+	back, err := Parse(b)
+	if err != nil || len(back.Postgres.Sizes) != len(Defaults().Postgres.Sizes) || len(back.Redis.Sizes) != len(Defaults().Redis.Sizes) {
+		t.Errorf("round trip = %v %+v", err, back)
+	}
+
+	small := Defaults()
+	small.Postgres.Sizes = append(small.Postgres.Sizes, Size{Name: "tiny", Kind: Shared, CPU: "0.5", Memory: "64Mi"})
+	if err := small.Validate(); err == nil || !strings.Contains(err.Error(), "at least 128Mi") {
+		t.Errorf("a 64Mi Postgres size = %v", err)
+	}
+	proc := Defaults()
+	proc.Sizes[0].Connections = 10
+	if err := proc.Validate(); err == nil {
+		t.Error("connections on a process size must be refused")
+	}
+	if c.For("mysql") != nil {
+		t.Error("no list for an unknown kind")
 	}
 }

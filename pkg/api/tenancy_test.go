@@ -865,42 +865,91 @@ func TestTwoApplicationsByHost(t *testing.T) {
 	}
 }
 
-// A database on a small plan (#53): one that names no size gets db-xs when
-// the workspace's memory ceiling is under 512Mi, and the answer says so in
-// words; a size under the database floor is said to be raised; without a
-// plan the database keeps the usual 256Mi.
-func TestDatabaseSizeOnASmallPlan(t *testing.T) {
+// Databases and stores take sizes from lists of their own (#57): one that
+// names none gets its list's default, recorded and said in the note; a
+// process size or an unknown one is refused; the workspace's memory counts
+// them with the processes, on creation, on resize and when a process
+// scales.
+func TestDatabaseAndStoreSizes(t *testing.T) {
 	s, cr, st := newTenantServer(t)
 	s.opts.Extensions = all.All()
 	ctx := context.Background()
-	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Memory: "256Mi"}}); err != nil {
+	// acme runs shop and wiki, a shared-s each: 128Mi.
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Memory: "1Gi"}}); err != nil {
 		t.Fatal(err)
 	}
-	create := func(host, body string) ResourceView {
+	call := func(method, path, body string, want int) ResourceView {
 		t.Helper()
-		rec := at(t, s, host, "POST", "/api/projects/shop/resources", body)
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+		rec := at(t, s, "acme.shpyrd.test", method, path, body)
+		if rec.Code != want {
+			t.Fatalf("%s %s %s = %d %s", method, path, body, rec.Code, rec.Body.String())
 		}
 		var v ResourceView
 		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		if want >= 400 {
+			v.Note = rec.Body.String()
+		}
 		return v
 	}
-	v := create("acme.shpyrd.test", `{"kind":"Postgres","name":"db","spec":{"storage":"5Gi"}}`)
-	if v.Details["size"] != "db-xs" || !strings.Contains(v.Note, "db-xs: 128Mi") || !strings.Contains(v.Note, "memory ceiling is 256Mi") {
-		t.Errorf("small plan = size %q note %q", v.Details["size"], v.Note)
+	create := func(body string, want int) ResourceView {
+		return call("POST", "/api/projects/shop/resources", body, want)
+	}
+
+	v := create(`{"kind":"Postgres","name":"db","spec":{"storage":"5Gi"}}`, http.StatusCreated)
+	if v.Details["size"] != "shared-s" || !strings.Contains(v.Note, "the size shared-s, the default: 0.5 CPU, 128Mi of memory, 20 connections") {
+		t.Errorf("no size = %q %q", v.Details["size"], v.Note)
 	}
 	pg := &shpyrdv1.Postgres{}
-	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, pg); err != nil || pg.Spec.Size != "db-xs" {
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, pg); err != nil || pg.Spec.Size != "shared-s" {
 		t.Errorf("stored size = %q %v", pg.Spec.Size, err)
 	}
-	v = create("acme.shpyrd.test", `{"kind":"Postgres","name":"tiny","spec":{"size":"shared-s"}}`)
-	if v.Details["size"] != "shared-s" || !strings.Contains(v.Note, "at least 128Mi") {
-		t.Errorf("shared-s = size %q note %q", v.Details["size"], v.Note)
+	if v := create(`{"kind":"Postgres","name":"old","spec":{"size":"db-xs"}}`, http.StatusBadRequest); !strings.Contains(v.Note, `unknown size \"db-xs\" for a Postgres database (sizes: shared-s, shared-m`) {
+		t.Errorf("a process size = %s", v.Note)
 	}
-	v = create("example.test", `{"kind":"Postgres","name":"db","spec":{}}`)
-	if v.Details["size"] != "" || !strings.Contains(v.Note, "256Mi") {
-		t.Errorf("no plan = size %q note %q", v.Details["size"], v.Note)
+	if v := create(`{"kind":"Postgres","name":"ha","spec":{"size":"shared-s","instances":2}}`, http.StatusCreated); v.Note != "" {
+		t.Errorf("a size named = note %q", v.Note)
+	}
+	if v := create(`{"kind":"Redis","name":"cache","spec":{}}`, http.StatusCreated); v.Details["size"] != "shared-s" || !strings.Contains(v.Note, "64Mi of memory, 100 connections") {
+		t.Errorf("Redis without a size = %q %q", v.Details["size"], v.Note)
+	}
+	// 128 + 128 + 2×128 + 64 = 576Mi; a 512Mi store would take 1088Mi.
+	if v := create(`{"kind":"Redis","name":"big","spec":{"size":"shared-l"}}`, http.StatusBadRequest); !strings.Contains(v.Note, "this would request 1088Mi of memory; the workspace allows 1Gi") {
+		t.Errorf("a store past the limit = %s", v.Note)
+	}
+
+	resize := func(kind, name, size string, want int) ResourceView {
+		return call("POST", "/api/projects/shop/resources/"+kind+"/"+name+"/resize", `{"size":"`+size+`"}`, want)
+	}
+	if v := resize("postgres", "db", "shared-m", http.StatusOK); v.Details["size"] != "shared-m" || !strings.Contains(v.Note, "db now has the size shared-m: 0.5 CPU, 256Mi of memory, 40 connections. Its instances restart") {
+		t.Errorf("resize = %q %q", v.Details["size"], v.Note)
+	}
+	resize("postgres", "ha", "shared-m", http.StatusOK) // 704 - 256 + 512 = 960Mi
+	if v := resize("postgres", "db", "shared-l", http.StatusBadRequest); !strings.Contains(v.Note, "this would request 1216Mi of memory") {
+		t.Errorf("resize past the limit = %s", v.Note)
+	}
+	if v := resize("redis", "cache", "shared-s", http.StatusOK); !strings.Contains(v.Note, "already has the size shared-s") {
+		t.Errorf("same size = %q", v.Note)
+	}
+	if v := resize("redis", "cache", "db-xs", http.StatusBadRequest); !strings.Contains(v.Note, "for a Redis store") {
+		t.Errorf("unknown Redis size = %s", v.Note)
+	}
+	if v := resize("Volume", "data", "shared-s", http.StatusBadRequest); !strings.Contains(v.Note, "have no size") {
+		t.Errorf("a volume = %s", v.Note)
+	}
+	resize("postgres", "nope", "shared-s", http.StatusNotFound)
+
+	// The workspace's usage counts them, and a process scaling past the
+	// memory left is refused: 960Mi + 64Mi is the limit, + 128Mi is over.
+	var view WorkspaceView
+	_ = json.Unmarshal(at(t, s, "acme.shpyrd.test", "GET", "/api/workspace", "").Body.Bytes(), &view)
+	if view.Usage == nil || view.Usage.Memory != "960Mi" {
+		t.Errorf("usage = %+v", view.Usage)
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":2}`); rec.Code != http.StatusOK {
+		t.Errorf("scale to 2 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":3}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "1088Mi of memory") {
+		t.Errorf("scale to 3 = %d %s", rec.Code, rec.Body.String())
 	}
 }
 

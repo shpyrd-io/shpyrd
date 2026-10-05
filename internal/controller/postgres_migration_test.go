@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +33,7 @@ func TestPostgresPlacementKeepsTheDataPool(t *testing.T) {
 	for _, pool := range []string{"data", "platform", ""} {
 		t.Run("pool="+pool, func(t *testing.T) {
 			pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-project", Annotations: map[string]string{shpyrdv1.AnnotationPlacement: "target-node"}}}
-			cluster := desiredCNPGCluster(pg, resource.MustParse("1Gi"), corev1.ResourceRequirements{}, LocalStorageClass, pool)
+			cluster := desiredCNPGCluster(pg, resource.MustParse("1Gi"), sizes.Defaults().Postgres.Sizes[0], corev1.ResourceRequirements{}, LocalStorageClass, pool)
 			selector, _, err := unstructured.NestedStringMap(cluster.Object, "spec", "affinity", "nodeSelector")
 			if err != nil {
 				t.Fatal(err)

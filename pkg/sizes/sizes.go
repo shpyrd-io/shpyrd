@@ -3,6 +3,11 @@
 // types. The catalog is cluster-wide (ConfigMap shpyrd-system/shpyrd-sizes),
 // seeded with defaults at install time and editable afterwards.
 //
+// Databases and stores have lists of their own, as Heroku's add-ons have
+// their own plans (#57): the same names (shared-s ... dedicated-2xl), each
+// list with its own memory, connections and default, so a Postgres
+// shared-s is not a process shared-s.
+//
 // Two kinds exist:
 //
 //   - shared: cpu is the ceiling the process may use (the Kubernetes
@@ -16,10 +21,10 @@
 package sizes
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -56,56 +61,106 @@ type Size struct {
 	Memory string `json:"memory"`
 	// Description is free text for the dashboard.
 	Description string `json:"description,omitempty"`
+	// Connections is how many clients a database or store of this size
+	// takes (PostgreSQL's max_connections, Redis's maxclients); 0 for a
+	// process.
+	Connections int `json:"connections,omitempty"`
 }
 
-// Catalog is the cluster's list of sizes and the one used when a process
-// does not name any.
-type Catalog struct {
+// List is the sizes of one kind of thing and the one it gets when it
+// names none.
+type List struct {
 	Default string `json:"default"`
 	Sizes   []Size `json:"sizes"`
 }
 
-// Databases (#53). DBMinMemory is the least a database runs with: a
-// smaller size is raised to it, and under DBDefaultMemory PostgreSQL is
-// tuned for it (about 20 connections). DBDefaultMemory is what a database
-// that names no size gets; on a plan whose memory ceiling is under
-// DBXSPlanBelow it is given DBXS instead, the catalog's database size.
+// Catalog is the cluster's sizes: the processes' list, and the lists of
+// databases and stores.
+type Catalog struct {
+	List
+	Postgres *List `json:"postgres,omitempty"`
+	Redis    *List `json:"redis,omitempty"`
+}
+
+// What a list is for: processes, or the resource kind it sizes.
 const (
-	DBMinMemory     = "128Mi"
-	DBDefaultMemory = "256Mi"
-	DBXS            = "db-xs"
-	DBXSPlanBelow   = "512Mi"
-	DBXSDescription = "Small databases: a small app's, about 20 connections; not for reporting"
+	ForProcesses = ""
+	ForPostgres  = "postgres"
+	ForRedis     = "redis"
 )
+
+// PostgresMinMemory is the least a Postgres size has: under it PostgreSQL
+// and CloudNativePG's instance manager do not fit in the pod.
+const PostgresMinMemory = "128Mi"
 
 // Defaults is the catalog seeded at install time. Memory steps follow Fly
 // and Render from 64 MiB up: the smallest entry suits Go services and
 // static sites, JVM and Node apps usually need shared-m or larger. Memory
 // is billed as reserved while an instance is awake (RFC-0075), so the
 // smallest size is also the smallest bill.
+//
+// A database or store gets the smallest size of its list unless it names
+// one, as a process does. Postgres starts at 128Mi, where PostgreSQL is
+// tuned for about 20 connections (#53); Redis follows the processes.
 func Defaults() Catalog {
 	return Catalog{
-		Default: "shared-s",
-		Sizes: []Size{
-			{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Description: "Default: static sites, Go services"},
-			{Name: "db-xs", Kind: Shared, CPU: "0.5", Memory: "128Mi", Description: DBXSDescription},
-			{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Description: "Node.js, Python, Ruby"},
-			{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Description: "JVM, heavier web apps"},
-			{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi"},
-			{Name: "dedicated-s", Kind: Dedicated, CPU: "1", Memory: "1Gi", Description: "Guaranteed CPU"},
-			{Name: "dedicated-m", Kind: Dedicated, CPU: "2", Memory: "4Gi"},
-			{Name: "dedicated-l", Kind: Dedicated, CPU: "4", Memory: "8Gi"},
-			{Name: "dedicated-xl", Kind: Dedicated, CPU: "8", Memory: "16Gi"},
-			{Name: "dedicated-2xl", Kind: Dedicated, CPU: "16", Memory: "32Gi"},
+		List: List{
+			Default: "shared-s",
+			Sizes: []Size{
+				{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Description: "Default: static sites, Go services"},
+				{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Description: "Node.js, Python, Ruby"},
+				{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Description: "JVM, heavier web apps"},
+				{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi"},
+				{Name: "dedicated-s", Kind: Dedicated, CPU: "1", Memory: "1Gi", Description: "Guaranteed CPU"},
+				{Name: "dedicated-m", Kind: Dedicated, CPU: "2", Memory: "4Gi"},
+				{Name: "dedicated-l", Kind: Dedicated, CPU: "4", Memory: "8Gi"},
+				{Name: "dedicated-xl", Kind: Dedicated, CPU: "8", Memory: "16Gi"},
+				{Name: "dedicated-2xl", Kind: Dedicated, CPU: "16", Memory: "32Gi"},
+			},
+		},
+		Postgres: &List{
+			Default: "shared-s",
+			Sizes: []Size{
+				{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "128Mi", Connections: 20, Description: "Default: a small app's database; not for reporting"},
+				{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Connections: 40},
+				{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Connections: 80},
+				{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi", Connections: 120},
+				{Name: "dedicated-s", Kind: Dedicated, CPU: "1", Memory: "1Gi", Connections: 120, Description: "Guaranteed CPU"},
+				{Name: "dedicated-m", Kind: Dedicated, CPU: "2", Memory: "4Gi", Connections: 200},
+				{Name: "dedicated-l", Kind: Dedicated, CPU: "4", Memory: "8Gi", Connections: 300},
+				{Name: "dedicated-xl", Kind: Dedicated, CPU: "8", Memory: "16Gi", Connections: 400},
+				{Name: "dedicated-2xl", Kind: Dedicated, CPU: "16", Memory: "32Gi", Connections: 500},
+			},
+		},
+		Redis: &List{
+			Default: "shared-s",
+			Sizes: []Size{
+				{Name: "shared-s", Kind: Shared, CPU: "0.5", Memory: "64Mi", Connections: 100, Description: "Default: a cache or a small queue"},
+				{Name: "shared-m", Kind: Shared, CPU: "0.5", Memory: "256Mi", Connections: 400},
+				{Name: "shared-l", Kind: Shared, CPU: "1", Memory: "512Mi", Connections: 1000},
+				{Name: "shared-xl", Kind: Shared, CPU: "2", Memory: "1Gi", Connections: 2000},
+				{Name: "dedicated-s", Kind: Dedicated, CPU: "1", Memory: "1Gi", Connections: 2000, Description: "Guaranteed CPU"},
+				{Name: "dedicated-m", Kind: Dedicated, CPU: "2", Memory: "4Gi", Connections: 5000},
+				{Name: "dedicated-l", Kind: Dedicated, CPU: "4", Memory: "8Gi", Connections: 10000},
+			},
 		},
 	}
 }
 
-// Parse reads a catalog from its YAML form and validates it.
+// Parse reads a catalog from its YAML form and validates it. A catalog
+// saved before databases and stores had sizes of their own gets the
+// built-in lists for them.
 func Parse(data []byte) (*Catalog, error) {
 	var c Catalog
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("sizes: %w", err)
+	}
+	d := Defaults()
+	if c.Postgres == nil || len(c.Postgres.Sizes) == 0 {
+		c.Postgres = d.Postgres
+	}
+	if c.Redis == nil || len(c.Redis.Sizes) == 0 {
+		c.Redis = d.Redis
 	}
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -113,31 +168,77 @@ func Parse(data []byte) (*Catalog, error) {
 	return &c, nil
 }
 
+// For is the list of sizes of processes (ForProcesses), databases
+// (ForPostgres) or stores (ForRedis); nil for anything else.
+func (c *Catalog) For(what string) *List {
+	switch what {
+	case ForProcesses:
+		return &c.List
+	case ForPostgres:
+		return c.Postgres
+	case ForRedis:
+		return c.Redis
+	}
+	return nil
+}
+
+// Of names what a list is for in a sentence: "a process", "a Postgres".
+func Of(what string) string {
+	switch what {
+	case ForPostgres:
+		return "a Postgres database"
+	case ForRedis:
+		return "a Redis store"
+	}
+	return "a process"
+}
+
 // Marshal renders the catalog as YAML for the ConfigMap.
 func (c Catalog) Marshal() ([]byte, error) {
 	return yaml.Marshal(c)
 }
 
-// Validate checks names, kinds, quantities and the default.
+// Validate checks the three lists.
 func (c Catalog) Validate() error {
-	if len(c.Sizes) == 0 {
-		return errors.New("sizes: catalog must have at least one size")
+	for _, what := range []string{ForProcesses, ForPostgres, ForRedis} {
+		l := c.For(what)
+		if l == nil {
+			return fmt.Errorf("sizes: the catalog has no sizes for %s", Of(what))
+		}
+		if err := l.Validate(what); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Validate checks names, kinds, quantities and the default of the sizes
+// of what; a Postgres size has at least PostgresMinMemory.
+func (l List) Validate(what string) error {
+	if len(l.Sizes) == 0 {
+		return fmt.Errorf("sizes: %s needs at least one size", Of(what))
 	}
 	seen := map[string]bool{}
-	for _, s := range c.Sizes {
+	for _, s := range l.Sizes {
 		if err := s.Validate(); err != nil {
 			return err
 		}
 		if seen[s.Name] {
-			return fmt.Errorf("sizes: duplicate size %q", s.Name)
+			return fmt.Errorf("sizes: duplicate size %q for %s", s.Name, Of(what))
 		}
 		seen[s.Name] = true
+		if mem := resource.MustParse(s.Memory); what == ForPostgres && mem.Cmp(resource.MustParse(PostgresMinMemory)) < 0 {
+			return fmt.Errorf("sizes: %s has %s of memory; a Postgres size has at least %s", s.Name, s.Memory, PostgresMinMemory)
+		}
+		if what == ForProcesses && s.Connections != 0 {
+			return fmt.Errorf("sizes: %s: connections are for databases and stores, not processes", s.Name)
+		}
 	}
-	if c.Default == "" {
-		return errors.New("sizes: default size must be set")
+	if l.Default == "" {
+		return fmt.Errorf("sizes: the default size for %s must be set", Of(what))
 	}
-	if !seen[c.Default] {
-		return fmt.Errorf("sizes: default %q is not in the catalog", c.Default)
+	if !seen[l.Default] {
+		return fmt.Errorf("sizes: default %q for %s is not one of its sizes", l.Default, Of(what))
 	}
 	return nil
 }
@@ -158,12 +259,15 @@ func (s Size) Validate() error {
 	if err != nil || mem.Sign() <= 0 {
 		return fmt.Errorf("sizes: %s: invalid memory %q", s.Name, s.Memory)
 	}
+	if s.Connections < 0 {
+		return fmt.Errorf("sizes: %s: connections cannot be negative", s.Name)
+	}
 	return nil
 }
 
 // Get returns a size by name.
-func (c Catalog) Get(name string) (Size, bool) {
-	for _, s := range c.Sizes {
+func (l List) Get(name string) (Size, bool) {
+	for _, s := range l.Sizes {
 		if s.Name == name {
 			return s, true
 		}
@@ -171,9 +275,25 @@ func (c Catalog) Get(name string) (Size, bool) {
 	return Size{}, false
 }
 
+// Pick is the size named, or the default when name is ""; an unknown name
+// is refused with the names there are.
+func (l List) Pick(what, name string) (Size, error) {
+	if name == "" {
+		name = l.Default
+	}
+	if s, ok := l.Get(name); ok {
+		return s, nil
+	}
+	names := make([]string, 0, len(l.Sizes))
+	for _, s := range l.Sorted() {
+		names = append(names, s.Name)
+	}
+	return Size{}, fmt.Errorf("unknown size %q for %s (sizes: %s)", name, Of(what), strings.Join(names, ", "))
+}
+
 // Sorted returns the sizes ordered by kind (shared first) then CPU then memory.
-func (c Catalog) Sorted() []Size {
-	out := append([]Size(nil), c.Sizes...)
+func (l List) Sorted() []Size {
+	out := append([]Size(nil), l.Sizes...)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind == Shared
@@ -189,28 +309,28 @@ func (c Catalog) Sorted() []Size {
 }
 
 // Upsert adds or replaces a size.
-func (c *Catalog) Upsert(s Size) error {
+func (l *List) Upsert(s Size) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	for i := range c.Sizes {
-		if c.Sizes[i].Name == s.Name {
-			c.Sizes[i] = s
+	for i := range l.Sizes {
+		if l.Sizes[i].Name == s.Name {
+			l.Sizes[i] = s
 			return nil
 		}
 	}
-	c.Sizes = append(c.Sizes, s)
+	l.Sizes = append(l.Sizes, s)
 	return nil
 }
 
 // Remove deletes a size; the default cannot be removed.
-func (c *Catalog) Remove(name string) error {
-	if name == c.Default {
+func (l *List) Remove(name string) error {
+	if name == l.Default {
 		return fmt.Errorf("sizes: %q is the default size; pick another default first", name)
 	}
-	for i := range c.Sizes {
-		if c.Sizes[i].Name == name {
-			c.Sizes = append(c.Sizes[:i], c.Sizes[i+1:]...)
+	for i := range l.Sizes {
+		if l.Sizes[i].Name == name {
+			l.Sizes = append(l.Sizes[:i], l.Sizes[i+1:]...)
 			return nil
 		}
 	}
