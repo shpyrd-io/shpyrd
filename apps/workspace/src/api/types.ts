@@ -23,6 +23,9 @@ export type PublicConfig = {
     slug: string;
     name: string;
     address?: string;
+    // How its apps' addresses are written: prefix, the app's slug, suffix
+    // ("acme-" and ".shpyrd.app"; or "" and ".intranet.acme.com").
+    appHost?: { prefix: string; suffix: string };
     ownedByOperator?: boolean;
     branding?: { logoUrl?: string; color?: string };
   };

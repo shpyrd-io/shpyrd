@@ -47,19 +47,38 @@ const (
 	CertWildcard = "wildcard"
 )
 
-// defaultHost is the hostname every project is served at: one label under
-// its workspace's apps domain.
+// workspaceHosts are the hosts a project answers at because of its
+// workspace (RFC-0033 names), the one its URL shows first:
+// <workspace>-<app>.<apps domain> in the shared layout, one label under
+// the workspace's domains otherwise, a primary custom domain first.
+func (c Config) workspaceHosts(app *shpyrdv1.App) []string {
+	if c.WorkspaceAppHosts != nil {
+		if hosts := c.WorkspaceAppHosts(workspaceOf(app), projectSlug(app)); len(hosts) > 0 {
+			return hosts
+		}
+	}
+	out := []string{projectSlug(app) + "." + c.appsDomain(app)}
+	if c.WorkspaceExtraDomains != nil {
+		for _, d := range c.WorkspaceExtraDomains(workspaceOf(app)) {
+			out = append(out, projectSlug(app)+"."+d)
+		}
+	}
+	return out
+}
+
+// defaultHost is the hostname every project is served at, the one its URL
+// shows.
 func (c Config) defaultHost(app *shpyrdv1.App) string {
-	return projectSlug(app) + "." + c.appsDomain(app)
+	return c.workspaceHosts(app)[0]
 }
 
 // customDomains are the hosts the project added, normalised and without the
-// default host (which is always served anyway), plus the app's host under
-// each of its workspace's other domains (RFC-0033 names: the address when a
-// custom domain is primary, other verified custom domains).
+// default host (which is always served anyway), plus the app's other hosts
+// in its workspace (RFC-0033 names: the shared name when a custom domain
+// is primary, other verified custom domains).
 func (c Config) customDomains(app *shpyrdv1.App) []string {
-	def := c.defaultHost(app)
-	seen := map[string]bool{def: true}
+	hosts := c.workspaceHosts(app)
+	seen := map[string]bool{hosts[0]: true}
 	var out []string
 	add := func(h string) {
 		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
@@ -69,15 +88,20 @@ func (c Config) customDomains(app *shpyrdv1.App) []string {
 		seen[h] = true
 		out = append(out, h)
 	}
-	if c.WorkspaceExtraDomains != nil {
-		for _, d := range c.WorkspaceExtraDomains(workspaceOf(app)) {
-			add(projectSlug(app) + "." + d)
-		}
+	for _, h := range hosts[1:] {
+		add(h)
 	}
 	for _, d := range app.Spec.Domains {
 		add(d)
 	}
 	return out
+}
+
+// sharedWildcard says the host is one label under the shared apps domain:
+// the apps' wildcard certificate (copied into the namespace) and the
+// wildcard record of the shared front door answer for it.
+func (c Config) sharedWildcard(host string) bool {
+	return c.Layout.UnderAppsDomain(host)
 }
 
 // domains are all hosts the Ingress serves: the default first, then the
@@ -108,6 +132,11 @@ func certificateSecretName(app *shpyrdv1.App, host string) string {
 func (c Config) ingressTLS(app *shpyrdv1.App) []networkingv1.IngressTLS {
 	var out []networkingv1.IngressTLS
 	for _, h := range c.domains(app) {
+		if c.sharedWildcard(h) {
+			// The apps' wildcard, copied into the namespace.
+			out = append(out, networkingv1.IngressTLS{Hosts: []string{h}, SecretName: AppsTLSSecretName})
+			continue
+		}
 		if c.WildcardTLS && c.underClusterDomain(h) {
 			out = append(out, networkingv1.IngressTLS{Hosts: []string{h}})
 			continue
@@ -128,7 +157,7 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 	wanted := map[string]bool{}
 	if hasWeb(app) {
 		for _, h := range r.Config.domains(app) {
-			if r.Config.WildcardTLS && r.Config.underClusterDomain(h) {
+			if r.Config.sharedWildcard(h) || (r.Config.WildcardTLS && r.Config.underClusterDomain(h)) {
 				continue
 			}
 			if r.Config.underWorkspaceDomain(app, h) {
@@ -192,7 +221,7 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 	for _, h := range hosts {
 		st := shpyrdv1.DomainStatus{Host: h, Target: target, Address: address}
 		st.DNS = r.dnsState(ctx, h, target, address)
-		if (r.Config.WildcardTLS && r.Config.underClusterDomain(h)) || r.Config.underWorkspaceDomain(app, h) {
+		if r.Config.sharedWildcard(h) || (r.Config.WildcardTLS && r.Config.underClusterDomain(h)) || r.Config.underWorkspaceDomain(app, h) {
 			st.Certificate = CertWildcard
 		} else {
 			st.Certificate, st.Message = r.certificateState(ctx, app, h)
@@ -399,6 +428,13 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 			"nginx.ingress.kubernetes.io/ssl-redirect":       "true",
 		})
 		ing.Spec.IngressClassName = &class
+		// The old host's certificate: the apps' wildcard under the shared
+		// apps domain (its record too), the front door's default otherwise.
+		ing.Spec.TLS = nil
+		if r.Config.sharedWildcard(oldHost) {
+			ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{oldHost}, SecretName: AppsTLSSecretName}}
+		}
+		r.Config.dnsAnnotations(app, ing, []string{oldHost})
 		ing.Spec.Rules = []networkingv1.IngressRule{{
 			Host: oldHost,
 			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{

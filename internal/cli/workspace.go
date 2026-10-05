@@ -62,10 +62,12 @@ func newWorkspaceAddressCmd(g *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "address <label>",
 		Short: "Move the workspace to another address under the same parent domain (owners)",
-		Long: `Move the workspace: demo.shpyrd.app becomes <label>.shpyrd.app, and every app
-<app>.<label>.shpyrd.app. The label cannot be another workspace's name or
-address, or a reserved word. The old address redirects to the new one for
-thirty days. People signed in sign in again at the new address.`,
+		Long: `Move the workspace: demo.shpyrd.cloud becomes <label>.shpyrd.cloud, and every
+app <label>-<app>.shpyrd.app (where apps have a domain of their own; otherwise
+<app>.<label>.<domain>). The label is lowercase letters and digits, no dashes,
+and cannot be another workspace's name or address, or a reserved word. The
+old address and app hosts redirect to the new ones for thirty days. People
+signed in sign in again at the new address.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()

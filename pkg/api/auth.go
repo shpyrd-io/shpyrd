@@ -97,9 +97,12 @@ type pendingLogin struct {
 	verifier string
 	next     string
 	// redirect is the redirect URI the authorization request named: the
-	// host the login started at, where it completes (RFC-0080).
+	// host the login started at, where it completes (RFC-0080), or the
+	// shared layout's one callback, which hands the browser on to host.
 	redirect string
-	created  time.Time
+	// host is where the login started and completes, with its port.
+	host    string
+	created time.Time
 }
 
 // relyingParty holds providers, in-flight logins and sessions.
@@ -352,9 +355,9 @@ func (rp *relyingParty) endSessionURL(sess *session) string {
 }
 
 // begin starts the authorization code flow and returns the issuer URL.
-// redirect is the callback of the host the login started at ("" keeps
-// the console's).
-func (rp *relyingParty) begin(providerID, next, redirect string) (string, error) {
+// redirect is the callback the issuer returns to ("" keeps the console's);
+// host is where the login started, where it completes.
+func (rp *relyingParty) begin(providerID, next, redirect, host string) (string, error) {
 	rp.mu.Lock()
 	p, ok := rp.providers[providerID]
 	if !ok && providerID == "" && len(rp.order) == 1 {
@@ -381,7 +384,7 @@ func (rp *relyingParty) begin(providerID, next, redirect string) (string, error)
 			delete(rp.pending, k)
 		}
 	}
-	rp.pending[state] = pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), redirect: redirect, created: now}
+	rp.pending[state] = pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), redirect: redirect, host: strings.ToLower(host), created: now}
 	rp.mu.Unlock()
 	opts := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
 	if redirect != "" {
@@ -392,6 +395,18 @@ func (rp *relyingParty) begin(providerID, next, redirect string) (string, error)
 		opts = append(opts, oauth2.SetAuthURLParam("connector_id", p.ConnectorID))
 	}
 	return p.oauth.AuthCodeURL(state, opts...), nil
+}
+
+// pendingHost is the host a login in flight started at, without taking
+// the login: "" for a state nobody issued or that expired.
+func (rp *relyingParty) pendingHost(state string) string {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	pl, ok := rp.pending[state]
+	if !ok || rp.now().Sub(pl.created) > loginTTL {
+		return ""
+	}
+	return pl.host
 }
 
 // complete exchanges the callback code for an identity, the raw id_token
@@ -620,7 +635,7 @@ func (s *Server) authLogin(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("login method %q is not offered here", provider))
 		return
 	}
-	u, err := s.rp.begin(provider, next, s.callbackURL(c))
+	u, err := s.rp.begin(provider, next, s.callbackURL(c), c.Request.Host)
 	if err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
@@ -636,6 +651,11 @@ func (s *Server) authCallback(c *gin.Context) {
 	}
 	if e := c.Query("error"); e != "" {
 		s.loginFailed(c, fmt.Errorf("%s: %s", e, c.Query("error_description")))
+		return
+	}
+	if host := s.rp.pendingHost(c.Query("state")); host != "" && host != strings.ToLower(c.Request.Host) {
+		// A login completes where it started; the code is not taken here.
+		s.loginFailed(c, errors.New("this sign-in started at another address; start again"))
 		return
 	}
 	id, idToken, pl, err := s.rp.complete(c.Request.Context(), c.Query("state"), c.Query("code"))

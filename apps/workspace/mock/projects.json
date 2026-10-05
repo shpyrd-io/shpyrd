@@ -7,7 +7,7 @@
     "iconColor": "orange",
     "namespace": "p-hello-world",
     "phase": "Running",
-    "url": "https://hello-world.acme.shpyrd.app",
+    "url": "https://acme-hello-world.shpyrd.app",
     "release": 12,
     "source": "git",
     "processes": {
@@ -63,7 +63,7 @@
     "status": {
       "phase": "Running",
       "digest": "sha256:9f2c41ab77d1",
-      "url": "https://hello-world.acme.shpyrd.app",
+      "url": "https://acme-hello-world.shpyrd.app",
       "latestBuild": "48",
       "processTypes": [
         "web",
@@ -175,7 +175,7 @@
     "iconColor": "green",
     "namespace": "p-billing",
     "phase": "Running",
-    "url": "https://billing.acme.shpyrd.app",
+    "url": "https://acme-billing.shpyrd.app",
     "release": 31,
     "source": "git",
     "processes": {
@@ -218,7 +218,7 @@
     "status": {
       "phase": "Running",
       "digest": "sha256:ab12cd",
-      "url": "https://billing.acme.shpyrd.app",
+      "url": "https://acme-billing.shpyrd.app",
       "latestBuild": "203",
       "processTypes": [
         "web",

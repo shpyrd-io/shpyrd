@@ -476,6 +476,14 @@ func TestExternalDNSFiltersIncludeWorkspacesDomain(t *testing.T) {
 	if got := filters(withWS); len(got) != 2 || got[0] != "operator.shpyrd.example" || got[1] != "shpyrd.example" {
 		t.Errorf("with workspaces domain: %v", got)
 	}
+	// The apps of the shared layout have a zone of their own too.
+	withApps := map[string]string{VarWorkspacesDomain: "shpyrd.cloud", VarAppsDomain: "shpyrd.app"}
+	for k, v := range base {
+		withApps[k] = v
+	}
+	if got := filters(withApps); len(got) != 3 || got[1] != "shpyrd.cloud" || got[2] != "shpyrd.app" {
+		t.Errorf("with workspaces and apps domains: %v", got)
+	}
 	// The same domain twice would be a duplicate filter, not two zones.
 	same := map[string]string{VarWorkspacesDomain: "operator.shpyrd.example"}
 	for k, v := range base {

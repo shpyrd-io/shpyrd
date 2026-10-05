@@ -106,18 +106,18 @@
         }
       ],
       "domains": {
-        "target": "acme.shpyrd.app",
+        "target": "acme-hello-world.shpyrd.app",
         "domains": [
           {
             "host": "hello.acme.com",
             "dns": "ok",
-            "target": "acme.shpyrd.app",
+            "target": "acme-hello-world.shpyrd.app",
             "certificate": "ready"
           },
           {
             "host": "www.hello.acme.com",
             "dns": "missing",
-            "target": "acme.shpyrd.app",
+            "target": "acme-hello-world.shpyrd.app",
             "certificate": "issuing",
             "message": "CNAME not found; the certificate waits for it"
           }
@@ -200,7 +200,7 @@
       "volumes": [],
       "snapshots": [],
       "domains": {
-        "target": "acme.shpyrd.app",
+        "target": "acme-billing.shpyrd.app",
         "domains": []
       },
       "drains": [],
@@ -225,7 +225,7 @@
       "volumes": [],
       "snapshots": [],
       "domains": {
-        "target": "acme.shpyrd.app",
+        "target": "acme-dash-tv.shpyrd.app",
         "domains": []
       },
       "drains": [],
@@ -363,12 +363,12 @@
   ],
   "workspaceDomains": [
     {
-      "host": "acme.shpyrd.app",
+      "host": "acme.shpyrd.cloud",
       "verified": true,
       "verifiedAt": "2026-06-02T14:11:00Z",
       "primary": true,
       "records": [],
-      "url": "https://acme.shpyrd.app"
+      "url": "https://acme.shpyrd.cloud"
     },
     {
       "host": "intranet.acme.com",
@@ -379,7 +379,7 @@
         {
           "type": "CNAME",
           "name": "intranet.acme.com",
-          "value": "acme.shpyrd.app"
+          "value": "acme.shpyrd.cloud"
         },
         {
           "type": "TXT",
@@ -397,7 +397,7 @@
         {
           "type": "CNAME",
           "name": "apps.acme.com",
-          "value": "acme.shpyrd.app"
+          "value": "acme.shpyrd.cloud"
         },
         {
           "type": "TXT",
@@ -425,7 +425,7 @@
       "github",
       "oidc"
     ],
-    "callback": "https://acme.shpyrd.app/api/auth/callback"
+    "callback": "https://acme.shpyrd.cloud/api/auth/callback"
   },
   "domainClaims": [
     {

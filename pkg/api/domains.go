@@ -79,8 +79,14 @@ func (s *Server) addDomain(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("%s is the workspace's own address", host))
 		return
 	}
-	if host == slug+"."+s.appsDomainOf(ws) {
-		abort(c, http.StatusBadRequest, fmt.Errorf("%s is already the project's hostname", host))
+	for _, h := range s.appHostsIn(c.Request.Context(), ws, slug) {
+		if host == h {
+			abort(c, http.StatusBadRequest, fmt.Errorf("%s is already the project's hostname", host))
+			return
+		}
+	}
+	if d := s.platformDomainOf(host); d != "" {
+		abort(c, http.StatusBadRequest, fmt.Errorf("names under %s are the platform's: the project already has its address there", d))
 		return
 	}
 	// A host under another workspace's address is theirs to give.
@@ -151,7 +157,7 @@ func (s *Server) domainsResult(ctx context.Context, app *shpyrdv1.App, host stri
 	target := project.SlugOf(app) + "." + s.opts.Public.Domain
 	if slug := workspaceOf(app); slug != store.DefaultWorkspace {
 		if ws, err := s.store.Workspace(ctx, slug); err == nil {
-			target = project.SlugOf(app) + "." + s.appsDomainOf(ws)
+			target = s.appHostsIn(ctx, ws, project.SlugOf(app))[0]
 		}
 	}
 	res := DomainsResult{

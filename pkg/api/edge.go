@@ -111,10 +111,42 @@ func (s *Server) appsDomainOf(ws *store.Workspace) string {
 	return s.opts.Public.Domain
 }
 
-// appPublicHostIn is <slug>.<apps domain>[:port]: an app's default address
-// in its workspace.
+// appHostsIn are the hosts an app answers at because of its workspace, the
+// one its URL shows first (tenancy.Layout.AppHosts): <label>-<slug>.<apps
+// domain> in the shared layout, <slug>.<domain> otherwise.
+func (s *Server) appHostsIn(ctx context.Context, ws *store.Workspace, slug string) []string {
+	if ws == nil || ws.Address == "" {
+		return []string{slug + "." + s.opts.Public.Domain}
+	}
+	hosts := s.opts.Layout.AppHosts(ws.Address, s.hostsOf(ctx, ws), s.opts.Public.Domain, slug)
+	if len(hosts) == 0 {
+		return []string{slug + "." + s.opts.Public.Domain}
+	}
+	return hosts
+}
+
+// appPublicHostIn is an app's default address in its workspace, with the
+// platform's port.
 func (s *Server) appPublicHostIn(ws *store.Workspace, slug string) string {
-	return s.withPort(slug + "." + s.appsDomainOf(ws))
+	return s.withPort(s.appHostsIn(context.Background(), ws, slug)[0])
+}
+
+// AppHostView is how a workspace's app addresses are written, for the
+// dashboard: Prefix + the app's slug + Suffix.
+type AppHostView struct {
+	Prefix string `json:"prefix"`
+	Suffix string `json:"suffix"`
+}
+
+// appHostView reads the pattern off a slug no name can contain.
+func (s *Server) appHostView(ctx context.Context, ws *store.Workspace) *AppHostView {
+	const mark = "\x00"
+	host := s.appHostsIn(ctx, ws, mark)[0]
+	prefix, suffix, ok := strings.Cut(host, mark)
+	if !ok {
+		return nil
+	}
+	return &AppHostView{Prefix: prefix, Suffix: suffix}
 }
 
 // dashboardURLFor is the dashboard URL of the request's workspace; the
@@ -128,9 +160,25 @@ func (s *Server) dashboardURLFor(c *gin.Context) string {
 }
 
 // appByHost finds the app an incoming host belongs to: its default address
-// or one of its custom domains. Cached briefly: nginx asks on every request.
+// or one of its custom domains. In the shared layout the host says it all,
+// <label>-<slug>.<apps domain>, and two lookups find the app; every other
+// host goes through an index of every app, cached briefly.
 func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 	host = hostOnly(host)
+	if label, slug, ok := s.opts.Layout.ParseAppHost(host); ok {
+		ws, err := s.store.WorkspaceByAddress(c.Request.Context(), s.opts.Layout.Address(label))
+		if err == nil {
+			if app, err := s.findApp(c.Request.Context(), ws.Slug, slug); err == nil {
+				return app, nil
+			}
+			return nil, errors.New("no app at this address")
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		// No workspace has the label: an address from before the layout
+		// may carry a hyphen, which the index knows.
+	}
 	s.hostCache.mu.Lock()
 	if s.hostCache.apps != nil && time.Since(s.hostCache.at) < 15*time.Second {
 		app := s.hostCache.apps[host]
@@ -145,23 +193,33 @@ func (s *Server) appByHost(c *gin.Context, host string) (*shpyrdv1.App, error) {
 	if err := s.apps.List(c.Request.Context(), &list); err != nil {
 		return nil, err
 	}
-	// Each app answers one label under every domain of its workspace: the
-	// primary, the address, verified custom domains.
-	domains := map[string][]string{store.DefaultWorkspace: {s.opts.Public.Domain}}
+	// Each app answers at its workspace's hosts (appHostsIn: the shared
+	// name, or one label under the primary domain, the address and verified
+	// custom domains) and at its own custom domains.
+	workspaces := map[string]*store.Workspace{store.DefaultWorkspace: nil}
 	if all, err := s.store.ListWorkspaces(c.Request.Context()); err == nil {
 		for i := range all {
-			domains[all[i].Slug] = s.appsDomainsOf(c.Request.Context(), &all[i])
+			workspaces[all[i].Slug] = &all[i]
 		}
 	}
 	index := map[string]*shpyrdv1.App{}
 	for i := range list.Items {
 		app := &list.Items[i]
-		wsDomains, ok := domains[workspaceOf(app)]
+		ws, ok := workspaces[workspaceOf(app)]
 		if !ok {
 			continue // an app of a workspace this server does not know
 		}
-		for _, domain := range wsDomains {
-			index[strings.ToLower(project.SlugOf(app)+"."+domain)] = app
+		for _, h := range s.appHostsIn(c.Request.Context(), ws, project.SlugOf(app)) {
+			index[h] = app
+		}
+		if ws != nil && ws.Address != "" {
+			// As before the layout, one label under the address too, for an
+			// app link that still uses it.
+			if _, shared := s.opts.Layout.Label(ws.Address); !shared {
+				for _, d := range s.appsDomainsOf(c.Request.Context(), ws) {
+					index[strings.ToLower(project.SlugOf(app)+"."+d)] = app
+				}
+			}
 		}
 		for _, d := range app.Spec.Domains {
 			index[hostOnly(d)] = app

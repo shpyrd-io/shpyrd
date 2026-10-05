@@ -105,17 +105,22 @@ func ValidateNewSlug(s string) error {
 // platform (RFC-0033); names built from it carry no workspace part.
 const DefaultWorkspace = "default"
 
-// MaxWorkspaceSlugLength keeps app-<workspace>-<project> under 63 characters.
-const MaxWorkspaceSlugLength = 24
+// MaxWorkspaceSlugLength keeps an app's host label, <workspace>-<project>,
+// within the 63 characters of a DNS label (RFC-0033 names): 22 + 1 + 40.
+const MaxWorkspaceSlugLength = 22
 
-var workspaceSlugRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,22}[a-z0-9])?$`)
+// A workspace slug has no hyphen: in <workspace>-<project> the first
+// hyphen ends the workspace's part, and project slugs keep theirs.
+var workspaceSlugRe = regexp.MustCompile(`^[a-z0-9]{1,22}$`)
 
-// ValidateWorkspaceSlug explains why a workspace slug is not acceptable: the
-// same alphabet as project slugs, at most MaxWorkspaceSlugLength characters,
-// never a reserved host and never "default", which names the implicit one.
+// ValidateWorkspaceSlug explains why a workspace slug is not acceptable
+// for a new workspace or a new address: lowercase letters and digits only,
+// at most MaxWorkspaceSlugLength characters, never a reserved host and
+// never "default", which names the implicit one. Workspaces from before
+// the rule may keep a hyphen in their slug; their address loses it.
 func ValidateWorkspaceSlug(s string) error {
 	if !workspaceSlugRe.MatchString(s) {
-		return fmt.Errorf("invalid workspace slug %q: use lowercase letters, digits and dashes (max %d characters)", s, MaxWorkspaceSlugLength)
+		return fmt.Errorf("invalid workspace slug %q: use lowercase letters and digits only, no dashes (max %d characters)", s, MaxWorkspaceSlugLength)
 	}
 	if s == DefaultWorkspace || Reserved(s) || strings.HasPrefix(s, "app-") {
 		return fmt.Errorf("%q is reserved; pick another workspace slug", s)

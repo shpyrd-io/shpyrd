@@ -231,6 +231,7 @@ func (s *Server) hasCapability(name string) bool {
 // provider's redirect URIs (RFC-0080).
 func (s *Server) workspacesChanged() {
 	s.forgetTenants()
+	s.forgetHosts()
 	if s.opts.WorkspacesChanged != nil {
 		s.opts.WorkspacesChanged()
 	}

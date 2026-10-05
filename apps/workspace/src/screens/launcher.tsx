@@ -138,7 +138,12 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
   const [ref, setRef] = useState("");
   const [path, setPath] = useState("");
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
+  // The app's address around the slug: acme-<slug>.shpyrd.app, or
+  // <slug>.<domain> where the server gives no pattern.
+  const appHost = config.data?.workspace?.appHost;
   const under = config.data?.workspace?.address ?? config.data?.domain;
+  const prefix = appHost?.prefix || undefined;
+  const suffix = appHost ? appHost.suffix : under ? `.${under}` : undefined;
   const create = useMutation({
     mutationFn: () =>
       api.createProject({
@@ -175,7 +180,7 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
         </DialogHeader>
         <Stack gap="normal">
           <Field label="Slug" hint="Lowercase letters, digits and dashes." required error={slug && !validSlug ? "Only lowercase letters, digits and dashes." : undefined}>
-            <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" suffix={under ? `.${under}` : undefined} autoFocus />
+            <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" prefix={prefix} suffix={suffix} autoFocus />
           </Field>
           <Field label="Name">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hello World" />

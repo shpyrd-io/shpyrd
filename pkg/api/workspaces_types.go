@@ -51,9 +51,13 @@ type CreatedWorkspace struct {
 // UpdateWorkspaceRequest is PATCH /api/workspaces/:slug; every field is
 // optional.
 type UpdateWorkspaceRequest struct {
-	Name    *string `json:"name,omitempty"`
-	Address *string `json:"address,omitempty"`
-	Status  *string `json:"status,omitempty"` // active or suspended
+	Name *string `json:"name,omitempty"`
+	// Address moves the workspace: a label (<label>.<workspaces domain>)
+	// or a host. The old address redirects for RedirectDays (30 when
+	// unset), its apps' hosts too.
+	Address      *string `json:"address,omitempty"`
+	RedirectDays *int    `json:"redirectDays,omitempty"`
+	Status       *string `json:"status,omitempty"` // active or suspended
 }
 
 // WorkspaceSummary is one workspace as the console lists them.

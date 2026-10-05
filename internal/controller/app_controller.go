@@ -26,9 +26,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
@@ -74,6 +76,37 @@ type AppReconciler struct {
 	// Kube writes the audit entries of a release's outcome (RFC-0022a);
 	// nil records nothing.
 	Kube kubernetes.Interface
+	// workspaceEvents carries the Apps of a workspace whose names changed
+	// (RequeueWorkspace): nothing of theirs changes, so no watch sees it.
+	workspaceEvents chan event.GenericEvent
+}
+
+// RequeueWorkspace reconciles every App of a workspace again: its address
+// or its domains changed, and with them the apps' hosts (RFC-0033 names).
+// The default workspace's include the Apps from before workspaces, which
+// carry no workspace label.
+func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
+	if r.workspaceEvents == nil {
+		return
+	}
+	var apps shpyrdv1.AppList
+	if err := r.List(ctx, &apps); err != nil {
+		log.FromContext(ctx).Error(err, "requeue the apps of a workspace", "workspace", slug)
+		return
+	}
+	var picked []client.Object
+	for i := range apps.Items {
+		if workspaceOf(&apps.Items[i]) == slug {
+			picked = append(picked, &apps.Items[i])
+		}
+	}
+	// The channel is the controller's queue's way in; never block the
+	// workspace pass on it.
+	go func() {
+		for _, app := range picked {
+			r.workspaceEvents <- event.GenericEvent{Object: app}
+		}
+	}()
 }
 
 // SetupWithManager registers the controller and its watches.
@@ -116,6 +149,9 @@ func (r *AppReconciler) builder(mgr ctrl.Manager) *builder.Builder {
 	}
 	kpackImage := &unstructured.Unstructured{}
 	kpackImage.SetGroupVersionKind(KpackImageGVK)
+	if r.workspaceEvents == nil {
+		r.workspaceEvents = make(chan event.GenericEvent, 1024)
+	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("app").
@@ -129,7 +165,8 @@ func (r *AppReconciler) builder(mgr ctrl.Manager) *builder.Builder {
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.workspaceTLSToApps)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.sizesToAllApps)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(runPodToApp), builder.WithPredicates(isRunPod)).
-		Watches(&shpyrdv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.volumeToApps))
+		Watches(&shpyrdv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.volumeToApps)).
+		WatchesRawSource(source.Channel(r.workspaceEvents, &handler.EnqueueRequestForObject{}))
 }
 
 // sizesToAllApps requeues every App when the size catalog changes so their
@@ -911,6 +948,9 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		return nil, err
 	}
 	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
+		return nil, err
+	}
+	if err := r.reconcileAppsTLS(ctx, app); err != nil {
 		return nil, err
 	}
 	// Garbage collect workloads of removed process types.

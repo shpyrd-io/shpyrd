@@ -113,8 +113,9 @@ func (s *Server) appsDomainsOf(ctx context.Context, ws *store.Workspace) []strin
 }
 
 // movedTarget says where a request at a moved host goes: the same path at
-// the current address (an app host keeps its label). "" when the host is
-// not a moved one.
+// the workspace's current address, or at an app's current host for an app
+// host of the old name (<app>.<old address>, or <old label>-<app> in the
+// shared layout). "" when the host is not a moved one.
 func (s *Server) movedTarget(c *gin.Context) string {
 	host := tenancy.Host(c.Request.Host)
 	// The edge's subrequests arrive at the server's own name and carry the
@@ -131,7 +132,19 @@ func (s *Server) movedTarget(c *gin.Context) string {
 	if host == ws.Address || oneLabelUnder(host, ws.Address) {
 		return ""
 	}
-	for _, h := range s.hostsOf(c.Request.Context(), ws) {
+	ctx := c.Request.Context()
+	appAt := func(slug string) string {
+		return "https://" + s.withPort(s.appHostsIn(ctx, ws, slug)[0]) + c.Request.URL.RequestURI()
+	}
+	if label, slug, ok := s.opts.Layout.ParseAppHost(host); ok {
+		if current, shared := s.opts.Layout.Label(ws.Address); shared && current == label {
+			return "" // the app's own host
+		}
+		if s.movedHost(ctx, ws, s.opts.Layout.Address(label)) {
+			return appAt(slug)
+		}
+	}
+	for _, h := range s.hostsOf(ctx, ws) {
 		if h.Kind != store.HostMoved || !tenancy.HostServes(&h) {
 			continue
 		}
@@ -139,14 +152,39 @@ func (s *Server) movedTarget(c *gin.Context) string {
 			return "https://" + s.withPort(ws.Address) + c.Request.URL.RequestURI()
 		}
 		if label, ok := strings.CutSuffix(host, "."+h.Host); ok && label != "" && !strings.Contains(label, ".") {
-			return "https://" + s.withPort(label+"."+ws.Address) + c.Request.URL.RequestURI()
+			return appAt(label)
 		}
 	}
 	return ""
 }
 
-// redirectMoved sends requests at a previous address to the current one
-// (301: browsers and crawlers update their links).
+// movedHost says the host is one of the workspace's moved addresses whose
+// redirect has not expired.
+func (s *Server) movedHost(ctx context.Context, ws *store.Workspace, host string) bool {
+	for _, h := range s.hostsOf(ctx, ws) {
+		if h.Kind == store.HostMoved && h.Host == host && tenancy.HostServes(&h) {
+			return true
+		}
+	}
+	return false
+}
+
+// machinePath is a path programs call rather than people open: the API,
+// the MCP endpoint and its OAuth server, the published keys. At a moved
+// dashboard host they are served as they are, since a client following a
+// redirect to another host drops its Authorization header (Go's, and most
+// others); the answers name the new address (GET /api/config).
+func machinePath(p string) bool {
+	if strings.HasPrefix(p, "/api/auth/") {
+		return false // people sign in at the new address
+	}
+	return strings.HasPrefix(p, "/api/") || p == "/mcp" || strings.HasPrefix(p, "/mcp/") || strings.HasPrefix(p, "/oauth/") || strings.HasPrefix(p, "/.well-known/")
+}
+
+// redirectMoved sends requests at a previous address to the current one:
+// 301 for reading (browsers and crawlers update their links), 308 for the
+// rest, which keeps the method and the body. Programs at the old dashboard
+// host are served there until the address expires (machinePath).
 func (s *Server) redirectMoved() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.URL.Path == "/_shpyrd/maintenance" {
@@ -154,7 +192,15 @@ func (s *Server) redirectMoved() gin.HandlerFunc {
 			return
 		}
 		if target := s.movedTarget(c); target != "" {
-			c.Redirect(http.StatusMovedPermanently, target)
+			if machinePath(c.Request.URL.Path) && s.isMovedDashboardHost(c) {
+				c.Next()
+				return
+			}
+			code := http.StatusMovedPermanently
+			if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+				code = http.StatusPermanentRedirect
+			}
+			c.Redirect(code, target)
 			c.Abort()
 			return
 		}
@@ -162,9 +208,33 @@ func (s *Server) redirectMoved() gin.HandlerFunc {
 	}
 }
 
+// isMovedDashboardHost says the request is at a moved address itself, not
+// at an app host under it.
+func (s *Server) isMovedDashboardHost(c *gin.Context) bool {
+	host := tenancy.Host(c.Request.Host)
+	t, err := s.tenancy.Resolve(c.Request.Context(), host)
+	if err != nil || t == nil || t.Workspace == nil {
+		return false
+	}
+	return s.movedHost(c.Request.Context(), t.Workspace, host)
+}
+
 func oneLabelUnder(host, domain string) bool {
 	label, ok := strings.CutSuffix(host, "."+domain)
 	return ok && label != "" && !strings.Contains(label, ".")
+}
+
+// platformDomainOf is the shared layout's domain a host sits under, ""
+// when none: every name there reaches the platform through a wildcard
+// record, so no workspace or project may claim one as its own (a
+// certificate would be issued for it).
+func (s *Server) platformDomainOf(host string) string {
+	for _, d := range []string{s.opts.Layout.WorkspacesDomain, s.opts.Layout.AppsDomain} {
+		if d != "" && (host == d || strings.HasSuffix(host, "."+d)) {
+			return d
+		}
+	}
+	return ""
 }
 
 var hostRe = regexp.MustCompile(`^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
@@ -172,9 +242,11 @@ var hostRe = regexp.MustCompile(`^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2
 // ---- the address -------------------------------------------------------------
 
 // changeAddress moves the workspace to a new address under the same parent
-// domain (demo.shpyrd.app -> acme.shpyrd.app): the label is a workspace
-// slug by shape, not another workspace's slug, address or host, and not
-// reserved. The old address redirects for thirty days. Owners only.
+// domain (demo.shpyrd.cloud -> acme.shpyrd.cloud), or, in the shared layout
+// (RFC-0033 names), under the workspaces domain, which moves an address
+// from before the layout into it: the label is a workspace slug by shape,
+// not another workspace's slug, address or host, and not reserved. The old
+// address redirects for thirty days, its apps' hosts too. Owners only.
 func (s *Server) changeAddress(c *gin.Context, w *store.Workspace, want string) (*store.Workspace, error) {
 	roles, _ := s.rolesOf(c)
 	if !roles.Can(authz.WorkspaceOwner, "") {
@@ -187,6 +259,9 @@ func (s *Server) changeAddress(c *gin.Context, w *store.Workspace, want string) 
 	_, parent, ok := strings.Cut(w.Address, ".")
 	if !ok {
 		return nil, &apiError{http.StatusBadRequest, "the current address has no parent domain"}
+	}
+	if s.opts.Layout.Shared() {
+		parent = s.opts.Layout.WorkspacesDomain
 	}
 	label := want
 	if strings.Contains(want, ".") {
@@ -313,6 +388,10 @@ func (s *Server) addWorkspaceDomain(c *gin.Context) {
 	}
 	if _, parent, ok := strings.Cut(ws.Address, "."); ok && (host == parent || strings.HasSuffix(host, "."+parent)) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("names under %s are workspace addresses; change the address instead", parent))
+		return
+	}
+	if d := s.platformDomainOf(host); d != "" {
+		abort(c, http.StatusBadRequest, fmt.Errorf("names under %s are the platform's; a custom domain is one your company owns", d))
 		return
 	}
 	h, err := s.store.PutWorkspaceHost(c.Request.Context(), ws.Slug, store.WorkspaceHost{Host: host, Kind: store.HostCustom})

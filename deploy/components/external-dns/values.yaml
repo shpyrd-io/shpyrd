@@ -11,6 +11,10 @@ domainFilters: ${SHPYRD_DNS_DOMAINS}
 extraArgs:
   # The ownership record of a wildcard cannot be named "a-*": use a label.
   txt-wildcard-replacement: wildcard
+  # Hosts a published wildcard already answers for (the apps of the shared
+  # apps domain, RFC-0033 names) carry this annotation: one record per
+  # domain instead of one per app. Objects without it are unaffected.
+  annotation-filter: "external-dns.alpha.kubernetes.io/exclude notin (true)"
 serviceAccount:
   create: true
   name: external-dns
