@@ -9,7 +9,7 @@ import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Table, TableBody, TableCell, TableFooter, TableRow } from "@shpyrd/ui/components/table";
 import { contact } from "@shpyrd/content/site/offer";
-import { lineCost, pricing } from "@shpyrd/content/site/pricing";
+import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/pricing";
 import { AddToAgent } from "@/components/add-to-agent";
 
 // The pricing page: the plans of shpyrd cloud with the usage prices of the
@@ -22,11 +22,13 @@ const countIcons: Record<string, React.ReactElement> = {
   minimum: <Receipt />,
 };
 
-const dollars = (n: number) => `$${n.toFixed(2)}`;
-
-export function Pricing() {
-  const { hero, plans, enterprise, usage, footnote, counts, example, faq } = pricing;
-  const total = example.lines.reduce((sum, line) => sum + lineCost(line), 0);
+// `region` picks the prices: Brazil has its own (/pricing/br, where
+// vercel.json sends visitors from Brazil), everyone else the international ones.
+export function Pricing({ region: id = "international" }: { region?: Region["id"] }) {
+  const { region, hero, plans, enterprise, usage, footnote, counts, example, faq } = pricingFor(id);
+  const cost = (line: (typeof example.lines)[number]) => lineCost(region.rates.starter, line);
+  const total = example.lines.reduce((sum, line) => sum + cost(line), 0);
+  const amount = (n: number) => money(region, n, 2);
 
   return (
     <PageLayoutContent width="large" padding="normal" className="grid grid-cols-1 content-start gap-16 py-8">
@@ -41,6 +43,7 @@ export function Pricing() {
               heading={plan.name}
               description={plan.summary}
               price={plan.price}
+              currencySymbol={region.symbol}
               trailingText={plan.per}
               features={plan.features.map((feature) => ({ children: feature }))}
               usage={plan.usage.map((rate) => ({
@@ -88,7 +91,12 @@ export function Pricing() {
             </Button>
           </div>
         </Card>
-        <p className="text-center text-xs text-muted-foreground">{footnote}</p>
+        <p className="text-center text-xs text-muted-foreground">
+          {footnote.text}{" "}
+          <a href={footnote.other.href} className="underline underline-offset-4 hover:text-foreground">
+            {footnote.other.label}
+          </a>
+        </p>
       </Stack>
 
       <Stack gap="spacious">
@@ -108,21 +116,21 @@ export function Pricing() {
               {example.lines.map((line) => (
                 <TableRow key={line.what}>
                   <TableCell className="whitespace-normal">{line.what}</TableCell>
-                  <TableCell className="text-right tabular-nums">{dollars(lineCost(line))}</TableCell>
+                  <TableCell className="text-right tabular-nums">{amount(cost(line))}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
             <TableFooter>
               <TableRow>
                 <TableCell>Usage for the month</TableCell>
-                <TableCell className="text-right tabular-nums">{dollars(total)}</TableCell>
+                <TableCell className="text-right tabular-nums">{amount(total)}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className="font-medium">
                   You pay {total < example.minimum ? "the Starter minimum" : "the usage"}
                 </TableCell>
                 <TableCell className="text-right font-medium tabular-nums">
-                  {dollars(Math.max(total, example.minimum))}
+                  {amount(Math.max(total, example.minimum))}
                 </TableCell>
               </TableRow>
             </TableFooter>

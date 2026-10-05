@@ -1,6 +1,32 @@
 {
   "redirects": [
-    { "source": "/discord", "destination": "https://discord.gg/RYAT4wNKfw", "permanent": false },
-    { "source": "/docs", "destination": "/docs/getting-started", "permanent": false }
+    {
+      "source": "/discord",
+      "destination": "https://discord.gg/RYAT4wNKfw",
+      "permanent": false
+    },
+    {
+      "source": "/docs",
+      "destination": "/docs/getting-started",
+      "permanent": false
+    },
+    {
+      "source": "/pricing",
+      "has": [
+        {
+          "type": "header",
+          "key": "x-vercel-ip-country",
+          "value": "BR"
+        }
+      ],
+      "missing": [
+        {
+          "type": "query",
+          "key": "currency"
+        }
+      ],
+      "destination": "/pricing/br",
+      "permanent": false
+    }
   ]
 }
