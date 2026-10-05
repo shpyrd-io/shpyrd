@@ -166,7 +166,7 @@ jobs:
           args: build --snapshot --clean
       - name: The server image's binaries, for both architectures
         run: make release-binaries
-      - if: github.event_name == 'push'
+      - if: always() # TEMP: measure a warm run on the branch
         uses: actions/cache/save@v4
         with:
           path: |
