@@ -55,18 +55,20 @@ website-dev:
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(SERVER_IMAGE) .
 
-## Fast development image: compile the server on the host (the applications
-## embedded from pkg/ui/dist), then package it with Dockerfile.dev. Run
-## `make ui` first when an application changed.
+## Fast development image: compile the server and the PostgreSQL gateway on
+## the host (the applications embedded from pkg/ui/dist), then package them
+## with Dockerfile.dev, as the release does. Run `make ui` first when an
+## application changed.
 GOARCH_HOST := $(shell go env GOARCH)
 dev-image:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH_HOST) go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/shpyrd-server-linux-$(GOARCH_HOST) ./cmd/shpyrd-server
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH_HOST) go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/pg-gateway-linux-$(GOARCH_HOST) ./cmd/pg-gateway
 	docker build -f Dockerfile.dev --build-arg TARGETARCH=$(GOARCH_HOST) -t $(SERVER_IMAGE) .
 
 ## The release image's binaries: the server and the PostgreSQL gateway for
 ## both architectures (the applications embedded from pkg/ui/dist), for
-## Dockerfile.release. CI builds them on every change, so a release finds
+## Dockerfile.dev. CI builds them on every change, so a release finds
 ## them compiled.
 release-binaries:
 	mkdir -p bin

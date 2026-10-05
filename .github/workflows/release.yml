@@ -6,7 +6,7 @@
 # release builds" job): a tag's run can read main's caches only, and CI has
 # compiled this commit's binaries for every system already, so a release
 # mostly links. The image packages binaries compiled here
-# (Dockerfile.release) rather than compiling inside Docker without a cache.
+# (Dockerfile.dev, as `make dev-image` does) rather than compiling inside Docker without a cache.
 #
 # Run by hand on a branch, it is a dry run: the image is built but not
 # pushed, and GoReleaser builds a snapshot and publishes nothing.
@@ -60,7 +60,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.release
+          file: Dockerfile.dev
           platforms: linux/amd64,linux/arm64
           push: ${{ env.PUBLISH == 'true' }}
           # A dry run's branch name may hold a slash, which no tag may.

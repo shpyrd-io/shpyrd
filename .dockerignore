@@ -8,7 +8,7 @@ node_modules
 apps/website
 pkg/ui/dist/console
 pkg/ui/dist/workspace
-# Dockerfile.dev and Dockerfile.release package binaries compiled outside
+# Dockerfile.dev packages binaries compiled outside Docker
 bin/*
 !bin/shpyrd-server-linux-*
 !bin/pg-gateway-linux-*
