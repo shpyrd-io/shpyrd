@@ -3,7 +3,7 @@ title: CLI reference
 description: Every shpyrd command and its flags.
 ---
 
-`shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.app` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`, `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`. {% .lead %}
+`shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.cloud` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`, `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`. {% .lead %}
 
 ## For scripts and agents
 
@@ -21,7 +21,7 @@ Inputs can come from files too. `shpyrd secrets set` and `shpyrd globals set` ta
 ```sh
 shpyrd secrets set --from-file .env.production --project shop
 shpyrd secrets set --from-file - --project shop < vars.json
-shpyrd login --url https://acme.shpyrd.app --token @token.txt
+shpyrd login --url https://acme.shpyrd.cloud --token @token.txt
 ```
 
 ## Signing in
@@ -29,7 +29,7 @@ shpyrd login --url https://acme.shpyrd.app --token @token.txt
 | Command | What it does |
 | --- | --- |
 | `shpyrd login --signup` | Create an account and your first workspace on shpyrd cloud from the terminal: the browser opens the signup with a code; you prove your email and name the workspace there, and when its door answers the CLI is signed in to it. `shpyrd login` with no URL at a terminal asks which of the two you want. `--signup-url` (or `SHPYRD_SIGNUP_URL`) points at another signup. |
-| `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.app`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
+| `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.cloud`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd whoami` | Who you are at the current workspace, checked live; fails when the token expired or was revoked. |
 | `shpyrd logout` | Forget the current workspace's credential (or `--url` another's). |

@@ -3,13 +3,13 @@ title: AI assistants (MCP)
 description: Every workspace is a remote MCP server. Add it to Claude, sign in through the workspace, and ask about your projects.
 ---
 
-Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.app/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
+Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
 
 The MCP server is an enterprise feature: always on shpyrd cloud, and on a self-hosted install with a license (`shpyrd-ctl license set`); without one, `/mcp` answers that it needs a license and the AI assistants card is not shown.
 
 ## Connecting Claude
 
-1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp` - on shpyrd cloud, `https://acme.shpyrd.app/mcp`).
+1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp` - on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`).
 2. In Claude: **Settings › Connectors › Add custom connector**, paste the URL, **Connect**.
 3. Claude sends you to your workspace's sign-in; sign in as usual and **Allow** the connection. The consent page names the assistant and what it may do.
 4. In a conversation, enable the connector and ask. The server's name — what Claude shows — is set by a workspace admin on the same card; by default it is *"<workspace> on shpyrd"*.

@@ -38,7 +38,7 @@ brew install shpyrd-io/tap/shpyrd
 shpyrd login
 ```
 
-Your browser opens on shpyrd cloud. Sign in, or sign up and name your free workspace - it answers at its own address, like `acme.shpyrd.app`, and every app you put online gets an address under it. Then approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
+Your browser opens on shpyrd cloud. Sign in, or sign up and name your free workspace - it answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`. Then approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
 
 ## 2. Talk to it
 
@@ -48,8 +48,8 @@ In the folder of your app, say what you want, the way you'd say it to a colleagu
 {% message from="person" %}
 Put this app online on shpyrd.
 {% /message %}
-{% message from="agent" steps=["Deployed purchase-requests · release 1", "purchases.acme.shpyrd.app is live · sign-in required"] %}
-Done. It's at **purchases.acme.shpyrd.app**, behind your workspace's sign-in. Nobody else can open it yet.
+{% message from="agent" steps=["Deployed purchase-requests · release 1", "acme-purchases.shpyrd.app is live · sign-in required"] %}
+Done. It's at **acme-purchases.shpyrd.app**, behind your workspace's sign-in. Nobody else can open it yet.
 {% /message %}
 {% message from="person" %}
 Share it with the Finance team, and let Ana change it too.

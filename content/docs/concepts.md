@@ -82,7 +82,7 @@ Changing any of these creates a release and rolls the processes. The platform al
 
 ## Domains and TLS
 
-A project's `web` process is published at `https://<name>.<workspace domain>` - on shpyrd cloud, `https://<name>.acme.shpyrd.app`; on a cluster you run yourself, under its own domain (additional `domains` can be declared). Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
+A project's `web` process is published at its own address - on shpyrd cloud, `https://acme-<name>.shpyrd.app`, or `https://<name>.<domain>` when the workspace brings a domain of its own; on a cluster you run yourself, `https://<name>.<domain>` (additional `domains` can be declared). Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
 
 ## Extensions
 

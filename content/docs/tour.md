@@ -3,7 +3,7 @@ title: Tour
 description: The dashboard of a shpyrd cloud workspace, feature by feature, with three sample projects deployed.
 ---
 
-Every workspace on shpyrd cloud has a dashboard at its own address. These screenshots come from **acme.shpyrd.app**, running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI, which is how your agent does it. {% .lead %}
+Every workspace on shpyrd cloud has a dashboard at its own address. These screenshots come from **acme.shpyrd.cloud**, running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI, which is how your agent does it. {% .lead %}
 
 ## Signing in
 
