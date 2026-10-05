@@ -1,5 +1,6 @@
-import { Gauge, Moon, Receipt } from "lucide-react";
+import { Building2, Check, Gauge, MessageCircle, Moon, Receipt } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
+import { Card } from "@shpyrd/ui/components/card";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Pillar } from "@shpyrd/ui/components/pillar";
@@ -11,9 +12,9 @@ import { contact } from "@shpyrd/content/site/offer";
 import { lineCost, pricing } from "@shpyrd/content/site/pricing";
 import { AddToAgent } from "@/components/add-to-agent";
 
-// The pricing page: the two plans of shpyrd cloud, the usage prices of the
-// paid one, what is counted, a worked example and the usual questions. Every
-// figure comes from content/site/pricing.ts.
+// The pricing page: the plans of shpyrd cloud with the usage prices of the
+// paid ones, Enterprise as a conversation in a row of its own under them,
+// what is counted, a worked example and the usual questions. Every figure comes from content/site/pricing.ts.
 
 const countIcons: Record<string, React.ReactElement> = {
   use: <Gauge />,
@@ -24,42 +25,71 @@ const countIcons: Record<string, React.ReactElement> = {
 const dollars = (n: number) => `$${n.toFixed(2)}`;
 
 export function Pricing() {
-  const { hero, plans, usage, footnote, counts, example, faq } = pricing;
+  const { hero, plans, enterprise, usage, footnote, counts, example, faq } = pricing;
   const total = example.lines.reduce((sum, line) => sum + lineCost(line), 0);
 
   return (
     <PageLayoutContent width="large" padding="normal" className="grid grid-cols-1 content-start gap-16 py-8">
       <Hero heading={hero.heading} description={hero.description} align="center" />
 
-      <PricingOptions variant="cards">
-        {plans.map((plan) => (
-          <PricingOption
-            key={plan.id}
-            as="h2"
-            heading={plan.name}
-            description={plan.summary}
-            price={plan.price}
-            trailingText={plan.per}
-            features={plan.features.map((feature) => ({ children: feature }))}
-            usage={plan.usage.map((rate) => ({
-              name: usage.find((line) => line.id === rate.id)?.name ?? rate.id,
-              note: usage.find((line) => line.id === rate.id)?.note,
-              value: rate.value,
-            }))}
-            actions={
-              plan.action.kind === "install" ? (
-                <AddToAgent />
-              ) : (
-                <Button asChild variant="outline">
-                  <a href={contact.href}>{plan.action.label}</a>
-                </Button>
-              )
-            }
-            message={plan.note}
-            footnote={plan.id === "starter" ? footnote : undefined}
-          />
-        ))}
-      </PricingOptions>
+      <Stack gap="normal">
+        <PricingOptions variant="cards">
+          {plans.map((plan) => (
+            <PricingOption
+              key={plan.id}
+              as="h2"
+              heading={plan.name}
+              description={plan.summary}
+              price={plan.price}
+              trailingText={plan.per}
+              features={plan.features.map((feature) => ({ children: feature }))}
+              usage={plan.usage.map((rate) => ({
+                name: usage.find((line) => line.id === rate.id)?.name ?? rate.id,
+                note: usage.find((line) => line.id === rate.id)?.note,
+                value: rate.value,
+              }))}
+              actions={
+                plan.action.kind === "install" ? (
+                  <AddToAgent />
+                ) : (
+                  <Button asChild variant="outline" icon={<MessageCircle />}>
+                    <a href={contact.href}>{plan.action.label}</a>
+                  </Button>
+                )
+              }
+              message={plan.note}
+              footnote={plan.footnote}
+            />
+          ))}
+        </PricingOptions>
+        {/* Enterprise, under the plans: who it is for, what it brings, and a
+            conversation. Padded like the plans' cards, so the two rows line up. */}
+        <Card className="@container/enterprise px-6 py-6">
+          <div className="grid gap-6 @3xl/enterprise:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] @3xl/enterprise:items-center">
+            <div className="flex gap-4">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+                <Building2 aria-hidden="true" className="size-5" />
+              </div>
+              <div className="grid gap-1">
+                <h2 className="font-heading text-xl">{enterprise.name}</h2>
+                <p className="text-sm text-muted-foreground">{enterprise.summary}</p>
+              </div>
+            </div>
+            <ul className="grid gap-2.5 text-sm @3xl/enterprise:border-l @3xl/enterprise:pl-6">
+              {enterprise.features.map((feature) => (
+                <li key={feature} className="flex gap-2.5">
+                  <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
+            <Button asChild variant="outline" icon={<MessageCircle />} className="justify-self-start @3xl/enterprise:justify-self-end">
+              <a href={contact.href}>{enterprise.action.label}</a>
+            </Button>
+          </div>
+        </Card>
+        <p className="text-center text-xs text-muted-foreground">{footnote}</p>
+      </Stack>
 
       <Stack gap="spacious">
         <SectionIntro heading={counts.heading} />
