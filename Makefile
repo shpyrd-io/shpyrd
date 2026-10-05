@@ -3,7 +3,7 @@ CLUSTER      ?= shpyrd
 SERVER_IMAGE ?= shpyrd-server:dev
 LDFLAGS      := -X github.com/shpyrd-io/shpyrd/pkg/version.Version=$(VERSION)
 
-.PHONY: all build cli server ui pages emails website website-dev image dev-image generate \
+.PHONY: all build cli server ui pages emails website website-dev image dev-image release-binaries generate \
         test vet lint clean dev-cluster dev-load dev-deploy dev-destroy \
         dev-pause dev-resume installclint commitlint
 
@@ -55,14 +55,27 @@ website-dev:
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(SERVER_IMAGE) .
 
-## Fast development image: compile the server on the host (the applications
-## embedded from pkg/ui/dist), then package it with Dockerfile.dev. Run
-## `make ui` first when an application changed.
+## Fast development image: compile the server and the PostgreSQL gateway on
+## the host (the applications embedded from pkg/ui/dist), then package them
+## with Dockerfile.dev, as the release does. Run `make ui` first when an
+## application changed.
 GOARCH_HOST := $(shell go env GOARCH)
 dev-image:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH_HOST) go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/shpyrd-server-linux-$(GOARCH_HOST) ./cmd/shpyrd-server
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH_HOST) go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/pg-gateway-linux-$(GOARCH_HOST) ./cmd/pg-gateway
 	docker build -f Dockerfile.dev --build-arg TARGETARCH=$(GOARCH_HOST) -t $(SERVER_IMAGE) .
+
+## The release image's binaries: the server and the PostgreSQL gateway for
+## both architectures (the applications embedded from pkg/ui/dist), for
+## Dockerfile.dev. CI builds them on every change, so a release finds
+## them compiled.
+release-binaries:
+	mkdir -p bin
+	for arch in amd64 arm64; do \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/shpyrd-server-linux-$$arch ./cmd/shpyrd-server && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w $(LDFLAGS)" -o bin/pg-gateway-linux-$$arch ./cmd/pg-gateway || exit 1; \
+	done
 
 ## Regenerate deepcopy code and the App CRD from api/
 generate:

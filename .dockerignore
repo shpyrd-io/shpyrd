@@ -8,8 +8,9 @@ node_modules
 apps/website
 pkg/ui/dist/console
 pkg/ui/dist/workspace
-# Dockerfile.dev packages the server compiled on the host
+# Dockerfile.dev packages binaries compiled outside Docker
 bin/*
 !bin/shpyrd-server-linux-*
+!bin/pg-gateway-linux-*
 tmp
 .git
