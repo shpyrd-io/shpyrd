@@ -18,12 +18,14 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
-// The collector writes cost lines: every hour the usage the metering loop
-// measured and OpenCost's estimate of the hours just closed; once a day
-// the provider's bill of the days just past, which settles late, so the
-// last few are read again. Lines are keyed by what they are about, so a
-// re-read changes only what changed. It runs on the leader, and only with
-// a license in force.
+// The collector writes cost lines: every quarter of an hour the usage the
+// metering loop measured and OpenCost's estimate of the hour under way, up
+// to now, and of the hours just closed; once a day the provider's bill of
+// the days just past, which settles late, so the last few are read again.
+// Lines are keyed by what they are about, an hour's by the whole hour, so
+// a re-read changes only what changed: the hour under way grows pass by
+// pass, and a closed hour settles over the re-reads. It runs on the
+// leader, and only with a license in force.
 
 // Collector is the costs loop.
 type Collector struct {
@@ -33,7 +35,7 @@ type Collector struct {
 	OpenCostURL  string
 	HTTP         *http.Client
 	Logger       *slog.Logger
-	Every        time.Duration // how often it wakes; an hour by default
+	Every        time.Duration // how often it wakes; a quarter of an hour by default
 	HoursBack    int           // closed hours read again each time; 3 by default
 	DaysBack     int           // closed days of the bill read again; 3 by default
 	now          func() time.Time
@@ -50,26 +52,34 @@ func (c *Collector) clock() time.Time {
 	return time.Now()
 }
 
-// Start runs until ctx ends.
+// Start runs until ctx ends: a pass now, then one at each nextPass.
 func (c *Collector) Start(ctx context.Context) error {
 	every := c.Every
 	if every <= 0 {
-		every = time.Hour
+		every = 15 * time.Minute
 	}
-	// A little after the hour, when OpenCost has the hour closed.
-	first := time.Until(c.clock().Truncate(time.Hour).Add(time.Hour + 5*time.Minute))
-	timer := time.NewTimer(min(first, every))
-	defer timer.Stop()
 	c.Collect(ctx)
 	for {
+		timer := time.NewTimer(time.Until(nextPass(c.clock(), every)))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
 		case <-timer.C:
 			c.Collect(ctx)
-			timer.Reset(every)
 		}
 	}
+}
+
+// nextPass is the next time five minutes past a step of the clock (:05,
+// :20, :35 and :50 for a quarter of an hour): OpenCost has the minutes
+// just past by then, and an hour just closed.
+func nextPass(now time.Time, every time.Duration) time.Time {
+	next := now.Truncate(every).Add(5 * time.Minute)
+	for !next.After(now) {
+		next = next.Add(every)
+	}
+	return next
 }
 
 // Collect is one pass; each part logs its own trouble and the others go on.
@@ -87,13 +97,22 @@ func (c *Collector) Collect(ctx context.Context) {
 		hours = 3
 	}
 	wsIDs := c.workspaceIDs(ctx)
-	for i := hours; i >= 1; i-- {
+	// The closed hours, oldest first, then the hour under way, read up to
+	// now (in whole minutes; under a minute of it, nothing yet).
+	for i := hours; i >= 0; i-- {
 		start := now.Truncate(time.Hour).Add(-time.Duration(i) * time.Hour)
 		end := start.Add(time.Hour)
-		if err := c.collectUsage(ctx, start, end); err != nil {
+		until := now.Truncate(time.Minute)
+		if until.After(end) {
+			until = end
+		}
+		if !until.After(start) {
+			continue
+		}
+		if err := c.collectUsage(ctx, start, end, until); err != nil {
 			log.Warn("costs: usage", "hour", start, "error", err)
 		}
-		if err := c.collectEstimate(ctx, start, end, wsIDs); err != nil {
+		if err := c.collectEstimate(ctx, start, end, until, wsIDs); err != nil {
 			log.Warn("costs: estimate", "hour", start, "error", err)
 		}
 	}
@@ -123,9 +142,10 @@ func (c *Collector) workspaceIDs(ctx context.Context) map[string]string {
 	return out
 }
 
-// collectUsage sums the metering loop's buckets of an hour into lines, per
-// workspace, project, component and metric.
-func (c *Collector) collectUsage(ctx context.Context, start, end time.Time) error {
+// collectUsage sums the metering loop's buckets of an hour, [start, until),
+// into lines of the hour [start, end), per workspace, project, component
+// and metric.
+func (c *Collector) collectUsage(ctx context.Context, start, end, until time.Time) error {
 	all, err := c.Store.ListWorkspaces(ctx)
 	if err != nil {
 		return err
@@ -133,12 +153,12 @@ func (c *Collector) collectUsage(ctx context.Context, start, end time.Time) erro
 	type key struct{ ws, project, component, metric, unit string }
 	sums := map[key]float64{}
 	for _, w := range all {
-		buckets, err := c.Store.QueryBuckets(ctx, w.Slug, "", start, end)
+		buckets, err := c.Store.QueryBuckets(ctx, w.Slug, "", start, until)
 		if err != nil {
 			return err
 		}
 		for _, b := range buckets {
-			if b.Quantity == nil || b.PeriodStart.Before(start) || !b.PeriodStart.Before(end) {
+			if b.Quantity == nil || b.PeriodStart.Before(start) || !b.PeriodStart.Before(until) {
 				continue
 			}
 			sums[key{w.ID, b.Project, b.Component, b.Metric, b.Unit}] += *b.Quantity
@@ -160,8 +180,9 @@ func (c *Collector) collectUsage(ctx context.Context, start, end time.Time) erro
 	return err
 }
 
-// collectEstimate reads OpenCost's allocation of an hour into lines.
-func (c *Collector) collectEstimate(ctx context.Context, start, end time.Time, wsIDs map[string]string) error {
+// collectEstimate reads OpenCost's allocation of an hour, [start, until),
+// into lines of the hour [start, end).
+func (c *Collector) collectEstimate(ctx context.Context, start, end, until time.Time, wsIDs map[string]string) error {
 	if c.OpenCostURL == "" {
 		return nil
 	}
@@ -169,7 +190,7 @@ func (c *Collector) collectEstimate(ctx context.Context, start, end time.Time, w
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-	data, err := fetchAllocation(ctx, client, c.OpenCostURL, start, end)
+	data, err := fetchAllocation(ctx, client, c.OpenCostURL, start, until)
 	if err != nil {
 		return err
 	}

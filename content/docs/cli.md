@@ -113,7 +113,7 @@ Self-hosted: the operator's, in `shpyrd-ctl`.
 | `shpyrd-ctl license set <file>` / `license status` | Install the enterprise license (a file from shpyrd): GitHub, Google, Microsoft and OIDC sign-in, auto sleep, costs and the MCP server switch on until it expires, and off on that day. |
 | `shpyrd-ctl license renew` / `license billing` | A license bought online renews by itself a week before it expires, sending the last 30 days of what the cluster used and cost; `renew` does it now. `billing` prints a link of one use to your account at shpyrd's billing (also the console's Settings › License › Open billing). |
 | `shpyrd-ctl costs [--from YYYY-MM-DD --to YYYY-MM-DD] [--kind estimated\|real\|usage] [--by project\|process\|resource\|service]` | What the cluster uses and costs (enterprise): OpenCost's estimate (extension `opencost`), the provider's bill (`costs oci set`) or the usage the platform measured. |
-| `shpyrd-ctl costs drains add <name> <url> [--header "Name=value"]...` / `list` / `remove <name>` | Send every cost line, as it is written or revised, to an HTTPS receiver: by workspace, project, process and resource. |
+| `shpyrd-ctl costs drains add <name> <url> [--header "Name=value"]...` / `list` / `remove <name>` | Send every cost line, as it is written or revised, to an HTTPS receiver: by workspace and project (their UUIDs, with the project's name), process and resource. |
 | `shpyrd-ctl costs oci set --tenancy … --user … --fingerprint … --region … --key @oci.pem` / `status` / `remove` | Read the real bill from Oracle Cloud's Usage API, resource by resource. |
 
 ## Email
