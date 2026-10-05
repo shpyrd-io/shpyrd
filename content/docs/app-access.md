@@ -43,7 +43,7 @@ Someone signed in without a role sees a page saying "Expenses is available to th
 A personal API token (Workspace › API tokens, or `shpyrd tokens create`) opens a closed app the way its owner would, within the token's roles:
 
 ```shell
-curl -H "Authorization: Bearer shp_…" https://expenses.acme.shpyrd.app/api/report
+curl -H "Authorization: Bearer shp_…" https://acme-expenses.shpyrd.app/api/report
 ```
 
 The app receives the owner's identity (`X-Shpyrd-User`, the JWT with `sub` = the person's id and `provider: api-token`) and the owner's teams. A token with no role on the project is refused with `403`; a revoked one with `401`. Any other bearer is treated as anonymous: an authenticated app asks it to sign in, an `identified` app receives it as sent — so a public app can run its own API authentication behind the door.

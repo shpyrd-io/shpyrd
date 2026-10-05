@@ -1,6 +1,6 @@
 {
   "version": "v0.9.58",
-  "domain": "acme.shpyrd.app",
+  "domain": "acme.shpyrd.cloud",
   "authRequired": true,
   "metrics": true,
   "auth": {
@@ -29,7 +29,11 @@
   "workspace": {
     "slug": "acme",
     "name": "Acme",
-    "address": "acme.shpyrd.app"
+    "address": "acme.shpyrd.cloud",
+    "appHost": {
+      "prefix": "acme-",
+      "suffix": ".shpyrd.app"
+    }
   },
   "door": "workspace",
   "volumes": {

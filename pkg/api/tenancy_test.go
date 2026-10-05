@@ -48,7 +48,7 @@ func newTenantServer(t *testing.T) (*Server, client.Client, store.Store) {
 	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "closed", Name: "Closed", Address: "closed.shpyrd.test", Status: store.WorkspaceSuspended}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: strings.Repeat("w", 24), Name: "Long", Address: "long.shpyrd.test"}); err != nil {
+	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: strings.Repeat("w", project.MaxWorkspaceSlugLength), Name: "Long", Address: "long.shpyrd.test"}); err != nil {
 		t.Fatal(err)
 	}
 	scheme, err := kube.Scheme()
@@ -623,12 +623,12 @@ func TestCustomDomainResolvesToTheAppsWorkspace(t *testing.T) {
 	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "shop"}, shop); err != nil {
 		t.Fatal(err)
 	}
-	shop.Spec.Domains = []string{"shop.acme-corp.example"}
+	shop.Spec.Domains = []string{"shop.acmecorp.example"}
 	if err := cr.Update(ctx, shop); err != nil {
 		t.Fatal(err)
 	}
 	s.hostCache.at = time.Time{} // forget the index
-	rec := at(t, s, "shop.acme-corp.example", "GET", "/api/projects", "")
+	rec := at(t, s, "shop.acmecorp.example", "GET", "/api/projects", "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"wiki"`) || strings.Contains(rec.Body.String(), "example.test") {
 		t.Errorf("at the custom domain = %d %s, want acme's projects", rec.Code, rec.Body.String())
 	}
@@ -735,21 +735,30 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 		}
 	}
 	// The move: label or full host, same result.
-	rec := patch("acme.shpyrd.test", `{"address":"Acme-Corp"}`)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"address":"acme-corp.shpyrd.test"`) || !strings.Contains(rec.Body.String(), `"url":"https://acme-corp.shpyrd.test"`) {
+	rec := patch("acme.shpyrd.test", `{"address":"AcmeCorp"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"address":"acmecorp.shpyrd.test"`) || !strings.Contains(rec.Body.String(), `"url":"https://acmecorp.shpyrd.test"`) {
 		t.Fatalf("move: %d %s", rec.Code, rec.Body.String())
 	}
-	if ws, _ := st.Workspace(ctx, "acme"); ws.Address != "acme-corp.shpyrd.test" {
+	if ws, _ := st.Workspace(ctx, "acme"); ws.Address != "acmecorp.shpyrd.test" {
 		t.Fatalf("address not stored: %+v", ws)
 	}
-	// The old address, dashboard and app hosts alike, redirects permanently.
-	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://acme-corp.shpyrd.test/api/config" {
+	// The old address, dashboard and app hosts alike, redirects permanently;
+	// a change keeps its method (308).
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/projects?x=1", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://acmecorp.shpyrd.test/projects?x=1" {
 		t.Errorf("old dashboard host: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
-	if rec := at(t, s, "shop.acme.shpyrd.test", "GET", "/orders?x=1", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://shop.acme-corp.shpyrd.test/orders?x=1" {
+	if rec := at(t, s, "shop.acme.shpyrd.test", "GET", "/orders?x=1", ""); rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "https://shop.acmecorp.shpyrd.test/orders?x=1" {
 		t.Errorf("old app host: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
-	if rec := at(t, s, "acme-corp.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"Acme"`) {
+	if rec := at(t, s, "shop.acme.shpyrd.test", "POST", "/hooks", `{}`); rec.Code != http.StatusPermanentRedirect || rec.Header().Get("Location") != "https://shop.acmecorp.shpyrd.test/hooks" {
+		t.Errorf("old app host, a webhook: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	// Programs at the old dashboard host are served there (a redirect to
+	// another host drops their Authorization), and told the new address.
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"dashboardUrl":"https://acmecorp.shpyrd.test"`) {
+		t.Errorf("old dashboard host, the API: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := at(t, s, "acmecorp.shpyrd.test", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"Acme"`) {
 		t.Errorf("new address: %d %s", rec.Code, rec.Body.String())
 	}
 	// Nobody else can take the old address while it redirects.
@@ -758,12 +767,12 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 	}
 
 	// Custom domains: not the platform's names, not a workspace address.
-	const host = "acme-corp.shpyrd.test"
+	const host = "acmecorp.shpyrd.test"
 	for body, want := range map[string]int{
-		`{"host":"not a host"}`:              http.StatusBadRequest,
-		`{"host":"x.acme-corp.shpyrd.test"}`: http.StatusBadRequest,
-		`{"host":"other.shpyrd.test"}`:       http.StatusBadRequest,
-		`{"host":"shop.example.test"}`:       http.StatusBadRequest,
+		`{"host":"not a host"}`:             http.StatusBadRequest,
+		`{"host":"x.acmecorp.shpyrd.test"}`: http.StatusBadRequest,
+		`{"host":"other.shpyrd.test"}`:      http.StatusBadRequest,
+		`{"host":"shop.example.test"}`:      http.StatusBadRequest,
 	} {
 		if rec := at(t, s, host, "POST", "/api/workspace/domains", body); rec.Code != want {
 			t.Errorf("%s: %d %s", body, rec.Code, rec.Body.String())
@@ -795,7 +804,7 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 	if rec := at(t, s, "intranet.acme.com", "GET", "/api/config", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"Acme"`) {
 		t.Errorf("custom domain dashboard: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, "shop.intranet.acme.com", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://acme-corp.shpyrd.test/.shpyrd/start") {
+	if rec := at(t, s, "shop.intranet.acme.com", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://acmecorp.shpyrd.test/.shpyrd/start") {
 		t.Errorf("app at the custom domain: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := at(t, s, host, "PATCH", "/api/workspace/domains/intranet.acme.com", `{"primary":true}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"primary":true`) {
@@ -805,7 +814,7 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 		t.Errorf("workspace with a primary domain: %s", rec.Body.String())
 	}
 	// Sign-in from an app under the primary domain goes to the primary host.
-	if rec := at(t, s, "shop.acme-corp.shpyrd.test", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://intranet.acme.com/.shpyrd/start") {
+	if rec := at(t, s, "shop.acmecorp.shpyrd.test", "GET", "/.shpyrd/signin?rd=/", ""); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "https://intranet.acme.com/.shpyrd/start") {
 		t.Errorf("sign-in goes to the primary: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := at(t, s, host, "GET", "/api/workspace/domains", ""); !strings.Contains(rec.Body.String(), `"primary":true`) {
@@ -814,7 +823,7 @@ func TestWorkspaceAddressAndCustomDomains(t *testing.T) {
 	if rec := at(t, s, host, "DELETE", "/api/workspace/domains/intranet.acme.com", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("delete: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, host, "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"url":"https://acme-corp.shpyrd.test"`) {
+	if rec := at(t, s, host, "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"url":"https://acmecorp.shpyrd.test"`) {
 		t.Errorf("after delete: %s", rec.Body.String())
 	}
 }

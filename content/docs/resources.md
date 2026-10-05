@@ -7,7 +7,7 @@ A project is a namespace with resources in it: the app, volumes, PostgreSQL data
 
 ```
 Resources:
-  App     hello-docker  Running  https://hello-docker.acme.shpyrd.app
+  App     hello-docker  Running  https://acme-hello-docker.shpyrd.app
   Volume  data          Bound    1Gi single-instance, mounted by hello-docker/web
 ```
 

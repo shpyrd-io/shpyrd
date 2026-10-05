@@ -26,6 +26,15 @@ const WorkspaceTLSSecretName = "workspace-tls"
 // fill for a workspace (workspace-<slug>-tls, in the system namespace).
 func workspaceTLSSource(slug string) string { return workspaceFrontDoorName(slug) + "-tls" }
 
+// AppsTLSSecretName is the copy, in a project namespace, of the shared apps
+// domain's wildcard certificate (RFC-0033 names): every app's
+// <workspace>-<app>.<apps domain> is covered by it.
+const AppsTLSSecretName = "apps-tls"
+
+// AppsWildcardSecretName is the shared apps domain's wildcard certificate,
+// in the system namespace, issued for the apps' front door.
+const AppsWildcardSecretName = "apps-wildcard-tls"
+
 // underWorkspaceDomain says the host is one label under the app's explicit
 // workspace's address: covered by the workspace wildcard. (A custom
 // domain, primary or not, has certificates per host.)
@@ -56,8 +65,11 @@ func (r *AppReconciler) reconcileWorkspaceTLS(ctx context.Context, app *shpyrdv1
 	ws := workspaceOf(app)
 	copyRef := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: WorkspaceTLSSecretName, Namespace: app.Namespace}}
 	// A workspace whose address is the platform domain (the open-source
-	// default) is covered by the platform wildcard: nothing to copy.
-	if address := r.Config.workspaceAddress(ws); address == "" || address == r.Config.Domain {
+	// default) is covered by the platform wildcard, and one of the shared
+	// layout by the apps' wildcard (reconcileAppsTLS): nothing to copy, and
+	// a copy left from before a move goes.
+	address := r.Config.workspaceAddress(ws)
+	if _, shared := r.Config.Layout.Label(address); shared || address == "" || address == r.Config.Domain {
 		if err := r.deleteIfExists(ctx, copyRef); err != nil {
 			return false, err
 		}
@@ -92,13 +104,65 @@ func (r *AppReconciler) reconcileWorkspaceTLS(ctx context.Context, app *shpyrdv1
 	return true, nil
 }
 
+// reconcileAppsTLS copies the shared apps domain's wildcard certificate into
+// the project namespace when one of the project's hosts is under that
+// domain, and removes the copy when none is.
+func (r *AppReconciler) reconcileAppsTLS(ctx context.Context, app *shpyrdv1.App) error {
+	copyRef := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: AppsTLSSecretName, Namespace: app.Namespace}}
+	needed := false
+	for _, h := range r.Config.domains(app) {
+		needed = needed || r.Config.sharedWildcard(h)
+	}
+	if !needed || !hasWeb(app) {
+		return r.deleteIfExists(ctx, copyRef)
+	}
+	src := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: r.Config.SystemNamespace, Name: AppsWildcardSecretName}, src); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // not issued yet: the front door serves its default meanwhile
+		}
+		return fmt.Errorf("apps certificate: %w", err)
+	}
+	if len(src.Data["tls.crt"]) == 0 || len(src.Data["tls.key"]) == 0 {
+		return nil
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, copyRef, func() error {
+		copyRef.Type = corev1.SecretTypeTLS
+		copyRef.Labels = mergeMaps(copyRef.Labels, map[string]string{
+			shpyrdv1.LabelManagedBy: "shpyrd",
+			shpyrdv1.LabelProject:   app.Name,
+		})
+		copyRef.Data = map[string][]byte{"tls.crt": src.Data["tls.crt"], "tls.key": src.Data["tls.key"]}
+		if ca := src.Data["ca.crt"]; len(ca) > 0 {
+			copyRef.Data["ca.crt"] = ca
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("copy apps certificate: %w", err)
+	}
+	return nil
+}
+
 // workspaceTLSToApps maps a change of a workspace's wildcard certificate to
-// every App of that workspace, so the copies follow renewals.
+// every App of that workspace, and a change of the apps' wildcard to every
+// App, so the copies follow renewals.
 func (r *AppReconciler) workspaceTLSToApps(ctx context.Context, obj client.Object) []reconcile.Request {
 	if obj.GetNamespace() != r.Config.SystemNamespace {
 		return nil
 	}
 	name := obj.GetName()
+	if name == AppsWildcardSecretName {
+		var apps shpyrdv1.AppList
+		if err := r.List(ctx, &apps); err != nil {
+			return nil
+		}
+		out := make([]reconcile.Request, 0, len(apps.Items))
+		for _, a := range apps.Items {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+		}
+		return out
+	}
 	slug, ok := strings.CutSuffix(strings.TrimPrefix(name, "workspace-"), "-tls")
 	if !ok || !strings.HasPrefix(name, "workspace-") || slug == "" {
 		return nil

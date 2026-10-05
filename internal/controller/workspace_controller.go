@@ -46,6 +46,14 @@ type WorkspaceReconciler struct {
 	// Forget drops the App controller's memory of workspaces and plans on
 	// Notify, so a change of ceilings is seen by the next reconcile.
 	Forget func()
+	// NamesChanged is told of a workspace whose address or domains changed,
+	// so its apps' hosts follow (AppReconciler.RequeueWorkspace). Nil:
+	// nobody is told.
+	NamesChanged func(ctx context.Context, slug string)
+
+	// names remembers each workspace's names as last seen (namesOf), to
+	// tell a change.
+	names map[string]string
 
 	events  chan event.GenericEvent
 	checker readinessChecker
@@ -93,6 +101,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{RequeueAfter: workspaceSync}, err
 	}
+	// The shared layout's two doors (shared_front_doors.go), whatever
+	// workspaces exist.
+	if err := r.ensureSharedFrontDoors(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 	wanted := map[string]bool{} // front door Ingress names to keep
 	pending := false            // a workspace whose door does not answer yet
 	for i := range all {
@@ -100,15 +113,20 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		if ws.Address == "" {
 			continue // no address yet: nothing to publish (RFC-0080: every workspace gets one)
 		}
-		wanted[workspaceFrontDoorName(ws.Slug)] = true
-		wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
-		wanted[archivesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
-		if err := r.ensureFrontDoor(ctx, ws); err != nil {
-			return ctrl.Result{}, err
+		_, shared := r.Config.Layout.Label(ws.Address)
+		if !shared {
+			wanted[workspaceFrontDoorName(ws.Slug)] = true
+			wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
+			wanted[archivesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
+			if err := r.ensureFrontDoor(ctx, ws); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		// What the door looks like from outside, recorded on the
-		// workspace; a door not yet answering is looked at again soon.
-		if ws.Status != store.WorkspaceSuspended && !r.checkReadiness(ctx, ws) {
+		// workspace; a door not yet answering is looked at again soon. A
+		// workspace of the shared layout that answered once is not looked
+		// at again: its door is everyone's.
+		if ws.Status != store.WorkspaceSuspended && !(shared && ws.ReadyAt != nil) && !r.checkReadiness(ctx, ws) {
 			pending = true
 		}
 		// The workspace's other names (RFC-0033 names): a verified custom
@@ -119,10 +137,14 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		if err != nil {
 			return ctrl.Result{RequeueAfter: workspaceSync}, err
 		}
+		r.noticeNames(ctx, ws, hosts)
 		for j := range hosts {
 			h := &hosts[j]
 			if !tenancy.HostServes(h) {
 				continue
+			}
+			if _, inLayout := r.Config.Layout.Label(h.Host); inLayout && h.Kind == store.HostMoved {
+				continue // the shared doors answer for an old name of the layout, and the server redirects
 			}
 			wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
 			if h.Kind == store.HostCustom {
@@ -168,6 +190,27 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: readinessRetry}, nil
 	}
 	return ctrl.Result{RequeueAfter: workspaceSync}, nil
+}
+
+// noticeNames tells NamesChanged when a workspace's address or the domains
+// its apps answer under differ from the last pass. The first look at a
+// workspace tells nothing: every App is reconciled when the controllers
+// start.
+func (r *WorkspaceReconciler) noticeNames(ctx context.Context, ws *store.Workspace, hosts []store.WorkspaceHost) {
+	names := ws.Address
+	for _, h := range hosts {
+		if h.Kind == store.HostCustom && h.VerifiedAt != nil {
+			names += fmt.Sprintf(" %s/%v", h.Host, h.Primary)
+		}
+	}
+	if r.names == nil {
+		r.names = map[string]string{}
+	}
+	before, seen := r.names[ws.Slug]
+	r.names[ws.Slug] = names
+	if seen && before != names && r.NamesChanged != nil {
+		r.NamesChanged(ctx, ws.Slug)
+	}
 }
 
 // workspaceHostFrontDoorName names the Ingress and Certificate of one of a

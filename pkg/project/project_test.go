@@ -89,12 +89,14 @@ func TestValidateNewSlug(t *testing.T) {
 }
 
 func TestValidateWorkspaceSlug(t *testing.T) {
-	for _, ok := range []string{"acme", "acme-labs", "a1", strings.Repeat("a", 24)} {
+	for _, ok := range []string{"acme", "acmelabs", "a1", "a", strings.Repeat("a", 22)} {
 		if err := ValidateWorkspaceSlug(ok); err != nil {
 			t.Errorf("ValidateWorkspaceSlug(%q): %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "Acme", "-acme", "acme-", "default", "www", "login", "app-x", strings.Repeat("a", 25)} {
+	// No hyphen: the first one of an app's host <workspace>-<app> ends the
+	// workspace's part. 22 + "-" + a 40-character project slug is 63.
+	for _, bad := range []string{"", "Acme", "-acme", "acme-", "acme-labs", "a--b", "default", "www", "login", "app-x", strings.Repeat("a", 23)} {
 		if err := ValidateWorkspaceSlug(bad); err == nil {
 			t.Errorf("ValidateWorkspaceSlug(%q) accepted", bad)
 		}

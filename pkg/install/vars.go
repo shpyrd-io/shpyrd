@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -47,6 +48,7 @@ const (
 	VarServerImage             = "SHPYRD_SERVER_IMAGE"              // server image; derived from the version unless set
 	VarUIImage                 = "SHPYRD_UI_IMAGE"                  // image the applications come from (RFC-0080); the server image unless set
 	VarWorkspacesDomain        = "SHPYRD_WORKSPACES_DOMAIN"         // domain tenant workspaces live under (cloud layer)
+	VarAppsDomain              = "SHPYRD_APPS_DOMAIN"               // domain their apps live under, as <workspace>-<app>.<domain> (cloud layer)
 	VarDefaultWorkspace        = "SHPYRD_DEFAULT_WORKSPACE"         // slug of the operator's default workspace (RFC-0078); "default"
 	VarDefaultWorkspaceAddress = "SHPYRD_DEFAULT_WORKSPACE_ADDRESS" // derived: where its dashboard answers (RFC-0080)
 	VarDefaultWorkspaceName    = "SHPYRD_DEFAULT_WORKSPACE_NAME"    // its display name; the domain when unset
@@ -326,6 +328,9 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if _, ok := vars[VarWorkspacesDomain]; !ok {
 		out[VarWorkspacesDomain] = ""
 	}
+	if _, ok := vars[VarAppsDomain]; !ok {
+		out[VarAppsDomain] = ""
+	}
 	// A workspace's certificate covers <address> and *.<address>, which
 	// only DNS-01 can issue; unless the operator names an issuer, it is
 	// the platform's (DNS-01 with a DNS provider). The cluster issuer
@@ -334,13 +339,16 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		out[VarWorkspaceCertIssuer] = out[VarPlatformIssuer]
 	}
 	// ExternalDNS publishes hosts under the platform domain and, when the
-	// cloud layer gives workspaces their own domain, under that one too:
-	// <workspace>.<domain> and *.<workspace>.<domain> live in a zone the
-	// same DNS user manages. A filter naming only the platform domain
-	// silently skips them (the first production cluster's).
+	// cloud layer gives workspaces and their apps domains of their own,
+	// under those too: the wildcards of the shared front doors
+	// (*.<workspaces domain>, *.<apps domain>) live in zones the same DNS
+	// user manages. A filter naming only the platform domain silently skips
+	// them (the first production cluster's).
 	domains := []string{vars[VarDomain]}
-	if ws := vars[VarWorkspacesDomain]; ws != "" && ws != vars[VarDomain] {
-		domains = append(domains, ws)
+	for _, d := range []string{vars[VarWorkspacesDomain], vars[VarAppsDomain]} {
+		if d != "" && !slices.Contains(domains, d) {
+			domains = append(domains, d)
+		}
 	}
 	out[VarDNSDomains] = "[" + strings.Join(domains, ", ") + "]"
 	out[VarPlatformIngressClass] = vars[VarIngressClassExternal]

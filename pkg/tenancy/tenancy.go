@@ -180,6 +180,9 @@ type ByAddress struct {
 	// TTL bounds how long a lookup, found or not, is remembered. Zero means
 	// ten seconds.
 	TTL time.Duration
+	// Layout says where workspaces and their apps answer; its zero value
+	// puts apps one label under their workspace's address.
+	Layout Layout
 
 	mu    sync.Mutex
 	cache map[string]entry
@@ -260,11 +263,30 @@ func (r *ByAddress) lookup(ctx context.Context, host string) (*Tenant, error) {
 			return nil, ErrUnknownHost
 		}
 	}
-	// Workspace addresses: acme.shpyrd.app, and <app>.acme.shpyrd.app.
+	// Workspace addresses: acme.shpyrd.cloud (acme.shpyrd.app before the
+	// layout), and <app>.acme.shpyrd.app for the apps of an address from
+	// before it.
 	if ws, err := r.Store.WorkspaceByAddress(ctx, host); err == nil {
 		return &Tenant{Realm: RealmWorkspace, Workspace: ws}, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
+	}
+	// Apps of the layout: acme-shop.shpyrd.app is an app of the workspace
+	// at acme.shpyrd.cloud, or of the one that moved from there (its
+	// redirect answers). A label no workspace has falls through: an
+	// address from before the layout may carry a hyphen.
+	if label, _, ok := r.Layout.ParseAppHost(host); ok {
+		address := r.Layout.Address(label)
+		if ws, err := r.Store.WorkspaceByAddress(ctx, address); err == nil {
+			return &Tenant{Realm: RealmWorkspace, Workspace: ws}, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		if ws, rec, err := r.Store.WorkspaceByHost(ctx, address); err == nil && HostServes(rec) {
+			return &Tenant{Realm: RealmWorkspace, Workspace: ws}, nil
+		} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 	}
 	if _, parent, ok := strings.Cut(host, "."); ok && parent != "" {
 		if ws, err := r.Store.WorkspaceByAddress(ctx, parent); err == nil {
@@ -338,6 +360,8 @@ type Addresses struct {
 	TTL   time.Duration
 	// DefaultSlug names the default workspace; nil means store.DefaultWorkspace.
 	DefaultSlug DefaultSlugFunc
+	// Layout says where a workspace's apps answer (AppHosts).
+	Layout Layout
 
 	mu    sync.Mutex
 	cache map[string]wsEntry
@@ -464,6 +488,17 @@ func (a *Addresses) ExtraDomains(slug string) []string {
 		}
 	}
 	return out
+}
+
+// AppHosts lists the hosts an app of the workspace answers at because of
+// its workspace, the one its URL shows first (Layout.AppHosts); nil for a
+// workspace the store does not know or has given no address.
+func (a *Addresses) AppHosts(slug, app string) []string {
+	ws := a.Workspace(slug)
+	if ws == nil || ws.Address == "" {
+		return nil
+	}
+	return a.Layout.AppHosts(ws.Address, a.Hosts(slug), "", app)
 }
 
 // ID is a workspace's id, "" for one the store does not know.

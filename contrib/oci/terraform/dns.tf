@@ -63,6 +63,24 @@ resource "oci_dns_zone" "workspaces" {
   }
 }
 
+# The apps' zone (cloud layer, RFC-0033 names): every app of every
+# workspace at <workspace>-<app>.<zone>, one wildcard for all of them.
+resource "oci_dns_zone" "apps" {
+  count = var.apps_zone != "" ? 1 : 0
+
+  compartment_id = local.compartment_id
+  name           = var.apps_zone
+  zone_type      = "PRIMARY"
+  scope          = "GLOBAL"
+
+  lifecycle {
+    precondition {
+      condition     = var.workspaces_zone != "" && var.apps_zone != var.workspaces_zone
+      error_message = "apps_zone needs a workspaces_zone of its own: workspaces answer there, their apps here."
+    }
+  }
+}
+
 resource "oci_dns_rrset" "workspaces_delegation" {
   for_each = var.workspaces_zone != "" ? var.workspaces_delegations : {}
 

@@ -71,11 +71,24 @@ func (r *WorkspaceReconciler) checkReadiness(ctx context.Context, ws *store.Work
 		checks = append(checks, store.ReadinessCheck{Name: name, OK: ok, Detail: detail})
 	}
 
+	// A workspace of the shared layout (RFC-0033 names) answers through
+	// the shared front door, with the workspaces' wildcard, and its apps
+	// under the apps domain; any other through a door of its own.
+	door, secret := workspaceFrontDoorName(ws.Slug), workspaceFrontDoorName(ws.Slug)+"-tls"
+	var probe [4]byte
+	_, _ = rand.Read(probe[:])
+	appProbe := "probe-" + hex.EncodeToString(probe[:]) + "." + ws.Address
+	label, shared := r.Config.Layout.Label(ws.Address)
+	if shared {
+		door, secret = workspacesFrontDoorName, WorkspacesWildcardSecretName
+		appProbe = r.Config.Layout.AppHost(label, "probe-"+hex.EncodeToString(probe[:]))
+	}
+
 	// The front door: the Ingress exists and, where a load balancer
 	// publishes its address on it, that address is there.
 	lb := r.frontDoorAddress(ctx)
 	ing := &networkingv1.Ingress{}
-	switch err := r.Get(ctx, client.ObjectKey{Namespace: r.Config.SystemNamespace, Name: workspaceFrontDoorName(ws.Slug)}, ing); {
+	switch err := r.Get(ctx, client.ObjectKey{Namespace: r.Config.SystemNamespace, Name: door}, ing); {
 	case apierrors.IsNotFound(err):
 		add(CheckFrontDoor, false, "the front door is not published yet")
 	case err != nil:
@@ -89,17 +102,17 @@ func (r *WorkspaceReconciler) checkReadiness(ctx context.Context, ws *store.Work
 	// The certificate: the platform's wildcard covers an address directly
 	// under the platform domain; every other workspace has its own, and
 	// the Secret is the proof it was issued.
-	if r.Config.WildcardTLS && r.Config.underClusterDomain(ws.Address) {
+	if !shared && r.Config.WildcardTLS && r.Config.underClusterDomain(ws.Address) {
 		add(CheckCertificate, true, "the platform's wildcard")
 	} else {
-		secret := &corev1.Secret{}
-		switch err := r.Get(ctx, client.ObjectKey{Namespace: r.Config.SystemNamespace, Name: workspaceFrontDoorName(ws.Slug) + "-tls"}, secret); {
-		case err == nil && len(secret.Data["tls.crt"]) > 0:
+		sec := &corev1.Secret{}
+		switch err := r.Get(ctx, client.ObjectKey{Namespace: r.Config.SystemNamespace, Name: secret}, sec); {
+		case err == nil && len(sec.Data["tls.crt"]) > 0:
 			add(CheckCertificate, true, "")
 		case err != nil && !apierrors.IsNotFound(err):
 			add(CheckCertificate, false, "certificate: "+err.Error())
 		default:
-			add(CheckCertificate, false, r.certificateDetail(ctx, workspaceFrontDoorName(ws.Slug)+"-tls"))
+			add(CheckCertificate, false, r.certificateDetail(ctx, secret))
 		}
 	}
 
@@ -108,7 +121,7 @@ func (r *WorkspaceReconciler) checkReadiness(ctx context.Context, ws *store.Work
 		add(CheckPublicName, true, "not checked: no DNS provider")
 		add(CheckDoorAnswers, true, "not checked: no DNS provider")
 	} else {
-		add(r.publicName(ctx, ws.Address, lb))
+		add(r.publicName(ctx, []string{ws.Address, appProbe}, lb))
 		add(r.doorAnswers(ctx, ws.Address, lb))
 	}
 
@@ -180,16 +193,15 @@ func (r *WorkspaceReconciler) certificateDetail(ctx context.Context, name string
 	return "certificate " + shortMessage(firstNonEmpty(msg, "waiting for the certificate authority"))
 }
 
-// publicName asks the zone's own name servers for the address and for a
-// name under it (the apps' wildcard), and compares with the front door.
-func (r *WorkspaceReconciler) publicName(ctx context.Context, address, lb string) (string, bool, string) {
+// publicName asks the zones' own name servers for the address and for a
+// name where an app would answer (the apps' wildcard record), and compares
+// with the front door.
+func (r *WorkspaceReconciler) publicName(ctx context.Context, hosts []string, lb string) (string, bool, string) {
 	resolve := r.checker.authoritative
 	if resolve == nil {
 		resolve = lookupAuthoritative
 	}
-	var probe [4]byte
-	_, _ = rand.Read(probe[:])
-	for _, host := range []string{address, "probe-" + hex.EncodeToString(probe[:]) + "." + address} {
+	for _, host := range hosts {
 		ips, err := resolve(ctx, host)
 		switch {
 		case isNotFound(err):

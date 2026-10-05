@@ -24,6 +24,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // Config carries cluster-level settings the controller needs.
@@ -44,6 +45,16 @@ type Config struct {
 	// under, one label under each (the address when a custom domain is
 	// primary; other verified custom domains). Nil: none.
 	WorkspaceExtraDomains func(slug string) []string
+	// WorkspaceAppHosts answers the hosts an app answers at because of its
+	// workspace, the one its URL shows first (tenancy.Layout.AppHosts):
+	// <workspace>-<app>.<apps domain> in the shared layout. Nil, or nothing
+	// for an unknown workspace: one label under WorkspaceDomain and each of
+	// WorkspaceExtraDomains, as before the layout.
+	WorkspaceAppHosts func(slug, app string) []string
+	// Layout says where workspaces and their apps answer (RFC-0033 names):
+	// hosts one label under its AppsDomain are covered by the apps'
+	// wildcard certificate and the wildcard record of the shared front door.
+	Layout tenancy.Layout
 	// WorkspaceSleepDefault answers a workspace's default HTTP sleep policy
 	// from its settings (RFC-0075): after and resuming, "" when none. Projects
 	// without a policy of their own inherit it; an explicit "off" opts out.
@@ -843,6 +854,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		delete(ing.Annotations, "external-dns.kubernetes.io/target")
 	}
 	ing.Spec.IngressClassName = ptr.To(class)
+	c.dnsAnnotations(app, ing, hosts)
 	// Certificates are explicit objects (reconcileCertificates), one per host
 	// that needs one, so the Ingress carries no cert-manager annotation.
 	delete(ing.Annotations, "cert-manager.io/cluster-issuer")
@@ -884,6 +896,45 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 	}
 	ing.Spec.Rules = rules
 	maintenanceIngress(app, ing)
+}
+
+// ExternalDNSExclude asks ExternalDNS to leave an Ingress alone (its
+// annotation filter, deploy/components/external-dns): the wildcard record of
+// the shared apps domain already answers for its hosts.
+const ExternalDNSExclude = "external-dns.alpha.kubernetes.io/exclude"
+
+// dnsAnnotations marks an app's Ingress for ExternalDNS: excluded when every
+// host it would publish is one label under the shared apps domain (one
+// wildcard record for every app, RFC-0033 names), published as before
+// otherwise. Internal apps keep their records: the wildcard points at the
+// public front door.
+func (c Config) dnsAnnotations(app *shpyrdv1.App, ing *networkingv1.Ingress, hosts []string) {
+	if ing.Annotations == nil {
+		ing.Annotations = map[string]string{}
+	}
+	if app.Spec.Exposure != "internal" && c.Layout.Shared() && c.wildcardPublishes(hosts) {
+		ing.Annotations[ExternalDNSExclude] = "true"
+		return
+	}
+	delete(ing.Annotations, ExternalDNSExclude)
+}
+
+// wildcardPublishes says no host needs a record of its own: each is either
+// under the shared apps domain, one label down, or outside the zones the
+// platform manages (a custom domain, whose owner publishes it).
+func (c Config) wildcardPublishes(hosts []string) bool {
+	zones := []string{c.Domain, c.Layout.WorkspacesDomain, c.Layout.AppsDomain}
+	for _, h := range hosts {
+		if c.sharedWildcard(h) {
+			continue
+		}
+		for _, z := range zones {
+			if z != "" && (h == z || strings.HasSuffix(h, "."+z)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Edge (RFC-0033): apps whose access is not public get the ingress-nginx
@@ -962,6 +1013,7 @@ func (c Config) mutateEdgeIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) 
 	ing.Spec.TLS = c.ingressTLS(app)
 	pathType := networkingv1.PathTypePrefix
 	hosts := c.domains(app)
+	c.dnsAnnotations(app, ing, hosts)
 	rules := make([]networkingv1.IngressRule, 0, len(hosts))
 	for _, h := range hosts {
 		rules = append(rules, networkingv1.IngressRule{

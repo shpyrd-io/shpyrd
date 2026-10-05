@@ -242,6 +242,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		Addr:         o.addr,
 		Store:        st,
 		Tenancy:      resolver,
+		Layout:       layoutFromEnv(),
 		SignInHost:   hostOf(envOr("SHPYRD_AUTH_URL", "")),
 		Realms:       o.opts.Realms,
 		Capabilities: o.opts.Capabilities,
@@ -431,7 +432,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	for _, t := range all.BindableTypes(enabledExts) {
 		bindable = append(bindable, schema.GroupVersionKind{Group: t.Group, Version: t.Version, Kind: t.Kind})
 	}
-	workspaceCache := &tenancy.Addresses{Store: memberships.Store, DefaultSlug: defaultSlugOf(memberships.Store)}
+	workspaceCache := &tenancy.Addresses{Store: memberships.Store, DefaultSlug: defaultSlugOf(memberships.Store), Layout: layoutFromEnv()}
 	controller.DefaultWorkspace = func() string {
 		if ws := workspaceCache.Workspace(""); ws != nil {
 			return ws.Slug
@@ -449,6 +450,8 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceDomain:       workspaceCache.Domain,
 			WorkspaceAddress:      workspaceCache.Address,
 			WorkspaceExtraDomains: workspaceCache.ExtraDomains,
+			WorkspaceAppHosts:     workspaceCache.AppHosts,
+			Layout:                workspaceCache.Layout,
 			WorkspaceLimits:       workspaceCache.Limits,
 			WorkspaceSleepDefault: workspaceCache.SleepDefault,
 			SleepAllowed:          apiDeps.SleepAllowed,
@@ -509,6 +512,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// while there is one workspace.
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	workspaces.Forget = workspaceCache.Forget
+	workspaces.NamesChanged = rec.RequeueWorkspace
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}
@@ -611,7 +615,14 @@ func ByAddress(st store.Store, domain, dashboardURL string) tenancy.Resolver {
 	if u, err := url.Parse(envOr("SHPYRD_AUTH_URL", "")); err == nil && u.Host != "" {
 		reserved = append(reserved, u.Host)
 	}
-	return &tenancy.ByAddress{Store: st, Domain: domain, ConsoleHost: hostOf(dashboardURL), Reserved: reserved, DefaultSlug: defaultSlugOf(st)}
+	return &tenancy.ByAddress{Store: st, Domain: domain, ConsoleHost: hostOf(dashboardURL), Reserved: reserved, DefaultSlug: defaultSlugOf(st), Layout: layoutFromEnv()}
+}
+
+// layoutFromEnv is where workspaces and their apps answer (RFC-0033 names):
+// the shared layout when both domains are set (SHPYRD_WORKSPACES_DOMAIN,
+// SHPYRD_APPS_DOMAIN), apps one label under their workspace otherwise.
+func layoutFromEnv() tenancy.Layout {
+	return tenancy.Layout{WorkspacesDomain: os.Getenv(install.VarWorkspacesDomain), AppsDomain: os.Getenv(install.VarAppsDomain)}
 }
 
 // hostOf is the host (with port) of a URL, or the string itself.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base32"
 	"hash/fnv"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -67,9 +68,18 @@ func requestScheme(c *gin.Context) string {
 	return "http"
 }
 
-// callbackURL is this request's own OpenID Connect redirect URI: sign-in
+// callbackURL is this request's OpenID Connect redirect URI: sign-in
 // returns to the host it started from (RFC-0080), never to another door.
+// In the shared layout a workspace's sign-in returns through the one
+// callback every workspace shares (signInRelayURL), which hands the
+// browser straight back to it: the identity provider lists that one
+// address instead of one per workspace.
 func (s *Server) callbackURL(c *gin.Context) string {
+	if relay := s.signInRelayURL(); relay != "" {
+		if t, err := s.door(c); err == nil && t.Workspace != nil && !t.Internal {
+			return relay
+		}
+	}
 	scheme := requestScheme(c)
 	if scheme == "http" && strings.HasPrefix(s.opts.Public.DashboardURL, "https://") {
 		// Behind the front door without X-Forwarded-Proto: the platform is
@@ -77,6 +87,51 @@ func (s *Server) callbackURL(c *gin.Context) string {
 		scheme = "https"
 	}
 	return scheme + "://" + c.Request.Host + "/api/auth/callback"
+}
+
+// signInRelayHost is the host of the shared callback: the workspaces
+// domain itself (shpyrd.cloud), which no workspace has. "" outside the
+// shared layout.
+func (s *Server) signInRelayHost() string {
+	if !s.opts.Layout.Shared() {
+		return ""
+	}
+	return s.opts.Layout.WorkspacesDomain
+}
+
+// signInRelayURL is the shared callback, "" outside the shared layout.
+func (s *Server) signInRelayURL() string {
+	if h := s.signInRelayHost(); h != "" {
+		return "https://" + s.withPort(h) + "/api/auth/callback"
+	}
+	return ""
+}
+
+// relaySignIn answers the shared callback: the identity provider's answer
+// (code and state, or an error) goes on, unread, to the callback of the
+// host the login started at, which the server remembered with the state;
+// the address is never taken from the request. Everything else at that
+// host is nobody's.
+func (s *Server) relaySignIn() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		relay := s.signInRelayHost()
+		if relay == "" || tenancy.Host(c.Request.Host) != relay {
+			c.Next()
+			return
+		}
+		c.Abort()
+		c.Header("Cache-Control", "no-store")
+		if c.Request.URL.Path != "/api/auth/callback" || s.rp == nil {
+			s.edgePage(c, http.StatusNotFound, "Nothing here", "There is nothing at this address.", nil)
+			return
+		}
+		host := s.rp.pendingHost(c.Query("state"))
+		if host == "" {
+			s.edgePage(c, http.StatusBadRequest, "Sign-in expired", "Go back to your workspace and sign in again.", nil)
+			return
+		}
+		c.Redirect(http.StatusFound, "https://"+host+"/api/auth/callback?"+c.Request.URL.RawQuery)
+	}
 }
 
 // ---- the identity provider's callbacks --------------------------------------
@@ -115,6 +170,16 @@ func (s *Server) redirectURIs(ctx context.Context) ([]string, error) {
 	}
 	if u := s.consoleURL(); u != "" {
 		add(u + "/api/auth/callback")
+	}
+	// The shared layout: every workspace returns through one callback.
+	if relay := s.signInRelayURL(); relay != "" {
+		add(relay)
+		out := make([]string, 0, len(set))
+		for u := range set {
+			out = append(out, u)
+		}
+		sort.Strings(out)
+		return out, nil
 	}
 	all, err := s.store.ListWorkspaces(ctx)
 	if err != nil {

@@ -1263,13 +1263,12 @@ func (s *Server) renameApp(c *gin.Context) {
 		abort(c, http.StatusConflict, fmt.Errorf("project %q already exists in this workspace", newSlug))
 		return
 	}
-	// Build the current default host to store in the redirect annotation.
-	// For the implicit workspace the platform domain is the base; for
-	// explicit workspaces use the workspace's apps domain.
+	// Build the current default host to store in the redirect annotation:
+	// the app's address in its workspace (RFC-0033 names).
 	wsObj, _ := s.store.Workspace(c.Request.Context(), ws)
 	oldHost := ""
 	if wsObj != nil {
-		oldHost = project.SlugOf(app) + "." + s.appsDomainOf(wsObj)
+		oldHost = s.appHostsIn(c.Request.Context(), wsObj, project.SlugOf(app))[0]
 	}
 	if _, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		a.Spec.Slug = newSlug

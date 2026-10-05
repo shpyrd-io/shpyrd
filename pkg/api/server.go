@@ -89,6 +89,10 @@ type Options struct {
 	// to tenancy.Single: every host is the implicit workspace. The cloud
 	// layer supplies a resolver that knows many.
 	Tenancy tenancy.Resolver
+	// Layout says where workspaces and their apps answer (RFC-0033 names):
+	// <label>.<workspaces domain> and <label>-<app>.<apps domain>. The
+	// zero value puts apps one label under their workspace's address.
+	Layout tenancy.Layout
 	// Realms decides which login methods each workspace offers (RFC-0033's
 	// RealmProvider). Defaults to every configured method for every
 	// workspace.
@@ -158,9 +162,12 @@ type VolumesConfig struct {
 type WorkspaceRef struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
-	// Address is where the workspace's dashboard answers; apps one label
-	// under it (RFC-0080: every workspace has one).
+	// Address is where the workspace's dashboard answers (RFC-0080: every
+	// workspace has one).
 	Address string `json:"address,omitempty"`
+	// AppHost is how its apps' addresses are written: prefix, the app's
+	// slug, suffix (acme- and .shpyrd.app; or "" and .intranet.acme.com).
+	AppHost *AppHostView `json:"appHost,omitempty"`
 	// OwnedByOperator marks the platform operator's own workspaces
 	// (RFC-0078): they show platform admins the way to the console.
 	OwnedByOperator bool `json:"ownedByOperator,omitempty"`
@@ -344,7 +351,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
 	s.engine = gin.New()
-	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.redirectMoved())
+	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}
@@ -830,7 +837,7 @@ func (s *Server) config(c *gin.Context) {
 	pub.ConsoleURL = s.consoleURL()
 	if t, err := s.door(c); err == nil && t.Workspace != nil {
 		ws := t.Workspace
-		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws)}
+		pub.Workspace = &WorkspaceRef{Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws), AppHost: s.appHostView(c.Request.Context(), ws)}
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
 	}

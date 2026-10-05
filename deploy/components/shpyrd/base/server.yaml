@@ -168,9 +168,12 @@ spec:
             - name: SHPYRD_PROFILE
               value: "${SHPYRD_PROFILE}"
             # Cloud layer (RFC-0033 phase 8): the domain workspaces without
-            # an explicit address live under (acme.shpyrd.app).
+            # an explicit address live under (acme.shpyrd.cloud), and the
+            # domain their apps live under (acme-shop.shpyrd.app).
             - name: SHPYRD_WORKSPACES_DOMAIN
               value: "${SHPYRD_WORKSPACES_DOMAIN}"
+            - name: SHPYRD_APPS_DOMAIN
+              value: "${SHPYRD_APPS_DOMAIN}"
             # The operator's default workspace (RFC-0078, RFC-0080): its
             # slug and the address its dashboard answers at.
             - name: SHPYRD_DEFAULT_WORKSPACE

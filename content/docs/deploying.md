@@ -50,7 +50,7 @@ What happens:
     Deploying: Releasing v3: web 1/3 updated · worker 0/1 updated
     Running: web 3/3 · worker 1/1
 Released v3: Deploy 654f4925638e
-https://hello-world.acme.shpyrd.app
+https://acme-hello-world.shpyrd.app
 ```
 
 Other sources:

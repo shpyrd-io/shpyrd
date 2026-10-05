@@ -3,11 +3,11 @@ title: Domains and exposure
 description: The hostname every project gets, custom domains you own, and which load balancer serves a project.
 ---
 
-Every project is served at its own hostname with a trusted certificate: on shpyrd cloud, `<slug>.<workspace address>`, such as `shop.acme.shpyrd.app`. A workspace can bring a domain of its own for all its apps; on a cluster you run yourself, projects can also take custom domains one by one, and **exposure** decides whether the public or the private load balancer serves a project. {% .lead %}
+Every project is served at its own hostname with a trusted certificate: on shpyrd cloud, `<workspace>-<slug>.shpyrd.app`, such as `acme-shop.shpyrd.app`. A workspace can bring a domain of its own for all its apps; on a cluster you run yourself, projects can also take custom domains one by one, and **exposure** decides whether the public or the private load balancer serves a project. {% .lead %}
 
 ## The project hostname
 
-`shop.acme.shpyrd.app` on shpyrd cloud; on a cluster you run, `shop.oci.example.com` on a cloud profile or `shop.shpyrd.test` / `shop.127.0.0.1.nip.io` locally: the slug plus the domain. It is always served, it is what `shpyrd open` opens, and it is the target a custom domain's DNS record points at. On cloud profiles with a DNS provider, one wildcard certificate covers every project hostname, so a new project is trusted from its first request; without one, each project gets its own certificate from Let's Encrypt (cloud) or the platform CA (local).
+`acme-shop.shpyrd.app` on shpyrd cloud; on a cluster you run, `shop.oci.example.com` on a cloud profile or `shop.shpyrd.test` / `shop.127.0.0.1.nip.io` locally: the slug plus the domain. It is always served, it is what `shpyrd open` opens, and it is the target a custom domain's DNS record points at. On cloud profiles with a DNS provider, one wildcard certificate covers every project hostname, so a new project is trusted from its first request; without one, each project gets its own certificate from Let's Encrypt (cloud) or the platform CA (local).
 
 ## Custom domains
 
@@ -54,9 +54,9 @@ Let's Encrypt allows 50 certificates per registered domain per week and five fai
 
 ## The workspace's own names
 
-On shpyrd cloud (and any hosted platform) a workspace answers at an address under the workspaces domain — `demo.shpyrd.app`, apps at `<app>.demo.shpyrd.app` — and can bring names of its own (Workspace › Overview, owners and admins):
+On shpyrd cloud a workspace answers at an address under the workspaces domain — `demo.shpyrd.cloud` — and its apps under the apps domain, the workspace's name first — `demo-<app>.shpyrd.app`. A workspace can bring names of its own (Workspace › Overview, owners and admins):
 
-- **Address.** Owners change the label: `demo.shpyrd.app` becomes `acme.shpyrd.app` and every app moves with it. The label cannot be another workspace's name, address or domain, or a reserved word (`login`, `api`, …). The old address — dashboard and app hosts alike — redirects permanently for thirty days, and nobody can take it meanwhile. People signed in sign in again at the new address. `shpyrd workspace address acme`.
+- **Address.** Owners change the label: `demo.shpyrd.cloud` becomes `acme.shpyrd.cloud` and every app moves with it (`demo-shop.shpyrd.app` becomes `acme-shop.shpyrd.app`). The label is lowercase letters and digits, no dashes, and cannot be another workspace's name, address or domain, or a reserved word (`login`, `api`, …). The old address — dashboard and app hosts alike — redirects permanently for thirty days, and nobody can take it meanwhile. People signed in sign in again at the new address. `shpyrd workspace address acme`.
 - **Custom domains.** A name the company owns, `intranet.acme.com`, in CNAME mode: two CNAME records (`intranet.acme.com` and `*.intranet.acme.com`, both to the workspace address) and one TXT record to prove the domain — the page and `shpyrd workspace domains add intranet.acme.com` print them. After `verify`, the platform issues a certificate for the domain and one per app host, and the dashboard and every app answer there too (`expenses.intranet.acme.com`). Make it **primary** (owners) and the dashboard, the app links and the identity tokens' issuer use it; the address keeps answering. Its dashboard pages then live at the domain, but the address still serves the workspace's sign-in, for the internal apps people enter from the workspace: they are entered through the address, and people sign in there on the way. Delegated (NS) mode, where the platform runs the zone and issues a wildcard, comes later.
 
 ## Exposure: external or internal

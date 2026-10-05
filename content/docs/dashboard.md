@@ -3,7 +3,7 @@ title: Dashboard
 description: The web UI - projects, releases, builds, logs, metrics and cluster capacity.
 ---
 
-On shpyrd cloud the dashboard is your workspace's address, `https://acme.shpyrd.app`; on a cluster you run yourself, the shpyrd server serves it at `https://shpyrd.<domain>`. Everything the CLI does for projects can be done there, and it is the place to watch what is happening. {% .lead %}
+On shpyrd cloud the dashboard is your workspace's address, `https://acme.shpyrd.cloud`; on a cluster you run yourself, the shpyrd server serves it at `https://shpyrd.<domain>`. Everything the CLI does for projects can be done there, and it is the place to watch what is happening. {% .lead %}
 
 ## Signing in
 
