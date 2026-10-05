@@ -225,6 +225,12 @@ variable "workspaces_zone" {
   default     = ""
 }
 
+variable "apps_zone" {
+  description = "Public zone in OCI DNS for the apps of tenant workspaces (cloud layer, RFC-0033 names): <workspace>-<app>.<zone>, one wildcard record (written by the cluster's ExternalDNS from the apps' shared front door) and one wildcard certificate (DNS-01) for every app. Written to the vars file as SHPYRD_APPS_DOMAIN; needs workspaces_zone, where the workspaces then answer as <workspace>.<workspaces_zone>. Delegate it at the registrar with apps_zone_nameservers. Empty: apps live one label under their workspace's address."
+  type        = string
+  default     = ""
+}
+
 variable "workspaces_delegations" {
   description = "Subzones of workspaces_zone served by other nameservers, as label => nameservers: { eu = [\"ns1.example.net.\", ...] } delegates eu.<workspaces_zone>. Within OCI DNS the subzone must be in this tenancy (see workspaces_zone)."
   type        = map(list(string))
