@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -106,53 +107,35 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err := r.ensureSharedFrontDoors(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
+	// First what every workspace should have, then away with what nobody
+	// should, then the doors themselves: a door left from before (the
+	// address a workspace just moved from the old layout) would hold the
+	// host its new redirecting door needs, and ingress-nginx refuses a host
+	// two Ingresses claim.
 	wanted := map[string]bool{} // front door Ingress names to keep
-	pending := false            // a workspace whose door does not answer yet
+	hostsOf := map[string][]store.WorkspaceHost{}
 	for i := range all {
 		ws := &all[i]
 		if ws.Address == "" {
 			continue // no address yet: nothing to publish (RFC-0080: every workspace gets one)
 		}
-		_, shared := r.Config.Layout.Label(ws.Address)
-		if !shared {
+		if _, shared := r.Config.Layout.Label(ws.Address); !shared {
 			wanted[workspaceFrontDoorName(ws.Slug)] = true
 			wanted[sourcesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
 			wanted[archivesFrontDoorName(workspaceFrontDoorName(ws.Slug))] = true
-			if err := r.ensureFrontDoor(ctx, ws); err != nil {
-				return ctrl.Result{}, err
-			}
 		}
-		// What the door looks like from outside, recorded on the
-		// workspace; a door not yet answering is looked at again soon. A
-		// workspace of the shared layout that answered once is not looked
-		// at again: its door is everyone's.
-		if ws.Status != store.WorkspaceSuspended && !(shared && ws.ReadyAt != nil) && !r.checkReadiness(ctx, ws) {
-			pending = true
-		}
-		// The workspace's other names (RFC-0033 names): a verified custom
-		// domain gets a front door with its own certificate (HTTP-01: the
-		// company's DNS points here); a previous address keeps answering
-		// with redirects until it expires.
 		hosts, err := r.Store.ListWorkspaceHosts(ctx, ws.Slug)
 		if err != nil {
 			return ctrl.Result{RequeueAfter: workspaceSync}, err
 		}
-		r.noticeNames(ctx, ws, hosts)
+		hostsOf[ws.Slug] = hosts
 		for j := range hosts {
-			h := &hosts[j]
-			if !tenancy.HostServes(h) {
-				continue
-			}
-			if _, inLayout := r.Config.Layout.Label(h.Host); inLayout && h.Kind == store.HostMoved {
-				continue // the shared doors answer for an old name of the layout, and the server redirects
-			}
-			wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
-			if h.Kind == store.HostCustom {
-				wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
-				wanted[archivesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
-			}
-			if err := r.ensureHostFrontDoor(ctx, ws, h); err != nil {
-				return ctrl.Result{}, err
+			if h := &hosts[j]; r.hostHasDoor(h) {
+				wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
+				if h.Kind == store.HostCustom {
+					wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
+					wanted[archivesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
+				}
 			}
 		}
 	}
@@ -177,6 +160,21 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 			logger.Info("workspace front door removed", "ingress", ing.Name, "workspace", ing.Labels[shpyrdv1.LabelWorkspace])
 		}
 	}
+	// The doors. A workspace whose door cannot be kept is told in the log
+	// and the result; it does not keep the others from theirs, nor from
+	// their quotas and suspension below.
+	pending := false // a workspace whose door does not answer yet
+	var failed error
+	for i := range all {
+		ws := &all[i]
+		if ws.Address == "" {
+			continue
+		}
+		if err := r.reconcileDoors(ctx, ws, hostsOf[ws.Slug], &pending); err != nil {
+			logger.Error(err, "workspace front door", "workspace", ws.Slug)
+			failed = errors.Join(failed, err)
+		}
+	}
 	// The projects' quotas follow their workspace's ceilings.
 	if err := r.syncQuotas(ctx, all); err != nil {
 		logger.Error(err, "workspace quotas")
@@ -186,10 +184,55 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	if err := r.syncSuspension(ctx, all); err != nil {
 		logger.Error(err, "workspace suspension")
 	}
+	if failed != nil {
+		return ctrl.Result{RequeueAfter: readinessRetry}, failed
+	}
 	if pending {
 		return ctrl.Result{RequeueAfter: readinessRetry}, nil
 	}
 	return ctrl.Result{RequeueAfter: workspaceSync}, nil
+}
+
+// hostHasDoor says a workspace host gets a front door of its own: a
+// verified custom domain, or a previous address outside the shared layout
+// that still redirects. An old name of the layout needs none: the shared
+// doors answer for it, and the server redirects.
+func (r *WorkspaceReconciler) hostHasDoor(h *store.WorkspaceHost) bool {
+	if !tenancy.HostServes(h) {
+		return false
+	}
+	_, inLayout := r.Config.Layout.Label(h.Host)
+	return !(inLayout && h.Kind == store.HostMoved)
+}
+
+// reconcileDoors keeps one workspace's doors: its own (outside the shared
+// layout), the look from outside, and the doors of its other hosts.
+func (r *WorkspaceReconciler) reconcileDoors(ctx context.Context, ws *store.Workspace, hosts []store.WorkspaceHost, pending *bool) error {
+	_, shared := r.Config.Layout.Label(ws.Address)
+	if !shared {
+		if err := r.ensureFrontDoor(ctx, ws); err != nil {
+			return err
+		}
+	}
+	// What the door looks like from outside, recorded on the workspace; a
+	// door not yet answering is looked at again soon. A workspace of the
+	// shared layout that answered once is not looked at again: its door is
+	// everyone's.
+	if ws.Status != store.WorkspaceSuspended && !(shared && ws.ReadyAt != nil) && !r.checkReadiness(ctx, ws) {
+		*pending = true
+	}
+	// The workspace's other names (RFC-0033 names): a verified custom
+	// domain gets a front door with its own certificate (HTTP-01: the
+	// company's DNS points here); a previous address keeps answering with
+	// redirects until it expires.
+	r.noticeNames(ctx, ws, hosts)
+	var errs error
+	for j := range hosts {
+		if h := &hosts[j]; r.hostHasDoor(h) {
+			errs = errors.Join(errs, r.ensureHostFrontDoor(ctx, ws, h))
+		}
+	}
+	return errs
 }
 
 // noticeNames tells NamesChanged when a workspace's address or the domains
