@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GoogleTagManager } from "@next/third-parties/google";
 import "@/styles/global.css";
 import { Shell } from "@/components/shell";
+import { shared } from "@/lib/metadata";
 
 // Google Tag Manager, when the build is given a container (NEXT_PUBLIC_GTM_ID,
 // set where the site is built). The container's tags then decide what is
@@ -9,8 +10,11 @@ import { Shell } from "@/components/shell";
 const gtm = process.env.NEXT_PUBLIC_GTM_ID;
 
 export const metadata: Metadata = {
+  // Where the site answers: what makes the shared pictures' addresses whole.
+  metadataBase: new URL("https://shpyrd.io"),
   title: { default: "shpyrd", template: "%s · shpyrd" },
   icons: { icon: "/logo.svg" },
+  ...shared("shpyrd"),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
