@@ -13,14 +13,21 @@ goal: >
   waits in the people list.
 
 steps:
+  # Signing in on the launcher, where its result is plain to see.
   - action: goto
-    path: /workspace/people
+    path: /
 
   - action: wait
     text: Sign in to open its applications.
 
   - action: do
     instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Website
+
+  - action: goto
+    path: /workspace/people
 
   - action: wait
     text: dev@acme.test

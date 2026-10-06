@@ -12,9 +12,9 @@ set -euo pipefail
 
 scenario=${1:-}
 case "$scenario" in
-  empty | established-team) ;;
+  empty | established-team | tour) ;;
   *)
-    echo "seed: unknown scenario '${scenario}' (known: empty, established-team)" >&2
+    echo "seed: unknown scenario '${scenario}' (known: empty, established-team, tour)" >&2
     exit 2
     ;;
 esac
@@ -37,14 +37,16 @@ kubectl config get-contexts "$context" >/dev/null 2>&1 \
 sh() { "$root/bin/shpyrd" --context "$context" "$@"; }
 ctl() { "$root/bin/shpyrd-ctl" --context "$context" "$@"; }
 
-# The workspace's name has no command of its own: the API, as admin.
-rename_workspace() {
+# The API as admin, for what has no working command: the workspace's name,
+# and a project's drain (`shpyrd drains add --project` over a kubeconfig
+# writes to app-<slug>, a namespace projects no longer have).
+api() { # method path json
   local token
   token=$(kubectl --context "$context" -n shpyrd-system get secret shpyrd-admin-token -o jsonpath='{.data.token}' | base64 -d)
-  curl -fsS --cacert "$ca" -X PATCH "https://$domain/api/workspace" \
-    -H "X-Shpyrd-Token: $token" -H 'Content-Type: application/json' \
-    -d "{\"name\":\"$1\"}" >/dev/null
+  curl -fsS --cacert "$ca" -X "$1" "https://$domain/api/$2" \
+    -H "X-Shpyrd-Token: $token" -H 'Content-Type: application/json' -d "$3" >/dev/null
 }
+rename_workspace() { api PATCH workspace "{\"name\":\"$1\"}"; }
 
 echo "seed: wiping the workspace"
 
@@ -53,13 +55,21 @@ echo "seed: wiping the workspace"
 for slug in $(sh projects list --jq '.[].slug'); do
   sh projects destroy "$slug" -y >/dev/null
 done
-for _ in $(seq 1 120); do
+# A project with a database takes longer: its cluster is shut down first.
+for _ in $(seq 1 300); do
   [ -z "$(sh projects list --jq '.[].slug')" ] \
     && [ -z "$(kubectl --context "$context" get ns -o name | grep '^namespace/p-' || true)" ] \
     && break
   sleep 1
 done
-[ -z "$(sh projects list --jq '.[].slug')" ] || { echo "seed: projects still deleting after 2 minutes" >&2; exit 1; }
+[ -z "$(sh projects list --jq '.[].slug')" ] || { echo "seed: projects still deleting after 5 minutes" >&2; exit 1; }
+
+# What the workspace holds besides its projects: config vars and drains.
+names=$(sh globals list --jq '.vars[]?.name // .vars[]?' 2>/dev/null || true)
+[ -z "$names" ] || sh globals unset $names >/dev/null
+for drain in $(sh drains list --workspace default --jq '.[].name'); do
+  sh drains remove "$drain" --workspace default >/dev/null
+done
 
 for team in $(sh teams list --jq '.[] | select(.everyone | not) | .name'); do
   sh teams delete "$team" -y >/dev/null
@@ -107,6 +117,41 @@ if [ "$scenario" = established-team ]; then
   sh teams create platform --description "Keeps the apps running" --member dev@acme.test >/dev/null
   project website "Website" "The public site at acme.test" globe blue
   project api "API" "The JSON API behind the apps" server green
+fi
+
+if [ "$scenario" = tour ]; then
+  # Everything a screen of the workspace can show, around one deployed
+  # project, Storefront. The image is prebuilt (no build): Releases has
+  # releases and no build.
+  image=docker.io/nginxinc/nginx-unprivileged:1.27-alpine
+  account ada@acme.test "Ada Admin" admin
+  account dev@acme.test "Dev Member" member
+  sh teams create platform --description "Keeps the apps running" --member dev@acme.test >/dev/null
+  sh globals set LOG_LEVEL=info >/dev/null
+  sh drains add https://logs.acme.test/ingest --name archive --workspace default >/dev/null
+
+  project storefront "Storefront" "The shop customers buy from" shopping-cart orange
+  project api "API" "The JSON API behind the apps" server green
+  project website "Website" "The public site at acme.test" globe blue
+
+  sh deploy --project api --image "$image" >/dev/null
+  sh deploy --project storefront --image "$image" >/dev/null
+  # A second release, so Releases can roll back.
+  sh secrets set --project storefront API_URL=https://api.acme.test CHECKOUT_FLOW=two-step >/dev/null
+  sh pg create db --project storefront --storage 1Gi --backups >/dev/null
+  sh attach db --project storefront >/dev/null
+  sh redis create cache --project storefront >/dev/null
+  sh attach cache --project storefront >/dev/null
+  sh volumes create uploads --size 1Gi --project storefront >/dev/null
+  api POST projects/storefront/drains '{"name":"papertrail","url":"https://logs.acme.test/storefront"}'
+  sh domains add shop.acme.test --no-wait --project storefront >/dev/null
+  sh members add storefront --user dev@acme.test --role developer >/dev/null
+  sh allow add project api --project storefront >/dev/null
+
+  # A few requests, so Logs and Metrics have lines.
+  for _ in $(seq 1 20); do
+    curl -s -o /dev/null --cacert "$ca" "https://storefront.$domain/" || true
+  done
 fi
 
 echo "seed: $scenario ready"

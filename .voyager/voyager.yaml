@@ -13,6 +13,14 @@
 #   ./bin/shpyrd cluster create --name shpyrd --skip shpyrd --enable auth-local,mail
 #   make ui && make dev-deploy
 #
+# The product tour (journeys/tour, scenario tour) also needs what its
+# screens show. --set keeps the server built here; without it, enabling an
+# extension reinstalls the published image:
+#
+#   for e in object-storage postgres redis logs-agent sleep; do
+#     ./bin/shpyrd-ctl --context kind-shpyrd extensions enable $e --set SHPYRD_SERVER_IMAGE=shpyrd-server:dev
+#   done
+#
 # The cluster's certificates come from the development CA in ~/.shpyrd/ca.
 # The browser trusts it through ~/.pki/nssdb (`shpyrd-ctl cluster trust-ca`);
 # Voyager's own health check is Node, which needs it named:
