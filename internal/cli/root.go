@@ -146,6 +146,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	// redis), the operator's in shpyrd-ctl (users, auth, object-storage).
 	addExtensionCommands(root, g, ext.AudienceDeveloper, extra...)
 	root.AddCommand(newLogsCmd(g))
+	root.AddCommand(newMetricsCmd(g))
 	root.AddCommand(newShellCmd(g))
 	root.AddCommand(newRunCmd(g))
 	root.AddCommand(newReleasesCmd(g))

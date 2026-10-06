@@ -20,6 +20,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/metrics"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/resources"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
 )
@@ -36,7 +37,7 @@ it to the app:
   shpyrd attach cache --project shop                        # REDIS_URL, REDIS_HOST, ... in the app
   shpyrd redis cli cache --project shop`,
 	}
-	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newCliCmd(g), newDeleteCmd(g))
+	cmd.AddCommand(metrics.ResourceCommand(g, "redis"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newCliCmd(g), newDeleteCmd(g))
 	return cmd
 }
 
