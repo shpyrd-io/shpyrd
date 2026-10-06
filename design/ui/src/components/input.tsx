@@ -8,15 +8,15 @@ import { cn } from "cn";
 // page, like a sign-in.
 const sizes = {
   sm: {
-    box: "h-7 gap-1.5 rounded-md px-2 text-sm md:text-sm [&_svg:not([class*='size-'])]:size-3.5",
+    box: "h-7 gap-1.5 rounded-control px-2 text-sm md:text-sm [&_svg:not([class*='size-'])]:size-3.5",
     divider: "mr-0.5 h-4",
   },
   default: {
-    box: "h-8 gap-1.5 rounded-md px-2.5 text-base md:text-sm [&_svg:not([class*='size-'])]:size-4",
+    box: "h-8 gap-1.5 rounded-control px-2.5 text-base md:text-sm [&_svg:not([class*='size-'])]:size-4",
     divider: "mr-1 h-4",
   },
   lg: {
-    box: "h-11 gap-2.5 rounded-md px-3.5 text-base [&_svg:not([class*='size-'])]:size-5",
+    box: "h-11 gap-2.5 rounded-control px-3.5 text-base [&_svg:not([class*='size-'])]:size-5",
     divider: "mr-1 h-6",
   },
 } as const;

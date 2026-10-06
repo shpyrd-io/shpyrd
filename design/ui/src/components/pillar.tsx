@@ -43,13 +43,13 @@ function Pillar({
       {icon && (
         <div
           data-slot="pillar-icon"
-          className="text-muted-foreground [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5"
+          className="text-primary [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5"
         >
           {icon}
         </div>
       )}
 
-      <Heading data-slot="pillar-heading" className="font-heading font-medium">
+      <Heading data-slot="pillar-heading" className="font-heading font-semibold">
         {heading}
       </Heading>
 

@@ -44,7 +44,7 @@ function Blankslate({
       <div className="flex max-w-md flex-col gap-1">
         <div
           data-slot="blankslate-title"
-          className="font-heading text-base leading-snug font-medium"
+          className="font-heading text-base leading-snug font-semibold"
         >
           {title}
         </div>

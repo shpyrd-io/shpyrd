@@ -192,7 +192,7 @@ function LauncherCard({
         </div>
       </div>
       <div className="grid gap-1 px-(--card-spacing)">
-        <div className="truncate font-heading text-lg font-medium">{name}</div>
+        <div className="truncate font-heading text-lg font-semibold">{name}</div>
         {description && <p className="line-clamp-2 text-sm text-muted-foreground">{description}</p>}
       </div>
       {tags && tags.length > 0 && (

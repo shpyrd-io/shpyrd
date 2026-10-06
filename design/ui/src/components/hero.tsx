@@ -85,7 +85,7 @@ function Hero({
           <Heading
             data-slot="hero-heading"
             className={cn(
-              "max-w-[20ch] font-heading leading-[1.1] font-medium tracking-tight text-balance",
+              "max-w-[20ch] font-heading leading-[1.1] font-semibold tracking-tight text-balance",
               sizes[variant],
             )}
           >

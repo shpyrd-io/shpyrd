@@ -56,7 +56,7 @@ function SectionIntro({
         <Heading
           data-slot="section-intro-heading"
           className={cn(
-            "max-w-[24ch] font-heading leading-tight font-medium tracking-tight text-balance",
+            "max-w-[24ch] font-heading leading-tight font-semibold tracking-tight text-balance",
             sizes[variant],
           )}
         >

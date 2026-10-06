@@ -130,7 +130,7 @@ function PricingOption({
             {label}
           </div>
         )}
-        <Heading data-slot="pricing-option-heading" className="font-heading text-xl font-medium tracking-tight">
+        <Heading data-slot="pricing-option-heading" className="font-heading text-xl font-semibold tracking-tight">
           {heading}
         </Heading>
         {description && (
@@ -150,7 +150,7 @@ function PricingOption({
                 {originalPrice}
               </s>
             )}
-            <span className="font-heading text-4xl font-medium tracking-tight">
+            <span className="font-heading text-4xl font-semibold tracking-tight">
               <span className="align-top text-2xl">{currencySymbol}</span>
               {price}
             </span>

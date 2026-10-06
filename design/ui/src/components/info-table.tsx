@@ -43,7 +43,7 @@ function InfoTable({
         <div
           id={id}
           data-slot="info-table-title"
-          className="font-heading text-base leading-snug font-medium"
+          className="font-heading text-base leading-snug font-semibold"
         >
           {title}
         </div>

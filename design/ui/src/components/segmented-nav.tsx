@@ -81,7 +81,10 @@ function SegmentedNav({
         ref={list}
         className={cn(
           "relative flex max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          pill ? "gap-1 rounded-full bg-muted p-1 ring-1 ring-foreground/5" : "gap-2 border-b",
+          // The bar is sunk like the switch's track, the light raised like its knob.
+          pill
+            ? "gap-1 rounded-xl bg-muted p-1 shadow-[inset_0_1px_3px_rgb(0_0_0/0.12),inset_0_-1px_0_rgb(255_255_255/0.5)] dark:shadow-[inset_0_1px_3px_rgb(0_0_0/0.5),inset_0_-1px_0_rgb(255_255_255/0.06)]"
+            : "gap-2 border-b",
         )}
       >
         {light && (
@@ -91,8 +94,8 @@ function SegmentedNav({
             className={cn(
               "pointer-events-none absolute left-0",
               pill
-                ? "inset-y-1 rounded-full bg-background shadow-sm ring-1 ring-foreground/10"
-                : "bottom-0 h-0.5 rounded-full bg-foreground",
+                ? "inset-y-1 rounded-control bg-linear-to-b from-white to-[#f2f2f2] shadow-[inset_0_1px_0_rgb(255_255_255),0_1px_2px_rgb(0_0_0/0.18),0_2px_5px_rgb(0_0_0/0.08)] dark:from-[#3a3a3a] dark:to-[#2a2a2a] dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_1px_2px_rgb(0_0_0/0.5)]"
+                : "bottom-0 h-0.5 rounded-full bg-primary",
               moving && "transition-[translate,width] duration-slow ease-move",
             )}
             style={{ translate: `${light.x}px 0`, width: light.width }}
@@ -102,12 +105,12 @@ function SegmentedNav({
           <li key={i} className="relative shrink-0">
             {React.cloneElement(link as React.ReactElement<{ className?: string }>, {
               className: cn(
-                "flex h-9 items-center rounded-full px-4 text-sm font-medium whitespace-nowrap text-muted-foreground outline-none transition-colors duration-fast ease-move hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                "flex h-9 items-center rounded-control px-4 text-sm font-medium whitespace-nowrap text-muted-foreground outline-none transition-colors duration-fast ease-move hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                 "aria-[current=page]:text-foreground",
                 !pill && "h-10 rounded-none px-3",
                 // Before the pill has found its place, the open page lights itself.
-                !light && pill && "aria-[current=page]:bg-background aria-[current=page]:shadow-sm",
-                !light && !pill && "aria-[current=page]:shadow-[inset_0_-2px_0_var(--foreground)]",
+                !light && pill && "aria-[current=page]:bg-white aria-[current=page]:shadow-sm dark:aria-[current=page]:bg-[#333]",
+                !light && !pill && "aria-[current=page]:shadow-[inset_0_-2px_0_var(--primary)]",
                 (link.props as { className?: string }).className,
               ),
             })}
