@@ -696,6 +696,7 @@ func (s *Server) routes() error {
 	// extension that owns the kind names the pod and the command.
 	api.POST("/projects/:slug/resources/:kind/:name/shell/ticket", s.throttleShellMints(), s.require(authz.ProjectExec), s.mintResourceShellTicket)
 	// Project resources (RFC-0003/0006) live in the project namespace.
+	api.GET("/projects/:slug/resources/:kind/:name/metrics", s.require(authz.ProjectView), s.resourceMetrics)
 	api.GET("/projects/:slug/resources", s.require(authz.ProjectView), s.listProjectResources)
 	api.POST("/projects/:slug/resources", s.require(authz.ProjectResource), s.createResource)
 	api.DELETE("/projects/:slug/resources/:kind/:name", s.require(authz.ProjectResource), s.deleteResource)
