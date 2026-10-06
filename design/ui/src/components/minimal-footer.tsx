@@ -104,7 +104,7 @@ function MinimalFooter({
               >
                 {social.map((s) => (
                   <li key={s.href}>
-                    <Button variant="ghost" size="icon" asChild aria-label={s.label}>
+                    <Button variant="ghost" size="icon" asChild aria-label={s.label} className="hover:bg-transparent hover:text-primary dark:hover:bg-transparent">
                       <a href={s.href}>{s.icon}</a>
                     </Button>
                   </li>
@@ -138,7 +138,13 @@ function BackToTop({ className }: { className?: string }) {
     }
   }
   return (
-    <Button variant="ghost" size="sm" iconEnd={<ArrowUp />} className={className} onClick={onClick}>
+    <Button
+      variant="ghost"
+      size="sm"
+      iconEnd={<ArrowUp />}
+      className={cn("hover:bg-transparent hover:text-primary dark:hover:bg-transparent", className)}
+      onClick={onClick}
+    >
       Back to top
     </Button>
   );

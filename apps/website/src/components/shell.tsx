@@ -30,6 +30,9 @@ import { DiscordMark, GitHubMark } from "@/components/marks";
 const github = "https://github.com/shpyrd-io/shpyrd";
 const discord = site.discord.href;
 
+// The icons of the header turn orange under the pointer, with no box behind.
+const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
+
 // What is around every page: the pages of the site at the side, where the
 // page is over it, and the foot. All of it is made of design/ui; a page
 // brings its content and, when it has one, the pane beside it.
@@ -226,12 +229,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           links={isDocument ? [] : links}
           actions={
             <>
-              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on GitHub">
+              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on GitHub" className={iconHover}>
                 <a href={github}>
                   <GitHubMark />
                 </a>
               </Button>
-              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord">
+              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord" className={iconHover}>
                 <a href={discord}>
                   <DiscordMark />
                 </a>
@@ -239,6 +242,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Button
                 variant="ghost"
                 size="icon"
+                className={iconHover}
                 aria-label={`Theme: ${theme}`}
                 title={`Theme: ${theme}`}
                 icon={theme === "dark" ? <Moon /> : theme === "light" ? <Sun /> : <SunMoon />}
