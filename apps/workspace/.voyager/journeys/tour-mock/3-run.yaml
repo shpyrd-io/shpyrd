@@ -1,49 +1,47 @@
-id: tour-run
+id: mock-run
 
-title: "Tour 3: running a project"
+title: "Mock tour 3: running a project"
 
 area: projects
 
-tags: [tour]
+tags: [tour, mock]
 
-scenario: tour
+scenario: mock
 
 goal: >
-  What runs and how it is doing: releases and rollbacks, backups, metrics,
-  logs, and a shell in a running instance.
+  What runs and how it is doing: releases, builds and their output, backups,
+  metrics, logs, and a shell in a running instance.
 
 steps:
-  # Signing in on the launcher, where its result is plain to see.
   - action: goto
-    path: /
+    path: /projects/hello-world/releases
 
   - action: wait
-    text: Sign in to open its applications.
-
-  - action: do
-    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
-
-  - action: wait
-    text: Storefront
-
-  - action: goto
-    path: /projects/storefront/releases
-
-  - action: wait
-    text: Rollback
-    narration: Every change is a release. Any earlier one is a click away.
+    text: Succeeded
+    narration: Every change is a release, and every build keeps what it printed.
 
   - action: capture
     name: releases
-    description: Releases, with the one in service and the ones to roll back to.
+    description: Releases and the builds that made them.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Output on the row of the build #48, until its output shows
+
+  - action: wait
+    text: Hide
+
+  - action: capture
+    name: build-output
+    description: A build's output.
     use: { docs: true }
 
   - action: goto
-    path: /projects/storefront/backups
+    path: /projects/hello-world/backups
 
   - action: wait
     text: Project backup and restore
-    narration: A whole project, code, configuration and data, backs up to one archive.
+    narration: A whole project backs up to one archive.
 
   - action: capture
     name: backups
@@ -55,18 +53,18 @@ steps:
     selector: "button:has-text('Download project backup'):not([disabled])"
 
   - action: do
-    instruction: Click Download project backup, until its confirmation dialog opens, and confirm nothing in it
+    instruction: Click Download project backup, until a dialog asks whether to back up Hello World
 
   - action: wait
-    text: Back up Storefront?
+    text: Simulate backup
 
   - action: capture
     name: backup-dialog
-    description: The confirmation before backing up a project.
+    description: The Mock's preview of backing up a project.
     use: { docs: true }
 
   - action: goto
-    path: /projects/storefront/metrics
+    path: /projects/hello-world/metrics
 
   - action: wait
     text: Response time
@@ -74,27 +72,26 @@ steps:
 
   - action: capture
     name: metrics
-    description: Response time, traffic, CPU and memory of a project.
-    use: { docs: true }
+    description: Response time, traffic, CPU and memory.
+    use: { docs: true, marketing: true }
 
   - action: goto
-    path: /projects/storefront/logs
+    path: /projects/hello-world/logs
 
   - action: wait
     text: Every process
-    narration: So do its logs, live, from every instance.
+    narration: So do its logs, from every instance.
 
   - action: capture
     name: logs
-    description: The logs of every process, live.
+    description: The logs of every process.
     use: { docs: true }
 
   - action: goto
-    path: /projects/storefront/shell
+    path: /projects/hello-world/shell
 
-  # The instance chosen once the list has loaded (web.1, web.2...).
   - action: wait
-    text: web.
+    text: Connect
 
   - action: capture
     name: shell

@@ -1,0 +1,47 @@
+# Voyager configuration — https://github.com/shpyrd-io/shpyrd-voyager
+#
+# The workspace application in Mock mode (apps/AGENTS.md): Next's
+# development server with NEXT_PUBLIC_API_MODE=mock, answering from mock/*.json.
+# No cluster, no sign-in: the Mock is always signed in as Ana Souza, owner
+# of the workspace Acme.
+#
+# Run Voyager from this folder (apps/workspace); from the repository root it
+# finds the cluster's configuration (/.voyager) instead.
+#
+#   cd apps/workspace && npx voyager test tour-mock --no-replay
+version: 1
+
+product:
+  name: shpyrd
+
+environment:
+  base_url: http://localhost:4325
+
+  start:
+    command: npm run design
+    timeout: 3m
+
+  health:
+    url: http://localhost:4325
+    timeout: 3m
+
+browser:
+  viewport:
+    width: 1440
+    height: 900
+
+outputs:
+  directory: .voyager-output
+  screenshots: true
+  videos: true
+  reports: true
+  traces: true
+
+# Semantic steps (do, verify) use TypeSafe Jev. Set TYPESAFE_API_KEY.
+semantic:
+  engine: jev
+
+# Voice-over for `voyager demo`, from each step's `narration` line. Set
+# ELEVENLABS_API_KEY; `--no-narration` records a silent demo instead.
+narration:
+  provider: elevenlabs
