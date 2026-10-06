@@ -82,6 +82,12 @@ describe("the pricing page", () => {
     }
   });
 
+  it("starts every plan with the Add to button; only Enterprise is a conversation", () => {
+    for (const plan of pricing.plans) {
+      expect(plan.action, plan.id).toEqual({ label: "Add to", kind: "install" });
+    }
+  });
+
   it("keeps Enterprise out of the priced plans: a conversation, not a price", () => {
     expect(pricing.plans.map((p) => p.id)).toEqual(["free", "starter", "pro", "business"]);
     expect(pricing.enterprise).not.toHaveProperty("price");

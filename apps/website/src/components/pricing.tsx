@@ -13,7 +13,8 @@ import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/p
 import { AddToAgent } from "@/components/add-to-agent";
 
 // The pricing page: the plans of shpyrd cloud with the usage prices of the
-// paid ones, Enterprise as a conversation in a row of its own under them,
+// paid ones, each with the "Add to" button of the home page, Enterprise as a
+// conversation in a row of its own under them,
 // what is counted, a worked example and the usual questions. Every figure comes from content/site/pricing.ts.
 
 const countIcons: Record<string, React.ReactElement> = {
@@ -51,14 +52,17 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
                 note: usage.find((line) => line.id === rate.id)?.note,
                 value: rate.value,
               }))}
+              // Centred in the card, whatever the plan's action is.
               actions={
-                plan.action.kind === "install" ? (
-                  <AddToAgent />
-                ) : (
-                  <Button asChild variant="outline" icon={<MessageCircle />}>
-                    <a href={contact.href}>{plan.action.label}</a>
-                  </Button>
-                )
+                <div className="flex flex-1 justify-center">
+                  {plan.action.kind === "install" ? (
+                    <AddToAgent />
+                  ) : (
+                    <Button asChild variant="outline" icon={<MessageCircle />}>
+                      <a href={contact.href}>{plan.action.label}</a>
+                    </Button>
+                  )}
+                </div>
               }
               message={plan.note}
               footnote={plan.footnote}

@@ -134,7 +134,8 @@ function plansFor(region: Region): Plan[] {
       summary: 'To try the platform: apps that sleep when nobody uses them.',
       features: ['4 projects', '2 CPU and 256 MiB in all', 'Sleeps after 10 minutes idle', 'Community support'],
       usage: included,
-      // The "Add to" button of the home page: it downloads the installer.
+      // Every plan starts the same way, with the "Add to" button of the home
+      // page: it downloads the installer. Only Enterprise is a conversation.
       action: { label: 'Add to', kind: 'install' },
       footnote: 'Ceilings: Projects 4 · CPU 2 cores · Memory 256 MiB.',
     },
@@ -146,7 +147,7 @@ function plansFor(region: Region): Plan[] {
       summary: `Pay for what runs, from ${money(region, region.minimum.starter)} a month.`,
       features: ['Unlimited projects', 'Sleeps after 15 minutes idle', 'Custom domains', 'Email support'],
       usage: usageOf(region.rates.starter),
-      action: { label: 'Talk to us', kind: 'contact' },
+      action: { label: 'Add to', kind: 'install' },
       footnote: `Ceilings: CPU 16 cores · Memory 32 GiB · Storage 2048 GiB.${early('starter')}`,
     },
     {
@@ -157,7 +158,7 @@ function plansFor(region: Region): Plan[] {
       summary: 'For products in production.',
       features: ['Custom sleep', 'Daily backups', 'Priority support', 'SSO and audit logs'],
       usage: usageOf(region.rates.pro),
-      action: { label: 'Talk to us', kind: 'contact' },
+      action: { label: 'Add to', kind: 'install' },
       footnote: `Ceilings: CPU 32 cores · Memory 64 GiB · Storage 4096 GiB.${early('pro')}`,
     },
     {
@@ -168,7 +169,7 @@ function plansFor(region: Region): Plan[] {
       summary: 'For teams that run their business on it.',
       features: ['Hourly backups', 'Private network applications', 'Support with an SLA', 'VPC peering'],
       usage: usageOf(region.rates.business),
-      action: { label: 'Talk to us', kind: 'contact' },
+      action: { label: 'Add to', kind: 'install' },
       footnote: `No ceilings.${early('business')}`,
     },
   ]
