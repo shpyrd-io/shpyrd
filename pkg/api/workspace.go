@@ -31,8 +31,9 @@ import (
 
 // WorkspaceView is GET /api/workspace.
 type WorkspaceView struct {
-	Slug string `json:"slug"`
-	Name string `json:"name"`
+	Capabilities WorkspaceCapabilities `json:"capabilities"`
+	Slug         string                `json:"slug"`
+	Name         string                `json:"name"`
 	// OwnedByOperator marks the platform operator's own workspace (RFC-0078,
 	// RFC-0080): platform admins own it and see the way to the console.
 	OwnedByOperator bool `json:"ownedByOperator"`
@@ -125,7 +126,8 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 		}
 	}
 	return WorkspaceView{
-		Slug: w.Slug, Name: w.Name, OwnedByOperator: w.OwnedByOperator(),
+		Capabilities: s.workspaceCapabilities(w),
+		Slug:         w.Slug, Name: w.Name, OwnedByOperator: w.OwnedByOperator(),
 		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
 		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",

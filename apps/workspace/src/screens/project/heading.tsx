@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { api } from "@/api/api";
 import { buildFailed, type DeployRequest, type Project } from "@/api/types";
+import { useInternalExposure } from "@/lib/networking";
 import type { Perms } from "@/lib/perms";
 import { addressOf, hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
 import { choiceOf, ProjectTile } from "@/lib/tile";
@@ -72,6 +73,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
     onError: (e: Error) => toast.error(e.message),
   });
   const internal = project.exposure === "internal";
+  const supportsInternal = useInternalExposure();
   const lastBuildFailed = buildFailed(project.status);
   const processes = Object.entries(project.processes ?? {});
   const release = project.status.release;
@@ -87,7 +89,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
             <StatusBadge type={types[phase]} live={phase === "deploying"}>
               {phaseWords[phase]}
             </StatusBadge>
-            {perms.deploy ? (
+            {perms.deploy && (supportsInternal || internal) ? (
               <ConfirmDialog
                 trigger={
                   <Badge variant="outline" className="cursor-pointer gap-1 hover:bg-muted" title={internal ? "On the local network. Click to put it on the public internet." : "On the public internet. Click to keep it on the local network."}>
@@ -101,7 +103,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
                 onConfirm={() => expose.mutate(internal ? "external" : "internal")}
               />
             ) : (
-              <Badge variant="outline" className="gap-1">
+              <Badge variant="outline" className="gap-1" title={!supportsInternal && !internal ? "Private networking is not enabled for this workspace." : undefined}>
                 {internal ? <Network /> : <Globe />}
                 {internal ? "local network" : "public internet"}
               </Badge>

@@ -395,7 +395,7 @@ func (p *Postgres) SetWorkspaceOwnerInvitePending(ctx context.Context, slug, ema
 
 func (p *Postgres) UpdateWorkspaceSettings(ctx context.Context, slug string, settings WorkspaceSettings) (*Workspace, error) {
 	raw, _ := json.Marshal(settings)
-	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET settings = $2, updated_at = now() WHERE slug = $1`, slug, raw)
+	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET settings = ($2::jsonb - 'internalExposure') || CASE WHEN settings ? 'internalExposure' THEN jsonb_build_object('internalExposure', settings->'internalExposure') ELSE '{}'::jsonb END, updated_at = now() WHERE slug = $1`, slug, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -2007,3 +2007,19 @@ func (p *Postgres) IsConsoleUser(ctx context.Context, email string) (bool, error
 
 var _ Store = (*Postgres)(nil)
 var _ Store = (*Memory)(nil)
+
+// SetWorkspaceInternalExposure atomically changes only the networking override.
+func (p *Postgres) SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error) {
+	raw, err := json.Marshal(enabled)
+	if err != nil {
+		return nil, err
+	}
+	tag, err := p.pool.Exec(ctx, `UPDATE workspaces SET settings = CASE WHEN $2::jsonb = 'null'::jsonb THEN settings - 'internalExposure' ELSE jsonb_set(settings, '{internalExposure}', $2::jsonb) END, updated_at = now() WHERE slug = $1`, slug, raw)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return p.Workspace(ctx, slug)
+}

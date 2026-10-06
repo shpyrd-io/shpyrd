@@ -4,6 +4,8 @@
 // A link an extension adds to the workspace's sidebar (GET /api/links).
 export type { Link } from "@shpyrd/shared/links";
 
+export type WorkspaceCapabilities = { internalExposure: boolean };
+
 export type PublicConfig = {
   version: string;
   domain: string;
@@ -20,6 +22,7 @@ export type PublicConfig = {
   // open-source core adds nothing.
   capabilities?: string[];
   workspace?: {
+    capabilities?: WorkspaceCapabilities;
     slug: string;
     name: string;
     address?: string;
@@ -55,6 +58,7 @@ export type Identity = {
 };
 
 export type WorkspaceInfo = {
+  capabilities?: WorkspaceCapabilities;
   slug: string;
   name: string;
   ownedByOperator: boolean;

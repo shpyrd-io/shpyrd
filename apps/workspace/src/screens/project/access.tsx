@@ -52,7 +52,7 @@ export function Access({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Who may open it</CardTitle>
-        <CardDescription>{modes[project.access].text}</CardDescription>
+        <CardDescription>{project.access === "public" ? (project.exposure === "internal" ? "The app answers to anyone on its internal network." : "The app answers to anyone on the internet.") : modes[project.access].text}</CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">

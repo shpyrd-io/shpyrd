@@ -124,7 +124,10 @@ const (
 
 // WorkspaceSettings are the knobs of the workspace.
 type WorkspaceSettings struct {
-	JoinPolicy string `json:"joinPolicy,omitempty"` // JoinOpen when empty
+	// InternalExposure is an operator override; nil inherits the hosting policy.
+	// Changed only through SetWorkspaceInternalExposure, never ordinary settings.
+	InternalExposure *bool  `json:"internalExposure,omitempty"`
+	JoinPolicy       string `json:"joinPolicy,omitempty"` // JoinOpen when empty
 	// OwnMethodsOnly hides the platform's login methods from this
 	// workspace's login page: only the methods the workspace configured
 	// itself (its company SSO) are offered (RFC-0033). Never true for the
@@ -780,6 +783,7 @@ type Store interface {
 	CreateWorkspace(ctx context.Context, w Workspace) (*Workspace, error)
 	UpdateWorkspace(ctx context.Context, slug, name string) (*Workspace, error)
 	UpdateWorkspaceSettings(ctx context.Context, slug string, settings WorkspaceSettings) (*Workspace, error)
+	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)
 	// SetWorkspaceReadiness records what the controller found at the
