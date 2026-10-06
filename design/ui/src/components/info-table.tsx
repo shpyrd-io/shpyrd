@@ -30,7 +30,7 @@ function InfoTable({
   title?: React.ReactNode;
   // The most columns there may be; there are fewer when the room is little.
   columns?: keyof typeof columnsOf;
-  layout?: "grid" | "rows";
+  layout?: "grid" | "rows" | "horizontal";
 }) {
   const id = React.useId();
   return (
@@ -53,7 +53,7 @@ function InfoTable({
         aria-labelledby={title ? id : undefined}
         className={cn(
           "grid text-sm",
-          layout === "grid" ? cn("gap-x-6 gap-y-4", columnsOf[columns]) : "gap-2",
+          layout === "grid" ? cn("gap-x-6 gap-y-4", columnsOf[columns]) : layout === "horizontal" ? "flex flex-wrap gap-x-7 gap-y-5" : "gap-2",
         )}
       >
         {children}
