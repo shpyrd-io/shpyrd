@@ -3,6 +3,8 @@ import { cn } from "cn";
 
 const sizes = {
   medium: "text-3xl @2xl/hero:text-4xl",
+  card: "text-3xl @2xl/hero:text-4xl",
+  "card-spacious": "text-3xl @2xl/hero:text-4xl",
   large: "text-4xl @2xl/hero:text-5xl",
 } as const;
 
@@ -42,6 +44,8 @@ function Hero({
   // "auto" is centred while the hero is one column, a phone's width, and
   // starts at the left once there is room for the picture beside the words.
   align?: "start" | "center" | "auto";
+  // `card` leaves outer padding to Card/CardContent.
+  // `card-spacious` adds 8px / 16px evenly, giving a default Card 24px / 32px insets.
   variant?: keyof typeof sizes;
 }) {
   const centred = align === "center";
@@ -52,6 +56,7 @@ function Hero({
     <section
       data-slot="hero"
       data-align={align}
+      data-variant={variant}
       className={cn("@container/hero", className)}
       {...props}
     >
@@ -59,7 +64,8 @@ function Hero({
           a query about its own width. */}
       <div
         className={cn(
-          "grid items-center gap-x-12 gap-y-10 py-12 @4xl/hero:py-16",
+          "grid items-center gap-x-12 gap-y-10",
+          variant === "card-spacious" ? "p-2 @sm/hero:p-4" : variant !== "card" && "py-12 @4xl/hero:py-16",
           beside && "@3xl/hero:grid-cols-2",
         )}
       >
@@ -97,6 +103,7 @@ function Hero({
               data-slot="hero-actions"
               className={cn(
                 "flex flex-wrap items-center gap-3",
+                variant === "card-spacious" && "[&_[data-slot=button]]:max-w-full [&_[data-slot=button]]:whitespace-normal [&_[data-slot=button]]:h-auto [&_[data-slot=button]]:min-h-8 [&_[data-slot=button]]:py-1.5",
                 centred && "justify-center",
                 auto && "justify-center @3xl/hero:justify-start",
               )}

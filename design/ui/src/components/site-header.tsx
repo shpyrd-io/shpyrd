@@ -1,10 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Menu } from "lucide-react";
 import { cn } from "cn";
-import { AnchoredOverlay } from "./anchored-overlay";
-import { Button, buttonVariants } from "./button";
+import { MobileNavigation, MobileNavigationTrigger, MobileNavigationContent } from "./mobile-navigation";
+import { buttonVariants } from "./button";
 import {
   NavigationMenu,
   NavigationMenuContent,
@@ -102,6 +101,7 @@ function SiteHeader({
   const many = links.length > 0;
 
   return (
+    <MobileNavigation open={open} onOpenChange={setOpen}>
     <Root
       data-slot="site-header"
       className={cn(
@@ -117,48 +117,7 @@ function SiteHeader({
           widths[width],
         )}
       >
-        {many && (
-          <AnchoredOverlay
-            open={open}
-            onOpenChange={setOpen}
-            width="small"
-            className="px-0 py-3"
-            anchor={
-              <Button
-                variant="ghost"
-                size="icon"
-                icon={<Menu />}
-                aria-label={menuLabel}
-                className="@2xl/site-header:hidden"
-              />
-            }
-          >
-            {/* A link chosen in the menu closes it: the page it goes to may be
-                drawn in the same document, where nothing else would. */}
-            <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
-              {links.map((item, i) =>
-                isGroup(item) ? (
-                  columnsOf(item).map((column, c) => (
-                    <NavListGroup key={`${i}-${c}`} title={column.label ?? item.label}>
-                      {column.links.map((entry, j) => {
-                        const { link } = entryOf(entry);
-                        return (
-                          <NavListItem key={j} asChild aria-current={current(link)}>
-                            {link}
-                          </NavListItem>
-                        );
-                      })}
-                    </NavListGroup>
-                  ))
-                ) : (
-                  <NavListItem key={i} asChild aria-current={current(item)}>
-                    {item}
-                  </NavListItem>
-                ),
-              )}
-            </NavList>
-          </AnchoredOverlay>
-        )}
+        {many && <MobileNavigationTrigger label={menuLabel} className="@2xl/site-header:hidden" />}
 
         {start && (
           <div data-slot="site-header-start" className="flex min-w-0 items-center gap-3">
@@ -254,7 +213,32 @@ function SiteHeader({
           </div>
         )}
       </div>
+      {many && <MobileNavigationContent className="@2xl/site-header:hidden">
+            <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
+              {links.map((item, i) =>
+                isGroup(item) ? (
+                  columnsOf(item).map((column, c) => (
+                    <NavListGroup key={`${i}-${c}`} title={column.label ?? item.label}>
+                      {column.links.map((entry, j) => {
+                        const { link } = entryOf(entry);
+                        return (
+                          <NavListItem key={j} asChild aria-current={current(link)}>
+                            {link}
+                          </NavListItem>
+                        );
+                      })}
+                    </NavListGroup>
+                  ))
+                ) : (
+                  <NavListItem key={i} asChild aria-current={current(item)}>
+                    {item}
+                  </NavListItem>
+                ),
+              )}
+            </NavList>
+      </MobileNavigationContent>}
     </Root>
+    </MobileNavigation>
   );
 }
 

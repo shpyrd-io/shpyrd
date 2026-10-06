@@ -9,16 +9,21 @@ import { useEffect, useSyncExternalStore } from "react";
 export type Theme = "light" | "dark" | "system";
 
 const KEY = "shpyrd.theme";
+let memoryTheme: Theme = "system";
 const listeners = new Set<() => void>();
 
 export function getTheme(): Theme {
-  const v = localStorage.getItem(KEY);
+  let v: string | null;
+  try { v = localStorage.getItem(KEY); } catch { return memoryTheme; }
   return v === "light" || v === "dark" ? v : "system";
 }
 
 export function setTheme(t: Theme) {
-  if (t === "system") localStorage.removeItem(KEY);
-  else localStorage.setItem(KEY, t);
+  memoryTheme = t;
+  try {
+    if (t === "system") localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, t);
+  } catch { /* Keep the selection working when storage is unavailable. */ }
   applyTheme();
   for (const l of listeners) l();
 }

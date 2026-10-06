@@ -14,6 +14,7 @@ function PageHeading({
   as: Title = "h1",
   title,
   description,
+  notes,
   icon,
   iconEnd,
   actions,
@@ -26,6 +27,7 @@ function PageHeading({
   as?: "h1" | "h2" | "h3";
   title: React.ReactNode;
   description?: React.ReactNode;
+  notes?: React.ReactNode;
   // An icon before the title.
   icon?: React.ReactElement;
   // What comes after the title: a badge, a name in code.
@@ -62,7 +64,12 @@ function PageHeading({
               {icon}
               {title}
             </Title>
-            {iconEnd}
+            {(iconEnd || notes) && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {iconEnd}
+                {notes && <div data-slot="page-heading-notes" className="text-xs text-muted-foreground">{notes}</div>}
+              </div>
+            )}
           </div>
           {description && (
             <p

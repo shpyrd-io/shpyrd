@@ -7,13 +7,19 @@ function Card({
   size = "default",
   variant = "default",
   asChild = false,
+  interactive = false,
+  background,
+  children,
   ...props
 }: React.ComponentProps<"div"> & {
   size?: "default" | "sm";
   // `secondary` lifts the card from the page with a shadow.
-  variant?: "default" | "secondary";
+  variant?: "default" | "secondary" | "dashed";
   // The card becomes its child: a link, and it answers to the pointer.
   asChild?: boolean;
+  interactive?: boolean;
+  // Decorative layer behind the content. The app controls its artwork.
+  background?: React.ReactNode;
 }) {
   const Comp = asChild ? Slot.Root : "div";
 
@@ -21,13 +27,18 @@ function Card({
     <Comp
       data-slot="card"
       data-size={size}
+      data-interactive={interactive || asChild || undefined}
       data-variant={variant}
       className={cn(
         "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 outline-none [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 data-[variant=secondary]:shadow-md dark:data-[variant=secondary]:shadow-black/50 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl [a]:transition-shadow [a]:hover:ring-primary [a]:focus-visible:ring-2 [a]:focus-visible:ring-primary",
+        "relative isolate data-[variant=dashed]:border data-[variant=dashed]:border-dashed data-[variant=dashed]:border-border data-[variant=dashed]:ring-0 data-[interactive=true]:transition-[background-color,box-shadow] data-[interactive=true]:duration-fast data-[interactive=true]:hover:bg-muted/50 data-[interactive=true]:hover:ring-primary data-[interactive=true]:focus-visible:ring-2 data-[interactive=true]:focus-visible:ring-primary",
         className,
       )}
       {...props}
-    />
+    >
+      {background && <span data-slot="card-background" aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">{background}</span>}
+      {asChild ? <Slot.Slottable>{children}</Slot.Slottable> : children}
+    </Comp>
   );
 }
 

@@ -46,6 +46,7 @@ function NavList({
   heading,
   headingLevel: Heading = "h2",
   headingHidden = false,
+  size = "default",
   ...props
 }: React.ComponentProps<"nav"> & {
   // The heading of the list. It gives the navigation its name.
@@ -53,14 +54,16 @@ function NavList({
   headingLevel?: "h2" | "h3";
   // The heading is there for who cannot see, and not drawn.
   headingHidden?: boolean;
+  size?: "default" | "sm";
 }) {
   const id = React.useId();
   return (
     <GroupLevel value={Heading === "h3" ? "h4" : "h3"}>
       <nav
         data-slot="nav-list"
+        data-size={size}
         aria-labelledby={heading ? id : undefined}
-        className={cn("text-sm", className)}
+        className={cn("text-sm", size === "sm" && "[&_[data-slot=nav-list-heading]]:text-xs [&_[data-slot=nav-list-heading]]:text-muted-foreground [&_[data-slot=nav-list-item]>a]:text-xs", className)}
         {...props}
       >
         {heading && (

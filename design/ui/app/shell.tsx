@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Menu, Moon, Sun } from "lucide-react";
-import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
+import { LayoutGrid, Moon, Sun } from "lucide-react";
+import { MobileNavigation, MobileNavigationTrigger, MobileNavigationContent } from "@shpyrd/ui/components/mobile-navigation";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
 import { Wordmark } from "@shpyrd/ui/components/brand";
@@ -78,24 +78,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </PageLayoutSidebar>
 
       <PageLayoutHeader divider="line" className="px-4 py-3 @3xl/page-layout:px-6">
+        <MobileNavigation open={menu} onOpenChange={setMenu}>
         <Stack direction="horizontal" align="center" gap="cozy">
-          <AnchoredOverlay
-            open={menu}
-            onOpenChange={setMenu}
-            width="small"
-            className="px-0 py-3"
-            anchor={
-              <Button
-                variant="outline"
-                size="icon"
-                icon={<Menu />}
-                aria-label="Components"
-                className="@3xl/page-layout:hidden"
-              />
-            }
-          >
-            {nav}
-          </AnchoredOverlay>
+          <MobileNavigationTrigger label="Components" className="@3xl/page-layout:hidden" />
           <Breadcrumbs>
             <BreadcrumbsItem asChild selected={!here}>
               <Link href="/">Overview</Link>
@@ -117,6 +102,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             Theme: {theme}
           </Button>
         </Stack>
+        <MobileNavigationContent className="@3xl/page-layout:hidden">{nav}</MobileNavigationContent>
+        </MobileNavigation>
       </PageLayoutHeader>
 
       <PageLayoutContent width="large" padding="normal" className="grid content-start gap-10">

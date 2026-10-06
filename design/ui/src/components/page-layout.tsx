@@ -221,6 +221,8 @@ function PageLayoutSidebar({
   divider = "none",
   sticky = false,
   hidden = false,
+  footer,
+  children,
   ...props
 }: Omit<React.ComponentProps<"aside">, "hidden"> & {
   position?: "start" | "end";
@@ -230,11 +232,16 @@ function PageLayoutSidebar({
   // It stays in sight, as tall as the window, while the page scrolls.
   sticky?: boolean;
   hidden?: Hidden;
+  // Optional fixed bottom area; only the content above it scrolls on desktop.
+  // Combine with sticky for a viewport-height sidebar.
+  footer?: React.ReactNode;
 }) {
+  const hasFooter = footer !== undefined && footer !== null;
   return (
     <aside
       data-slot="page-layout-sidebar"
       data-position={position}
+      data-variant={hasFooter ? "fixed-footer" : "default"}
       className={cn(
         position === "start"
           ? "order-1 [grid-area:sidebar-start]"
@@ -244,12 +251,19 @@ function PageLayoutSidebar({
         widths[width],
         paddings[padding],
         sticky &&
-          "@3xl/page-layout:sticky @3xl/page-layout:top-0 @3xl/page-layout:h-svh @3xl/page-layout:self-start @3xl/page-layout:overflow-y-auto",
+          "@3xl/page-layout:sticky @3xl/page-layout:top-0 @3xl/page-layout:h-svh @3xl/page-layout:self-start",
+        sticky && !hasFooter && "@3xl/page-layout:overflow-y-auto",
+        hasFooter && "@3xl/page-layout:flex @3xl/page-layout:min-h-0 @3xl/page-layout:flex-col @3xl/page-layout:overflow-hidden",
         hide(hidden),
         className,
       )}
       {...props}
-    />
+    >
+      {hasFooter ? <>
+        <div data-slot="page-layout-sidebar-content" className="min-w-0 @3xl/page-layout:min-h-0 @3xl/page-layout:flex-1 @3xl/page-layout:overflow-y-auto">{children}</div>
+        <div data-slot="page-layout-sidebar-footer" className="shrink-0 border-t p-4">{footer}</div>
+      </> : children}
+    </aside>
   );
 }
 

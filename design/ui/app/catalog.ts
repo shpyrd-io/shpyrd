@@ -23,6 +23,7 @@ export const catalog: Category[] = [
       { slug: "app-icons", title: "App icons", description: "The symbols a project may take on its card, in the colour it chooses, or one of its own." },
       { slug: "button", title: "Button", description: "Something to press, with or without an icon." },
       { slug: "avatar", title: "Avatar", description: "The picture of someone, or of something that is not a person." },
+      { slug: "tile", title: "Tile", description: "A small icon surface, in three sizes." },
       { slug: "badge", title: "Badge", description: "A word that marks something." },
       { slug: "counter-label", title: "Counter label", description: "How many there are of something, after its name." },
       { slug: "status-badge", title: "Status badge", description: "How something is: a dot, a word, a quantity." },
@@ -38,6 +39,7 @@ export const catalog: Category[] = [
     title: "Structures",
     description: "Reusable combinations, like forms and cards.",
     pages: [
+      { slug: "document-actions", title: "Document actions", description: "Copy a permanent link, download a document and print." },
       { slug: "input", title: "Input", description: "Where something is typed, with what goes beside its text." },
       { slug: "textarea", title: "Textarea", description: "Where more than a line is typed." },
       { slug: "field", title: "Field", description: "A label and its field, with the hint and the error." },
@@ -70,6 +72,7 @@ export const catalog: Category[] = [
     title: "Blueprints",
     description: "Complex interactive components, like navigation headers.",
     pages: [
+      { slug: "mobile-navigation", title: "Mobile navigation", description: "A menu that expands inline, with keyboard focus restoration." },
       { slug: "dropdown-button", title: "Dropdown button", description: "A button that opens a menu." },
       { slug: "tabs", title: "Tabs", description: "Views that take turns in the same place." },
       { slug: "dialog", title: "Dialog", description: "A question over the page, with its actions." },

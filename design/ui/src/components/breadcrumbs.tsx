@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "cn";
+import { ChevronRight } from "lucide-react";
 import { Slot } from "radix-ui";
 
 // Where the page is, among the pages over it: each item leads one level
@@ -42,8 +43,9 @@ function BreadcrumbsItem({
   return (
     <li
       data-slot="breadcrumbs-item"
-      className="inline-flex items-center gap-2 not-first:before:text-muted-foreground not-first:before:content-['/']"
+      className="group/breadcrumb inline-flex items-center gap-2"
     >
+      <ChevronRight aria-hidden="true" className="size-3 text-muted-foreground group-first/breadcrumb:hidden" />
       <Comp
         href={href}
         aria-current={selected ? "page" : undefined}
