@@ -1,10 +1,12 @@
 import { hero } from "@shpyrd/content/site/home";
 import { Home } from "@/components/home";
 import { ShippingChat } from "@/components/shipping-chat";
+import { shared } from "@/lib/metadata";
 
 export const metadata = {
   title: { absolute: `shpyrd - ${hero.heading}` },
   description: hero.description,
+  ...shared(`shpyrd - ${hero.heading}`, hero.description),
 };
 
 // The picture beside the heading is the chat that ships the app (homepage
