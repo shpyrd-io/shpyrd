@@ -2,6 +2,7 @@
   "slug": "acme",
   "name": "Acme",
   "ownedByOperator": false,
+  "capabilities": { "internalExposure": false },
   "domain": "acme.shpyrd.cloud",
   "address": "acme.shpyrd.cloud",
   "url": "https://acme.shpyrd.cloud",

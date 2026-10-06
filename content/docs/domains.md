@@ -68,7 +68,7 @@ shpyrd exposure internal --project backoffice
 shpyrd exposure external --project backoffice
 ```
 
-or the Exposure badge on the project page, or `exposure: internal` in `shpyrd.yaml`. Changing it re-renders the project's Ingress on the other controller - no release, no downtime for the instances - and the DNS record for its hostname follows on the provider's next sync, pointing at the internal address. Certificates keep working: the wildcard covers the hostname, and a custom domain's certificate is issued through the front door the domain points at.
+or the Exposure badge on the project page, or `exposure: internal` in `shpyrd.yaml`. On shpyrd cloud, internal exposure is available only when the platform operator has enabled private networking for the workspace; operator-owned workspaces have it by default. Self-hosted OSS/EE keep internal exposure available. Enabling the setting does not create a VPN or VPC connection. Changing it re-renders the project's Ingress on the other controller - no release, no downtime for the instances - and the DNS record for its hostname follows on the provider's next sync, pointing at the internal address. Certificates keep working: the wildcard covers the hostname, and a custom domain's certificate is issued through the front door the domain points at.
 
 The internal controller exists when the cluster was installed with `--internal-lb-subnet <subnet ocid>` (Oracle Cloud: the private load balancer subnet that `contrib/oci/terraform` creates). Without it, setting a project internal is refused with an explanation. The dashboard, sign-in page and Grafana can move behind the internal front door too, once a team has the network to reach them: `shpyrd cluster init --platform-exposure internal`.
 

@@ -62,6 +62,8 @@ type UpdateWorkspaceRequest struct {
 
 // WorkspaceSummary is one workspace as the console lists them.
 type WorkspaceSummary struct {
+	Capabilities     WorkspaceCapabilities `json:"capabilities"`
+	InternalExposure *bool                 `json:"internalExposure"`
 	// ID is the workspace's id, the wsid of the JWTs it serves.
 	ID      string `json:"id"`
 	Slug    string `json:"slug"`

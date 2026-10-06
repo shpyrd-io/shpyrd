@@ -33,6 +33,9 @@
     "appHost": {
       "prefix": "acme-",
       "suffix": ".shpyrd.app"
+    },
+    "capabilities": {
+      "internalExposure": false
     }
   },
   "door": "workspace",

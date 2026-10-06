@@ -346,6 +346,7 @@ func (m *Memory) UpdateWorkspaceSettings(_ context.Context, slug string, setting
 	if err != nil {
 		return nil, err
 	}
+	settings.InternalExposure = w.Settings.InternalExposure
 	w.Settings, w.UpdatedAt = settings, m.now()
 	c := *w
 	return &c, nil
@@ -1944,4 +1945,22 @@ func (m *Memory) SetProjectIcon(_ context.Context, id string, data []byte, typ s
 	}
 	m.icons[id] = projectIcon{data: append([]byte(nil), data...), typ: typ}
 	return nil
+}
+
+// SetWorkspaceInternalExposure changes only the operator's networking override.
+func (m *Memory) SetWorkspaceInternalExposure(_ context.Context, slug string, enabled *bool) (*Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.ws(slug)
+	if err != nil {
+		return nil, err
+	}
+	w.Settings.InternalExposure = nil
+	if enabled != nil {
+		v := *enabled
+		w.Settings.InternalExposure = &v
+	}
+	w.UpdatedAt = m.now()
+	c := *w
+	return &c, nil
 }
