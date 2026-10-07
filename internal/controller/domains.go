@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/net/publicsuffix"
 	"net"
 	"sort"
 	"strings"
@@ -228,9 +229,11 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 		}
 		switch st.DNS {
 		case DNSMissing:
-			st.Message = fmt.Sprintf("create a DNS record: CNAME %s -> %s (or A -> %s at a zone apex)", h, target, address)
+			typ, value := RecordFor(h, target, address)
+			st.Message = fmt.Sprintf("create a DNS record: %s %s -> %s", typ, h, value)
 		case DNSWrong:
-			st.Message = fmt.Sprintf("%s points elsewhere: change it to CNAME -> %s (or A -> %s)", h, target, address)
+			typ, value := RecordFor(h, target, address)
+			st.Message = fmt.Sprintf("%s points elsewhere: change it to %s -> %s", h, typ, value)
 		}
 		if st.DNS != DNSOK || (st.Certificate != CertReady && st.Certificate != CertWildcard) {
 			pending = true
@@ -239,6 +242,41 @@ func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) (
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out, pending
+}
+
+// RecordFor is the record that points host at a project: a CNAME to the
+// project's hostname (target), except at a zone apex, a root domain such as
+// example.com or acme.co.uk, which cannot carry a CNAME and points at the
+// front door's address instead (ApexRecordType).
+func RecordFor(host, target, address string) (typ, value string) {
+	if IsApex(host) {
+		return ApexRecordType(address), address
+	}
+	return "CNAME", target
+}
+
+// IsApex says host is a root domain: the registrable name itself, by the
+// public suffix list, not a name under it.
+func IsApex(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	root, err := publicsuffix.EffectiveTLDPlusOne(host)
+	return err == nil && root == host
+}
+
+// ApexRecordType is the record a zone apex points at the front door with:
+// A where the load balancer has addresses (one or several, comma-separated),
+// ALIAS where it has a hostname only. With no address known, A: the most
+// common, its value for the operator to give.
+func ApexRecordType(address string) string {
+	if strings.TrimSpace(address) == "" {
+		return "A"
+	}
+	for _, a := range strings.Split(address, ",") {
+		if net.ParseIP(strings.TrimSpace(a)) == nil {
+			return "ALIAS"
+		}
+	}
+	return "A"
 }
 
 // frontDoorAddress is the address a custom domain must resolve to: the

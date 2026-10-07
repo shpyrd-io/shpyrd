@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 )
 
@@ -184,14 +183,14 @@ func printDomains(out io.Writer, res *api.DomainsResult) {
 	w.Flush()
 }
 
-func domainNote(d shpyrdv1.DomainStatus) string {
+func domainNote(d api.ProjectDomain) string {
 	switch {
 	case d.DNS == "ok" && (d.Certificate == "ready" || d.Certificate == "wildcard"):
 		return "serving"
 	case d.DNS == "missing":
-		return fmt.Sprintf("create: CNAME %s -> %s (or A -> %s)", d.Host, d.Target, d.Address)
+		return fmt.Sprintf("create: %s %s -> %s", d.Record.Type, d.Host, d.Record.Value)
 	case d.DNS == "wrong":
-		return fmt.Sprintf("points elsewhere: CNAME %s -> %s (or A -> %s)", d.Host, d.Target, d.Address)
+		return fmt.Sprintf("points elsewhere: change it to %s %s -> %s", d.Record.Type, d.Host, d.Record.Value)
 	case d.Certificate == "failed":
 		return "certificate failed: " + d.Message
 	default:

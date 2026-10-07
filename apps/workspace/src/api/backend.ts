@@ -201,7 +201,7 @@ export const backend: Api = {
   restoreVolume: (slug, volume, body) => request(`${project(slug)}/volumes/${encodeURIComponent(volume)}/restore`, json("POST", body)),
   domains: async (slug) => {
     const r = await request<DomainsAnswer>(`${project(slug)}/domains`);
-    return { target: r.target, domains: r.domains };
+    return { target: r.target, address: r.address, domains: r.domains };
   },
   addDomain: async (slug, host) => {
     const r = await request<DomainsAnswer>(`${project(slug)}/domains`, json("POST", { host }));

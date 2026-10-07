@@ -116,16 +116,39 @@
             "host": "hello.acme.com",
             "dns": "ok",
             "target": "acme-hello-world.shpyrd.app",
-            "certificate": "ready"
+            "certificate": "ready",
+            "record": {
+              "type": "CNAME",
+              "name": "hello.acme.com",
+              "value": "acme-hello-world.shpyrd.app"
+            }
           },
           {
             "host": "www.hello.acme.com",
             "dns": "missing",
             "target": "acme-hello-world.shpyrd.app",
             "certificate": "issuing",
-            "message": "CNAME not found; the certificate waits for it"
+            "message": "CNAME not found; the certificate waits for it",
+            "record": {
+              "type": "CNAME",
+              "name": "www.hello.acme.com",
+              "value": "acme-hello-world.shpyrd.app"
+            }
+          },
+          {
+            "host": "acme-hello.com",
+            "dns": "missing",
+            "target": "acme-hello-world.shpyrd.app",
+            "certificate": "issuing",
+            "record": {
+              "type": "A",
+              "name": "acme-hello.com",
+              "value": "203.0.113.10"
+            },
+            "message": "create a DNS record: A acme-hello.com -> 203.0.113.10"
           }
-        ]
+        ],
+        "address": "203.0.113.10"
       },
       "drains": [
         {
@@ -386,8 +409,13 @@
           "value": "acme.shpyrd.cloud"
         },
         {
+          "type": "CNAME",
+          "name": "*.intranet.acme.com",
+          "value": "acme.shpyrd.cloud"
+        },
+        {
           "type": "TXT",
-          "name": "_shpyrd.intranet.acme.com",
+          "name": "_shpyrd-verify.intranet.acme.com",
           "value": "shpyrd-verify=7c1e9a"
         }
       ],
@@ -404,8 +432,13 @@
           "value": "acme.shpyrd.cloud"
         },
         {
+          "type": "CNAME",
+          "name": "*.apps.acme.com",
+          "value": "acme.shpyrd.cloud"
+        },
+        {
           "type": "TXT",
-          "name": "_shpyrd.apps.acme.com",
+          "name": "_shpyrd-verify.apps.acme.com",
           "value": "shpyrd-verify=b34f10"
         }
       ],

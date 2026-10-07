@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -330,11 +331,15 @@ type DNSRecord struct {
 	Value string `json:"value"`
 }
 
-func (s *Server) domainView(ws *store.Workspace, h store.WorkspaceHost) DomainView {
+func (s *Server) domainView(ctx context.Context, ws *store.Workspace, h store.WorkspaceHost) DomainView {
+	// The name itself points at the workspace by CNAME, or at the public
+	// front door's address at a zone apex, which cannot carry a CNAME. The
+	// wildcard under it is never an apex.
+	typ, value := controller.RecordFor(h.Host, ws.Address, s.frontDoor(ctx, false))
 	return DomainView{
 		Host: h.Host, Verified: h.VerifiedAt != nil, VerifiedAt: h.VerifiedAt, Primary: h.Primary,
 		Records: []DNSRecord{
-			{Type: "CNAME", Name: h.Host, Value: ws.Address},
+			{Type: typ, Name: h.Host, Value: value},
 			{Type: "CNAME", Name: "*." + h.Host, Value: ws.Address},
 			{Type: "TXT", Name: "_shpyrd-verify." + h.Host, Value: "shpyrd-verify=" + h.Token},
 		},
@@ -351,7 +356,7 @@ func (s *Server) listWorkspaceDomains(c *gin.Context) {
 	out := []DomainView{}
 	for _, h := range s.hostsOf(c.Request.Context(), ws) {
 		if h.Kind == store.HostCustom {
-			out = append(out, s.domainView(ws, h))
+			out = append(out, s.domainView(c.Request.Context(), ws, h))
 		}
 	}
 	c.JSON(http.StatusOK, out)
@@ -405,7 +410,7 @@ func (s *Server) addWorkspaceDomain(c *gin.Context) {
 	}
 	s.forgetHosts()
 	s.audit(c, "", "workspace.domain.add", host, "")
-	c.JSON(http.StatusCreated, s.domainView(ws, *h))
+	c.JSON(http.StatusCreated, s.domainView(c.Request.Context(), ws, *h))
 }
 
 // verifyDomain is POST /api/workspace/domains/:host/verify: the TXT proof
@@ -455,7 +460,7 @@ func (s *Server) verifyWorkspaceDomain(c *gin.Context) {
 	s.forgetTenants()
 	s.workspacesChanged()
 	s.audit(c, "", "workspace.domain.verified", h.Host, "")
-	c.JSON(http.StatusOK, s.domainView(ws, *updated))
+	c.JSON(http.StatusOK, s.domainView(c.Request.Context(), ws, *updated))
 }
 
 // updateDomain is PATCH /api/workspace/domains/:host {primary}: a verified
@@ -492,7 +497,7 @@ func (s *Server) updateWorkspaceDomain(c *gin.Context) {
 	s.forgetTenants()
 	s.workspacesChanged()
 	s.audit(c, "", "workspace.domain.primary", h.Host, fmt.Sprintf("%v", h.Primary))
-	c.JSON(http.StatusOK, s.domainView(ws, *updated))
+	c.JSON(http.StatusOK, s.domainView(c.Request.Context(), ws, *updated))
 }
 
 func (s *Server) deleteWorkspaceDomain(c *gin.Context) {

@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -33,11 +33,18 @@ type domainRequest struct {
 // DomainsResult is the answer to a domain change: the records to create and
 // the state of every custom domain.
 type DomainsResult struct {
-	Host    string                  `json:"host,omitempty"`
-	Target  string                  `json:"target"`
-	Address string                  `json:"address,omitempty"`
-	Domains []shpyrdv1.DomainStatus `json:"domains"`
-	App     AppSummary              `json:"app"`
+	Host    string          `json:"host,omitempty"`
+	Target  string          `json:"target"`
+	Address string          `json:"address,omitempty"`
+	Domains []ProjectDomain `json:"domains"`
+	App     AppSummary      `json:"app"`
+}
+
+// ProjectDomain is one custom domain of a project: its state, and the record
+// that points it here (controller.RecordFor).
+type ProjectDomain struct {
+	shpyrdv1.DomainStatus
+	Record DNSRecord `json:"record"`
 }
 
 // normalizeHost lower-cases and validates a hostname; wildcards are refused
@@ -160,54 +167,81 @@ func (s *Server) domainsResult(ctx context.Context, app *shpyrdv1.App, host stri
 			target = s.appHostsIn(ctx, ws, project.SlugOf(app))[0]
 		}
 	}
+	address := s.frontDoorAddress(ctx, app)
 	res := DomainsResult{
 		Host:    host,
 		Target:  target,
-		Address: s.frontDoorAddress(ctx, app),
-		Domains: app.Status.Domains,
+		Address: address,
+		Domains: s.domainsOf(ctx, app, target, address),
 		App:     summarize(app),
-	}
-	if res.Domains == nil {
-		res.Domains = []shpyrdv1.DomainStatus{}
-	}
-	// A domain just added has no status yet: show what to create right away.
-	if host != "" {
-		found := false
-		for _, d := range res.Domains {
-			if d.Host == host {
-				found = true
-			}
-		}
-		if !found {
-			res.Domains = append(res.Domains, shpyrdv1.DomainStatus{
-				Host: host, DNS: controller.DNSUnknown, Certificate: controller.CertIssuing,
-				Target: res.Target, Address: res.Address,
-				Message: fmt.Sprintf("create a DNS record: CNAME %s -> %s (or %s -> %s at a zone apex)", host, res.Target, ApexRecordType(res.Address), res.Address),
-			})
-		}
 	}
 	return res
 }
 
-// ApexRecordType is the record a zone apex (which cannot carry a CNAME)
-// points at the front door with: A where the load balancer has addresses
-// (one or several, comma-separated), ALIAS where it has a hostname only.
-func ApexRecordType(address string) string {
-	for _, a := range strings.Split(address, ",") {
-		if net.ParseIP(strings.TrimSpace(a)) == nil {
-			return "ALIAS"
+// domainsOf lists the project's domains as its spec has them: the
+// controller's status for those it has seen, and for one added since, what
+// to create right away. The status is written when the project is next
+// reconciled, so on its own it would still show a domain just removed and
+// miss one just added. The workspace's own hosts for the project, which
+// the status also holds and the spec never does, stay.
+func (s *Server) domainsOf(ctx context.Context, app *shpyrdv1.App, target, address string) []ProjectDomain {
+	wanted := map[string]bool{}
+	for _, d := range app.Spec.Domains {
+		wanted[strings.ToLower(strings.TrimSuffix(d, "."))] = true
+	}
+	ws, _ := s.store.Workspace(ctx, workspaceOf(app))
+	for _, h := range s.appHostsIn(ctx, ws, project.SlugOf(app))[1:] {
+		wanted[h] = true
+	}
+	record := func(host string) DNSRecord {
+		typ, value := controller.RecordFor(host, target, address)
+		return DNSRecord{Type: typ, Name: host, Value: value}
+	}
+	out := []ProjectDomain{}
+	seen := map[string]bool{}
+	for _, d := range app.Status.Domains {
+		if wanted[d.Host] {
+			out = append(out, ProjectDomain{DomainStatus: d, Record: record(d.Host)})
+			seen[d.Host] = true
 		}
 	}
-	return "A"
+	for _, d := range app.Spec.Domains {
+		h := strings.ToLower(strings.TrimSuffix(d, "."))
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		r := record(h)
+		out = append(out, ProjectDomain{
+			DomainStatus: shpyrdv1.DomainStatus{
+				Host: h, DNS: controller.DNSUnknown, Certificate: controller.CertIssuing,
+				Target: target, Address: address,
+				Message: fmt.Sprintf("create a DNS record: %s %s -> %s", r.Type, h, r.Value),
+			},
+			Record: r,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out
 }
+
+// ApexRecordType is the record a zone apex points at the front door with
+// (controller.ApexRecordType), for the CLI.
+func ApexRecordType(address string) string { return controller.ApexRecordType(address) }
 
 // frontDoorAddress is the load balancer a project's hosts resolve to: the
 // static addresses the profile reserved for the public front door when it
 // has them (SHPYRD_LB_IP; several on AWS, one per zone), else what the
 // Service reports.
 func (s *Server) frontDoorAddress(ctx context.Context, app *shpyrdv1.App) string {
+	return s.frontDoor(ctx, app.Spec.Exposure == "internal")
+}
+
+// frontDoor is the address of the public load balancer, or of the internal
+// one.
+func (s *Server) frontDoor(ctx context.Context, internal bool) string {
 	ns, name := "ingress-nginx", "ingress-nginx-controller"
-	if app.Spec.Exposure == "internal" {
+	if internal {
 		ns, name = "ingress-nginx-internal", "ingress-nginx-internal-controller"
 	} else if fixed := s.vars(install.VarLBIP); fixed != "" {
 		return fixed
