@@ -497,8 +497,11 @@ func equalEnvFrom(a, b []corev1.EnvFromSource) bool {
 // refreshDelivery reads Vector's metrics for the drain's sink and updates
 // phase, counters and the last delivery time.
 func (r *LogDrainReconciler) refreshDelivery(ctx context.Context, d *shpyrdv1.LogDrain) {
+	// A drain still pending says why on every check: one added while the
+	// logs-agent extension was off must not keep saying so once it runs (#16).
+	pending := d.Status.Phase == "" || d.Status.Phase == shpyrdv1.DrainPending
 	if r.HTTP == nil {
-		if d.Status.Phase == "" {
+		if pending {
 			d.Status.Phase = shpyrdv1.DrainPending
 			d.Status.Message = "configured; waiting for the first lines"
 		}
@@ -506,7 +509,7 @@ func (r *LogDrainReconciler) refreshDelivery(ctx context.Context, d *shpyrdv1.Lo
 	}
 	sent, errs, ok := r.sinkCounters(ctx, componentID(d)+"_sink")
 	if !ok {
-		if d.Status.Phase == "" {
+		if pending {
 			d.Status.Phase = shpyrdv1.DrainPending
 			d.Status.Message = "configured; waiting for the agent to load it"
 		}
@@ -531,7 +534,7 @@ func (r *LogDrainReconciler) refreshDelivery(ctx context.Context, d *shpyrdv1.Lo
 		if d.Status.FailingPolls == drainFailingPolls {
 			r.auditFailing(ctx, d)
 		}
-	case d.Status.Phase == "":
+	case pending:
 		d.Status.Phase = shpyrdv1.DrainPending
 		d.Status.Message = "configured; waiting for the first lines"
 	}

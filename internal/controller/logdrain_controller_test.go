@@ -249,6 +249,49 @@ func TestLogDrainWithoutAgent(t *testing.T) {
 	}
 }
 
+// #16: a drain added while the logs-agent extension was off says so; once
+// the agent runs, that message gives way to the drain's own state, before
+// any line has gone out.
+func TestLogDrainAfterAgentEnabled(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		http *http.Client
+		want string
+	}{
+		{"no metrics client", nil, "waiting for the first lines"},
+		{"agent not reporting the drain yet", &http.Client{Transport: noDrainMetrics{}}, "waiting for the agent to load it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drain := &shpyrdv1.LogDrain{ObjectMeta: metav1.ObjectMeta{Name: "dd", Namespace: "app-shop"}, Spec: shpyrdv1.LogDrainSpec{URL: "https://x.example.com/"}}
+			r, c := newDrainReconciler(t, drain)
+			r.HTTP = tc.http
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(drain)}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Create(ctx, vectorDaemonSet()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Reconcile(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			_ = c.Get(ctx, client.ObjectKeyFromObject(drain), drain)
+			if drain.Status.Phase != shpyrdv1.DrainPending || !strings.Contains(drain.Status.Message, tc.want) {
+				t.Errorf("status with the agent running = %+v, want Pending: %s", drain.Status, tc.want)
+			}
+		})
+	}
+}
+
+// noDrainMetrics answers Vector's metrics endpoint before it has loaded
+// any drain.
+type noDrainMetrics struct{}
+
+func (noDrainMetrics) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("vector_started_total 1\n")), Header: http.Header{}}, nil
+}
+
 // vectorMetrics answers Vector's metrics endpoint with the counters it is
 // given: sent and errs are read on every request.
 type vectorMetrics struct{ sent, errs int64 }
