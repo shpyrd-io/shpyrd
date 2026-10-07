@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -69,6 +70,16 @@ func markDeploymentReady(t *testing.T, c client.Client, ns, name string, replica
 	d.Status.UpdatedReplicas = replicas
 	d.Status.AvailableReplicas = replicas
 	if err := c.Status().Update(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	// The instances are the ReplicaSet's the Deployment controller makes for
+	// the current template.
+	rs := replicaSetOf(d, d.Spec.Template.Spec.Containers[0].Image, fmt.Sprintf("ready%d", d.Generation))
+	if err := c.Create(context.Background(), rs); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatal(err)
+	}
+	rs.Status.Replicas, rs.Status.ReadyReplicas, rs.Status.AvailableReplicas = replicas, replicas, replicas
+	if err := c.Status().Update(context.Background(), rs); err != nil {
 		t.Fatal(err)
 	}
 }

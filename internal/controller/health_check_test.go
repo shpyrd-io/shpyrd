@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ptr "k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -138,36 +140,25 @@ func TestRolloutStrategyWithVolume(t *testing.T) {
 func TestProcessHealthStartupBudget(t *testing.T) {
 	app := sampleApp("grace")
 	started := metav1.NewTime(time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC))
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "grace-web-1", Namespace: app.Namespace, Labels: map[string]string{shpyrdv1.LabelApp: app.Name, shpyrdv1.LabelProcess: "web"}},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name:           "app",
-			StartupProbe:   &corev1.Probe{PeriodSeconds: 5, FailureThreshold: 6},
-			ReadinessProbe: &corev1.Probe{PeriodSeconds: 10, FailureThreshold: 3},
-		}}},
-		Status: corev1.PodStatus{
-			Phase:      corev1.PodRunning,
-			Conditions: []corev1.PodCondition{{Type: corev1.ContainersReady, Status: corev1.ConditionFalse, Message: "containers with unready status: [app]"}},
-			ContainerStatuses: []corev1.ContainerStatus{{
-				Name:  "app",
-				Ready: false,
-				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}},
-			}},
-		},
-	}
-	r, _ := newTestReconciler(t, app, pod)
+	d := rolledOut(app, "registry.test/grace:v1")
+	d.Spec.Template.Spec.Containers[0].StartupProbe = &corev1.Probe{PeriodSeconds: 5, FailureThreshold: 6}
+	d.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{PeriodSeconds: 10, FailureThreshold: 3}
+	rs := replicaSetOf(d, "registry.test/grace:v1", "h1")
+	pod := podOf(rs, "grace-web-1", corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}})
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.ContainersReady, Status: corev1.ConditionFalse, Message: "containers with unready status: [app]"}}
+	r, _ := newTestReconciler(t, app, d, rs, pod)
 
 	// 30 s startup + 30 s readiness = 60 s budget.
 	r.Now = func() time.Time { return started.Add(20 * time.Second) }
-	if failing, reason := r.processHealth(context.Background(), app, "web"); failing != 0 || reason != "" {
+	if failing, reason := r.processHealth(context.Background(), rs); failing != 0 || reason != "" {
 		t.Errorf("20s after start: failing=%d reason=%q, want starting", failing, reason)
 	}
 	r.Now = func() time.Time { return started.Add(59 * time.Second) }
-	if failing, _ := r.processHealth(context.Background(), app, "web"); failing != 0 {
+	if failing, _ := r.processHealth(context.Background(), rs); failing != 0 {
 		t.Errorf("59s after start: still within budget, got failing=%d", failing)
 	}
 	r.Now = func() time.Time { return started.Add(75 * time.Second) }
-	failing, reason := r.processHealth(context.Background(), app, "web")
+	failing, reason := r.processHealth(context.Background(), rs)
 	if failing != 1 || reason != "not ready after 1m15s: readiness probe failing" {
 		t.Errorf("75s after start: failing=%d reason=%q", failing, reason)
 	}
@@ -178,9 +169,175 @@ func TestProcessHealthStartupBudget(t *testing.T) {
 	}
 	// A crash loop is failing regardless of age.
 	pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
-	r2, _ := newTestReconciler(t, app, pod)
+	r2, _ := newTestReconciler(t, app, d, rs, pod)
 	r2.Now = func() time.Time { return started.Add(time.Second) }
-	if failing, reason := r2.processHealth(context.Background(), app, "web"); failing != 1 || reason != "CrashLoopBackOff" {
+	if failing, reason := r2.processHealth(context.Background(), rs); failing != 1 || reason != "CrashLoopBackOff" {
 		t.Errorf("crash loop: failing=%d reason=%q", failing, reason)
+	}
+}
+
+// rolledOut is a web Deployment of app at image.
+func rolledOut(app *shpyrdv1.App, image string) *appsv1.Deployment {
+	labels := selectorLabels(app, "web")
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: app.Name + "-web", Namespace: app.Namespace, UID: "deploy", Labels: labels},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: image}}},
+			},
+		},
+	}
+}
+
+// replicaSetOf is the ReplicaSet the Deployment controller made for d at
+// image, with the pod-template-hash it adds to its pods.
+func replicaSetOf(d *appsv1.Deployment, image, hash string) *appsv1.ReplicaSet {
+	tmpl := *d.Spec.Template.DeepCopy()
+	tmpl.Spec.Containers[0].Image = image
+	tmpl.Labels = mergeMaps(tmpl.Labels, map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: hash})
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: d.Name + "-" + hash, Namespace: d.Namespace, UID: types.UID("rs-" + hash), Labels: tmpl.Labels,
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: d.Name, UID: d.UID, Controller: ptr.To(true)}},
+		},
+		Spec: appsv1.ReplicaSetSpec{Selector: d.Spec.Selector, Template: tmpl},
+	}
+}
+
+// podOf is an instance of rs whose app container is in state.
+func podOf(rs *appsv1.ReplicaSet, name string, state corev1.ContainerState) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: rs.Namespace, Labels: rs.Spec.Template.Labels,
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rs.Name, UID: rs.UID, Controller: ptr.To(true)}},
+		},
+		Spec:   rs.Spec.Template.Spec,
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "app", State: state}}},
+	}
+}
+
+// #91: a deploy's outcome follows the instances of the release being
+// deployed. The previous release's pods stay until the new ones are ready,
+// and their crash loop is not the new release's.
+func TestProcessHealthFollowsTheCurrentRelease(t *testing.T) {
+	app := sampleApp("rollout")
+	d := rolledOut(app, "registry.test/rollout:v2")
+	old := replicaSetOf(d, "registry.test/rollout:v1", "v1hash")
+	cur := replicaSetOf(d, "registry.test/rollout:v2", "v2hash")
+	crashing := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	creating := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
+
+	health := func(objs ...client.Object) (int32, string) {
+		t.Helper()
+		r, _ := newTestReconciler(t, append([]client.Object{app, d, old}, objs...)...)
+		current, err := r.currentReplicaSet(context.Background(), d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.processHealth(context.Background(), current)
+	}
+	if failing, reason := health(cur, podOf(old, "rollout-web-v1", crashing), podOf(cur, "rollout-web-v2", creating)); failing != 0 || reason != "" {
+		t.Errorf("v1 crash-looping, v2 starting: failing=%d reason=%q, want v2's health alone", failing, reason)
+	}
+	if failing, reason := health(cur, podOf(old, "rollout-web-v1", crashing), podOf(cur, "rollout-web-v2", crashing)); failing != 1 || reason != "CrashLoopBackOff" {
+		t.Errorf("v2 crash-looping too: failing=%d reason=%q, want v2's crash loop", failing, reason)
+	}
+	// Before the Deployment controller has made v2's ReplicaSet there is no
+	// instance of the new release to judge.
+	if failing, reason := health(podOf(old, "rollout-web-v1", crashing)); failing != 0 || reason != "" {
+		t.Errorf("v2 not created yet: failing=%d reason=%q, want nothing failing", failing, reason)
+	}
+}
+
+// #91: while the next release builds, the instances that crash belong to
+// the release it replaces. The project reads Building, so a deploy waiting
+// on it does not take the old crash loop for the new release's outcome.
+func TestBuildingNextReleaseOverPreviousCrashLoop(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	runReconcile(t, r, app)
+	finishBuild(t, c, getJob(t, c, "app-dk", "dk-build-1"), 0, `{"image":"10.96.0.50:5000/apps/dk@`+testDigest+`","revision":""}`)
+	runReconcile(t, r, app)
+
+	// v1's instance crash-loops.
+	d := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-dk", Name: "dk-web"}, d); err != nil {
+		t.Fatal(err)
+	}
+	rs := replicaSetOf(d, d.Spec.Template.Spec.Containers[0].Image, "v1hash")
+	if err := c.Create(ctx, rs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, podOf(rs, "dk-web-v1", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}})); err != nil {
+		t.Fatal(err)
+	}
+	got := runReconcile(t, r, app)
+	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "CrashLoopBackOff") {
+		t.Fatalf("v1 crash-looping: phase=%q (%s), want Failed", got.Status.Phase, got.Status.Message)
+	}
+
+	// The fix is uploaded: build 2 runs while v1 still crash-loops.
+	got.Spec.Source.Blob.SHA256, got.Spec.Source.Blob.Ref = "def456def456def456", "fedcba987654"
+	if err := c.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if got.Status.LatestBuild != "dk-build-2" || got.Status.Phase != shpyrdv1.PhaseBuilding {
+		t.Fatalf("building v2: build=%q phase=%q (%s), want Building", got.Status.LatestBuild, got.Status.Phase, got.Status.Message)
+	}
+}
+
+// #91, the other way round: a release whose instances crash-loop is not
+// running because the previous release's instance is still ready. The
+// Deployment's ready count spans both; the release's is its ReplicaSet's.
+func TestCrashingReleaseOverReadyPrevious(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	runReconcile(t, r, app)
+	finishBuild(t, c, getJob(t, c, "app-dk", "dk-build-1"), 0, `{"image":"10.96.0.50:5000/apps/dk@`+testDigest+`","revision":""}`)
+	runReconcile(t, r, app)
+	markDeploymentReady(t, c, "app-dk", "dk-web", 1)
+	got := runReconcile(t, r, app)
+	if got.Status.Phase != shpyrdv1.PhaseRunning {
+		t.Fatalf("v1 ready: phase=%q (%s), want Running", got.Status.Phase, got.Status.Message)
+	}
+
+	// v2 builds and rolls out; its instance crash-loops while v1's serves.
+	got.Spec.Source.Blob.SHA256, got.Spec.Source.Blob.Ref = "def456def456def456", "fedcba987654"
+	if err := c.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	v2 := "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	finishBuild(t, c, getJob(t, c, "app-dk", "dk-build-2"), 0, `{"image":"10.96.0.50:5000/apps/dk@`+v2+`","revision":""}`)
+	runReconcile(t, r, got)
+	d := &appsv1.Deployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-dk", Name: "dk-web"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if img := d.Spec.Template.Spec.Containers[0].Image; !strings.HasSuffix(img, v2) {
+		t.Fatalf("Deployment image = %q, want v2's", img)
+	}
+	rs := replicaSetOf(d, d.Spec.Template.Spec.Containers[0].Image, "v2hash")
+	if err := c.Create(ctx, rs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, podOf(rs, "dk-web-v2", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}})); err != nil {
+		t.Fatal(err)
+	}
+	// What the Deployment reports mid-rollout: v2's instance is updated,
+	// v1's is the one ready.
+	d.Status.ObservedGeneration = d.Generation
+	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas, d.Status.AvailableReplicas = 2, 1, 1, 1
+	if err := c.Status().Update(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "CrashLoopBackOff") {
+		t.Fatalf("v2 crash-looping beside a ready v1: phase=%q (%s), want Failed", got.Status.Phase, got.Status.Message)
 	}
 }
