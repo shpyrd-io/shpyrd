@@ -253,12 +253,18 @@ export type SizeCatalog = SizeList & { postgres: SizeList; redis: SizeList };
 
 export type Instance = { name: string; process: string; pod: string; ready: boolean };
 
+// A record to publish at the DNS provider.
+export type DnsRecord = { type: string; name: string; value: string };
+
 export type DomainStatus = {
   host: string;
   dns: "ok" | "missing" | "wrong" | "unknown";
   target?: string;
   certificate: "ready" | "issuing" | "failed" | "wildcard";
   message?: string;
+  // The record that points the domain here: a CNAME to the project, or an
+  // A (ALIAS) to the front door where the domain is a zone apex.
+  record?: DnsRecord;
 };
 
 // A name of the workspace's own: proved by records, and one of them the
@@ -268,7 +274,7 @@ export type WorkspaceDomain = {
   verified: boolean;
   verifiedAt?: string;
   primary: boolean;
-  records: { type: string; name: string; value: string }[];
+  records: DnsRecord[];
   url: string;
 };
 

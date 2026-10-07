@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -45,6 +45,7 @@ import {
 } from "@shpyrd/ui/components/tabs";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
+import { RecordsPanel } from "../project/domains";
 import { Failed, Loading } from "../project/shared";
 
 // The workspace is an MCP server: the name the assistants show, its
@@ -443,88 +444,95 @@ export function WorkspaceDomains() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Domain</TableHead>
-                  <TableHead>Records</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead className="text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {domains.data!.map((d) => (
-                  <TableRow key={d.host}>
-                    <TableCell>
-                      <InlineCode>{d.host}</InlineCode>
-                      {d.primary && (
-                        <Badge variant="secondary" className="ml-2">
-                          the address
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-[11px] text-muted-foreground">
-                      {d.records.length === 0
-                        ? "the platform's"
-                        : d.records.map((r) => (
-                            <div key={`${r.type}${r.name}`}>
-                              {r.name} {r.type} {r.value}
-                            </div>
-                          ))}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge
-                        type={d.verified ? "success" : "warning"}
-                        live={!d.verified}
-                      >
-                        {d.verified ? "Verified" : "Waiting for the records"}
-                      </StatusBadge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {perms.owner && (
-                        <Stack
-                          direction="horizontal"
-                          gap="tight"
-                          justify="end"
-                          align="center"
+                  <Fragment key={d.host}>
+                    <TableRow>
+                      <TableCell>
+                        <InlineCode>{d.host}</InlineCode>
+                        {d.primary && (
+                          <Badge variant="secondary" className="ml-2">
+                            the address
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge
+                          type={d.verified ? "success" : "warning"}
+                          live={!d.verified}
                         >
-                          {!d.verified && (
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              disabled={verify.isPending}
-                              onClick={() => verify.mutate(d.host)}
-                            >
-                              Verify
-                            </Button>
-                          )}
-                          {d.verified && !d.primary && (
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              disabled={primary.isPending}
-                              onClick={() => primary.mutate(d.host)}
-                            >
-                              Make it the address
-                            </Button>
-                          )}
-                          {!d.primary && d.records.length > 0 && (
-                            <ConfirmDialog
-                              trigger={
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  icon={<Trash2 />}
-                                  aria-label={`Remove ${d.host}`}
-                                />
-                              }
-                              variant="destructive"
-                              title={`Remove ${d.host}?`}
-                              description="It stops answering here. The records at your registrar stay as they are."
-                              action="Remove"
-                              onConfirm={() => remove.mutate(d.host)}
-                            />
-                          )}
-                        </Stack>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                          {d.verified ? "Verified" : "Waiting for the records"}
+                        </StatusBadge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {perms.owner && (
+                          <Stack
+                            direction="horizontal"
+                            gap="tight"
+                            justify="end"
+                            align="center"
+                          >
+                            {!d.verified && (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                disabled={verify.isPending}
+                                onClick={() => verify.mutate(d.host)}
+                              >
+                                Verify
+                              </Button>
+                            )}
+                            {d.verified && !d.primary && (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                disabled={primary.isPending}
+                                onClick={() => primary.mutate(d.host)}
+                              >
+                                Make it the address
+                              </Button>
+                            )}
+                            {!d.primary && d.records.length > 0 && (
+                              <ConfirmDialog
+                                trigger={
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    icon={<Trash2 />}
+                                    aria-label={`Remove ${d.host}`}
+                                  />
+                                }
+                                variant="destructive"
+                                title={`Remove ${d.host}?`}
+                                description="It stops answering here. The records at your registrar stay as they are."
+                                action="Remove"
+                                onConfirm={() => remove.mutate(d.host)}
+                              />
+                            )}
+                          </Stack>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {/* Until it is verified, what to publish to prove it and
+                      to point it here. */}
+                    {!d.verified && d.records.length > 0 && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={3}
+                          className="pt-0 whitespace-normal"
+                        >
+                          <RecordsPanel records={d.records}>
+                            Publish these records at your DNS provider, then
+                            Verify. The TXT record proves the domain is yours.
+                          </RecordsPanel>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>

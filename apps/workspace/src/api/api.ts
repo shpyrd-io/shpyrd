@@ -148,7 +148,7 @@ export type Api = {
   createSnapshot: (slug: string, volume: string, name?: string) => Promise<SnapshotInfo>;
   removeSnapshot: (slug: string, volume: string, snapshot: string) => Promise<void>;
   restoreVolume: (slug: string, volume: string, body: { snapshot: string; to?: string }) => Promise<RestoreVolumeResult>;
-  domains: (slug: string) => Promise<{ target: string; domains: DomainStatus[] }>;
+  domains: (slug: string) => Promise<{ target: string; address?: string; domains: DomainStatus[] }>;
   addDomain: (slug: string, host: string) => Promise<DomainStatus>;
   removeDomain: (slug: string, host: string) => Promise<void>;
   // The drains of the workspace: every project's lines, labelled with it.

@@ -1146,6 +1146,99 @@ func TestDomains(t *testing.T) {
 	}
 }
 
+// The list follows the spec, not only the controller's last status: a domain
+// just added shows at once (pending), one just removed is gone at once.
+func TestDomainsListFollowsTheSpec(t *testing.T) {
+	shop := sampleApp("shop", shpyrdv1.PhaseRunning, shpyrdv1.Release{Number: 1, Image: "img"})
+	shop.Spec.Domains = []string{"new.example.com", "kept.example.com"}
+	shop.Status.Domains = []shpyrdv1.DomainStatus{
+		{Host: "kept.example.com", DNS: "ok", Certificate: "ready"},
+		{Host: "old.example.com", DNS: "ok", Certificate: "ready"},
+	}
+	s, _ := newTestServer(t, nil, []client.Object{shop})
+
+	rec := do(t, s, "GET", "/api/projects/shop/domains", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+	var res DomainsResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]ProjectDomain{}
+	for _, d := range res.Domains {
+		got[d.Host] = d
+	}
+	if len(got) != 2 {
+		t.Fatalf("domains = %+v, want kept and new only", res.Domains)
+	}
+	if _, ok := got["old.example.com"]; ok {
+		t.Errorf("old.example.com is still listed after its removal from the spec")
+	}
+	if d := got["kept.example.com"]; d.DNS != "ok" || d.Certificate != "ready" {
+		t.Errorf("kept = %+v, want the controller's status", d)
+	}
+	if d := got["new.example.com"]; d.DNS != "unknown" || d.Certificate != "issuing" || d.Target != "shop.example.test" {
+		t.Errorf("new = %+v, want pending, pointed at the project", d)
+	}
+}
+
+// The front door's load balancer, for the records of a zone apex.
+func frontDoorService(ip string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingress-nginx-controller", Namespace: "ingress-nginx"},
+		Status:     corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: ip}}}},
+	}
+}
+
+// Each domain comes with the record that points it here: a CNAME to the
+// project for a name under a domain, an A to the front door at a zone apex,
+// which cannot carry a CNAME.
+func TestDomainsRecords(t *testing.T) {
+	shop := sampleApp("shop", shpyrdv1.PhaseRunning, shpyrdv1.Release{Number: 1, Image: "img"})
+	shop.Spec.Domains = []string{"www.example.com", "example.com"}
+	s, _ := newTestServer(t, nil, []client.Object{shop}, frontDoorService("203.0.113.7"))
+
+	rec := do(t, s, "GET", "/api/projects/shop/domains", "", true)
+	var res DomainsResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("%d %s: %v", rec.Code, rec.Body.String(), err)
+	}
+	want := map[string]DNSRecord{
+		"www.example.com": {Type: "CNAME", Name: "www.example.com", Value: "shop.example.test"},
+		"example.com":     {Type: "A", Name: "example.com", Value: "203.0.113.7"},
+	}
+	for _, d := range res.Domains {
+		if d.Record != want[d.Host] {
+			t.Errorf("%s: record %+v, want %+v", d.Host, d.Record, want[d.Host])
+		}
+		if !strings.Contains(d.Message, want[d.Host].Type+" "+d.Host+" -> "+want[d.Host].Value) {
+			t.Errorf("%s: message %q", d.Host, d.Message)
+		}
+	}
+	if len(res.Domains) != 2 {
+		t.Errorf("domains = %+v", res.Domains)
+	}
+}
+
+// A workspace's domain: its own name points like a project's (CNAME, or A at
+// a zone apex), the wildcard under it always by CNAME, and the TXT proves it.
+func TestWorkspaceDomainRecords(t *testing.T) {
+	s, _ := newTestServer(t, nil, nil, frontDoorService("203.0.113.7"))
+	ws := &store.Workspace{Address: "acme.shpyrd.test"}
+	for host, first := range map[string]DNSRecord{
+		"intranet.acme.com": {Type: "CNAME", Name: "intranet.acme.com", Value: "acme.shpyrd.test"},
+		"acme.com":          {Type: "A", Name: "acme.com", Value: "203.0.113.7"},
+	} {
+		v := s.domainView(context.Background(), ws, store.WorkspaceHost{Host: host, Token: "t"})
+		if len(v.Records) != 3 || v.Records[0] != first ||
+			v.Records[1] != (DNSRecord{Type: "CNAME", Name: "*." + host, Value: "acme.shpyrd.test"}) ||
+			v.Records[2] != (DNSRecord{Type: "TXT", Name: "_shpyrd-verify." + host, Value: "shpyrd-verify=t"}) {
+			t.Errorf("%s: records %+v", host, v.Records)
+		}
+	}
+}
+
 // Postgres sleep routes (RFC-0075, section 5): policy validation, HA
 // refusal, suspend and resume.
 func TestPostgresSleepAPI(t *testing.T) {

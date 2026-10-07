@@ -11,6 +11,7 @@ import type {
   BuildInfo,
   ConfigVar,
   Connection,
+  DnsRecord,
   DomainClaim,
   DomainStatus,
   Drain,
@@ -37,6 +38,14 @@ import me from "../../mock/me.json";
 import projects from "../../mock/projects.json";
 import things from "../../mock/things.json";
 import workspace from "../../mock/workspace.json";
+
+// The record that points a domain at target, as the server writes it: a
+// CNAME, or an A to the front door at a zone apex. The server asks the public
+// suffix list; two labels (acme.com) is near enough for the Mock.
+const frontDoor = "203.0.113.10";
+function recordFor(host: string, target: string): DnsRecord {
+  return host.split(".").length === 2 ? { type: "A", name: host, value: frontDoor } : { type: "CNAME", name: host, value: target };
+}
 
 // Everything of a project beyond itself, and everything of the workspace
 // beyond itself: one kept object, changed in place.
@@ -253,7 +262,13 @@ export const mock: Api = {
   workspaceDomains: async () => (await thingsOf.get()).workspaceDomains,
   addWorkspaceDomain: async (host) => {
     const all = await thingsOf.get();
-    const domain: WorkspaceDomain = { host, verified: false, primary: false, records: [{ type: "CNAME", name: host, value: "acme.shpyrd.app" }, { type: "TXT", name: `_shpyrd.${host}`, value: `shpyrd-verify=${id()}` }], url: `https://${host}` };
+    const domain: WorkspaceDomain = {
+      host,
+      verified: false,
+      primary: false,
+      records: [recordFor(host, "acme.shpyrd.cloud"), { type: "CNAME", name: `*.${host}`, value: "acme.shpyrd.cloud" }, { type: "TXT", name: `_shpyrd-verify.${host}`, value: `shpyrd-verify=${id()}` }],
+      url: `https://${host}`,
+    };
     all.workspaceDomains.push(domain);
     await thingsOf.set(all);
     return domain;
@@ -611,7 +626,8 @@ export const mock: Api = {
   domains: async (slug) => (await ofProject(slug))[1].domains,
   addDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
-    const domain: DomainStatus = { host, dns: "missing", target: p.domains.target, certificate: "issuing", message: "Point a CNAME at the target; the certificate follows." };
+    const record = recordFor(host, p.domains.target);
+    const domain: DomainStatus = { host, dns: "missing", target: p.domains.target, certificate: "issuing", record, message: `create a DNS record: ${record.type} ${host} -> ${record.value}` };
     p.domains.domains.push(domain);
     await thingsOf.set(all);
     return domain;

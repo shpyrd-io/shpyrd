@@ -150,3 +150,27 @@ func TestDomainsDNSMissing(t *testing.T) {
 		t.Errorf("state = %s", st)
 	}
 }
+
+// A root domain cannot carry a CNAME: it points at the front door's address
+// (A, or ALIAS where the load balancer has a hostname only); a name under it
+// points at the project's own hostname (CNAME).
+func TestRecordFor(t *testing.T) {
+	for _, tc := range []struct {
+		host, address, typ, value string
+	}{
+		{"www.example.com", "203.0.113.7", "CNAME", "shop.apps.test"},
+		{"app.intranet.acme.com", "203.0.113.7", "CNAME", "shop.apps.test"},
+		{"example.com", "203.0.113.7", "A", "203.0.113.7"},
+		{"acme.co.uk", "203.0.113.7", "A", "203.0.113.7"},
+		{"example.com", "lb-1.elb.amazonaws.com", "ALIAS", "lb-1.elb.amazonaws.com"},
+		{"example.com", "203.0.113.7,203.0.113.8", "A", "203.0.113.7,203.0.113.8"},
+		// The front door's address unknown (a local cluster without a load
+		// balancer): still an A record, its value left to whoever knows it.
+		{"example.com", "", "A", ""},
+	} {
+		typ, value := RecordFor(tc.host, "shop.apps.test", tc.address)
+		if typ != tc.typ || value != tc.value {
+			t.Errorf("RecordFor(%s, %s) = %s %s, want %s %s", tc.host, tc.address, typ, value, tc.typ, tc.value)
+		}
+	}
+}
