@@ -61,6 +61,10 @@ func (s *Server) restoreProjectArchive(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
+	if err := s.checkExposure(ctx, s.workspaceOfApp(ctx, app), app.Spec.Exposure, m.Spec.Exposure); err != nil {
+		exposureError(c, err)
+		return
+	}
 	if err := s.checkArchiveCompatibility(ctx, app, original, m); err != nil {
 		abort(c, http.StatusConflict, err)
 		return

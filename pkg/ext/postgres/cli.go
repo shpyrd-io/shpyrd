@@ -22,6 +22,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/metrics"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/resources"
 	"github.com/shpyrd-io/shpyrd/pkg/kexec"
 )
@@ -45,7 +46,7 @@ settings for them.
 Databases run on CloudNativePG; one cluster per database, 1 instance by
 default (2-3 for high availability with --instances).`,
 	}
-	cmd.AddCommand(newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
+	cmd.AddCommand(metrics.ResourceCommand(g, "postgres"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
 	return cmd
 }
 

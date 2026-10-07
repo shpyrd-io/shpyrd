@@ -406,6 +406,7 @@ func (s *Server) getApp(c *gin.Context) {
 // CreateAppRequest creates a project: namespace app-<slug> plus the App.
 // Name is the display name, any text; Slug overrides the one derived from it.
 type CreateAppRequest struct {
+	Exposure  string                      `json:"exposure,omitempty"`
 	Name      string                      `json:"name" binding:"required"`
 	Slug      string                      `json:"slug,omitempty"`
 	Domains   []string                    `json:"domains,omitempty"`
@@ -420,6 +421,10 @@ type CreateAppRequest struct {
 func (s *Server) createApp(c *gin.Context) {
 	var req CreateAppRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
+	}
+	if err := validateDeployRequest(&DeployRequest{Exposure: req.Exposure}); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
@@ -445,6 +450,10 @@ func (s *Server) createApp(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	if err := s.checkExposure(ctx, ws.Slug, "", req.Exposure); err != nil {
+		exposureError(c, err)
+		return
+	}
 	// The slug is unique within the workspace (RFC-0076: it is a label on
 	// the App, the App is named by its id, so the API checks — not the
 	// API server's name uniqueness).
@@ -494,7 +503,7 @@ func (s *Server) createApp(c *gin.Context) {
 	}
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns.Name, Labels: labels},
-		Spec:       shpyrdv1.AppSpec{ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
+		Spec:       shpyrdv1.AppSpec{Exposure: req.Exposure, ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
 	}
 	project.SetDisplayName(app, req.Name)
 	if req.Git != nil && req.Git.URL != "" {
@@ -1156,12 +1165,17 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 			abort(c, http.StatusLocked, err)
 			return nil, err
 		}
+		beforeExposure := app.Spec.Exposure
 		if err := mutate(app); err != nil {
 			status := http.StatusBadRequest
 			if strings.Contains(err.Error(), "rolling out") {
 				status = http.StatusConflict
 			}
 			abort(c, status, err)
+			return nil, err
+		}
+		if err := s.checkExposure(c.Request.Context(), s.workspace(c), beforeExposure, app.Spec.Exposure); err != nil {
+			exposureError(c, err)
 			return nil, err
 		}
 		// The workspace's plan (RFC-0033): checked on the App as it would

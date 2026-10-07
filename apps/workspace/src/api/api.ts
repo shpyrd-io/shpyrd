@@ -47,7 +47,7 @@ import type {
 // server; the Mock, JSON files. NEXT_PUBLIC_API_MODE picks one, and the
 // build drops the other.
 
-export type NewProject = { slug: string; displayName?: string; description?: string; git?: { url: string; revision?: string }; subPath?: string };
+export type NewProject = { slug: string; exposure?: Exposure; displayName?: string; description?: string; git?: { url: string; revision?: string }; subPath?: string };
 
 // What the shell and the logs need beyond a request: a line as it comes,
 // until the signal aborts.

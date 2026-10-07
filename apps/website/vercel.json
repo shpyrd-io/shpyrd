@@ -28,5 +28,16 @@
       "destination": "/pricing/br",
       "permanent": false
     }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)opengraph-image",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "image/png"
+        }
+      ]
+    }
   ]
 }

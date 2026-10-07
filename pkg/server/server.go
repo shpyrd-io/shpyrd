@@ -52,6 +52,8 @@ import (
 // Options is what a binary built on the core chooses (RFC-0033's open-core
 // boundary). The zero value is the open-source platform.
 type Options struct {
+	// InternalExposure supplies workspace networking defaults; nil permits self-hosted apps.
+	InternalExposure api.InternalExposurePolicy
 	// Tenancy builds the resolver mapping request hosts to workspaces. Nil:
 	// the platform runs one workspace, which every host is, and the store
 	// shows no other.
@@ -239,13 +241,14 @@ func run(o runOptions, logger *slog.Logger) error {
 		}
 	}
 	srv, err := api.New(k, api.Options{
-		Addr:         o.addr,
-		Store:        st,
-		Tenancy:      resolver,
-		Layout:       layoutFromEnv(),
-		SignInHost:   hostOf(envOr("SHPYRD_AUTH_URL", "")),
-		Realms:       o.opts.Realms,
-		Capabilities: o.opts.Capabilities,
+		Addr:             o.addr,
+		Store:            st,
+		Tenancy:          resolver,
+		Layout:           layoutFromEnv(),
+		SignInHost:       hostOf(envOr("SHPYRD_AUTH_URL", "")),
+		Realms:           o.opts.Realms,
+		Capabilities:     o.opts.Capabilities,
+		InternalExposure: o.opts.InternalExposure,
 		MembershipChanged: func() {
 			if o.controller {
 				memberships.Notify()

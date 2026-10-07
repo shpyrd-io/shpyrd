@@ -193,3 +193,80 @@ Self-hosted: where things are on your machine and on a cluster you run yourself.
 | namespace `shpyrd-system` | server, registry (with its credential and certificate), node trust DaemonSet, ExternalDNS, admin token, install record, sessions mirror, Dex and its accounts when `auth-local` is enabled |
 | namespace `app-<name>` | one per project (label `shpyrd.io/project`): App, Volumes and their claims, Deployments, Services, Ingress and one Certificate per host that needs one, kpack Image and Builds or BuildKit Jobs, config var Secret, `<app>-bindings` and release snapshots |
 | `contrib/oci/` | Terraform for the Oracle Cloud network and cluster, `kubeconfig.sh`, `tunnel.sh` |
+
+## Metrics
+
+```sh
+shpyrd metrics --project shop --process web
+shpyrd metrics --project shop --by instance --mode total --range 6h --json
+shpyrd pg metrics db --project shop
+shpyrd redis metrics cache --project shop --range 24h
+```
+
+`metrics` uses the project from `shpyrd.yaml` when `--project` is omitted.
+`--process` (`-p`) selects a process type; HTTP throughput and latency remain
+project-wide. CPU and memory default to percentages; `--mode total` shows cores
+and bytes. `--by instance` supports `--agg none|sum|avg|max` and `--replaced`.
+
+Database metrics live under `pg` and `redis`, require `--project`, and report
+CPU (cores), memory (bytes), network (bytes/s), and storage used/capacity (bytes),
+summed across the resource's instances. These are infrastructure metrics;
+connections, transactions, cache hits and other database internals are not included.
+Storage needs a persistent volume with kubelet volume statistics.
+
+All three commands accept `--range 15m|1h|6h|24h|7d` (default `1h`). Text output
+shows each series' latest sample and its UTC timestamp. `--json` returns the full
+API time series; `--jq` filters it. Missing samples show `No data`, and failed
+queries show their errors. Metrics require monitoring configured on the server;
+database commands also require the server version providing resource metrics.
+
+### Time series for charts and agents
+
+Use `--json` to retrieve every available sample in the selected window:
+
+```sh
+shpyrd metrics --project shop --process web --mode total --range 6h --json
+shpyrd pg metrics db --project shop --range 6h --json
+shpyrd redis metrics cache --project shop --range 6h --json
+```
+
+All three use the same response shape. This illustrative excerpt shows one chart
+with two samples; actual responses include the other charts and available points:
+
+```json
+{
+  "range": "6h",
+  "step": 360,
+  "charts": [{
+    "id": "cpu",
+    "title": "CPU",
+    "unit": "cores",
+    "kind": "line",
+    "instanceCapable": false,
+    "series": [{
+      "name": "all",
+      "points": [[1791298800, 0.18], [1791299160, 0.24]]
+    }]
+  }],
+  "releases": []
+}
+```
+
+Each point is `[unix_timestamp_seconds, numeric_value]`. Plot timestamps on the
+horizontal axis and values on the vertical axis, using `unit` for its label and
+`series.name` for the legend. `step` is the query interval in seconds. The server
+targets roughly 60 intervals per window, with a minimum interval of 60 seconds:
+15m and 1h use 60s, 6h uses 360s, 24h uses 1440s, and 7d uses 10080s. These are
+sampled query results, not every raw monitoring scrape.
+
+`kind` suggests line, stacked or step rendering. `reference` and `burst`, when
+present on a series, describe allocation reference lines. `releases` provides
+project deployment markers (`number`, `time` in Unix seconds, and `label`).
+`error` marks a failed chart query and `note` explains omitted data. Empty series
+or missing timestamps represent unavailable data, not zero usage; preserve gaps.
+
+To extract a chart while retaining its units and all its series:
+
+```sh
+shpyrd pg metrics db --project shop --range 6h --jq '.charts[] | select(.id == "cpu")'
+```

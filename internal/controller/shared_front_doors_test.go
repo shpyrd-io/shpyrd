@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,8 +12,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
@@ -237,5 +242,151 @@ func TestMovedWorkspaceDropsItsOldWildcardCopy(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: WorkspaceTLSSecretName}, &corev1.Secret{}); err == nil {
 		t.Error("the old wildcard's copy survived the move")
+	}
+}
+
+// ingressNginx stands in for ingress-nginx's admission webhook: an Ingress
+// may not claim a host and path another Ingress already holds.
+func ingressNginx(t *testing.T) client.Client {
+	t.Helper()
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c client.Client
+	check := func(ctx context.Context, obj client.Object) error {
+		ing, ok := obj.(*networkingv1.Ingress)
+		if !ok {
+			return nil
+		}
+		var all networkingv1.IngressList
+		if err := c.List(ctx, &all); err != nil {
+			return err
+		}
+		for _, other := range all.Items {
+			if other.Namespace == ing.Namespace && other.Name == ing.Name {
+				continue
+			}
+			for _, a := range other.Spec.Rules {
+				for _, b := range ing.Spec.Rules {
+					if a.Host != b.Host || a.HTTP == nil || b.HTTP == nil {
+						continue
+					}
+					for _, pa := range a.HTTP.Paths {
+						for _, pb := range b.HTTP.Paths {
+							if pa.Path == pb.Path {
+								return fmt.Errorf("host %q and path %q is already defined in ingress %s/%s", b.Host, pb.Path, other.Namespace, other.Name)
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+	c = fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if err := check(ctx, obj); err != nil {
+				return err
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if err := check(ctx, obj); err != nil {
+				return err
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	}).Build()
+	return c
+}
+
+// A workspace moved out of the old layout (acme.shpyrd.app, its own door)
+// into the shared one keeps a redirecting door for its old address. The
+// door it had holds that host, so it goes first, in the same pass: else
+// ingress-nginx refuses the new one and the pass stops there.
+func TestMovingIntoTheLayoutReplacesTheOldDoor(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	for _, w := range []store.Workspace{
+		{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.app"},
+		{Slug: "beta", Name: "Beta", Address: "beta.shpyrd.app"},
+	} {
+		if _, err := st.CreateWorkspace(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := ingressNginx(t)
+	scheme, _ := kube.Scheme()
+	r := &WorkspaceReconciler{Client: c, Scheme: scheme, Store: st, Config: Config{
+		Domain: "operator.shpyrd.io", SystemNamespace: "shpyrd-system", ClusterIssuer: "letsencrypt",
+		WorkspaceCertIssuer: "letsencrypt-dns01", IngressClassExternal: "nginx", Layout: cloudLayout,
+	}}
+	if _, err := r.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatalf("before the move: %v", err)
+	}
+	exists := func(name string) bool {
+		return c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: name}, &networkingv1.Ingress{}) == nil
+	}
+	if !exists("workspace-acme") || !exists("workspace-beta") {
+		t.Fatal("the old layout's doors are not there to begin with")
+	}
+
+	// The operator's move (shpyrd-cloud workspaces move acme acme).
+	if _, err := st.UpdateWorkspaceAddress(ctx, "acme", "acme.shpyrd.cloud"); err != nil {
+		t.Fatal(err)
+	}
+	exp := time.Now().Add(time.Hour)
+	if _, err := st.PutWorkspaceHost(ctx, "acme", store.WorkspaceHost{Host: "acme.shpyrd.app", Kind: store.HostMoved, ExpiresAt: &exp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatalf("after the move: %v", err)
+	}
+	for _, gone := range []string{"workspace-acme", "workspace-acme-sources", "workspace-acme-archives"} {
+		if exists(gone) {
+			t.Errorf("%s survived the move", gone)
+		}
+	}
+	old := &networkingv1.Ingress{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: workspaceHostFrontDoorName("acme", "acme.shpyrd.app")}, old); err != nil || old.Spec.Rules[0].Host != "acme.shpyrd.app" || old.Spec.Rules[1].Host != "*.acme.shpyrd.app" {
+		t.Fatalf("the old address's door = %+v %v", old.Spec.Rules, err)
+	}
+	if !exists("workspace-beta") {
+		t.Error("beta lost its door")
+	}
+}
+
+// One workspace whose door cannot be kept does not keep the others from
+// theirs: the pass goes on and reports it.
+func TestOneWorkspacesDoorDoesNotStopTheOthers(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	for _, w := range []store.Workspace{
+		{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.app"},
+		{Slug: "beta", Name: "Beta", Address: "beta.shpyrd.app"},
+	} {
+		if _, err := st.CreateWorkspace(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := ingressNginx(t)
+	// Something outside the platform holds acme's host.
+	pathType := networkingv1.PathTypePrefix
+	squatter := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "squatter", Namespace: "elsewhere"}, Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{
+		Host: "acme.shpyrd.app", IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Path: "/", PathType: &pathType}}}},
+	}}}}
+	if err := c.Create(ctx, squatter); err != nil {
+		t.Fatal(err)
+	}
+	scheme, _ := kube.Scheme()
+	r := &WorkspaceReconciler{Client: c, Scheme: scheme, Store: st, Config: Config{
+		Domain: "operator.shpyrd.io", SystemNamespace: "shpyrd-system", ClusterIssuer: "letsencrypt", IngressClassExternal: "nginx", Layout: cloudLayout,
+	}}
+	if _, err := r.Reconcile(ctx, ctrl.Request{}); err == nil {
+		t.Error("acme's refusal is not reported")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: "workspace-beta"}, &networkingv1.Ingress{}); err != nil {
+		t.Errorf("beta has no door: %v", err)
 	}
 }

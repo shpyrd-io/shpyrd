@@ -22,11 +22,13 @@ import {
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Skeleton } from "@shpyrd/ui/components/skeleton";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { api, ApiError } from "@/api/api";
-import type { ProjectSummary } from "@/api/types";
+import type { Exposure, ProjectSummary } from "@/api/types";
+import { useInternalExposure } from "@/lib/networking";
 import { useBrandColor } from "@/lib/branding";
 import { usePerms, useUserOnly } from "@/lib/perms";
 import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
@@ -132,6 +134,8 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [slug, setSlug] = useState("");
+  const supportsInternal = useInternalExposure();
+  const [exposure, setExposure] = useState<Exposure>("external");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [git, setGit] = useState("");
@@ -148,6 +152,7 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
     mutationFn: () =>
       api.createProject({
         slug: slug.trim(),
+        exposure,
         displayName: name.trim() || undefined,
         description: description.trim() || undefined,
         git: git.trim() ? { url: git.trim(), revision: ref.trim() || "main" } : undefined,
@@ -188,6 +193,18 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
           <Field label="What it is" hint="One line, on its card.">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A small API that answers the mobile app." />
           </Field>
+          {supportsInternal && (
+            <Field label="Network" hint="Internal apps are reachable only through this workspace's private network.">
+              <Select value={exposure} onValueChange={(v) => setExposure(v as Exposure)}>
+                <SelectTrigger aria-label="Network"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="external">Public internet</SelectItem>
+                  <SelectItem value="internal">Internal network</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+          {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
           <Field label="Git repository" hint="Optional: it is built and released right away. Without one, deploy later, from Git or from a checkout with the CLI.">
             <Input value={git} onChange={(e) => setGit(e.target.value)} placeholder="https://github.com/acme/hello-world" className="font-mono text-xs" />
           </Field>
@@ -206,7 +223,7 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button disabled={!validSlug || create.isPending} onClick={() => create.mutate()}>
+          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal)} onClick={() => create.mutate()}>
             Create
           </Button>
         </DialogFooter>

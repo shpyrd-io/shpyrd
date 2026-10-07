@@ -129,7 +129,7 @@ export const mock: Api = {
   config: async () => {
     await wait();
     const ws = await workspaceOf.get();
-    return { ...(config as PublicConfig), workspace: { ...(config as PublicConfig).workspace!, name: ws.name, branding: ws.branding } };
+    return { ...(config as PublicConfig), workspace: { ...(config as PublicConfig).workspace!, name: ws.name, branding: ws.branding, capabilities: ws.capabilities } };
   },
   me: async () => {
     await wait();
@@ -347,10 +347,11 @@ export const mock: Api = {
     return { ...p, domain: domainOf(await thingsOf.get(), slug) };
   },
   createProject: async (body) => {
+    if (body.exposure === "internal" && !(await workspaceOf.get()).capabilities?.internalExposure) throw new ApiError(403, "Internal exposure is not enabled for this workspace.");
     const all = await projectsOf.list();
     if (!/^[a-z0-9-]{2,}$/.test(body.slug)) throw new ApiError(400, "the slug has lowercase letters, digits and dashes");
     if (all.some((p) => p.slug === body.slug)) throw new ApiError(409, `a project named ${body.slug} exists`);
-    const created: Project = { slug: body.slug, displayName: body.displayName || body.slug, description: body.description, namespace: `p-${body.slug}`, phase: "Pending", release: 0, access: "public", exposure: "external", createdAt: now(), spec: { source: body.git ? { git: body.git, subPath: body.subPath } : undefined }, status: { phase: "Pending", releases: [] } };
+    const created: Project = { slug: body.slug, displayName: body.displayName || body.slug, description: body.description, namespace: `p-${body.slug}`, phase: "Pending", release: 0, access: "public", exposure: body.exposure ?? "external", createdAt: now(), spec: { source: body.git ? { git: body.git, subPath: body.subPath } : undefined }, status: { phase: "Pending", releases: [] } };
     await projectsOf.set(created);
     return summary(created);
   },
@@ -433,7 +434,11 @@ export const mock: Api = {
     if (Object.values(changes).some((c) => c.size)) release(p, "config", "Sizes changed", p.status.releases.at(-1)?.build);
     return projectsOf.set(p);
   },
-  setExposure: async (slug, exposure) => projectsOf.set({ ...(await projectsOf.find(slug)), exposure }),
+  setExposure: async (slug, exposure) => {
+    const project = await projectsOf.find(slug);
+    if (exposure === "internal" && project.exposure !== "internal" && !(await workspaceOf.get()).capabilities?.internalExposure) throw new ApiError(403, "Internal exposure is not enabled for this workspace.");
+    return projectsOf.set({ ...project, exposure });
+  },
   setAccess: async (slug, access) => projectsOf.set({ ...(await projectsOf.find(slug)), access }),
   preview: async (slug, body) => {
     await wait();
