@@ -13,6 +13,7 @@ import {
   NavigationMenuTrigger,
 } from "./navigation-menu";
 import { NavList, NavListGroup, NavListItem } from "./nav-list";
+import { glass } from "../lib/glass";
 
 // How wide what is in the bar may be: the same sizes as the content of a page
 // layout, so the brand lines up with the page's text under it. The bar itself,
@@ -53,6 +54,12 @@ const isGroup = (item: Link | SiteHeaderGroup): item is SiteHeaderGroup =>
 
 const current = (link: Link) => link.props["aria-current"];
 
+// In the floating panel, the word under the pointer is lit from below: an
+// orange light inside the panel, from its foot up to the word. The panel is
+// 3.75rem high and a word 2.5rem, so the light reaches 0.625rem down to the edge.
+const glowUnder =
+  "relative after:pointer-events-none after:absolute after:inset-x-[-45%] after:-bottom-2.5 after:h-5 after:bg-[radial-gradient(ellipse_50%_100%_at_50%_100%,rgb(255_79_0/0.16),transparent)] after:opacity-0 after:transition-opacity after:duration-300 hover:after:opacity-100 data-[state=open]:after:opacity-100";
+
 // The bar over every page of a site: who it is, the few pages that matter,
 // and what to do. It stays at the top as the page scrolls, so the way in is
 // never further than the top of the screen.
@@ -77,6 +84,7 @@ function SiteHeader({
   links = [],
   actions,
   menuLabel = "Menu",
+  variant = "bar",
   ...props
 }: React.ComponentProps<"header"> & {
   as?: "header" | "div";
@@ -94,18 +102,24 @@ function SiteHeader({
   actions?: React.ReactNode;
   // The name of the button that opens the menu, for who cannot see its icon.
   menuLabel?: string;
+  // `bar` goes from edge to edge with a line under it; `floating` is a panel
+  // of frosted glass held off the edges, the page passing under it.
+  variant?: "bar" | "floating";
 }) {
   // A `header`, or a `div` inside a layout that has one; either takes the same props.
   const Root = as as React.ElementType;
   const [open, setOpen] = React.useState(false);
   const many = links.length > 0;
+  const floating = variant === "floating";
 
   return (
     <MobileNavigation open={open} onOpenChange={setOpen}>
     <Root
       data-slot="site-header"
+      data-variant={variant}
       className={cn(
-        "@container/site-header border-b bg-background/85 backdrop-blur-md",
+        "@container/site-header",
+        floating ? "px-3 pt-3 @3xl/site-header:px-6 @3xl/site-header:pt-4" : "border-b bg-background/85 backdrop-blur-md",
         sticky && "sticky top-0 z-40",
         className,
       )}
@@ -114,6 +128,8 @@ function SiteHeader({
       <div
         className={cn(
           "mx-auto flex h-14 w-full items-center gap-3 px-4 @3xl/site-header:px-6",
+          floating &&
+cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           widths[width],
         )}
       >
@@ -131,7 +147,7 @@ function SiteHeader({
           <NavigationMenu
             data-slot="site-header-links"
             aria-label="Site"
-            className="ml-4 hidden @2xl/site-header:flex"
+            className={cn("hidden @2xl/site-header:flex", floating ? "ml-10" : "ml-4")}
           >
             {/* The words of a site stand a little apart from one another. */}
             <NavigationMenuList className="gap-5">
@@ -150,6 +166,7 @@ function SiteHeader({
                       className={cn(
                         buttonVariants({ variant: "nav", size: "lg" }),
                         "px-0 hover:bg-transparent data-[state=open]:bg-transparent data-[state=open]:text-primary data-current:text-primary",
+                        floating && glowUnder,
                       )}
                     >
                       {item.label}
@@ -196,6 +213,7 @@ function SiteHeader({
                       className={cn(
                         buttonVariants({ variant: "nav", size: "lg" }),
                         "p-0 hover:bg-transparent data-[active=true]:bg-transparent",
+                        floating && glowUnder,
                       )}
                     >
                       {item}
@@ -213,7 +231,7 @@ function SiteHeader({
           </div>
         )}
       </div>
-      {many && <MobileNavigationContent className="@2xl/site-header:hidden">
+      {many && <MobileNavigationContent className={cn("@2xl/site-header:hidden", floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
             <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
               {links.map((item, i) =>
                 isGroup(item) ? (

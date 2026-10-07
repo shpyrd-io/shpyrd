@@ -4,6 +4,7 @@ import * as React from "react";
 import { ArrowUp } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "./button";
+import { glass } from "../lib/glass";
 
 // How wide what is in the foot may be: the sizes of the site header and of the
 // content of a page layout, so the three line up. The foot's line always goes
@@ -44,6 +45,7 @@ function MinimalFooter({
   note,
   footnotes,
   backToTop = false,
+  variant = "line",
   ...props
 }: React.ComponentProps<"footer"> & {
   as?: "footer" | "div";
@@ -60,18 +62,28 @@ function MinimalFooter({
   footnotes?: React.ReactNode;
   // A button at the end of the second row that goes back to the top.
   backToTop?: boolean;
+  // `line` sits under a line from edge to edge; `floating` is a panel of
+  // frosted glass held off the edges, like the site header's.
+  variant?: "line" | "floating";
 }) {
   // A `footer`, or a `div` inside a layout that has one; either takes the same props.
   const Root = as as React.ElementType;
+  const floating = variant === "floating";
   return (
     <Root
       data-slot="minimal-footer"
-      className={cn("@container/minimal-footer border-t text-sm", className)}
+      data-variant={variant}
+      className={cn(
+        "@container/minimal-footer text-sm",
+        floating ? "px-3 pb-3 @3xl/minimal-footer:px-6 @3xl/minimal-footer:pb-4" : "border-t",
+        className,
+      )}
       {...props}
     >
       <div
         className={cn(
           "mx-auto grid w-full gap-6 px-4 py-8 @3xl/minimal-footer:px-6",
+          floating && cn(glass, "@3xl/minimal-footer:px-8"),
           widths[width],
         )}
       >
@@ -89,7 +101,7 @@ function MinimalFooter({
                   {links.map((link, i) => (
                     <li
                       key={i}
-                      className="text-muted-foreground [&>a]:underline-offset-4 [&>a:hover]:text-foreground [&>a:hover]:underline"
+                      className="text-muted-foreground [&>a]:underline-offset-4 [&>a]:transition-colors [&>a:hover]:text-primary"
                     >
                       {link}
                     </li>

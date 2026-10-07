@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 504.99 411.59">
+  <!-- Generator: Adobe Illustrator 30.8.2, SVG Export Plug-In . SVG Version: 2.1.4 Build 7)  -->
+  <defs>
+    <style>
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6 {
+        stroke: #3f4044;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .st0, .st1, .st3, .st6 {
+        fill: #d3d8de;
+      }
+
+      .st0, .st2, .st4, .st6 {
+        stroke-width: 1.39px;
+      }
+
+      .st1, .st5 {
+        stroke-width: 1.44px;
+      }
+
+      .st2, .st4, .st5 {
+        fill: #fff;
+      }
+
+      .st2, .st6 {
+        mix-blend-mode: screen;
+      }
+
+      .st7 {
+        isolation: isolate;
+      }
+
+      .st8 {
+        fill: #3f4044;
+      }
+
+      .st3 {
+        stroke-width: 1.96px;
+      }
+    </style>
+  </defs>
+  <g class="st7">
+        <g>
+          <g>
+            <polygon class="st4" points="434.74 286.38 432.28 287.76 40.48 60.78 42.95 59.39 434.74 286.38"/>
+            <polygon class="st4" points="432.29 287.76 432.29 290.66 40.48 63.68 40.48 60.78 432.29 287.76"/>
+          </g>
+          <g>
+            <polygon class="st4" points="464.58 269.23 462.12 270.61 70.31 43.63 72.79 42.24 464.58 269.23"/>
+            <polygon class="st4" points="462.12 270.61 462.12 273.51 70.31 46.53 70.31 43.63 462.12 270.61"/>
+          </g>
+        </g>
+  </g>
+</svg>

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 504.99 411.59">
+  <!-- Generator: Adobe Illustrator 30.8.2, SVG Export Plug-In . SVG Version: 2.1.4 Build 7)  -->
+  <defs>
+    <style>
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6 {
+        stroke: #3f4044;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .st0, .st1, .st3, .st6 {
+        fill: #d3d8de;
+      }
+
+      .st0, .st2, .st4, .st6 {
+        stroke-width: 1.39px;
+      }
+
+      .st1, .st5 {
+        stroke-width: 1.44px;
+      }
+
+      .st2, .st4, .st5 {
+        fill: #fff;
+      }
+
+      .st2, .st6 {
+        mix-blend-mode: screen;
+      }
+
+      .st7 {
+        isolation: isolate;
+      }
+
+      .st8 {
+        fill: #3f4044;
+      }
+
+      .st3 {
+        stroke-width: 1.96px;
+      }
+    </style>
+  </defs>
+  <g class="st7">
+        <polygon class="st0" points="164.89 172.04 164.89 172.12 164.89 399.18 171.99 395.03 171.99 175.4 164.89 172.04"/>
+        <polygon class="st4" points="164.92 172.04 164.92 399.18 158.32 395.34 158.32 168.24 164.92 172.04"/>
+  </g>
+</svg>
