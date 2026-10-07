@@ -57,7 +57,7 @@ function PageHeading({
             <Title
               data-slot="page-heading-title"
               className={cn(
-                "flex items-center gap-2 font-heading leading-tight font-medium [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[0.9em]",
+                "flex items-center gap-2 font-heading leading-tight font-semibold [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[0.9em]",
                 sizes[variant],
               )}
             >

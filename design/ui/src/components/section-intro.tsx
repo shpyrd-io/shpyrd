@@ -4,6 +4,8 @@ import { cn } from "cn";
 const sizes = {
   medium: "text-xl @2xl/section-intro:text-2xl",
   large: "text-2xl @2xl/section-intro:text-3xl",
+  // Under a hero at its largest: a step down from it, not three.
+  xlarge: "text-3xl @2xl/section-intro:text-4xl @4xl/section-intro:text-5xl",
 } as const;
 
 // What opens a section of a page: what it is about, in one line, and at most
@@ -56,7 +58,7 @@ function SectionIntro({
         <Heading
           data-slot="section-intro-heading"
           className={cn(
-            "max-w-[24ch] font-heading leading-tight font-medium tracking-tight text-balance",
+            "max-w-[24ch] font-heading leading-tight font-semibold tracking-tight text-balance",
             sizes[variant],
           )}
         >

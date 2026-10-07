@@ -100,12 +100,17 @@ function Terminal({
     if (!element) return;
     let gone = false;
     let undo = () => {};
-    Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]).then(
+    // The font is waited for: xterm measures its cells once, as it opens.
+    Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      document.fonts?.load("13px 'Geist Mono Variable'").catch(() => []),
+    ]).then(
       ([{ Terminal: XTerm }, { FitAddon }]) => {
         if (gone) return;
         const t = new XTerm({
           cursorBlink: true,
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+          fontFamily: "'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
           fontSize: 13,
           lineHeight: 1.2,
           theme: themeOf(element),

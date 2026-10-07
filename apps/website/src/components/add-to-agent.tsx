@@ -53,7 +53,7 @@ export function AgentMark({
 // nobody asked for — it carries the fact that this works with more than one
 // agent rather than decorating. It stops while the pointer or the keyboard is
 // on the button, and entirely when the reader has asked for less motion.
-const HOLD = 2200;
+const HOLD = 4500;
 
 // One clock for every button on the page, so the one in the header and the one
 // in the hero always show the same agent and roll at the same moment. Anything
@@ -64,6 +64,9 @@ const first = { index: 0, leaving: -1 };
 let current = first;
 let holds = 0;
 let running = 0;
+// Something on the page that keeps its own time (the hero's chat, which moves
+// on when a conversation ends) drives the clock instead of the interval.
+let driven = 0;
 let timer: number | undefined;
 const listeners = new Set<() => void>();
 
@@ -79,7 +82,7 @@ export const clock = {
   run() {
     if (++running === 1) {
       timer = window.setInterval(() => {
-        if (holds > 0) return;
+        if (holds > 0 || driven > 0) return;
         current = { index: (current.index + 1) % agents.length, leaving: current.index };
         listeners.forEach((l) => l());
       }, HOLD);
@@ -92,6 +95,21 @@ export const clock = {
   show(index: number) {
     if (index === current.index) return;
     current = { index, leaving: current.index };
+    listeners.forEach((l) => l());
+  },
+  // Take the clock over: the interval stops moving it until let go. The one
+  // driving moves it with `next`, which waits while a button is held.
+  drive() {
+    driven++;
+    let on = true;
+    return () => {
+      if (on) driven--;
+      on = false;
+    };
+  },
+  next() {
+    if (holds > 0) return;
+    current = { index: (current.index + 1) % agents.length, leaving: current.index };
     listeners.forEach((l) => l());
   },
   // Hold every button still; the function it returns lets go, once.
@@ -130,7 +148,14 @@ export function useCurrentAgent() {
   return { index, agent: agents[index] };
 }
 
-export function AddToAgent({ manual = true }: { manual?: boolean }) {
+export function AddToAgent({
+  manual = true,
+  size,
+}: {
+  manual?: boolean;
+  // The button's size, from the library: "lg" where it leads a page.
+  size?: React.ComponentProps<typeof Button>["size"];
+}) {
   // The agent showing, and the one on its way out (none, at first).
   const { index, leaving } = useSyncExternalStore(clock.subscribe, clock.now, clock.atStart);
   // Rendered when the application is built, where there is no matchMedia and
@@ -168,7 +193,7 @@ export function AddToAgent({ manual = true }: { manual?: boolean }) {
 
   return (
     <div
-      className="inline-grid justify-items-center gap-1.5"
+      className="inline-grid justify-items-center gap-3"
       onMouseEnter={() => (hovered.current ??= clock.hold())}
       onMouseLeave={() => {
         hovered.current?.();
@@ -185,7 +210,7 @@ export function AddToAgent({ manual = true }: { manual?: boolean }) {
         focused.current = null;
       }}
     >
-      <Button asChild>
+      <Button asChild size={size}>
         <a href={installer?.href ?? addToAgent.manual.href} aria-label={label}>
           <span className="inline-flex items-center gap-1.5">
             {addToAgent.label}

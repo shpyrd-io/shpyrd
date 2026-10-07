@@ -20,7 +20,7 @@ export default function Page() {
     <>
       <Section title="Fonts">
         <p className="font-sans text-lg">Geist, for everything that is read.</p>
-        <p className="font-mono text-lg">Monospace, for names and addresses.</p>
+        <p className="font-mono text-lg">Geist Mono, for names and addresses.</p>
       </Section>
       <Section title="Sizes">
         {sizes.map(([name, size]) => (

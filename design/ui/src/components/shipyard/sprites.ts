@@ -21,11 +21,17 @@
 // named here, where the images are imported.
 /// <reference types="next/image-types/global" />
 import container from "./sprites/container.svg";
-import craneBeam from "./sprites/crane-beam.svg";
-import craneCabin from "./sprites/crane-cabin.svg";
-import craneLeg from "./sprites/crane-leg.svg";
+import craneAframe from "./sprites/crane-aframe.svg";
+import craneGirderBack from "./sprites/crane-girder-back.svg";
+import craneGirderFront from "./sprites/crane-girder-front.svg";
+import craneHouse from "./sprites/crane-house.svg";
+import craneLandBack from "./sprites/crane-land-back.svg";
+import craneLandFront from "./sprites/crane-land-front.svg";
+import craneRails from "./sprites/crane-rails.svg";
+import craneSeaB from "./sprites/crane-sea-b.svg";
+import craneSeaD from "./sprites/crane-sea-d.svg";
+import craneSeaLow from "./sprites/crane-sea-low.svg";
 import craneSpreader from "./sprites/crane-spreader.svg";
-import craneTie from "./sprites/crane-tie.svg";
 import craneTrolley from "./sprites/crane-trolley.svg";
 import gate from "./sprites/gate.svg";
 import ground from "./sprites/ground.svg";
@@ -43,26 +49,54 @@ const src = (file: File) => (typeof file === "string" ? file : file.src);
 
 type Piece = { src: string; size: readonly [number, number]; stands: readonly [number, number]; unit: number };
 
+// Where every part of the crane stands, in its drawing.
+const crane = { size: [504.99, 411.59], stands: [170.3, 359.75], unit: 51.9 } as const;
+
 export const sprites = {
   // Basic pieces, still to be drawn. What is made of parts has a file for
   // each part, so that each is drawn before or after what stands beside
   // it: a container on a truck is over its bed and behind its cab. The
   // parts of a truck stand on the same point, and so do those of a ship.
-  container: { src: src(container), size: [134, 130], stands: [67, 90], unit: 50 },
-  "truck-bed": { src: src(truckBed), size: [138, 89], stands: [68, 64], unit: 50 },
-  "truck-cab": { src: src(truckCab), size: [90, 116], stands: [113, 60], unit: 50 },
-  "ship-hull": { src: src(shipHull), size: [650, 417], stands: [262, 265], unit: 50 },
-  "ship-bridge": { src: src(shipBridge), size: [213, 224], stands: [-158, 362], unit: 50 },
-  "crane-leg": { src: src(craneLeg), size: [58, 287], stands: [29, 269], unit: 50 },
-  "crane-beam": { src: src(craneBeam), size: [397, 250], stands: [138, 360], unit: 50 },
-  "crane-tie": { src: src(craneTie), size: [124, 86], stands: [62, 312], unit: 50 },
-"crane-trolley": { src: src(craneTrolley), size: [182, 120], stands: [91, 346], unit: 50 },
-  "crane-cabin": { src: src(craneCabin), size: [66, 100], stands: [128, 240], unit: 50 },
   "crane-spreader": { src: src(craneSpreader), size: [134, 87], stands: [67, 47], unit: 50 },
   warehouse: { src: src(warehouse), size: [446, 376], stands: [223, 251], unit: 50 },
-  gate: { src: src(gate), size: [100, 125], stands: [50, 100], unit: 50 },
-  ground: { src: src(ground), size: [2718, 1591], stands: [975, 564], unit: 50 },
-  // Drawn pieces.
+  // The gate stands on the strip between the warehouse and the kerb of the
+  // drawn yard, which is narrower than it was: it is drawn at 0.65.
+  gate: { src: src(gate), size: [100, 125], stands: [50, 100], unit: 76.9 },
+  // Drawn pieces. The container is drawn a little larger than the first
+  // one was: its unit is its short side, across, so that it stays as big.
+  container: { src: src(container), size: [134.28, 131.11], stands: [67.14, 92.04], unit: 51.9 },
+  // The truck is one drawing cut in two, standing on the same point: the
+  // bed, under the container it carries, and the cab before it. Its unit is
+  // the bed, one container wide; its point, the middle of the bed on the ground.
+  "truck-bed": { src: src(truckBed), size: [234.65, 162.83], stands: [147.22, 78.15], unit: 60.9 },
+  "truck-cab": { src: src(truckCab), size: [234.65, 162.83], stands: [147.22, 78.15], unit: 60.9 },
+  // The yard itself, drawn whole: its pads, the stacks, the warehouse, the
+  // sign, the lane and the quay. Placed by the crane's rails: their middle is
+  // the lane the trucks take, at the scale of the containers.
+  ground: { src: src(ground), size: [1200, 1200], stands: [341.9, 554.8], unit: 51.9 },
+  // The crane is one drawing cut in nine files that stand on the same point,
+  // the ground under the middle of its four legs, so that what moves can go
+  // between its parts: a truck between its legs, a container between the
+  // legs on the water side, the trolley between its two girders. Its legs
+  // stand on the rails of the ground, at the same scale.
+  "crane-land-back": { src: src(craneLandBack), ...crane },
+  "crane-girder-back": { src: src(craneGirderBack), ...crane },
+  "crane-sea-low": { src: src(craneSeaLow), ...crane },
+  "crane-sea-b": { src: src(craneSeaB), ...crane },
+  "crane-girder-front": { src: src(craneGirderFront), ...crane },
+  "crane-rails": { src: src(craneRails), ...crane },
+  "crane-land-front": { src: src(craneLandFront), ...crane },
+  "crane-sea-d": { src: src(craneSeaD), ...crane },
+  "crane-aframe": { src: src(craneAframe), ...crane },
+  "crane-house": { src: src(craneHouse), ...crane },
+  // The trolley hangs under the rails, between the girders, drawn here in
+  // the crane's colours.
+  "crane-trolley": { src: src(craneTrolley), size: [128.5, 84.19], stands: [61.33, 271.1], unit: 51.9 },
+  // The ship is one drawing, cut in two files that stand on the same point:
+  // the hull, with the water moving against it, and the bridge over it. Its
+  // unit is its deck, three containers wide, as the first ship's was.
+  "ship-hull": { src: src(shipHull), size: [705.08, 544.4], stands: [344.95, 342.22], unit: 55.35 },
+  "ship-bridge": { src: src(shipBridge), size: [705.08, 544.4], stands: [344.95, 342.22], unit: 55.35 },
   sign: { src: src(sign), size: [1024, 1024], stands: [575, 850], unit: 135 },
 } satisfies Record<string, Piece>;
 

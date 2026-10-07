@@ -1,9 +1,24 @@
 /* The identity comes whole from design/ui: tokens, fonts, themes, the look
    of a written text, and the classes its components use. */
 @import "@shpyrd/ui/styles.css";
+@import "./feature-blocks.css";
 
-/* The site header stays at the top (3.5rem and its line), so a link to a
-   heading stops below it, with a little room, rather than under it. */
+/* The site header stays at the top (4.75rem with the room above it), so a
+   link to a heading stops below it, with a little room, rather than under it.
+   Going to a heading of the page glides there, as on legal.shpyrd.io, unless
+   the system asks for less motion. */
 html {
-  scroll-padding-top: calc(3.5rem + 1px + 1.5rem);
+  scroll-padding-top: calc(4.75rem + 1.5rem);
 }
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* What runs from edge to edge (the ocean under the hero) is cut at the window,
+   not scrolled to. */
+body {
+  overflow-x: clip;
+}
+

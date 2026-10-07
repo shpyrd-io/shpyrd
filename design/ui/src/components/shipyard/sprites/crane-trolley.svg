@@ -1,7 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-111 -346 202 131" width="202" height="131">
-<g stroke-linejoin="round" stroke-linecap="round">
-<polygon points="-108.3,-247.5 -56.3,-217.5 -56.3,-230 -108.3,-260" fill="#ff4f00" stroke="#52525b" stroke-width="1.5"/>
-<polygon points="88.8,-301.3 -56.3,-217.5 -56.3,-230 88.8,-313.8" fill="#ff4f00" stroke="#52525b" stroke-width="1.5"/>
-<polygon points="36.8,-343.8 88.8,-313.8 -56.3,-230 -108.3,-260" fill="#ffffff" stroke="#52525b" stroke-width="1.5"/>
-</g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-61.33 -271.10 128.50 84.19" width="128.50" height="84.19">
+  <polygon points="65.17,-234.85 -14.38,-188.92 -14.38,-197.22 65.17,-243.15" fill="#d3d8de" stroke="#3f4044" stroke-width="1.39" stroke-linejoin="round"/>
+  <polygon points="-59.33,-214.87 -14.38,-188.92 -14.38,-197.22 -59.33,-223.17" fill="#ffffff" stroke="#3f4044" stroke-width="1.39" stroke-linejoin="round"/>
+  <polygon points="20.23,-269.10 65.17,-243.15 -14.38,-197.22 -59.33,-223.17" fill="#ff4f00" stroke="#3f4044" stroke-width="1.39" stroke-linejoin="round"/>
 </svg>

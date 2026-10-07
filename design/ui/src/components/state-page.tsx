@@ -46,7 +46,7 @@ function StatePage({
         ) : (
           <LogoMark className="size-16" />
         )}
-        {title && <h1 className="font-heading text-2xl font-medium">{title}</h1>}
+        {title && <h1 className="font-heading text-2xl font-semibold">{title}</h1>}
         {description && <p className="max-w-md text-sm text-balance text-muted-foreground">{description}</p>}
         {waiting && <Loader2 aria-label="Waiting" className="size-5 animate-spin text-muted-foreground" />}
         {action && <div className="flex flex-wrap items-center justify-center gap-2">{action}</div>}

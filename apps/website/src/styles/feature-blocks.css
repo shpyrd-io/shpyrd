@@ -1,0 +1,204 @@
+/* The six blocks of what shpyrd does, each with its little film, ported from
+   the designer's sheet (claude.ai/artifact/R8pQc5eZnfonk2iQgg6CpP). Its
+   colours are the site's tokens; everything is scoped under `.fb`. */
+
+.fb {
+  --ink: var(--foreground);
+  --muted: var(--muted-foreground);
+  --faint: color-mix(in oklab, var(--foreground) 28%, transparent);
+  --line: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --grid: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --card: var(--background);
+  --accent: var(--primary);
+  --accent-ink: var(--primary);
+  --accent-soft: color-mix(in oklab, var(--primary) 14%, transparent);
+  --ok: var(--success);
+  --ok-soft: color-mix(in oklab, var(--success) 14%, transparent);
+  --no: var(--destructive);
+  --stage: transparent;
+}
+
+/* The film's own window, as in the hero: light, edged in white, a faint grid. */
+.fb .stage {
+  position: relative;
+  min-height: 236px;
+  overflow: hidden;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+/* A drawn film fills its stage, whatever the tile makes of it: at least
+   236px, as tall as the tile beside it when the row is taller. */
+.fb .stage > svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.fb .stage svg text { font-family: var(--font-mono); }
+
+/* 1. Agent */
+.fb .s-agent { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.fb .s-agent .ln { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.fb .s-agent .ln span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb .s-agent .ask { color: var(--ink); font-size: 12.5px; }
+.fb .s-agent .ask .pr { color: var(--accent); }
+.fb .s-agent .call { color: var(--muted); padding-left: 12px; }
+.fb .s-agent .call .ok { margin-left: auto; color: var(--ok); }
+.fb .s-agent .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: fb-pulse 1.1s ease-in-out infinite; }
+.fb .s-agent .ans { color: var(--ink); line-height: 1.5; padding-left: 12px; }
+.fb .s-agent .act { padding-left: 12px; }
+.fb .s-agent .run { border: 1px solid var(--accent); color: #fff; background: var(--accent); padding: 3px 9px; border-radius: 5px; box-shadow: 0 4px 12px -4px rgb(255 79 0 / 0.5); }
+.fb .s-agent .l1 { animation: fb-ag1 11s infinite; }
+.fb .s-agent .l2 { animation: fb-ag2 11s infinite; }
+.fb .s-agent .l3 { animation: fb-ag3 11s infinite; }
+.fb .s-agent .l4 { animation: fb-ag4 11s infinite; }
+.fb .s-agent .l5 { animation: fb-ag5 11s infinite; }
+.fb .s-agent .l6 { animation: fb-ag6 11s infinite; }
+@keyframes fb-ag1 { 0%,16% { opacity: 1 } 20%,24% { opacity: 0 } 27%,100% { opacity: 1 } }
+@keyframes fb-ag2 { 0%,16% { opacity: 1 } 20%,33% { opacity: 0 } 36%,100% { opacity: 1 } }
+@keyframes fb-ag3 { 0%,16% { opacity: 1 } 20%,41% { opacity: 0 } 44%,100% { opacity: 1 } }
+@keyframes fb-ag4 { 0%,16% { opacity: 1 } 20%,49% { opacity: 0 } 52%,100% { opacity: 1 } }
+@keyframes fb-ag5 { 0%,16% { opacity: 1 } 20%,59% { opacity: 0 } 62%,100% { opacity: 1 } }
+@keyframes fb-ag6 { 0%,16% { opacity: 1 } 20%,68% { opacity: 0 } 71%,100% { opacity: 1 } }
+@keyframes fb-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+/* 2. Security Door */
+.fb .s-door { --door: 56%; --cw: 122px; }
+.fb .s-door .head { position: absolute; inset: 14px 16px auto 16px; display: flex; justify-content: space-between; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+.fb .s-door .door { position: absolute; left: var(--door); top: 38px; bottom: 14px; width: 2px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 10px rgb(255 79 0 / 0.5); }
+.fb .s-door .door-tag { position: absolute; left: var(--door); top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; font-size: 10.5px; white-space: nowrap; }
+.fb .s-door .door-tag svg { width: 11px; height: 11px; color: var(--accent); }
+.fb .s-door .lane { position: absolute; left: 0; right: 0; height: 40px; }
+/* The three visitors spread down the stage, whatever its height: in a tall
+   tile they fill it; at 236px they fall where the sheet had them. */
+.fb .s-door .lane.a { top: 22%; height: 64px; }
+.fb .s-door .lane.b { top: 52%; }
+.fb .s-door .lane.c { top: 76%; }
+.fb .s-door .chip { position: absolute; top: 4px; width: var(--cw); padding: 4px 8px; border-radius: 5px; border: 1px solid var(--line); background: var(--card); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; }
+.fb .s-door .a .chip { left: calc(var(--door) + 12px); border-color: var(--ok); background: var(--ok-soft); animation: fb-pass 10s infinite; }
+.fb .s-door .b .chip { left: calc(var(--door) - var(--cw) - 8px); animation: fb-stopB 10s infinite; }
+.fb .s-door .c .chip { left: calc(var(--door) - var(--cw) - 8px); animation: fb-stopC 10s infinite; }
+.fb .s-door .why { position: absolute; left: calc(var(--door) + 12px); right: 12px; font-size: 10px; line-height: 1.35; }
+.fb .s-door .a .why { top: 34px; color: var(--ok); animation: fb-whyA 10s infinite; }
+.fb .s-door .b .why, .fb .s-door .c .why { top: 6px; color: var(--no); }
+.fb .s-door .b .why { animation: fb-whyB 10s infinite; }
+.fb .s-door .c .why { animation: fb-whyC 10s infinite; }
+@keyframes fb-pass {
+  0%,18% { left: calc(var(--door) + 12px); opacity: 1; border-color: var(--ok); background: var(--ok-soft) }
+  21% { opacity: 0; left: calc(var(--door) + 12px) }
+  22% { opacity: 0; left: 8px; border-color: var(--line); background: var(--card) }
+  25% { opacity: 1; left: 8px; border-color: var(--line); background: var(--card) }
+  38% { left: calc(var(--door) - var(--cw) - 8px); border-color: var(--line); background: var(--card) }
+  44% { left: calc(var(--door) + 12px); border-color: var(--ok); background: var(--ok-soft) }
+  100% { left: calc(var(--door) + 12px); opacity: 1; border-color: var(--ok); background: var(--ok-soft) }
+}
+@keyframes fb-stopB {
+  0%,18% { left: calc(var(--door) - var(--cw) - 8px); opacity: 1 }
+  21% { opacity: 0; left: calc(var(--door) - var(--cw) - 8px) }
+  22%,36% { opacity: 0; left: 8px }
+  39% { opacity: 1; left: 8px }
+  52% { left: calc(var(--door) - var(--cw) - 8px) }
+  54% { left: calc(var(--door) - var(--cw) - 13px) }
+  56%,100% { left: calc(var(--door) - var(--cw) - 8px); opacity: 1 }
+}
+@keyframes fb-stopC {
+  0%,18% { left: calc(var(--door) - var(--cw) - 8px); opacity: 1 }
+  21% { opacity: 0; left: calc(var(--door) - var(--cw) - 8px) }
+  22%,50% { opacity: 0; left: 8px }
+  53% { opacity: 1; left: 8px }
+  66% { left: calc(var(--door) - var(--cw) - 8px) }
+  68% { left: calc(var(--door) - var(--cw) - 13px) }
+  70%,100% { left: calc(var(--door) - var(--cw) - 8px); opacity: 1 }
+}
+@keyframes fb-whyA { 0%,18% { opacity: 1 } 21%,45% { opacity: 0 } 49%,100% { opacity: 1 } }
+@keyframes fb-whyB { 0%,18% { opacity: 1 } 21%,55% { opacity: 0 } 59%,100% { opacity: 1 } }
+@keyframes fb-whyC { 0%,18% { opacity: 1 } 21%,69% { opacity: 0 } 73%,100% { opacity: 1 } }
+
+/* 3. Resources */
+.fb .s-res .frame { fill: none; stroke: var(--faint); stroke-dasharray: 4 4; }
+.fb .s-res .node { fill: var(--card); stroke: var(--line); }
+.fb .s-res .node.app { stroke: var(--accent); }
+.fb .s-res .lbl { fill: var(--ink); font-size: 11px; }
+.fb .s-res .cap { fill: var(--muted); font-size: 10px; }
+.fb .s-res .wire { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 1; stroke-dashoffset: 0; }
+/* Solid, so the wire behind a variable does not run through its name. */
+.fb .s-res .var rect { fill: color-mix(in oklab, var(--primary) 12%, var(--background)); stroke: var(--accent); }
+.fb .s-res .var text { fill: var(--accent-ink); font-size: 10.5px; }
+.fb .s-res .w1 { animation: fb-wire1 10s infinite; }
+.fb .s-res .w2 { animation: fb-wire2 10s infinite; }
+.fb .s-res .w3 { animation: fb-wire3 10s infinite; }
+.fb .s-res .v1 { animation: fb-var1 10s infinite; }
+.fb .s-res .v2 { animation: fb-var2 10s infinite; }
+.fb .s-res .v3 { animation: fb-var3 10s infinite; }
+@keyframes fb-wire1 { 0%,16% { stroke-dashoffset: 0 } 20%,26% { stroke-dashoffset: 1 } 36%,100% { stroke-dashoffset: 0 } }
+@keyframes fb-wire2 { 0%,16% { stroke-dashoffset: 0 } 20%,40% { stroke-dashoffset: 1 } 50%,100% { stroke-dashoffset: 0 } }
+@keyframes fb-wire3 { 0%,16% { stroke-dashoffset: 0 } 20%,54% { stroke-dashoffset: 1 } 64%,100% { stroke-dashoffset: 0 } }
+@keyframes fb-var1 { 0%,16% { opacity: 1 } 20%,36% { opacity: 0 } 40%,100% { opacity: 1 } }
+@keyframes fb-var2 { 0%,16% { opacity: 1 } 20%,50% { opacity: 0 } 54%,100% { opacity: 1 } }
+@keyframes fb-var3 { 0%,16% { opacity: 1 } 20%,64% { opacity: 0 } 68%,100% { opacity: 1 } }
+
+/* 4. Sleep */
+.fb .s-sleep .gl { stroke: var(--line); stroke-width: 1; }
+.fb .s-sleep .step { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.fb .s-sleep .ax { fill: var(--muted); font-size: 10px; }
+.fb .s-sleep .note { fill: var(--ink); font-size: 10px; }
+.fb .s-sleep .note.no { fill: var(--no); }
+.fb .s-sleep .tick { fill: var(--faint); }
+.fb .s-sleep .tick.wake { fill: var(--accent); }
+.fb .s-sleep .cross { stroke: var(--no); stroke-width: 1.6; }
+.fb .s-sleep .status { font-size: 11.5px; fill: var(--ink); }
+.fb .s-sleep .status tspan.k { fill: var(--accent-ink); }
+.fb .s-sleep .ph line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
+.fb .s-sleep .ph { animation: fb-playhead 12s infinite linear; }
+.fb .s-sleep .st-awake { animation: fb-stAwake 12s infinite; }
+.fb .s-sleep .st-asleep { opacity: 0; animation: fb-stAsleep 12s infinite; }
+.fb .s-sleep .st-resume { opacity: 0; animation: fb-stResume 12s infinite; }
+.fb .s-sleep .anon { animation: fb-anon 12s infinite; }
+@keyframes fb-playhead { 0% { transform: translateX(0) } 30% { transform: translateX(120px) } 75% { transform: translateX(309px) } 85% { transform: translateX(318px) } 100% { transform: translateX(352px) } }
+@keyframes fb-stAwake { 0%,29.5% { opacity: 1 } 30%,84.5% { opacity: 0 } 85%,100% { opacity: 1 } }
+@keyframes fb-stAsleep { 0%,29.5% { opacity: 0 } 30%,74.5% { opacity: 1 } 75%,100% { opacity: 0 } }
+@keyframes fb-stResume { 0%,74.5% { opacity: 0 } 75%,84.5% { opacity: 1 } 85%,100% { opacity: 0 } }
+@keyframes fb-anon { 0%,52% { opacity: 1 } 54% { opacity: 0.2 } 56% { opacity: 1 } 58% { opacity: 0.2 } 60%,100% { opacity: 1 } }
+
+/* 5. Metrics */
+.fb .s-met .gl { stroke: var(--line); }
+.fb .s-met .ax { fill: var(--muted); font-size: 10px; }
+.fb .s-met .title { fill: var(--ink); font-size: 12px; font-family: var(--font-sans); font-weight: 600; }
+.fb .s-met .ln { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 0; animation: fb-draw 10s infinite linear; }
+.fb .s-met .p50 { stroke: var(--faint); }
+.fb .s-met .p95 { stroke: var(--accent); }
+.fb .s-met .p99 { stroke: var(--ink); stroke-width: 1.2; }
+.fb .s-met .rel { stroke: var(--accent); stroke-dasharray: 3 3; }
+.fb .s-met .rel-t { fill: var(--accent-ink); font-size: 10px; }
+.fb .s-met .m1 { animation: fb-mk1 10s infinite; }
+.fb .s-met .m2 { animation: fb-mk2 10s infinite; }
+.fb .s-met .rng rect { fill: var(--card); stroke: var(--line); }
+.fb .s-met .rng .on rect { fill: var(--accent); stroke: var(--accent); }
+.fb .s-met .rng text { fill: var(--ink); font-size: 10px; }
+.fb .s-met .rng .on text { fill: #fff; }
+.fb .s-met .lg { fill: var(--muted); font-size: 10px; }
+@keyframes fb-draw { 0%,16% { stroke-dashoffset: 0 } 19%,22% { stroke-dashoffset: 1 } 72%,100% { stroke-dashoffset: 0 } }
+@keyframes fb-mk1 { 0%,16% { opacity: 1 } 19%,41% { opacity: 0 } 43%,100% { opacity: 1 } }
+@keyframes fb-mk2 { 0%,16% { opacity: 1 } 19%,58% { opacity: 0 } 60%,100% { opacity: 1 } }
+
+/* 6. Cost */
+.fb .s-cost { padding: 14px 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 8px; }
+.fb .s-cost .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fb .s-cost .size { color: var(--ink); border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 8px; }
+.fb .s-cost .trace { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); min-height: 0; }
+/* The chart stops above its label, so the orange does not run over the words. */
+.fb .s-cost .trace svg { position: absolute; inset: 0 0 22px 0; width: 100%; height: calc(100% - 22px); }
+.fb .s-cost .area { fill: var(--accent-soft); }
+.fb .s-cost .cpu { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.fb .s-cost .roll { animation: fb-roll 9s infinite linear; }
+.fb .s-cost .wait { position: absolute; left: 0; bottom: 4px; font-size: 10px; color: var(--muted); padding-right: 6px; }
+.fb .s-cost .ladder { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; font-size: 10px; }
+.fb .s-cost .ladder .bar { height: 6px; border-radius: 3px; background: var(--line); }
+.fb .s-cost .ladder .bar i { display: block; height: 100%; border-radius: 3px; background: var(--faint); }
+.fb .s-cost .ladder .first { color: var(--ink); }
+.fb .s-cost .ladder .first + .bar i { background: var(--accent); }
+@keyframes fb-roll { from { transform: translateX(0) } to { transform: translateX(-200px) } }
+
+@media (prefers-reduced-motion: reduce) {
+  .fb .stage, .fb .stage * { animation: none !important; }
+}

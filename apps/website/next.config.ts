@@ -15,9 +15,10 @@ const base: NextConfig = {
   agentRules: false,
   // The development server hands its scripts only to pages opened at its own
   // address. A cloudflared quick tunnel (https://<random>.trycloudflare.com) is
-  // how a proposal is shown to someone else, so its addresses may load them too.
-  // It has no part in the build.
-  allowedDevOrigins: ["*.trycloudflare.com"],
+  // how a proposal is shown to someone else, so its addresses may load them too;
+  // so may an ngrok tunnel (https://<name>.ngrok-free.dev). It has no part in
+  // the build.
+  allowedDevOrigins: ["*.trycloudflare.com", "*.ngrok-free.dev"],
 };
 
 export default function config(phase: string): NextConfig {

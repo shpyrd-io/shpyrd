@@ -6,6 +6,8 @@ const sizes = {
   card: "text-3xl @2xl/hero:text-4xl",
   "card-spacious": "text-3xl @2xl/hero:text-4xl",
   large: "text-4xl @2xl/hero:text-5xl",
+  // The front page of a site: the heading as big as the room allows.
+  xlarge: "text-5xl @2xl/hero:text-6xl @4xl/hero:text-7xl",
 } as const;
 
 // The banner at the top of a page: what the page is, in as few words as it
@@ -85,7 +87,7 @@ function Hero({
           <Heading
             data-slot="hero-heading"
             className={cn(
-              "max-w-[20ch] font-heading leading-[1.1] font-medium tracking-tight text-balance",
+              "max-w-[20ch] font-heading leading-[1.1] font-semibold tracking-tight text-balance",
               sizes[variant],
             )}
           >

@@ -12,14 +12,14 @@ const GroupLevel = React.createContext<"h3" | "h4">("h3");
 // The current item: the row in grey, and half a circle of the primary
 // growing out of the edge of the list, like a bookmark.
 const row =
-  "group/nav-item relative flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 data-[current=true]:bg-muted data-[current=true]:font-medium data-[current=true]:before:absolute data-[current=true]:before:top-1/2 data-[current=true]:before:-left-2 data-[current=true]:before:h-[9px] data-[current=true]:before:w-[5px] data-[current=true]:before:-translate-y-1/2 data-[current=true]:before:rounded-r-full data-[current=true]:before:bg-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+  "group/nav-item relative flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 data-[current=true]:bg-muted data-[current=true]:font-medium data-[current=true]:before:absolute data-[current=true]:before:top-1/2 data-[current=true]:before:-left-2 data-[current=true]:before:h-4 data-[current=true]:before:w-[3px] data-[current=true]:before:-translate-y-1/2 data-[current=true]:before:rounded-[2px] data-[current=true]:before:bg-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
 
 function Before({ children }: { children?: React.ReactNode }) {
   if (!children) return null;
   return (
     <span
       data-slot="nav-list-icon"
-      className="text-muted-foreground group-data-[current=true]/nav-item:text-foreground"
+      className="text-muted-foreground group-data-[current=true]/nav-item:text-primary"
     >
       {children}
     </span>
@@ -71,7 +71,7 @@ function NavList({
             id={id}
             data-slot="nav-list-heading"
             className={cn(
-              "px-4 pb-2 font-heading text-base leading-snug font-medium",
+              "px-4 pb-2 font-heading text-base leading-snug font-semibold",
               headingHidden && "sr-only",
             )}
           >

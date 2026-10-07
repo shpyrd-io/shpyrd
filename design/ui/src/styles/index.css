@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "./prose.css";
 
 /* The classes the components use are found here, whoever imports this file. */
@@ -12,6 +13,7 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -54,6 +56,8 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  /* The corner of what is pressed or toggled: a button, a switch. */
+  --radius-control: 5px;
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -82,8 +86,8 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.66 0.22 38);
-  --primary-foreground: oklch(0.99 0 0);
+  --primary: #ff4f00;
+  --primary-foreground: #ffffff;
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -104,12 +108,12 @@
   --warning-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.66 0.22 38 / 60%);
+  --ring: rgb(255 79 0 / 60%);
   /* The colours of charts. Their order is what keeps neighbours apart for
      who does not tell every colour from another: the brand orange, blue,
      green, violet, and grey for "the others". They were checked as a set,
      in this order, against this surface; a change has to be checked again. */
-  --chart-1: oklch(0.66 0.22 38);
+  --chart-1: #ff4f00;
   --chart-2: oklch(0.588 0.158 241.966);
   --chart-3: oklch(0.596 0.145 163.225);
   --chart-4: oklch(0.541 0.281 293.009);
@@ -137,11 +141,11 @@
   --symbol-pink: oklch(0.6 0.21 350);
   --symbol-brown: oklch(0.52 0.07 55);
   --symbol-grey: oklch(0.55 0.02 262);
-  --radius: 0.625rem;
+  --radius: 0.375rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.66 0.22 38);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-primary: #ff4f00;
+  --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
@@ -149,19 +153,20 @@
 }
 
 .dark {
-  --background: oklch(0.17 0.03 262);
-  --foreground: oklch(0.97 0.01 250);
-  --card: oklch(0.21 0.03 262);
+  /* Neutral black, as apple.com: no tint, so the orange sits on black. */
+  --background: #000000;
+  --foreground: #f5f5f7;
+  --card: #161617;
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.03 262);
+  --popover: #1c1c1e;
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.7 0.21 38);
-  --primary-foreground: oklch(0.13 0.02 40);
+  --primary: #ff4f00;
+  --primary-foreground: #ffffff;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.27 0.03 262);
+  --muted: #1d1d1f;
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.27 0.03 262);
+  --accent: #2c2c2e;
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.2 0.05 22);
@@ -173,8 +178,8 @@
   --warning-foreground: oklch(0.2 0.04 70);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.7 0.21 38 / 60%);
-  --chart-1: oklch(0.66 0.22 38);
+  --ring: rgb(255 79 0 / 60%);
+  --chart-1: #ff4f00;
   --chart-2: oklch(0.588 0.158 241.966);
   --chart-3: oklch(0.596 0.145 163.225);
   --chart-4: oklch(0.606 0.25 292.717);
@@ -199,8 +204,8 @@
   --symbol-grey: oklch(0.74 0.02 262);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.7 0.21 38);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-primary: #ff4f00;
+  --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
