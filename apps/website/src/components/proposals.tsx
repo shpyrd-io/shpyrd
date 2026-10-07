@@ -216,14 +216,19 @@ export function ConnectOnce() {
 export function Closing() {
   return (
     <ShipyardCta
+      variant="large"
+      border={false}
+      // The yard large, the words beside it narrower, and little room above
+      // and under: about 50px from the timeline and from the footer.
+      className="-mt-3.5 mb-6.5 [&>div]:py-0 @3xl/hero:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)]"
       heading="Start on shpyrd cloud"
       description="Sign up, connect your agent, and ship your first app. Or run it yourself: shpyrd is open source under MPL-2.0, and the quick start takes you from nothing to a deployed app."
       actions={
         <>
-          <Button asChild>
+          <Button size="lg" asChild>
             <a href="/docs/getting-started">Get started</a>
           </Button>
-          <Button variant="outline" asChild>
+          <Button variant="outline" size="lg" asChild>
             <a href="/docs/installation">Run it yourself</a>
           </Button>
         </>

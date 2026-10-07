@@ -1,5 +1,6 @@
 import { Hero } from "@shpyrd/ui/components/hero";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
+import { cn } from "@shpyrd/ui/lib/cn";
 
 // The end of a page, with the shipyard at work beside it: what to do next on
 // the left, the yard on the right, and under the words, centred, where there
@@ -10,17 +11,26 @@ export function ShipyardCta({
   description,
   actions,
   note,
+  variant = "medium",
+  border = true,
+  className,
 }: {
   heading: React.ReactNode;
   description?: React.ReactNode;
   actions: React.ReactNode;
   note?: React.ReactNode;
+  // The size of its heading; "medium" unless the page around it is louder.
+  variant?: "medium" | "large";
+  // The line over it, parting it from the section above. Off where that
+  // section already ends with room enough.
+  border?: boolean;
+  className?: string;
 }) {
   return (
     <Hero
       as="h2"
-      variant="medium"
-      className="border-t"
+      variant={variant}
+      className={cn(border && "border-t", className)}
       heading={heading}
       description={description}
       actions={actions}

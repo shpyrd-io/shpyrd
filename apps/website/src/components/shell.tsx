@@ -3,7 +3,40 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Briefcase, Handshake, Menu, Moon, ShieldCheck, SquareTerminal, Sun, SunMoon, Trophy, Wrench } from "lucide-react";
+import {
+  ArchiveRestore,
+  Bot,
+  Boxes,
+  Briefcase,
+  Cloud,
+  Cloudy,
+  Compass,
+  Database,
+  Download,
+  FileCode,
+  GitPullRequest,
+  Globe,
+  Handshake,
+  Heart,
+  LayoutDashboard,
+  Lightbulb,
+  LockKeyhole,
+  Map as MapIcon,
+  Menu,
+  Moon,
+  Network,
+  Puzzle,
+  Rocket,
+  Ruler,
+  ScrollText,
+  ShieldCheck,
+  SquareTerminal,
+  Sun,
+  SunMoon,
+  Trophy,
+  UploadCloud,
+  Wrench,
+} from "lucide-react";
 import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
 import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
@@ -17,6 +50,8 @@ import {
   PageLayoutSidebar,
 } from "@shpyrd/ui/components/page-layout";
 import { SiteHeader } from "@shpyrd/ui/components/site-header";
+import { glass } from "@shpyrd/ui/lib/glass";
+import { cn } from "@shpyrd/ui/lib/cn";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { find, navigation } from "@shpyrd/content/navigation";
@@ -31,6 +66,36 @@ const github = "https://github.com/shpyrd-io/shpyrd";
 const discord = site.discord.href;
 
 // The icons of the header turn orange under the pointer, with no box behind.
+
+// An icon for each page of the documentation, beside its name in the side
+// panel: after the side menu of legal.shpyrd.io.
+const docIcons: Record<string, React.ReactElement> = {
+  "/docs/getting-started": <Rocket />,
+  "/docs/concepts": <Lightbulb />,
+  "/docs/tour": <Compass />,
+  "/docs/deploying": <UploadCloud />,
+  "/docs/shpyrd-yaml": <FileCode />,
+  "/docs/resources": <Boxes />,
+  "/docs/databases": <Database />,
+  "/docs/domains": <Globe />,
+  "/docs/app-access": <LockKeyhole />,
+  "/docs/access": <ShieldCheck />,
+  "/docs/mcp": <Bot />,
+  "/docs/logs": <ScrollText />,
+  "/docs/dashboard": <LayoutDashboard />,
+  "/docs/cli": <SquareTerminal />,
+  "/docs/installation": <Download />,
+  "/docs/oracle-cloud": <Cloud />,
+  "/docs/aws": <Cloudy />,
+  "/docs/extensions": <Puzzle />,
+  "/docs/backups": <ArchiveRestore />,
+  "/docs/architecture-guide": <Network />,
+  "/docs/design-principles": <Ruler />,
+  "/docs/roadmap": <MapIcon />,
+  "/docs/how-to-contribute": <GitPullRequest />,
+  "https://donate.stripe.com/9B63cxfbwg8H31OgPX2ZO01": <Heart />,
+};
+
 const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
 
 // What is around every page: the pages of the site at the side, where the
@@ -139,6 +204,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <NavListItem
               key={link.href}
               asChild
+              icon={docIcons[link.href]}
               aria-current={here?.link === link ? "page" : undefined}
             >
               <Link href={link.href}>{link.title}</Link>
@@ -161,17 +227,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <PageLayoutSidebar
           aria-label="Site"
           width="small"
-          divider="line"
           sticky
           hidden={{ narrow: true }}
-          className="pb-4"
+          // Floats like the header: held off the edges, a panel of glass the
+          // height of the window, scrolling inside itself.
+          // Over the bar beside it, so the bar does not cut its shadow; 1.5rem
+          // of room on its right, the panel keeping its 15rem.
+          className="relative z-50 py-4 pr-6 pl-4 @3xl/page-layout:w-66 @3xl/page-layout:overflow-visible"
         >
-          <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
-            <Link href="/" aria-label="shpyrd">
-              <Wordmark />
-            </Link>
-          </Stack>
-          {nav}
+          <div className={cn(glass, "flex h-full flex-col overflow-y-auto pb-4")}>
+            <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
+              <Link href="/" aria-label="shpyrd">
+                <Wordmark />
+              </Link>
+            </Stack>
+            {nav}
+          </div>
         </PageLayoutSidebar>
       )}
 
@@ -179,9 +250,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <SiteHeader
           as="div"
           sticky={false}
+          // A document has its own floating panel at the side; its bar is
+          // left loose over the page, with only a faint line under it.
+          variant={isDocument ? "bar" : "floating"}
+          // The line runs as far as what is in the bar: from the breadcrumbs to
+          // the end of the last button, not from edge to edge. The bar is held
+          // down so its words sit on the same line as the logo in the side panel.
+          className={
+            isDocument
+              ? "border-b-0 bg-background/70 px-4 pt-4.5 md:px-6 [&>div:first-child]:border-b [&>div:first-child]:border-foreground/8 [&>div:first-child]:px-0"
+              : undefined
+          }
           // A document has the sidebar at its left, and the whole room beside
-          // it; the other pages hold their content to "large", so the bar does.
-          width={isDocument ? "full" : "large"}
+          // it; the other pages hold their content to "xlarge", so the bar does.
+          width={isDocument ? "full" : "xlarge"}
           start={
             isDocument ? (
               <>
@@ -272,7 +354,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <PageLayoutFooter>
         <MinimalFooter
           as="div"
-          width={isDocument ? "full" : "large"}
+          // Loose like a document's bar, on every page: a faint line over it,
+          // as wide as what is in it, rather than a panel of glass.
+          variant="line"
+          // Off the docs, it lines up with the page's text: the 80rem of the
+          // page less the room the page keeps on each side.
+          className={cn(
+            "border-t-0 px-4 md:px-6 [&>div:first-child]:border-t [&>div:first-child]:border-foreground/8 [&>div:first-child]:px-0",
+            !isDocument && "[&>div:first-child]:max-w-[calc(80rem-3rem)]",
+          )}
+          width={isDocument ? "full" : "xlarge"}
           links={[...(sectionsLive ? solutions : []), ...marketing].map((l) => (
             <Link key={l.href} href={l.href}>
               {l.title}
@@ -287,7 +378,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <LogoMark className="size-5" />
             </Link>
           }
-          note="shpyrd is open source under MPL-2.0, and in beta."
+          note="© 2026. shpyrd. All rights reserved."
           backToTop
         />
       </PageLayoutFooter>
