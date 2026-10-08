@@ -332,6 +332,13 @@ func (s *Server) buildLogs(c *gin.Context) {
 			abort(c, http.StatusNotFound, fmt.Errorf("the output of build %s is gone (only a limited build history is kept)", build))
 			return
 		}
+		// A build refused before it had an instance has ended without one
+		// (#117): the log is empty and the builds say why.
+		var job batchv1.Job
+		if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: build}, &job); err == nil && jobBuildInfo(job).Status != "Building" {
+			c.Status(http.StatusOK)
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return

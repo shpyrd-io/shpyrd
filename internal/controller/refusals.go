@@ -145,15 +145,31 @@ func (r *AppReconciler) quotaTakers(ctx context.Context, namespace string, res c
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1], database
 }
 
-// releaseJobRefusal reports why the current release instance could not be
-// created, and whether the refusal came from the workspace quota.
-func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job) (string, bool) {
+// refusal says who refused to create a Job's instance.
+type refusal int
+
+const (
+	refusedNone     refusal = iota
+	refusedOther            // the platform, for a reason the customer cannot act on
+	refusedQuota            // the workspace's ceiling (#52)
+	refusedPlatform         // the quota, for the platform's own instance lacking requests (#117)
+)
+
+// missingRequests is Kubernetes refusing a pod under a quota because a
+// container of it declares no request: the platform's fault, never the
+// customer's.
+var missingRequests = regexp.MustCompile(`must specify (?:requests|limits)\.(?:cpu|memory)`)
+
+// jobRefusal reports, in words, why Kubernetes would not create the
+// current instance of job, and who refused it; who is what could not
+// start ("The release step", "The build").
+func (r *AppReconciler) jobRefusal(ctx context.Context, job *batchv1.Job, who string) (string, refusal) {
 	if r.Kube == nil {
-		return "", false
+		return "", refusedNone
 	}
 	events, err := r.Kube.CoreV1().Events(job.Namespace).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.name=" + job.Name + ",reason=FailedCreate"})
 	if err != nil {
-		return "", false
+		return "", refusedNone
 	}
 	var latest *corev1.Event
 	for i := range events.Items {
@@ -166,12 +182,22 @@ func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job)
 		}
 	}
 	if latest == nil {
-		return "", false
+		return "", refusedNone
 	}
-	if msg := r.quotaRefusal(ctx, job.Namespace, "The release step", latest.Message); msg != "" {
-		return msg, true
+	if msg := r.quotaRefusal(ctx, job.Namespace, who, latest.Message); msg != "" {
+		return msg, refusedQuota
 	}
-	return "The release step cannot start: the platform refused to create its instance. Ask the operator to check the workspace’s capacity and permissions.", false
+	if missingRequests.MatchString(latest.Message) {
+		return who + " cannot start: the platform asked for it without the resource requests the workspace's ceiling needs. This is a platform error, not your app's; contact support.", refusedPlatform
+	}
+	return who + " cannot start: the platform refused to create its instance. Ask the operator to check the workspace’s capacity and permissions.", refusedOther
+}
+
+// releaseJobRefusal reports why the current release instance could not be
+// created, and whether the refusal came from the workspace quota.
+func (r *AppReconciler) releaseJobRefusal(ctx context.Context, job *batchv1.Job) (string, bool) {
+	msg, by := r.jobRefusal(ctx, job, "The release step")
+	return msg, by == refusedQuota
 }
 
 // processRefusals are the quota refusals of the processes whose new

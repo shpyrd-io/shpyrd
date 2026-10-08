@@ -118,7 +118,19 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		st.LatestImage = lastImage(builds[:len(builds)-1])
 		if latest.Status.Active > 0 {
 			st.Message = "building " + latest.Name
+			break
 		}
+		// A quota refusal does not clear by waiting: the build fails now,
+		// in words, rather than at its deadline 30 minutes on (#117).
+		msg, by := r.jobRefusal(ctx, latest, "The build")
+		if by != refusedQuota && by != refusedPlatform {
+			break
+		}
+		if err := r.stopBuildJob(ctx, latest, msg); err != nil {
+			return st, err
+		}
+		st.Ready, st.Message = "False", msg
+		r.Recorder.Eventf(app, corev1.EventTypeWarning, "BuildFailed", "%s: %s", latest.Name, msg)
 	}
 	if err := r.pruneBuildJobs(ctx, builds); err != nil {
 		return st, err
@@ -221,6 +233,18 @@ func (r *AppReconciler) annotateJob(ctx context.Context, job *batchv1.Job, ann m
 	job.Annotations = mergeMaps(job.Annotations, ann)
 	if err := r.Patch(ctx, job, patch); err != nil {
 		return fmt.Errorf("annotate build job: %w", err)
+	}
+	return nil
+}
+
+// stopBuildJob records a build that cannot start as failed and suspends its
+// Job, so Kubernetes stops trying to create its instance.
+func (r *AppReconciler) stopBuildJob(ctx context.Context, job *batchv1.Job, msg string) error {
+	patch := client.MergeFrom(job.DeepCopy())
+	job.Annotations = mergeMaps(job.Annotations, map[string]string{shpyrdv1.AnnotationBuildFailure: msg})
+	job.Spec.Suspend = ptr.To(true)
+	if err := r.Patch(ctx, job, patch); err != nil {
+		return fmt.Errorf("stop build job: %w", err)
 	}
 	return nil
 }
@@ -337,9 +361,17 @@ echo "pushed $IMAGE_REPO@$digest"`
 					NodeSelector:       c.appsNodeSelector(), // RFC-0077
 					SecurityContext:    &corev1.PodSecurityContext{FSGroup: uid},
 					InitContainers: []corev1.Container{{
-						Name:                     fetchContainer,
-						Image:                    c.BuildKitImage,
-						Command:                  []string{"sh", "-ec", c.fetchScript(app)},
+						Name:    fetchContainer,
+						Image:   c.BuildKitImage,
+						Command: []string{"sh", "-ec", c.fetchScript(app)},
+						// The build container asks for resources, so a workspace's
+						// quota covers the pod and refuses it unless this one asks
+						// too (#117). Small requests, no limit: a shallow clone of a
+						// large repository can need a few hundred MiB.
+						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("10m"),
+							corev1.ResourceMemory: resource.MustParse("64Mi"),
+						}},
 						SecurityContext:          &corev1.SecurityContext{RunAsUser: uid, RunAsGroup: uid, AllowPrivilegeEscalation: ptr.To(false)},
 						VolumeMounts:             []corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}},
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
