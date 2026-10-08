@@ -828,11 +828,10 @@ func newAccessCmd(g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var detail struct {
-				Access string `json:"access"`
-				URL    string `json:"url"`
-			}
-			_ = json.Unmarshal(raw, &detail)
+			// The mode is the spec's and the address the status's (#35).
+			var d api.AppDetail
+			_ = json.Unmarshal(raw, &d)
+			detail := struct{ Access, URL string }{d.Spec.Access, d.Status.URL}
 			members, err := serverRequest(ctx, ac.k, "GET", "api/projects/"+name+"/members", nil, "")
 			if err != nil {
 				return err
