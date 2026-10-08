@@ -61,7 +61,9 @@ every application that uses it (`design/DESIGN_FOR_AGENT.md`).
 
 `design/ui/package.json`:
 
-- `"private": true` goes. `version` starts at `0.1.0`.
+- `"private": true` goes. `version` stays `0.0.0` until the first release:
+  `0.0.0` means "never released", and the release workflow never publishes
+  it. The first release makes it `0.1.0` (cycle 1).
 - `files` names what ships: `src/` without the tests (`*.test.ts`,
   `*.test.tsx`) and without `src/test.ts`, plus `README.md`, `CHANGELOG.md`
   and `LICENSE` (MPL-2.0, a copy of the repository's). Nothing of `app/`
@@ -108,8 +110,9 @@ section. A session that only touched the gallery or tests does not release.
 A workflow of its own, `.github/workflows/ui-release.yml`, on pushes to
 `main` that touch `design/ui/**`:
 
-1. Read the version from `design/ui/package.json`. If npm already has it,
-   stop: a push that did not change the version publishes nothing.
+1. Read the version from `design/ui/package.json`. If it is `0.0.0`, or npm
+   already has it, stop: a push that did not change the version publishes
+   nothing.
 2. Run the library's lint, type-check and tests.
 3. `npm publish --access public --provenance` from `design/ui`.
 4. Tag the commit `ui-v<version>`. The prefix keeps it apart from the core's
