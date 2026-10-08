@@ -544,6 +544,8 @@ Expected: `nothing to release: 0.0.0 is the version of a library never released`
 
 - [ ] **Step 6: Write the workflow**
 
+> Superseded while executing: a supply-chain review of PR #130 found that this single job ran the dependencies' install scripts (`npm ci`) where an OIDC token and a writing token were available, and installed an unpinned npm. The committed `.github/workflows/ui-release.yml` splits it into a read-only `gates` job and a `publish` job that installs nothing but `npm@11.21.0` and keeps no credentials in its checkout; `design/ui/scripts/release-workflow.test.mjs` holds the workflow to that. The version below is the original, kept as the plan's record.
+
 `.github/workflows/ui-release.yml`:
 
 ```yaml
