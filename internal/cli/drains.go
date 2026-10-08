@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,7 +110,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 					if _, err := ac.serverRequest(ctx, "POST", "api/workspace/drains", body, "application/json"); err != nil {
 						return err
 					}
-					return added(fmt.Sprintf("Added drain %s to the workspace: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat()))
+					return added(fmt.Sprintf("Added drain %s to the workspace: every project's logs -> %s (%s)\n", name, d.Spec.URL, d.EffectiveFormat()) + ac.logsAgentNote(ctx))
 				}
 				if project == "" {
 					return errors.New("cluster drains are the platform operator's: run this with --context (shpyrd-ctl)")
@@ -117,7 +118,7 @@ logs-agent extension (shpyrd extensions enable logs-agent).`,
 				if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+project+"/drains", body, "application/json"); err != nil {
 					return err
 				}
-				return added(fmt.Sprintf("Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat()))
+				return added(fmt.Sprintf("Added drain %s to project %s: logs -> %s (%s)\n", name, project, d.Spec.URL, d.EffectiveFormat()) + ac.logsAgentNote(ctx))
 			}
 			if project != "" {
 				if _, err := ac.getApp(ctx, project); err != nil {
@@ -348,4 +349,20 @@ func drainScope(cluster bool, appName, workspace string) (ns, project string, er
 		return "", "", err
 	}
 	return appNamespace(project), project, nil
+}
+
+// logsAgentNote is the sentence a drain added through the API needs when the
+// workspace runs no logs agent to forward its lines (#16), read from the
+// workspace's public config as the drain screens read it; empty when the
+// agent runs or the config cannot be read.
+func (a *appClient) logsAgentNote(ctx context.Context) string {
+	raw, err := a.serverRequest(ctx, "GET", "api/config", nil, "")
+	if err != nil {
+		return ""
+	}
+	var cfg api.PublicConfig
+	if json.Unmarshal(raw, &cfg) != nil || contains(cfg.Extensions, "logs-agent") {
+		return ""
+	}
+	return "The logs-agent extension is off; nothing is forwarded until the operator runs `shpyrd extensions enable logs-agent`.\n"
 }
