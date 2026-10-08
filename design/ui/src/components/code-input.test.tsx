@@ -34,6 +34,24 @@ describe("CodeInput", () => {
     expect(document.activeElement).toBe(boxes()[1]);
   });
 
+  // Clicked with the pointer, a box that holds a digit loses the selection
+  // its focus made: the browser hands the field the old digit and the new
+  // one, in the order of the caret.
+  it("replaces the digit of a filled box with the one typed after it", () => {
+    const onChange = vi.fn();
+    render(<Controlled value="123456" onChange={onChange} />);
+    fireEvent.change(boxes()[0], { target: { value: "19" } });
+    expect(onChange).toHaveBeenLastCalledWith("923456");
+    expect(document.activeElement).toBe(boxes()[1]);
+  });
+
+  it("replaces the digit of a filled box with the one typed before it", () => {
+    const onChange = vi.fn();
+    render(<Controlled value="123456" onChange={onChange} />);
+    fireEvent.change(boxes()[2], { target: { value: "93" } });
+    expect(onChange).toHaveBeenLastCalledWith("129456");
+  });
+
   it("ignores what is not a digit", () => {
     const onChange = vi.fn();
     render(<Controlled onChange={onChange} />);

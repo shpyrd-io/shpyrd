@@ -90,6 +90,14 @@ function CodeInput({
           onChange={(e) => {
             const typed = e.target.value.replace(/\D/g, "");
             if (!typed) return;
+            // A filled box clicked with the pointer has lost its selection:
+            // its digit arrives beside the one typed, before or after it.
+            const old = digits[i];
+            if (old && typed.length === 2) {
+              set(digits.slice(0, i) + (typed[0] === old ? typed[1] : typed[0]) + digits.slice(i + 1));
+              focus(i + 1);
+              return;
+            }
             // The browser's own one-time-code fill lands here whole.
             const next = (digits.slice(0, i) + typed + digits.slice(i + typed.length)).slice(0, length);
             set(next);
