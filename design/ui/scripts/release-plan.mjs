@@ -54,10 +54,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`nothing to release: ${plan.reason}`);
     if (out) appendFileSync(out, "publish=false\n");
   } else {
-    const notesFile = join(process.env.RUNNER_TEMP ?? ".", "ui-release-notes.md");
-    writeFileSync(notesFile, `${plan.notes}\n`);
     console.log(`releasing ${pkg.name}@${plan.version} under ${plan.distTag}, tagged ${plan.gitTag}`);
+    // The notes are the workflow's: run by hand, the script leaves nothing.
     if (out) {
+      const notesFile = join(process.env.RUNNER_TEMP ?? ".", "ui-release-notes.md");
+      writeFileSync(notesFile, `${plan.notes}\n`);
       appendFileSync(out, `publish=true\nversion=${plan.version}\ndist_tag=${plan.distTag}\ngit_tag=${plan.gitTag}\nnotes_file=${notesFile}\n`);
     }
   }
