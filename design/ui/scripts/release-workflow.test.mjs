@@ -40,4 +40,16 @@ describe("the release workflow", () => {
   it("leaves no credentials in the publishing job's checkout", () => {
     expect(job("publish")).toMatch(/actions\/checkout@[^\n]+\n\s+with:\n\s+persist-credentials: false/);
   });
+
+  it("never makes a library release the repository's latest, which the CLI's install script follows", () => {
+    expect(job("publish")).toMatch(/gh release create[^\n]*--latest=false/);
+  });
+
+  it("publishes to npm only what npm does not have, so a re-run can finish a half-done release", () => {
+    expect(job("publish")).toMatch(/- name: Publish\n\s+if: steps\.plan\.outputs\.publish == 'true'/);
+  });
+
+  it("makes the GitHub release only when it is missing, so a re-run does not fail on it", () => {
+    expect(job("publish")).toMatch(/gh release view "\$TAG"[^\n]*\|\|\s*gh release create/);
+  });
 });

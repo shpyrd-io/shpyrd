@@ -20,6 +20,15 @@ describe("releasePlan", () => {
     expect(releasePlan({ version: "0.0.0", published: [], changelog }).publish).toBe(false);
   });
 
+  it("still names the tag and notes of a version npm has, so its GitHub release can be finished", () => {
+    expect(releasePlan({ version: "0.2.0", published: ["0.2.0"], changelog })).toMatchObject({
+      publish: false,
+      version: "0.2.0",
+      gitTag: "ui-v0.2.0",
+      notes: "CodeInput takes a length.",
+    });
+  });
+
   it("releases nothing when npm has the version already", () => {
     const plan = releasePlan({ version: "0.2.0", published: ["0.1.0", "0.2.0"], changelog });
     expect(plan.publish).toBe(false);
