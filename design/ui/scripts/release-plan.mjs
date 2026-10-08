@@ -19,14 +19,17 @@ export function releasePlan({ version, published, changelog }) {
   if (version === "0.0.0") {
     return { publish: false, reason: "0.0.0 is the version of a library never released" };
   }
+  const release = { version, distTag: version.includes("-") ? "next" : "latest", gitTag: `ui-v${version}` };
   if (published.includes(version)) {
-    return { publish: false, reason: `${version} is on npm already` };
+    // Still named: a run that published but failed before its GitHub
+    // release is finished by running it again.
+    return { publish: false, reason: `${version} is on npm already`, ...release, notes: changelogSection(changelog, version) };
   }
   const notes = changelogSection(changelog, version);
   if (!notes) {
     throw new Error(`CHANGELOG.md has no section for ${version}: write it before releasing`);
   }
-  return { publish: true, version, distTag: version.includes("-") ? "next" : "latest", gitTag: `ui-v${version}`, notes };
+  return { publish: true, ...release, notes };
 }
 
 // The versions npm has of the package: none for a package it has never
@@ -50,16 +53,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     changelog: readFileSync("CHANGELOG.md", "utf8"),
   });
   const out = process.env.GITHUB_OUTPUT;
-  if (!plan.publish) {
-    console.log(`nothing to release: ${plan.reason}`);
-    if (out) appendFileSync(out, "publish=false\n");
-  } else {
-    console.log(`releasing ${pkg.name}@${plan.version} under ${plan.distTag}, tagged ${plan.gitTag}`);
-    // The notes are the workflow's: run by hand, the script leaves nothing.
-    if (out) {
+  console.log(plan.publish ? `releasing ${pkg.name}@${plan.version} under ${plan.distTag}, tagged ${plan.gitTag}` : `nothing to publish: ${plan.reason}`);
+  // The outputs and the notes are the workflow's: run by hand, the script
+  // leaves nothing.
+  if (out) {
+    appendFileSync(out, `publish=${plan.publish}\n`);
+    if (plan.version) {
       const notesFile = join(process.env.RUNNER_TEMP ?? ".", "ui-release-notes.md");
       writeFileSync(notesFile, `${plan.notes}\n`);
-      appendFileSync(out, `publish=true\nversion=${plan.version}\ndist_tag=${plan.distTag}\ngit_tag=${plan.gitTag}\nnotes_file=${notesFile}\n`);
+      appendFileSync(out, `version=${plan.version}\ndist_tag=${plan.distTag}\ngit_tag=${plan.gitTag}\nnotes_file=${notesFile}\n`);
     }
   }
 }

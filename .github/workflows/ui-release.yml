@@ -77,17 +77,22 @@ jobs:
         working-directory: design/ui
         run: node scripts/release-plan.mjs
       - name: Publish
+        if: steps.plan.outputs.publish == 'true'
         working-directory: design/ui
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install --global npm@11.21.0 # trusted publishing needs 11.5.1 or later
           npm publish --access public --provenance --tag "${{ steps.plan.outputs.dist_tag }}"
+      # Never the repository's latest release: that is the CLI's, which the
+      # install script follows. Made only when missing, so running a failed
+      # run again finishes a release npm already has.
       - name: Tag and GitHub release
+        if: steps.plan.outputs.git_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.git_tag }}
           VERSION: ${{ steps.plan.outputs.version }}
           NOTES: ${{ steps.plan.outputs.notes_file }}
           PRERELEASE: ${{ steps.plan.outputs.dist_tag == 'next' && '--prerelease' || '' }}
-        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" $PRERELEASE
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" --latest=false $PRERELEASE
