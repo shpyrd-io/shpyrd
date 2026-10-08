@@ -569,6 +569,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "QuotaExceeded", refusal)
 		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
 		return out, nil
+	case app.HasSource() && app.Spec.Image == "" && build.Ready != "True" && build.Ready != "False":
+		// The next release is building. Instances failing now are the
+		// previous release's, not its outcome (#91).
+		app.Status.Phase = shpyrdv1.PhaseBuilding
+		app.Status.Message = firstNonEmpty(build.Message, "building new release; "+summary)
+		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
+		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
 	case failing && !ready:
 		// New instances cannot start; older ones may still be serving.
 		app.Status.Phase = shpyrdv1.PhaseFailed
@@ -580,11 +587,6 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Phase = shpyrdv1.PhaseFailed
 		app.Status.Message = build.Message + " The previous release keeps running."
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
-	case app.HasSource() && app.Spec.Image == "" && build.Ready != "True":
-		app.Status.Phase = shpyrdv1.PhaseBuilding
-		app.Status.Message = firstNonEmpty(build.Message, "building new release; "+summary)
-		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
-		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
 	case !ready:
 		app.Status.Phase = shpyrdv1.PhaseDeploying
 		app.Status.Message = summary
@@ -843,16 +845,25 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if op != controllerutil.OperationResultNone {
 			log.FromContext(ctx).Info("deployment reconciled", "name", d.Name, "op", op)
 		}
+		// The release's instances are those of the ReplicaSet for the
+		// current template: mid-rollout the Deployment's counts include the
+		// previous release's (#91).
+		current, err := r.currentReplicaSet(ctx, d)
+		if err != nil {
+			return nil, fmt.Errorf("replicasets of %s: %w", d.Name, err)
+		}
 		ps := shpyrdv1.ProcessStatus{
 			Desired: p.replicas(),
-			Ready:   d.Status.ReadyReplicas,
 			Updated: d.Status.UpdatedReplicas,
+		}
+		if current != nil {
+			ps.Ready = current.Status.ReadyReplicas
 		}
 		// The Deployment controller needs a moment after an update.
 		if d.Status.ObservedGeneration < d.Generation {
 			ps.Ready, ps.Updated = 0, 0
 		}
-		ps.Failing, ps.Reason = r.processHealth(ctx, app, p.Name)
+		ps.Failing, ps.Reason = r.processHealth(ctx, current)
 		ps.Size = sizeName
 		// The size's CPU is the limit; a shared size requests only a share.
 		ps.CPU = res.Limits.Cpu().String()
