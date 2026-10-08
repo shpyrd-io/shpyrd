@@ -573,6 +573,11 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	if err == nil && snap.WorkspaceRole(email) != "" {
 		return nil
 	}
+	// The operator's workspaces follow the console: rolesInWorkspace makes
+	// a console admin their owner, so their sign-in is admitted too (#89).
+	if w.OwnedByOperator() && s.authz.ConsoleAdmin(ctx, id) {
+		return nil
+	}
 	switch w.Settings.JoinPolicy {
 	case store.JoinCompany:
 		if claimed == nil {

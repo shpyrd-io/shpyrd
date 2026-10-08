@@ -164,3 +164,33 @@ func TestWorkspaceBranding(t *testing.T) {
 		t.Errorf("logo after clearing: %d", rec.Code)
 	}
 }
+
+// #89: the operator's workspaces follow the console, so a console admin
+// signs in to one where they hold no role of their own, whatever its join
+// policy, as rolesInWorkspace makes them its owner. A customer's workspace
+// keeps its own rule.
+func TestConsoleAdminSignsInToTheOperatorsWorkspace(t *testing.T) {
+	s, _ := newTestServer(t, nil, nil)
+	s.authz.TTL = 1
+	ctx := context.Background()
+	if rec := adminJSON(t, s, "PATCH", "/api/workspace", `{"joinPolicy":"listed"}`); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.test", Owner: store.WorkspaceOwnerCustomer, Settings: store.WorkspaceSettings{JoinPolicy: store.JoinListed}}); err != nil {
+		t.Fatal(err)
+	}
+	dora := ext.Identity{Email: "Dora@example.test", Provider: "local"}
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, dora); err == nil {
+		t.Fatal("not a console admin yet: the listed policy must refuse her")
+	}
+	if _, err := s.store.AddConsoleUser(ctx, "dora@example.test", "test"); err != nil {
+		t.Fatal(err)
+	}
+	s.authz.Invalidate()
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, dora); err != nil {
+		t.Errorf("console admin at the operator's workspace: %v", err)
+	}
+	if err := s.admitSignIn(ctx, "acme", dora); err == nil {
+		t.Error("console admin at a customer's listed workspace: admitted, want the workspace's own rule")
+	}
+}
