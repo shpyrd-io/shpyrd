@@ -82,7 +82,7 @@ function Shipyard({
       role="img"
       aria-label="A shipyard at work: a crane moves containers between a ship and trucks."
       className={cn(
-        "relative isolate aspect-square w-full overflow-hidden [container-type:inline-size] [mask-image:radial-gradient(closest-side,black_76%,transparent_100%)] dark:hue-rotate-180 dark:invert",
+        "relative isolate aspect-square w-full overflow-hidden [container-type:inline-size] [mask-image:radial-gradient(closest-side,black_76%,transparent_100%)]",
         className,
       )}
       {...props}
@@ -102,23 +102,28 @@ function Shipyard({
 type Point = readonly [number, number, number];
 
 // A piece: its file, at the scale of the yard, put where the piece stands.
+// In the dark theme its dark twin is shown instead.
 function Piece({ sprite, at, rank }: { sprite: keyof typeof sprites; at: Point; rank: number }) {
-  const { src, size, stands, unit } = sprites[sprite];
+  const piece: { src: string; dark?: string; size: readonly [number, number]; stands: readonly [number, number]; unit: number } =
+    sprites[sprite];
+  const { src, dark, size, stands, unit } = piece;
   const scale = UNIT / unit;
   const [x, y] = project(at);
+  const style = {
+    width: wide(size[0] * scale),
+    transform: `translate3d(${across(x - stands[0] * scale)}, ${down(y - stands[1] * scale)}, 0)`,
+    zIndex: rank,
+  };
+  const place = "pointer-events-none absolute top-0 left-0 max-w-none select-none";
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt=""
-      draggable={false}
-      className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
-      style={{
-        width: wide(size[0] * scale),
-        transform: `translate3d(${across(x - stands[0] * scale)}, ${down(y - stands[1] * scale)}, 0)`,
-        zIndex: rank,
-      }}
-    />
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt="" draggable={false} className={cn(place, dark && "dark:hidden")} style={style} />
+      {dark && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={dark} alt="" draggable={false} className={cn(place, "hidden dark:block")} style={style} />
+      )}
+    </>
   );
 }
 
@@ -130,7 +135,7 @@ function Line({ from, to, tone, rank }: { from: Point; to: Point; tone: "cable" 
     <div
       className={cn(
         "absolute top-0 left-0 origin-left rounded-full",
-        tone === "barrier" ? "h-[max(2px,0.4cqw)] bg-[#ff4f00]" : "h-px bg-[#52525b]",
+        tone === "barrier" ? "h-[max(2px,0.4cqw)] bg-[#ff4f00]" : "h-px bg-[#52525b] dark:bg-[#636366]",
       )}
       style={{
         width: wide(Math.hypot(x2 - x1, y2 - y1)),

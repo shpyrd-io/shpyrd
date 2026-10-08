@@ -9,9 +9,9 @@
   --line: color-mix(in oklab, var(--foreground) 10%, transparent);
   --grid: color-mix(in oklab, var(--foreground) 4%, transparent);
   --card: var(--background);
-  --accent: var(--primary);
-  --accent-ink: var(--primary);
-  --accent-soft: color-mix(in oklab, var(--primary) 14%, transparent);
+  --fb-accent: var(--primary);
+  --fb-accent-ink: var(--primary);
+  --fb-accent-soft: color-mix(in oklab, var(--primary) 14%, transparent);
   --ok: var(--success);
   --ok-soft: color-mix(in oklab, var(--success) 14%, transparent);
   --no: var(--destructive);
@@ -41,13 +41,13 @@
 .fb .s-agent .ln { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .fb .s-agent .ln span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fb .s-agent .ask { color: var(--ink); font-size: 12.5px; }
-.fb .s-agent .ask .pr { color: var(--accent); }
+.fb .s-agent .ask .pr { color: var(--fb-accent); }
 .fb .s-agent .call { color: var(--muted); padding-left: 12px; }
 .fb .s-agent .call .ok { margin-left: auto; color: var(--ok); }
-.fb .s-agent .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: fb-pulse 1.1s ease-in-out infinite; }
+.fb .s-agent .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fb-accent); animation: fb-pulse 1.1s ease-in-out infinite; }
 .fb .s-agent .ans { color: var(--ink); line-height: 1.5; padding-left: 12px; }
 .fb .s-agent .act { padding-left: 12px; }
-.fb .s-agent .run { border: 1px solid var(--accent); color: #fff; background: var(--accent); padding: 3px 9px; border-radius: 5px; box-shadow: 0 4px 12px -4px rgb(255 79 0 / 0.5); }
+.fb .s-agent .run { border: 1px solid var(--fb-accent); color: #fff; background: var(--fb-accent); padding: 3px 9px; border-radius: 5px; box-shadow: 0 4px 12px -4px rgb(255 79 0 / 0.5); }
 .fb .s-agent .l1 { animation: fb-ag1 11s infinite; }
 .fb .s-agent .l2 { animation: fb-ag2 11s infinite; }
 .fb .s-agent .l3 { animation: fb-ag3 11s infinite; }
@@ -65,9 +65,9 @@
 /* 2. Security Door */
 .fb .s-door { --door: 56%; --cw: 122px; }
 .fb .s-door .head { position: absolute; inset: 14px 16px auto 16px; display: flex; justify-content: space-between; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; }
-.fb .s-door .door { position: absolute; left: var(--door); top: 38px; bottom: 14px; width: 2px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 10px rgb(255 79 0 / 0.5); }
+.fb .s-door .door { position: absolute; left: var(--door); top: 38px; bottom: 14px; width: 2px; background: var(--fb-accent); border-radius: 2px; box-shadow: 0 0 10px rgb(255 79 0 / 0.5); }
 .fb .s-door .door-tag { position: absolute; left: var(--door); top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; font-size: 10.5px; white-space: nowrap; }
-.fb .s-door .door-tag svg { width: 11px; height: 11px; color: var(--accent); }
+.fb .s-door .door-tag svg { width: 11px; height: 11px; color: var(--fb-accent); }
 .fb .s-door .lane { position: absolute; left: 0; right: 0; height: 40px; }
 /* The three visitors spread down the stage, whatever its height: in a tall
    tile they fill it; at 236px they fall where the sheet had them. */
@@ -117,13 +117,13 @@
 /* 3. Resources */
 .fb .s-res .frame { fill: none; stroke: var(--faint); stroke-dasharray: 4 4; }
 .fb .s-res .node { fill: var(--card); stroke: var(--line); }
-.fb .s-res .node.app { stroke: var(--accent); }
+.fb .s-res .node.app { stroke: var(--fb-accent); }
 .fb .s-res .lbl { fill: var(--ink); font-size: 11px; }
 .fb .s-res .cap { fill: var(--muted); font-size: 10px; }
-.fb .s-res .wire { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.fb .s-res .wire { fill: none; stroke: var(--fb-accent); stroke-width: 1.6; stroke-dasharray: 1; stroke-dashoffset: 0; }
 /* Solid, so the wire behind a variable does not run through its name. */
-.fb .s-res .var rect { fill: color-mix(in oklab, var(--primary) 12%, var(--background)); stroke: var(--accent); }
-.fb .s-res .var text { fill: var(--accent-ink); font-size: 10.5px; }
+.fb .s-res .var rect { fill: color-mix(in oklab, var(--primary) 12%, var(--background)); stroke: var(--fb-accent); }
+.fb .s-res .var text { fill: var(--fb-accent-ink); font-size: 10.5px; }
 .fb .s-res .w1 { animation: fb-wire1 10s infinite; }
 .fb .s-res .w2 { animation: fb-wire2 10s infinite; }
 .fb .s-res .w3 { animation: fb-wire3 10s infinite; }
@@ -139,15 +139,15 @@
 
 /* 4. Sleep */
 .fb .s-sleep .gl { stroke: var(--line); stroke-width: 1; }
-.fb .s-sleep .step { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.fb .s-sleep .step { fill: none; stroke: var(--fb-accent); stroke-width: 2; stroke-linejoin: round; }
 .fb .s-sleep .ax { fill: var(--muted); font-size: 10px; }
 .fb .s-sleep .note { fill: var(--ink); font-size: 10px; }
 .fb .s-sleep .note.no { fill: var(--no); }
 .fb .s-sleep .tick { fill: var(--faint); }
-.fb .s-sleep .tick.wake { fill: var(--accent); }
+.fb .s-sleep .tick.wake { fill: var(--fb-accent); }
 .fb .s-sleep .cross { stroke: var(--no); stroke-width: 1.6; }
 .fb .s-sleep .status { font-size: 11.5px; fill: var(--ink); }
-.fb .s-sleep .status tspan.k { fill: var(--accent-ink); }
+.fb .s-sleep .status tspan.k { fill: var(--fb-accent-ink); }
 .fb .s-sleep .ph line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
 .fb .s-sleep .ph { animation: fb-playhead 12s infinite linear; }
 .fb .s-sleep .st-awake { animation: fb-stAwake 12s infinite; }
@@ -166,14 +166,14 @@
 .fb .s-met .title { fill: var(--ink); font-size: 12px; font-family: var(--font-sans); font-weight: 600; }
 .fb .s-met .ln { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 0; animation: fb-draw 10s infinite linear; }
 .fb .s-met .p50 { stroke: var(--faint); }
-.fb .s-met .p95 { stroke: var(--accent); }
+.fb .s-met .p95 { stroke: var(--fb-accent); }
 .fb .s-met .p99 { stroke: var(--ink); stroke-width: 1.2; }
-.fb .s-met .rel { stroke: var(--accent); stroke-dasharray: 3 3; }
-.fb .s-met .rel-t { fill: var(--accent-ink); font-size: 10px; }
+.fb .s-met .rel { stroke: var(--fb-accent); stroke-dasharray: 3 3; }
+.fb .s-met .rel-t { fill: var(--fb-accent-ink); font-size: 10px; }
 .fb .s-met .m1 { animation: fb-mk1 10s infinite; }
 .fb .s-met .m2 { animation: fb-mk2 10s infinite; }
 .fb .s-met .rng rect { fill: var(--card); stroke: var(--line); }
-.fb .s-met .rng .on rect { fill: var(--accent); stroke: var(--accent); }
+.fb .s-met .rng .on rect { fill: var(--fb-accent); stroke: var(--fb-accent); }
 .fb .s-met .rng text { fill: var(--ink); font-size: 10px; }
 .fb .s-met .rng .on text { fill: #fff; }
 .fb .s-met .lg { fill: var(--muted); font-size: 10px; }
@@ -184,19 +184,19 @@
 /* 6. Cost */
 .fb .s-cost { padding: 14px 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 8px; }
 .fb .s-cost .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
-.fb .s-cost .size { color: var(--ink); border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 8px; }
+.fb .s-cost .size { color: var(--ink); border: 1px solid var(--fb-accent); background: var(--fb-accent-soft); border-radius: 5px; padding: 2px 8px; }
 .fb .s-cost .trace { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); min-height: 0; }
 /* The chart stops above its label, so the orange does not run over the words. */
 .fb .s-cost .trace svg { position: absolute; inset: 0 0 22px 0; width: 100%; height: calc(100% - 22px); }
-.fb .s-cost .area { fill: var(--accent-soft); }
-.fb .s-cost .cpu { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.fb .s-cost .area { fill: var(--fb-accent-soft); }
+.fb .s-cost .cpu { fill: none; stroke: var(--fb-accent); stroke-width: 1.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .fb .s-cost .roll { animation: fb-roll 9s infinite linear; }
 .fb .s-cost .wait { position: absolute; left: 0; bottom: 4px; font-size: 10px; color: var(--muted); padding-right: 6px; }
 .fb .s-cost .ladder { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; font-size: 10px; }
 .fb .s-cost .ladder .bar { height: 6px; border-radius: 3px; background: var(--line); }
 .fb .s-cost .ladder .bar i { display: block; height: 100%; border-radius: 3px; background: var(--faint); }
 .fb .s-cost .ladder .first { color: var(--ink); }
-.fb .s-cost .ladder .first + .bar i { background: var(--accent); }
+.fb .s-cost .ladder .first + .bar i { background: var(--fb-accent); }
 @keyframes fb-roll { from { transform: translateX(0) } to { transform: translateX(-200px) } }
 
 @media (prefers-reduced-motion: reduce) {

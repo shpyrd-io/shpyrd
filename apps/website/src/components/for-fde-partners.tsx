@@ -15,8 +15,8 @@ import { signUp } from "@/lib/signup";
 
 export function PartnerNext({ heading = "Start with one client" }: { heading?: string }) {
   return (
-    <Stack gap="normal">
-      <SectionIntro
+    <Stack gap="spacious">
+      <SectionIntro align="center" variant="xlarge"
         heading={heading}
         description="Sign up, open a workspace for the client you are delivering to now, and deploy what you built. The next client gets the same setup."
       />
@@ -75,8 +75,8 @@ const limits = [
 
 export function PartnerLimits() {
   return (
-    <Stack gap="normal">
-      <SectionIntro heading="What it doesn't do" />
+    <Stack gap="spacious">
+      <SectionIntro align="center" variant="xlarge" heading="What it doesn't do" />
       <ul className="grid gap-6">
         {limits.map((l) => (
           <li key={l.claim} className="border-l-2 pl-4">

@@ -18,8 +18,8 @@ export function ClientAppsNext({
   description?: string;
 }) {
   return (
-    <Stack gap="normal" className="border-t pt-12">
-      <SectionIntro heading={heading} description={description} />
+    <Stack gap="spacious" className="border-t pt-12">
+      <SectionIntro align="center" variant="xlarge" heading={heading} description={description} />
       <Stack direction="horizontal" gap="cozy" className="flex-wrap">
         {/* Self sign-up on shpyrd cloud. */}
         <Button asChild>

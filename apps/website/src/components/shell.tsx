@@ -3,44 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  ArchiveRestore,
-  Bot,
-  Boxes,
-  Briefcase,
-  Cloud,
-  Cloudy,
-  Compass,
-  Database,
-  Download,
-  FileCode,
-  GitPullRequest,
-  Globe,
-  Handshake,
-  Heart,
-  LayoutDashboard,
-  Lightbulb,
-  LockKeyhole,
-  Map as MapIcon,
-  Menu,
-  Moon,
-  Network,
-  Puzzle,
-  Rocket,
-  Ruler,
-  ScrollText,
-  ShieldCheck,
-  SquareTerminal,
-  Sun,
-  SunMoon,
-  Trophy,
-  UploadCloud,
-  Wrench,
-} from "lucide-react";
+import { ArchiveRestore, Bot, Boxes, Briefcase, Cloud, Cloudy, Compass, Database, Download, FileCode, GitPullRequest, Globe, Handshake, Heart, LayoutDashboard, Lightbulb, LockKeyhole, Map as MapIcon, Menu, Moon, Network, Puzzle, Rocket, Ruler, ScrollText, ShieldCheck, SquareTerminal, Sun, SunMoon, Trophy, UploadCloud, UsersRound, Wrench } from "lucide-react";
 import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
 import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
+import { Footer } from "@shpyrd/ui/components/footer";
 import { MinimalFooter } from "@shpyrd/ui/components/minimal-footer";
 import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import {
@@ -107,7 +75,7 @@ const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transpa
 // other people who choose shpyrd, each on a page of its own.
 const solutions = [
   { title: "For developers", href: "/for/developers", icon: <SquareTerminal />, description: "Push code, get a URL, on shpyrd cloud." },
-  { title: "For IT teams", href: "/for/it", icon: <ShieldCheck />, description: "One accepted place for the apps people build." },
+  { title: "For IT teams", href: "/for/it", icon: <UsersRound />, description: "One accepted place for the apps people build." },
   { title: "For FDE partners", href: "/for/fde-partners", icon: <Handshake />, description: "The same setup behind every client delivery." },
 ];
 
@@ -221,7 +189,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       padding="none"
       columnGap="none"
       rowGap="none"
-      className="min-h-svh"
+      // The aurora behind the call to action runs on under the foot: the
+      // page cuts it off at its own bottom rather than growing for it.
+      className="relative min-h-svh overflow-y-clip"
     >
       {isDocument && (
         <PageLayoutSidebar
@@ -258,7 +228,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           // down so its words sit on the same line as the logo in the side panel.
           className={
             isDocument
-              ? "border-b-0 bg-background/70 px-4 pt-4.5 md:px-6 [&>div:first-child]:border-b [&>div:first-child]:border-foreground/8 [&>div:first-child]:px-0"
+              ? "border-b-0 bg-background/70 px-4 pt-4.5 md:px-6 [&>div:first-child]:border-b [&>div:first-child]:border-foreground/8 dark:[&>div:first-child]:border-foreground/20 [&>div:first-child]:px-0"
               : undefined
           }
           // A document has the sidebar at its left, and the whole room beside
@@ -352,35 +322,77 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {children}
 
       <PageLayoutFooter>
+        {path === "/" ? (
+          // The home's foot is the full one: the brand and the way in, the
+          // site's map in columns, the fine print. Every other page has the
+          // small one.
+          <Footer
+            as="div"
+            width="xlarge"
+            className="border-t-0 px-4 md:px-6 [&>div:first-child]:max-w-[calc(80rem-3rem)] [&>div:first-child]:border-t [&>div:first-child]:border-foreground/8 [&>div:first-child]:px-0 dark:[&>div:first-child]:border-foreground/20"
+            logo={
+              <Link href="/" aria-label="shpyrd">
+                <Wordmark className="h-6" />
+              </Link>
+            }
+            tagline="You built it. We ship it: online, behind a sign-in, for the people who need it."
+            action={<AddToAgent manual={false} />}
+            columns={[
+              ...(sectionsLive
+                ? [
+                    { title: "Solutions", links: solutions.map((l) => <Link key={l.href} href={l.href}>{l.title.replace(/^For (\w)/, (_, c: string) => c.toUpperCase())}</Link>) },
+                    { title: "Use cases", links: useCases.map((l) => <Link key={l.href} href={l.href}>{l.title}</Link>) },
+                  ]
+                : []),
+              {
+                title: "Product",
+                links: [
+                  ...marketing.map((l) => <Link key={l.href} href={l.href}>{l.title}</Link>),
+                  <Link key="/docs/roadmap" href="/docs/roadmap">Roadmap</Link>,
+                ],
+              },
+              {
+                title: "Community",
+                links: [
+                  <a key="gh" href={github}>GitHub</a>,
+                  <a key="dc" href={discord}>Discord</a>,
+                ],
+              },
+            ]}
+            note="© 2026 shpyrd. All rights reserved."
+            backToTop
+          />
+        ) : (
         <MinimalFooter
-          as="div"
-          // Loose like a document's bar, on every page: a faint line over it,
-          // as wide as what is in it, rather than a panel of glass.
-          variant="line"
-          // Off the docs, it lines up with the page's text: the 80rem of the
-          // page less the room the page keeps on each side.
-          className={cn(
-            "border-t-0 px-4 md:px-6 [&>div:first-child]:border-t [&>div:first-child]:border-foreground/8 [&>div:first-child]:px-0",
-            !isDocument && "[&>div:first-child]:max-w-[calc(80rem-3rem)]",
-          )}
-          width={isDocument ? "full" : "xlarge"}
-          links={[...(sectionsLive ? solutions : []), ...marketing].map((l) => (
-            <Link key={l.href} href={l.href}>
-              {l.title}
-            </Link>
-          ))}
-          social={[
-            { label: "shpyrd on GitHub", href: github, icon: <GitHubMark /> },
-            { label: "shpyrd on Discord", href: discord, icon: <DiscordMark /> },
-          ]}
-          logo={
-            <Link href="/" aria-label="shpyrd">
-              <LogoMark className="size-5" />
-            </Link>
-          }
-          note="© 2026. shpyrd. All rights reserved."
-          backToTop
-        />
+            as="div"
+            // Loose like a document's bar, on every page: a faint line over it,
+            // as wide as what is in it, rather than a panel of glass.
+            variant="line"
+            // Off the docs, it lines up with the page's text: the 80rem of the
+            // page less the room the page keeps on each side.
+            className={cn(
+              "border-t-0 px-4 md:px-6 [&>div:first-child]:border-t [&>div:first-child]:border-foreground/8 dark:[&>div:first-child]:border-foreground/20 [&>div:first-child]:px-0",
+              !isDocument && "[&>div:first-child]:max-w-[calc(80rem-3rem)]",
+            )}
+            width={isDocument ? "full" : "xlarge"}
+            links={[...(sectionsLive ? solutions : []), ...marketing].map((l) => (
+              <Link key={l.href} href={l.href}>
+                {l.title}
+              </Link>
+            ))}
+            social={[
+              { label: "shpyrd on GitHub", href: github, icon: <GitHubMark /> },
+              { label: "shpyrd on Discord", href: discord, icon: <DiscordMark /> },
+            ]}
+            logo={
+              <Link href="/" aria-label="shpyrd">
+                <LogoMark className="size-5" />
+              </Link>
+            }
+            note="© 2026. shpyrd. All rights reserved."
+            backToTop
+          />
+        )}
       </PageLayoutFooter>
     </PageLayout>
   );

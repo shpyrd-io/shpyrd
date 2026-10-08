@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 504.99 411.59">
+  <!-- Generator: Adobe Illustrator 30.8.2, SVG Export Plug-In . SVG Version: 2.1.4 Build 7)  -->
+  <defs>
+    <style>
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6 {
+        stroke: #636366;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .st0, .st1, .st3, .st6 {
+        fill: #2c2c2e;
+      }
+
+      .st0, .st2, .st4, .st6 {
+        stroke-width: 1.39px;
+      }
+
+      .st1, .st5 {
+        stroke-width: 1.44px;
+      }
+
+      .st2, .st4, .st5 {
+        fill: #000;
+      }
+
+      .st2, .st6 {
+        mix-blend-mode: screen;
+      }
+
+      .st7 {
+        isolation: isolate;
+      }
+
+      .st8 {
+        fill: #636366;
+      }
+
+      .st3 {
+        stroke-width: 1.96px;
+      }
+    </style>
+  </defs>
+  <g class="st7">
+        <g>
+          <polygon class="st4" points="257.75 111.12 251.5 114.64 93.89 22.92 100.18 19.38 257.75 111.12"/>
+          <polygon class="st4" points="251.52 114.64 251.52 122.01 93.89 30.28 93.89 22.92 251.52 114.64"/>
+        </g>
+        <g>
+          <polygon class="st4" points="504.3 253.52 498.05 257.03 258.09 118.48 264.37 114.94 504.3 253.52"/>
+          <polygon class="st4" points="498.07 257.03 498.07 264.4 258.09 125.85 258.09 118.48 498.07 257.03"/>
+        </g>
+  </g>
+</svg>

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 504.99 411.59">
+  <!-- Generator: Adobe Illustrator 30.8.2, SVG Export Plug-In . SVG Version: 2.1.4 Build 7)  -->
+  <defs>
+    <style>
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6 {
+        stroke: #636366;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .st0, .st1, .st3, .st6 {
+        fill: #2c2c2e;
+      }
+
+      .st0, .st2, .st4, .st6 {
+        stroke-width: 1.39px;
+      }
+
+      .st1, .st5 {
+        stroke-width: 1.44px;
+      }
+
+      .st2, .st4, .st5 {
+        fill: #000;
+      }
+
+      .st2, .st6 {
+        mix-blend-mode: screen;
+      }
+
+      .st7 {
+        isolation: isolate;
+      }
+
+      .st8 {
+        fill: #636366;
+      }
+
+      .st3 {
+        stroke-width: 1.96px;
+      }
+    </style>
+  </defs>
+  <g class="st7">
+        <polygon class="st0" points="6.92 80.04 6.92 87.4 100.1 33.9 100.1 26.53 6.92 80.04"/>
+        <g>
+          <polygon class="st4" points="251.87 32.47 130.03 44.16 123.3 40.15 251.91 28.24 251.87 32.47"/>
+          <polygon class="st4" points="251.91 28.24 123.46 40.13 129.71 36.45 258.4 24.43 251.91 28.24"/>
+        </g>
+        <g>
+          <polygon class="st4" points="158.37 86.24 36.53 97.93 29.8 93.91 158.41 82.01 158.37 86.24"/>
+          <polygon class="st4" points="158.41 82.01 29.96 93.9 36.22 90.22 164.9 78.2 158.41 82.01"/>
+        </g>
+        <polygon class="st4" points=".69 76.52 6.94 80.04 106.32 22.96 100.04 19.42 .69 76.52"/>
+        <path class="st8" d="M120.25,78.85c1.93,0,1.93-3,0-3s-1.93,3,0,3h0Z"/>
+        <g>
+          <polygon class="st1" points="36.53 64.67 36.53 90.14 123.3 39.68 123.3 14.3 36.53 64.67"/>
+          <polygon class="st5" points="36.54 64.67 36.54 90.14 12.73 76.6 12.73 51.07 36.54 64.67"/>
+          <polygon class="st1" points="36.53 90.14 123.3 39.68 123.3 35.94 36.53 86.4 36.53 90.14"/>
+          <polygon class="st5" points="12.73 76.6 36.54 90.14 36.54 86.4 12.73 72.86 12.73 76.6"/>
+          <polygon class="st5" points="12.73 51.07 36.54 64.67 123.3 14.3 99.48 .72 12.73 51.07"/>
+          <polygon class="st5" points="32.31 68.29 32.31 74.18 26.95 71.07 26.95 65.15 32.31 68.29"/>
+          <polygon class="st5" points="22.28 62.57 22.28 68.46 16.92 65.35 16.92 59.43 22.28 62.57"/>
+          <g>
+            <polygon class="st5" points="67.04 52.23 67.04 58.12 72.41 55.01 72.41 49.09 67.04 52.23"/>
+            <polygon class="st5" points="77.07 46.51 77.07 52.4 82.44 49.29 82.44 43.37 77.07 46.51"/>
+            <polygon class="st5" points="87.03 40.65 87.03 46.54 92.39 43.43 92.39 37.51 87.03 40.65"/>
+            <polygon class="st5" points="47.02 63.89 47.02 69.79 52.38 66.67 52.38 60.76 47.02 63.89"/>
+            <polygon class="st5" points="57.05 58.17 57.05 64.07 62.41 60.95 62.41 55.03 57.05 58.17"/>
+            <polygon class="st5" points="97.06 34.93 97.06 40.82 102.42 37.71 102.42 31.79 97.06 34.93"/>
+            <polygon class="st5" points="107.15 29.24 107.15 35.14 112.51 32.03 112.51 26.11 107.15 29.24"/>
+          </g>
+          <polygon class="st1" points="19.09 50.62 21.29 51.85 99.3 6.84 99.3 4.34 19.09 50.62"/>
+          <polygon class="st5" points="117.18 14.85 99.29 4.34 99.29 6.84 115.12 16.14 117.18 14.85"/>
+        </g>
+  </g>
+</svg>

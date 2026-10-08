@@ -1,4 +1,4 @@
-import { Briefcase, Building2, Check, Gauge, MessageCircle, Moon, Plus, Receipt, Rocket, Sprout, Zap } from "lucide-react";
+import { Briefcase, Building2, Check, Gauge, MessageCircle, Moon, Receipt, Rocket, Sprout, Zap } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card } from "@shpyrd/ui/components/card";
 import { Hero } from "@shpyrd/ui/components/hero";
@@ -7,6 +7,7 @@ import { PricingOption, PricingOptions } from "@shpyrd/ui/components/pricing-opt
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { contact } from "@shpyrd/content/site/offer";
+import { Faq } from "@/components/faq";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/pricing";
 import { glass } from "@shpyrd/ui/lib/glass";
@@ -47,7 +48,7 @@ function PlanTile({ children }: { children: React.ReactNode }) {
 // A plan under the pointer: its edge turns orange, and a soft orange glow
 // shows around it, over the glass's own light and shadow.
 const lift =
-  "transition-[box-shadow] duration-300 hover:ring-primary hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.65),0_10px_30px_rgb(20_20_30/0.06),0_0_28px_-6px_rgb(255_79_0/0.45)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_10px_30px_rgb(0_0_0/0.4),0_0_28px_-6px_rgb(255_79_0/0.5)]";
+  "transition-[box-shadow] duration-300 hover:ring-primary dark:hover:ring-primary hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.65),0_10px_30px_rgb(20_20_30/0.06),0_0_28px_-6px_rgb(255_79_0/0.45)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.12),0_10px_30px_rgb(0_0_0/0.6),0_0_28px_-6px_rgb(255_79_0/0.5)]";
 
 export function Pricing({ region: id = "international" }: { region?: Region["id"] }) {
   const { region, hero, plans, enterprise, usage, footnote, counts, example, faq } = pricingFor(id);
@@ -57,7 +58,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
 
   return (
     <PageLayoutContent width="xlarge" padding="normal" className="grid grid-cols-1 content-start gap-16 py-8">
-      <Hero heading={hero.heading} description={hero.description} align="center" />
+      <Hero variant="page" heading={hero.heading} description={hero.description} align="center" />
 
       {/* The plans float as glass over the binary ocean of the home page, which
           runs from edge to edge behind them. */}
@@ -144,9 +145,9 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
         </p>
       </Stack>
 
-      {/* The spacing of the home page: 112px between sections (the page's
-          64px and 48px more), 56px from a title to what it introduces. */}
-      <Stack gap="spacious" className="mt-12">
+      {/* The spacing of the home page: 168px between sections (the page's
+          64px and 104px more), 56px from a title to what it introduces. */}
+      <Stack gap="spacious" className="mt-26">
         <SectionIntro variant="xlarge" align="center" heading={counts.heading} />
         {/* In the glass of the home page's blocks, in their type: the icon
             beside the name, the words under it. */}
@@ -163,7 +164,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
         </div>
       </Stack>
 
-      <Stack gap="spacious" className="mt-12">
+      <Stack gap="spacious" className="mt-26">
         <SectionIntro variant="xlarge" align="center" heading={example.heading} description={example.description} />
         {/* The example as an invoice: what each part used, line by line,
             then a strong rule, and under it the sums - the usage, and what is
@@ -223,32 +224,15 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
         <p className="mx-auto max-w-4xl text-center text-sm text-balance text-muted-foreground">{example.sense}</p>
       </Stack>
 
-      {/* The last section is 112px from the footer's line too. */}
-      <Stack gap="spacious" className="mt-12 mb-22">
+      {/* The last section is 168px from the footer's line too. */}
+      <Stack gap="spacious" className="mt-26 mb-36">
         <SectionIntro
           variant="xlarge"
           align="center"
           heading="Frequently asked questions"
           description="What people ask most before they start."
         />
-        {/* The questions as a list to open, one answer at a time in view: the
-            usual way to show questions and their answers. Native <details>,
-            so it works without script and the answers are in the page for
-            search and for a reader that reads it all. */}
-        <div className={cn(glass, "mx-auto mt-8 w-full max-w-4xl divide-y divide-foreground/8 px-2")}>
-          {faq.map((item, i) => (
-            <details key={item.q} open={i === 0} className="group/faq">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 px-4 py-5 text-base font-semibold text-foreground transition-colors hover:text-primary [&::-webkit-details-marker]:hidden">
-                {item.q}
-                <Plus
-                  aria-hidden="true"
-                  className="size-5 shrink-0 text-primary transition-transform duration-200 group-open/faq:rotate-45"
-                />
-              </summary>
-              <p className="-mt-1 max-w-prose px-4 pb-5 text-sm text-muted-foreground">{item.a}</p>
-            </details>
-          ))}
-        </div>
+        <Faq items={faq} className="mt-8" />
         <p className="text-center text-sm text-muted-foreground">
           Another question?{" "}
           <a href={contact.href} className="font-medium text-foreground underline underline-offset-4 hover:text-primary">

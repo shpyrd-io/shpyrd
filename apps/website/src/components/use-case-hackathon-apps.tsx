@@ -21,8 +21,8 @@ export function HackathonNext({
       description={description}
       actions={
         <>
-          <AddToAgent />
-          <Button variant="outline" asChild>
+          <AddToAgent size="lg" />
+          <Button variant="outline" size="lg" asChild>
             <a href={secondaryCta.href}>{secondaryCta.label}</a>
           </Button>
         </>

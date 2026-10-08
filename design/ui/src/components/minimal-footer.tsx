@@ -138,7 +138,7 @@ function MinimalFooter({
 
 // Back to the top of the page, and, for the keyboard, to its main content: a
 // reader who pressed it should not have to tab through the header again.
-function BackToTop({ className }: { className?: string }) {
+export function BackToTop({ className }: { className?: string }) {
   function onClick(event: React.MouseEvent) {
     const less = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: less ? "auto" : "smooth" });

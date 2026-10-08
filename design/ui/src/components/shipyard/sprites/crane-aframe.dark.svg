@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 504.99 411.59">
+  <!-- Generator: Adobe Illustrator 30.8.2, SVG Export Plug-In . SVG Version: 2.1.4 Build 7)  -->
+  <defs>
+    <style>
+      .st0, .st1, .st2, .st3, .st4, .st5, .st6 {
+        stroke: #636366;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .st0, .st1, .st3, .st6 {
+        fill: #2c2c2e;
+      }
+
+      .st0, .st2, .st4, .st6 {
+        stroke-width: 1.39px;
+      }
+
+      .st1, .st5 {
+        stroke-width: 1.44px;
+      }
+
+      .st2, .st4, .st5 {
+        fill: #000;
+      }
+
+      .st2, .st6 {
+        mix-blend-mode: screen;
+      }
+
+      .st7 {
+        isolation: isolate;
+      }
+
+      .st8 {
+        fill: #636366;
+      }
+
+      .st3 {
+        stroke-width: 1.96px;
+      }
+    </style>
+  </defs>
+  <g class="st7">
+        <polygon class="st4" points="258.12 32.01 258.12 118.48 251.52 114.64 251.52 28.22 258.12 32.01"/>
+        <polygon class="st4" points="265.07 28.48 265.07 28.26 258.09 39.65 258.09 118.48 265.19 114.32 265.19 28.42 265.07 28.48"/>
+        <polygon class="st4" points="261.85 30.12 265.19 28.42 264.99 28.31 265.07 28.26 258.4 24.43 158.41 81.93 158.48 81.97 158.41 82.01 165.01 85.81 166.2 85.12 261.85 30.12"/>
+        <polygon class="st0" points="265.07 28.48 265.07 28.26 164.98 85.73 164.98 85.81 164.98 172.19 172.08 168.04 172.08 89.09 258.09 39.65 265.19 28.42 265.07 28.48"/>
+        <g>
+          <polygon class="st4" points="164.96 85.73 274.28 235.19 280.41 231.32 171.23 82.05 164.96 85.73"/>
+          <polygon class="st4" points="164.98 85.73 274.29 235.19 267.8 231.51 165.11 91.09 164.98 85.73"/>
+        </g>
+        <g>
+          <polygon class="st4" points="258.8 31.94 368.12 181.41 374.25 177.54 265.07 28.26 258.8 31.94"/>
+          <polygon class="st4" points="258.82 31.94 368.13 181.4 361.63 177.72 258.95 37.3 258.82 31.94"/>
+        </g>
+        <polygon class="st4" points="164.98 85.81 164.98 172.27 158.37 168.43 158.37 82.01 164.98 85.81"/>
+  </g>
+</svg>

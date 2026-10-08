@@ -13,7 +13,7 @@ import {
   NavigationMenuTrigger,
 } from "./navigation-menu";
 import { NavList, NavListGroup, NavListItem } from "./nav-list";
-import { glass } from "../lib/glass";
+import { glass, glassHolding } from "../lib/glass";
 
 // How wide what is in the bar may be: the same sizes as the content of a page
 // layout, so the brand lines up with the page's text under it. The bar itself,
@@ -129,7 +129,8 @@ function SiteHeader({
         className={cn(
           "mx-auto flex h-14 w-full items-center gap-3 px-4 @3xl/site-header:px-6",
           floating &&
-cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
+// The bar holds the menus' panel, which has to blur the page too.
+cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           widths[width],
         )}
       >
@@ -148,6 +149,14 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
             data-slot="site-header-links"
             aria-label="Site"
             className={cn("hidden @2xl/site-header:flex", floating ? "ml-10" : "ml-4")}
+            // It opens as soon as the pointer rests on the word, rather than
+            // the fifth of a second that makes one click it instead.
+            delayDuration={50}
+            // Floating, the panel opens as far under the bar as the bar is
+            // from the top of the page (12px, and the 10px from these words
+            // to the bar's edge), in the bar's own glass: its ground, edge,
+            // light and shadow.
+            viewportClassName={floating ? cn(glass, "mt-5.5") : undefined}
           >
             {/* The words of a site stand a little apart from one another. */}
             <NavigationMenuList className="gap-5">
@@ -171,17 +180,20 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
                     >
                       {item.label}
                     </NavigationMenuTrigger>
-                    <NavigationMenuContent>
+                    {/* Room inside the panel: around it, between its columns
+                        and between its pages, so it reads as a menu of a site
+                        rather than an application's. */}
+                    <NavigationMenuContent className="p-4">
                       <div
-                        className="grid gap-x-2 gap-y-1"
+                        className="grid gap-x-6 gap-y-1"
                         style={{
-                          gridTemplateColumns: `repeat(${columnsOf(item).length}, minmax(15rem, 1fr))`,
+                          gridTemplateColumns: `repeat(${columnsOf(item).length}, minmax(17rem, 1fr))`,
                         }}
                       >
                         {columnsOf(item).map((column, c) => (
-                          <div key={c} className="grid content-start gap-0.5">
+                          <div key={c} className="grid content-start gap-1.5">
                             {column.label && (
-                              <p className="px-2.5 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
+                              <p className="px-3 pt-2 pb-2 text-xs font-medium text-muted-foreground">
                                 {column.label}
                               </p>
                             )}
@@ -195,6 +207,8 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
                                   title={(link.props as { children?: React.ReactNode }).children}
                                   description={description}
                                   icon={icon}
+                                  // Under the pointer, the icon turns orange in a white tile.
+                                  className="gap-4 p-3 [&>[aria-hidden]]:size-10 [&>[aria-hidden]]:transition-colors [&>[aria-hidden]_svg]:size-5 [&>span:last-child]:gap-1 hover:[&>[aria-hidden]]:bg-background hover:[&>[aria-hidden]]:text-primary focus-visible:[&>[aria-hidden]]:bg-background focus-visible:[&>[aria-hidden]]:text-primary"
                                 >
                                   {link}
                                 </NavigationMenuLink>

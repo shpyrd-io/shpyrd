@@ -1,0 +1,164 @@
+/* Light of the brand orange around the call to action, as light falling
+   through moving sea water: warm glows that drift and breathe, and rays from
+   above that sway and shimmer over the words. No edge anywhere. Drawn with
+   CSS only; still for who asked for less motion. */
+.aurora {
+  position: absolute;
+  left: 50%;
+  top: -18%;
+  bottom: -18%;
+  width: 100vw;
+  translate: -50% 0;
+  /* Over the block, not under it: the light falls on the yard too. It is
+     blended so that it only colours: multiplied on the light page (black
+     words stay black), screened on the dark one (white words stay white). */
+  z-index: 1;
+  mix-blend-mode: multiply;
+  overflow: hidden;
+  pointer-events: none;
+  /* Light on the light page: barely there. */
+  --aurora-strength: 0.26;
+  /* The rays ("brilho na água"): on the light page, light itself, white
+     over the orange glows. The layer is multiplied, so white leaves the page
+     as it is: the shafts read as clear light cut through the orange. */
+  --ray-1: #ffffff;
+  --ray-2: #fff6ef;
+  --ray-3: #ffffff;
+  --ray-strength: 1.6;
+  /* Around the block, faded on every side: no edge anywhere. */
+  /* Centred under the words (the page is 1232px wide, the words in its
+     first 430px), and gone 470px from there: the words all on the light, the
+     yard and the window's edge hardly touched. */
+  mask-image: radial-gradient(ellipse 470px 50% at calc(50% - 400px) 50%, black 40%, transparent 100%);
+}
+.dark .aurora {
+  --aurora-strength: 0.6;
+  --ray-1: #ff7a3d;
+  --ray-2: #ff9a6b;
+  --ray-3: #ff4f00;
+  /* Dimmer on the dark page: a glimmer, not a beam. */
+  --ray-strength: 0.45;
+  mix-blend-mode: screen;
+}
+
+/* The lights: large blots of the oranges of the hero's ocean (#ff4f00 and
+   its #ff7a3d), gathered under the block's words, as glows behind a stage; the yard gets little of them.
+   They drift and breathe slowly. */
+.aurora .light {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: calc(0.7 * var(--aurora-strength));
+  will-change: transform;
+  animation: aurora-drift 22s ease-in-out infinite alternate;
+}
+.aurora .light:nth-child(1) {
+  left: calc(50% - 760px); top: 6%; width: 560px; height: 64%;
+  background: radial-gradient(closest-side, #ff4f00, transparent);
+}
+.aurora .light:nth-child(2) {
+  left: calc(50% - 500px); top: 34%; width: 480px; height: 60%;
+  background: radial-gradient(closest-side, #ff7a3d, transparent);
+  animation-duration: 27s; animation-delay: -9s;
+}
+.aurora .light:nth-child(3) {
+  left: calc(50% - 720px); top: 46%; width: 600px; height: 54%;
+  background: radial-gradient(closest-side, #ff5f14, transparent);
+  animation-duration: 25s; animation-delay: -4s;
+}
+/* Only a breath of it reaches the yard. */
+.aurora .light:nth-child(4) {
+  left: calc(50% - 150px); top: 30%; width: 420px; height: 50%;
+  background: radial-gradient(closest-side, #ff9a6b, transparent);
+  opacity: calc(0.3 * var(--aurora-strength));
+  animation-duration: 31s; animation-delay: -15s;
+}
+
+/* The rays: light falling through moving water, from above and to the
+   right of the words, fanning down over them. Two fans of a few shafts each,
+   swaying wide and their own way, so where they cross the light shimmers as under the
+   sea; faded toward their foot. */
+@property --ray-a {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.aurora .rays {
+  position: absolute;
+  inset: 0;
+  mask-image:
+    radial-gradient(ellipse 420px 55% at calc(50% - 400px) 50%, black 15%, transparent 85%),
+    linear-gradient(to bottom, black 20%, transparent 95%);
+  mask-composite: intersect;
+}
+.aurora .rays::before,
+.aurora .rays::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  filter: blur(7px);
+  background: repeating-conic-gradient(
+    from calc(200deg + var(--ray-a)) at calc(50% - 120px) -35%,
+    transparent 0deg 3deg,
+    color-mix(in oklab, var(--ray-1) 75%, transparent) 4deg,
+    transparent 5.2deg 9deg,
+    color-mix(in oklab, var(--ray-2) 60%, transparent) 10deg,
+    transparent 11deg 16deg
+  );
+  opacity: calc(0.55 * var(--ray-strength));
+  animation: aurora-sway 10.5s ease-in-out infinite alternate, aurora-shimmer 3s ease-in-out infinite alternate;
+}
+/* On the dark page the shafts shimmer by their brightness. On the light one
+   that would dim the white to grey, and a grey ray multiplied is a dark one:
+   there they shimmer by how much of them shows, and stay white. */
+.dark .aurora .rays::before,
+.dark .aurora .rays::after {
+  animation-name: aurora-sway, aurora-flicker;
+}
+.aurora .rays::after {
+  background: repeating-conic-gradient(
+    from calc(197deg - var(--ray-a)) at calc(50% - 60px) -40%,
+    transparent 0deg 5deg,
+    color-mix(in oklab, var(--ray-3) 65%, transparent) 6.2deg,
+    transparent 7.4deg 13deg
+  );
+  opacity: calc(0.4 * var(--ray-strength));
+  animation-duration: 14s, 4.2s;
+  animation-delay: -5s, -1.8s;
+}
+
+@keyframes aurora-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(8%, -6%, 0) scale(1.12); }
+  100% { transform: translate3d(-6%, 5%, 0) scale(0.92); }
+}
+@keyframes aurora-sway {
+  from { --ray-a: -6deg; }
+  50% { --ray-a: 1.5deg; }
+  to { --ray-a: 6deg; }
+}
+@keyframes aurora-shimmer {
+  0% { filter: blur(7px); opacity: calc(0.35 * var(--ray-strength)); }
+  40% { filter: blur(5px); opacity: calc(0.6 * var(--ray-strength)); }
+  70% { filter: blur(6px); opacity: calc(0.45 * var(--ray-strength)); }
+  100% { filter: blur(4px); opacity: calc(0.6 * var(--ray-strength)); }
+}
+@keyframes aurora-flicker {
+  0% { filter: blur(7px) brightness(0.7); }
+  40% { filter: blur(5px) brightness(1.35); }
+  70% { filter: blur(6px) brightness(0.9); }
+  100% { filter: blur(4px) brightness(1.3); }
+}
+
+/* Centred: the same light, under words in the middle of the page rather than
+   at its left. Moved 400px right, where its glows and rays gather; the block
+   that holds it clips it across. */
+.aurora.aurora-centred {
+  translate: calc(-50% + 400px) 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora .light,
+  .aurora .rays::before,
+  .aurora .rays::after { animation: none; }
+}

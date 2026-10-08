@@ -94,7 +94,8 @@ function SegmentedNav({
             className={cn(
               "pointer-events-none absolute left-0",
               pill
-                ? "inset-y-1 rounded-control bg-linear-to-b from-white to-[#f2f2f2] shadow-[inset_0_1px_0_rgb(255_255_255),0_1px_2px_rgb(0_0_0/0.18),0_2px_5px_rgb(0_0_0/0.08)] dark:from-[#3a3a3a] dark:to-[#2a2a2a] dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_1px_2px_rgb(0_0_0/0.5)]"
+                ? // The orange mark of the docs' list, lying down: 16 by 3px under the word.
+                "inset-y-1 rounded-control bg-background shadow-[0_1px_2px_rgb(0_0_0/0.12),0_2px_6px_rgb(0_0_0/0.06)] dark:bg-accent dark:shadow-[0_1px_2px_rgb(0_0_0/0.5)] after:absolute after:bottom-1 after:left-1/2 after:h-[3px] after:w-4 after:-translate-x-1/2 after:rounded-[2px] after:bg-primary"
                 : "bottom-0 h-0.5 rounded-full bg-primary",
               moving && "transition-[translate,width] duration-slow ease-move",
             )}
@@ -109,7 +110,7 @@ function SegmentedNav({
                 "aria-[current=page]:text-foreground",
                 !pill && "h-10 rounded-none px-3",
                 // Before the pill has found its place, the open page lights itself.
-                !light && pill && "aria-[current=page]:bg-white aria-[current=page]:shadow-sm dark:aria-[current=page]:bg-[#333]",
+                !light && pill && "aria-[current=page]:bg-background aria-[current=page]:shadow-sm dark:aria-[current=page]:bg-accent relative aria-[current=page]:after:absolute aria-[current=page]:after:bottom-1 aria-[current=page]:after:left-1/2 aria-[current=page]:after:h-[3px] aria-[current=page]:after:w-4 aria-[current=page]:after:-translate-x-1/2 aria-[current=page]:after:rounded-[2px] aria-[current=page]:after:bg-primary",
                 !light && !pill && "aria-[current=page]:shadow-[inset_0_-2px_0_var(--primary)]",
                 (link.props as { className?: string }).className,
               ),

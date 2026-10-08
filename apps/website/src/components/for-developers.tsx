@@ -17,13 +17,13 @@ export function DeveloperNext() {
       description="Sign up and your workspace is ready, with nothing to install or run. The first deploy takes the CLI and one folder."
       actions={
         <>
-          <Button asChild>
+          <Button size="lg" asChild>
             <a href={signUp}>Get started</a>
           </Button>
-          <Button variant="outline" asChild>
+          <Button variant="outline" size="lg" asChild>
             <a href="/for/developers/your-first-deploy">Quick start</a>
           </Button>
-          <Button variant="ghost" asChild>
+          <Button variant="ghost" size="lg" asChild>
             <a href="https://github.com/shpyrd-io/shpyrd">Read the source</a>
           </Button>
         </>

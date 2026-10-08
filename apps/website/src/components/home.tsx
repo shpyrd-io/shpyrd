@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { History, Plug, Rocket, Users } from "lucide-react";
+import { ArrowRight, Handshake, History, Plug, Rocket, SquareTerminal, Users, UsersRound } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
+import { glass } from "@shpyrd/ui/lib/glass";
 import { also, gap, hero, route } from "@shpyrd/content/site/home";
 import { secondaryCta } from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
@@ -24,6 +24,13 @@ import { Closing } from "@/components/proposals";
 //
 // The picture beside the heading is a part the page is given: "/" gives the
 // chat, and a proposal can give another.
+
+// The icon of each solution, as in the header's menu.
+const alsoIcons: Record<string, React.ReactElement> = {
+  "/for/developers": <SquareTerminal />,
+  "/for/it": <UsersRound />,
+  "/for/fde-partners": <Handshake />,
+};
 
 // The icons of the page, by the id of what they stand beside.
 const stepIcons: Record<string, React.ReactElement> = {
@@ -45,15 +52,13 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         <BinaryOcean className="pointer-events-none absolute -top-6 left-1/2 -z-10 h-[calc(100%+4rem)] w-screen -translate-x-1/2 [mask-image:linear-gradient(to_bottom,transparent,black_15%,black_70%,transparent)]" />
       <Hero
         // One sentence a line: "You built it." over "We ship it."
-        // The last line, "We ship it.", is filled with the brand orange as if it
-        // were being poured in: the ink stays only in the W and along the tops.
+        // The last line, "We ship it.", in the brand orange, plain.
         heading={hero.heading.split(/(?<=\.)\s+/).map((line, i, lines) => (
           <span
             key={line}
             className={cn(
               "block leading-[1.2]",
-              i === lines.length - 1 &&
-                "w-fit bg-clip-text pb-[0.08em] text-transparent [background-image:radial-gradient(ellipse_20%_100%_at_0%_0%,var(--foreground)_0%,transparent_65%),linear-gradient(to_bottom,var(--foreground)_0%,var(--foreground)_8%,color-mix(in_oklab,var(--foreground)_70%,transparent)_16%,color-mix(in_oklab,var(--foreground)_40%,transparent)_24%,color-mix(in_oklab,var(--foreground)_15%,transparent)_32%,transparent_42%),linear-gradient(var(--primary),var(--primary))]",
+              i === lines.length - 1 && "text-primary",
             )}
           >
             {line}
@@ -93,28 +98,41 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
       </Stack>
 
       {/* Room after the mosaic, so the next section starts a new thought. */}
-      <Stack gap="spacious" className="mt-12">
+      <Stack gap="spacious" className="mt-26">
         <SectionIntro variant="xlarge" align="center" heading={route.heading} description={route.description} />
         <div className="mt-8">
           <RouteTimeline steps={route.steps} icons={stepIcons} lit="share" />
         </div>
       </Stack>
 
-      {/* The solutions wait with the sections (src/lib/sections.ts). */}
+      {/* The solutions wait with the sections (src/lib/sections.ts). As the
+          rest of the page: 168px from the route, a centred title, and each
+          solution a card of glass with its icon, as on Pricing. */}
       {sectionsLive && (
-      <Stack gap="spacious">
-        <SectionIntro variant="xlarge" label={also.label} heading={also.heading} />
-        <ul className="grid gap-4 sm:grid-cols-3">
+      <Stack gap="spacious" className="mt-26">
+        <SectionIntro variant="xlarge" align="center" heading={also.heading} />
+        <ul className="mt-8 grid gap-4 sm:grid-cols-3">
           {also.items.map((a) => (
             <li key={a.href}>
-              <Card asChild className="h-full">
-                <Link href={a.href}>
-                  <CardHeader>
-                    <CardTitle className="font-heading">{a.title} →</CardTitle>
-                    <CardDescription>{a.body}</CardDescription>
-                  </CardHeader>
-                </Link>
-              </Card>
+              <Link
+                href={a.href}
+                className={cn(
+                  glass,
+                  // A link: its edge turns orange under the pointer, with a soft glow, as
+                  // a plan on Pricing does.
+                  "group/also grid h-full content-start gap-2 p-6 transition-[box-shadow] duration-300 hover:ring-primary dark:hover:ring-primary hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.65),0_10px_30px_rgb(20_20_30/0.06),0_0_28px_-6px_rgb(255_79_0/0.45)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.12),0_10px_30px_rgb(0_0_0/0.6),0_0_28px_-6px_rgb(255_79_0/0.5)] focus-visible:ring-primary",
+                )}
+              >
+                <span className="flex items-center gap-2 text-base font-semibold text-foreground [&_svg]:size-[18px] [&_svg]:shrink-0 [&_svg]:text-primary">
+                  {alsoIcons[a.href]}
+                  {a.title}
+                  <ArrowRight
+                    aria-hidden="true"
+                    className="ml-auto text-muted-foreground transition-[translate,color] group-hover/also:translate-x-0.5 group-hover/also:text-primary"
+                  />
+                </span>
+                <span className="text-sm text-muted-foreground">{a.body}</span>
+              </Link>
             </li>
           ))}
         </ul>

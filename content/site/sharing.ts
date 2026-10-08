@@ -22,7 +22,7 @@ export const steps = [
       'builds it and gives it a URL with TLS, and sign-in sits in front of it ' +
       'from the first release.',
     screenshot: {
-      src: '/screenshots/deploy-dialog.png',
+      src: '/screenshots/deploy-dialog-crop.png',
       alt: 'Deploying a project from the dashboard',
       exists: true,
     },
@@ -67,7 +67,7 @@ export const steps = [
       'turns out to be wrong, rolling back restores the previous release and ' +
       'the config that went with it.',
     screenshot: {
-      src: '/screenshots/releases-card.png',
+      src: '/screenshots/releases-card-crop.png',
       alt: 'Numbered releases with a rollback action',
       exists: true,
     },
