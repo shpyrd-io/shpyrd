@@ -92,9 +92,15 @@ design").
 2. **Pay what is owed**, entry by entry, and mark each as paid.
 3. **Run the gates** of everything the session touched: `npm run lint`,
    `npm run typecheck`, `npm run test`, `npm run build`. When `design/ui`
-   changed, also build every application that uses it: a change there can
-   break a screen elsewhere.
-4. **Report**: what changed, what was paid, what is still owed and why.
+   changed, also build every application of this repository that uses it:
+   a change there can break a screen elsewhere.
+4. **Release the library** when the session changed `design/ui/src`: raise
+   the version in `design/ui/package.json` and write its section in
+   `design/ui/CHANGELOG.md` (`design/ui/README.md`, "Versions"). The other
+   projects that use the library get the change from npm, through the pull
+   request their Dependabot opens. A session that changed only the gallery
+   or tests releases nothing.
+5. **Report**: what changed, what was paid, what is still owed and why.
    The summary goes into the pull request; the changelog itself is never
    committed.
 

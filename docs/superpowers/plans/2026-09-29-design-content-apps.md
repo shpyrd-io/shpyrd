@@ -9,7 +9,7 @@ little repeated code as possible.
 |---|---|
 | Framework | Next, for everything, compiled to static files; no Node at run time |
 | Root folders | `design/` (identity), `content/` (what is written), `apps/` (the applications) |
-| Packages | one npm workspace at the root; `design/ui` is `@shpyrd/ui` |
+| Packages | one npm workspace at the root; `design/ui` is `@shpyrd/ui`, also published to npm with a version of its own for the other projects ([its spec](../specs/2026-10-08-design-ui-package-design.md)) |
 | Code the applications share | `apps/shared` |
 | Mock | an `ApiRouter` in the application; an environment variable picks Mock or Backend |
 | Builds | one per application |
