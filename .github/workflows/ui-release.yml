@@ -4,6 +4,12 @@
 # CHANGELOG section. A push that does not change the version publishes
 # nothing.
 #
+# Two jobs, so that no dependency's code runs where publishing is possible:
+# the gates install the dependencies (and run their install scripts) with a
+# token that can only read; the publishing job installs nothing but a pinned
+# npm, keeps no credentials in its checkout, and is the only one that may ask
+# for an OIDC token or write the repository.
+#
 # npm trusts this workflow (trusted publishing, OIDC): no token is stored.
 # NPM_TOKEN is only for a first publication, before npm can be told to
 # trust the workflow; remove the secret once it is.
@@ -15,8 +21,7 @@ on:
     paths: ["design/ui/**"]
 
 permissions:
-  contents: write # the ui-v tag and its GitHub release
-  id-token: write # npm trusted publishing and provenance
+  contents: read
 
 # One release at a time: a push delivered twice must not publish twice.
 concurrency:
@@ -24,17 +29,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: "@shpyrd/ui to npm"
+  gates:
+    name: "@shpyrd/ui: what to release, and its gates"
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
-          registry-url: https://registry.npmjs.org
       - name: What to release
         id: plan
         working-directory: design/ui
@@ -47,20 +55,39 @@ jobs:
           npm run typecheck --workspace design/ui
           npm run test --workspace design/ui
           (cd design/ui && node scripts/check-pack.mjs)
+
+  publish:
+    name: "@shpyrd/ui to npm"
+    needs: gates
+    if: needs.gates.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the ui-v tag and its GitHub release
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      - name: What to release
+        id: plan
+        working-directory: design/ui
+        run: node scripts/release-plan.mjs
       - name: Publish
-        if: steps.plan.outputs.publish == 'true'
         working-directory: design/ui
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm install --global npm@^11.5.1 # trusted publishing needs it
+          npm install --global npm@11.21.0 # trusted publishing needs 11.5.1 or later
           npm publish --access public --provenance --tag "${{ steps.plan.outputs.dist_tag }}"
       - name: Tag and GitHub release
-        if: steps.plan.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.git_tag }}
           VERSION: ${{ steps.plan.outputs.version }}
           NOTES: ${{ steps.plan.outputs.notes_file }}
           PRERELEASE: ${{ steps.plan.outputs.dist_tag == 'next' && '--prerelease' || '' }}
-        run: gh release create "$TAG" --target "$GITHUB_SHA" --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" $PRERELEASE
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" $PRERELEASE
