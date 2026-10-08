@@ -71,6 +71,15 @@ jobs:
           done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
           echo "go=$go" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          # The library reaches the other projects only through a version
+          # (design/ui/README.md): a change to its source without one is
+          # worth a word, not a failure, since not every change is released
+          # at once.
+          if git diff --no-renames --name-only "$BASE" HEAD -- design/ui/src \
+              | grep -vE '\.test\.tsx?$|^design/ui/src/test\.ts$' | grep -q . \
+            && ! git diff "$BASE" HEAD -- design/ui/package.json | grep -qE '^[-+] *"version":'; then
+            echo "::warning file=design/ui/package.json::design/ui/src changed and the version did not: the other projects get the change only once a version is released (design/ui/README.md)"
+          fi
 
   go:
     name: Go tests
@@ -126,6 +135,11 @@ jobs:
       - run: npm run lint --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: npm run typecheck --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: npm run test --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+      - name: What @shpyrd/ui would ship
+        working-directory: design/ui
+        run: node scripts/check-pack.mjs
+      - name: What an application of another repository sees of @shpyrd/ui
+        run: design/ui/scripts/check-consumer.sh
       - run: make ui
 
   # What a release builds (the CLIs for every system, the server and the
