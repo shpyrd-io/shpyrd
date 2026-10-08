@@ -41,6 +41,7 @@ export const catalog: Category[] = [
     pages: [
       { slug: "document-actions", title: "Document actions", description: "Copy a permanent link, download a document and print." },
       { slug: "input", title: "Input", description: "Where something is typed, with what goes beside its text." },
+      { slug: "code-input", title: "Code input", description: "A short code that was sent, typed or pasted, a digit a box." },
       { slug: "textarea", title: "Textarea", description: "Where more than a line is typed." },
       { slug: "field", title: "Field", description: "A label and its field, with the hint and the error." },
       { slug: "color-picker", title: "Colour picker", description: "A colour, chosen: a swatch, the hex, and the colours the application offers." },
