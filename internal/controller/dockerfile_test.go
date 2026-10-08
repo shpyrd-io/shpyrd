@@ -7,9 +7,11 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -227,5 +229,83 @@ func TestBuildKeyAndFailureSummary(t *testing.T) {
 	}
 	if shellQuote("it's") != `'it'\''s'` {
 		t.Errorf("shellQuote = %s", shellQuote("it's"))
+	}
+}
+
+// #117: a workspace with limits covers every pod that asks for resources
+// with its quota, and Kubernetes then refuses a pod in which any container
+// declares no CPU or memory request. The build's containers all declare
+// both.
+func TestBuildJobDeclaresRequestsInEveryContainer(t *testing.T) {
+	r, _ := newTestReconciler(t)
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fault := QuotaRequestsFault(job.Spec.Template.Spec); fault != "" {
+		t.Error(fault)
+	}
+	pod := OneOffPod(dockerfileApp(), "registry.test/dk@"+testDigest, []string{"rake", "db:migrate"}, corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")}}, false, false, "")
+	if fault := QuotaRequestsFault(pod.Spec); fault != "" {
+		t.Error(fault)
+	}
+	// The guard itself: one container asking, one not.
+	bad := job.Spec.Template.Spec.DeepCopy()
+	bad.InitContainers[0].Resources = corev1.ResourceRequirements{}
+	if fault := QuotaRequestsFault(*bad); !strings.Contains(fault, fetchContainer) {
+		t.Errorf("a container without requests beside one with: fault = %q", fault)
+	}
+}
+
+// #117: a build whose instance the workspace's quota refuses does not sit
+// "building" until its 30-minute deadline. It fails at once, says why in
+// words, and the platform stops asking.
+func TestBuildRefusedAtCreation(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, want string
+	}{
+		{
+			"the platform's own fault",
+			`Error creating: pods "dk-build-1-kr98m" is forbidden: failed quota: shpyrd: must specify requests.cpu for: fetch; requests.memory for: fetch`,
+			"The build cannot start: the platform asked for it without the resource requests the workspace's ceiling needs. This is a platform error, not your app's",
+		},
+		{
+			"the workspace's ceiling",
+			`Error creating: pods "dk-build-1-kr98m" is forbidden: exceeded quota: shpyrd, requested: requests.memory=512Mi, used: requests.memory=256Mi, limited: requests.memory=512Mi`,
+			"The build cannot start: the workspace's memory ceiling is 512Mi, 256Mi of it taken",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			app := dockerfileApp()
+			r, c := newTestReconciler(t, app)
+			kube := kubefake.NewSimpleClientset()
+			r.Kube = kube
+			got := runReconcile(t, r, app)
+			job := getJob(t, c, "app-dk", "dk-build-1")
+			if _, err := kube.CoreV1().Events("app-dk").Create(ctx, &corev1.Event{
+				ObjectMeta:     metav1.ObjectMeta{Name: "refused", Namespace: "app-dk"},
+				InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: job.Name, Namespace: "app-dk"},
+				Reason:         "FailedCreate", Message: tc.event, LastTimestamp: metav1.Now(),
+			}, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			got = runReconcile(t, r, got)
+			if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.HasPrefix(got.Status.Message, tc.want) {
+				t.Fatalf("phase=%q message=%q, want Failed: %s", got.Status.Phase, got.Status.Message, tc.want)
+			}
+			if bad := PlatformWordingFault(got.Status.Message); bad != "" {
+				t.Errorf("%q names %q", got.Status.Message, bad)
+			}
+			job = getJob(t, c, "app-dk", "dk-build-1")
+			if job.Spec.Suspend == nil || !*job.Spec.Suspend {
+				t.Error("the refused build must stop asking for its instance")
+			}
+			// It stays failed: the next pass reads the outcome back.
+			got = runReconcile(t, r, got)
+			if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.HasPrefix(got.Status.Message, tc.want) {
+				t.Errorf("next pass: phase=%q message=%q", got.Status.Phase, got.Status.Message)
+			}
+		})
 	}
 }

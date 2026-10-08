@@ -466,3 +466,18 @@ func runKubernetesMoves(t *testing.T, ctx context.Context, s *Server, app *shpyr
 	t.Log("physical node moves preserved the original contents")
 
 }
+
+// #117: the export's pods run in the project's namespace, under its quota
+// when the workspace has limits; every container asks for CPU and memory.
+func TestProjectExportPodsDeclareRequests(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "p-shop"}}
+	volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "p-shop"}}
+	for name, pod := range map[string]*corev1.Pod{
+		"volume": archiveVolumePod(app, volume, "op", "registry.test/server:dev"),
+		"source": projectSourcePod(app, "op", controller.DefaultBuildKitImage),
+	} {
+		if fault := controller.QuotaRequestsFault(pod.Spec); fault != "" {
+			t.Errorf("%s pod: %s", name, fault)
+		}
+	}
+}

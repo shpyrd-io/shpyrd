@@ -265,12 +265,7 @@ func (s *Server) exportProjectGit(ctx context.Context, app *shpyrdv1.App, op *pr
 	if image == "" {
 		image = controller.DefaultBuildKitImage
 	}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{GenerateName: "project-source-", Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID, shpyrdv1.LabelApp: app.Name}}, Spec: corev1.PodSpec{
-		AutomountServiceAccountToken: ptr.To(false), EnableServiceLinks: ptr.To(false), RestartPolicy: corev1.RestartPolicyNever, TerminationGracePeriodSeconds: ptr.To[int64](5),
-		SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsGroup: ptr.To[int64](1000), FSGroup: ptr.To[int64](1000)},
-		Containers:      []corev1.Container{{Name: "source", Image: image, Command: []string{"sh", "-ec", "trap 'exit 0' TERM; while :; do sleep 3600; done"}, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, VolumeMounts: []corev1.VolumeMount{{Name: "source", MountPath: "/source"}}, Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")}}}},
-		Volumes:         []corev1.Volume{{Name: "source", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
-	}}
+	pod := projectSourcePod(app, op.ID, image)
 	if err := s.apps.Create(ctx, pod); err != nil {
 		return err
 	}
@@ -292,4 +287,16 @@ func (s *Server) exportProjectGit(ctx context.Context, app *shpyrdv1.App, op *pr
 git clone --quiet --no-checkout -- "$1" /source/repo
 git -C /source/repo archive --format=tar.gz "$2"`, "archive", m.Spec.Source.Git.URL, revision}, nil, out)
 	})
+}
+
+// projectSourcePod holds the deployed Git commit while an export reads it.
+// It asks for CPU as well as memory: a workspace's quota refuses a pod that
+// asks for one and not the other (#117).
+func projectSourcePod(app *shpyrdv1.App, operation, image string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{GenerateName: "project-source-", Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: operation, shpyrdv1.LabelApp: app.Name}}, Spec: corev1.PodSpec{
+		AutomountServiceAccountToken: ptr.To(false), EnableServiceLinks: ptr.To(false), RestartPolicy: corev1.RestartPolicyNever, TerminationGracePeriodSeconds: ptr.To[int64](5),
+		SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsGroup: ptr.To[int64](1000), FSGroup: ptr.To[int64](1000)},
+		Containers:      []corev1.Container{{Name: "source", Image: image, Command: []string{"sh", "-ec", "trap 'exit 0' TERM; while :; do sleep 3600; done"}, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, VolumeMounts: []corev1.VolumeMount{{Name: "source", MountPath: "/source"}}, Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("64Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")}}}},
+		Volumes:         []corev1.Volume{{Name: "source", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+	}}
 }
