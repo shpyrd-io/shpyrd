@@ -7,6 +7,8 @@ CLI and one dashboard on top of Kubernetes.
 
 [![A workspace in the shpyrd dashboard: its projects, who can open each, and how each is doing](https://shpyrd.io/screenshots/workspace.png)](https://shpyrd.io/docs/tour)
 
+[![A project's metrics in the shpyrd dashboard: response time, requests, failures, CPU and memory, with each release marked](https://shpyrd.io/screenshots/metrics.png)](https://shpyrd.io/docs/tour#metrics)
+
 Status: beta. It runs on a local kind cluster and on Oracle Cloud (OKE); the
 design record and roadmap live in [rfcs/](rfcs/README.md). Website: https://shpyrd.io
 
