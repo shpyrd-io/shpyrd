@@ -13,7 +13,7 @@ without it.
 ```sh
 npm install
 npm --prefix apps/website run dev        # http://localhost:4324
-npm --prefix apps/website run build      # static files in out/
+npm --prefix apps/website run build      # every page rendered; /api/contact runs on request
 npm --prefix apps/website run lint
 npm --prefix apps/website run typecheck
 npm --prefix apps/website run test
@@ -33,7 +33,7 @@ src/components/markdoc.tsx   which component of design/ui draws each tag
 src/lib/content.ts           reads content/docs and returns front matter, tree and headings
 public/install.sh            served at shpyrd.io/install.sh, the documented install path
 public/screenshots/          screenshots used by the docs and the root README
-vercel.json                  the redirects (/discord, /docs); a static export emits none
+vercel.json                  the redirects (/discord, /docs, /how-sharing-works), which Vercel answers first
 ```
 
 The texts are not here. Documentation is `content/docs/*.md` and the marketing
@@ -61,6 +61,25 @@ container loads, so the tags know which part of the funnel they are on (the
 sign-up says `signup`, the dashboards `console` or `workspace`). Every
 "Get started" goes to the sign-up (`src/lib/signup.ts`), which the container
 reads as a link click.
+
+## The contact forms
+
+`/contact/sales` and `/contact/enterprise` post to `app/api/contact`, the
+one route that runs on request. It checks the answers by the forms' rules
+(`src/lib/contact.ts`, from `content/site/contact.ts`) and mails them to the
+team through Mailgun's SMTP. Its settings, in Vercel, for Production only:
+
+| Variable | Example |
+|---|---|
+| `SMTP_HOST` | `smtp.mailgun.org` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `postmaster@mg.shpyrd.io` |
+| `SMTP_PASS` | Mailgun's SMTP password |
+| `CONTACT_FROM` | `shpyrd website <website@mg.shpyrd.io>` |
+| `CONTACT_TO` | `sales@shpyrd.io` |
+
+Without them (a preview, the development server) the route answers `503`
+and the page offers Discord: nothing is mailed.
 
 ## License
 

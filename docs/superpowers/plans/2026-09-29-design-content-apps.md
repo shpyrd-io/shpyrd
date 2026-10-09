@@ -7,7 +7,7 @@ little repeated code as possible.
 
 | Subject | Decision |
 |---|---|
-| Framework | Next, for everything, compiled to static files; no Node at run time |
+| Framework | Next, for everything, compiled to static files; no Node at run time. The website, on Vercel, has one route on request: its contact forms ([their spec](../specs/2026-10-09-contact-pages-design.md)) |
 | Root folders | `design/` (identity), `content/` (what is written), `apps/` (the applications) |
 | Packages | one npm workspace at the root; `design/ui` is `@shpyrd/ui` |
 | Code the applications share | `apps/shared` |
