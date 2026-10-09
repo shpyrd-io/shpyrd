@@ -3,6 +3,10 @@ import { documents, read } from "@/lib/content";
 import { shared } from "@/lib/metadata";
 
 // The documents are known when the application is built: one page each.
+// Only the addresses built here exist: any other is a 404, never a page
+// rendered on request.
+export const dynamicParams = false;
+
 export function generateStaticParams() {
   return documents().map((slug) => ({ slug }));
 }
