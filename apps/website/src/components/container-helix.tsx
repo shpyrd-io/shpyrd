@@ -241,6 +241,20 @@ export function ContainerHelix({
     let idle = 0;
     let way = 1;
     let lastY = window.scrollY;
+    // The ring's clock, in seconds, for its float; still for who asked for
+    // less motion. Each container's own bob: two slow sines, their speeds
+    // (radians a second) and starts drawn once, the same on every visit.
+    let clock = 0;
+    const random = (n: number) => {
+      const x = Math.sin(n * 12.9898) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    const FLOAT = Array.from({ length: 40 }, (_, i) => [
+      0.7 + random(i * 4) * 0.6,
+      0.35 + random(i * 4 + 1) * 0.35,
+      random(i * 4 + 2) * Math.PI * 2,
+      random(i * 4 + 3) * Math.PI * 2,
+    ]);
 
     function draw() {
       if (!c) return;
@@ -266,16 +280,19 @@ export function ContainerHelix({
         // ahead, level: the far side small across the middle, the
         // near side sweeping by large at the edges and going on behind.
         const turn = spin;
-        // Each container, on its own, lifts by half as much again as its
-        // height as it passes straight ahead, behind the hero's title, and
-        // settles again: the lift starts and ends within about six
-        // containers' room (three slots either side of the middle), level all
-        // the while.
-        const REACH = ((Math.PI * 2) / N) * 3;
-        const lift = (t: number) => (Math.abs(t) < REACH ? (0.5 + 0.5 * Math.cos((Math.PI * t) / REACH)) * 1.5 * H : 0);
+        // The containers float, level all the while: a wave runs round the
+        // ring, three crests to the turn, carried with it as it turns, and
+        // each container bobs on its own over it, slowly, out of step with
+        // its neighbours.
+        const float = (i: number) => {
+          const [f1, f2, p1, p2] = FLOAT[i];
+          const wave = Math.sin((i / N) * Math.PI * 2 * 3 - (clock * Math.PI * 2) / 7) * 0.6 * H;
+          const bob = (0.6 * Math.sin(clock * f1 + p1) + 0.4 * Math.sin(clock * f2 + p2)) * 0.25 * H;
+          return wave + bob;
+        };
         for (let i = 0; i < N; i++) {
           const a = (i / N) * Math.PI * 2 + turn;
-          const rel = [R * Math.sin(a), -8 + lift(Math.atan2(Math.sin(a), Math.cos(a))), -20 - R * Math.cos(a)];
+          const rel = [R * Math.sin(a), -8 + float(i), -20 - R * Math.cos(a)];
           if (-rel[2] < 7) continue;
           boxes.push({ m: rotY(Math.PI / 2 - a), centre: [rel[0], rel[1], CAMERA + rel[2]] });
         }
@@ -517,6 +534,7 @@ export function ContainerHelix({
       const k = 1 - Math.exp(-dt * 2.6);
       for (const key of Object.keys(pose) as (keyof Pose)[]) pose[key] += (target[key] - pose[key]) * k;
       drift += dt * 0.045;
+      clock += dt;
       if (window.scrollY !== lastY) way = window.scrollY > lastY ? 1 : -1;
       lastY = window.scrollY;
       idle += dt * 0.05 * way;
