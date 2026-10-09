@@ -210,6 +210,8 @@ git commit -m "feat(ui): @shpyrd/ui is a package: what it ships, its peers, its 
 
 ### Task 2: The check of what an application outside the workspace sees
 
+> **Removed (2026-10-09, the owner's decision).** The check was built and then taken out of #130: a project's own CI checks a new version when it takes it, and `shpyrd-signup` and `legal` get a minimal CI in their cycles. The task below is kept as the record of what was planned; Task 3's CI step for it is gone too, and the Review Focus line 5 no longer applies.
+
 **Files:**
 - Create: `design/ui/scripts/check-consumer.sh`
 
