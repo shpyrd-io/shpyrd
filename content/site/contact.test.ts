@@ -6,7 +6,7 @@ describe("the contact pages", () => {
   it("ask what the spec says, in its order", () => {
     expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "message"]);
     expect(enterprise.fields.map((f) => f.name)).toEqual([
-      "firstName", "lastName", "email", "company", "jobTitle", "size", "runsOn", "needs", "timeline", "message",
+      "firstName", "lastName", "email", "company", "jobTitle", "size", "runsOn", "timeline", "needs", "message",
     ]);
   });
 

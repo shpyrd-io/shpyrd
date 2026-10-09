@@ -17,6 +17,27 @@ import { check, formOf, trap, type Answers, type Kind } from "@/lib/contact";
 
 type Status = "idle" | "sending" | "sent" | "failed";
 
+// Two fields to a row. Texts of several lines and the checkboxes take a
+// whole row, and so does a field that would be left alone in its own.
+export function wideFields(fields: ContactField[]): Set<string> {
+  const wide = new Set<string>();
+  const full = (f: ContactField) => f.type === "textarea" || f.type === "checkboxes";
+  let half: ContactField | undefined;
+  for (const f of fields) {
+    if (full(f)) {
+      if (half) wide.add(half.name);
+      half = undefined;
+      wide.add(f.name);
+    } else if (half) {
+      half = undefined;
+    } else {
+      half = f;
+    }
+  }
+  if (half) wide.add(half.name);
+  return wide;
+}
+
 export function ContactForm({ kind }: { kind: Kind }) {
   const form = formOf(kind);
   const [answers, setAnswers] = React.useState<Answers>({});
@@ -88,12 +109,15 @@ export function ContactForm({ kind }: { kind: Kind }) {
     );
   }
 
+  const wide = wideFields(form.fields);
+  const span = (f: ContactField) => (wide.has(f.name) ? "sm:col-span-2" : undefined);
+
   const control = (f: ContactField) => {
     const id = `contact-${f.name}`;
     switch (f.type) {
       case "select":
         return (
-          <Field key={f.name} id={id} label={f.label} required={f.required} error={errors[f.name]}>
+          <Field key={f.name} id={id} label={f.label} required={f.required} error={errors[f.name]} className={span(f)}>
             <Select name={f.name} value={text(f.name)} onValueChange={(v) => set(f.name, v)}>
               <SelectTrigger
                 id={id}
@@ -146,13 +170,13 @@ export function ContactForm({ kind }: { kind: Kind }) {
         );
       case "textarea":
         return (
-          <Field key={f.name} label={f.label} error={errors[f.name]} className="sm:col-span-2">
-            <Textarea id={id} name={f.name} rows={4} value={text(f.name)} onChange={(e) => set(f.name, e.target.value)} />
+          <Field key={f.name} label={f.label} required={f.required} error={errors[f.name]} className={span(f)}>
+            <Textarea id={id} name={f.name} className="min-h-32" value={text(f.name)} onChange={(e) => set(f.name, e.target.value)} />
           </Field>
         );
       default:
         return (
-          <Field key={f.name} label={f.label} required={f.required} error={errors[f.name]}>
+          <Field key={f.name} label={f.label} required={f.required} error={errors[f.name]} className={span(f)}>
             <Input
               id={id}
               name={f.name}

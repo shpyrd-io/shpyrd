@@ -88,6 +88,17 @@ export const enterprise: ContactPage = {
       ],
     },
     {
+      name: 'timeline',
+      label: 'Timeline',
+      type: 'select',
+      required: true,
+      choices: [
+        { value: 'exploring', label: 'Exploring' },
+        { value: 'quarter', label: 'This quarter' },
+        { value: 'later', label: 'Next quarter or later' },
+      ],
+    },
+    {
       name: 'needs',
       label: 'What do you need?',
       type: 'checkboxes',
@@ -97,17 +108,6 @@ export const enterprise: ContactPage = {
         { value: 'sla', label: 'Support with an SLA' },
         { value: 'procurement', label: 'Invoicing and procurement' },
         { value: 'managed', label: 'Managed for our clients' },
-      ],
-    },
-    {
-      name: 'timeline',
-      label: 'Timeline',
-      type: 'select',
-      required: true,
-      choices: [
-        { value: 'exploring', label: 'Exploring' },
-        { value: 'quarter', label: 'This quarter' },
-        { value: 'later', label: 'Next quarter or later' },
       ],
     },
     { name: 'message', label: 'Tell us about your setup', type: 'textarea' },

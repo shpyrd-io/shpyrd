@@ -80,8 +80,8 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   | Job title | text | yes |
   | Company size | select: 1–49 · 50–249 · 250–999 · 1000+ | yes |
   | Where would shpyrd run? | select: shpyrd cloud · Our own cloud (AWS, Oracle Cloud…) · On-premises · Not sure yet | yes |
-  | What do you need? | checkboxes: Single sign-on · Security or compliance review · Support with an SLA · Invoicing and procurement · Managed for our clients | no |
   | Timeline | select: Exploring · This quarter · Next quarter or later | yes |
+  | What do you need? | checkboxes: Single sign-on · Security or compliance review · Support with an SLA · Invoicing and procurement · Managed for our clients | no |
   | Tell us about your setup | text, several lines | no |
 
 - Button: **Contact enterprise sales**.

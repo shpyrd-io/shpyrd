@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
-import { ContactForm } from "./contact-form";
+import { ContactForm, wideFields } from "./contact-form";
+import { enterprise, sales } from "@shpyrd/content/site/contact";
 import { trap } from "@/lib/contact";
 
 afterEach(() => {
@@ -111,5 +112,19 @@ describe("ContactForm", () => {
     const html = renderToString(<ContactForm kind="sales" />);
     expect(html).toMatch(/<form[^>]*method="post"/);
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+  });
+
+  it("marks the question as required", () => {
+    render(<ContactForm kind="sales" />);
+    expect((screen.getByLabelText("How can we help you?", { exact: false }) as HTMLTextAreaElement).required).toBe(true);
+  });
+});
+
+describe("wideFields", () => {
+  // Two fields to a row; a field left alone in its row takes the whole of
+  // it, as do the texts of several lines and the checkboxes.
+  it("leaves no field alone in half a row", () => {
+    expect([...wideFields(sales.fields)].sort()).toEqual(["email", "message"]);
+    expect([...wideFields(enterprise.fields)].sort()).toEqual(["message", "needs"]);
   });
 });
