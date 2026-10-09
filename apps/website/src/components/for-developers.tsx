@@ -21,7 +21,7 @@ export function DeveloperNext() {
             <a href={signUp}>Get started</a>
           </Button>
           <Button variant="outline" size="lg" asChild>
-            <a href="/for/developers/your-first-deploy">Quick start</a>
+            <a href="/for/developers#your-first-deploy">Quick start</a>
           </Button>
           <Button variant="ghost" size="lg" asChild>
             <a href="https://github.com/shpyrd-io/shpyrd">Read the source</a>
@@ -31,7 +31,7 @@ export function DeveloperNext() {
       note={
         <>
           Open source under MPL-2.0: you can also{" "}
-          <a href="/for/developers/run-it-yourself" className="underline underline-offset-4 hover:text-foreground">
+          <a href="/for/developers#run-it-yourself" className="underline underline-offset-4 hover:text-foreground">
             run it yourself
           </a>
           .

@@ -1,9 +1,8 @@
 import { Button } from "@shpyrd/ui/components/button";
-import { SectionIntro } from "@shpyrd/ui/components/section-intro";
-import { Stack } from "@shpyrd/ui/components/stack";
 import { contact } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
 import { signUp } from "@/lib/signup";
+import { SimpleCta } from "@/components/simple-cta";
 
 // The endings of the Client apps section. The section is about the app built
 // for a client; the firm that builds it has its own page (/for/fde-partners).
@@ -18,21 +17,19 @@ export function ClientAppsNext({
   description?: string;
 }) {
   return (
-    <Stack gap="spacious" className="border-t pt-12">
-      <SectionIntro align="center" variant="xlarge" heading={heading} description={description} />
-      <Stack direction="horizontal" gap="cozy" className="flex-wrap">
-        {/* Self sign-up on shpyrd cloud. */}
-        <Button asChild>
+    <SimpleCta
+      heading={heading}
+      description={description}
+      action={
+        <Button size="lg" asChild>
           <a href={signUp}>Get started</a>
         </Button>
-        <Button variant="outline" asChild>
-          <a href={contact.href}>Talk to us</a>
-        </Button>
-        <Button variant="link" asChild className="px-0">
-          <a href="/for/fde-partners">For FDE partners</a>
-        </Button>
-      </Stack>
-    </Stack>
+      }
+      links={[
+        { label: "Talk to us", href: contact.href },
+        { label: "For FDE partners", href: "/for/fde-partners" },
+      ]}
+    />
   );
 }
 

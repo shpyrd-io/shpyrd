@@ -180,6 +180,8 @@ const SPACING = H + 1.12;
 const BASE: M3 = rotZ(Math.PI / 2);
 const STEP = 0.24;
 const CAMERA = 70;
+// Where the ring's eye level stands on the screen, from its top.
+const RISE = 0.04;
 // How many metres of the chain the screen's height holds, at the chain.
 const VIEW = 32;
 const LIGHT_DIR: V3 = (() => {
@@ -188,7 +190,15 @@ const LIGHT_DIR: V3 = (() => {
   return [v[0] / l, v[1] / l, v[2] / l];
 })();
 
-export function ContainerHelix({ className }: { className?: string }) {
+export function ContainerHelix({
+  className,
+  ring = false,
+}: {
+  className?: string;
+  // The container circle (ContainerCircle, below): the containers in a ring
+  // around the reader instead of the spiral.
+  ring?: boolean;
+}) {
   const ref = React.useRef<HTMLCanvasElement>(null);
 
   React.useEffect(() => {
@@ -222,18 +232,54 @@ export function ContainerHelix({ className }: { className?: string }) {
     };
     let pose = poseAt(progress());
     let drift = 0;
+    // The ring turns slowly on its own, a container's step (a 40th of the
+    // turn) every three seconds or so, and the scroll speeds it on: a step
+    // for every 140px scrolled, followed softly, the way it was scrolled.
+    // Left alone it goes on slowly the way it was last scrolled.
+    const spinAt = () => (window.scrollY / 140) * ((Math.PI * 2) / 40);
+    let spin = spinAt();
+    let idle = 0;
+    let way = 1;
+    let lastY = window.scrollY;
 
     function draw() {
       if (!c) return;
       const pal = dark ? DARK : LIGHT;
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.clearRect(0, 0, canvas!.width, canvas!.height);
-      const f = (height * CAMERA) / VIEW;
+      // Inside the ring the eye needs a wide view, so the ring reads as a
+      // circle: its far side small in the middle, its sides sweeping by.
+      const f = (height * CAMERA) / (ring ? 72 : VIEW);
       const group = mul(mul(rotZ(pose.rz), rotY(pose.ry)), rotX(pose.rx));
       const phase = pose.ph * 0.42 + drift;
 
       // Every container: where it stands, how it is turned, how near it is.
-      const boxes = [];
+      const boxes: { m: M3; centre: V3 }[] = [];
+      if (ring) {
+        // A ring around the eye, a little under it, so it reads as a circle
+        // seen from within: the near part passes at the sides, the far part
+        // across the middle. Each container stands across the ring, its length
+        // pointing to the centre, like the spokes of a fan, a gap between each.
+        const N = 40;
+        const R = 30;
+        // The eye stands inside the ring, near its edge and over it, looking
+        // ahead, level: the far side small across the middle, the
+        // near side sweeping by large at the edges and going on behind.
+        const turn = spin;
+        // Each container, on its own, lifts by half as much again as its
+        // height as it passes straight ahead, behind the hero's title, and
+        // settles again: the lift starts and ends within about six
+        // containers' room (three slots either side of the middle), level all
+        // the while.
+        const REACH = ((Math.PI * 2) / N) * 3;
+        const lift = (t: number) => (Math.abs(t) < REACH ? (0.5 + 0.5 * Math.cos((Math.PI * t) / REACH)) * 1.5 * H : 0);
+        for (let i = 0; i < N; i++) {
+          const a = (i / N) * Math.PI * 2 + turn;
+          const rel = [R * Math.sin(a), -8 + lift(Math.atan2(Math.sin(a), Math.cos(a))), -20 - R * Math.cos(a)];
+          if (-rel[2] < 7) continue;
+          boxes.push({ m: rotY(Math.PI / 2 - a), centre: [rel[0], rel[1], CAMERA + rel[2]] });
+        }
+      } else
       for (let i = 0; i < COUNT; i++) {
         const t = i - COUNT / 2;
         const angle = -0.9 + i * STEP + phase + 0.05 * Math.sin(i * 0.21 - phase * 2);
@@ -245,19 +291,41 @@ export function ContainerHelix({ className }: { className?: string }) {
         const centre: V3 = [world[0] + pose.px, world[1] + pose.py, world[2] + pose.pz];
         boxes.push({ m: mul(group, mul(turn, BASE)), centre });
       }
-      boxes.sort((a, b) => a.centre[2] - b.centre[2]);
+      // Farthest first; in the ring by distance from the eye, so neighbours
+      // at the sides are laid in the right order.
+      const away = (b: { centre: V3 }) =>
+        ring ? Math.hypot(b.centre[0], b.centre[1], CAMERA - b.centre[2]) : CAMERA - b.centre[2];
+      boxes.sort((a, b) => away(b) - away(a));
 
       for (const box of boxes) {
         const scale = (f / (CAMERA - box.centre[2])) * dpr;
         const sx = canvas!.width / 2 + box.centre[0] * scale;
         const sy = canvas!.height / 2 - box.centre[1] * scale;
+        // In the ring every point is seen from the eye, true perspective, so
+        // the ring turns as one body; the spiral, far off, keeps each box's
+        // own scale.
         const to = (p: V3) => {
           const q = apply(box.m, p);
-          return [sx + q[0] * scale, sy - q[1] * scale];
+          if (!ring) return [sx + q[0] * scale, sy - q[1] * scale];
+          const w: V3 = [box.centre[0] + q[0], box.centre[1] + q[1], box.centre[2] + q[2]];
+          const k = (f / (CAMERA - w[2])) * dpr;
+          // The eye looks level, its view shifted up (as a shift lens does), so
+          // the containers' upright edges stay upright to the screen's edges.
+          return [canvas!.width / 2 + w[0] * k, canvas!.height * RISE - w[1] * k];
         };
+        // How much a direction turns to the eye: toward the camera itself in
+        // the ring, along the view in the spiral.
+        const toEye = (() => {
+          const e: V3 = [-box.centre[0], -box.centre[1], CAMERA - box.centre[2]];
+          const l = Math.hypot(...e);
+          return ring ? [e[0] / l, e[1] / l, e[2] / l] : [0, 0, 1];
+        })();
+        const facing = (v: number[]) => v[0] * toEye[0] + v[1] * toEye[1] + v[2] * toEye[2];
         // Far ones fade into the page, as in a haze: their colours go to the
         // page's, so none shows through another.
-        const near = Math.min(Math.max((box.centre[2] + 30) / 50, 0), 1);
+        const near = ring
+          ? Math.min(Math.max(1 - (CAMERA - box.centre[2] - 8) / 90, 0), 1)
+          : Math.min(Math.max((box.centre[2] + 30) / 50, 0), 1);
         const haze = (colour: string) => mix(colour, pal.page, (1 - near) * 0.82);
         const stroke = Math.max(0.5 * dpr, scale * 0.02);
         const edge = haze(dark ? mix(pal.outline, "#000000", 0.2) : mix(pal.onEnd, pal.outline, 0.55));
@@ -278,8 +346,8 @@ export function ContainerHelix({ className }: { className?: string }) {
           ];
           for (const [nl, idx, base] of outer) {
             const nw = apply(box.m, nl);
-            if (nw[2] <= 0) continue;
-            c.globalAlpha = Math.min(1, nw[2] * 5);
+            if (facing(nw) <= 0) continue;
+            c.globalAlpha = Math.min(1, facing(nw) * 5);
             const lit = Math.max(0, nw[0] * LIGHT_DIR[0] + nw[1] * LIGHT_DIR[1] + nw[2] * LIGHT_DIR[2]);
             c.beginPath();
             idx.forEach((k, j) => {
@@ -299,7 +367,12 @@ export function ContainerHelix({ className }: { className?: string }) {
 
         for (const face of FACES) {
           const n = apply(box.m, face.n);
-          if (n[2] <= 0) continue;
+          // Seen from the eye at the face's own middle, so a near box's walls
+          // show and hide as they should.
+          const mid = apply(box.m, [face.o[0] + (face.u[0] + face.v[0]) / 2, face.o[1] + (face.u[1] + face.v[1]) / 2, face.o[2] + (face.u[2] + face.v[2]) / 2]);
+          const view = ring ? [-box.centre[0] - mid[0], -box.centre[1] - mid[1], CAMERA - box.centre[2] - mid[2]] : [0, 0, 1];
+          const seen = (n[0] * view[0] + n[1] * view[1] + n[2] * view[2]) / Math.hypot(view[0], view[1], view[2]);
+          if (seen <= 0) continue;
           const a = Math.hypot(...face.u);
           const b = Math.hypot(...face.v);
           const [ox, oy] = to(face.o);
@@ -309,25 +382,41 @@ export function ContainerHelix({ className }: { className?: string }) {
           const base = face.kind === "side" ? pal.side : pal.end;
           const shaded = dark ? mix(base, pal.shade, lit * pal.shadeBy) : mix(base, pal.shade, (1 - lit) * pal.shadeBy);
 
-          // The face laid on the screen: its own metres, mapped.
-          c.setTransform((ux - ox) / a, (uy - oy) / a, (vx - ox) / b, (vy - oy) / b, ox, oy);
-          c.beginPath();
-          c.rect(0, 0, a, b);
-          c.fillStyle = haze(shaded);
-          c.fill();
-
-          // The relief, on the screen itself: a point of the face at (u, v),
-          // raised h along its normal.
+          // A point of the face at (u, v), raised h along its normal. In the
+          // spiral the face is mapped flat (each box seen from afar); in the
+          // ring every point is seen from the eye, so a near face keeps its
+          // true corners and its walls stay square.
           const U = [(ux - ox) / a, (uy - oy) / a];
           const V = [(vx - ox) / b, (vy - oy) / b];
           const N = [n[0] * scale, -n[1] * scale];
-          const at = (u: number, v: number, h: number): [number, number] => [
-            ox + U[0] * u + V[0] * v + N[0] * h,
-            oy + U[1] * u + V[1] * v + N[1] * h,
-          ];
+          const at = (u: number, v: number, h: number): [number, number] => {
+            if (!ring) return [ox + U[0] * u + V[0] * v + N[0] * h, oy + U[1] * u + V[1] * v + N[1] * h];
+            const q = to([
+              face.o[0] + (face.u[0] * u) / a + (face.v[0] * v) / b + face.n[0] * h,
+              face.o[1] + (face.u[1] * u) / a + (face.v[1] * v) / b + face.n[1] * h,
+              face.o[2] + (face.u[2] * u) / a + (face.v[2] * v) / b + face.n[2] * h,
+            ]);
+            return [q[0], q[1]];
+          };
+          const outline = () => {
+            c.setTransform(1, 0, 0, 1, 0, 0);
+            c.beginPath();
+            for (const [u, v] of [[0, 0], [a, 0], [a, b], [0, b]]) {
+              const [x, y] = at(u, v, 0);
+              if (u || v) c.lineTo(x, y);
+              else c.moveTo(x, y);
+            }
+            c.closePath();
+          };
+
+          // The face laid on the screen.
+          outline();
+          c.fillStyle = haze(shaded);
+          c.fill();
+
           // A wall seen nearly edge on packs its ribs into a moiré that
           // shimmers as it turns: its relief fades out before that.
-          const flat = Math.min(1, Math.max(0, (n[2] - 0.12) / 0.3));
+          const flat = Math.min(1, Math.max(0, (seen - 0.12) / 0.3));
           if (face.kind !== "floor" && scale > 2.2 * dpr && flat > 0) {
             c.setTransform(1, 0, 0, 1, 0, 0);
             const uh = apply(box.m, face.u).map((x) => x / a);
@@ -345,7 +434,7 @@ export function ContainerHelix({ className }: { className?: string }) {
               const len = Math.hypot(nf[0], nf[1], nf[2]);
               // Fading in as it turns to the camera, out as it turns away:
               // never popping.
-              const fade = Math.min(1, Math.max(0, (nf[2] / len) * 5));
+              const fade = Math.min(1, Math.max(0, (facing(nf) / len) * 5));
               const shown = fade > 0;
               const lf = Math.max(0, (nf[0] * LIGHT_DIR[0] + nf[1] * LIGHT_DIR[1] + nf[2] * LIGHT_DIR[2]) / len);
               return { edge, shown, fade, lf, path: new Path2D() };
@@ -389,10 +478,12 @@ export function ContainerHelix({ className }: { className?: string }) {
             // middle, painted over the ribs with a keyline of the wall's
             // white around it; in the wall's own light grey, so the spiral
             // stays a background.
-            const lift = at(0, 0, 0.09);
-            c.setTransform(U[0], U[1], V[0], V[1], lift[0], lift[1]);
+            // Mapped flat at its own middle, where the face is seen.
+            const lift = at(a / 2, b / 2, 0.09);
+            const du = at(a / 2 + 1, b / 2, 0.09);
+            const dv = at(a / 2, b / 2 + 1, 0.09);
+            c.setTransform(du[0] - lift[0], du[1] - lift[1], dv[0] - lift[0], dv[1] - lift[1], lift[0], lift[1]);
             const size = 1.3 / 140.7;
-            c.translate(a / 2, b / 2);
             c.scale(size, -size);
             c.translate(-70.35, -70.32);
             c.lineJoin = "round";
@@ -401,13 +492,9 @@ export function ContainerHelix({ className }: { className?: string }) {
             c.stroke(mark);
             c.fillStyle = haze(pal.side);
             c.fill(mark);
-            c.setTransform((ux - ox) / a, (uy - oy) / a, (vx - ox) / b, (vy - oy) / b, ox, oy);
           }
           // Its edge, as fine as the relief's: no dark frame around it.
-          c.setTransform((ux - ox) / a, (uy - oy) / a, (vx - ox) / b, (vy - oy) / b, ox, oy);
-          c.beginPath();
-          c.rect(0, 0, a, b);
-          c.setTransform(1, 0, 0, 1, 0, 0);
+          outline();
           c.strokeStyle = edge;
           c.lineWidth = stroke * 0.5;
           c.lineJoin = "round";
@@ -430,11 +517,16 @@ export function ContainerHelix({ className }: { className?: string }) {
       const k = 1 - Math.exp(-dt * 2.6);
       for (const key of Object.keys(pose) as (keyof Pose)[]) pose[key] += (target[key] - pose[key]) * k;
       drift += dt * 0.045;
+      if (window.scrollY !== lastY) way = window.scrollY > lastY ? 1 : -1;
+      lastY = window.scrollY;
+      idle += dt * 0.05 * way;
+      spin += (idle + spinAt() - spin) * (1 - Math.exp(-dt * 4));
       draw();
       frame = requestAnimationFrame(tick);
     };
     const onScroll = () => {
       pose = poseAt(progress());
+      spin = spinAt();
       draw();
     };
     if (still) {
@@ -450,7 +542,7 @@ export function ContainerHelix({ className }: { className?: string }) {
       window.removeEventListener("resize", resize);
       window.removeEventListener("scroll", onScroll);
     };
-  }, []);
+  }, [ring]);
 
   return (
     <canvas
@@ -459,4 +551,13 @@ export function ContainerHelix({ className }: { className?: string }) {
       className={cn("pointer-events-none fixed inset-0 -z-10 size-full", className)}
     />
   );
+}
+
+// The container circle ("círculo de contêineres", Giovani 2026-10-08): the
+// same containers in a ring around the reader, each across it like the
+// blades of a fan, the eye inside, near its edge and over it. The ring turns
+// as the page is scrolled, as one body, so the containers come from far
+// ahead, pass by at the sides and go on behind, out of sight.
+export function ContainerCircle({ className }: { className?: string }) {
+  return <ContainerHelix ring className={className} />;
 }

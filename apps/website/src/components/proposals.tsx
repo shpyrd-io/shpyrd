@@ -3,10 +3,10 @@ import { ClipboardList, FileText, Gauge, Receipt, UserPlus } from "lucide-react"
 import { LogoMark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card } from "@shpyrd/ui/components/card";
-import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { developerCta } from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { ShipyardCta } from "@/components/shipyard-cta";
+import { SimpleCta } from "@/components/simple-cta";
 
 // What the four homepage proposals share while they are being compared. None of
 // this outlives the decision: the one that wins moves to `/`, and its screens to
@@ -189,25 +189,12 @@ export function Launcher({
 // read. Sharing is a sentence to your agent; this is how the agent learns to.
 export function ConnectOnce() {
   return (
-    // The intro takes the whole width and centres its own words: it sizes its
-    // text by its own room, so inside a column that centres (and so shrinks)
-    // its children it had the room of one word.
-    <div className="grid justify-items-center gap-6">
-      <SectionIntro
-        variant="xlarge"
-        align="center"
-        className="w-full"
-        heading="Connect your agent once"
-        description="Then sharing is something you say."
-      />
-      <AddToAgent size="lg" />
-      <a
-        href={developerCta.href}
-        className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-      >
-        Or run it yourself
-      </a>
-    </div>
+    <SimpleCta
+      heading="Connect your agent once"
+      description="Then sharing is something you say."
+      action={<AddToAgent size="lg" />}
+      links={[{ label: "Or run it yourself", href: developerCta.href }]}
+    />
   );
 }
 

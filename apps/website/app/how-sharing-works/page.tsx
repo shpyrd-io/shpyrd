@@ -10,7 +10,7 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { boundariesForStep } from "@shpyrd/content/site/boundaries";
 import { intro, runs, steps } from "@shpyrd/content/site/sharing";
 import { Boundaries } from "@/components/boundaries";
-import { ContainerHelix } from "@/components/container-helix";
+import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
 import { pageSections } from "@/lib/page";
 
@@ -27,10 +27,11 @@ const icons: Record<string, React.ReactElement> = {
 export default function HowSharingWorks() {
   return (
     <>
-    {/* The page's background: the container spiral (container-helix.tsx),
-        fixed behind it, turning, re-posed as the page is scrolled. Outside
-        the page's grid, so it takes none of its room. */}
-    <ContainerHelix />
+    {/* The page's background: the container circle (container-helix.tsx),
+        fixed behind it, turning as the page is scrolled. Outside the page's
+        grid, so it takes none of its room. The spiral it replaced stays at
+        /proposals/background. */}
+    <ContainerCircle />
     <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
       <Hero variant="page" align="center" heading={intro.title} description={intro.lead} />
 

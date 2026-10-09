@@ -4,6 +4,7 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { contact, developerCta } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
 import { signUp } from "@/lib/signup";
+import { SimpleCta } from "@/components/simple-cta";
 
 // What the pages of "For FDE partners" share: the full ending and the limits
 // (on the section's own page), and the short step at the end of each subpage.
@@ -15,23 +16,19 @@ import { signUp } from "@/lib/signup";
 
 export function PartnerNext({ heading = "Start with one client" }: { heading?: string }) {
   return (
-    <Stack gap="spacious">
-      <SectionIntro align="center" variant="xlarge"
-        heading={heading}
-        description="Sign up, open a workspace for the client you are delivering to now, and deploy what you built. The next client gets the same setup."
-      />
-      <Stack direction="horizontal" gap="cozy" className="flex-wrap">
-        <Button asChild>
+    <SimpleCta
+      heading={heading}
+      description="Sign up, open a workspace for the client you are delivering to now, and deploy what you built. The next client gets the same setup."
+      action={
+        <Button size="lg" asChild>
           <a href={signUp}>Get started</a>
         </Button>
-        <Button variant="outline" asChild>
-          <a href={contact.href}>Talk to us about a client project</a>
-        </Button>
-        <Button variant="link" asChild className="px-0">
-          <a href={developerCta.href}>Quick start for your engineers</a>
-        </Button>
-      </Stack>
-    </Stack>
+      }
+      links={[
+        { label: "Talk to us about a client project", href: contact.href },
+        { label: "Quick start for your engineers", href: developerCta.href },
+      ]}
+    />
   );
 }
 

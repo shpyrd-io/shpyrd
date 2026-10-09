@@ -1,9 +1,8 @@
 import { Button } from "@shpyrd/ui/components/button";
-import { SectionIntro } from "@shpyrd/ui/components/section-intro";
-import { Stack } from "@shpyrd/ui/components/stack";
 import { contact } from "@shpyrd/content/site/offer";
 import { SubpageStep } from "@/components/subpage-step";
 import { signUp } from "@/lib/signup";
+import { SimpleCta } from "@/components/simple-cta";
 
 // Where "Get started" goes: signing up for a workspace on shpyrd cloud.
 export const getStarted = { label: "Get started", href: signUp };
@@ -18,20 +17,19 @@ export function ItNext({
   description?: string;
 }) {
   return (
-    <Stack gap="spacious" className="border-t pt-12">
-      <SectionIntro align="center" variant="xlarge" heading={heading} description={description} />
-      <Stack direction="horizontal" gap="cozy" className="flex-wrap">
-        <Button asChild>
+    <SimpleCta
+      heading={heading}
+      description={description}
+      action={
+        <Button size="lg" asChild>
           <a href={getStarted.href}>{getStarted.label}</a>
         </Button>
-        <Button variant="outline" asChild>
-          <a href={contact.href}>Talk to us about a pilot</a>
-        </Button>
-        <Button variant="ghost" asChild>
-          <a href="/docs/access">People, teams and roles</a>
-        </Button>
-      </Stack>
-    </Stack>
+      }
+      links={[
+        { label: "Talk to us about a pilot", href: contact.href },
+        { label: "People, teams and roles", href: "/docs/access" },
+      ]}
+    />
   );
 }
 

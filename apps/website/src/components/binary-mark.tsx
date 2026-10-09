@@ -40,6 +40,7 @@ export function BinaryMark({
   shift = 0,
   height,
   x,
+  centred,
 }: {
   className?: string;
   // The element the mark stands centred behind (else the middle of the
@@ -57,6 +58,9 @@ export function BinaryMark({
   // mark's height in px, and its centre in px right of the page's middle.
   height?: number;
   x?: number;
+  // Where it stands instead when the page's hero is centred: in the middle of
+  // the page's width, this tall, its top this many px from the page's top.
+  centred?: { height: number; offset: number };
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null);
 
@@ -93,12 +97,18 @@ export function BinaryMark({
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       // Its box: the page's width, down to the bottom of the marked element.
       const box = canvas.getBoundingClientRect();
-      const hero = document.querySelector("[data-slot=hero]")?.getBoundingClientRect();
+      const heroEl = document.querySelector<HTMLElement>("[data-slot=hero]");
+      const hero = heroEl?.getBoundingClientRect();
       const end = document.querySelector("[data-binary-end]")?.getBoundingClientRect();
       const behind = anchor ? document.querySelector(anchor)?.getBoundingClientRect() : undefined;
+      // Under a centred hero, the mark stands centred too, at its own size and place.
+      const middle = centred && heroEl?.dataset.align === "center" ? centred : undefined;
+      const markHeight = middle ? middle.height : height;
+      const markOffset = middle ? middle.offset : offset;
+      const markX = middle ? 0 : x;
       const h = Math.max(
         end ? end.bottom - box.top : window.innerHeight,
-        height !== undefined ? (offset ?? 0) + height + CELL * 2 : 0,
+        markHeight !== undefined ? (markOffset ?? 0) + markHeight + CELL * 2 : 0,
         400,
       );
       canvas.style.height = `${h}px`;
@@ -117,18 +127,20 @@ export function BinaryMark({
       grid.width = cols;
       grid.height = rows;
       const g = grid.getContext("2d")!;
+      // Centred, it may take the page's whole width; beside the words, 70% of it.
+      const room = cols * (middle ? 1 : 0.7);
       const size =
-        height !== undefined
-          ? Math.min(height / CELL / 140.64, (cols * 0.7) / 140.71)
-          : Math.min(tall / CELL / 140.64, (cols * 0.7) / 140.71) * scale;
+        markHeight !== undefined
+          ? Math.min(markHeight / CELL / 140.64, room / 140.71)
+          : Math.min(tall / CELL / 140.64, room / 140.71) * scale;
       // Its centre: the anchor's, or the middle of the space it is given.
       const cx =
-        x !== undefined
-          ? Math.min(cols / 2 + x / CELL, cols - (140.71 * size) / 2)
+        markX !== undefined
+          ? Math.min(cols / 2 + markX / CELL, cols - (140.71 * size) / 2)
           : (behind ? (behind.left + behind.width / 2 - box.left) / CELL : cols / 2) + shift / CELL;
       const cy =
-        offset !== undefined
-          ? offset / CELL + (140.64 * size) / 2
+        markOffset !== undefined
+          ? markOffset / CELL + (140.64 * size) / 2
           : behind
             ? (behind.top + behind.height / 2 - box.top) / CELL
             : top / CELL + tall / CELL / 2;
@@ -212,7 +224,7 @@ export function BinaryMark({
       sized.disconnect();
       window.removeEventListener("resize", resize);
     };
-  }, [anchor, scale, offset, shift, height, x]);
+  }, [anchor, scale, offset, shift, height, x, centred?.height, centred?.offset]);
 
   return (
     <canvas

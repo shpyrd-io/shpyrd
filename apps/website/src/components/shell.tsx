@@ -31,6 +31,12 @@ import { DiscordMark, GitHubMark } from "@/components/marks";
 // Where the code is, and where the community talks; the header and the foot
 // both point there.
 const github = "https://github.com/shpyrd-io/shpyrd";
+// The legal pages, on their own site.
+const legal = [
+  { title: "Legal", href: "https://legal.shpyrd.io/" },
+  { title: "Terms of Service", href: "https://legal.shpyrd.io/global/terms-of-service" },
+  { title: "Privacy Policy", href: "https://legal.shpyrd.io/global/privacy-policy" },
+];
 const discord = site.discord.href;
 
 // The icons of the header turn orange under the pointer, with no box behind.
@@ -359,7 +365,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 ],
               },
             ]}
-            note="© 2026 shpyrd. All rights reserved."
+            // The fine print, and the legal pages beside it, as on every
+            // other page's foot.
+            note={
+              <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span>© 2026 shpyrd. All rights reserved.</span>
+                {legal.map((l) => (
+                  <a key={l.href} href={l.href} className="underline-offset-4 transition-colors hover:text-primary">
+                    {l.title}
+                  </a>
+                ))}
+              </span>
+            }
             backToTop
           />
         ) : (
@@ -389,7 +406,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <LogoMark className="size-5" />
               </Link>
             }
-            note="© 2026. shpyrd. All rights reserved."
+            // The fine print, and the legal pages beside it.
+            note={
+              <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span>© 2026. shpyrd. All rights reserved.</span>
+                {legal.map((l) => (
+                  <a key={l.href} href={l.href} className="underline-offset-4 transition-colors hover:text-primary">
+                    {l.title}
+                  </a>
+                ))}
+              </span>
+            }
             backToTop
           />
         )}

@@ -1,18 +1,14 @@
-import Link from "next/link";
-import { BrowserFrame } from "@shpyrd/ui/components/browser-frame";
-import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
-import { Hero } from "@shpyrd/ui/components/hero";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
-import { ConnectOnce, Launcher, launcherApps } from "@/components/proposals";
-import { AgentWindow } from "@/components/agent-window";
-import { SubpageStep } from "@/components/subpage-step";
+import { ContinuousSection } from "@/components/continuous-section";
+import { ConnectOnce } from "@/components/proposals";
 import { pageSections } from "@/lib/page";
+import { Part as Overview } from "./_parts/overview";
+import { Part as ToolsPeopleBuild } from "./_parts/tools-people-build";
+import { Part as WhoDoesWhat } from "./_parts/who-does-what";
+import { Part as OneWeekOneTracker } from "./_parts/one-week-one-tracker";
 
-// Internal tools, the section's own page: the tool already works, and one
-// sentence to your agent puts it where the team looks every morning. The
-// kinds of tool, what shpyrd does and doesn't, and a week of one tracker are
-// its subpages.
-
+// Internal tools, read as one page (continuous-section.tsx): its parts one
+// after another under a bar that stays, and one ending.
 export const metadata = {
   title: "Internal tools",
   description:
@@ -21,43 +17,21 @@ export const metadata = {
 
 export default function Page() {
   return (
-    <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
-
-      <Hero variant="page"
+    <PageLayoutContent as="div">
+      <ContinuousSection
         label="Internal tools"
-        heading="Built a tool for your team? Put it in their day."
-        description="The tracker, the dashboard, the approval tool you built with AI. Tell your agent who it's for, and tomorrow it's in their list of apps."
-        image={
-          <BrowserFrame address="acme.shpyrd.app">
-            <Launcher person="luis@acme.com" apps={launcherApps.slice(0, 4)} />
-          </BrowserFrame>
+        parts={[
+          { slug: "overview", title: "Overview", content: <Overview /> },
+          { slug: "tools-people-build", title: "Tools people build", content: <ToolsPeopleBuild /> },
+          { slug: "who-does-what", title: "Who does what", content: <WhoDoesWhat /> },
+          { slug: "one-week-one-tracker", title: "One week, one tracker", content: <OneWeekOneTracker /> },
+        ]}
+        ending={
+          <PageLayoutContent width="xlarge" padding="normal" className={pageSections}>
+            <ConnectOnce />
+          </PageLayoutContent>
         }
       />
-
-      <AgentWindow>
-        <Conversation>
-          <ConversationMessage from="person" author="You">
-            Share the purchase tracker with Finance and Operations.
-          </ConversationMessage>
-          <ConversationMessage from="agent" author="Your agent">
-            Done. It&apos;s in their apps the next time they sign in with their work account.
-            Nobody else can open it.
-          </ConversationMessage>
-        </Conversation>
-      </AgentWindow>
-
-      <p className="text-center text-sm text-muted-foreground">
-        Works the same for trackers, dashboards, approval tools, quote tools and onboarding
-        checklists.{" "}
-        <Link href="/use-cases/internal-tools/tools-people-build" className="font-medium text-foreground underline-offset-4 hover:underline">
-          Find yours
-        </Link>
-      </p>
-
-      <ConnectOnce />
-
-      {/* As every page of the section ends: the way to its next one. */}
-      <SubpageStep next={{ href: "/use-cases/internal-tools/tools-people-build", title: "Tools people build" }} />
     </PageLayoutContent>
   );
 }
