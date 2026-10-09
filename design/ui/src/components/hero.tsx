@@ -8,6 +8,9 @@ const sizes = {
   large: "text-4xl @2xl/hero:text-5xl",
   // The front page of a site: the heading as big as the room allows.
   xlarge: "text-5xl @2xl/hero:text-6xl @4xl/hero:text-7xl",
+  // A page's own title: larger than its sections' titles (48px), smaller
+  // than the home page's (72px).
+  page: "text-4xl @2xl/hero:text-5xl @4xl/hero:text-6xl",
 } as const;
 
 // The banner at the top of a page: what the page is, in as few words as it
@@ -104,7 +107,9 @@ function Hero({
             <div
               data-slot="hero-actions"
               className={cn(
-                "flex flex-wrap items-center gap-3",
+                // Buttons line up by their tops: one may carry a line under it
+                // (the Add to button's "or install manually").
+                "flex flex-wrap items-start gap-3",
                 variant === "card-spacious" && "[&_[data-slot=button]]:max-w-full [&_[data-slot=button]]:whitespace-normal [&_[data-slot=button]]:h-auto [&_[data-slot=button]]:min-h-8 [&_[data-slot=button]]:py-1.5",
                 centred && "justify-center",
                 auto && "justify-center @3xl/hero:justify-start",

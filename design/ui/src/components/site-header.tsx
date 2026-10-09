@@ -13,7 +13,7 @@ import {
   NavigationMenuTrigger,
 } from "./navigation-menu";
 import { NavList, NavListGroup, NavListItem } from "./nav-list";
-import { glass } from "../lib/glass";
+import { glass, glassHolding } from "../lib/glass";
 
 // How wide what is in the bar may be: the same sizes as the content of a page
 // layout, so the brand lines up with the page's text under it. The bar itself,
@@ -85,6 +85,7 @@ function SiteHeader({
   actions,
   menuLabel = "Menu",
   variant = "bar",
+  fold = "narrow",
   ...props
 }: React.ComponentProps<"header"> & {
   as?: "header" | "div";
@@ -105,12 +106,18 @@ function SiteHeader({
   // `bar` goes from edge to edge with a line under it; `floating` is a panel
   // of frosted glass held off the edges, the page passing under it.
   variant?: "bar" | "floating";
+  // When the links fold into the menu: below a narrow bar (42rem), or, for
+  // a bar with many words, below a wide one (72rem).
+  fold?: "narrow" | "wide";
 }) {
   // A `header`, or a `div` inside a layout that has one; either takes the same props.
   const Root = as as React.ElementType;
   const [open, setOpen] = React.useState(false);
   const many = links.length > 0;
   const floating = variant === "floating";
+  // Written out whole, so the classes are found when the styles are built.
+  const folded = fold === "wide" ? "@6xl/site-header:hidden" : "@2xl/site-header:hidden";
+  const unfolded = fold === "wide" ? "hidden @6xl/site-header:flex" : "hidden @2xl/site-header:flex";
 
   return (
     <MobileNavigation open={open} onOpenChange={setOpen}>
@@ -129,11 +136,12 @@ function SiteHeader({
         className={cn(
           "mx-auto flex h-14 w-full items-center gap-3 px-4 @3xl/site-header:px-6",
           floating &&
-cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
+// The bar holds the menus' panel, which has to blur the page too.
+cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           widths[width],
         )}
       >
-        {many && <MobileNavigationTrigger label={menuLabel} className="@2xl/site-header:hidden" />}
+        {many && <MobileNavigationTrigger label={menuLabel} className={folded} />}
 
         {start && (
           <div data-slot="site-header-start" className="flex min-w-0 items-center gap-3">
@@ -147,7 +155,15 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           <NavigationMenu
             data-slot="site-header-links"
             aria-label="Site"
-            className={cn("hidden @2xl/site-header:flex", floating ? "ml-10" : "ml-4")}
+            className={cn(unfolded, floating ? "ml-10" : "ml-4")}
+            // It opens as soon as the pointer rests on the word, rather than
+            // the fifth of a second that makes one click it instead.
+            delayDuration={50}
+            // Floating, the panel opens as far under the bar as the bar is
+            // from the top of the page (12px, and the 10px from these words
+            // to the bar's edge), in the bar's own glass: its ground, edge,
+            // light and shadow.
+            viewportClassName={floating ? cn(glass, "mt-5.5") : undefined}
           >
             {/* The words of a site stand a little apart from one another. */}
             <NavigationMenuList className="gap-5">
@@ -171,17 +187,20 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
                     >
                       {item.label}
                     </NavigationMenuTrigger>
-                    <NavigationMenuContent>
+                    {/* Room inside the panel: around it, between its columns
+                        and between its pages, so it reads as a menu of a site
+                        rather than an application's. */}
+                    <NavigationMenuContent className="p-4">
                       <div
-                        className="grid gap-x-2 gap-y-1"
+                        className="grid gap-x-6 gap-y-1"
                         style={{
-                          gridTemplateColumns: `repeat(${columnsOf(item).length}, minmax(15rem, 1fr))`,
+                          gridTemplateColumns: `repeat(${columnsOf(item).length}, minmax(17rem, 1fr))`,
                         }}
                       >
                         {columnsOf(item).map((column, c) => (
-                          <div key={c} className="grid content-start gap-0.5">
+                          <div key={c} className="grid content-start gap-1.5">
                             {column.label && (
-                              <p className="px-2.5 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
+                              <p className="px-3 pt-2 pb-2 text-xs font-medium text-muted-foreground">
                                 {column.label}
                               </p>
                             )}
@@ -195,6 +214,8 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
                                   title={(link.props as { children?: React.ReactNode }).children}
                                   description={description}
                                   icon={icon}
+                                  // Under the pointer, the icon turns orange in a white tile.
+                                  className="gap-4 p-3 [&>[aria-hidden]]:size-10 [&>[aria-hidden]]:transition-colors [&>[aria-hidden]_svg]:size-5 [&>span:last-child]:gap-1 hover:[&>[aria-hidden]]:bg-background hover:[&>[aria-hidden]]:text-primary focus-visible:[&>[aria-hidden]]:bg-background focus-visible:[&>[aria-hidden]]:text-primary"
                                 >
                                   {link}
                                 </NavigationMenuLink>
@@ -231,7 +252,7 @@ cn(glass, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           </div>
         )}
       </div>
-      {many && <MobileNavigationContent className={cn("@2xl/site-header:hidden", floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
+      {many && <MobileNavigationContent className={cn(folded, floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
             <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
               {links.map((item, i) =>
                 isGroup(item) ? (

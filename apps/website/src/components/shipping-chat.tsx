@@ -65,7 +65,7 @@ function Typing() {
 // time over most of the moment it is drafted in.
 // A message longer than the box scrolls along with the caret, as a real input
 // does, so the end being typed stays in view; an empty box shows its start.
-function Composer({ text, placeholder }: { text: string | null; placeholder: string }) {
+export function Composer({ text, placeholder }: { text: string | null; placeholder: string }) {
   const [shown, setShown] = useState(0);
   const line = useRef<HTMLSpanElement>(null);
   useEffect(() => {

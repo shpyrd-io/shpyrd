@@ -1,34 +1,28 @@
-import { Button } from "@shpyrd/ui/components/button";
-import { SectionIntro } from "@shpyrd/ui/components/section-intro";
-import { Stack } from "@shpyrd/ui/components/stack";
 import { AddToAgent } from "@/components/add-to-agent";
 import { SubpageStep } from "@/components/subpage-step";
+import { SimpleCta } from "@/components/simple-cta";
 
 // What the pages of the "Agents and workers" section share.
 
-// The end of the section's own page: connect your agent, or read how processes
-// are declared.
+// The end of the section's own page: the words on the CTA block's light
+// ("brilho na água", src/styles/aurora.css), centred on them; the one thing to
+// do in the middle, in orange; where to read on, as two plain links further
+// down, near the footer (48px from its line, as a subpage's ending is).
 export function AgentsNext({
   heading = "Put the next one somewhere it keeps running",
 }: {
   heading?: string;
 }) {
   return (
-    <Stack gap="normal" className="border-t pt-12">
-      <SectionIntro
-        heading={heading}
-        description="Connect your agent once, then tell it what to run. Or read how processes work."
-      />
-      <Stack direction="horizontal" gap="cozy" className="flex-wrap">
-        <AddToAgent />
-        <Button variant="outline" asChild>
-          <a href="/docs/deploying">Processes and deploys</a>
-        </Button>
-        <Button variant="ghost" asChild>
-          <a href="/docs/logs">Logs</a>
-        </Button>
-      </Stack>
-    </Stack>
+    <SimpleCta
+      heading={heading}
+      description="Connect your agent once, then tell it what to run. Or read how processes work."
+      action={<AddToAgent size="lg" />}
+      links={[
+        { label: "Processes and deploys", href: "/docs/deploying" },
+        { label: "Logs", href: "/docs/logs" },
+      ]}
+    />
   );
 }
 

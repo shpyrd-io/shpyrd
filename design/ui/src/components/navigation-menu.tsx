@@ -17,10 +17,13 @@ function NavigationMenu({
   className,
   children,
   viewport = true,
+  viewportClassName,
   ...props
 }: React.ComponentProps<typeof Primitive.Root> & {
   // The shared panel under the bar. Without it, each menu opens on its own.
   viewport?: boolean;
+  // The panel's own classes: how far under the bar it opens, for one.
+  viewportClassName?: string;
 }) {
   return (
     <Primitive.Root
@@ -30,7 +33,7 @@ function NavigationMenu({
       {...props}
     >
       {children}
-      {viewport && <NavigationMenuViewport />}
+      {viewport && <NavigationMenuViewport className={viewportClassName} />}
     </Primitive.Root>
   );
 }

@@ -114,23 +114,30 @@ function Shot({
         <p className="text-sm text-muted-foreground">{children}</p>
       </figcaption>
       {close && clip ? (
-        <div className="relative min-h-60 flex-1 overflow-hidden">
+        // The screenshots are of the console in its light theme; on the dark
+        // page they are turned to dark (the orange kept), as the shipyard is.
+        // Cut in a window of its own, as far from the card's foot as from its
+        // sides (18px: the card's 10px and 8px of its own), not at the card's
+        // edge.
+        <div className="relative mx-2 mb-[18px] min-h-60 flex-1 overflow-hidden rounded-[10px] border border-white/80 shadow-[0_6px_16px_rgb(25_25_40/0.07)] dark:border-white/10">
           {/* eslint-disable-next-line @next/next/no-img-element -- the site is a static export */}
           <img
             src={src}
             alt={alt}
             loading="lazy"
-            className="absolute inset-x-2 top-0 w-[calc(100%-1rem)] rounded-t-[10px] border-x border-t border-white/80 shadow-[0_20px_45px_rgb(25_25_40/0.12)] dark:border-white/10"
+            className="absolute inset-x-0 top-0 w-full dark:invert dark:hue-rotate-180"
           />
         </div>
       ) : close ? (
-        <div className="flex flex-1 items-center justify-center px-2 pb-2.5">
+        // As far from the card's foot as from its sides: 18px each (the
+        // card's 10px and 8px of its own).
+        <div className="flex flex-1 items-center justify-center px-2 pb-[18px]">
           {/* eslint-disable-next-line @next/next/no-img-element -- the site is a static export */}
           <img
             src={src}
             alt={alt}
             loading="lazy"
-            className="w-full max-w-[608px] rounded-[10px] border border-white/80 shadow-[0_20px_45px_rgb(25_25_40/0.12)] dark:border-white/10"
+            className="w-full max-w-[608px] rounded-[10px] border border-white/80 shadow-[0_6px_16px_rgb(25_25_40/0.07)] dark:border-white/10 dark:invert dark:hue-rotate-180"
           />
         </div>
       ) : (
@@ -140,7 +147,7 @@ function Shot({
           src={src}
           alt={alt}
           loading="lazy"
-          className="absolute top-0 left-6 w-[140%] max-w-none rounded-tl-[10px] border-t border-l border-white/80 shadow-[0_20px_45px_rgb(25_25_40/0.12)] dark:border-white/10"
+          className="absolute top-0 left-6 w-[140%] max-w-none rounded-tl-[10px] border-t border-l border-white/80 shadow-[0_6px_16px_rgb(25_25_40/0.07)] dark:border-white/10 dark:invert dark:hue-rotate-180"
         />
       </div>
       )}

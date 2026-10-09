@@ -77,6 +77,14 @@
   --ease-enter: cubic-bezier(0, 0, 0.2, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+  /* A row that goes by, sideways and for ever: it moves by one copy of
+     itself, which the next copy then takes the place of. */
+  --animate-marquee: marquee var(--marquee-duration, 40s) linear infinite;
+  @keyframes marquee {
+    to {
+      transform: translateX(-50%);
+    }
+  }
 }
 
 :root {

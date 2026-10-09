@@ -75,17 +75,17 @@ export const also = {
   heading: 'Not the one who built it?',
   items: [
     {
-      href: '/for/developers',
+      href: '/solutions/developers',
       title: 'Developers',
       body: 'A CLI, releases and rollback, on shpyrd cloud or on your own cluster.',
     },
     {
-      href: '/for/it',
+      href: '/solutions/internal-apps',
       title: 'IT teams',
       body: 'One accepted place for the apps your people build, behind your sign-in.',
     },
     {
-      href: '/for/fde-partners',
+      href: '/solutions/implementation-partners',
       title: 'FDE partners',
       body: 'The same setup behind every client delivery, and a clean handover.',
     },

@@ -13,7 +13,11 @@ describe("Shipyard", () => {
     const images = container.querySelectorAll("img");
     expect(images.length).toBeGreaterThan(20);
     for (const image of images) {
-      expect(Object.values(shipyardSprites).some((sprite) => sprite.src === image.getAttribute("src"))).toBe(true);
+      expect(
+        Object.values(shipyardSprites).some((sprite) =>
+          [sprite.src, (sprite as { dark?: string }).dark].includes(image.getAttribute("src") ?? ""),
+        ),
+      ).toBe(true);
       expect(image.style.transform).toMatch(/translate3d\(.+cqw, .+cqw, 0\)/);
     }
   });
