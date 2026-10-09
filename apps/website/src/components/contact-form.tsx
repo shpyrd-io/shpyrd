@@ -34,10 +34,21 @@ export function ContactForm({ kind }: { kind: Kind }) {
   const text = (name: string) => (typeof answers[name] === "string" ? (answers[name] as string) : "");
   const list = (name: string) => (Array.isArray(answers[name]) ? (answers[name] as string[]) : []);
 
+  // The first field that needs fixing takes the focus, so its error is
+  // what a screen reader says next.
+  function show(found: Record<string, string>) {
+    setErrors(found);
+    const first = form.fields.find((f) => found[f.name]);
+    if (!first) return;
+    const id = `contact-${first.name}`;
+    const target = first.type === "checkboxes" ? `${id}-${first.choices?.[0]?.value}` : id;
+    document.getElementById(target)?.focus();
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const found = check(kind, answers);
-    setErrors(found);
+    show(found);
     if (Object.keys(found).length > 0) return;
     setStatus("sending");
     try {
@@ -54,7 +65,7 @@ export function ContactForm({ kind }: { kind: Kind }) {
       if (res.status === 400) {
         const body = (await res.json().catch(() => ({}))) as { errors?: Record<string, string> };
         if (body.errors) {
-          setErrors(body.errors);
+          show(body.errors);
           setStatus("idle");
           return;
         }
@@ -80,7 +91,12 @@ export function ContactForm({ kind }: { kind: Kind }) {
         return (
           <Field key={f.name} id={id} label={f.label} required={f.required} error={errors[f.name]}>
             <Select name={f.name} value={text(f.name)} onValueChange={(v) => set(f.name, v)}>
-              <SelectTrigger id={id} aria-invalid={errors[f.name] ? true : undefined} className="w-full">
+              <SelectTrigger
+                id={id}
+                aria-invalid={errors[f.name] ? true : undefined}
+                aria-describedby={errors[f.name] ? `${id}-error` : undefined}
+                className="w-full"
+              >
                 <SelectValue placeholder="Choose…" />
               </SelectTrigger>
               <SelectContent>
@@ -95,7 +111,11 @@ export function ContactForm({ kind }: { kind: Kind }) {
         );
       case "checkboxes":
         return (
-          <fieldset key={f.name} className="grid gap-3 sm:col-span-2">
+          <fieldset
+            key={f.name}
+            aria-describedby={errors[f.name] ? `${id}-error` : undefined}
+            className="grid gap-3 sm:col-span-2"
+          >
             <legend className="mb-1 text-sm font-medium">{f.label}</legend>
             {f.choices?.map((c) => {
               const cid = `${id}-${c.value}`;
@@ -113,7 +133,11 @@ export function ContactForm({ kind }: { kind: Kind }) {
                 </div>
               );
             })}
-            {errors[f.name] && <p className="text-xs text-destructive">{errors[f.name]}</p>}
+            {errors[f.name] && (
+              <p id={`${id}-error`} className="text-xs text-destructive">
+                {errors[f.name]}
+              </p>
+            )}
           </fieldset>
         );
       case "textarea":

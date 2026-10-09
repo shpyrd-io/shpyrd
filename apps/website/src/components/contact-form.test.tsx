@@ -68,4 +68,36 @@ describe("ContactForm", () => {
     expect(screen.getByRole("checkbox", { name: "Single sign-on" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Contact enterprise sales" })).toBeTruthy();
   });
+
+  it("moves to the first field that needs fixing, so its error is heard", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<ContactForm kind="sales" />);
+    fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("First name", { exact: false }));
+  });
+
+  it("ties a select to its error", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<ContactForm kind="sales" />);
+    fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
+    const trigger = screen.getByRole("combobox");
+    const described = (trigger.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
+    expect(described).toContain("Fill this in.");
+  });
+
+  it("ties the checkboxes to the error the server gives them", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ errors: { needs: "Choose from the options." } }), { status: 400 })));
+    const { container } = render(<ContactForm kind="enterprise" />);
+    for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Work email", "ana@acme.com"], ["Company", "Acme"], ["Job title", "CTO"]]) {
+      // The exact label (with its required mark): "Company" is also in "Company size".
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${label}\\*?$`)), { target: { value } });
+    }
+    for (const [name, value] of [["size", "50-249"], ["runsOn", "cloud"], ["timeline", "quarter"]]) {
+      fireEvent.change(container.querySelector(`select[name=${name}]`)!, { target: { value } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Contact enterprise sales" }));
+    await waitFor(() => expect(screen.getByText("Choose from the options.")).toBeTruthy());
+    const group = screen.getByRole("group", { name: "What do you need?" });
+    expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Choose from the options.");
+  });
 });
