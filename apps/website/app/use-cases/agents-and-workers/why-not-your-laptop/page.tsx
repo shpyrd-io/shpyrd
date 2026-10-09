@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "Why not your laptop" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "Agents and workers · Why not your laptop", robots: { index: false }, alternates: { canonical: "/use-cases/agents-and-workers#why-not-your-laptop" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/ai-apps-and-agents" } };
 
 export default function Page() {
-  return <Redirect to="/use-cases/agents-and-workers#why-not-your-laptop" />;
+  return <Redirect to="/solutions/ai-apps-and-agents" />;
 }

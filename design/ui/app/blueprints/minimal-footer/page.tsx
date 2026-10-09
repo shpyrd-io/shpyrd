@@ -7,7 +7,7 @@ import { Section } from "../../section";
 
 const stay = (event: React.MouseEvent) => event.preventDefault();
 
-const links = ["For developers", "For IT teams", "How sharing works", "Docs", "Roadmap"].map((t) => (
+const links = ["For developers", "For IT teams", "Getting Started", "Docs", "Roadmap"].map((t) => (
   <a key={t} href="#" onClick={stay}>
     {t}
   </a>

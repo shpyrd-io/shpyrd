@@ -14,7 +14,7 @@ import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
 import { pageSections } from "@/lib/page";
 
-export const metadata = { title: "How sharing works", description: intro.lead };
+export const metadata = { title: "Getting Started", description: intro.lead };
 
 // The mark of each step on the route.
 const icons: Record<string, React.ReactElement> = {

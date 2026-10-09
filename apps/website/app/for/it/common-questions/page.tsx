@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "Common questions" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "For IT teams · Common questions", robots: { index: false }, alternates: { canonical: "/for/it#common-questions" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/internal-apps" } };
 
 export default function Page() {
-  return <Redirect to="/for/it#common-questions" />;
+  return <Redirect to="/solutions/internal-apps" />;
 }

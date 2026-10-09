@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "What's included" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "For developers · What's included", robots: { index: false }, alternates: { canonical: "/for/developers#whats-included" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/developers" } };
 
 export default function Page() {
-  return <Redirect to="/for/developers#whats-included" />;
+  return <Redirect to="/solutions/developers" />;
 }

@@ -24,7 +24,7 @@ export const contact = {
 }
 
 export const secondaryCta = {
-  label: 'See how sharing works',
+  label: 'Getting Started',
   href: '/how-sharing-works',
 }
 

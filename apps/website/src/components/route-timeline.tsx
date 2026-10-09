@@ -6,7 +6,7 @@ import { cn } from "@shpyrd/ui/lib/cn";
 type Step = { id: string; title: string; body: string };
 
 // How long the line takes to cross, slow enough to read the steps in order.
-const DRAW = 4000;
+const DRAW = 2800;
 
 // The road from a laptop to a team, laid out across the page: a large icon
 // for each step on one line, its name and a line about it under it, in the
@@ -51,7 +51,7 @@ export function RouteTimeline({
       {/* The line behind the icons, drawn from the first to the last. */}
       <span
         aria-hidden="true"
-        className="absolute top-8 right-[12.5%] left-[12.5%] hidden h-px origin-left scale-x-0 bg-linear-to-r from-border via-primary/60 to-border transition-transform duration-[4000ms] ease-linear group-data-shown/route:scale-x-100 md:block"
+        className="absolute top-8 right-[12.5%] left-[12.5%] hidden h-px origin-left scale-x-0 bg-linear-to-r from-border via-primary/60 to-border transition-transform duration-[2800ms] ease-linear group-data-shown/route:scale-x-100 md:block"
       />
       {steps.map((step, i) => (
         <li
@@ -59,7 +59,7 @@ export function RouteTimeline({
           // Each step arrives as the line reaches its icon: the line crosses
           // from the first icon to the last in DRAW ms, at an even pace.
           style={{ transitionDelay: `${Math.round((i / Math.max(steps.length - 1, 1)) * DRAW)}ms` }}
-          className="relative grid justify-items-center gap-4 text-center opacity-0 transition-[opacity,translate] duration-1000 ease-out -translate-x-6 group-data-shown/route:translate-x-0 group-data-shown/route:opacity-100"
+          className="relative grid justify-items-center gap-4 text-center opacity-0 transition-[opacity,translate] duration-700 ease-out -translate-x-6 group-data-shown/route:translate-x-0 group-data-shown/route:opacity-100"
         >
           <span
             className={cn(

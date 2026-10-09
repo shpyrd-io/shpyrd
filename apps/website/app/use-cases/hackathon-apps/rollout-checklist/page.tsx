@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "Rollout checklist" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "Apps from a hackathon · Rollout checklist", robots: { index: false }, alternates: { canonical: "/use-cases/hackathon-apps#rollout-checklist" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/apps-built-with-ai" } };
 
 export default function Page() {
-  return <Redirect to="/use-cases/hackathon-apps#rollout-checklist" />;
+  return <Redirect to="/solutions/apps-built-with-ai" />;
 }

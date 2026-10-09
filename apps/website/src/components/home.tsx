@@ -27,9 +27,9 @@ import { Closing } from "@/components/proposals";
 
 // The icon of each solution, as in the header's menu.
 const alsoIcons: Record<string, React.ReactElement> = {
-  "/for/developers": <SquareTerminal />,
-  "/for/it": <UsersRound />,
-  "/for/fde-partners": <Handshake />,
+  "/solutions/developers": <SquareTerminal />,
+  "/solutions/internal-apps": <UsersRound />,
+  "/solutions/implementation-partners": <Handshake />,
 };
 
 // The icons of the page, by the id of what they stand beside.

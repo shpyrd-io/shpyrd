@@ -1,8 +1,9 @@
-// Whether the site shows its sections beyond the home, pricing and the docs:
-// the solutions, the use cases, How sharing works and the proposals. Their
-// routes are app/for, app/use-cases, app/how-sharing-works and app/proposals;
-// to hide them again, put a leading underscore on those folders, which keeps
-// them out of the build, and set this to false.
+// Whether the site shows Getting Started (app/how-sharing-works) and the
+// proposals (app/proposals) beyond the home, pricing, the docs and the
+// Features and Solutions pages; to hide them again, put a leading underscore
+// on those folders, which keeps them out of the build, and set this to false.
+// (The old solutions and use cases, app/for and app/use-cases, are now only
+// redirects to the Solutions pages.)
 export const sectionsLive = true;
 
 // Whether the header shows "Sign in". It waits for the cloud's sign-in: each

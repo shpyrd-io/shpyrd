@@ -128,6 +128,8 @@ export function BinaryMark({
       canvas.height = Math.round(h * dpr);
       cols = Math.ceil(w / CELL);
       rows = Math.ceil(h / CELL);
+      // Not laid out yet (a hidden or zero-width page): nothing to draw.
+      if (!cols || !rows) return;
 
       // Where the mark stands: from the hero's top over most of the box, in
       // the middle of the page's width; drawn once on a grid of cells, a cell

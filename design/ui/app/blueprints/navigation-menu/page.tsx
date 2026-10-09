@@ -57,7 +57,7 @@ export default function Page() {
                 <NavigationMenuContent>
                   <div className="grid w-72 gap-0.5">
                     <NavigationMenuLink href="#" onClick={stay} title="Docs" description="Every command and every setting." />
-                    <NavigationMenuLink href="#" onClick={stay} title="How sharing works" description="Telling your agent who it's for." />
+                    <NavigationMenuLink href="#" onClick={stay} title="Getting Started" description="Telling your agent who it's for." />
                   </div>
                 </NavigationMenuContent>
               </NavigationMenuItem>

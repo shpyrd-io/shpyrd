@@ -5,7 +5,7 @@
 // the spec's dependency note.
 
 export const intro = {
-  title: 'How sharing works',
+  title: 'Getting Started',
   lead:
     'Four steps, in the order they happen. An app is published, a colleague ' +
     'opens it and does real work, someone outside the team is turned away, and ' +

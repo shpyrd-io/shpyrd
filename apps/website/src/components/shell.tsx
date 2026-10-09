@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArchiveRestore, Bot, Boxes, Briefcase, Cloud, Cloudy, Compass, Database, Download, FileCode, GitPullRequest, Globe, Handshake, Heart, LayoutDashboard, Lightbulb, LockKeyhole, Map as MapIcon, Menu, Moon, Network, Puzzle, Rocket, Ruler, ScrollText, ShieldCheck, SquareTerminal, Sun, SunMoon, Trophy, UploadCloud, UsersRound, Wrench } from "lucide-react";
+import { ArchiveRestore, Bot, Boxes, Cloud, Cloudy, Compass, Database, Download, FileCode, GitPullRequest, Globe, Heart, LayoutDashboard, Lightbulb, LockKeyhole, Map as MapIcon, Menu, Moon, Network, Puzzle, Rocket, Ruler, ScrollText, ShieldCheck, SquareTerminal, Sun, SunMoon, UploadCloud } from "lucide-react";
 import { AnchoredOverlay } from "@shpyrd/ui/components/anchored-overlay";
 import { Breadcrumbs, BreadcrumbsItem } from "@shpyrd/ui/components/breadcrumbs";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
@@ -24,7 +24,10 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { find, navigation } from "@shpyrd/content/navigation";
 import * as site from "@shpyrd/content/site/offer";
+import { features } from "@shpyrd/content/site/features";
+import { solutionGroups } from "@shpyrd/content/site/solutions";
 import { AddToAgent } from "@/components/add-to-agent";
+import { icons } from "@/components/landing-icons";
 import { sectionsLive, signInLive } from "@/lib/sections";
 import { DiscordMark, GitHubMark } from "@/components/marks";
 
@@ -72,30 +75,9 @@ const docIcons: Record<string, React.ReactElement> = {
 
 const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
 
-// What is around every page: the pages of the site at the side, where the
-// page is over it, and the foot. All of it is made of design/ui; a page
-// brings its content and, when it has one, the pane beside it.
-// The marketing pages are not documents: they get the wordmark and a few
-// links, not the whole documentation tree down the side.
-// The homepage is for people who build with AI; the solutions are for the
-// other people who choose shpyrd, each on a page of its own.
-const solutions = [
-  { title: "For developers", href: "/for/developers", icon: <SquareTerminal />, description: "Push code, get a URL, on shpyrd cloud." },
-  { title: "For IT teams", href: "/for/it", icon: <UsersRound />, description: "One accepted place for the apps people build." },
-  { title: "For FDE partners", href: "/for/fde-partners", icon: <Handshake />, description: "The same setup behind every client delivery." },
-];
-
-// What people put in it, one page each: the other way into the same product.
-const useCases = [
-  { title: "Internal tools", href: "/use-cases/internal-tools", icon: <Wrench />, description: "Trackers, dashboards and approvals, in your team's day." },
-  { title: "Apps from a hackathon", href: "/use-cases/hackathon-apps", icon: <Trophy />, description: "Keep the few people want, from Monday on." },
-  { title: "Agents and workers", href: "/use-cases/agents-and-workers", icon: <Bot />, description: "What runs without a web page, off your laptop." },
-  { title: "Client apps", href: "/use-cases/client-apps", icon: <Briefcase />, description: "Built by you, opened with their own sign-in." },
-];
-
-// How sharing works is one of the sections not shown yet (src/lib/sections.ts).
+// Getting Started (/how-sharing-works) is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
-  ...(sectionsLive ? [{ title: "How sharing works", href: "/how-sharing-works" }] : []),
+  ...(sectionsLive ? [{ title: "Getting Started", href: "/how-sharing-works" }] : []),
   { title: "Pricing", href: "/pricing" },
   { title: "Docs", href: "/docs/getting-started" },
 ];
@@ -119,47 +101,41 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {l.title}
     </Link>
   );
-  // The Solutions menu waits with the sections (src/lib/sections.ts).
-  const solutionsMenu = {
-      label: "Solutions",
-      columns: [
-        {
-          label: "For",
-          // The column is headed "For", so its items do not say it again.
-          links: solutions.map((l) => ({
-            link: link({ ...l, title: l.title.replace(/^For /, "") }),
-            description: l.description,
-            icon: l.icon,
-          })),
-        },
-        {
-          label: "What you're shipping",
-          links: useCases.map((l) => ({ link: link(l), description: l.description, icon: l.icon })),
-        },
-      ],
-    };
-  const links = [...(sectionsLive ? [solutionsMenu] : []), ...marketing.map(link)];
+  // The two menus of the copy brief (arquivos de copy, 2026-10-09): what
+  // shpyrd does, six features; and who and what it is for, in three groups.
+  const entry = (base: string) => (p: { slug: string; name: string; card: string; icon: keyof typeof icons }) => ({
+    link: link({ title: p.name, href: `${base}/${p.slug}` }),
+    description: p.card,
+    icon: icons[p.icon],
+  });
+  const featuresMenu = {
+    label: "Features",
+    columns: [{ label: "Features", links: features.map(entry("/features")) }],
+  };
+  const newSolutionsMenu = {
+    label: "Solutions",
+    columns: solutionGroups.map((g) => ({ label: g.name, links: g.items.map(entry("/solutions")) })),
+  };
+  const links = [featuresMenu, newSolutionsMenu, ...marketing.map(link)];
 
   const siteNav = (
     <NavList aria-label="Site">
-      {sectionsLive && (
-      <NavListGroup title="Solutions">
-        {solutions.map((link) => (
-          <NavListItem key={link.href} asChild>
-            <Link href={link.href}>{link.title}</Link>
+      <NavListGroup title="Features">
+        {features.map((f) => (
+          <NavListItem key={f.slug} asChild>
+            <Link href={`/features/${f.slug}`}>{f.name}</Link>
           </NavListItem>
         ))}
       </NavListGroup>
-      )}
-      {sectionsLive && (
-      <NavListGroup title="What you're shipping">
-        {useCases.map((link) => (
-          <NavListItem key={link.href} asChild>
-            <Link href={link.href}>{link.title}</Link>
-          </NavListItem>
-        ))}
-      </NavListGroup>
-      )}
+      {solutionGroups.map((g) => (
+        <NavListGroup key={g.name} title={`Solutions · ${g.name}`}>
+          {g.items.map((p) => (
+            <NavListItem key={p.slug} asChild>
+              <Link href={`/solutions/${p.slug}`}>{p.name}</Link>
+            </NavListItem>
+          ))}
+        </NavListGroup>
+      ))}
       <NavListGroup title="shpyrd">
         {marketing.map((link) => (
           <NavListItem key={link.href} asChild>
@@ -229,6 +205,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           // A document has its own floating panel at the side; its bar is
           // left loose over the page, with only a faint line under it.
           variant={isDocument ? "bar" : "floating"}
+          // Six words in the bar now (Features, Solutions, ...): they fold
+          // into the menu below a wide bar.
+          fold="wide"
           // The line runs as far as what is in the bar: from the breadcrumbs to
           // the end of the last button, not from edge to edge. The bar is held
           // down so its words sit on the same line as the logo in the side panel.
@@ -344,12 +323,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
             tagline="You built it. We ship it: online, behind a sign-in, for the people who need it."
             action={<AddToAgent manual={false} />}
             columns={[
-              ...(sectionsLive
-                ? [
-                    { title: "Solutions", links: solutions.map((l) => <Link key={l.href} href={l.href}>{l.title.replace(/^For (\w)/, (_, c: string) => c.toUpperCase())}</Link>) },
-                    { title: "Use cases", links: useCases.map((l) => <Link key={l.href} href={l.href}>{l.title}</Link>) },
-                  ]
-                : []),
+              // The two menus of the header, without Solutions-backup (it goes
+              // after Giovani's design review): the features, and the
+              // solutions in their three groups.
+              { title: "Features", links: features.map((f) => <Link key={f.slug} href={`/features/${f.slug}`}>{f.name}</Link>) },
+              ...solutionGroups.map((g) => ({
+                title: g.name === "Who" ? "Solutions" : g.name,
+                links: g.items.map((p) => <Link key={p.slug} href={`/solutions/${p.slug}`}>{p.name}</Link>),
+              })),
               {
                 title: "Product",
                 links: [
@@ -392,7 +373,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
               !isDocument && "[&>div:first-child]:max-w-[calc(80rem-3rem)]",
             )}
             width={isDocument ? "full" : "xlarge"}
-            links={[...(sectionsLive ? solutions : []), ...marketing].map((l) => (
+            // Who it is for (Solutions), then the site's own pages; not
+            // Solutions-backup, which goes after the design review.
+            links={[
+              ...solutionGroups[0].items.map((p) => ({ title: p.name, href: `/solutions/${p.slug}` })),
+              ...marketing,
+            ].map((l) => (
               <Link key={l.href} href={l.href}>
                 {l.title}
               </Link>

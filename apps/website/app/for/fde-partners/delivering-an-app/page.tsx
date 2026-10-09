@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "Delivering an app" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "For FDE partners · Delivering an app", robots: { index: false }, alternates: { canonical: "/for/fde-partners#delivering-an-app" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/implementation-partners" } };
 
 export default function Page() {
-  return <Redirect to="/for/fde-partners#delivering-an-app" />;
+  return <Redirect to="/solutions/implementation-partners" />;
 }

@@ -1,9 +1,9 @@
-import { Redirect } from "@/components/continuous-section";
+import { Redirect } from "@/components/redirect";
 
-// "Who does what" is now a part of the section's one page: this address takes
-// whoever has it to that part.
-export const metadata = { title: "Internal tools · Who does what", robots: { index: false }, alternates: { canonical: "/use-cases/internal-tools#who-does-what" } };
+// The Solutions-backup pages were removed (Giovani, 2026-10-09); their
+// addresses take whoever has them to the new solution page.
+export const metadata = { title: "Moved", robots: { index: false }, alternates: { canonical: "/solutions/internal-apps" } };
 
 export default function Page() {
-  return <Redirect to="/use-cases/internal-tools#who-does-what" />;
+  return <Redirect to="/solutions/internal-apps" />;
 }

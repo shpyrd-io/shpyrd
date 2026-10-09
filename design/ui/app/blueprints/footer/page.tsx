@@ -16,7 +16,7 @@ const a = (t: string) => (
 const columns = [
   { title: "Solutions", links: ["For developers", "For IT teams", "For FDE partners"].map(a) },
   { title: "Use cases", links: ["Internal tools", "Apps from a hackathon", "Agents and workers", "Client apps"].map(a) },
-  { title: "Product", links: ["How sharing works", "Pricing", "Docs", "Roadmap"].map(a) },
+  { title: "Product", links: ["Getting Started", "Pricing", "Docs", "Roadmap"].map(a) },
 ];
 
 // The gallery has no brand marks of other companies; plain glyphs stand in.

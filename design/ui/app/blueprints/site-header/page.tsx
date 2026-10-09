@@ -9,7 +9,7 @@ import { Section } from "../../section";
 const stay = (event: React.MouseEvent) => event.preventDefault();
 
 const links = [
-  <a key="sharing" href="#" onClick={stay} aria-current="page">How sharing works</a>,
+  <a key="sharing" href="#" onClick={stay} aria-current="page">Getting Started</a>,
   <a key="bring" href="#" onClick={stay}>Bring an app</a>,
   <a key="docs" href="#" onClick={stay}>Docs</a>,
 ];

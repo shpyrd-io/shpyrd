@@ -85,6 +85,7 @@ function SiteHeader({
   actions,
   menuLabel = "Menu",
   variant = "bar",
+  fold = "narrow",
   ...props
 }: React.ComponentProps<"header"> & {
   as?: "header" | "div";
@@ -105,12 +106,18 @@ function SiteHeader({
   // `bar` goes from edge to edge with a line under it; `floating` is a panel
   // of frosted glass held off the edges, the page passing under it.
   variant?: "bar" | "floating";
+  // When the links fold into the menu: below a narrow bar (42rem), or, for
+  // a bar with many words, below a wide one (72rem).
+  fold?: "narrow" | "wide";
 }) {
   // A `header`, or a `div` inside a layout that has one; either takes the same props.
   const Root = as as React.ElementType;
   const [open, setOpen] = React.useState(false);
   const many = links.length > 0;
   const floating = variant === "floating";
+  // Written out whole, so the classes are found when the styles are built.
+  const folded = fold === "wide" ? "@6xl/site-header:hidden" : "@2xl/site-header:hidden";
+  const unfolded = fold === "wide" ? "hidden @6xl/site-header:flex" : "hidden @2xl/site-header:flex";
 
   return (
     <MobileNavigation open={open} onOpenChange={setOpen}>
@@ -134,7 +141,7 @@ cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           widths[width],
         )}
       >
-        {many && <MobileNavigationTrigger label={menuLabel} className="@2xl/site-header:hidden" />}
+        {many && <MobileNavigationTrigger label={menuLabel} className={folded} />}
 
         {start && (
           <div data-slot="site-header-start" className="flex min-w-0 items-center gap-3">
@@ -148,7 +155,7 @@ cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           <NavigationMenu
             data-slot="site-header-links"
             aria-label="Site"
-            className={cn("hidden @2xl/site-header:flex", floating ? "ml-10" : "ml-4")}
+            className={cn(unfolded, floating ? "ml-10" : "ml-4")}
             // It opens as soon as the pointer rests on the word, rather than
             // the fifth of a second that makes one click it instead.
             delayDuration={50}
@@ -245,7 +252,7 @@ cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
           </div>
         )}
       </div>
-      {many && <MobileNavigationContent className={cn("@2xl/site-header:hidden", floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
+      {many && <MobileNavigationContent className={cn(folded, floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
             <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
               {links.map((item, i) =>
                 isGroup(item) ? (
