@@ -75,9 +75,9 @@ const docIcons: Record<string, React.ReactElement> = {
 
 const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
 
-// Getting Started (/how-sharing-works) is one of the sections not shown yet (src/lib/sections.ts).
+// Getting Started (/getting-started) is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
-  ...(sectionsLive ? [{ title: "Getting Started", href: "/how-sharing-works" }] : []),
+  ...(sectionsLive ? [{ title: "Getting Started", href: "/getting-started" }] : []),
   { title: "Pricing", href: "/pricing" },
   { title: "Docs", href: "/docs/getting-started" },
 ];

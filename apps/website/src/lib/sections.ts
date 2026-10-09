@@ -1,4 +1,4 @@
-// Whether the site shows Getting Started (app/how-sharing-works) and the
+// Whether the site shows Getting Started (app/getting-started) and the
 // proposals (app/proposals) beyond the home, pricing, the docs and the
 // Features and Solutions pages; to hide them again, put a leading underscore
 // on those folders, which keeps them out of the build, and set this to false.

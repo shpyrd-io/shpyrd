@@ -1,7 +1,7 @@
 // What shpyrd does not do.
 //
 // One source, rendered on the homepage and again, in fuller form, alongside the
-// matching step of /how-sharing-works. The rule that goes with this file: a
+// matching step of /getting-started. The rule that goes with this file: a
 // capability claim on a marketing page maps to shipped code, not to an RFC
 // title.
 
