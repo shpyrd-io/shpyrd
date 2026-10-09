@@ -57,6 +57,13 @@ locals {
   node_image_id = length(local.node_images) > 0 ? local.node_images[0] : null
 }
 
+# Every node pool boots with node-cloud-init.sh: grow the root filesystem to
+# the boot volume, then OKE's bootstrap (#45). A change to it applies to
+# nodes created afterwards; existing nodes keep their first boot.
+locals {
+  node_user_data = base64encode(file("${path.module}/node-cloud-init.sh"))
+}
+
 resource "oci_containerengine_node_pool" "workers" {
   cluster_id         = oci_containerengine_cluster.this.id
   compartment_id     = local.compartment_id
@@ -64,6 +71,7 @@ resource "oci_containerengine_node_pool" "workers" {
   kubernetes_version = var.kubernetes_version
   node_shape         = var.node_shape
   ssh_public_key     = local.ssh_public_key
+  node_metadata      = { user_data = local.node_user_data }
 
   node_shape_config {
     ocpus         = var.node_ocpus
@@ -124,6 +132,7 @@ resource "oci_containerengine_node_pool" "apps" {
   kubernetes_version = var.kubernetes_version
   node_shape         = var.node_shape
   ssh_public_key     = local.ssh_public_key
+  node_metadata      = { user_data = local.node_user_data }
 
   node_shape_config {
     ocpus         = var.apps_node_ocpus
@@ -183,6 +192,7 @@ resource "oci_containerengine_node_pool" "data" {
   kubernetes_version = var.kubernetes_version
   node_shape         = var.node_shape
   ssh_public_key     = local.ssh_public_key
+  node_metadata      = { user_data = local.node_user_data }
 
   node_shape_config {
     ocpus         = var.data_node_ocpus
