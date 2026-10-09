@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ContactForm } from "./contact-form";
+import { trap } from "@/lib/contact";
 
 afterEach(() => {
   cleanup();
@@ -47,7 +48,7 @@ describe("ContactForm", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/contact");
     const body = JSON.parse(String(init.body));
-    expect(body).toMatchObject({ kind: "sales", website: "", answers: { firstName: "Ana", interest: "cloud" } });
+    expect(body).toMatchObject({ kind: "sales", [trap]: "", answers: { firstName: "Ana", interest: "cloud" } });
     expect(body.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(body).not.toHaveProperty("startedAt");
   });

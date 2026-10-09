@@ -8,7 +8,7 @@ import { mailer } from "@/lib/mailer";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  let body: { kind?: unknown; answers?: unknown; website?: unknown; elapsedMs?: unknown };
+  let body: Record<string, unknown> & { kind?: unknown; answers?: unknown };
   try {
     body = await request.json();
   } catch {

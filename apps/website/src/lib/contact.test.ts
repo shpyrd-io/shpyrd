@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { check, isBot, isKind, minimumMs } from "./contact";
+import { check, isBot, isKind, minimumMs, trap } from "./contact";
 
 const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme" };
 const salesAnswers = { ...person, interest: "cloud" };
@@ -46,19 +46,25 @@ describe("check", () => {
 
 describe("isBot", () => {
   it("lets a person through", () => {
-    expect(isBot({ website: "", elapsedMs: minimumMs + 1 })).toBe(false);
+    expect(isBot({ [trap]: "", elapsedMs: minimumMs + 1 })).toBe(false);
   });
   it("catches the hidden field filled", () => {
-    expect(isBot({ website: "https://spam.example", elapsedMs: 60_000 })).toBe(true);
+    expect(isBot({ [trap]: "https://spam.example", elapsedMs: 60_000 })).toBe(true);
   });
   it("catches a form sent faster than a person can", () => {
-    expect(isBot({ website: "", elapsedMs: 500 })).toBe(true);
+    expect(isBot({ [trap]: "", elapsedMs: 500 })).toBe(true);
   });
   it("catches a form that says nothing of how long it took", () => {
-    expect(isBot({ website: "" })).toBe(true);
+    expect(isBot({ [trap]: "" })).toBe(true);
   });
   it("goes by how long the person took, whatever their clock says", () => {
-    expect(isBot({ website: "", elapsedMs: 45_000, startedAt: Date.now() + 600_000 } as never)).toBe(false);
+    expect(isBot({ [trap]: "", elapsedMs: 45_000, startedAt: Date.now() + 600_000 } as never)).toBe(false);
+  });
+});
+
+describe("the hidden field", () => {
+  it("has a name no browser or password manager fills in by itself", () => {
+    expect(trap).not.toMatch(/web|url|site|mail|name|phone|tel|company|org|address|city|zip|code/i);
   });
 });
 

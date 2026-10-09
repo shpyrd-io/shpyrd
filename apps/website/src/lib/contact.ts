@@ -43,11 +43,13 @@ export function check(kind: Kind, answers: Answers): Record<string, string> {
 // a person takes to fill the form in. The page measures that time itself
 // (`elapsedMs`): a clock of the person's that is ahead or behind the
 // server's cannot make them a bot.
-export const trap = "website";
+// Named so no browser or password manager fills it in for a person.
+export const trap = "hp_check";
 export const minimumMs = 3000;
 
-export function isBot(submission: { website?: unknown; elapsedMs?: unknown }): boolean {
-  if (typeof submission.website === "string" && submission.website !== "") return true;
+export function isBot(submission: Record<string, unknown>): boolean {
+  const hidden = submission[trap];
+  if (typeof hidden === "string" && hidden !== "") return true;
   if (typeof submission.elapsedMs !== "number" || !Number.isFinite(submission.elapsedMs)) return true;
   return submission.elapsedMs < minimumMs;
 }
