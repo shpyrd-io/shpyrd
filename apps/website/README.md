@@ -33,7 +33,6 @@ src/components/markdoc.tsx   which component of design/ui draws each tag
 src/lib/content.ts           reads content/docs and returns front matter, tree and headings
 public/install.sh            served at shpyrd.io/install.sh, the documented install path
 public/screenshots/          screenshots used by the docs and the root README
-vercel.json                  the redirects (/discord, /docs, /how-sharing-works), which Vercel answers first
 ```
 
 The texts are not here. Documentation is `content/docs/*.md` and the marketing
@@ -54,20 +53,35 @@ exact shape.
 ## Measuring
 
 The site carries Google Tag Manager when the build is given a container:
-`NEXT_PUBLIC_GTM_ID=GTM-XXXXXXX` where the site is built (Vercel's
-environment variables). Without it nothing is loaded. The container's tags
+`NEXT_PUBLIC_GTM_ID`, a build argument in `shpyrd.yaml` (`GTM-NRQD4CPW`;
+public, as it is in every page's source). Without it nothing is loaded. The container's tags
 decide what is measured; the page pushes `shpyrd_app: "website"` before the
 container loads, so the tags know which part of the funnel they are on (the
 sign-up says `signup`, the dashboards `console` or `workspace`). Every
 "Get started" goes to the sign-up (`src/lib/signup.ts`), which the container
 reads as a link click.
 
+## On shpyrd
+
+The site is the project `website` of the platform workspace
+(`shpyrd.yaml`). It is built from the repository's root with `Dockerfile`
+(and its own `Dockerfile.dockerignore`), since it needs the workspace's
+`design/ui` and `content`, into Next's standalone server. The `website`
+workflow deploys it after its checks pass on `main`; by hand, from the
+root: `cp apps/website/shpyrd.yaml . && shpyrd deploy`.
+
+The redirects (`src/lib/redirects.ts`) are Next's own: `/discord`, `/docs`,
+`/how-sharing-works`, the bare `shpyrd.io` to `www.shpyrd.io`, and
+`/pricing` to `/pricing/br` for a browser that prefers Brazilian Portuguese
+(or where a country header says Brazil).
+
 ## The contact forms
 
 `/contact/sales` and `/contact/enterprise` post to `app/api/contact`, the
 one route that runs on request. It checks the answers by the forms' rules
 (`src/lib/contact.ts`, from `content/site/contact.ts`) and mails them to the
-team through Mailgun's SMTP. Its settings, in Vercel, for Production only:
+team through Mailgun's SMTP. Its settings are the `website` project's config
+vars on shpyrd (`shpyrd secrets set --project website …`):
 
 | Variable | Example |
 |---|---|
@@ -78,7 +92,7 @@ team through Mailgun's SMTP. Its settings, in Vercel, for Production only:
 | `CONTACT_FROM` | `shpyrd website <website@mg.shpyrd.io>` |
 | `CONTACT_TO` | `sales@shpyrd.io` |
 
-Without them (a preview, the development server) the route answers `503`
+Without them (the development server, a cluster that lacks them) the route answers `503`
 and the page offers Discord: nothing is mailed.
 
 ## License

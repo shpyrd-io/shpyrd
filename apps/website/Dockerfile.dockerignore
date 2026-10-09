@@ -1,0 +1,10 @@
+# The website's own build context (BuildKit reads it before the root
+# .dockerignore, which leaves the website out of the server's image):
+# everything but installed packages, built files and binaries.
+**/node_modules
+**/.next
+**/out
+**/*.tsbuildinfo
+bin
+tmp
+.git

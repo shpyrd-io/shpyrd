@@ -1,0 +1,21 @@
+# The website, shpyrd.io: the project `website` of the platform workspace.
+# Built from the repository's root with apps/website/Dockerfile, since the
+# site needs the workspace's design/ui and content. CI deploys it from the
+# root (.github/workflows/website.yml) and copies this file there first:
+# `shpyrd deploy` reads shpyrd.yaml from the directory it runs in.
+#
+# The contact forms' settings (SMTP_*, CONTACT_*; apps/website/README.md)
+# are the project's config vars, set on shpyrd, never here.
+project: website
+build:
+  strategy: dockerfile
+  dockerfile: apps/website/Dockerfile
+  target: runtime
+  env:
+    # Public: Google Tag Manager's container is in every page's source.
+    NEXT_PUBLIC_GTM_ID: GTM-NRQD4CPW
+processes:
+  web:
+    size: shared-m
+    healthCheck:
+      path: /
