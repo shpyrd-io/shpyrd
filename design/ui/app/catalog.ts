@@ -47,6 +47,7 @@ export const catalog: Category[] = [
       { slug: "file-drop", title: "File drop", description: "A file dropped or chosen; what is there, shown, changed or removed." },
       { slug: "icon-picker", title: "Icon picker", description: "The icon of a card, chosen: a symbol and its colour, or an image of its own." },
       { slug: "switch", title: "Switch", description: "A setting that is on or off, and takes effect at once." },
+      { slug: "checkbox", title: "Checkbox", description: "One of several choices in a form that is sent later." },
       { slug: "card", title: "Card", description: "A box for what belongs together." },
       { slug: "pricing-options", title: "Pricing options", description: "The plans of an offer side by side: the price, what comes with it, what to do." },
       { slug: "avatar-stack", title: "Avatar stack", description: "Who is in it: pictures over each other, spread under the pointer." },
