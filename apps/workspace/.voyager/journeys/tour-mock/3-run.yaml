@@ -1,0 +1,122 @@
+id: mock-run
+
+title: "Mock tour 3: running a project"
+
+area: projects
+
+tags: [tour, mock]
+
+scenario: mock
+
+goal: >
+  What runs and how it is doing: releases, builds and their output, backups,
+  metrics, logs, and a shell in a running instance.
+
+steps:
+  - action: goto
+    path: /projects/hello-world/releases
+
+  - action: wait
+    text: Succeeded
+    narration: Every change is a release, and every build keeps what it printed.
+
+  - action: capture
+    name: releases
+    description: Releases and the builds that made them.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Output on the row of the build #48, until its output shows
+
+  - action: wait
+    text: Hide
+
+  - action: capture
+    name: build-output
+    description: A build's output.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/backups
+
+  - action: wait
+    text: Project backup and restore
+    narration: A whole project backs up to one archive.
+
+  - action: capture
+    name: backups
+    description: Backing up and restoring the whole project.
+    use: { docs: true }
+
+  # The button is disabled until the backup status has loaded.
+  - action: wait
+    selector: "button:has-text('Download project backup'):not([disabled])"
+
+  - action: do
+    instruction: Click Download project backup, until a dialog asks whether to back up Hello World
+
+  - action: wait
+    text: Simulate backup
+
+  - action: capture
+    name: backup-dialog
+    description: The Mock's preview of backing up a project.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/metrics
+
+  - action: wait
+    text: Response time
+    narration: "Metrics come with every app: response time, traffic, CPU and memory."
+
+  - action: capture
+    name: metrics
+    description: Response time, traffic, CPU and memory.
+    use: { docs: true, marketing: true }
+
+  - action: goto
+    path: /projects/hello-world/logs
+
+  - action: wait
+    text: Every process
+    narration: So do its logs, from every instance.
+
+  - action: capture
+    name: logs
+    description: The logs of every process.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/shell
+
+  - action: wait
+    text: Connect
+
+  - action: capture
+    name: shell
+    description: Opening a shell in a running instance.
+    use: { docs: true }
+
+  # Connect is disabled until the instances have loaded.
+  - action: wait
+    selector: "button:has-text('Connect'):not([disabled])"
+
+  - action: do
+    instruction: Click the Connect button beside the instance chooser, to open a shell in the instance
+
+  - action: wait
+    text: Disconnect
+    narration: And a shell inside it, from the browser.
+
+  - action: capture
+    name: shell-connected
+    description: A shell inside a running instance.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

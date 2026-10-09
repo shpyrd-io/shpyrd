@@ -1,0 +1,32 @@
+# Maps product areas to code (paths from apps/workspace). `voyager update`
+# uses this to find the journeys a change is likely to affect.
+areas:
+  launcher:
+    description: >
+      The workspace's home: the applications a person can open, creating a
+      project, and accepting an invitation.
+    code:
+      - src/App.tsx
+      - src/screens/launcher.tsx
+      - src/screens/invite.tsx
+      - src/shell/**
+      - mock/projects.json
+
+  projects:
+    description: >
+      One project: overview, releases, backups, metrics, logs, shell,
+      config, resources, domains, drains, access, roles, connections and
+      activity.
+    code:
+      - src/screens/project/**
+      - src/lib/**
+      - mock/things.json
+
+  workspace:
+    description: >
+      The workspace's settings: general, people, teams, sign-in, API tokens,
+      connections, MCP, config vars, log drains and domains.
+    code:
+      - src/screens/workspace/**
+      - mock/workspace.json
+      - mock/things.json
