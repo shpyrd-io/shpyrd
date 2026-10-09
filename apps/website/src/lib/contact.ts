@@ -12,14 +12,16 @@ export const formOf = (kind: Kind): ContactPage => (kind === "sales" ? sales : e
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const limit = (f: ContactField) => (f.type === "textarea" ? 500 : 100);
 
-function fault(f: ContactField, value: string | string[] | undefined): string | undefined {
+// A submission comes from anywhere: a value is checked for what it is, not
+// for what the page would have sent.
+function fault(f: ContactField, value: unknown): string | undefined {
   if (f.type === "checkboxes") {
-    if (value === undefined) return undefined;
+    if (value === undefined || value === null) return undefined;
     if (!Array.isArray(value)) return "Choose from the options.";
     const allowed = new Set(f.choices?.map((c) => c.value));
-    return value.every((v) => allowed.has(v)) ? undefined : "Choose from the options.";
+    return value.every((v) => typeof v === "string" && allowed.has(v)) ? undefined : "Choose from the options.";
   }
-  if (Array.isArray(value)) return "Write it as text.";
+  if (value !== undefined && value !== null && typeof value !== "string") return "Write it as text.";
   const v = (value ?? "").trim();
   if (!v) return f.required ? "Fill this in." : undefined;
   if (v.length > limit(f)) return `Keep it under ${limit(f)} characters.`;

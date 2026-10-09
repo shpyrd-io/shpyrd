@@ -33,6 +33,12 @@ describe("check", () => {
     expect(check("sales", { ...salesAnswers, message: "x".repeat(500) })).toEqual({});
   });
 
+  it("refuses a number or an object where a word is expected, rather than fail", () => {
+    expect(check("sales", { ...salesAnswers, firstName: 5 as never }).firstName).toBeTruthy();
+    expect(check("sales", { ...salesAnswers, company: { a: 1 } as never }).company).toBeTruthy();
+    expect(check("enterprise", { ...enterpriseAnswers, needs: ["sso", 5] as never }).needs).toBeTruthy();
+  });
+
   it("refuses a list where a word is expected", () => {
     expect(check("sales", { ...salesAnswers, company: ["Acme"] }).company).toBeTruthy();
   });
