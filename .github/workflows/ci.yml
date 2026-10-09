@@ -71,14 +71,14 @@ jobs:
           done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
           echo "go=$go" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
-          # The library reaches the other projects only through a version
-          # (design/ui/README.md): a change to its source without one is
-          # worth a word, not a failure, since not every change is released
-          # at once.
+          # A change to the library waits for its release under "Unreleased"
+          # in its CHANGELOG (design/DESIGN_FOR_AGENT.md, "Release the
+          # library"): a change to its source that does not note it is worth
+          # a word, not a failure.
           if git diff --no-renames --name-only "$BASE" HEAD -- design/ui/src \
               | grep -vE '\.test\.tsx?$|^design/ui/src/test\.ts$' | grep -q . \
-            && ! git diff "$BASE" HEAD -- design/ui/package.json | grep -qE '^[-+] *"version":'; then
-            echo "::warning file=design/ui/package.json::design/ui/src changed and the version did not: the other projects get the change only once a version is released (design/ui/README.md)"
+            && ! git diff --name-only "$BASE" HEAD -- design/ui/CHANGELOG.md | grep -q .; then
+            echo "::warning file=design/ui/CHANGELOG.md::design/ui/src changed and its CHANGELOG did not: note the change under Unreleased, for the next release (design/DESIGN_FOR_AGENT.md)"
           fi
 
   go:
