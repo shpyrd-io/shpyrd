@@ -18,11 +18,16 @@ export const discord = {
 }
 
 // The site's main action: what someone built, deployed on shpyrd cloud
-// (the sign-up). The words take turns after "Deploy your".
-export const deploy = {
-  label: 'Deploy your',
-  things: ['vibecoded app', 'agent', 'site', 'API', 'internal tool', 'side project'],
-}
+// (the sign-up). The phrases take turns, whole: "Deploy your agent",
+// "Publish your site"...
+export const deploy = [
+  { verb: 'Deploy', thing: 'vibecoded app' },
+  { verb: 'Publish', thing: 'site' },
+  { verb: 'Deploy', thing: 'agent' },
+  { verb: 'Publish', thing: 'API' },
+  { verb: 'Deploy', thing: 'internal tool' },
+  { verb: 'Publish', thing: 'side project' },
+]
 
 // Where "Contact us" leads: the sales form, and the enterprise form for the
 // Enterprise plan (apps/website/app/contact).

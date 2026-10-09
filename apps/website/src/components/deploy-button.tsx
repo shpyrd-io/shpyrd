@@ -1,9 +1,9 @@
 "use client";
 
-// The site's main action: "Deploy your …", the last words taking turns
-// (a vibecoded app, an agent, a site…), and a click to the sign-up, with
-// the plan of where it was clicked (free, unless a plan's card says). The
-// words roll as the agents of AddToAgent do, on a clock every such button
+// The site's main action: "Deploy your vibecoded app", "Publish your
+// site"…, whole phrases taking turns, and a click to the sign-up, with the
+// plan of where it was clicked (free, unless a plan's card says). The
+// phrases roll as the agents of AddToAgent do, on a clock every such button
 // on the page shares, so they change together.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "cn";
@@ -12,7 +12,7 @@ import { placeIn, roll } from "@shpyrd/ui/lib/roll";
 import { deploy } from "@shpyrd/content/site/offer";
 import { signUpFor } from "@/lib/signup";
 
-// How long each word stays.
+// How long each phrase stays.
 const HOLD = 2600;
 
 const first = { index: 0, leaving: -1 };
@@ -33,7 +33,7 @@ const clock = {
     if (++running === 1) {
       timer = window.setInterval(() => {
         if (holds > 0) return;
-        current = { index: (current.index + 1) % deploy.things.length, leaving: current.index };
+        current = { index: (current.index + 1) % deploy.length, leaving: current.index };
         listeners.forEach((l) => l());
       }, HOLD);
     }
@@ -85,7 +85,7 @@ export function DeployButton({
     <Button asChild size={size}>
       <a
         href={signUpFor(plan)}
-        aria-label={`${deploy.label} ${deploy.things[index]} on shpyrd`}
+        aria-label={`${deploy[index].verb} your ${deploy[index].thing} on shpyrd`}
         onMouseEnter={() => (hovered.current ??= clock.hold())}
         onMouseLeave={() => {
           hovered.current?.();
@@ -99,28 +99,25 @@ export function DeployButton({
           focused.current = null;
         }}
       >
-        <span className="inline-flex items-baseline gap-1.5">
-          {deploy.label}
-          {/* Two columns: "Deploy your", which never moves, and the word,
-              centred in the room the longest of them needs, so the button
-              keeps one width and nothing beside it moves. The cell clips the
-              word leaving above and the next waiting below. The word sits on
-              the label's line, a size up from it: the part that changes. */}
-          <span className="-my-1 grid justify-items-center overflow-hidden py-1 text-[1.125em]">
-            {deploy.things.map((thing, i) => {
-              const place = placeIn(i, index, leaving);
-              return (
-                <span
-                  key={thing}
-                  aria-hidden={place === "here" ? undefined : "true"}
-                  data-place={place}
-                  className={cn("col-start-1 row-start-1 w-max font-semibold", roll)}
-                >
-                  {thing}
-                </span>
-              );
-            })}
-          </span>
+        {/* Every phrase in one cell, centred in the room the longest needs,
+            so the button keeps one width and nothing beside it moves. The
+            cell clips the phrase leaving above and the next waiting below.
+            The thing is a size up from the words before it: what changes most. */}
+        <span className="-my-1 grid justify-items-center overflow-hidden py-1">
+          {deploy.map(({ verb, thing }, i) => {
+            const place = placeIn(i, index, leaving);
+            return (
+              <span
+                key={`${verb} ${thing}`}
+                aria-hidden={place === "here" ? undefined : "true"}
+                data-place={place}
+                className={cn("col-start-1 row-start-1 inline-flex w-max items-baseline gap-1.5", roll)}
+              >
+                {`${verb} your `}
+                <span className="text-[1.125em] font-semibold">{thing}</span>
+              </span>
+            );
+          })}
         </span>
       </a>
     </Button>
