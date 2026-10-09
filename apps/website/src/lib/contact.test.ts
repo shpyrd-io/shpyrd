@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { check, isBot, isKind, minimumMs, trap } from "./contact";
 
 const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme" };
-const salesAnswers = { ...person, interest: "cloud" };
+const salesAnswers = { ...person, message: "We have six internal apps to move." };
 const enterpriseAnswers = { ...person, jobTitle: "CTO", size: "250-999", runsOn: "own-cloud", timeline: "quarter", needs: ["sso", "sla"] };
 
 describe("check", () => {
@@ -12,7 +12,7 @@ describe("check", () => {
   });
 
   it("names every required field left empty", () => {
-    expect(Object.keys(check("sales", {})).sort()).toEqual(["company", "email", "firstName", "interest", "lastName"]);
+    expect(Object.keys(check("sales", {})).sort()).toEqual(["company", "email", "firstName", "lastName", "message"]);
   });
 
   it("refuses an address that is not one", () => {
@@ -20,7 +20,7 @@ describe("check", () => {
   });
 
   it("refuses a value no select offers", () => {
-    expect(check("sales", { ...salesAnswers, interest: "everything" }).interest).toBeTruthy();
+    expect(check("enterprise", { ...enterpriseAnswers, size: "everyone" }).size).toBeTruthy();
   });
 
   it("refuses a checkbox the form does not have", () => {

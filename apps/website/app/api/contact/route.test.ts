@@ -7,7 +7,7 @@ vi.mock("@/lib/mailer", () => ({ mailer: () => (configured ? send : null) }));
 const { POST } = await import("./route");
 const { trap } = await import("@/lib/contact");
 
-const answers = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", interest: "cloud" };
+const answers = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", message: "We have six internal apps to move." };
 const post = (body: unknown) =>
   POST(new Request("https://shpyrd.io/api/contact", {
     method: "POST",
@@ -26,7 +26,7 @@ describe("POST /api/contact", () => {
     const res = await post(human);
     expect(res.status).toBe(200);
     expect(send).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0][0]).toMatchObject({ replyTo: "ana@acme.com", subject: "[Sales] Ana Souza, Acme: shpyrd cloud for my team" });
+    expect(send.mock.calls[0][0]).toMatchObject({ replyTo: "ana@acme.com", subject: "[Sales] Ana Souza, Acme" });
     expect(send.mock.calls[0][0].text).toContain("Country: BR");
   });
 

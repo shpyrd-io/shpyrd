@@ -22,7 +22,7 @@ export function contactMail(kind: Kind, answers: Answers, meta: { page: string; 
   const who = `${a("firstName")} ${a("lastName")}, ${a("company")}`;
   const subject =
     kind === "sales"
-      ? `[Sales] ${who}: ${a("interest")}`
+      ? `[Sales] ${who}`
       : `[Enterprise] ${who} (${a("size")}): ${a("runsOn")}`;
 
   const rows: [string, string][] = form.fields

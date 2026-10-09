@@ -57,8 +57,7 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   | Last name | text | yes |
   | Work email | email | yes |
   | Company | text | yes |
-  | What are you interested in? | select: shpyrd cloud for my team · shpyrd in our own cloud · Managing apps for clients · Something else | yes |
-  | Anything we should know? | text, several lines | no |
+  | How can we help you? | text, several lines | yes |
 
 - Button: **Request a call**.
 - Beside it, with `ChecklistItems`: what the call covers (the apps you
@@ -151,7 +150,7 @@ STARTTLS), configured by environment variables in Vercel:
 | `CONTACT_FROM` | `shpyrd website <website@mg.shpyrd.io>` |
 | `CONTACT_TO` | `sales@shpyrd.io` |
 
-- Subject: `[Sales] Ana Souza, Acme: shpyrd cloud for my team`, or
+- Subject: `[Sales] Ana Souza, Acme`, or
   `[Enterprise] Ana Souza, Acme (250–999): our own cloud`.
 - Body, as text and as a simple table: every field, then the page it came
   from, the time, and the country Vercel reports (`x-vercel-ip-country`).

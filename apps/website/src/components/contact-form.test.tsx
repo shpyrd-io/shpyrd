@@ -11,19 +11,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function fill(container: HTMLElement) {
-  for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Work email", "ana@acme.com"], ["Company", "Acme"]]) {
+function fill() {
+  for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Work email", "ana@acme.com"], ["Company", "Acme"], ["How can we help you?", "Six apps to move."]]) {
     fireEvent.change(screen.getByLabelText(label, { exact: false }), { target: { value } });
   }
-  // Radix's Select keeps a native select in a form, which is what a test
-  // (and the browser's autofill) can change.
-  fireEvent.change(container.querySelector("select[name=interest]")!, { target: { value: "cloud" } });
 }
 
 describe("ContactForm", () => {
   it("shows the sales form's fields", () => {
     render(<ContactForm kind="sales" />);
-    for (const label of ["First name", "Last name", "Work email", "Company", "Anything we should know?"]) {
+    for (const label of ["First name", "Last name", "Work email", "Company", "How can we help you?"]) {
       expect(screen.getByLabelText(label, { exact: false })).toBeTruthy();
     }
     expect(screen.getByRole("button", { name: "Request a call" })).toBeTruthy();
@@ -42,22 +39,22 @@ describe("ContactForm", () => {
   it("sends a complete form and thanks the person by their address", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
-    const { container } = render(<ContactForm kind="sales" />);
-    fill(container);
+    render(<ContactForm kind="sales" />);
+    fill();
     fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
     await waitFor(() => expect(screen.getByText(/we'll reply to ana@acme.com/)).toBeTruthy());
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/contact");
     const body = JSON.parse(String(init.body));
-    expect(body).toMatchObject({ kind: "sales", [trap]: "", answers: { firstName: "Ana", interest: "cloud" } });
+    expect(body).toMatchObject({ kind: "sales", [trap]: "", answers: { firstName: "Ana", message: "Six apps to move." } });
     expect(body.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(body).not.toHaveProperty("startedAt");
   });
 
   it("keeps what was typed and offers Discord when it cannot send", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "x" }), { status: 502 })));
-    const { container } = render(<ContactForm kind="sales" />);
-    fill(container);
+    render(<ContactForm kind="sales" />);
+    fill();
     fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
     await waitFor(() => expect(screen.getByText(/could not be sent/)).toBeTruthy());
     expect((screen.getByLabelText("Company", { exact: false }) as HTMLInputElement).value).toBe("Acme");
@@ -77,11 +74,16 @@ describe("ContactForm", () => {
     expect(document.activeElement).toBe(screen.getByLabelText("First name", { exact: false }));
   });
 
+  it("has no menu to choose from on the sales form", () => {
+    render(<ContactForm kind="sales" />);
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
   it("ties a select to its error", () => {
     vi.stubGlobal("fetch", vi.fn());
-    render(<ContactForm kind="sales" />);
-    fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
-    const trigger = screen.getByRole("combobox");
+    render(<ContactForm kind="enterprise" />);
+    fireEvent.click(screen.getByRole("button", { name: "Contact enterprise sales" }));
+    const trigger = screen.getAllByRole("combobox")[0];
     const described = (trigger.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
     expect(described).toContain("Fill this in.");
   });

@@ -38,19 +38,7 @@ export const sales: ContactPage = {
   submit: 'Request a call',
   fields: [
     ...person,
-    {
-      name: 'interest',
-      label: 'What are you interested in?',
-      type: 'select',
-      required: true,
-      choices: [
-        { value: 'cloud', label: 'shpyrd cloud for my team' },
-        { value: 'own-cloud', label: 'shpyrd in our own cloud' },
-        { value: 'clients', label: 'Managing apps for clients' },
-        { value: 'other', label: 'Something else' },
-      ],
-    },
-    { name: 'message', label: 'Anything we should know?', type: 'textarea' },
+    { name: 'message', label: 'How can we help you?', type: 'textarea', required: true },
   ],
   beside: {
     heading: 'What the call covers',

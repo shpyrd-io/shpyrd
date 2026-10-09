@@ -4,7 +4,7 @@ import { pricing } from "./pricing";
 
 describe("the contact pages", () => {
   it("ask what the spec says, in its order", () => {
-    expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "company", "interest", "message"]);
+    expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "company", "message"]);
     expect(enterprise.fields.map((f) => f.name)).toEqual([
       "firstName", "lastName", "email", "company", "jobTitle", "size", "runsOn", "needs", "timeline", "message",
     ]);
@@ -22,6 +22,11 @@ describe("the contact pages", () => {
 
   it("link the privacy policy the footer links", () => {
     expect(privacy.href).toBe("https://legal.shpyrd.io/global/privacy-policy");
+  });
+
+  it("ask the sales form's question in the person's own words, and require it", () => {
+    const message = sales.fields.find((f) => f.name === "message");
+    expect(message).toMatchObject({ label: "How can we help you?", type: "textarea", required: true });
   });
 
   it("thank the person by the address they gave", () => {
