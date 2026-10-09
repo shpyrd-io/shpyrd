@@ -8,7 +8,7 @@ import { mailer } from "@/lib/mailer";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  let body: { kind?: unknown; answers?: unknown; website?: unknown; startedAt?: unknown };
+  let body: { kind?: unknown; answers?: unknown; website?: unknown; elapsedMs?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "No such form." }, { status: 400 });
   }
   // A bot learns nothing: it is answered as a person would be.
-  if (isBot(body, Date.now())) return Response.json({ ok: true });
+  if (isBot(body)) return Response.json({ ok: true });
 
   const answers = (body.answers && typeof body.answers === "object" ? body.answers : {}) as Answers;
   const errors = check(body.kind, answers);

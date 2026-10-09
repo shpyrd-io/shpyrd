@@ -40,12 +40,14 @@ export function check(kind: Kind, answers: Answers): Record<string, string> {
 }
 
 // The hidden field people never see and bots fill in, and the least time
-// a person takes between opening the page and sending the form.
+// a person takes to fill the form in. The page measures that time itself
+// (`elapsedMs`): a clock of the person's that is ahead or behind the
+// server's cannot make them a bot.
 export const trap = "website";
 export const minimumMs = 3000;
 
-export function isBot(submission: { website?: unknown; startedAt?: unknown }, now: number): boolean {
+export function isBot(submission: { website?: unknown; elapsedMs?: unknown }): boolean {
   if (typeof submission.website === "string" && submission.website !== "") return true;
-  if (typeof submission.startedAt !== "number") return true;
-  return now - submission.startedAt < minimumMs;
+  if (typeof submission.elapsedMs !== "number" || !Number.isFinite(submission.elapsedMs)) return true;
+  return submission.elapsedMs < minimumMs;
 }

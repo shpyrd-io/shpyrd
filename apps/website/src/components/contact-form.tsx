@@ -23,9 +23,11 @@ export function ContactForm({ kind }: { kind: Kind }) {
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [status, setStatus] = React.useState<Status>("idle");
   const [website, setWebsite] = React.useState("");
-  const startedAt = React.useRef(0);
+  // When the form appeared, on the page's own clock: what is sent is how
+  // long the person took, never a time of day.
+  const shownAt = React.useRef(0);
   React.useEffect(() => {
-    startedAt.current = Date.now();
+    shownAt.current = performance.now();
   }, []);
 
   const set = (name: string, value: string | string[]) => setAnswers((a) => ({ ...a, [name]: value }));
@@ -42,7 +44,7 @@ export function ContactForm({ kind }: { kind: Kind }) {
       const res = await fetch("/api/contact", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind, answers, [trap]: website, startedAt: startedAt.current }),
+        body: JSON.stringify({ kind, answers, [trap]: website, elapsedMs: Math.round(performance.now() - shownAt.current) }),
       });
       if (res.ok) {
         setStatus("sent");

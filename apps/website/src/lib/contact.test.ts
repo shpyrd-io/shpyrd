@@ -45,18 +45,20 @@ describe("check", () => {
 });
 
 describe("isBot", () => {
-  const start = 1_000_000;
   it("lets a person through", () => {
-    expect(isBot({ website: "", startedAt: start }, start + minimumMs + 1)).toBe(false);
+    expect(isBot({ website: "", elapsedMs: minimumMs + 1 })).toBe(false);
   });
   it("catches the hidden field filled", () => {
-    expect(isBot({ website: "https://spam.example", startedAt: start }, start + 60_000)).toBe(true);
+    expect(isBot({ website: "https://spam.example", elapsedMs: 60_000 })).toBe(true);
   });
   it("catches a form sent faster than a person can", () => {
-    expect(isBot({ website: "", startedAt: start }, start + 500)).toBe(true);
+    expect(isBot({ website: "", elapsedMs: 500 })).toBe(true);
   });
-  it("catches a form with no start time", () => {
-    expect(isBot({ website: "" }, start)).toBe(true);
+  it("catches a form that says nothing of how long it took", () => {
+    expect(isBot({ website: "" })).toBe(true);
+  });
+  it("goes by how long the person took, whatever their clock says", () => {
+    expect(isBot({ website: "", elapsedMs: 45_000, startedAt: Date.now() + 600_000 } as never)).toBe(false);
   });
 });
 

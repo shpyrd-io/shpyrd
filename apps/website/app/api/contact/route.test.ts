@@ -13,7 +13,7 @@ const post = (body: unknown) =>
     headers: { "content-type": "application/json", referer: "https://shpyrd.io/contact/sales", "x-vercel-ip-country": "BR" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   }));
-const human = { kind: "sales", answers, website: "", startedAt: Date.now() - 10_000 };
+const human = { kind: "sales", answers, website: "", elapsedMs: 10_000 };
 
 describe("POST /api/contact", () => {
   beforeEach(() => {
@@ -44,7 +44,7 @@ describe("POST /api/contact", () => {
 
   it("answers a bot as if it had sent, and sends nothing", async () => {
     expect((await post({ ...human, website: "https://spam.example" })).status).toBe(200);
-    expect((await post({ ...human, startedAt: Date.now() })).status).toBe(200);
+    expect((await post({ ...human, elapsedMs: 0 })).status).toBe(200);
     expect(send).not.toHaveBeenCalled();
   });
 
