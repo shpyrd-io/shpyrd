@@ -41,6 +41,8 @@ export function BinaryMark({
   height,
   x,
   centred,
+  near = 0,
+  tilt = false,
 }: {
   className?: string;
   // The element the mark stands centred behind (else the middle of the
@@ -61,6 +63,11 @@ export function BinaryMark({
   // Where it stands instead when the page's hero is centred: in the middle of
   // the page's width, this tall, its top this many px from the page's top.
   centred?: { height: number; offset: number };
+  // Rain around the mark too, softly, only this many cells out from it,
+  // fainter the farther.
+  near?: number;
+  // The mark leans softly toward the pointer, in 3D.
+  tilt?: boolean;
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null);
 
@@ -80,6 +87,10 @@ export function BinaryMark({
     let cols = 0;
     let rows = 0;
     let inMark = new Uint8Array(0);
+    // How near the mark each cell outside it is: 1 next to it, 0 at \`near\`
+    // cells out or more.
+    let around = new Float32Array(0);
+    let pivot: [number, number] = [0, 0];
     let digits = new Uint8Array(0);
     // Each column's drop: where its head is (in rows), how fast it falls, how
     // long its tail is.
@@ -150,6 +161,31 @@ export function BinaryMark({
       const px = g.getImageData(0, 0, cols, rows).data;
       inMark = new Uint8Array(cols * rows);
       for (let i = 0; i < cols * rows; i++) inMark[i] = px[i * 4 + 3] > 110 ? 1 : 0;
+      // The distance of each cell from the mark, in cells, grown outward a
+      // ring at a time.
+      around = new Float32Array(cols * rows);
+      if (near > 0) {
+        let ring = Array.from(inMark.keys()).filter((i) => inMark[i]);
+        const seen = Uint8Array.from(inMark);
+        for (let d = 1; d <= near && ring.length; d++) {
+          const next: number[] = [];
+          for (const i of ring) {
+            const x0 = i % cols;
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const xx = x0 + dx;
+              const j = i + dx + dy * cols;
+              if (xx < 0 || xx >= cols || j < 0 || j >= cols * rows || seen[j]) continue;
+              seen[j] = 1;
+              around[j] = 1 - (d - 1) / near;
+              next.push(j);
+            }
+          }
+          ring = next;
+        }
+      }
+      // The mark leans about its own middle.
+      pivot = [(cx * CELL), (cy * CELL)];
+      canvas.style.transformOrigin = `${pivot[0]}px ${pivot[1]}px`;
 
       digits = new Uint8Array(cols * rows);
       for (let i = 0; i < digits.length; i++) digits[i] = Math.random() < 0.5 ? 0 : 1;
@@ -186,8 +222,14 @@ export function BinaryMark({
           // fading behind it, nothing ahead of it.
           const behind = still ? -1 : head[x] - y;
           const rain = behind >= 0 && behind < tail[x] ? 1 - behind / tail[x] : 0;
-          // Only the mark: outside it, nothing falls.
-          if (!inMark[i]) continue;
+          // Outside the mark only the rain itself, close to it and faint.
+          if (!inMark[i]) {
+            if (!rain || !around[i]) continue;
+            const a = rain * around[i] * (behind < 1 ? 0.3 : 0.18);
+            c.fillStyle = `rgba(${t.mark},${a.toFixed(3)})`;
+            c.fillText(digits[i] ? "1" : "0", x * CELL + CELL / 2, y * CELL + CELL / 2);
+            continue;
+          }
           // The rain only lifts the mark a little: it is felt more than seen.
           const a = t.markBase + (1 - t.markBase) * rain * (behind < 1 ? 0.4 : 0.3);
           c.fillStyle = `rgba(${t.mark},${a.toFixed(3)})`;
@@ -203,12 +245,38 @@ export function BinaryMark({
     if (end) sized.observe(end);
     document.fonts?.load(`500 11px "Geist Mono Variable"`).then(() => paint(0), () => {});
 
+    // The lean: toward the pointer, followed softly, at most MAX degrees.
+    const MAX = 9;
+    const aim = { x: 0, y: 0 };
+    const lean = { x: 0, y: 0 };
+    const onPointer = (e: PointerEvent) => {
+      const r = canvas.getBoundingClientRect();
+      aim.x = Math.max(-1, Math.min(1, (e.clientX - (r.left + pivot[0])) / (window.innerWidth / 2)));
+      aim.y = Math.max(-1, Math.min(1, (e.clientY - (r.top + pivot[1])) / (window.innerHeight / 2)));
+    };
+    const onLeave = () => {
+      aim.x = 0;
+      aim.y = 0;
+    };
+    if (tilt && !still) {
+      window.addEventListener("pointermove", onPointer, { passive: true });
+      document.documentElement.addEventListener("pointerleave", onLeave);
+    }
+
     let frame = 0;
     let last = performance.now();
     let acc = 0;
     const tick = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.1);
       last = now;
+      if (tilt) {
+        const k = 1 - Math.exp(-dt * 3);
+        lean.x += (aim.x - lean.x) * k;
+        lean.y += (aim.y - lean.y) * k;
+        // Turned to face the pointer: right of it, its face turns right;
+        // under it, down.
+        canvas.style.transform = `perspective(1400px) rotateY(${(lean.x * MAX).toFixed(2)}deg) rotateX(${(-lean.y * MAX).toFixed(2)}deg)`;
+      }
       acc += dt;
       if (acc >= 1 / FPS) {
         paint(acc);
@@ -223,8 +291,10 @@ export function BinaryMark({
       themed.disconnect();
       sized.disconnect();
       window.removeEventListener("resize", resize);
+      window.removeEventListener("pointermove", onPointer);
+      document.documentElement.removeEventListener("pointerleave", onLeave);
     };
-  }, [anchor, scale, offset, shift, height, x, centred?.height, centred?.offset]);
+  }, [anchor, scale, offset, shift, height, x, centred?.height, centred?.offset, near, tilt]);
 
   return (
     <canvas

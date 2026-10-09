@@ -68,10 +68,13 @@ export function ContinuousSection({
     <>
       {/* Behind the top of every section page: the shpyrd mark, a ship seen
           from the front, made of falling binary (binary-mark.tsx), the same
-          size and place on all of them, scrolling with the page. Under a
-          centred hero it stands in the middle, 30% larger (1101px), its top
-          100px under the header's 72px. */}
-      <BinaryMark height={847} offset={100} x={370} centred={{ height: 1101, offset: 172 }} />
+          size and place on all of them, scrolling with the page: in the
+          middle, 991px tall, its top level with the section bar's foot
+          (160px). (Until 2026-10-09: 847px, its top at 100px, 370px
+          right of the middle; centred heroes 1101px at 172px.) The rain
+          falls softly just around it too, four cells out, and it leans
+          softly toward the pointer. */}
+      <BinaryMark height={991} offset={160} x={0} near={4} tilt />
       {/* The bar, under the header (its 72px and 12px more), over the page. */}
       <div className="sticky top-[84px] z-30 mx-auto w-full max-w-7xl px-4 pt-8 @3xl/page-layout:px-6">
         {/* What scrolls under the bar is hidden behind it: the page's own
