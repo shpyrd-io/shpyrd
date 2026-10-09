@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { deploy } from "@shpyrd/content/site/offer";
 import { DeployButton } from "./deploy-button";
 
 const said = ({ verb, thing }: (typeof deploy)[number]) => `${verb} your ${thing}`;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("DeployButton", () => {
   it("says the first phrase, and goes to the free plan's sign-up", () => {
@@ -35,5 +38,27 @@ describe("DeployButton", () => {
   it("carries no icon", () => {
     const { container } = render(<DeployButton />);
     expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("moves on once the browser says the pointer is gone, even with no leave event", () => {
+    vi.useFakeTimers();
+    render(<DeployButton />);
+    const link = screen.getByRole("link");
+    const before = link.getAttribute("aria-label");
+    // An enter with no leave: the window lost the pointer, or the page changed under it.
+    fireEvent.mouseEnter(link);
+    vi.spyOn(link, "matches").mockReturnValue(false);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(link.getAttribute("aria-label")).not.toBe(before);
+  });
+
+  it("holds still while the pointer is over it", () => {
+    vi.useFakeTimers();
+    render(<DeployButton />);
+    const link = screen.getByRole("link");
+    const before = link.getAttribute("aria-label");
+    fireEvent.mouseEnter(link);
+    act(() => vi.advanceTimersByTime(6000));
+    expect(link.getAttribute("aria-label")).toBe(before);
   });
 });

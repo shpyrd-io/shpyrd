@@ -17,10 +17,10 @@ const HOLD = 2600;
 
 const first = { index: 0, leaving: -1 };
 let current = first;
-let holds = 0;
 let running = 0;
 let timer: number | undefined;
 const listeners = new Set<() => void>();
+const buttons = new Set<HTMLElement>();
 
 const clock = {
   subscribe(listener: () => void) {
@@ -32,7 +32,10 @@ const clock = {
   run() {
     if (++running === 1) {
       timer = window.setInterval(() => {
-        if (holds > 0) return;
+        // A pointer over a button, or keyboard focus in it, holds them all
+        // still. Asked of the buttons at each turn rather than counted from
+        // enter and leave, which the browser does not always send in pairs.
+        if ([...buttons].some((b) => b.matches(":hover, :focus-visible"))) return;
         current = { index: (current.index + 1) % deploy.length, leaving: current.index };
         listeners.forEach((l) => l());
       }, HOLD);
@@ -41,14 +44,9 @@ const clock = {
       if (--running === 0) window.clearInterval(timer);
     };
   },
-  // A pointer over a button, or keyboard focus in it, holds them all still.
-  hold() {
-    holds++;
-    let held = true;
-    return () => {
-      if (held) holds--;
-      held = false;
-    };
+  watch(button: HTMLElement) {
+    buttons.add(button);
+    return () => void buttons.delete(button);
   },
 };
 
@@ -63,8 +61,7 @@ export function DeployButton({
   const { index, leaving } = useSyncExternalStore(clock.subscribe, clock.now, clock.atStart);
   // Built without a browser: the reader's preference is read in an effect.
   const [still, setStill] = useState(true);
-  const hovered = useRef<(() => void) | null>(null);
-  const focused = useRef<(() => void) | null>(null);
+  const link = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     const less = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setStill(less.matches);
@@ -73,36 +70,19 @@ export function DeployButton({
     return () => less.removeEventListener("change", apply);
   }, []);
   useEffect(() => (still ? undefined : clock.run()), [still]);
-  useEffect(
-    () => () => {
-      hovered.current?.();
-      focused.current?.();
-    },
-    [],
-  );
+  useEffect(() => clock.watch(link.current!), []);
 
   return (
     <Button asChild size={size}>
       <a
+        ref={link}
         href={signUpFor(plan)}
         aria-label={`${deploy[index].verb} your ${deploy[index].thing} on shpyrd`}
-        onMouseEnter={() => (hovered.current ??= clock.hold())}
-        onMouseLeave={() => {
-          hovered.current?.();
-          hovered.current = null;
-        }}
-        onFocus={(e) => {
-          if (e.currentTarget.matches(":focus-visible")) focused.current ??= clock.hold();
-        }}
-        onBlur={() => {
-          focused.current?.();
-          focused.current = null;
-        }}
       >
         {/* Every phrase in one cell, centred in the room the longest needs,
             so the button keeps one width and nothing beside it moves. The
             cell clips the phrase leaving above and the next waiting below.
-            The thing is a size up from the words before it: what changes most. */}
+            The thing is bold: what changes most. */}
         <span className="-my-1 grid justify-items-center overflow-hidden py-1">
           {deploy.map(({ verb, thing }, i) => {
             const place = placeIn(i, index, leaving);
@@ -111,10 +91,10 @@ export function DeployButton({
                 key={`${verb} ${thing}`}
                 aria-hidden={place === "here" ? undefined : "true"}
                 data-place={place}
-                className={cn("col-start-1 row-start-1 inline-flex w-max items-baseline gap-1.5", roll)}
+                className={cn("col-start-1 row-start-1 w-max", roll)}
               >
                 {`${verb} your `}
-                <span className="text-[1.125em] font-semibold">{thing}</span>
+                <span className="font-semibold">{thing}</span>
               </span>
             );
           })}
