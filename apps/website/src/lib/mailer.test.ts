@@ -28,6 +28,9 @@ describe("mailer", () => {
     expect(createTransport).toHaveBeenCalledWith({
       host: "smtp.mailgun.org", port: 587, secure: false, requireTLS: true,
       auth: { user: "postmaster@mg.shpyrd.io", pass: "secret" },
+      // Gives up well before a Vercel function is stopped, so a server that
+      // does not answer is a 502 with its reason in the log.
+      connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 10_000,
     });
   });
 

@@ -14,6 +14,11 @@ export function mailer(env: Record<string, string | undefined> = process.env) {
     secure: false,
     requireTLS: true,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    // Gives up well before a Vercel function is stopped, so a server that
+    // does not answer is a 502 with its reason in the log.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
   });
   return async (mail: Outgoing) => {
     const { subject, text, html, replyTo } = mail;
