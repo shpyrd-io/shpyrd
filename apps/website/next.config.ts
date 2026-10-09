@@ -1,20 +1,17 @@
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
-import type { Redirect } from "next/dist/lib/load-custom-routes";
-import vercel from "./vercel.json";
+import { redirects } from "./src/lib/redirects";
 
 // Every page is rendered when the site is built; one route runs on request,
 // the contact forms' (app/api/contact). The site runs on shpyrd as Next's
-// standalone server (Dockerfile); the redirects in vercel.json are Next's
-// own, so they hold there, on Vercel and in the development server alike.
+// standalone server (Dockerfile); Next serves the redirects itself
+// (src/lib/redirects.ts), there and in the development server alike.
 const config: NextConfig = {
   // One folder with the server and only the files it needs, traced from the
   // repository's root so the workspace's packages (design/ui, content) come.
   output: "standalone",
   outputFileTracingRoot: fileURLToPath(new URL("../..", import.meta.url)),
-  // JSON types "header" as any string; the file holds Vercel's redirects,
-  // which are Next's too (has, missing).
-  redirects: async () => vercel.redirects as Redirect[],
+  redirects: async () => redirects,
   // The pictures are converted once and shipped as they are, never resized
   // on request.
   images: { unoptimized: true },

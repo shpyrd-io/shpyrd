@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { discord } from "@shpyrd/content/site/offer";
 import config from "../../next.config";
-import vercel from "../../vercel.json";
+import { redirects } from "./redirects";
 
 const find = (source: string, has?: string) =>
-  vercel.redirects.filter((r) => r.source === source && (has === undefined || (r.has ?? []).some((h) => ("key" in h ? h.key : h.type) === has)));
+  redirects.filter((r) => r.source === source && (has === undefined || (r.has ?? []).some((h) => ("key" in h ? h.key : h.type) === has)));
 
 describe("the redirects", () => {
   it("send /discord to the invite the site's content names", () => {
@@ -15,10 +15,10 @@ describe("the redirects", () => {
     expect(find("/docs")[0]?.destination).toBe("/docs/getting-started");
   });
 
-  // Served by Next itself on shpyrd, where there is no Vercel to read
-  // vercel.json, and by the development server alike.
+  // Next serves them itself, wherever it runs: on shpyrd, on Vercel while
+  // it still serves the domain, and in the development server.
   it("are Next's own, wherever it runs", async () => {
-    expect(await config.redirects?.()).toEqual(vercel.redirects);
+    expect(await config.redirects?.()).toEqual(redirects);
   });
 
   it("send the bare domain to www, keeping the path", () => {

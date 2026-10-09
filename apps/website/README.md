@@ -33,7 +33,6 @@ src/components/markdoc.tsx   which component of design/ui draws each tag
 src/lib/content.ts           reads content/docs and returns front matter, tree and headings
 public/install.sh            served at shpyrd.io/install.sh, the documented install path
 public/screenshots/          screenshots used by the docs and the root README
-vercel.json                  the redirects, which Next serves itself (next.config.ts)
 ```
 
 The texts are not here. Documentation is `content/docs/*.md` and the marketing
@@ -71,7 +70,7 @@ The site is the project `website` of the platform workspace
 workflow deploys it after its checks pass on `main`; by hand, from the
 root: `cp apps/website/shpyrd.yaml . && shpyrd deploy`.
 
-The redirects (`vercel.json`) are Next's own: `/discord`, `/docs`,
+The redirects (`src/lib/redirects.ts`) are Next's own: `/discord`, `/docs`,
 `/how-sharing-works`, the bare `shpyrd.io` to `www.shpyrd.io`, and
 `/pricing` to `/pricing/br` for a browser that prefers Brazilian Portuguese
 (or where a country header says Brazil).

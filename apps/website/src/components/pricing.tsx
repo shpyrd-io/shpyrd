@@ -26,7 +26,8 @@ const countIcons: Record<string, React.ReactElement> = {
 };
 
 // `region` picks the prices: Brazil has its own (/pricing/br, where
-// vercel.json sends visitors from Brazil), everyone else the international ones.
+// src/lib/redirects.ts sends visitors from Brazil), everyone else the
+// international ones.
 // The icon of each plan, in a tile like Enterprise's.
 const planIcons: Record<string, React.ReactElement> = {
   free: <Sprout />,
