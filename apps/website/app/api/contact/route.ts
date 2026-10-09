@@ -1,6 +1,6 @@
 // The contact forms' one route: checks a submission by the forms' rules
 // (src/lib/contact.ts) and mails it to the team (src/lib/mailer.ts).
-// The only part of the site that runs on request.
+// The only part of the site that runs on every request.
 import { check, isBot, isKind, type Answers } from "@/lib/contact";
 import { contactMail } from "@/lib/contact-mail";
 import { mailer } from "@/lib/mailer";

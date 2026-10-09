@@ -2,8 +2,9 @@ import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import { redirects } from "./src/lib/redirects";
 
-// Every page is rendered when the site is built; one route runs on request,
-// the contact forms' (app/api/contact). The site runs on shpyrd as Next's
+// Every page is rendered when the site is built; two routes run on the
+// server: the contact forms' (app/api/contact), on request, and the GitHub
+// link's stars (app/api/github), kept an hour. The site runs on shpyrd as Next's
 // standalone server (Dockerfile); Next serves the redirects itself
 // (src/lib/redirects.ts), there and in the development server alike.
 const config: NextConfig = {

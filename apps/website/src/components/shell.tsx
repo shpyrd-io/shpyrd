@@ -75,6 +75,11 @@ const docIcons: Record<string, React.ReactElement> = {
 
 const iconHover = "hover:bg-transparent hover:text-primary dark:hover:bg-transparent";
 
+// The repository's stars beside its mark, as supabase.com has them: a short
+// number (95, 1.2K), quiet, no pill. Asked of the site's own route
+// (app/api/github), which asks GitHub at most once an hour.
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
 // Getting Started (/getting-started) is one of the sections not shown yet (src/lib/sections.ts).
 const marketing = [
   ...(sectionsLive ? [{ title: "Getting Started", href: "/getting-started" }] : []),
@@ -90,6 +95,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const next = { light: "dark", dark: "system", system: "light" } as const;
   const [menu, setMenu] = useState(false);
   useEffect(() => setMenu(false), [path]);
+  const [stars, setStars] = useState<number | null>(null);
+  useEffect(() => {
+    fetch("/api/github")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => typeof body?.stars === "number" && setStars(body.stars))
+      .catch(() => {});
+  }, []);
 
   // A solution's proposals live under its address, so they mark it too.
   const link = (l: { title: string; href: string }) => (
@@ -266,9 +278,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
           links={isDocument ? [] : links}
           actions={
             <>
-              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on GitHub" className={iconHover}>
+              <Button
+                variant="ghost"
+                size={stars === null ? "icon" : "default"}
+                asChild
+                aria-label={stars === null ? "shpyrd on GitHub" : `shpyrd on GitHub, ${stars} stars`}
+                className={cn(iconHover, stars !== null && "gap-1 px-2")}
+              >
                 <a href={github}>
                   <GitHubMark />
+                  {stars !== null && (
+                    <span className="text-xs text-muted-foreground tabular-nums transition-colors group-hover/button:text-primary">
+                      {compact.format(stars)}
+                    </span>
+                  )}
                 </a>
               </Button>
               <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord" className={iconHover}>
