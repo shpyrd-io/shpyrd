@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { ContactForm } from "./contact-form";
 import { trap } from "@/lib/contact";
 
@@ -99,5 +100,13 @@ describe("ContactForm", () => {
     await waitFor(() => expect(screen.getByText("Choose from the options.")).toBeTruthy());
     const group = screen.getByRole("group", { name: "What do you need?" });
     expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Choose from the options.");
+  });
+
+  // As the server sends it, before the page's script runs: a click then must
+  // not send the answers as a GET, into the address bar and the logs.
+  it("cannot be sent before the page is ready, and never by GET", () => {
+    const html = renderToString(<ContactForm kind="sales" />);
+    expect(html).toMatch(/<form[^>]*method="post"/);
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
   });
 });

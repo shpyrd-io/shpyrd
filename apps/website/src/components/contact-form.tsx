@@ -26,8 +26,12 @@ export function ContactForm({ kind }: { kind: Kind }) {
   // When the form appeared, on the page's own clock: what is sent is how
   // long the person took, never a time of day.
   const shownAt = React.useRef(0);
+  // Until the page's script runs, the form cannot be sent: the browser would
+  // send it itself, without the checks.
+  const [ready, setReady] = React.useState(false);
   React.useEffect(() => {
     shownAt.current = performance.now();
+    setReady(true);
   }, []);
 
   const set = (name: string, value: string | string[]) => setAnswers((a) => ({ ...a, [name]: value }));
@@ -163,7 +167,7 @@ export function ContactForm({ kind }: { kind: Kind }) {
   };
 
   return (
-    <form noValidate onSubmit={submit} className="grid gap-5 sm:grid-cols-2">
+    <form method="post" noValidate onSubmit={submit} className="grid gap-5 sm:grid-cols-2">
       {status === "failed" && (
         <p role="alert" className="text-sm text-destructive sm:col-span-2">
           {failed} <a href={discord.href} className="underline underline-offset-4">Discord</a>
@@ -182,7 +186,7 @@ export function ContactForm({ kind }: { kind: Kind }) {
         className="absolute -left-[9999px] size-px opacity-0"
       />
       <div className="grid gap-3 sm:col-span-2">
-        <Button type="submit" disabled={status === "sending"} className="justify-self-start">
+        <Button type="submit" disabled={!ready || status === "sending"} className="justify-self-start">
           {form.submit}
         </Button>
         <p className="text-xs text-muted-foreground">
