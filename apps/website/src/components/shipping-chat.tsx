@@ -87,7 +87,11 @@ export function Composer({ text, placeholder }: { text: string | null; placehold
         ref={line}
         className={`min-w-0 flex-1 overflow-hidden whitespace-nowrap ${text ? "" : "truncate text-muted-foreground"}`}
       >
-        {text ? text.slice(0, shown) : placeholder}
+        {/* Each letter typed is a new element rather than a change to the
+            text: a browser translating the page replaces the text it finds,
+            so React would type into text no longer on the page and remove
+            what is not there, which stops the page. */}
+        <span key={text ? shown : "placeholder"}>{text ? text.slice(0, shown) : placeholder}</span>
         {text && <span className="ml-px inline-block h-4 w-px translate-y-0.5 animate-pulse bg-foreground" />}
       </span>
       <span
@@ -104,6 +108,11 @@ export function Composer({ text, placeholder }: { text: string | null; placehold
 
 const enter = "animate-in fade-in-0 slide-in-from-bottom-2 duration-normal ease-enter";
 
+// What the agent says replaces its dots in an element of its own, never as bare
+// text beside them: a browser translating the page moves bare text into
+// elements of its own, and React, removing what it put there, would stop the
+// page.
+//
 // An address in what the agent says, looking like the link it would be. It is
 // made up, so it goes nowhere.
 function Url({ children }: { children: string }) {
@@ -210,10 +219,10 @@ export function ShippingChat() {
           {past("thinking-build") && (
             <ConversationMessage from="agent" author={name(agent, "size-3")} className={enter}>
               {past("built") ? (
-                <>
+                <span>
                   Your CRM is built! Contacts, deals, and a kanban you can drag them across.
                   It&apos;s running at <Url>http://localhost:3000</Url>
-                </>
+                </span>
               ) : (
                 <Typing />
               )}
@@ -234,10 +243,10 @@ export function ShippingChat() {
               className={enter}
             >
               {past("shipped") ? (
-                <>
+                <span>
                   Done. It&apos;s live at <Url>https://crm.acme.shpyrd.app</Url>, behind your work
                   sign-in. Only you can open it for now.
-                </>
+                </span>
               ) : (
                 <Typing />
               )}
@@ -262,10 +271,10 @@ export function ShippingChat() {
               className={enter}
             >
               {past("shared") ? (
-                <>
+                <span>
                   Done. Sales can open <Url>https://crm.acme.shpyrd.app</Url>, and will find it
                   among their apps next time they sign in.
-                </>
+                </span>
               ) : (
                 <Typing />
               )}
