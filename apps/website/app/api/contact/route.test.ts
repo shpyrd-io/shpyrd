@@ -26,8 +26,8 @@ describe("POST /api/contact", () => {
     const res = await post(human);
     expect(res.status).toBe(200);
     expect(send).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0][0]).toMatchObject({ replyTo: "ana@acme.com", subject: "[Sales] Ana Souza, acme.com" });
-    expect(send.mock.calls[0][0].text).toContain("Country: BR");
+    expect(send.mock.calls[0][0]).toMatchObject({ replyTo: "ana@acme.com", subject: "Contact sales: Ana Souza, acme.com" });
+    expect(send.mock.calls[0][0].text).toContain("wrote to the shpyrd sales team");
   });
 
   it("refuses a form with mistakes, field by field, and sends nothing", async () => {

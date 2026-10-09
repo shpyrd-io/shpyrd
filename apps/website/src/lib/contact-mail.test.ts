@@ -1,49 +1,66 @@
 import { describe, expect, it } from "vitest";
 import { contactMail } from "./contact-mail";
 
-const meta = { page: "https://shpyrd.io/contact/enterprise", at: new Date("2026-10-09T12:00:00Z"), country: "BR" };
-const enterpriseAnswers = {
-  firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", jobTitle: "CTO",
-  size: "201-500", message: "Two clusters.",
-};
+const at = new Date("2026-10-09T18:40:00Z");
+const sales = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", message: "Six apps to move.\nCan we keep Google sign-in?" };
+const enterprise = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", jobTitle: "CTO", size: "201-500", message: "Two clusters." };
+const salesMeta = { page: "https://www.shpyrd.io/contact/sales", at, country: "BR" };
 
 describe("contactMail", () => {
-  it("names the form, the person, the company and what they want in its subject", () => {
-    expect(contactMail("enterprise", enterpriseAnswers, meta).subject).toBe(
-      "[Enterprise] Ana Souza, Acme (201–500 employees)",
+  it("names the form, the person and the company in its subject, as a reply will show it", () => {
+    expect(contactMail("sales", sales, salesMeta).subject).toBe("Contact sales: Ana Souza, acme.com");
+    expect(contactMail("enterprise", enterprise, { page: "https://www.shpyrd.io/contact/enterprise", at }).subject).toBe(
+      "Contact enterprise sales: Ana Souza, Acme (201–500 employees)",
     );
-    expect(
-      contactMail("sales", { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", message: "Six apps." }, meta).subject,
-    ).toBe("[Sales] Ana Souza, acme.com");
   });
 
   it("is answered by replying to the person", () => {
-    expect(contactMail("enterprise", enterpriseAnswers, meta).replyTo).toBe("ana@acme.com");
+    expect(contactMail("sales", sales, salesMeta).replyTo).toBe("ana@acme.com");
   });
 
-  it("lists every answer by its label, the choices by theirs, and where it came from", () => {
-    const { text } = contactMail("enterprise", enterpriseAnswers, meta);
-    expect(text).toContain("Job title: CTO");
-    expect(text).toContain("Company size: 201–500 employees");
-    expect(text).toContain("How can we help you?: Two clusters.");
-    expect(text).toContain("Page: https://shpyrd.io/contact/enterprise");
-    expect(text).toContain("Sent: 2026-10-09T12:00:00.000Z");
-    expect(text).toContain("Country: BR");
+  it("reads as the person's own message: who wrote, what they asked, their details, where and when", () => {
+    const { text } = contactMail("enterprise", enterprise, { page: "https://www.shpyrd.io/contact/enterprise", at });
+    expect(text).toBe(
+      [
+        "Ana Souza (ana@acme.com) wrote to the shpyrd enterprise sales team:",
+        "",
+        "> Two clusters.",
+        "",
+        "Name: Ana Souza",
+        "Email: ana@acme.com",
+        "Company: Acme",
+        "Job title: CTO",
+        "Company size: 201–500 employees",
+        "",
+        "Sent from shpyrd.io/contact/enterprise on 9 October 2026 at 18:40 UTC.",
+      ].join("\n"),
+    );
+  });
+
+  it("quotes every line of a message of several", () => {
+    expect(contactMail("sales", sales, salesMeta).text).toContain("> Six apps to move.\n> Can we keep Google sign-in?");
+  });
+
+  it("keeps what it knows of the visitor's whereabouts to itself", () => {
+    const { text, html } = contactMail("sales", sales, salesMeta);
+    expect(text + html).not.toMatch(/Country|\bBR\b/);
   });
 
   it("keeps the subject to one line whatever was typed", () => {
-    const { subject } = contactMail("sales", { firstName: "Ana\r\nBcc: x@evil.test", lastName: "S", email: "a@b.co", message: "m" }, meta);
+    const { subject } = contactMail("sales", { ...sales, firstName: "Ana\r\nBcc: x@evil.test" }, salesMeta);
     expect(subject).not.toMatch(/[\r\n]/);
   });
 
   it("shows typed markup as text in the HTML", () => {
-    const { html } = contactMail("sales", { firstName: "<b>Ana</b>", lastName: "S", email: "a@b.co", message: "m" }, meta);
+    const { html } = contactMail("sales", { ...sales, firstName: "<b>Ana</b>", message: "<script>x</script>" }, salesMeta);
     expect(html).toContain("&lt;b&gt;Ana&lt;/b&gt;");
+    expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<b>Ana</b>");
+    expect(html).not.toContain("<script>");
   });
 
   it("carries only the form's own fields", () => {
-    const { text, html } = contactMail("sales", { firstName: "Ana", lastName: "S", email: "a@b.co", message: "m", injected: "x" } as never, meta);
+    const { text, html } = contactMail("sales", { ...sales, injected: "x" } as never, salesMeta);
     expect(text + html).not.toContain("injected");
   });
 });
