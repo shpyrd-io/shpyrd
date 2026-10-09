@@ -11,7 +11,7 @@ import { Faq } from "@/components/faq";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/pricing";
 import { glass } from "@shpyrd/ui/lib/glass";
-import { AddToAgent } from "@/components/add-to-agent";
+import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
 
 // The pricing page: the plans of shpyrd cloud with the usage prices of the
@@ -93,7 +93,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
               actions={
                 <div className="flex flex-1 justify-center">
                   {plan.action.kind === "install" ? (
-                    <AddToAgent />
+                    <DeployButton plan={plan.id} />
                   ) : (
                     <Button asChild variant="outline" icon={<MessageCircle />}>
                       <a href={contact.href}>{plan.action.label}</a>

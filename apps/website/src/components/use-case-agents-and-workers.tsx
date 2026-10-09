@@ -1,4 +1,4 @@
-import { AddToAgent } from "@/components/add-to-agent";
+import { DeployButton } from "@/components/deploy-button";
 import { SubpageStep } from "@/components/subpage-step";
 import { SimpleCta } from "@/components/simple-cta";
 
@@ -17,7 +17,7 @@ export function AgentsNext({
     <SimpleCta
       heading={heading}
       description="Connect your agent once, then tell it what to run. Or read how processes work."
-      action={<AddToAgent size="lg" />}
+      action={<DeployButton size="lg" />}
       links={[
         { label: "Processes and deploys", href: "/docs/deploying" },
         { label: "Logs", href: "/docs/logs" },

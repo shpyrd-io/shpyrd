@@ -17,6 +17,13 @@ export const discord = {
   href: '/discord',
 }
 
+// The site's main action: what someone built, deployed on shpyrd cloud
+// (the sign-up). The words take turns after "Deploy your".
+export const deploy = {
+  label: 'Deploy your',
+  things: ['vibecoded app', 'agent', 'site', 'API', 'internal tool', 'side project'],
+}
+
 // Where "Contact us" leads: the sales form, and the enterprise form for the
 // Enterprise plan (apps/website/app/contact).
 export const contact = {

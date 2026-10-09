@@ -26,7 +26,7 @@ import { find, navigation } from "@shpyrd/content/navigation";
 import * as site from "@shpyrd/content/site/offer";
 import { features } from "@shpyrd/content/site/features";
 import { solutionGroups } from "@shpyrd/content/site/solutions";
-import { AddToAgent } from "@/components/add-to-agent";
+import { DeployButton } from "@/components/deploy-button";
 import { icons } from "@/components/landing-icons";
 import { sectionsLive, signInLive } from "@/lib/sections";
 import { DiscordMark, GitHubMark } from "@/components/marks";
@@ -297,7 +297,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">
-                <AddToAgent manual={false} />
+                <DeployButton />
               </div>
             </>
           }
@@ -321,7 +321,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               </Link>
             }
             tagline="You built it. We ship it: online, behind a sign-in, for the people who need it."
-            action={<AddToAgent manual={false} />}
+            action={<DeployButton />}
             columns={[
               // The two menus of the header, without Solutions-backup (it goes
               // after Giovani's design review): the features, and the
