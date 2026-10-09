@@ -202,7 +202,7 @@ export function pricingFor(id: Region['id']) {
         'Costs per project, and drains to send them on',
         'The MCP server for AI assistants',
       ],
-      action: { label: 'Talk to us', kind: 'contact' as const },
+      action: { label: 'Contact us', kind: 'contact' as const },
     },
     // What each line of a plan's usage is, and how it is measured; the rates are
     // the plans' own.

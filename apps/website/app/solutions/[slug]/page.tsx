@@ -5,6 +5,10 @@ import { LandingPage } from "@/components/landing";
 
 // One page for each entry of the Solutions menu (content/site/solutions.ts), all
 // built the same way (landing.tsx). Known when the site is built.
+// Only the addresses built here exist: any other is a 404, never a page
+// rendered on request.
+export const dynamicParams = false;
+
 export function generateStaticParams() {
   return solutions.map((p) => ({ slug: p.slug }));
 }

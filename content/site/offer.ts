@@ -17,10 +17,16 @@ export const discord = {
   href: '/discord',
 }
 
+// Where "Contact us" leads: the sales form, and the enterprise form for the
+// Enterprise plan (apps/website/app/contact).
 export const contact = {
-  href: discord.href,
-  label: 'Start the conversation',
-  note: 'Conversations happen in the project Discord while shpyrd is in beta.',
+  href: '/contact/sales',
+  label: 'Contact us',
+}
+
+export const enterpriseContact = {
+  href: '/contact/enterprise',
+  label: 'Contact us',
 }
 
 export const secondaryCta = {

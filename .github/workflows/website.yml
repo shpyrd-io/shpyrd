@@ -1,6 +1,20 @@
-# The shpyrd.io website (Next + design/ui + content) lives in apps/website/ and deploys from
-# there on Vercel. This job is the pre-merge check; the Vercel preview is the
-# visual one.
+# The shpyrd.io website (Next + design/ui + content) lives in apps/website/.
+# Build checks every pull request and push; on main, Deploy then ships it
+# to shpyrd as the project `website` of the platform workspace
+# (apps/website/shpyrd.yaml): `shpyrd deploy` from the repository's root,
+# with apps/website/Dockerfile, since the site needs the workspace's
+# design/ui and content. A pull request never deploys.
+#
+# Deploy needs, in the repository's settings:
+#   variable SHPYRD_URL    the platform workspace's address, e.g.
+#                          https://platform.shpyrd.app
+#   secret   SHPYRD_TOKEN  an API token scoped to the project: in the
+#                          dashboard (the platform workspace > Workspace > API
+#                          tokens), project website, role developer; or
+#                          shpyrd tokens create website-deploy \
+#                            --project website --role developer --expires 365d
+# The contact forms' settings (SMTP_*, CONTACT_*) are the project's config
+# vars on shpyrd, never here.
 #
 # Path-filtered, so it does not run on Go-only pull requests and reports no
 # status on them. Do not mark "website / Build" as a required status check while
@@ -20,6 +34,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/website.yml'
+  workflow_dispatch:
   pull_request:
     paths:
       - 'apps/website/**'
@@ -32,9 +47,12 @@ on:
 permissions:
   contents: read
 
+# A pull request: a newer push cancels the run in flight. Main: one run at
+# a time, in the order of the pushes, so an older commit never deploys
+# after a newer one and a deploy under way is never cut short.
 concurrency:
   group: website-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -59,3 +77,33 @@ jobs:
       - run: npm --prefix apps/website run typecheck
       - run: npm --prefix apps/website run test
       - run: npm --prefix apps/website run build
+
+  deploy:
+    name: Deploy to shpyrd
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SHPYRD_URL: ${{ vars.SHPYRD_URL }}
+      SHPYRD_TOKEN: ${{ secrets.SHPYRD_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the shpyrd CLI
+        run: |
+          if [ -z "$SHPYRD_URL" ] || [ -z "$SHPYRD_TOKEN" ]; then
+            echo "::error::Set the SHPYRD_URL variable and the SHPYRD_TOKEN secret (see the top of this file)."
+            exit 1
+          fi
+          curl -fsSL https://shpyrd.io/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # shpyrd deploy reads shpyrd.yaml from the directory it runs in, and
+      # the site builds from the root: the project file goes there for the
+      # deploy only (the archive is the committed tree; this copy is not in it).
+      - name: Deploy
+        run: |
+          cp apps/website/shpyrd.yaml shpyrd.yaml
+          shpyrd version
+          shpyrd deploy

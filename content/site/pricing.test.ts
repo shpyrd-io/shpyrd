@@ -92,7 +92,7 @@ describe("the pricing page", () => {
     expect(pricing.plans.map((p) => p.id)).toEqual(["free", "starter", "pro", "business"]);
     expect(pricing.enterprise).not.toHaveProperty("price");
     expect(pricing.enterprise).not.toHaveProperty("usage");
-    expect(pricing.enterprise.action).toEqual({ label: "Talk to us", kind: "contact" });
+    expect(pricing.enterprise.action).toEqual({ label: "Contact us", kind: "contact" });
   });
 
   it("names one point of Enterprise for each licensed feature of ee/", () => {

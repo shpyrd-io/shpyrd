@@ -3,7 +3,7 @@ import { Pricing } from "@/components/pricing";
 import { shared } from "@/lib/metadata";
 
 // The pricing page in Brazil, with its own prices in reais. Visitors from
-// Brazil are sent here from /pricing (vercel.json); search engines keep
+// Brazil are sent here from /pricing (src/lib/redirects.ts); search engines keep
 // /pricing, so this one is not indexed.
 const pricing = pricingFor("br");
 
