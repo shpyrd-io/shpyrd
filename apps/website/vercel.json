@@ -1,6 +1,17 @@
 {
   "redirects": [
     {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "shpyrd.io"
+        }
+      ],
+      "destination": "https://www.shpyrd.io/:path*",
+      "permanent": true
+    },
+    {
       "source": "/discord",
       "destination": "https://discord.gg/RYAT4wNKfw",
       "permanent": false
@@ -22,6 +33,24 @@
           "type": "header",
           "key": "x-vercel-ip-country",
           "value": "BR"
+        }
+      ],
+      "missing": [
+        {
+          "type": "query",
+          "key": "currency"
+        }
+      ],
+      "destination": "/pricing/br",
+      "permanent": false
+    },
+    {
+      "source": "/pricing",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept-language",
+          "value": "pt-BR.*"
         }
       ],
       "missing": [
