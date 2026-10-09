@@ -6,7 +6,7 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { PricingOption, PricingOptions } from "@shpyrd/ui/components/pricing-options";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { contact } from "@shpyrd/content/site/offer";
+import { contact, enterpriseContact } from "@shpyrd/content/site/offer";
 import { Faq } from "@/components/faq";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/pricing";
@@ -133,7 +133,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
               ))}
             </ul>
             <Button asChild variant="outline" icon={<MessageCircle />} className="justify-self-start @3xl/enterprise:justify-self-end">
-              <a href={contact.href}>{enterprise.action.label}</a>
+              <a href={enterpriseContact.href}>{enterprise.action.label}</a>
             </Button>
           </div>
         </Card>
@@ -236,7 +236,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
         <p className="text-center text-sm text-muted-foreground">
           Another question?{" "}
           <a href={contact.href} className="font-medium text-foreground underline underline-offset-4 hover:text-primary">
-            Talk to us
+            Contact us
           </a>
         </p>
       </Stack>
