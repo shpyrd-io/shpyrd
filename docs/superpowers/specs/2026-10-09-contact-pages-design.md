@@ -55,8 +55,7 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   |---|---|---|
   | First name | text | yes |
   | Last name | text | yes |
-  | Work email | email | yes |
-  | Company | text | yes |
+  | Company email | email | yes |
   | How can we help you? | text, several lines | yes |
 
 - Button: **Request a call**.
@@ -76,7 +75,7 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   |---|---|---|
   | First name | text | yes |
   | Last name | text | yes |
-  | Work email | email | yes |
+  | Company email | email | yes |
   | Company | text | yes |
   | Job title | text | yes |
   | Company size | select: 1–49 · 50–249 · 250–999 · 1000+ | yes |
@@ -150,7 +149,7 @@ STARTTLS), configured by environment variables in Vercel:
 | `CONTACT_FROM` | `shpyrd website <website@mg.shpyrd.io>` |
 | `CONTACT_TO` | `sales@shpyrd.io` |
 
-- Subject: `[Sales] Ana Souza, Acme`, or
+- Subject: `[Sales] Ana Souza, acme.com` (the sales form asks no company: the email's domain says which), or
   `[Enterprise] Ana Souza, Acme (250–999): our own cloud`.
 - Body, as text and as a simple table: every field, then the page it came
   from, the time, and the country Vercel reports (`x-vercel-ip-country`).

@@ -19,11 +19,13 @@ export function contactMail(kind: Kind, answers: Answers, meta: { page: string; 
   const form = formOf(kind);
   const field = (name: string) => form.fields.find((f) => f.name === name)!;
   const a = (name: string) => oneLine(shown(field(name), answers[name]));
-  const who = `${a("firstName")} ${a("lastName")}, ${a("company")}`;
+  const name = `${a("firstName")} ${a("lastName")}`;
+  // The sales form asks no company: its email's domain says which.
+  const domain = oneLine(String(answers.email ?? "")).split("@")[1] ?? "";
   const subject =
     kind === "sales"
-      ? `[Sales] ${who}`
-      : `[Enterprise] ${who} (${a("size")}): ${a("runsOn")}`;
+      ? `[Sales] ${name}, ${domain}`
+      : `[Enterprise] ${name}, ${a("company")} (${a("size")}): ${a("runsOn")}`;
 
   const rows: [string, string][] = form.fields
     .map((f): [string, string] => [f.label, shown(f, answers[f.name])])

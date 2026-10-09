@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function fill() {
-  for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Work email", "ana@acme.com"], ["Company", "Acme"], ["How can we help you?", "Six apps to move."]]) {
+  for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Company email", "ana@acme.com"], ["How can we help you?", "Six apps to move."]]) {
     fireEvent.change(screen.getByLabelText(label, { exact: false }), { target: { value } });
   }
 }
@@ -20,7 +20,7 @@ function fill() {
 describe("ContactForm", () => {
   it("shows the sales form's fields", () => {
     render(<ContactForm kind="sales" />);
-    for (const label of ["First name", "Last name", "Work email", "Company", "How can we help you?"]) {
+    for (const label of ["First name", "Last name", "Company email", "How can we help you?"]) {
       expect(screen.getByLabelText(label, { exact: false })).toBeTruthy();
     }
     expect(screen.getByRole("button", { name: "Request a call" })).toBeTruthy();
@@ -32,7 +32,8 @@ describe("ContactForm", () => {
     vi.stubGlobal("fetch", fetch);
     render(<ContactForm kind="sales" />);
     fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
-    expect(screen.getAllByText("Fill this in.").length).toBeGreaterThanOrEqual(4);
+    expect(screen.getAllByText("Fill this in.").length).toBe(4);
+    expect(screen.queryByLabelText(/^Company\*?$/)).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -57,7 +58,7 @@ describe("ContactForm", () => {
     fill();
     fireEvent.click(screen.getByRole("button", { name: "Request a call" }));
     await waitFor(() => expect(screen.getByText(/could not be sent/)).toBeTruthy());
-    expect((screen.getByLabelText("Company", { exact: false }) as HTMLInputElement).value).toBe("Acme");
+    expect((screen.getByLabelText("How can we help you?", { exact: false }) as HTMLTextAreaElement).value).toBe("Six apps to move.");
     expect(screen.getAllByRole("link", { name: /Discord/ })[0].getAttribute("href")).toBe("/discord");
   });
 
@@ -91,7 +92,7 @@ describe("ContactForm", () => {
   it("ties the checkboxes to the error the server gives them", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ errors: { needs: "Choose from the options." } }), { status: 400 })));
     const { container } = render(<ContactForm kind="enterprise" />);
-    for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Work email", "ana@acme.com"], ["Company", "Acme"], ["Job title", "CTO"]]) {
+    for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Company email", "ana@acme.com"], ["Company", "Acme"], ["Job title", "CTO"]]) {
       // The exact label (with its required mark): "Company" is also in "Company size".
       fireEvent.change(screen.getByLabelText(new RegExp(`^${label}\\*?$`)), { target: { value } });
     }

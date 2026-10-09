@@ -13,8 +13,8 @@ describe("contactMail", () => {
       "[Enterprise] Ana Souza, Acme (250–999): Our own cloud (AWS, Oracle Cloud…)",
     );
     expect(
-      contactMail("sales", { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", message: "Six apps." }, meta).subject,
-    ).toBe("[Sales] Ana Souza, Acme");
+      contactMail("sales", { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", message: "Six apps." }, meta).subject,
+    ).toBe("[Sales] Ana Souza, acme.com");
   });
 
   it("is answered by replying to the person", () => {
@@ -32,18 +32,18 @@ describe("contactMail", () => {
   });
 
   it("keeps the subject to one line whatever was typed", () => {
-    const { subject } = contactMail("sales", { firstName: "Ana\r\nBcc: x@evil.test", lastName: "S", email: "a@b.co", company: "A", message: "m" }, meta);
+    const { subject } = contactMail("sales", { firstName: "Ana\r\nBcc: x@evil.test", lastName: "S", email: "a@b.co", message: "m" }, meta);
     expect(subject).not.toMatch(/[\r\n]/);
   });
 
   it("shows typed markup as text in the HTML", () => {
-    const { html } = contactMail("sales", { firstName: "<b>Ana</b>", lastName: "S", email: "a@b.co", company: "A", message: "m" }, meta);
+    const { html } = contactMail("sales", { firstName: "<b>Ana</b>", lastName: "S", email: "a@b.co", message: "m" }, meta);
     expect(html).toContain("&lt;b&gt;Ana&lt;/b&gt;");
     expect(html).not.toContain("<b>Ana</b>");
   });
 
   it("carries only the form's own fields", () => {
-    const { text, html } = contactMail("sales", { firstName: "Ana", lastName: "S", email: "a@b.co", company: "A", message: "m", injected: "x" } as never, meta);
+    const { text, html } = contactMail("sales", { firstName: "Ana", lastName: "S", email: "a@b.co", message: "m", injected: "x" } as never, meta);
     expect(text + html).not.toContain("injected");
   });
 });

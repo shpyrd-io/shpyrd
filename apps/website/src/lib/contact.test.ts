@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { check, isBot, isKind, minimumMs, trap } from "./contact";
 
-const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme" };
+const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com" };
 const salesAnswers = { ...person, message: "We have six internal apps to move." };
-const enterpriseAnswers = { ...person, jobTitle: "CTO", size: "250-999", runsOn: "own-cloud", timeline: "quarter", needs: ["sso", "sla"] };
+const enterpriseAnswers = { ...person, company: "Acme", jobTitle: "CTO", size: "250-999", runsOn: "own-cloud", timeline: "quarter", needs: ["sso", "sla"] };
 
 describe("check", () => {
   it("passes a complete form", () => {
@@ -12,7 +12,7 @@ describe("check", () => {
   });
 
   it("names every required field left empty", () => {
-    expect(Object.keys(check("sales", {})).sort()).toEqual(["company", "email", "firstName", "lastName", "message"]);
+    expect(Object.keys(check("sales", {})).sort()).toEqual(["email", "firstName", "lastName", "message"]);
   });
 
   it("refuses an address that is not one", () => {
@@ -28,19 +28,19 @@ describe("check", () => {
   });
 
   it("refuses a field longer than it may be", () => {
-    expect(check("sales", { ...salesAnswers, company: "x".repeat(101) }).company).toBeTruthy();
+    expect(check("sales", { ...salesAnswers, firstName: "x".repeat(101) }).firstName).toBeTruthy();
     expect(check("sales", { ...salesAnswers, message: "x".repeat(501) }).message).toBeTruthy();
     expect(check("sales", { ...salesAnswers, message: "x".repeat(500) })).toEqual({});
   });
 
   it("refuses a number or an object where a word is expected, rather than fail", () => {
     expect(check("sales", { ...salesAnswers, firstName: 5 as never }).firstName).toBeTruthy();
-    expect(check("sales", { ...salesAnswers, company: { a: 1 } as never }).company).toBeTruthy();
+    expect(check("sales", { ...salesAnswers, lastName: { a: 1 } as never }).lastName).toBeTruthy();
     expect(check("enterprise", { ...enterpriseAnswers, needs: ["sso", 5] as never }).needs).toBeTruthy();
   });
 
   it("refuses a list where a word is expected", () => {
-    expect(check("sales", { ...salesAnswers, company: ["Acme"] }).company).toBeTruthy();
+    expect(check("sales", { ...salesAnswers, lastName: ["Souza"] }).lastName).toBeTruthy();
   });
 });
 

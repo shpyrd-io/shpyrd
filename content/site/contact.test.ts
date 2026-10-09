@@ -4,7 +4,7 @@ import { pricing } from "./pricing";
 
 describe("the contact pages", () => {
   it("ask what the spec says, in its order", () => {
-    expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "company", "message"]);
+    expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "message"]);
     expect(enterprise.fields.map((f) => f.name)).toEqual([
       "firstName", "lastName", "email", "company", "jobTitle", "size", "runsOn", "needs", "timeline", "message",
     ]);
@@ -27,6 +27,12 @@ describe("the contact pages", () => {
   it("ask the sales form's question in the person's own words, and require it", () => {
     const message = sales.fields.find((f) => f.name === "message");
     expect(message).toMatchObject({ label: "How can we help you?", type: "textarea", required: true });
+  });
+
+  it("ask for the company's email on both forms", () => {
+    for (const form of [sales, enterprise]) {
+      expect(form.fields.find((f) => f.name === "email")?.label).toBe("Company email");
+    }
   });
 
   it("thank the person by the address they gave", () => {

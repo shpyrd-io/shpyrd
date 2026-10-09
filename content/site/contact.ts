@@ -26,9 +26,10 @@ export type ContactPage = {
 const person: ContactField[] = [
   { name: 'firstName', label: 'First name', type: 'text', required: true, autoComplete: 'given-name' },
   { name: 'lastName', label: 'Last name', type: 'text', required: true, autoComplete: 'family-name' },
-  { name: 'email', label: 'Work email', type: 'email', required: true, autoComplete: 'email' },
-  { name: 'company', label: 'Company', type: 'text', required: true, autoComplete: 'organization' },
+  { name: 'email', label: 'Company email', type: 'email', required: true, autoComplete: 'email' },
 ]
+
+const company: ContactField = { name: 'company', label: 'Company', type: 'text', required: true, autoComplete: 'organization' }
 
 const replyFirst = 'A reply within one business day'
 
@@ -60,6 +61,7 @@ export const enterprise: ContactPage = {
   submit: 'Contact enterprise sales',
   fields: [
     ...person,
+    company,
     { name: 'jobTitle', label: 'Job title', type: 'text', required: true, autoComplete: 'organization-title' },
     {
       name: 'size',
