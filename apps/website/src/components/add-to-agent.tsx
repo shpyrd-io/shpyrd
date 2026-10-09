@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "cn";
 import { Button } from "@shpyrd/ui/components/button";
+import { placeIn, roll } from "@shpyrd/ui/lib/roll";
 import {
   type BrandIconProps,
   ClaudeIcon,
@@ -123,17 +124,9 @@ export const clock = {
   },
 };
 
-// Where each agent is in the roll, in the library's names for motion: the
-// roll is a move (`duration-slow`, `ease-move`), and the mark settles into
-// place after it (`ease-enter`, a beat later). Only the one leaving and the
-// one arriving move; the others wait under the cell and go back there without
-// being seen, which is why "waiting" has no transition.
-const roll = cn(
-  "transition-[translate,opacity,filter] duration-slow ease-move",
-  "data-[place=here]:translate-y-0 data-[place=here]:opacity-100 data-[place=here]:blur-none",
-  "data-[place=leaving]:-translate-y-[110%] data-[place=leaving]:opacity-0 data-[place=leaving]:blur-[3px]",
-  "data-[place=waiting]:translate-y-[110%] data-[place=waiting]:opacity-0 data-[place=waiting]:blur-[3px] data-[place=waiting]:transition-none",
-);
+// Each agent rolls into place as a word does (design/ui's roll), and its
+// mark settles a beat after the words land (`ease-enter`, delayed): it
+// turns into place from where it leaves or waits.
 const turn = cn(
   "inline-flex transition-[rotate,scale] duration-slow ease-enter",
   "group-data-[place=here]/agent:rotate-0 group-data-[place=here]/agent:scale-100 group-data-[place=here]/agent:delay-150",
@@ -224,7 +217,7 @@ export function AddToAgent({
                 it moves; the cell clips what is above and below. */}
             <span className="-my-1 grid justify-items-center overflow-hidden py-1">
               {agents.map((agent, i) => {
-                const place = i === index ? "here" : i === leaving ? "leaving" : "waiting";
+                const place = placeIn(i, index, leaving);
                 return (
                   <span
                     key={agent.id}
