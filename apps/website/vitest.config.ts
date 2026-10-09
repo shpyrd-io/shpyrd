@@ -5,6 +5,5 @@ import { defineConfig } from "vitest/config";
 // that is made up (jsdom), with the file's `// @vitest-environment jsdom`.
 export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  esbuild: { jsx: "automatic" },
   test: { setupFiles: ["./src/test-setup.ts"] },
 });
