@@ -59,7 +59,12 @@ export function Part() {
 
       <Stack gap="spacious">
         <SectionIntro align="center" variant="xlarge" heading="What it doesn't do" description="Worth knowing before you approve anything." />
-        <Boundaries items={boundaries.filter((b) => b.step !== null)} />
+        {/* The five limits side by side, as on the developers' page: each a
+            claim and what it doesn't cover; three across on a laptop, two on
+            a tablet, one under the other on a phone. */}
+        <div className="[&>ul]:gap-8 sm:[&>ul]:grid-cols-2 lg:[&>ul]:grid-cols-3 xl:[&>ul]:grid-cols-5">
+          <Boundaries items={boundaries.filter((b) => b.step !== null)} />
+        </div>
       </Stack>
 
 

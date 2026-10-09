@@ -120,6 +120,9 @@ export function ContinuousSection({
             // The titles in three sizes, so each kind reads as what it is:
             // the page's opening 60px, each part's title 48px, and the titles
             // of the blocks inside a part 36px.
+            // The page's own hero stands over the binary mark: its words in
+            // the page's glow (global.css), its buttons as they are.
+            i === 0 && "hero-glow",
             i > 0 &&
               "[&_[data-slot=hero-heading]]:!text-4xl @2xl/hero:[&_[data-slot=hero-heading]]:!text-5xl [&_[data-slot=hero]]:!pt-0",
             "[&_[data-slot=section-intro-heading]]:!text-3xl @2xl/section-intro:[&_[data-slot=section-intro-heading]]:!text-4xl",

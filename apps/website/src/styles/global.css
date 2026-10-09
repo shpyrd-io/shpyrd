@@ -23,3 +23,32 @@ body {
   overflow-x: clip;
 }
 
+
+/* Words over a moving background (the binary mark): a glow in the page's own
+   colour, white on the light page and black on the dark, laid in many thin
+   layers so it clears the digits right around each letter and fades out
+   softly beyond. */
+.page-glow,
+.hero-glow
+  :is(
+    [data-slot="hero-label"],
+    [data-slot="hero-heading"],
+    [data-slot="hero-description"],
+    [data-slot="hero-note"]
+  ) {
+  text-shadow:
+    0 0 1px var(--background),
+    0 0 2px var(--background),
+    0 0 3px var(--background),
+    0 0 4px var(--background),
+    0 0 6px var(--background),
+    0 0 8px var(--background),
+    0 0 10px var(--background),
+    0 0 12px var(--background),
+    0 0 14px var(--background),
+    0 0 18px var(--background),
+    0 0 22px var(--background),
+    0 0 28px var(--background),
+    0 0 36px var(--background),
+    0 0 48px var(--background);
+}

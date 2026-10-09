@@ -53,7 +53,11 @@ export function Part() {
 
       <Stack gap="spacious">
         <SectionIntro align="center" variant="xlarge" heading="Worth knowing before you promise it" />
-        <Boundaries items={boundaries.filter((b) => ["sign-in", "data"].includes(b.id))} />
+        {/* Side by side, as the limits on the developers' and IT pages; one
+            under the other on a phone. */}
+        <div className="[&>ul]:gap-8 sm:[&>ul]:grid-cols-2">
+          <Boundaries items={boundaries.filter((b) => ["sign-in", "data"].includes(b.id))} />
+        </div>
       </Stack>
 
 

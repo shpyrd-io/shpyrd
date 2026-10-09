@@ -53,7 +53,10 @@ export function Part() {
         image={<CodeWindow title="Terminal" detail="~/projects/shop" code={deployOutput} language="sh" />}
       />
 
-      <Stack gap="spacious">
+      {/* The whole block, title and link too, in a soft glow of the page's
+          own colour (white on the light page, black on the dark), so it
+          reads over the moving binary mark behind it. */}
+      <Stack gap="spacious" className="page-glow">
         <SectionIntro variant="xlarge" align="center"
           heading="The loop"
           link={

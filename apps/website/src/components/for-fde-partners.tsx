@@ -74,7 +74,9 @@ export function PartnerLimits() {
   return (
     <Stack gap="spacious">
       <SectionIntro align="center" variant="xlarge" heading="What it doesn't do" />
-      <ul className="grid gap-6">
+      {/* The three limits side by side, as on the developers' and IT pages;
+          one under the other on a phone. */}
+      <ul className="grid gap-8 md:grid-cols-3">
         {limits.map((l) => (
           <li key={l.claim} className="border-l-2 pl-4">
             <p className="font-semibold">{l.claim}</p>
