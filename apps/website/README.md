@@ -25,7 +25,7 @@ Or `make website-dev` from the root.
 
 ```
 app/page.tsx                 the marketing homepage
-app/how-sharing-works/       the builder-to-colleague journey
+app/getting-started/         the builder-to-colleague journey
 app/bring-an-app/            the assisted-beta offer
 app/docs/[slug]/             every documentation page
 src/components/shell.tsx     the chrome; it branches on document or marketing page
@@ -66,7 +66,3 @@ reads as a link click.
 
 [MPL-2.0](../../LICENSE), like the rest of the repository. Every component here
 comes from `design/ui`.
-
-The commercial Tailwind UI *Syntax* template, and the carve-out that covered it,
-live with the previous site in `apps/website-old/` until a deploy proves this
-one and it is removed.

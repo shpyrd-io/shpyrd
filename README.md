@@ -5,7 +5,7 @@ place, from deploy to monitoring: cluster bootstrap, buildpack and Dockerfile
 builds, releases and rollbacks, URLs with TLS, config vars, logs and metrics, from one
 CLI and one dashboard on top of Kubernetes.
 
-[![The shop project in the shpyrd dashboard](https://shpyrd.io/screenshots/project-overview.png)](https://shpyrd.io/docs/tour)
+[![A workspace in the shpyrd dashboard: its projects, who can open each, and how each is doing](https://shpyrd.io/screenshots/workspace.png)](https://shpyrd.io/docs/tour)
 
 Status: beta. It runs on a local kind cluster and on Oracle Cloud (OKE); the
 design record and roadmap live in [rfcs/](rfcs/README.md). Website: https://shpyrd.io
@@ -393,16 +393,10 @@ sign-off (`git commit -s`).
 
 ## License
 
-[MPL-2.0](LICENSE), with one exception: `apps/website-old/`, the previous site,
-is built on the commercial Tailwind UI *Syntax* template and is governed by
-[`apps/website-old/LICENSE`](apps/website-old/LICENSE) instead. It is kept only
-until a deploy proves its replacement, and goes with the carve-out when it does.
+[MPL-2.0](LICENSE): the platform, the CLI, the dashboard, the site, the
+examples and the RFCs.
 
-The site that replaces it, `apps/website/`, draws with `design/ui` and carries
-nothing of that template, so it is MPL-2.0 like everything else — the platform,
-the CLI, the dashboard, the examples and the RFCs.
-
-The enterprise features are the other exception: [`ee/`](ee) is governed by
+The enterprise features are the one exception: [`ee/`](ee) is governed by
 [`ee/LICENSE`](ee/LICENSE). Its source is public, and running it in production
 needs an agreement and a license; without a license it is built in and does
 nothing. `go build -tags foss ./...` builds without any of it.

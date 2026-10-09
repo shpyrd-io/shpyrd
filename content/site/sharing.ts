@@ -1,4 +1,4 @@
-// /how-sharing-works — the journey, in the order the research's demonstration
+// /getting-started — the journey, in the order the research's demonstration
 // script uses: the useful work first, the platform second.
 //
 // Each step names the screenshot it needs. Two of them do not exist yet; see

@@ -32,7 +32,7 @@ const sets = {
   sharing: {
     label: "How sharing works",
     items: sharingProposals,
-    current: { href: "/how-sharing-works", title: "Current page" },
+    current: { href: "/getting-started", title: "Current page" },
   },
 };
 
