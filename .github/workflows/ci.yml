@@ -138,8 +138,6 @@ jobs:
       - name: What @shpyrd/ui would ship
         working-directory: design/ui
         run: node scripts/check-pack.mjs
-      - name: What an application of another repository sees of @shpyrd/ui
-        run: design/ui/scripts/check-consumer.sh
       - run: make ui
 
   # What a release builds (the CLIs for every system, the server and the

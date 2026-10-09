@@ -135,13 +135,10 @@ In `ci.yml`, for every pull request that touches `design/ui/**`:
 
 - **What ships.** `npm pack --dry-run` in `design/ui`; the job fails if the
   list holds a test, `app/`, `public/` or a Next configuration file.
-- **What a consumer sees.** The packed tarball is installed into a small Next
-  application made in the job (one page importing a component and
-  `@shpyrd/ui/styles.css`, `transpilePackages` set), and `next build` runs.
-  This proves the exports, the peer dependencies, the compilation and
-  Tailwind's `@source` from `node_modules`, outside the workspace. It is the
-  check that would have caught the font the v0.9.76 cloud release was
-  missing.
+- **What a consumer sees** is checked by the consumers: each project's CI
+  builds a new version when it takes it (its Dependabot pull request).
+  `shpyrd-signup` and `legal` have no CI today; each gets a minimal one
+  (install, type-check, build) in its cycle, before its migration merges.
 - **A forgotten bump.** A change to `design/ui/src/**` without a change of
   version gets a warning, not a failure: not every change has to be released
   at once.
