@@ -1,3 +1,5 @@
-// Where "Get started" goes: the self sign-up of shpyrd cloud, with the
-// free plan chosen. The sign-up reads `?plan=`.
-export const signUp = "https://signup.shpyrd.io/?plan=free";
+// The self sign-up of shpyrd cloud, with a plan chosen: the sign-up reads
+// `?plan=` (the plans' ids, content/site/pricing.ts). "Get started", and
+// anything that names no plan, chooses the free one.
+export const signUpFor = (plan = "free") => `https://signup.shpyrd.io/?plan=${encodeURIComponent(plan)}`;
+export const signUp = signUpFor();

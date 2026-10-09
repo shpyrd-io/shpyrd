@@ -8,7 +8,7 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { glass } from "@shpyrd/ui/lib/glass";
 import { also, gap, hero, route } from "@shpyrd/content/site/home";
 import { secondaryCta } from "@shpyrd/content/site/offer";
-import { AddToAgent } from "@/components/add-to-agent";
+import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
 import { FeatureBlocks } from "@/components/feature-blocks";
 import { RouteTimeline } from "@/components/route-timeline";
@@ -70,7 +70,7 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         description={hero.description}
         actions={
           <>
-            <AddToAgent size="lg" />
+            <DeployButton size="lg" />
             {sectionsLive && (
               <Button variant="outline" size="lg" asChild>
                 <a href={secondaryCta.href}>{secondaryCta.label}</a>
