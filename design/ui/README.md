@@ -48,12 +48,16 @@ removed, a behaviour a screen relies on changed) is a minor version
 
 ## Releasing
 
-1. In the pull request that changes the library, raise the version in
-   `package.json` and add its section to `CHANGELOG.md`.
-2. Merge it. On `main`, `.github/workflows/ui-release.yml` sees a version
-   npm does not have, runs the library's lint, type-check and tests,
-   publishes it, tags the commit `ui-v<version>` and makes a GitHub release
-   with the version's section.
+Changes are collected, not released one by one: each change to `src/`
+adds a line under `## Unreleased` in `CHANGELOG.md` (a breaking one starts
+with `**Breaking:**`). A release is a pull request of its own that turns
+`## Unreleased` into the version's section and sets `package.json`'s
+version; merging it publishes. `.github/workflows/ui-release.yml` sees a
+version npm does not have, runs the library's gates, publishes it, tags
+the commit `ui-v<version>` and makes a GitHub release with the section.
+
+The steps, for a person or an agent: `design/DESIGN_FOR_AGENT.md`,
+"Release the library".
 
 A version with a suffix (`0.4.0-rc.1`) is published under the `next`
 dist-tag, never `latest`.

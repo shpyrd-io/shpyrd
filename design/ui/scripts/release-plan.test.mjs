@@ -60,6 +60,11 @@ describe("changelogSection", () => {
     expect(changelogSection(changelog, "0.1.0")).toBe("The first published version.");
   });
 
+  it("is the version's own section when changes not released yet sit above it", () => {
+    const withUnreleased = changelog.replace("## 0.2.0", "## Unreleased\n\n- A later change.\n\n## 0.2.0");
+    expect(changelogSection(withUnreleased, "0.2.0")).toBe("CodeInput takes a length.");
+  });
+
   it("is empty for a version with no section", () => {
     expect(changelogSection(changelog, "9.9.9")).toBe("");
   });
