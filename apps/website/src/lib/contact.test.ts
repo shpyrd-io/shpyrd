@@ -3,7 +3,7 @@ import { check, isBot, isKind, minimumMs, trap } from "./contact";
 
 const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com" };
 const salesAnswers = { ...person, message: "We have six internal apps to move." };
-const enterpriseAnswers = { ...person, company: "Acme", jobTitle: "CTO", size: "250-999", message: "Two clusters, single sign-on." };
+const enterpriseAnswers = { ...person, company: "Acme", jobTitle: "CTO", size: "201-500", message: "Two clusters, single sign-on." };
 
 describe("check", () => {
   it("passes a complete form", () => {

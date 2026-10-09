@@ -4,13 +4,13 @@ import { contactMail } from "./contact-mail";
 const meta = { page: "https://shpyrd.io/contact/enterprise", at: new Date("2026-10-09T12:00:00Z"), country: "BR" };
 const enterpriseAnswers = {
   firstName: "Ana", lastName: "Souza", email: "ana@acme.com", company: "Acme", jobTitle: "CTO",
-  size: "250-999", message: "Two clusters.",
+  size: "201-500", message: "Two clusters.",
 };
 
 describe("contactMail", () => {
   it("names the form, the person, the company and what they want in its subject", () => {
     expect(contactMail("enterprise", enterpriseAnswers, meta).subject).toBe(
-      "[Enterprise] Ana Souza, Acme (250–999)",
+      "[Enterprise] Ana Souza, Acme (201–500 employees)",
     );
     expect(
       contactMail("sales", { firstName: "Ana", lastName: "Souza", email: "ana@acme.com", message: "Six apps." }, meta).subject,
@@ -24,7 +24,7 @@ describe("contactMail", () => {
   it("lists every answer by its label, the choices by theirs, and where it came from", () => {
     const { text } = contactMail("enterprise", enterpriseAnswers, meta);
     expect(text).toContain("Job title: CTO");
-    expect(text).toContain("Company size: 250–999");
+    expect(text).toContain("Company size: 201–500 employees");
     expect(text).toContain("How can we help you?: Two clusters.");
     expect(text).toContain("Page: https://shpyrd.io/contact/enterprise");
     expect(text).toContain("Sent: 2026-10-09T12:00:00.000Z");

@@ -78,7 +78,7 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   | Company email | email | yes |
   | Company | text | yes |
   | Job title | text | yes |
-  | Company size | select: 1–49 · 50–249 · 250–999 · 1000+ | yes |
+  | Company size | select: 1–10 · 11–50 · 51–200 · 201–500 · 501–1,000 · 1,001–5,000 · 5,000+, each "employees" | yes |
   | How can we help you? | text, several lines | yes |
 
 - Button: **Contact enterprise sales**.
@@ -147,7 +147,7 @@ STARTTLS), configured by environment variables in Vercel:
 | `CONTACT_TO` | `sales@shpyrd.io` |
 
 - Subject: `[Sales] Ana Souza, acme.com` (the sales form asks no company: the email's domain says which), or
-  `[Enterprise] Ana Souza, Acme (250–999)`.
+  `[Enterprise] Ana Souza, Acme (201–500 employees)`.
 - Body, as text and as a simple table: every field, then the page it came
   from, the time, and the country Vercel reports (`x-vercel-ip-country`).
 - `Reply-To` is the address the person gave, so a reply from the inbox

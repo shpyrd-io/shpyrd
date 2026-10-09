@@ -98,7 +98,7 @@ describe("ContactForm", () => {
       // The exact label (with its required mark): "Company" is also in "Company size".
       fireEvent.change(screen.getByLabelText(new RegExp(`^${label.replace("?", "\\?")}\\*?$`)), { target: { value } });
     }
-    fireEvent.change(container.querySelector("select[name=size]")!, { target: { value: "50-249" } });
+    fireEvent.change(container.querySelector("select[name=size]")!, { target: { value: "51-200" } });
     fireEvent.click(screen.getByRole("button", { name: "Contact enterprise sales" }));
     await waitFor(() => expect(screen.getByText("Choose one of the options.")).toBeTruthy());
     const trigger = screen.getByRole("combobox");

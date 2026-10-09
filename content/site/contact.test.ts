@@ -37,6 +37,14 @@ describe("the contact pages", () => {
     }
   });
 
+  it("ask the company's size in employees, from the smallest to the largest", () => {
+    const size = enterprise.fields.find((f) => f.name === "size");
+    expect(size?.choices?.map((c) => c.label)).toEqual([
+      "1–10 employees", "11–50 employees", "51–200 employees", "201–500 employees",
+      "501–1,000 employees", "1,001–5,000 employees", "5,000+ employees",
+    ]);
+  });
+
   it("thank the person by the address they gave", () => {
     expect(thanks("ana@acme.com")).toContain("ana@acme.com");
   });
