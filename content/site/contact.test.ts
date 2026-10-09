@@ -6,13 +6,13 @@ describe("the contact pages", () => {
   it("ask what the spec says, in its order", () => {
     expect(sales.fields.map((f) => f.name)).toEqual(["firstName", "lastName", "email", "message"]);
     expect(enterprise.fields.map((f) => f.name)).toEqual([
-      "firstName", "lastName", "email", "company", "jobTitle", "size", "runsOn", "timeline", "needs", "message",
+      "firstName", "lastName", "email", "company", "jobTitle", "size", "message",
     ]);
   });
 
-  it("give every select and every set of checkboxes its choices", () => {
+  it("give every select its choices", () => {
     for (const f of [...sales.fields, ...enterprise.fields]) {
-      if (f.type === "select" || f.type === "checkboxes") expect(f.choices?.length, f.name).toBeGreaterThan(1);
+      if (f.type === "select") expect(f.choices?.length, f.name).toBeGreaterThan(1);
     }
   });
 
@@ -24,9 +24,11 @@ describe("the contact pages", () => {
     expect(privacy.href).toBe("https://legal.shpyrd.io/global/privacy-policy");
   });
 
-  it("ask the sales form's question in the person's own words, and require it", () => {
-    const message = sales.fields.find((f) => f.name === "message");
-    expect(message).toMatchObject({ label: "How can we help you?", type: "textarea", required: true });
+  it("ask both forms' question in the person's own words, and require it", () => {
+    for (const form of [sales, enterprise]) {
+      const message = form.fields.find((f) => f.name === "message");
+      expect(message).toMatchObject({ label: "How can we help you?", type: "textarea", required: true });
+    }
   });
 
   it("ask for the company's email on both forms", () => {

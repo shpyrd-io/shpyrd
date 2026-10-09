@@ -5,10 +5,8 @@
 // not sent, it keeps what was typed and offers Discord.
 import * as React from "react";
 import { Button } from "@shpyrd/ui/components/button";
-import { Checkbox } from "@shpyrd/ui/components/checkbox";
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
-import { Label } from "@shpyrd/ui/components/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { failed, privacy, technical, thanks, type ContactField } from "@shpyrd/content/site/contact";
@@ -17,11 +15,11 @@ import { check, formOf, trap, type Answers, type Kind } from "@/lib/contact";
 
 type Status = "idle" | "sending" | "sent" | "failed";
 
-// Two fields to a row. Texts of several lines and the checkboxes take a
-// whole row, and so does a field that would be left alone in its own.
+// Two fields to a row. A text of several lines takes a whole row, and so
+// does a field that would be left alone in its own.
 export function wideFields(fields: ContactField[]): Set<string> {
   const wide = new Set<string>();
-  const full = (f: ContactField) => f.type === "textarea" || f.type === "checkboxes";
+  const full = (f: ContactField) => f.type === "textarea";
   let half: ContactField | undefined;
   for (const f of fields) {
     if (full(f)) {
@@ -57,7 +55,6 @@ export function ContactForm({ kind }: { kind: Kind }) {
 
   const set = (name: string, value: string | string[]) => setAnswers((a) => ({ ...a, [name]: value }));
   const text = (name: string) => (typeof answers[name] === "string" ? (answers[name] as string) : "");
-  const list = (name: string) => (Array.isArray(answers[name]) ? (answers[name] as string[]) : []);
 
   // The first field that needs fixing takes the focus, so its error is
   // what a screen reader says next.
@@ -65,9 +62,7 @@ export function ContactForm({ kind }: { kind: Kind }) {
     setErrors(found);
     const first = form.fields.find((f) => found[f.name]);
     if (!first) return;
-    const id = `contact-${first.name}`;
-    const target = first.type === "checkboxes" ? `${id}-${first.choices?.[0]?.value}` : id;
-    document.getElementById(target)?.focus();
+    document.getElementById(`contact-${first.name}`)?.focus();
   }
 
   async function submit(e: React.FormEvent) {
@@ -136,37 +131,6 @@ export function ContactForm({ kind }: { kind: Kind }) {
               </SelectContent>
             </Select>
           </Field>
-        );
-      case "checkboxes":
-        return (
-          <fieldset
-            key={f.name}
-            aria-describedby={errors[f.name] ? `${id}-error` : undefined}
-            className="grid gap-3 sm:col-span-2"
-          >
-            <legend className="mb-1 text-sm font-medium">{f.label}</legend>
-            {f.choices?.map((c) => {
-              const cid = `${id}-${c.value}`;
-              const chosen = list(f.name);
-              return (
-                <div key={c.value} className="flex items-center gap-2.5">
-                  <Checkbox
-                    id={cid}
-                    checked={chosen.includes(c.value)}
-                    onCheckedChange={(on) =>
-                      set(f.name, on === true ? [...chosen, c.value] : chosen.filter((v) => v !== c.value))
-                    }
-                  />
-                  <Label htmlFor={cid}>{c.label}</Label>
-                </div>
-              );
-            })}
-            {errors[f.name] && (
-              <p id={`${id}-error`} className="text-xs text-destructive">
-                {errors[f.name]}
-              </p>
-            )}
-          </fieldset>
         );
       case "textarea":
         return (

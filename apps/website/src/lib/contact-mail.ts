@@ -10,9 +10,8 @@ const escape = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 function shown(f: ContactField, value: string | string[] | undefined): string {
-  const label = (v: string) => f.choices?.find((c) => c.value === v)?.label ?? v;
-  if (Array.isArray(value)) return value.map(label).join(", ");
-  return value ? label(value) : "";
+  if (typeof value !== "string" || !value) return "";
+  return f.choices?.find((c) => c.value === value)?.label ?? value;
 }
 
 export function contactMail(kind: Kind, answers: Answers, meta: { page: string; at: Date; country?: string }) {
@@ -25,7 +24,7 @@ export function contactMail(kind: Kind, answers: Answers, meta: { page: string; 
   const subject =
     kind === "sales"
       ? `[Sales] ${name}, ${domain}`
-      : `[Enterprise] ${name}, ${a("company")} (${a("size")}): ${a("runsOn")}`;
+      : `[Enterprise] ${name}, ${a("company")} (${a("size")})`;
 
   const rows: [string, string][] = form.fields
     .map((f): [string, string] => [f.label, shown(f, answers[f.name])])

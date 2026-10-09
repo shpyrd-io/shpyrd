@@ -63,9 +63,10 @@ describe("ContactForm", () => {
     expect(screen.getAllByRole("link", { name: /Discord/ })[0].getAttribute("href")).toBe("/discord");
   });
 
-  it("shows the enterprise form's choices as checkboxes", () => {
+  it("asks the enterprise form's question, with no checkboxes", () => {
     render(<ContactForm kind="enterprise" />);
-    expect(screen.getByRole("checkbox", { name: "Single sign-on" })).toBeTruthy();
+    expect(screen.getByLabelText("How can we help you?", { exact: false })).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.getByRole("button", { name: "Contact enterprise sales" })).toBeTruthy();
   });
 
@@ -90,20 +91,19 @@ describe("ContactForm", () => {
     expect(described).toContain("Fill this in.");
   });
 
-  it("ties the checkboxes to the error the server gives them", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ errors: { needs: "Choose from the options." } }), { status: 400 })));
+  it("ties a field to the error the server gives it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ errors: { size: "Choose one of the options." } }), { status: 400 })));
     const { container } = render(<ContactForm kind="enterprise" />);
-    for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Company email", "ana@acme.com"], ["Company", "Acme"], ["Job title", "CTO"]]) {
+    for (const [label, value] of [["First name", "Ana"], ["Last name", "Souza"], ["Company email", "ana@acme.com"], ["Company", "Acme"], ["Job title", "CTO"], ["How can we help you?", "Two clusters."]]) {
       // The exact label (with its required mark): "Company" is also in "Company size".
-      fireEvent.change(screen.getByLabelText(new RegExp(`^${label}\\*?$`)), { target: { value } });
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${label.replace("?", "\\?")}\\*?$`)), { target: { value } });
     }
-    for (const [name, value] of [["size", "50-249"], ["runsOn", "cloud"], ["timeline", "quarter"]]) {
-      fireEvent.change(container.querySelector(`select[name=${name}]`)!, { target: { value } });
-    }
+    fireEvent.change(container.querySelector("select[name=size]")!, { target: { value: "50-249" } });
     fireEvent.click(screen.getByRole("button", { name: "Contact enterprise sales" }));
-    await waitFor(() => expect(screen.getByText("Choose from the options.")).toBeTruthy());
-    const group = screen.getByRole("group", { name: "What do you need?" });
-    expect(document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Choose from the options.");
+    await waitFor(() => expect(screen.getByText("Choose one of the options.")).toBeTruthy());
+    const trigger = screen.getByRole("combobox");
+    expect(document.getElementById(trigger.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Choose one of the options.");
+    expect(document.activeElement).toBe(trigger);
   });
 
   // As the server sends it, before the page's script runs: a click then must
@@ -122,9 +122,9 @@ describe("ContactForm", () => {
 
 describe("wideFields", () => {
   // Two fields to a row; a field left alone in its row takes the whole of
-  // it, as do the texts of several lines and the checkboxes.
+  // it, as does a text of several lines.
   it("leaves no field alone in half a row", () => {
     expect([...wideFields(sales.fields)].sort()).toEqual(["email", "message"]);
-    expect([...wideFields(enterprise.fields)].sort()).toEqual(["message", "needs"]);
+    expect([...wideFields(enterprise.fields)].sort()).toEqual(["message"]);
   });
 });

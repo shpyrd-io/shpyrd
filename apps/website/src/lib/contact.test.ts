@@ -3,7 +3,7 @@ import { check, isBot, isKind, minimumMs, trap } from "./contact";
 
 const person = { firstName: "Ana", lastName: "Souza", email: "ana@acme.com" };
 const salesAnswers = { ...person, message: "We have six internal apps to move." };
-const enterpriseAnswers = { ...person, company: "Acme", jobTitle: "CTO", size: "250-999", runsOn: "own-cloud", timeline: "quarter", needs: ["sso", "sla"] };
+const enterpriseAnswers = { ...person, company: "Acme", jobTitle: "CTO", size: "250-999", message: "Two clusters, single sign-on." };
 
 describe("check", () => {
   it("passes a complete form", () => {
@@ -23,10 +23,6 @@ describe("check", () => {
     expect(check("enterprise", { ...enterpriseAnswers, size: "everyone" }).size).toBeTruthy();
   });
 
-  it("refuses a checkbox the form does not have", () => {
-    expect(check("enterprise", { ...enterpriseAnswers, needs: ["sso", "free-lunch"] }).needs).toBeTruthy();
-  });
-
   it("refuses a field longer than it may be", () => {
     expect(check("sales", { ...salesAnswers, firstName: "x".repeat(101) }).firstName).toBeTruthy();
     expect(check("sales", { ...salesAnswers, message: "x".repeat(501) }).message).toBeTruthy();
@@ -36,7 +32,7 @@ describe("check", () => {
   it("refuses a number or an object where a word is expected, rather than fail", () => {
     expect(check("sales", { ...salesAnswers, firstName: 5 as never }).firstName).toBeTruthy();
     expect(check("sales", { ...salesAnswers, lastName: { a: 1 } as never }).lastName).toBeTruthy();
-    expect(check("enterprise", { ...enterpriseAnswers, needs: ["sso", 5] as never }).needs).toBeTruthy();
+    expect(check("enterprise", { ...enterpriseAnswers, size: 5 as never }).size).toBeTruthy();
   });
 
   it("refuses a list where a word is expected", () => {

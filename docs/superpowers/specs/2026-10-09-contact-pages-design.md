@@ -79,10 +79,7 @@ text lives in `content/site/contact.ts`, like the rest of the site's.
   | Company | text | yes |
   | Job title | text | yes |
   | Company size | select: 1–49 · 50–249 · 250–999 · 1000+ | yes |
-  | Where would shpyrd run? | select: shpyrd cloud · Our own cloud (AWS, Oracle Cloud…) · On-premises · Not sure yet | yes |
-  | Timeline | select: Exploring · This quarter · Next quarter or later | yes |
-  | What do you need? | checkboxes: Single sign-on · Security or compliance review · Support with an SLA · Invoicing and procurement · Managed for our clients | no |
-  | Tell us about your setup | text, several lines | no |
+  | How can we help you? | text, several lines | yes |
 
 - Button: **Contact enterprise sales**.
 - Beside it: the Enterprise plan's points, from
@@ -150,7 +147,7 @@ STARTTLS), configured by environment variables in Vercel:
 | `CONTACT_TO` | `sales@shpyrd.io` |
 
 - Subject: `[Sales] Ana Souza, acme.com` (the sales form asks no company: the email's domain says which), or
-  `[Enterprise] Ana Souza, Acme (250–999): our own cloud`.
+  `[Enterprise] Ana Souza, Acme (250–999)`.
 - Body, as text and as a simple table: every field, then the page it came
   from, the time, and the country Vercel reports (`x-vercel-ip-country`).
 - `Reply-To` is the address the person gave, so a reply from the inbox
@@ -180,8 +177,9 @@ Previews have no variables, so they never send real mail.
 
 ## A component for the library
 
-The enterprise form's "What do you need?" needs checkboxes, and
-`design/ui` has none (`checklist.tsx` is a list of a feature's points, not
+The enterprise form first asked "What do you need?" as checkboxes, which
+`design/ui` did not have; the question was later dropped from the form, and
+the component stays in the library for the next form that needs it. `design/ui` had none (`checklist.tsx` is a list of a feature's points, not
 an input). `Checkbox` goes into `design/ui/src/components`, by the library's
 rules (`design/DESIGN_FOR_AGENT.md`): a gallery page and its line in
 `app/catalog.ts`, tests, `"use client"`, colours by name, and a line under

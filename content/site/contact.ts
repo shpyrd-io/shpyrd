@@ -8,7 +8,7 @@ export type Choice = { value: string; label: string }
 export type ContactField = {
   name: string
   label: string
-  type: 'text' | 'email' | 'select' | 'checkboxes' | 'textarea'
+  type: 'text' | 'email' | 'select' | 'textarea'
   required?: boolean
   choices?: Choice[]
   autoComplete?: string
@@ -75,42 +75,7 @@ export const enterprise: ContactPage = {
         { value: '1000+', label: '1000+' },
       ],
     },
-    {
-      name: 'runsOn',
-      label: 'Where would shpyrd run?',
-      type: 'select',
-      required: true,
-      choices: [
-        { value: 'cloud', label: 'shpyrd cloud' },
-        { value: 'own-cloud', label: 'Our own cloud (AWS, Oracle Cloud…)' },
-        { value: 'on-premises', label: 'On-premises' },
-        { value: 'unsure', label: 'Not sure yet' },
-      ],
-    },
-    {
-      name: 'timeline',
-      label: 'Timeline',
-      type: 'select',
-      required: true,
-      choices: [
-        { value: 'exploring', label: 'Exploring' },
-        { value: 'quarter', label: 'This quarter' },
-        { value: 'later', label: 'Next quarter or later' },
-      ],
-    },
-    {
-      name: 'needs',
-      label: 'What do you need?',
-      type: 'checkboxes',
-      choices: [
-        { value: 'sso', label: 'Single sign-on' },
-        { value: 'review', label: 'Security or compliance review' },
-        { value: 'sla', label: 'Support with an SLA' },
-        { value: 'procurement', label: 'Invoicing and procurement' },
-        { value: 'managed', label: 'Managed for our clients' },
-      ],
-    },
-    { name: 'message', label: 'Tell us about your setup', type: 'textarea' },
+    { name: 'message', label: 'How can we help you?', type: 'textarea', required: true },
   ],
   beside: { heading: 'What Enterprise adds', items: pricing.enterprise.features },
   after: { heading: 'What follows', items: [replyFirst, 'A call about your setup', 'A license for a trial'] },
