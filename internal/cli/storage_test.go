@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/storagemigrate"
 )
@@ -45,5 +48,49 @@ func TestVolumeGroupFindsAMountedVolumeByItsProcess(t *testing.T) {
 	}
 	if g := volumeGroup(groups, "uploads"); g != nil {
 		t.Errorf("unknown volume: %+v", g)
+	}
+}
+
+// A lost connection during the copy: the CLI waits for the server's
+// operation to end and reads the result from the placement page.
+func TestWaitForMoveReadsTheResultAfterALostConnection(t *testing.T) {
+	calls := 0
+	request := func(method, path string, body []byte) ([]byte, error) {
+		calls++
+		switch {
+		case path == "" && calls == 1:
+			return nil, errors.New("Post \"https://x/move\": http2: client connection lost")
+		case path == "" && calls == 2:
+			return []byte(`{"id":"op1","kind":"move","phase":"copying","active":true}`), nil
+		case path == "":
+			return []byte(`{"phase":"idle","active":false}`), nil
+		case path == "/placement":
+			return []byte(`{"groups":[{"id":"process:web","processes":["web"],"volumes":["fluxyr"],"nodes":["10.0.1.38"],"storageClasses":["oci-bv"]}]}`), nil
+		}
+		return nil, errors.New("unexpected " + path)
+	}
+	warnings, err := waitForMove(context.Background(), request, "fluxyr", "oci-bv", time.Millisecond)
+	if err != nil || len(warnings) != 0 || calls != 4 {
+		t.Errorf("waitForMove = %v %v after %d calls", warnings, err, calls)
+	}
+	// The operation failed: its error is the answer.
+	failed := func(method, path string, body []byte) ([]byte, error) {
+		return []byte(`{"id":"op2","kind":"move","phase":"copying","error":"copy fluxyr: fingerprint mismatch","active":false}`), nil
+	}
+	if _, err := waitForMove(context.Background(), failed, "fluxyr", "oci-bv", time.Millisecond); err == nil || !strings.Contains(err.Error(), "fingerprint mismatch") {
+		t.Errorf("a failed operation must be reported: %v", err)
+	}
+	// Idle but still on the old class: not done.
+	notMoved := func(method, path string, body []byte) ([]byte, error) {
+		if path == "/placement" {
+			return []byte(`{"groups":[{"id":"process:web","volumes":["fluxyr"],"storageClasses":["shpyrd-local"]}]}`), nil
+		}
+		return []byte(`{"phase":"idle","active":false}`), nil
+	}
+	if _, err := waitForMove(context.Background(), notMoved, "fluxyr", "oci-bv", time.Millisecond); err == nil || !strings.Contains(err.Error(), "still on [shpyrd-local]") {
+		t.Errorf("a move that did not happen must be reported: %v", err)
+	}
+	if !lostConnection(errors.New("http2: client connection lost")) || lostConnection(errors.New("shpyrd-server: project not found")) {
+		t.Error("lostConnection must tell a dead connection from an answer")
 	}
 }
