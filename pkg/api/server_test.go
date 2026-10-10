@@ -672,6 +672,11 @@ func TestVolumesAPIAndScaleRefusal(t *testing.T) {
 			t.Errorf("%s: %d", bad, rec.Code)
 		}
 	}
+	// Without a ReadWriteMany class to fall back on, a shared folder is
+	// refused in words, before anything is created.
+	if rec := do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"shared-default","size":"1Gi","shared":true}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Shared folders are not available on this cloud yet") {
+		t.Errorf("shared without a class: %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := do(t, s, "POST", "/api/projects/demo/volumes", `{"name":"assets","size":"1Gi","shared":true,"storageClass":"nfs"}`, true); rec.Code != http.StatusCreated {
 		t.Errorf("shared create: %d %s", rec.Code, rec.Body.String())
 	}
