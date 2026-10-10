@@ -277,12 +277,12 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		// Its disk counts against the workspace's storage ceiling, as the
 		// namespace quota will count it: refused here, in words, rather
 		// than left waiting for a claim the quota never admits.
-		if disk, has := s.storeDisk(t.Kind, spec); has {
+		if disk, rounded, has := s.storeDisk(t.Kind, spec); has {
 			if err := s.checkStorageLimit(ctx, s.workspace(c), disk); err != nil {
 				abort(c, http.StatusConflict, err)
 				return
 			}
-			if requested := storeRequestedDisk(spec); requested == nil || disk.Cmp(*requested) > 0 {
+			if rounded {
 				note = strings.TrimSpace(note + fmt.Sprintf(" Its disk is %s, the provider minimum.", disk.String()))
 			}
 		}
@@ -735,18 +735,25 @@ func storeRequestedDisk(spec map[string]interface{}) *resource.Quantity {
 }
 
 // storeDisk is the disk a new database or persistent store gets: the
-// request, or the default, rounded to the provider minimum. A store without
+// request, or the default, rounded to the provider minimum; rounded says
+// whether the minimum made it larger than asked. A store without
 // persistence has none.
-func (s *Server) storeDisk(kind string, spec map[string]interface{}) (resource.Quantity, bool) {
+func (s *Server) storeDisk(kind string, spec map[string]interface{}) (disk resource.Quantity, rounded, has bool) {
 	requested := storeRequestedDisk(spec)
+	var base resource.Quantity
 	switch kind {
 	case "Postgres":
-		return s.databaseDiskSize(requested), true
+		disk, base = s.databaseDiskSize(requested), resource.MustParse("5Gi")
 	case "Redis":
 		if persistent, _ := spec["persistent"].(bool); !persistent {
-			return resource.Quantity{}, false
+			return resource.Quantity{}, false, false
 		}
-		return s.redisDiskSize(requested), true
+		disk, base = s.redisDiskSize(requested), resource.MustParse("1Gi")
+	default:
+		return resource.Quantity{}, false, false
 	}
-	return resource.Quantity{}, false
+	if requested != nil {
+		base = *requested
+	}
+	return disk, disk.Cmp(base) > 0, true
 }

@@ -46,9 +46,13 @@ func TestDatabaseDiskCountsAgainstTheStorageCeiling(t *testing.T) {
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Its disk is 50Gi, the provider minimum.") {
 		t.Errorf("database within the ceiling = %d %s", rec.Code, rec.Body.String())
 	}
-	// It now counts: a second one passes the ceiling.
+	// It now counts: with the ceiling lowered under two disks, a second one
+	// passes it.
+	if _, err := st.UpdateWorkspaceSettings(ctx, "acme", store.WorkspaceSettings{Limits: &store.Limits{Storage: "60Gi"}}); err != nil {
+		t.Fatal(err)
+	}
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", `{"kind":"Postgres","name":"db2"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "100Gi of storage; the workspace allows 100Gi") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "100Gi of storage; the workspace allows 60Gi") {
 		t.Errorf("second database = %d %s", rec.Code, rec.Body.String())
 	}
 }
