@@ -127,6 +127,12 @@ variable "apps_node_memory_gb" {
 # platform pool. Same autoscaler mechanism as the apps pool. Enabled when
 # data_max_count > 0.
 
+variable "registry_trust_taint" {
+  description = "Start apps-pool nodes tainted shpyrd.io/registry-trust=pending:NoSchedule until the registry-nodes DaemonSet has written the platform CA, so no project pod is scheduled before the node can pull from the in-cluster registry (shpyrd-io/shpyrd#44). Roll `shpyrd-ctl cluster init` with a version that removes the taint (v0.9.82 or later) before turning this on; it applies to nodes created afterwards."
+  type        = bool
+  default     = false
+}
+
 variable "data_min_count" {
   description = "Minimum nodes of the data pool. 1 keeps wakes at seconds; 0 lets the pool empty (node boot adds ~2 min to a database cold wake)."
   type        = number

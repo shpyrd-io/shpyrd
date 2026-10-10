@@ -4,8 +4,14 @@
 # with a hosts.toml, read on the fly when config_path is set, as kind, OKE,
 # EKS and GKE images do; CRI-O: /etc/containers/certs.d/<host>/ca.crt, read
 # at pull time). The init container does the work; a pause container holds
-# the pod so the DaemonSet reports readiness and new nodes get it before any
-# project pod is scheduled (system-node-critical).
+# the pod so the DaemonSet reports readiness.
+#
+# Readiness orders nothing: a node is Ready seconds before this pod has run,
+# and a project pod scheduled in that gap fails to pull (shpyrd-io/shpyrd#44).
+# A node pool that starts its nodes tainted shpyrd.io/registry-trust=pending
+# (the OCI module's registry_trust_taint) closes the gap: project pods cannot
+# land until the second init container removes the taint, right after the CA
+# is written. On a node without the taint the removal is a no-op.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -64,6 +70,7 @@ spec:
         app.kubernetes.io/name: registry-nodes
     spec:
       priorityClassName: system-node-critical
+      serviceAccountName: registry-nodes
       tolerations:
         - operator: Exists
       initContainers:
@@ -92,6 +99,37 @@ spec:
               mountPath: /host/etc/containerd
             - name: containers
               mountPath: /host/etc/containers
+        - name: untaint
+          image: registry.k8s.io/kubectl:v1.36.1
+          # A strategic merge patch that deletes the taint by key: a no-op
+          # when the node never had it, so this runs on every pool.
+          args:
+            - patch
+            - node
+            - $(NODE_NAME)
+            - --type=strategic
+            - --patch={"spec":{"taints":[{"$patch":"delete","key":"shpyrd.io/registry-trust"}]}}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: KUBECACHEDIR
+              value: /tmp/kubectl
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.10
@@ -106,6 +144,8 @@ spec:
             capabilities:
               drop: [ALL]
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: scripts
           configMap:
             name: registry-nodes

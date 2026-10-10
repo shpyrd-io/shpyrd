@@ -54,6 +54,7 @@ apps_min_count = 1                   # the apps pool: autoscaled, carries proces
 apps_max_count = 3                   # 0 = no apps pool (single-pool cluster)
 apps_node_ocpus = 1                  # smaller nodes: the autoscaler scales in finer steps
 apps_node_memory_gb = 8
+registry_trust_taint = true          # new apps nodes take project pods only once they trust the registry (see below)
 
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
@@ -194,6 +195,8 @@ The cluster autoscaler manages the apps pool alone: a node joins when a process 
 The default platform pool is two E5 nodes of 2 OCPU and 12 GB. Once a data pool takes the databases, `node_ocpus = 1` is enough: two such nodes have about 3.7 allocatable cores, and the platform reserves about 2.0 of them, the node agents included.
 
 `apps_min_count = 1` keeps one warm node so a sleeping app wakes in seconds; `0` lets the pool empty when every app sleeps, and the first request then also waits for a node (about two minutes). `apps_max_count = 0` (the default in Terraform) means no apps pool: a single-pool cluster as before.
+
+A new node is Ready a few seconds before the `registry-nodes` DaemonSet has made its container runtime trust the in-cluster registry, and a project pod scheduled in those seconds fails its first pull. With `registry_trust_taint = true` the pool starts each node tainted `shpyrd.io/registry-trust=pending:NoSchedule`; the DaemonSet removes the taint right after writing the CA, so project pods wait for it. Turn it on after rolling `shpyrd-ctl cluster init` with v0.9.82 or later (the version whose DaemonSet removes the taint); it applies to nodes created afterwards.
 
 **Adding the pool to a running cluster.** Set the `apps_*` variables, `terraform apply`, then `cluster init` with the vars file right away — the file now names the apps pool as the one the autoscaler manages, and the controller adds the selector to every app; the rolling update moves the processes as the autoscaler adds nodes for them, old instances serving until the new ones are ready. Do not leave a long gap between the two commands: until `cluster init` runs, the autoscaler still manages the platform pool and, ten minutes after the new node gives it room, would drain one of the old nodes. Once the apps have moved, lower `node_count` to what the platform and the databases need.
 
