@@ -3,6 +3,7 @@
 @import "@shpyrd/ui/styles.css";
 @import "./feature-blocks.css";
 @import "./aurora.css";
+@import "./tour.css";
 
 /* The site header stays at the top (4.75rem with the room above it), so a
    link to a heading stops below it, with a little room, rather than under it.

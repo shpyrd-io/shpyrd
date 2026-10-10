@@ -1,4 +1,4 @@
-import { ArrowRight, Ban, DoorOpen, Rocket, Undo2 } from "lucide-react";
+import { Ban, DoorOpen, Rocket, Undo2 } from "lucide-react";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Hero } from "@shpyrd/ui/components/hero";
 import { cn } from "@shpyrd/ui/lib/cn";
@@ -13,6 +13,7 @@ import { Boundaries } from "@/components/boundaries";
 import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
 import { pageSections } from "@/lib/page";
+import { signUp } from "@/lib/signup";
 
 export const metadata = { title: "Getting Started", description: intro.lead };
 
@@ -84,7 +85,7 @@ export default function HowSharingWorks() {
                     <Blankslate
                       border
                       title="Screenshot pending"
-                      description={step.screenshot.note ?? step.screenshot.alt}
+                      description={step.screenshot.alt}
                     />
                   )}
                   {under.length > 0 && <Boundaries items={under} />}
@@ -104,8 +105,8 @@ export default function HowSharingWorks() {
         <div className="w-full max-w-4xl [&_li]:border-l-0 [&_li]:pl-0 [&_p]:mx-auto">
           <Boundaries items={boundariesForStep(runs.step)} />
         </div>
-        <Button variant="outline" size="lg" asChild iconEnd={<ArrowRight />}>
-          <a href={runs.link.href}>{runs.link.label}</a>
+        <Button size="lg" asChild>
+          <a href={signUp}>{runs.action}</a>
         </Button>
       </div>
     </PageLayoutContent>

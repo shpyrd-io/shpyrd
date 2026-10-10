@@ -7,6 +7,7 @@ if (typeof window !== "undefined") {
     disconnect() {}
   }
   globalThis.ResizeObserver ??= Observer as unknown as typeof ResizeObserver;
+  globalThis.IntersectionObserver ??= Observer as unknown as typeof IntersectionObserver;
   window.matchMedia ??= (query: string) =>
     ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList;
   Element.prototype.scrollIntoView ??= () => {};

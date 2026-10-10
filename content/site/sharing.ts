@@ -39,8 +39,7 @@ export const steps = [
     screenshot: {
       src: '/screenshots/launcher.png',
       alt: 'The app launcher as a use-only colleague sees it',
-      exists: false,
-      note: 'NEEDS CAPTURE: the launcher signed in as a user-role account.',
+      exists: true,
     },
   },
   {
@@ -54,8 +53,7 @@ export const steps = [
     screenshot: {
       src: '/screenshots/denied.png',
       alt: 'An account without access being denied',
-      exists: false,
-      note: 'NEEDS CAPTURE: a denied response for an account without the grant.',
+      exists: true,
     },
   },
   {
@@ -81,5 +79,6 @@ export const runs = {
     'On shpyrd cloud, with nothing to run. Or on a Kubernetes cluster your ' +
     'company controls: locally on kind while you try it, on Oracle Cloud (OKE) ' +
     'or AWS (EKS) when it matters. A cluster of your own needs an owner.',
-  link: { label: 'Installation and cloud setup', href: '/docs/installation' },
+  // The way to start: the sign-up (apps/website/src/lib/signup.ts).
+  action: 'Get started',
 }

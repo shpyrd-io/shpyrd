@@ -4,7 +4,7 @@ import * as React from "react";
 import { cn } from "@shpyrd/ui/lib/cn";
 
 // How long the line takes to run down the steps.
-const DRAW = 2800;
+const DRAW = 1600;
 
 type Step = {
   icon: React.ReactElement;
@@ -71,14 +71,14 @@ export function VerticalRoute({
       <span
         aria-hidden="true"
         style={{ bottom: end }}
-        className="absolute top-7 left-7 w-px origin-top -translate-x-1/2 scale-y-0 bg-linear-to-b from-border via-primary/60 to-border transition-transform duration-[2800ms] ease-linear group-data-shown/route:scale-y-100"
+        className="absolute top-7 left-7 w-px origin-top -translate-x-1/2 scale-y-0 bg-linear-to-b from-border via-primary/60 to-border transition-transform duration-[1600ms] ease-linear group-data-shown/route:scale-y-100"
       />
       {steps.map((step, i) => (
         <li
           key={i}
           // Each step arrives as the line reaches its icon.
           style={{ transitionDelay: `${Math.round((i / Math.max(steps.length - 1, 1)) * DRAW)}ms` }}
-          className="relative grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-6 opacity-0 transition-[opacity,translate] duration-700 ease-out -translate-x-6 group-data-shown/route:translate-x-0 group-data-shown/route:opacity-100"
+          className="relative grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-6 opacity-0 transition-[opacity,translate] duration-slow ease-enter -translate-x-6 group-data-shown/route:translate-x-0 group-data-shown/route:opacity-100"
         >
           <span
             className={cn(

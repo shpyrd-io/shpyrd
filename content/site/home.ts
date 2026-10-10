@@ -11,11 +11,10 @@ export const hero = {
 }
 
 export const gap = {
-  label: 'The part nobody plans for',
-  heading: 'Working and used are two different things',
+  label: 'Easily deploy your project.',
+  heading: 'Your app, database, and background processes. In one place',
   description:
-    'Building the app was the part you knew how to ask for. The questions after it ' +
-    'are the ones that keep it on your laptop.',
+    'You know how to build it. Then come the questions that keep it stuck on your laptop.',
   items: [
     {
       id: 'where',
@@ -97,4 +96,19 @@ export const boundariesSection = {
   intro:
     'shpyrd is in beta and developed in the open. The limits below are the ' +
     'ones worth knowing before you spend time on an evaluation.',
+}
+
+// For companies, before the page's close: every team builds its own tools
+// now, and the Small Software manifesto says what that asks of the company
+// (Patrick, 2026-10-09: "alguma sessão na home falando de empresas e botão
+// chamando pra ver o small software manifesto").
+export const companies = {
+  label: 'For businesses',
+  heading: 'Every team is building its own apps. Give them one place to run.',
+  description:
+    'Finance, sales, people, ops: they all build their tools with AI now. ' +
+    'shpyrd puts every one of them behind your company’s sign-in, with roles, ' +
+    'isolation, backups and apps that sleep when nobody uses them, on shpyrd ' +
+    'cloud or your own.',
+  manifesto: { href: '/small-software-manifesto', label: 'Read the Small Software manifesto' },
 }

@@ -177,6 +177,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
     </NavList>
   );
 
+  // The manifesto is a deck of its own: the whole window, none of the
+  // site's chrome.
+  if (path === "/small-software-manifesto") return children;
+
   return (
     <PageLayout
       containerWidth="full"
@@ -359,6 +363,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 links: [
                   ...marketing.map((l) => <Link key={l.href} href={l.href}>{l.title}</Link>),
                   <Link key="/docs/roadmap" href="/docs/roadmap">Roadmap</Link>,
+                  <Link key="/small-software-manifesto" href="/small-software-manifesto">Small Software manifesto</Link>,
                 ],
               },
               {

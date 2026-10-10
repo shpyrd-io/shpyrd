@@ -21,9 +21,9 @@ const config: NextConfig = {
   // The development server hands its scripts only to pages opened at its own
   // address. A cloudflared quick tunnel (https://<random>.trycloudflare.com) is
   // how a proposal is shown to someone else, so its addresses may load them too;
-  // so may an ngrok tunnel (https://<name>.ngrok-free.dev). It has no part in
-  // the build.
-  allowedDevOrigins: ["*.trycloudflare.com", "*.ngrok-free.dev"],
+  // so may an ngrok tunnel (https://<name>.ngrok-free.app, or .dev). It has
+  // no part in the build.
+  allowedDevOrigins: ["*.trycloudflare.com", "*.ngrok-free.app", "*.ngrok-free.dev"],
 };
 
 export default config;

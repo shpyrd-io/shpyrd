@@ -47,7 +47,7 @@ type Moment = (typeof MOMENTS)[number][0];
 const at = (name: Moment) => MOMENTS.findIndex(([n]) => n === name);
 const LAST = MOMENTS.length - 1;
 
-function Typing() {
+export function Typing() {
   return (
     <span className="inline-flex gap-1 py-1" aria-label="Typing">
       {[0, 150, 300].map((delay) => (
@@ -115,7 +115,7 @@ const enter = "animate-in fade-in-0 slide-in-from-bottom-2 duration-normal ease-
 //
 // An address in what the agent says, looking like the link it would be. It is
 // made up, so it goes nowhere.
-function Url({ children }: { children: string }) {
+export function Url({ children }: { children: string }) {
   return (
     <span className="font-medium break-all text-foreground underline decoration-muted-foreground/60 underline-offset-2">
       {children}
