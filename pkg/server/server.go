@@ -496,8 +496,8 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
 	}
-	if err := mgr.Add(&controller.LocalStorageProtection{Client: mgr.GetClient()}); err != nil {
-		return nil, err
+	if err := (&controller.LocalStorageProtection{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("local data protection: %w", err)
 	}
 	volumes := &controller.VolumeReconciler{
 		Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"),
