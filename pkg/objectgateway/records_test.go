@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	"github.com/versity/versitygw/auth"
 )
@@ -310,5 +311,59 @@ func TestDescriptorCacheIsBounded(t *testing.T) {
 	c.forget("a")
 	if _, _, ok := c.lookup("a"); ok {
 		t.Fatal("forgotten entry found")
+	}
+}
+
+func TestDeleteEmptiesTheBucketInBatches(t *testing.T) {
+	records, fake := testRecords(t)
+	ctx := context.Background()
+	if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2500; i++ {
+		fake.put(fmt.Sprintf("buckets/consumer-a/dir/%05d", i), "x")
+	}
+	fake.put("buckets/consumer-ab/kept", "x") // a neighbour whose name shares a prefix
+	if err := records.Delete(ctx, "consumer-a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.keysWithPrefix("buckets/consumer-a/"); n != 0 {
+		t.Fatalf("%d objects left", n)
+	}
+	if n := fake.keysWithPrefix("buckets/consumer-ab/"); n != 1 {
+		t.Fatal("neighbour deleted")
+	}
+	fake.mu.Lock()
+	batches, singles := fake.batches, fake.singleDeles
+	fake.mu.Unlock()
+	if singles != 0 {
+		t.Fatalf("%d objects deleted one by one", singles)
+	}
+	if len(batches) != 3 || batches[0] != 1000 || batches[1] != 1000 || batches[2] != 500 {
+		t.Fatalf("batches %v, want [1000 1000 500]", batches)
+	}
+	rec, err := records.Get(ctx, "consumer-a")
+	if err != nil || !rec.Disabled || rec.Secret != "" {
+		t.Fatalf("tombstone %+v, %v", rec, err)
+	}
+}
+
+func TestDeleteReportsAListingFailure(t *testing.T) {
+	records, fake := testRecords(t)
+	ctx := context.Background()
+	if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.put("buckets/consumer-a/one", "x")
+	fake.mu.Lock()
+	fake.listFail = true
+	fake.mu.Unlock()
+	if err := records.Delete(ctx, "consumer-a"); minio.ToErrorResponse(err).Code != "AccessDenied" {
+		t.Fatalf("listing failure: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.batches) != 0 || fake.singleDeles != 0 {
+		t.Fatalf("deletes after a failed listing: %v, %d", fake.batches, fake.singleDeles)
 	}
 }
