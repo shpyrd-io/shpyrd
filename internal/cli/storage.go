@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,7 +34,107 @@ func newStorageMigrateCmd(g *globalFlags) *cobra.Command {
 		Use:   "migrate",
 		Short: "Migrate a database's or a volume's data to the profile's storage class",
 	}
-	cmd.AddCommand(newStorageMigrateDatabaseCmd(g))
+	cmd.AddCommand(newStorageMigrateDatabaseCmd(g), newStorageMigrateVolumeCmd(g))
+	return cmd
+}
+
+// A volume's data is copied by the project move (RFC-0081) onto the
+// profile's class: the project pauses for the copy, the claim keeps its
+// name, the old disk is kept for three days.
+func newStorageMigrateVolumeCmd(g *globalFlags) *cobra.Command {
+	var class string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "volume <project-id> <volume>",
+		Short: "Move a volume's data to the profile's storage class; the project pauses for the copy",
+		Long: `Copies a volume from the storage class it is on (a node's disk, for the
+volumes made before block storage) to the profile's class, through the project
+move: the whole project pauses (HTTP answers 503 with Retry-After), the data is
+copied and verified by fingerprint, the claim keeps its name on the new disk,
+the old disk is kept with the Retain policy for three days as the way back,
+and the project resumes. The volume keeps its mount paths and files; its size
+becomes the provider minimum where there is one.
+
+The project id is the one the console's project archives page shows. Say
+--yes to pause the project without being asked.`,
+		Example: `  shpyrd-ctl storage migrate volume 0yo6bvyy7oe89k5wrkwuva9iw uploads --yes`,
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project, volume := args[0], args[1]
+			ctx := signalContext()
+			k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
+			if err != nil {
+				return err
+			}
+			info, err := install.ReadInstallInfo(ctx, k, "")
+			if err != nil {
+				return errors.New("this cluster does not run the platform yet; there is no profile to read the storage class from")
+			}
+			if class == "" {
+				class = install.ProjectStorageClass(func(key string) string { return info.Vars[key] })
+			}
+			if class == "" {
+				return errors.New("the profile names no storage class for disks; say the target with --class")
+			}
+			raw, err := serverRequest(ctx, k, "GET", "api/cluster/project-archives/"+project+"/placement", nil, "")
+			if err != nil {
+				return err
+			}
+			var placement struct {
+				Groups []struct {
+					ID             string   `json:"id"`
+					Nodes          []string `json:"nodes"`
+					StorageClasses []string `json:"storageClasses"`
+				} `json:"groups"`
+			}
+			if err := json.Unmarshal(raw, &placement); err != nil {
+				return fmt.Errorf("unexpected answer: %w", err)
+			}
+			group := "volume:" + volume
+			var node string
+			found := false
+			for _, g := range placement.Groups {
+				if g.ID != group {
+					continue
+				}
+				found = true
+				if len(g.Nodes) > 0 {
+					node = g.Nodes[0]
+				}
+				if len(g.StorageClasses) == 1 && g.StorageClasses[0] == class {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s is already on %s; nothing to move.\n", volume, class)
+					return nil
+				}
+			}
+			if !found {
+				return fmt.Errorf("the project has no volume %q (groups are listed on its placement page)", volume)
+			}
+			if node == "" {
+				return errors.New("the volume is on no node (it has never been mounted); it needs a node for the copy, mount it first")
+			}
+			if !yes {
+				fmt.Fprintf(cmd.OutOrStdout(), "This pauses project %s while %s is copied to %s on %s. Add --yes to go on.\n", project, volume, class, node)
+				return nil
+			}
+			body, _ := json.Marshal(map[string]string{"group": group, "node": node, "targetClass": class})
+			out, err := serverRequest(ctx, k, "POST", "api/cluster/project-archives/"+project+"/move", body, "application/json")
+			if err != nil {
+				return err
+			}
+			var answer struct {
+				Status   string   `json:"status"`
+				Warnings []string `json:"warnings"`
+			}
+			_ = json.Unmarshal(out, &answer)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s moved to %s on %s; the project is back. The old disk is kept for three days (the placement page lists it).\n", volume, class, node)
+			for _, w := range answer.Warnings {
+				fmt.Fprintln(cmd.OutOrStdout(), "  "+w)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&class, "class", "", "the storage class to move to (default: the profile's class for disks)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "pause the project and move without asking")
 	return cmd
 }
 

@@ -29,9 +29,13 @@ import (
 )
 
 type projectMove struct {
-	RolledBack            bool                           `json:"rolledBack,omitempty"`
-	Group                 placementGroup                 `json:"group"`
-	Destination           string                         `json:"destination"`
+	RolledBack  bool           `json:"rolledBack,omitempty"`
+	Group       placementGroup `json:"group"`
+	Destination string         `json:"destination"`
+	// TargetClass is the storage class the copies are made on: the node's
+	// disk for a move between nodes, the profile's block class for a
+	// migration off the node's disk. Empty in records from before: node-local.
+	TargetClass           string                         `json:"targetClass,omitempty"`
 	BeforeProcesses       string                         `json:"beforeProcesses"`
 	BeforeDatabaseNode    string                         `json:"beforeDatabaseNode"`
 	BeforeVolumes         map[string]shpyrdv1.VolumeSpec `json:"beforeVolumes,omitempty"`
@@ -39,6 +43,15 @@ type projectMove struct {
 	BeforePostgresStorage *resource.Quantity             `json:"beforePostgresStorage,omitempty"`
 	Claims                []moveClaim                    `json:"claims"`
 }
+
+// targetClass is the class the copies are made on.
+func (m *projectMove) targetClass() string {
+	if m.TargetClass == "" {
+		return controller.LocalStorageClass
+	}
+	return m.TargetClass
+}
+
 type moveClaim struct {
 	RetainSource  bool                                 `json:"retainSource,omitempty"`
 	Original      corev1.PersistentVolumeClaim         `json:"original"`
@@ -57,6 +70,9 @@ func (s *Server) moveProject(c *gin.Context) {
 		Group          string `json:"group"`
 		Node           string `json:"node"`
 		MigrateToLocal bool   `json:"migrateToLocal"`
+		// TargetClass moves the data onto another storage class on the way:
+		// the profile's block class, for a disk still on a node's disk.
+		TargetClass string `json:"targetClass,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -82,7 +98,20 @@ func (s *Server) moveProject(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
-	move, err := s.prepareProjectMove(ctx, app, group, node)
+	target := req.TargetClass
+	if target == "" {
+		target = controller.LocalStorageClass
+	}
+	blockProfile := install.ProjectStorageClass(s.vars) != controller.LocalStorageClass
+	if target == controller.LocalStorageClass && blockProfile && req.TargetClass == "" {
+		// On a profile whose disks are block volumes a move between nodes
+		// copies nothing: the disk follows the process. The one move that
+		// makes sense there is off the node's disk, onto the profile's class.
+		if groupOnClass(group, controller.LocalStorageClass) {
+			target = install.ProjectStorageClass(s.vars)
+		}
+	}
+	move, err := s.prepareProjectMove(ctx, app, group, node, target)
 	if err != nil {
 		abort(c, http.StatusConflict, err)
 		return
@@ -91,15 +120,13 @@ func (s *Server) moveProject(c *gin.Context) {
 		if !claim.RetainSource {
 			continue
 		}
-		// A move copies node-local data. On a profile whose disks are
-		// block volumes there is nothing to copy, and copying a block disk
-		// onto a node's disk is the direction this platform retires: never,
-		// whatever the request says.
-		if install.ProjectStorageClass(s.vars) != controller.LocalStorageClass {
+		// A copy onto a node's disk is the direction this platform retires
+		// on its cloud profiles: never there, whatever the request says.
+		if target == controller.LocalStorageClass && blockProfile {
 			abort(c, http.StatusConflict, errors.New("this project's disks are provider block volumes that follow their processes: there is nothing to copy, so the scheduler places them (drain the node, or clear the project's pins); a move only copies node-local disks"))
 			return
 		}
-		if !req.MigrateToLocal {
+		if target == controller.LocalStorageClass && !req.MigrateToLocal {
 			abort(c, http.StatusConflict, errors.New("provider volumes require explicit migration to local storage"))
 			return
 		}
@@ -130,11 +157,24 @@ func (s *Server) moveProject(c *gin.Context) {
 		abort(c, http.StatusBadGateway, errors.Join(err, recoveryErr))
 		return
 	}
-	s.audit(c, app.Name, "project.move", group.ID, "moved to "+node.Name)
-	c.JSON(http.StatusOK, gin.H{"status": "moved", "warnings": op.Warnings})
+	s.audit(c, app.Name, "project.move", group.ID, "moved to "+node.Name+" on "+move.targetClass())
+	c.JSON(http.StatusOK, gin.H{"status": "moved", "targetClass": move.targetClass(), "warnings": op.Warnings})
 }
-func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, group placementGroup, node *corev1.Node) (*projectMove, error) {
-	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes], BeforeVolumes: map[string]shpyrdv1.VolumeSpec{}}
+
+// groupOnClass says whether every claim of the group is on that class.
+func groupOnClass(group placementGroup, class string) bool {
+	if len(group.StorageClasses) == 0 {
+		return false
+	}
+	for _, c := range group.StorageClasses {
+		if c != class {
+			return false
+		}
+	}
+	return true
+}
+func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, group placementGroup, node *corev1.Node, target string) (*projectMove, error) {
+	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], TargetClass: target, BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes], BeforeVolumes: map[string]shpyrdv1.VolumeSpec{}}
 	var claims []corev1.PersistentVolumeClaim
 	if group.Database != "" {
 		pg := &shpyrdv1.Postgres{}
@@ -208,14 +248,16 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		if pv.Annotations[projectOperationLabel] != "" {
 			return nil, errors.New("volume already belongs to another maintenance operation")
 		}
-		move.Claims = append(move.Claims, moveClaim{RetainSource: pv.Spec.StorageClassName != controller.LocalStorageClass, Original: claim, SourcePV: pv.Name, SourceReclaim: pv.Spec.PersistentVolumeReclaimPolicy})
+		// The source disk is kept when the copy changes class: it is the way
+		// back until the project is checked on the new one.
+		move.Claims = append(move.Claims, moveClaim{RetainSource: pv.Spec.StorageClassName != target, Original: claim, SourcePV: pv.Name, SourceReclaim: pv.Spec.PersistentVolumeReclaimPolicy})
 	}
 	if len(claims) > 0 {
 		sc := &storagev1.StorageClass{}
-		if err := s.apps.Get(ctx, types.NamespacedName{Name: controller.LocalStorageClass}, sc); err != nil {
-			return nil, fmt.Errorf("local storage is not installed: %w", err)
+		if err := s.apps.Get(ctx, types.NamespacedName{Name: target}, sc); err != nil {
+			return nil, fmt.Errorf("the storage class %s is not installed: %w", target, err)
 		}
-		if sc.Provisioner != "shpyrd.io/local-path" {
+		if target == controller.LocalStorageClass && sc.Provisioner != "shpyrd.io/local-path" {
 			return nil, errors.New("unexpected local storage provisioner")
 		}
 	}
@@ -367,7 +409,7 @@ func (s *Server) copyMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	if err := s.retainMovePV(ctx, claim.SourcePV, op.ID); err != nil {
 		return err
 	}
-	target := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: claim.TargetClaim, Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID}}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, StorageClassName: ptr.To(controller.LocalStorageClass), Resources: claim.Original.Spec.Resources}}
+	target := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: claim.TargetClaim, Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID}}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, StorageClassName: ptr.To(op.Move.targetClass()), Resources: claim.Original.Spec.Resources}}
 	if err := s.apps.Create(ctx, target); err != nil {
 		return err
 	}
@@ -552,7 +594,7 @@ func (s *Server) bindMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	restored := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: claim.Original.Name, Namespace: app.Namespace, Labels: claim.Original.Labels, OwnerReferences: claim.Original.OwnerReferences}, Spec: *claim.Original.Spec.DeepCopy()}
 	restored.Spec.VolumeName = destination
 	if forward {
-		restored.Spec.StorageClassName = ptr.To(controller.LocalStorageClass)
+		restored.Spec.StorageClassName = ptr.To(op.Move.targetClass())
 		restored.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 		restored.Spec.Selector = nil
 		restored.Spec.DataSource = nil
