@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -166,5 +167,52 @@ func TestProjectArchiveRecoveryOnlyClearsItsOwnDatabaseMaintenance(t *testing.T)
 		if pg.Annotations[shpyrdv1.AnnotationMaintenance] != want {
 			t.Fatalf("%s maintenance=%q", name, pg.Annotations[shpyrdv1.AnnotationMaintenance])
 		}
+	}
+}
+
+// The "<db>-backups" bucket the platform creates for a database with backups
+// (RFC-0038) lives in the project's namespace, owned by its Postgres. It is
+// the database's own archive, not project data, so it must not stop a
+// portable export or a move; a bucket the project created itself still does,
+// in words (#52).
+func TestProjectArchiveIgnoresDatabaseBackupsBucket(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: app.Namespace, UID: "db-uid"}, Spec: shpyrdv1.PostgresSpec{Backups: &shpyrdv1.PostgresBackups{}}}
+	owned := true
+	backups := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{
+		Name: controller.BackupsBucketName(db.Name), Namespace: app.Namespace,
+		Labels:          map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": db.Name},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: shpyrdv1.GroupVersion.String(), Kind: "Postgres", Name: db.Name, UID: db.UID, Controller: &owned, BlockOwnerDeletion: &owned}},
+	}}
+	s, _ := newTestServer(t, nil, []client.Object{app, db, backups})
+	m, err := s.projectArchiveMetadata(ctx, app)
+	if err != nil {
+		t.Fatalf("the database's backups bucket blocked the portable export: %v", err)
+	}
+	if len(m.Databases) != 1 || m.Databases[0].Name != "db" {
+		t.Fatalf("databases: %+v", m.Databases)
+	}
+	if _, err := s.projectMetadata(ctx, app, false); err != nil {
+		t.Fatalf("the database's backups bucket blocked a move: %v", err)
+	}
+
+	// A bucket of the project's own, even one named like a backups bucket
+	// and labelled like one, is still refused: nothing the project does can
+	// give its bucket a database for an owner.
+	own := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads-backups", Namespace: app.Namespace, Labels: backups.Labels}}
+	s, _ = newTestServer(t, nil, []client.Object{app, db, backups, own})
+	_, err = s.projectArchiveMetadata(ctx, app)
+	if err == nil {
+		t.Fatal("archive implied the project's own bucket data was exported")
+	}
+	if !strings.Contains(err.Error(), "object buckets of its own") {
+		t.Fatalf("refusal does not name the project's own buckets: %v", err)
+	}
+	if bad := controller.PlatformWordingFault(err.Error()); bad != "" {
+		t.Fatalf("refusal %q names %q", err, bad)
+	}
+	if _, err := s.projectMetadata(ctx, app, false); err != nil {
+		t.Fatalf("the project's own bucket blocked a move, which does not claim to carry it: %v", err)
 	}
 }

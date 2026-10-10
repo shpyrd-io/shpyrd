@@ -110,13 +110,33 @@ func (s *Server) projectMetadata(ctx context.Context, app *shpyrdv1.App, portabl
 		if err := s.apps.List(ctx, &buckets, client.InNamespace(app.Namespace)); err != nil {
 			return nil, err
 		}
-		if len(buckets.Items) > 0 {
-			return nil, errors.New("portable archives currently support Postgres and volumes; object bucket contents require a separate export")
+		for i := range buckets.Items {
+			if databaseBackupsBucket(&buckets.Items[i]) {
+				continue
+			}
+			return nil, errors.New("portable archives currently support Postgres and volumes; this project also has object buckets of its own, whose contents require a separate export")
 		}
 	}
 	sort.Slice(m.Volumes, func(i, j int) bool { return m.Volumes[i].Name < m.Volumes[j].Name })
 	sort.Slice(m.Databases, func(i, j int) bool { return m.Databases[i].Name < m.Databases[j].Name })
 	return m, nil
+}
+
+// databaseBackupsBucket reports whether the platform made this bucket for
+// one of the project's databases: the "<db>-backups" bucket of RFC-0038,
+// which the Postgres controller creates with itself as the controller owner.
+// Its contents are the database's own archive, kept or dropped with the
+// database, so it holds nothing a project archive would have to carry; only
+// buckets the project created itself do. The owner reference is the
+// criterion because the controller always sets it and nothing a project
+// does can give its own bucket a database for an owner.
+func databaseBackupsBucket(b *shpyrdv1.ObjectBucket) bool {
+	for _, o := range b.OwnerReferences {
+		if o.Kind == "Postgres" && strings.HasPrefix(o.APIVersion, shpyrdv1.GroupVersion.Group+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) archiveRepository(ctx context.Context, reference string) (*remote.Repository, string, error) {
