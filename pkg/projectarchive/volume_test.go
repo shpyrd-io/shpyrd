@@ -59,7 +59,7 @@ func volumeFixture(t *testing.T) []byte {
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "nested"), 0700) })
 	var out bytes.Buffer
-	if err := ExportVolume(context.Background(), dir, &out); err != nil {
+	if err := ExportVolume(context.Background(), dir, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	return out.Bytes()
@@ -169,23 +169,128 @@ func TestVolumeRejectsUnsafeArchives(t *testing.T) {
 		"duplicate": {reg("a"), reg("a")}, "privilege": {{Name: "a", Typeflag: tar.TypeReg, Mode: 04755}},
 		"device":                      {{Name: "a", Typeflag: tar.TypeChar, Mode: 0600}},
 		"hardlink":                    {{Name: "a", Typeflag: tar.TypeLink, Linkname: "../outside", Mode: 0600}},
-		"escaping symlink":            {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: "../outside", Mode: 0777}},
-		"link chain":                  {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0777}, {Name: "b", Typeflag: tar.TypeSymlink, Linkname: "a/../outside", Mode: 0777}},
+		"link without target":         {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: "", Mode: 0777}},
 		"symlink parent":              {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: "b", Mode: 0777}, reg("a/file")},
+		"escaping symlink parent":     {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: "/etc", Mode: 0777}, reg("a/file")},
+		"symlink parent of a folder":  {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0777}, {Name: "a/b", Typeflag: tar.TypeDir, Mode: 0700}},
+		"symlink parent of a link":    {{Name: "a", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0777}, {Name: "a/b", Typeflag: tar.TypeSymlink, Linkname: "c", Mode: 0777}},
 		"parent declared after child": {reg("a/file"), {Name: "a", Typeflag: tar.TypeSymlink, Linkname: "b", Mode: 0777}},
 		"file parent":                 {reg("a"), reg("a/b")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			data := tarEntries(t, headers...)
-			if err := ValidateVolume(context.Background(), bytes.NewReader(data), 0); err == nil {
+			err := ValidateVolume(context.Background(), bytes.NewReader(data), 0)
+			if err == nil {
 				t.Fatal("accepted unsafe archive")
+			}
+			// An archive that lays a link and then writes through it is
+			// refused for that reason, in words (#129).
+			if strings.Contains(name, "symlink parent") && !errors.Is(err, errLinkInPath) {
+				t.Fatalf("refused for another reason: %v", err)
 			}
 			dir := t.TempDir()
 			v := openTransaction(t, dir)
 			if err := v.Stage(context.Background(), bytes.NewReader(data), 0); err == nil {
 				t.Fatal("staged unsafe archive")
 			}
+			if _, err := os.Lstat(filepath.Join(dir, "a", "file")); !os.IsNotExist(err) {
+				t.Fatalf("staging wrote through the link: %v", err)
+			}
 		})
+	}
+}
+
+// A volume in production holds links the platform cannot answer for: a
+// browser's lock links into a temporary directory, a virtual environment's
+// interpreter link to the system's, a link to something gone. They go
+// through an export and a restore as links, said one by one on the report,
+// and never stop the operation (#129).
+func TestVolumeLinksRoundTripAsTheyAre(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	for _, dir := range []string{"profile", "venv/bin", "nested"} {
+		if err := os.MkdirAll(filepath.Join(source, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte("root manifest"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"profile/SingletonSocket": "/tmp/org.chromium.Chromium.k2Fw1a/SingletonSocket",
+		"venv/bin/python":         "/usr/bin/python3",
+		"upwards":                 "../../etc/hosts",
+		"broken":                  "missing-file",
+		"nested/link":             "../manifest.json",
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(source, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var archive, report bytes.Buffer
+	if err := ExportVolume(ctx, source, &archive, &report); err != nil {
+		t.Fatalf("export stopped on a link: %v", err)
+	}
+	warnings := strings.Split(strings.TrimSpace(report.String()), "\n")
+	if len(warnings) != 4 {
+		t.Fatalf("report: %q", report.String())
+	}
+	for _, name := range []string{"profile/SingletonSocket", "venv/bin/python", "upwards", "broken"} {
+		found := false
+		for _, line := range warnings {
+			if strings.HasPrefix(line, WarningPrefix) && strings.Contains(line, " "+name+" ") && strings.Contains(line, links[name]) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("report does not name %s and its target: %q", name, report.String())
+		}
+	}
+	if strings.Contains(report.String(), "nested/link") {
+		t.Fatalf("report warns about a link inside the volume: %q", report.String())
+	}
+	if err := ValidateVolume(ctx, bytes.NewReader(archive.Bytes()), 0); err != nil {
+		t.Fatalf("validation refused the links: %v", err)
+	}
+	destination := t.TempDir()
+	v := openTransaction(t, destination)
+	if err := v.Stage(ctx, bytes.NewReader(archive.Bytes()), 0); err != nil {
+		t.Fatalf("staging refused the links: %v", err)
+	}
+	if err := v.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range links {
+		got, err := os.Readlink(filepath.Join(destination, name))
+		if err != nil || got != target {
+			t.Errorf("%s restored as %q, %v; want the link %q", name, got, err, target)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(destination, "nested", "link")); err != nil || string(got) != "root manifest" {
+		t.Fatalf("link inside the volume: %q, %v", got, err)
+	}
+	// Fingerprints compare the links' targets, not what they point at: the
+	// destination has no browser profile nor interpreter behind them.
+	var before, after bytes.Buffer
+	if err := FingerprintVolume(ctx, source, &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := FingerprintVolume(ctx, destination, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before.Bytes(), after.Bytes()) {
+		t.Fatal("fingerprints differ over links copied as they are")
+	}
+	if err := os.Symlink("/usr/bin/python3.12", filepath.Join(destination, "venv", "python-other")); err != nil {
+		t.Fatal(err)
+	}
+	after.Reset()
+	if err := FingerprintVolume(ctx, destination, &after); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(before.Bytes(), after.Bytes()) {
+		t.Fatal("fingerprint does not see a link's target")
 	}
 }
 
@@ -282,7 +387,7 @@ func TestVolumeRootMetadataAndFingerprintSurviveRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	var archive, before, after bytes.Buffer
-	if err := ExportVolume(ctx, source, &archive); err != nil {
+	if err := ExportVolume(ctx, source, &archive, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if err := FingerprintVolume(ctx, source, &before); err != nil {

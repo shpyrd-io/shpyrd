@@ -9,6 +9,11 @@ helm:
   values: [values.yaml]
   # CRDs are installed by the monitoring-crds component in rc0.
   skipCRDs: true
+# Prometheus keeps its data on a claim of SHPYRD_MONITORING_SIZE (none when
+# empty), pinned to the platform pool with the rest of the stack. Changing
+# the size of an existing claim follows the storage class's expansion rules:
+# the claim grows in place when the class allows it, otherwise it keeps its
+# size until it is recreated.
 kustomize:
   path: base
 wait:

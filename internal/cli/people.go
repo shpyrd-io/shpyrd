@@ -334,7 +334,9 @@ func article(word string) string {
 
 // ---- shpyrd sleep ----------------------------------------------------------
 
-// newSleepCmd configures or disables HTTP sleep for a project's web process.
+// newSleepCmd configures HTTP sleep for a project's web process: a quiet
+// period of its own, off (awake even when the workspace has a default), or
+// the workspace's default (#135).
 func newSleepCmd(g *globalFlags) *cobra.Command {
 	var after, resuming string
 	cmd := &cobra.Command{
@@ -345,7 +347,8 @@ the first request wakes it. The person may choose:
 
   shpyrd sleep shop --after 15m --resuming page   # branded waking screen
   shpyrd sleep shop --after 30m --resuming wait   # hold the connection
-  shpyrd sleep shop --after off                   # disable
+  shpyrd sleep shop --after off                   # never sleeps, whatever the workspace's default
+  shpyrd sleep shop --after default               # follow the workspace's default again
 
 Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 		Args: cobra.ExactArgs(1),
@@ -356,7 +359,8 @@ Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 				return err
 			}
 			// The batch process endpoint takes the sleep spec for web; the
-			// server validates 5m..24h and page|wait, "off" clears it.
+			// server validates 5m..24h and page|wait, stores "off" as the
+			// project's own policy and clears it on "default".
 			body := map[string]any{"processes": map[string]any{
 				"web": map[string]any{"sleep": map[string]any{"after": after, "resuming": resuming}},
 			}}
@@ -365,15 +369,18 @@ Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 				return err
 			}
 			return g.print(cmd, out, func(w io.Writer) {
-				if after == "" || after == "off" {
-					fmt.Fprintf(w, "Sleep disabled for %s.\n", args[0])
-				} else {
+				switch strings.ToLower(after) {
+				case "off":
+					fmt.Fprintf(w, "Sleep is off for %s: it stays awake, also when the workspace has a default.\n", args[0])
+				case "", "default":
+					fmt.Fprintf(w, "Sleep for %s follows the workspace's default.\n", args[0])
+				default:
 					fmt.Fprintf(w, "Sleep set: %s will scale to zero after %s of inactivity (%s mode).\n", args[0], after, firstNonEmpty(resuming, "wait"))
 				}
 			})
 		},
 	}
-	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' disables")
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' keeps the app awake, 'default' follows the workspace")
 	cmd.Flags().StringVar(&resuming, "resuming", "wait", "page (branded waking screen) or wait (hold the connection)")
 	_ = cmd.MarkFlagRequired("after")
 	return cmd

@@ -59,7 +59,7 @@ func NormalizeWorkspaceSettings(in WorkspaceSettings) (WorkspaceSettings, error)
 			if err != nil {
 				return out, fmt.Errorf("apps: %w", err)
 			}
-			if sp != nil {
+			if sleepTurnsOn(sp) { // "off" is no default
 				d, _ := time.ParseDuration(sp.After)
 				n.AppsAfter, n.AppsResuming = shortDuration(d), sp.Resuming
 			}

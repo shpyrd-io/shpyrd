@@ -81,6 +81,18 @@ spec:
             capabilities:
               drop: [ALL]
 ---
+# A node drain or an autoscaler eviction keeps one gateway serving: S3
+# consumers (registry, sources, backups) never lose both replicas at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: object-storage
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: object-storage
+---
 # Only the control plane can call the administrative listener. Project
 # workloads can reach S3 and still require a scoped signed credential.
 apiVersion: networking.k8s.io/v1

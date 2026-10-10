@@ -43,6 +43,13 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 		if pod.DeletionTimestamp != nil || !metav1.IsControlledBy(&pod, current) {
 			continue
 		}
+		if pod.Status.Phase == corev1.PodFailed && pod.Status.Reason == "Evicted" {
+			// The node threw the instance off (disk or memory pressure) and
+			// the Deployment controller has already replaced it; the dead
+			// pod stays until garbage collection. Its end is the node's,
+			// not the release's (#94: ten of them read as ten failing).
+			continue
+		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != "app" {
 				continue

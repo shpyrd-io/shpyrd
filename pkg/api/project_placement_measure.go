@@ -83,7 +83,7 @@ func (s *Server) measureProjectPlacement(c *gin.Context) {
 			abort(c, http.StatusConflict, fmt.Errorf("volume %s is not provisioned yet", claim))
 			return
 		}
-		command, err := s.projectClaimHelper(ctx, app, claim, claim, operation, "", true)
+		command, err := s.projectClaimHelper(ctx, app, claim, claim, operation, "", true, nil)
 		if err != nil {
 			abort(c, http.StatusBadGateway, err)
 			return

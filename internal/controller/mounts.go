@@ -72,14 +72,19 @@ func (r *AppReconciler) resolveMounts(ctx context.Context, app *shpyrdv1.App) (m
 	return out, nil
 }
 
-// applyMounts adds the claims and mounts to a Deployment. Any
-// single-instance volume forces one replica and a Recreate rollout: block
-// storage attaches to one node, a rolling update would wait forever for
-// the old instance to release it.
 // VolumeGroup is the group volumes are handed to (the buildpack images'
 // cnb group; any other image user is added to it as a supplementary group).
 const VolumeGroup int64 = 1000
 
+// applyMounts adds the claims and mounts to a Deployment. A single-instance
+// volume is a ceiling of one instance, never a count: block storage attaches
+// to one node, so a declared count above one is refused (resolveMounts), the
+// sleep scaler's maximum is the declared count (reconcileSleep), and a count
+// above one found here is brought back to one. The count itself belongs to
+// mutateDeployment, which leaves it to the scaler while the app sleeps:
+// writing one here woke a sleeping app on every reconcile and the scaler
+// put it back to sleep, a restart every 30 s (#94). The Recreate rollout
+// such a volume needs is rolloutStrategy's.
 func applyMounts(d *appsv1.Deployment, mounts []resolvedMount) {
 	sort.Slice(mounts, func(i, j int) bool { return mounts[i].Name < mounts[j].Name })
 	var vols []corev1.Volume
@@ -114,17 +119,12 @@ func applyMounts(d *appsv1.Deployment, mounts []resolvedMount) {
 		d.Spec.Template.Spec.SecurityContext.FSGroup = ptr.To(VolumeGroup)
 		d.Spec.Template.Spec.SecurityContext.FSGroupChangePolicy = ptr.To(corev1.FSGroupChangeOnRootMismatch)
 	}
-	want := appsv1.RollingUpdateDeploymentStrategyType
-	if single {
-		want = appsv1.RecreateDeploymentStrategyType
+	if single && d.Spec.Replicas != nil && *d.Spec.Replicas > 1 {
 		d.Spec.Replicas = ptr.To[int32](1)
 	}
 	if restoring {
 		// The claim is being replaced from a snapshot: release it.
 		d.Spec.Replicas = ptr.To[int32](0)
-	}
-	if d.Spec.Strategy.Type != want {
-		d.Spec.Strategy = appsv1.DeploymentStrategy{Type: want}
 	}
 }
 

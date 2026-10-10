@@ -22,16 +22,27 @@ const recoveryDir = ".shpyrd-restore"
 
 var operationName = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-// ExportVolume archives files without following symlinks out of the volume.
-// Recovery workspaces are platform-owned and never part of a user backup.
-func ExportVolume(ctx context.Context, directory string, w io.Writer) error {
+// WarningPrefix marks, on the helper's error stream, a line that is a
+// warning for the operation's report rather than part of a failure.
+const WarningPrefix = "warning: "
+
+// errLinkInPath says an archive entry would be written through a link.
+var errLinkInPath = errors.New("the path goes through a link and was refused")
+
+// ExportVolume archives the tree as it is. A link is written as a link with
+// its target text, never followed, whatever it points at: browser profiles
+// leave lock links into a temporary directory and virtual environments link
+// their interpreter to the system's (#129). A link that points outside the
+// volume, or at nothing in it, is said on report, one line per link, and
+// the export goes on. Recovery workspaces are platform-owned and never part
+// of a user backup.
+func ExportVolume(ctx context.Context, directory string, w io.Writer, report io.Writer) error {
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
 	tw := tar.NewWriter(w)
-	links := map[string]string{}
 	err = fs.WalkDir(root.FS(), ".", func(name string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -53,10 +64,9 @@ func ExportVolume(ctx context.Context, directory string, w io.Writer) error {
 			if err != nil {
 				return err
 			}
-			if !safeLink(name, link) {
-				return fmt.Errorf("volume symlink leaves its root: %s", name)
+			if sentence := linkWarning(root, name, link); sentence != "" {
+				fmt.Fprintln(report, WarningPrefix+sentence)
 			}
-			links[name] = link
 		} else if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported volume file: %s", name)
 		}
@@ -86,69 +96,39 @@ func ExportVolume(ctx context.Context, directory string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := validateLinks(links); err != nil {
-		return err
-	}
 	return tw.Close()
 }
 
 func safeVolumeName(name string) bool {
 	return validName(name) && name != recoveryDir && !strings.HasPrefix(name, recoveryDir+"/")
 }
-func safeLink(name, target string) bool {
-	if target == "" || strings.HasPrefix(target, "/") || strings.ContainsAny(target, "\\\x00") {
-		return false
+
+// linkWarning is the sentence for a link the volume cannot answer for: it
+// names the file and its target, so the person knows what was copied as it
+// is. Empty for a link that points at something inside the volume.
+func linkWarning(root *os.Root, name, target string) string {
+	if target == "" || strings.HasPrefix(target, "/") {
+		return fmt.Sprintf("the link %s points outside the volume, at %s; it was copied as it is", name, target)
 	}
 	resolved := path.Clean(path.Join(path.Dir(name), target))
-	return resolved != ".." && !strings.HasPrefix(resolved, "../") && resolved != recoveryDir && !strings.HasPrefix(resolved, recoveryDir+"/")
-}
-
-// Individually relative links can still escape through a chain, e.g.
-// a -> . and b -> a/../outside. Resolve every known link component before
-// applying '..'; do not rely on lexical path.Clean alone.
-func validateLinks(links map[string]string) error {
-	for name := range links {
-		pending := strings.Split(name, "/")
-		var resolved []string
-		expansions := 0
-		for len(pending) > 0 {
-			part := pending[0]
-			pending = pending[1:]
-			switch part {
-			case "", ".":
-				continue
-			case "..":
-				if len(resolved) == 0 {
-					return fmt.Errorf("symlink chain leaves volume: %s", name)
-				}
-				resolved = resolved[:len(resolved)-1]
-				continue
-			}
-			candidate := strings.Join(append(append([]string{}, resolved...), part), "/")
-			if target, ok := links[candidate]; ok {
-				expansions++
-				if expansions > 255 {
-					return fmt.Errorf("cyclic or excessive symlink chain: %s", name)
-				}
-				pending = append(strings.Split(target, "/"), pending...)
-				continue
-			}
-			resolved = append(resolved, part)
-			if resolved[0] == recoveryDir {
-				return fmt.Errorf("symlink targets recovery data: %s", name)
-			}
-		}
+	if resolved == ".." || strings.HasPrefix(resolved, "../") {
+		return fmt.Sprintf("the link %s points outside the volume, at %s; it was copied as it is", name, target)
 	}
-	return nil
+	if _, err := root.Lstat(resolved); err != nil {
+		return fmt.Sprintf("the link %s points at %s, which is not in the volume; it was copied as it is", name, target)
+	}
+	return ""
 }
 
 // ValidateVolume checks a nested tar without extraction. Extraction repeats
-// these checks using os.Root to prevent symlink/path traversal races.
+// these checks and writes every entry from a handle on its parent directory
+// that was opened without following a link, so no entry is written through
+// one, whatever a link in the archive says (#129).
 func ValidateVolume(ctx context.Context, r io.Reader, limit int64) error {
 	return readVolume(ctx, r, limit, nil)
 }
 
-func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, rootHeader ...*bool) error {
+func readVolume(ctx context.Context, r io.Reader, limit int64, tree *stagingTree, rootHeader ...*bool) error {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -156,7 +136,6 @@ func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, ro
 	seen := map[string]byte{}
 	parents := map[string]bool{}
 	directories := map[string]tar.Header{}
-	links := map[string]string{}
 	var size int64
 	for {
 		h, err := tr.Next()
@@ -173,12 +152,17 @@ func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, ro
 		if (!safeVolumeName(name) && !(name == "." && h.Typeflag == tar.TypeDir)) || seen[name] != 0 || len(seen) >= 100000 {
 			return fmt.Errorf("invalid/duplicate volume path: %q", name)
 		}
+		if parents[name] && h.Typeflag == tar.TypeSymlink {
+			return fmt.Errorf("archive entry %s: %w", name, errLinkInPath)
+		}
 		if parents[name] && h.Typeflag != tar.TypeDir {
-			return fmt.Errorf("non-directory parent: %q", name)
+			return fmt.Errorf("archive entry %s has entries below it but is not a folder", name)
 		}
 		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
-			if kind, ok := seen[parent]; ok && kind != tar.TypeDir {
-				return fmt.Errorf("non-directory parent: %q", parent)
+			if kind, ok := seen[parent]; ok && kind == tar.TypeSymlink {
+				return fmt.Errorf("archive entry %s: %w", name, errLinkInPath)
+			} else if ok && kind != tar.TypeDir {
+				return fmt.Errorf("archive entry %s is below %s, which is not a folder", name, parent)
 			}
 			parents[parent] = true
 		}
@@ -199,31 +183,30 @@ func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, ro
 		switch h.Typeflag {
 		case tar.TypeDir, tar.TypeReg:
 		case tar.TypeSymlink:
-			if !safeLink(name, h.Linkname) {
-				return fmt.Errorf("unsafe symlink: %s", name)
+			if h.Linkname == "" || strings.ContainsRune(h.Linkname, 0) {
+				return fmt.Errorf("archive entry %s is a link without a target", name)
 			}
-			links[name] = h.Linkname
 		default:
 			return fmt.Errorf("unsupported volume entry type: %s", name)
 		}
-		if root == nil {
+		if tree == nil {
 			continue
 		}
-		if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
+		if err := tree.mkdirAll(path.Dir(name), 0700); err != nil {
 			return err
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			err = root.MkdirAll(name, os.FileMode(h.Mode)|0700)
+			err = tree.mkdirAll(name, os.FileMode(h.Mode)|0700)
 			directories[name] = *h
 		case tar.TypeSymlink:
-			err = root.Symlink(h.Linkname, name)
+			err = tree.symlink(h.Linkname, name)
 			if err == nil && os.Geteuid() == 0 {
-				err = root.Lchown(name, h.Uid, h.Gid)
+				err = tree.root.Lchown(name, h.Uid, h.Gid)
 			}
 		case tar.TypeReg:
 			var f *os.File
-			f, err = root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(h.Mode))
+			f, err = tree.create(name, os.FileMode(h.Mode))
 			if err == nil {
 				_, err = io.Copy(f, tr)
 				if err == nil && os.Geteuid() == 0 {
@@ -245,17 +228,15 @@ func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, ro
 			return err
 		}
 		if h.Typeflag == tar.TypeReg {
-			if err := root.Chtimes(name, h.ModTime, h.ModTime); err != nil {
+			if err := tree.root.Chtimes(name, h.ModTime, h.ModTime); err != nil {
 				return err
 			}
 		}
 	}
-	if err := validateLinks(links); err != nil {
-		return err
-	}
 	// Apply directory permissions last, children first. A read-only parent
 	// must not prevent extraction; creating children must not change the
-	// restored directory timestamp after it has been set.
+	// restored directory timestamp after it has been set. These paths were
+	// all just made above without a link in them.
 	names := make([]string, 0, len(directories))
 	for name := range directories {
 		names = append(names, name)
@@ -264,14 +245,14 @@ func readVolume(ctx context.Context, r io.Reader, limit int64, root *os.Root, ro
 	for _, name := range names {
 		h := directories[name]
 		if os.Geteuid() == 0 {
-			if err := root.Chown(name, h.Uid, h.Gid); err != nil {
+			if err := tree.root.Chown(name, h.Uid, h.Gid); err != nil {
 				return err
 			}
 		}
-		if err := root.Chmod(name, os.FileMode(h.Mode)); err != nil {
+		if err := tree.root.Chmod(name, os.FileMode(h.Mode)); err != nil {
 			return err
 		}
-		if err := root.Chtimes(name, h.ModTime, h.ModTime); err != nil {
+		if err := tree.root.Chtimes(name, h.ModTime, h.ModTime); err != nil {
 			return err
 		}
 	}
@@ -407,8 +388,13 @@ func (v *VolumeTransaction) Stage(ctx context.Context, r io.Reader, limit int64)
 		return err
 	}
 	defer root.Close()
+	tree, err := openStagingTree(root)
+	if err != nil {
+		return err
+	}
+	defer tree.Close()
 	hasRoot := false
-	if err := readVolume(ctx, r, limit, root, &hasRoot); err != nil {
+	if err := readVolume(ctx, r, limit, tree, &hasRoot); err != nil {
 		return err
 	}
 	original, err := fs.ReadDir(v.root.FS(), ".")
@@ -539,8 +525,9 @@ func (v *VolumeTransaction) Rollback() error {
 func (v *VolumeTransaction) Finish() error { return v.root.RemoveAll(v.base) }
 
 // VolumeMain is also used in a short-lived helper Pod mounting exactly one
-// project PVC. The helper has no service-account token or host mount.
-func VolumeMain(args []string, stdin io.Reader, stdout io.Writer) error {
+// project PVC. The helper has no service-account token or host mount. Its
+// warnings go to stderr, each on a line that starts with WarningPrefix.
+func VolumeMain(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 1 && args[0] == "wait" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -564,7 +551,7 @@ func VolumeMain(args []string, stdin io.Reader, stdout io.Writer) error {
 		return diskCapacity(directory, stdout)
 	}
 	if args[0] == "export" {
-		return ExportVolume(context.Background(), directory, stdout)
+		return ExportVolume(context.Background(), directory, stdout, stderr)
 	}
 	if len(args) != 3 {
 		return errors.New("project-volume needs operation id")

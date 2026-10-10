@@ -64,9 +64,21 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: [ALL]
+              # The archive is written to this scratch disk and uploaded
+              # from there, never held in memory as a whole: at 512Mi the
+              # production job was killed at its limit on every run (#119).
+              # The limit is SHPYRD_BACKUP_MEMORY for the platforms whose
+              # archives outgrow the default.
+              volumeMounts:
+                - name: scratch
+                  mountPath: /tmp
               resources:
                 requests:
                   cpu: 50m
                   memory: 128Mi
                 limits:
-                  memory: 512Mi
+                  memory: ${SHPYRD_BACKUP_MEMORY}
+          volumes:
+            - name: scratch
+              emptyDir:
+                sizeLimit: 4Gi

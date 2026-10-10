@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"helm.sh/helm/v3/pkg/chart"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -408,11 +409,68 @@ func (e *Engine) chartAndValues(c *Component) (*chart.Chart, map[string]interfac
 	if err != nil {
 		return nil, nil, err
 	}
-	vals, err := loadValues(e.tree, valuesFiles(e.tree, c, e.profile.Name), e.vars)
+	vals, err := e.componentValues(c)
 	if err != nil {
 		return nil, nil, err
 	}
 	return loaded, vals, nil
+}
+
+// componentValues merges the component's values with the profile overlay,
+// then applies what configuration decides rather than the profile: Prometheus
+// keeps its data on a claim of SHPYRD_MONITORING_SIZE, or on the chart's
+// emptyDir when the size is "" (the local profile), as the registry keeps
+// its blobs in a bucket or on a claim by SHPYRD_REGISTRY_BUCKET.
+func (e *Engine) componentValues(c *Component) (map[string]interface{}, error) {
+	vals, err := loadValues(e.tree, valuesFiles(e.tree, c, e.profile.Name), e.vars)
+	if err != nil {
+		return nil, err
+	}
+	if c.Name == MonitoringComponent {
+		if err := prometheusStorage(vals, e.vars[VarMonitoringSize], e.vars[VarStorageClass]); err != nil {
+			return nil, fmt.Errorf("%s: %w", c.Name, err)
+		}
+	}
+	return vals, nil
+}
+
+// MonitoringComponent runs Prometheus and Grafana (kube-prometheus-stack).
+const MonitoringComponent = "monitoring"
+
+// prometheusStorage gives Prometheus a persistent claim of the size, with
+// the class ("" = the cluster default, as the registry and object-storage
+// claims take it). The Prometheus operator makes the StatefulSet's claim
+// from the template; the installer pins the pod, and so the volume, to the
+// platform pool (pools.go). An empty size leaves the values alone: the
+// chart's emptyDir, whose history goes with every restart.
+func prometheusStorage(vals map[string]interface{}, size, class string) error {
+	if size == "" {
+		return nil
+	}
+	if _, err := resource.ParseQuantity(size); err != nil {
+		return fmt.Errorf("%s=%q is not a storage size such as 50Gi: %w", VarMonitoringSize, size, err)
+	}
+	spec := map[string]interface{}{
+		"accessModes": []interface{}{"ReadWriteOnce"},
+		"resources":   map[string]interface{}{"requests": map[string]interface{}{"storage": size}},
+	}
+	if class != "" {
+		spec["storageClassName"] = class
+	}
+	table(table(vals, "prometheus"), "prometheusSpec")["storageSpec"] = map[string]interface{}{
+		"volumeClaimTemplate": map[string]interface{}{"spec": spec},
+	}
+	return nil
+}
+
+// table returns the nested values table under key, making it when absent.
+func table(vals map[string]interface{}, key string) map[string]interface{} {
+	if t, ok := vals[key].(map[string]interface{}); ok {
+		return t
+	}
+	t := map[string]interface{}{}
+	vals[key] = t
+	return t
 }
 
 // renderComponent renders the profile overlay when present, else the base,

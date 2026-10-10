@@ -52,7 +52,9 @@ default (2-3 for high availability with --instances).`,
 
 // Database sleep (RFC-0075, section 5).
 
-// newPgSleepCmd sets or clears the automatic hibernation policy.
+// newPgSleepCmd sets the automatic hibernation policy: a quiet period of
+// the database's own, off (awake even when the workspace has a default for
+// databases), or the workspace's default (#135).
 func newPgSleepCmd(g ext.CLIGlobals) *cobra.Command {
 	var after, project string
 	cmd := &cobra.Command{
@@ -69,7 +71,8 @@ re-released once when the policy is set or removed (their database host
 moves to the platform's wake-capable address).
 
   shpyrd pg sleep db --project shop --after 30m
-  shpyrd pg sleep db --project shop --after off`,
+  shpyrd pg sleep db --project shop --after off       # never sleeps, whatever the workspace's default
+  shpyrd pg sleep db --project shop --after default   # follow the workspace's default again`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
@@ -78,16 +81,19 @@ moves to the platform's wake-capable address).
 				return err
 			}
 			return ext.Print(g, cmd, map[string]string{"project": project, "name": args[0], "sleepAfter": after}, func(w io.Writer) {
-				if after == "off" || after == "" {
-					fmt.Fprintf(w, "Sleep disabled for %s; attached apps are being re-released.\n", args[0])
-				} else {
+				switch strings.ToLower(after) {
+				case "off":
+					fmt.Fprintf(w, "Sleep is off for %s: it stays awake, also when the workspace has a default; attached apps are being re-released.\n", args[0])
+				case "", "default":
+					fmt.Fprintf(w, "Sleep for %s follows the workspace's default; attached apps are being re-released.\n", args[0])
+				default:
 					fmt.Fprintf(w, "%s sleeps after %s without client connections; attached apps are being re-released.\n", args[0], after)
 				}
 			})
 		},
 	}
 	projectFlag(cmd, &project)
-	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' disables")
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' keeps the database awake, 'default' follows the workspace")
 	_ = cmd.MarkFlagRequired("after")
 	return cmd
 }

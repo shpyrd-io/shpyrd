@@ -110,6 +110,7 @@ const (
 	VarVolumeMinSize       = "SHPYRD_VOLUME_MIN_SIZE"       // provider minimum a request is rounded up to ("" = none)
 	VarSnapshotClass       = "SHPYRD_SNAPSHOT_CLASS"        // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
 	VarObjectStorageSize   = "SHPYRD_OBJECT_STORAGE_SIZE"   // volume of the object-storage extension (RFC-0046)
+	VarMonitoringSize      = "SHPYRD_MONITORING_SIZE"       // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
 	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume
@@ -119,6 +120,7 @@ const (
 	VarBackupRegion   = "SHPYRD_BACKUP_REGION"
 	VarBackupSchedule = "SHPYRD_BACKUP_SCHEDULE"  // cron, UTC
 	VarBackupKeep     = "SHPYRD_BACKUP_KEEP"      // archives kept
+	VarBackupMemory   = "SHPYRD_BACKUP_MEMORY"    // memory limit of the backup job ("1Gi" unless the profile says otherwise)
 	VarFSSMountTarget = "SHPYRD_FSS_MOUNT_TARGET" // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
 	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
 	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
@@ -154,6 +156,10 @@ const (
 	// FrontDoorLB is a cloud load balancer in front of ingress-nginx.
 	FrontDoorLB = "lb"
 )
+
+// DefaultBackupMemory is the backup job's memory limit when the profile
+// names none. The production archive outgrew 512Mi (#119).
+const DefaultBackupMemory = "1Gi"
 
 // RegistrySecretName is the dockerconfigjson Secret with the credentials
 // builds push with and instances pull with (private registries).
@@ -391,27 +397,60 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if _, ok := vars[VarNodeMaxCount]; !ok {
 		out[VarNodeMaxCount] = "5"
 	}
+	// The backup job's memory limit (RFC-0037): every profile in the tree
+	// sets it; a profile from before the variable renders with the default.
+	if _, ok := vars[VarBackupMemory]; !ok {
+		out[VarBackupMemory] = DefaultBackupMemory
+	}
 	out[VarRegistryS3Secure] = "true"
 	for _, v := range []string{VarGatewayBucket, VarGatewayEndpoint, VarGatewayRegion} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
 		}
 	}
+	// The S3 gateway (RFC-0046) takes the consumers nobody gave a bucket of
+	// their own. A registry bucket named explicitly (--registry-credentials-file
+	// or SHPYRD_REGISTRY_*) keeps the registry writing straight to the
+	// provider, so image pulls never wait on the gateway; an explicit backup
+	// target likewise keeps the platform archives on their own bucket.
+	// Sources always move to the gateway.
 	if vars[VarGatewayBucket] != "" {
-		endpoint := "http://object-storage." + vars[VarSystemNS] + ".svc:3900"
-		out[VarRegistryBucket] = "registry"
-		out[VarRegistryEndpoint] = endpoint
-		out[VarRegistryRegion] = "garage"
-		out[VarRegistryS3Secure] = "false"
+		endpoint := gatewayEndpoint(vars[VarSystemNS])
+		if vars[VarRegistryBucket] == "" {
+			out[VarRegistryBucket] = "registry"
+			out[VarRegistryEndpoint] = endpoint
+			out[VarRegistryRegion] = "garage"
+			out[VarRegistryS3Secure] = "false"
+		}
 		out[VarSourcesBucket] = "sources"
 		out[VarSourcesEndpoint] = endpoint
 		out[VarSourcesRegion] = "garage"
 		out[VarSourcesSecret] = "gateway-sources"
-		out[VarBackupTarget] = "s3://platform-backups/platform"
-		out[VarBackupEndpoint] = endpoint
-		out[VarBackupRegion] = "garage"
+		if vars[VarBackupTarget] == "" {
+			out[VarBackupTarget] = "s3://platform-backups/platform"
+			out[VarBackupEndpoint] = endpoint
+			out[VarBackupRegion] = "garage"
+		}
 	}
 	return out
+}
+
+// gatewayEndpoint is where the S3 gateway listens inside the cluster: the
+// address Garage had, so consumers need no change when it replaces Garage.
+func gatewayEndpoint(namespace string) string {
+	return "http://object-storage." + namespace + ".svc:3900"
+}
+
+// registryViaGateway reports whether the registry stores images through the
+// S3 gateway, as opposed to a provider bucket of its own.
+func registryViaGateway(vars map[string]string) bool {
+	return vars[VarGatewayBucket] != "" && vars[VarRegistryEndpoint] == gatewayEndpoint(vars[VarSystemNS])
+}
+
+// backupsViaGateway reports whether the platform archives go through the S3
+// gateway, as opposed to a backup target of their own.
+func backupsViaGateway(vars map[string]string) bool {
+	return vars[VarGatewayBucket] != "" && vars[VarBackupEndpoint] == gatewayEndpoint(vars[VarSystemNS])
 }
 
 // URLPort is the https port public URLs carry: 443 when a front door

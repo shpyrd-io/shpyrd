@@ -600,7 +600,7 @@ func TestApplyProcesses(t *testing.T) {
 		t.Errorf("sleep off without keda-http: %d %s", rec.Code, rec.Body.String())
 	}
 	s.sleepAvailable = func() bool { return true }
-	// Web only, 5m..24h, resuming page|wait; "off" clears.
+	// Web only, 5m..24h, resuming page|wait; "off" is stored, "default" clears.
 	for _, bad := range []string{
 		`{"processes":{"web":{"sleep":{"after":"1m"}}}}`,
 		`{"processes":{"web":{"sleep":{"after":"25h"}}}}`,
@@ -620,14 +620,26 @@ func TestApplyProcesses(t *testing.T) {
 	if sp := got.Spec.Processes["web"].Sleep; sp == nil || sp.After != "15m0s" || sp.Resuming != "page" {
 		t.Errorf("sleep not applied: %+v", got.Spec.Processes["web"].Sleep)
 	}
+	// Off is a policy of the project's own (#135): it stays on the process
+	// so the workspace's default cannot put the app back to sleep.
 	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"off"}}}}`, true); rec.Code != http.StatusOK {
 		t.Fatalf("sleep off: %d %s", rec.Code, rec.Body.String())
 	}
 	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1"}, got); err != nil {
 		t.Fatal(err)
 	}
+	if sp := got.Spec.Processes["web"].Sleep; sp == nil || sp.After != "off" {
+		t.Errorf("off must be stored as an explicit policy, got %+v", sp)
+	}
+	// Default clears it: the workspace's default applies again.
+	if rec := do(t, s, "POST", "/api/projects/web1/processes", `{"processes":{"web":{"sleep":{"after":"default"}}}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("sleep default: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1"}, got); err != nil {
+		t.Fatal(err)
+	}
 	if got.Spec.Processes["web"].Sleep != nil {
-		t.Errorf("sleep not cleared: %+v", got.Spec.Processes["web"].Sleep)
+		t.Errorf("default must clear the policy: %+v", got.Spec.Processes["web"].Sleep)
 	}
 }
 
@@ -1284,13 +1296,49 @@ func TestPostgresSleepAPI(t *testing.T) {
 	if got.Spec.Sleep == nil || got.Spec.Sleep.Suspended || got.Spec.Sleep.After != "30m0s" {
 		t.Fatalf("resume: %+v", got.Spec.Sleep)
 	}
-	// Off removes the policy entirely.
+	// Off is a policy of the database's own (#135): it stays, so the
+	// workspace's default for databases cannot put it back to sleep.
 	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"off"}}`, true); rec.Code != http.StatusOK {
 		t.Fatalf("off: %d %s", rec.Code, rec.Body.String())
 	}
 	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep == nil || got.Spec.Sleep.After != "off" {
+		t.Errorf("off must be stored as an explicit policy, got %+v", got.Spec.Sleep)
+	}
+	// Off on an HA database is accepted (it never sleeps anyway); a quiet
+	// period is not.
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/ha/sleep", `{"sleep":{"after":"off"}}`, true); rec.Code != http.StatusOK {
+		t.Errorf("off on HA: %d %s", rec.Code, rec.Body.String())
+	}
+	// Default removes the policy entirely: the workspace's default applies.
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"default"}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("default: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
 	if got.Spec.Sleep != nil {
-		t.Errorf("off should clear the policy: %+v", got.Spec.Sleep)
+		t.Errorf("default should clear the policy: %+v", got.Spec.Sleep)
+	}
+	// A suspension by hand survives both: off keeps the flag with the
+	// explicit policy, default keeps the flag and clears the period.
+	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/suspend", "", true); rec.Code != http.StatusOK {
+		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"off"}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("off while suspended: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep == nil || !got.Spec.Sleep.Suspended || got.Spec.Sleep.After != "off" {
+		t.Errorf("off while suspended: %+v", got.Spec.Sleep)
+	}
+	if rec := do(t, s, "PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"default"}}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("default while suspended: %d %s", rec.Code, rec.Body.String())
+	}
+	_ = cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, got)
+	if got.Spec.Sleep == nil || !got.Spec.Sleep.Suspended || got.Spec.Sleep.After != "" {
+		t.Errorf("default while suspended: %+v", got.Spec.Sleep)
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/resume", "", true); rec.Code != http.StatusOK {
+		t.Fatalf("resume: %d %s", rec.Code, rec.Body.String())
 	}
 	// Suspending an HA database is refused too.
 	if rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/ha/suspend", "", true); rec.Code != http.StatusBadRequest {

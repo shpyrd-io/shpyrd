@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -717,5 +718,148 @@ func TestTheServerDeploymentTakesItsApplicationsFromTheUIImage(t *testing.T) {
 	}
 	if _, kept := eng.overrides()[VarUIImage]; kept {
 		t.Errorf("SHPYRD_UI_IMAGE must not be recorded as an override: %v", eng.overrides())
+	}
+}
+
+// Two stateless gateway replicas serve every S3 consumer; a drain or an
+// autoscaler eviction must leave one of them running.
+func TestObjectGatewayRendersADisruptionBudget(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com", VarGatewayBucket: "gateway", VarGatewayEndpoint: "https://ns.compat.objectstorage.sa-saopaulo-1.oraclecloud.com", VarGatewayRegion: "sa-saopaulo-1"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := eng.renderComponent(eng.components["object-gateway"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deployment, budget bool
+	for _, o := range objs {
+		switch {
+		case o.GetKind() == "Deployment" && o.GetName() == "object-storage":
+			deployment = true
+		case o.GetKind() == "PodDisruptionBudget" && o.GetName() == "object-storage":
+			min, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "minAvailable")
+			app, _, _ := unstructured.NestedString(o.Object, "spec", "selector", "matchLabels", "app.kubernetes.io/name")
+			budget = fmt.Sprint(min) == "1" && app == "object-storage"
+		}
+	}
+	if !deployment || !budget {
+		t.Errorf("object-gateway: deployment=%v disruption budget=%v", deployment, budget)
+	}
+}
+
+// The backup job's memory limit is a variable with a default (#119: the
+// production job died at 512Mi) and the archive is written to a scratch
+// disk.
+func TestPlatformBackupMemoryIsAVariable(t *testing.T) {
+	for set, want := range map[string]string{"": DefaultBackupMemory, "2Gi": "2Gi"} {
+		vars := map[string]string{VarDomain: "example.test"}
+		if set != "" {
+			vars[VarBackupMemory] = set
+		}
+		eng, err := New(nil, Options{Profile: "local", Vars: vars, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		objs, err := eng.renderComponent(eng.components["platform-backup"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seen bool
+		for _, o := range objs {
+			if o.GetKind() != "CronJob" {
+				continue
+			}
+			seen = true
+			containers, _, _ := unstructured.NestedSlice(o.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+			if len(containers) != 1 {
+				t.Fatalf("containers = %v", containers)
+			}
+			mem, _, _ := unstructured.NestedString(containers[0].(map[string]interface{}), "resources", "limits", "memory")
+			if mem != want {
+				t.Errorf("SHPYRD_BACKUP_MEMORY=%q: memory limit = %q, want %q", set, mem, want)
+			}
+			y := mustYAML(t, o)
+			if !strings.Contains(y, `"mountPath":"/tmp"`) || !strings.Contains(y, `"emptyDir"`) {
+				t.Errorf("the archive needs a scratch disk on /tmp:\n%s", y)
+			}
+		}
+		if !seen {
+			t.Fatal("platform-backup rendered no CronJob")
+		}
+	}
+	// A profile from before the variable renders with the default; a set
+	// value is kept.
+	if d := derivedVars(map[string]string{VarDomain: "x.test"}, nil); d[VarBackupMemory] != DefaultBackupMemory {
+		t.Errorf("derived memory = %q", d[VarBackupMemory])
+	}
+	if d := derivedVars(map[string]string{VarDomain: "x.test", VarBackupMemory: "3Gi"}, nil); d[VarBackupMemory] != "" {
+		t.Errorf("an explicit memory limit must not be overridden: %q", d[VarBackupMemory])
+	}
+}
+
+// The monitoring stack carries the rules that make a failed backup run and
+// a stale backup visible (#119), worded for an operator (#52), and keeps
+// the kube-state-metrics collectors they read.
+func TestPlatformBackupAlerts(t *testing.T) {
+	for _, profile := range []string{"local", "oci"} {
+		eng, err := New(nil, Options{Profile: profile, Vars: map[string]string{VarDomain: "example.test", VarACMEEmail: "ops@example.com"}, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals, err := loadValues(deploy.FS, valuesFiles(deploy.FS, eng.components["monitoring"], profile), eng.vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rulesMap, _ := vals["additionalPrometheusRulesMap"].(map[string]interface{})
+		groups, _, _ := unstructured.NestedSlice(rulesMap, "shpyrd-platform-backup", "groups")
+		if len(groups) != 1 {
+			t.Fatalf("%s: backup rule groups = %v", profile, groups)
+		}
+		rules, _, _ := unstructured.NestedSlice(groups[0].(map[string]interface{}), "rules")
+		alerts := map[string]map[string]interface{}{}
+		for _, r := range rules {
+			rule := r.(map[string]interface{})
+			alerts[rule["alert"].(string)] = rule
+		}
+		for _, name := range []string{"PlatformBackupFailed", "PlatformBackupStale"} {
+			rule := alerts[name]
+			if rule == nil {
+				t.Errorf("%s: no %s rule", profile, name)
+				continue
+			}
+			expr, _ := rule["expr"].(string)
+			if !strings.Contains(expr, "platform-backup") || !strings.Contains(expr, `namespace="shpyrd-system"`) {
+				t.Errorf("%s: %s expression does not select the backup job: %s", profile, name, expr)
+			}
+			if sev, _, _ := unstructured.NestedString(rule, "labels", "severity"); sev == "" {
+				t.Errorf("%s: %s has no severity", profile, name)
+			}
+			ann, _, _ := unstructured.NestedStringMap(rule, "annotations")
+			for _, k := range []string{"summary", "description"} {
+				if ann[k] == "" {
+					t.Errorf("%s: %s has no %s", profile, name, k)
+				}
+				for _, word := range []string{"kubectl", "CronJob", "Job", "pod", "namespace", "shpyrd-system", "`"} {
+					if strings.Contains(ann[k], word) {
+						t.Errorf("%s: %s %s names %q: %s", profile, name, k, word, ann[k])
+					}
+				}
+			}
+		}
+		if len(alerts) == 2 {
+			if !strings.Contains(alerts["PlatformBackupFailed"]["expr"].(string), "kube_job_status_failed") || !strings.Contains(alerts["PlatformBackupStale"]["expr"].(string), "kube_cronjob_status_last_successful_time") {
+				t.Errorf("%s: rules read the wrong metrics", profile)
+			}
+		}
+		// The alerts read the jobs and cronjobs collectors: the chart's
+		// default list must stay, or name both.
+		ksm, _ := vals["kube-state-metrics"].(map[string]interface{})
+		if collectors, has := ksm["collectors"]; has {
+			y := fmt.Sprint(collectors)
+			if !strings.Contains(y, "jobs") || !strings.Contains(y, "cronjobs") {
+				t.Errorf("%s: kube-state-metrics collectors drop jobs or cronjobs: %v", profile, collectors)
+			}
+		}
 	}
 }

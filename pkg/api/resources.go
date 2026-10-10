@@ -566,20 +566,27 @@ type postgresSleepRequest struct {
 // be available. Apps attached to the database get a config release when
 // the policy appears or disappears (the host moves between "<name>-rw" and
 // the shpyrd Service "<name>"); the CLI says so.
+//
+// Three states, as for a web process (#135): a quiet period of its own,
+// an explicit "off" (stored, so the database stays awake when the
+// workspace has a default for databases), and "default" (the policy is
+// cleared and the workspace's default applies).
 func (s *Server) patchPostgresSleep(c *gin.Context) {
 	var req postgresSleepRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.Sleep == nil {
-		abort(c, http.StatusBadRequest, errors.New(`body must be {"sleep":{"after":"30m"}} ("off" disables)`))
+		abort(c, http.StatusBadRequest, errors.New(`body must be {"sleep":{"after":"30m"}}; "off" keeps the database awake, "default" follows the workspace`))
 		return
 	}
 	after := strings.ToLower(strings.TrimSpace(req.Sleep.After))
 	switch after {
-	case "", "off", "false":
+	case "", "default":
 		after = ""
+	case sleepOff, "false":
+		after = sleepOff
 	default:
 		d, err := time.ParseDuration(after)
 		if err != nil {
-			abort(c, http.StatusBadRequest, fmt.Errorf("sleep after: %q is not a duration (try 30m, 2h)", req.Sleep.After))
+			abort(c, http.StatusBadRequest, fmt.Errorf("sleep after: %q is not a quiet period (try 30m or 2h); off keeps the database awake, default follows the workspace", req.Sleep.After))
 			return
 		}
 		if d < 5*time.Minute || d > 24*time.Hour {
@@ -593,10 +600,11 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 		}
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
-		if after != "" && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
+		if after != "" && after != sleepOff && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
 			return fmt.Errorf("%s runs %d instances (high availability) and never sleeps", pg.Name, *pg.Spec.Instances)
 		}
 		if after == "" {
+			// Back to the workspace's default; a suspension by hand stays.
 			if pg.Spec.Sleep != nil {
 				pg.Spec.Sleep.After = ""
 				if !pg.Spec.Sleep.Suspended {
@@ -614,8 +622,12 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	detail := "off"
-	if after != "" {
+	detail := "workspace default"
+	switch after {
+	case sleepOff:
+		detail = "off"
+	case "":
+	default:
 		detail = "after " + after
 	}
 	s.audit(c, c.Param("slug"), "postgres.sleep", pg.Name, detail)

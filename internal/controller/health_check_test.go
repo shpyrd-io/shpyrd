@@ -176,6 +176,30 @@ func TestProcessHealthStartupBudget(t *testing.T) {
 	}
 }
 
+// #94: an instance the node evicted (disk pressure) is dead and already
+// replaced; it is not a failing instance of the release.
+func TestEvictedInstancesAreNotFailing(t *testing.T) {
+	app := sampleApp("evict")
+	d := rolledOut(app, "registry.test/evict:v1")
+	rs := replicaSetOf(d, "registry.test/evict:v1", "h1")
+	evicted := podOf(rs, "evict-web-old", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}})
+	evicted.Status.Phase, evicted.Status.Reason = corev1.PodFailed, "Evicted"
+	evicted.Status.Message = "The node was low on resource: ephemeral-storage."
+	running := podOf(rs, "evict-web-new", corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}})
+	running.Status.ContainerStatuses[0].Ready = true
+	r, _ := newTestReconciler(t, app, d, rs, evicted, running)
+	if failing, reason := r.processHealth(context.Background(), rs); failing != 0 || reason != "" {
+		t.Errorf("evicted instance: failing=%d reason=%q, want none", failing, reason)
+	}
+	// An instance that failed on its own still counts.
+	crashed := podOf(rs, "evict-web-crashed", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}})
+	crashed.Status.Phase = corev1.PodFailed
+	r2, _ := newTestReconciler(t, app, d, rs, evicted, crashed)
+	if failing, reason := r2.processHealth(context.Background(), rs); failing != 1 || reason != "exited with code 1" {
+		t.Errorf("crashed instance: failing=%d reason=%q", failing, reason)
+	}
+}
+
 // rolledOut is a web Deployment of app at image.
 func rolledOut(app *shpyrdv1.App, image string) *appsv1.Deployment {
 	labels := selectorLabels(app, "web")

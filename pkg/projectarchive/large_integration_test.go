@@ -81,7 +81,7 @@ func TestLargeProjectVolumeRoundTrip(t *testing.T) {
 	}
 	r, w := io.Pipe()
 	exported := make(chan error, 1)
-	go func() { err := ExportVolume(ctx, dir, w); w.CloseWithError(err); exported <- err }()
+	go func() { err := ExportVolume(ctx, dir, w, io.Discard); w.CloseWithError(err); exported <- err }()
 	err = b.Add(ctx, "volumes/data.tar", r)
 	r.CloseWithError(err)
 	sourceErr := <-exported

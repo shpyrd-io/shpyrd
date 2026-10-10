@@ -10,7 +10,9 @@ kubeProxy:
 
 prometheus:
   prometheusSpec:
-    retention: 7d
+    # On a 50 GB block volume (SHPYRD_MONITORING_SIZE); the series the
+    # platform keeps are small and two weeks of them fit with room to spare.
+    retention: 15d
     resources:
       requests:
         cpu: 100m
