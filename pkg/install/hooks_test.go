@@ -3,7 +3,13 @@ package install
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +24,7 @@ import (
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
+	"github.com/shpyrd-io/shpyrd/pkg/objectgateway"
 )
 
 type nopReporter struct{}
@@ -164,6 +171,143 @@ func TestPlatformBackupsStayDirectNextToTheGateway(t *testing.T) {
 	}
 	if string(sec.Data["AWS_ACCESS_KEY_ID"]) != "gateway-key" || string(sec.Data["SHPYRD_BACKUP_TARGET"]) != "s3://platform-backups/platform" {
 		t.Errorf("backups through the gateway: key=%s target=%s", sec.Data["AWS_ACCESS_KEY_ID"], sec.Data["SHPYRD_BACKUP_TARGET"])
+	}
+}
+
+// descriptorStore is enough of S3 for the gateway hook: objects with ETags,
+// a creation refused when the key exists (If-None-Match) and, like OCI
+// Object Storage, a stale If-Match accepted.
+type descriptorStore struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+	etags   map[string]string
+	seq     int
+}
+
+func (d *descriptorStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	key := strings.TrimPrefix(r.URL.Path, "/shpyrd-prod-objects/")
+	switch r.Method {
+	case http.MethodPut:
+		if _, exists := d.objects[key]; exists && r.Header.Get("If-None-Match") == "*" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			fmt.Fprint(w, `<Error><Code>PreconditionFailed</Code></Error>`)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if strings.HasPrefix(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") {
+			body = unchunk(body)
+		}
+		d.seq++
+		d.objects[key], d.etags[key] = body, fmt.Sprintf("etag-%d", d.seq)
+		w.Header().Set("ETag", `"`+d.etags[key]+`"`)
+	case http.MethodGet:
+		body, ok := d.objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>`)
+			return
+		}
+		w.Header().Set("ETag", `"`+d.etags[key]+`"`)
+		w.Header().Set("Last-Modified", time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC).Format(http.TimeFormat))
+		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+		_, _ = w.Write(body)
+	case http.MethodDelete:
+		delete(d.objects, key)
+		delete(d.etags, key)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusBadRequest)
+	}
+}
+
+// unchunk undoes the client's streaming-signature framing over plain HTTP:
+// "<hex size>;chunk-signature=...\r\n<data>\r\n" repeated, a zero chunk last
+// (as in the gateway's own tests).
+func unchunk(body []byte) []byte {
+	var out []byte
+	rest := string(body)
+	for {
+		nl := strings.Index(rest, "\r\n")
+		if nl < 0 {
+			return out
+		}
+		var size int
+		if _, err := fmt.Sscanf(strings.SplitN(rest[:nl], ";", 2)[0], "%x", &size); err != nil || size == 0 {
+			return out
+		}
+		rest = rest[nl+2:]
+		if len(rest) < size {
+			return out
+		}
+		out = append(out, rest[:size]...)
+		rest = strings.TrimPrefix(rest[size:], "\r\n")
+	}
+}
+
+// stepReporter keeps what the hooks say.
+type stepReporter struct {
+	nopReporter
+	steps []string
+}
+
+func (r *stepReporter) Step(_, msg string) { r.steps = append(r.steps, msg) }
+
+// The gateway hook on a provider that ignores If-Match (OCI Object Storage):
+// with the single-writer setting it creates the platform descriptors and
+// their Secrets and says why it may, and a second run keeps the credentials;
+// without the setting the install stops and the error names it.
+func TestGatewayHookOnAProviderThatIgnoresIfMatch(t *testing.T) {
+	ctx := context.Background()
+	ns := "shpyrd-system"
+	c := &Component{Name: "object-gateway", Namespace: ns}
+	srv := httptest.NewServer(&descriptorStore{objects: map[string][]byte{}, etags: map[string]string{}})
+	t.Cleanup(srv.Close)
+	vars := func(singleWriter string) map[string]string {
+		return map[string]string{VarSystemNS: ns, VarGatewayBucket: "shpyrd-prod-objects", VarGatewayEndpoint: srv.URL, VarGatewayRegion: "sa-saopaulo-1", VarGatewaySingleWriter: singleWriter, VarRegistryEndpoint: gatewayEndpoint(ns), VarBackupEndpoint: gatewayEndpoint(ns)}
+	}
+	creds := map[string]string{"AWS_ACCESS_KEY_ID": "provider-key", "AWS_SECRET_ACCESS_KEY": "provider-secret"}
+
+	cs := fake.NewClientset()
+	e := fakeEngine(ctx, cs, vars("false"))
+	e.opts.GatewayCredentials = creds
+	err := gatewayCredentialsHook(ctx, e, c)
+	if !errors.Is(err, objectgateway.ErrIfMatchIgnored) || !strings.Contains(err.Error(), "SHPYRD_GATEWAY_SINGLE_WRITER") {
+		t.Fatalf("without the setting: %v", err)
+	}
+	if _, err := cs.CoreV1().Secrets(ns).Get(ctx, "gateway-sources", metav1.GetOptions{}); err == nil {
+		t.Fatal("a refused preflight still wrote a credential")
+	}
+
+	cs = fake.NewClientset()
+	rep := &stepReporter{}
+	e = fakeEngine(ctx, cs, vars("true"))
+	e.rep, e.opts.GatewayCredentials = rep, creds
+	if err := gatewayCredentialsHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{RegistryS3SecretName, "gateway-sources", "gateway-platform-backups", GatewayBackendSecret} {
+		if _, err := cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if said := strings.Join(rep.steps, "\n"); !strings.Contains(said, "If-Match") || !strings.Contains(said, "single writer") {
+		t.Errorf("the install did not say the gateway runs as a single writer: %q", said)
+	}
+	before, err := cs.CoreV1().Secrets(ns).Get(ctx, "gateway-sources", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayCredentialsHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	after, err := cs.CoreV1().Secrets(ns).Get(ctx, "gateway-sources", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before.Data["AWS_SECRET_ACCESS_KEY"]) == "" || string(before.Data["AWS_SECRET_ACCESS_KEY"]) != string(after.Data["AWS_SECRET_ACCESS_KEY"]) {
+		t.Error("a second run replaced the sources credential")
 	}
 }
 

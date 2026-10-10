@@ -48,21 +48,35 @@ provider bucket creation, IAM, public ACLs or cross-bucket copies.
 
 ## Service and limits
 
-`shpyrd-server object-gateway` runs two stateless replicas; no PVC or database
-is required during bootstrap. VersityGW v1.8.0 handles S3 signatures,
-streaming and multipart; the shpyrd backend explicitly maps supported object
-operations to isolated prefixes. Unsupported operations return S3 errors.
+`shpyrd-server object-gateway` runs two stateless replicas (one on OCI, see
+below); no PVC or database is required during bootstrap. VersityGW v1.8.0
+handles S3 signatures, streaming and multipart; the shpyrd backend explicitly
+maps supported object operations to isolated prefixes. Unsupported operations
+return S3 errors.
 
 Descriptors and random consumer secrets live under
 `__shpyrd_gateway/buckets/`. Conditional writes prevent concurrent
 provisioners from overwriting credentials. The backend must implement S3
 `If-Match` and `If-None-Match` conditional PUT semantics. Installation and
 gateway startup verify these conditions against a disposable probe object
-and fail if the provider ignores them. Keep this metadata
-when migrating or recovering the physical bucket. Credential reads are
-uncached, so revocation applies to the next authenticated request; already
-in-flight requests may finish. This costs metadata reads per request and
-must be included in provider latency and request-cost estimates.
+and fail if the provider ignores them, with the one exception below. Keep
+this metadata when migrating or recovering the physical bucket. Credential
+reads are uncached, so revocation applies to the next authenticated request;
+already in-flight requests may finish. This costs metadata reads per request
+and must be included in provider latency and request-cost estimates.
+
+OCI Object Storage's S3 compatibility honours `If-None-Match` but ignores
+`If-Match`: creating a descriptor is atomic there, updating one is not. On
+that provider the gateway runs in single-writer mode
+(`SHPYRD_GATEWAY_SINGLE_WRITER=true`, set by the `oci` profile): the
+preflight accepts the provider and the process logs that it did, and every
+update of a descriptor runs under an in-process lock, which gives what the
+conditional update would have. The consequence is one gateway pod on OCI
+(`SHPYRD_GATEWAY_REPLICAS=1`; its disruption budget lets that pod move during
+a drain, so the gateway is briefly unavailable while it comes back on another
+node) until descriptors move to a store with conditional updates; the storage,
+databases and durability plan tracks that follow-up. Without the setting the
+preflight fails on such a provider and the message names the setting.
 
 The S3 listener caps simultaneous requests at 128 per replica. Streaming
 avoids buffering a complete object; aggregate resource usage still depends

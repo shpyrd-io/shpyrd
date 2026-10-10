@@ -51,6 +51,14 @@ type Record struct {
 type Records struct {
 	Store  *objectstore.S3
 	client *s3.Client
+	// SingleWriter says no other process writes descriptors while this one
+	// runs. Updates are serialized in-process whatever the provider (see
+	// lock); on a provider that ignores If-Match that serialization is all
+	// that prevents a lost update, so Preflight accepts such a provider only
+	// with SingleWriter set, and a deployment that sets it runs one gateway.
+	SingleWriter bool
+
+	locks sync.Map // descriptor name -> *sync.Mutex
 
 	cacheOnce sync.Once
 	cache     *descriptorCache
@@ -63,6 +71,16 @@ func (r *Records) descriptors() *descriptorCache {
 		}
 	})
 	return r.cache
+}
+
+// lock serializes this process's read-modify-writes of one descriptor, so
+// two of its own callers never lose each other's update; the retry on a
+// conditional conflict remains for other processes. The caller runs the
+// returned function when done.
+func (r *Records) lock(name string) func() {
+	mu, _ := r.locks.LoadOrStore(name, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
 }
 
 // cachedGet is Get for authentication: the outcome, found or unknown, is
@@ -144,6 +162,7 @@ func (r *Records) Ensure(ctx context.Context, spec objectstore.BucketSpec) error
 	if spec.RetentionDays < 0 {
 		return errors.New("retentionDays must not be negative")
 	}
+	defer r.lock(spec.Name)()
 	for attempt := 0; attempt < 5; attempt++ {
 		rec, err := r.Get(ctx, spec.Name)
 		if err != nil {
@@ -165,6 +184,7 @@ func (r *Records) Ensure(ctx context.Context, spec objectstore.BucketSpec) error
 	return errors.New("concurrent gateway descriptor update; retry")
 }
 func (r *Records) Credential(ctx context.Context, name, access, secret string) (objectstore.Credential, error) {
+	defer r.lock(name)()
 	for attempt := 0; attempt < 5; attempt++ {
 		rec, err := r.Get(ctx, name)
 		if err != nil {
@@ -190,6 +210,7 @@ func (r *Records) Credential(ctx context.Context, name, access, secret string) (
 	return objectstore.Credential{}, errors.New("concurrent gateway credential update; retry")
 }
 func (r *Records) Revoke(ctx context.Context, name string) error {
+	defer r.lock(name)()
 	for attempt := 0; attempt < 5; attempt++ {
 		rec, err := r.Get(ctx, name)
 		if errors.Is(err, s3err.GetAPIError(s3err.ErrNoSuchBucket)) {

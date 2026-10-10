@@ -59,21 +59,23 @@ const (
 	VarRegistryInsecure = "SHPYRD_REGISTRY_INSECURE" // "true" keeps the in-cluster registry on plain HTTP (escape hatch, RFC-0059)
 	VarRegistrySecret   = "SHPYRD_REGISTRY_SECRET"   // name of the registry credentials Secret ("" when the registry needs none)
 	// In-cluster registry (RFC-0059).
-	VarRegistryIP         = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
-	VarRegistrySize       = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
-	VarRegistryBucket     = "SHPYRD_REGISTRY_BUCKET"   // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
-	VarRegistryEndpoint   = "SHPYRD_REGISTRY_ENDPOINT" // S3-compatible endpoint for the registry bucket
-	VarRegistryRegion     = "SHPYRD_REGISTRY_REGION"   // region of the registry bucket
-	VarGatewayBucket      = "SHPYRD_GATEWAY_BUCKET"
-	VarGatewayEndpoint    = "SHPYRD_GATEWAY_ENDPOINT"
-	VarGatewayRegion      = "SHPYRD_GATEWAY_REGION"
-	VarRegistryS3Secure   = "SHPYRD_REGISTRY_S3_SECURE"
-	VarSourcesBucket      = "SHPYRD_SOURCES_BUCKET"
-	VarSourcesEndpoint    = "SHPYRD_SOURCES_ENDPOINT"
-	VarSourcesRegion      = "SHPYRD_SOURCES_REGION"
-	VarSourcesSecret      = "SHPYRD_SOURCES_SECRET"
-	VarBuildCacheRegistry = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
-	VarCASource           = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
+	VarRegistryIP          = "SHPYRD_REGISTRY_IP"       // fixed ClusterIP of the in-cluster registry ("" with an external registry)
+	VarRegistrySize        = "SHPYRD_REGISTRY_SIZE"     // size of its volume claim (only when using filesystem storage)
+	VarRegistryBucket      = "SHPYRD_REGISTRY_BUCKET"   // OCI Object Storage bucket for registry blobs ("" = filesystem/PVC)
+	VarRegistryEndpoint    = "SHPYRD_REGISTRY_ENDPOINT" // S3-compatible endpoint for the registry bucket
+	VarRegistryRegion      = "SHPYRD_REGISTRY_REGION"   // region of the registry bucket
+	VarGatewayBucket       = "SHPYRD_GATEWAY_BUCKET"
+	VarGatewayEndpoint     = "SHPYRD_GATEWAY_ENDPOINT"
+	VarGatewayRegion       = "SHPYRD_GATEWAY_REGION"
+	VarGatewaySingleWriter = "SHPYRD_GATEWAY_SINGLE_WRITER" // "true" when one gateway process writes descriptors, for a provider that ignores If-Match (OCI); "false" unless the profile says otherwise
+	VarGatewayReplicas     = "SHPYRD_GATEWAY_REPLICAS"      // gateway pods: "2" unless the profile says otherwise, "1" with a single writer
+	VarRegistryS3Secure    = "SHPYRD_REGISTRY_S3_SECURE"
+	VarSourcesBucket       = "SHPYRD_SOURCES_BUCKET"
+	VarSourcesEndpoint     = "SHPYRD_SOURCES_ENDPOINT"
+	VarSourcesRegion       = "SHPYRD_SOURCES_REGION"
+	VarSourcesSecret       = "SHPYRD_SOURCES_SECRET"
+	VarBuildCacheRegistry  = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
+	VarCASource            = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
 	// policy-only mode next to the provider's CNI; "none" relies on the
 	// cluster's own engine (kind's kindnet enforces policies).
@@ -407,6 +409,15 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
 		}
+	}
+	// The gateway's writer mode and pod count: every profile in the tree
+	// sets them; a profile from before the variables renders two replicas
+	// that expect a provider honouring If-Match.
+	if _, ok := vars[VarGatewaySingleWriter]; !ok {
+		out[VarGatewaySingleWriter] = "false"
+	}
+	if _, ok := vars[VarGatewayReplicas]; !ok {
+		out[VarGatewayReplicas] = "2"
 	}
 	// The S3 gateway (RFC-0046) takes the consumers nobody gave a bucket of
 	// their own. A registry bucket named explicitly (--registry-credentials-file

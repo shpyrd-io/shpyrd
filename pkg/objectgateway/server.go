@@ -29,6 +29,10 @@ const Region = "garage" // keep consumer compatibility when replacing Garage
 type Config struct {
 	Endpoint, Region, Bucket, AccessKey, SecretKey, AdminToken string
 	S3Address, AdminAddress                                    string
+	// SingleWriter: this is the only gateway process writing descriptors
+	// (SHPYRD_GATEWAY_SINGLE_WRITER), which a provider that ignores If-Match
+	// requires; see Records.
+	SingleWriter bool
 }
 type Server struct {
 	S3      *s3api.S3ApiServer
@@ -59,9 +63,13 @@ func New(ctx context.Context, c Config, opts ...s3api.Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	records := &Records{Store: store, client: client}
-	if err := records.CheckConditionalWrites(ctx); err != nil {
+	records := &Records{Store: store, client: client, SingleWriter: c.SingleWriter}
+	note, err := records.Preflight(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if note != "" {
+		log.Print(note)
 	}
 	be := &Backend{proxy: proxy, physical: c.Bucket, records: records}
 	// Root is an unexposed, process-local random account. Administration uses
@@ -133,6 +141,13 @@ func Main() error {
 	}
 	if c.AdminAddress == "" {
 		c.AdminAddress = ":3903"
+	}
+	switch v := os.Getenv("SHPYRD_GATEWAY_SINGLE_WRITER"); v {
+	case "true":
+		c.SingleWriter = true
+	case "", "false":
+	default:
+		return fmt.Errorf("SHPYRD_GATEWAY_SINGLE_WRITER must be true or false, not %q", v)
 	}
 	s, err := New(ctx, c)
 	if err != nil {

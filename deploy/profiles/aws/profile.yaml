@@ -58,6 +58,9 @@ vars:
   SHPYRD_DATABASE_URL: ""
   SHPYRD_CONTROL_PLANE_DB_SIZE: 5Gi
   SHPYRD_OBJECT_STORAGE_SIZE: 20Gi
+  # The S3 gateway (RFC-0046): two pods on a provider that honours If-Match.
+  SHPYRD_GATEWAY_SINGLE_WRITER: "false"
+  SHPYRD_GATEWAY_REPLICAS: "2"
   # Prometheus keeps its metrics (the sleep activity signal and the usage
   # history read from it) on a gp3 volume. Growing an existing claim
   # follows the class's expansion rules.

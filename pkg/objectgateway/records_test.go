@@ -2,6 +2,7 @@ package objectgateway
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -21,21 +22,24 @@ import (
 
 // fakeS3 is one bucket in memory: enough of the S3 API for descriptors
 // (conditional GET/PUT), listings and batched deletes, and it counts what
-// the gateway asks of it.
+// the gateway asks of it. With ignoreIfMatch it behaves like OCI Object
+// Storage, accepting a stale If-Match.
 type fakeS3 struct {
-	mu          sync.Mutex
-	objects     map[string]string // key -> body
-	etags       map[string]string
-	seq         int
-	gets        map[string]int
-	lists       int
-	listFail    bool
-	batches     []int // sizes of each multi-object delete
-	singleDeles int
+	mu            sync.Mutex
+	objects       map[string]string // key -> body
+	etags         map[string]string
+	history       map[string][]string // key -> every body PUT, in order
+	seq           int
+	gets          map[string]int
+	lists         int
+	listFail      bool
+	ignoreIfMatch bool
+	batches       []int // sizes of each multi-object delete
+	singleDeles   int
 }
 
 func newFakeS3() *fakeS3 {
-	return &fakeS3{objects: map[string]string{}, etags: map[string]string{}, gets: map[string]int{}}
+	return &fakeS3{objects: map[string]string{}, etags: map[string]string{}, history: map[string][]string{}, gets: map[string]int{}}
 }
 
 func (f *fakeS3) put(key, body string) {
@@ -122,7 +126,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, `<Error><Code>PreconditionFailed</Code></Error>`)
 			return
 		}
-		if m := strings.Trim(r.Header.Get("If-Match"), `"`); m != "" && m != f.etags[key] {
+		if m := strings.Trim(r.Header.Get("If-Match"), `"`); !f.ignoreIfMatch && m != "" && m != f.etags[key] {
 			w.WriteHeader(http.StatusPreconditionFailed)
 			fmt.Fprint(w, `<Error><Code>PreconditionFailed</Code></Error>`)
 			return
@@ -134,6 +138,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.seq++
 		f.objects[key] = string(body)
 		f.etags[key] = fmt.Sprintf("etag-%d", f.seq)
+		f.history[key] = append(f.history[key], string(body))
 		w.Header().Set("ETag", `"`+f.etags[key]+`"`)
 	default:
 		w.WriteHeader(http.StatusBadRequest)
@@ -365,5 +370,110 @@ func TestDeleteReportsAListingFailure(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.batches) != 0 || fake.singleDeles != 0 {
 		t.Fatalf("deletes after a failed listing: %v, %d", fake.batches, fake.singleDeles)
+	}
+}
+
+// On a provider that ignores If-Match (OCI Object Storage), a single
+// writer's concurrent issues, revocations and retention changes of one
+// descriptor lose no update: concurrent issues hand out one secret and write
+// it once, a live secret is only ever replaced after a revocation, and every
+// version written is consistent. Run with -race.
+func TestSingleWriterSerializesDescriptorUpdates(t *testing.T) {
+	records, fake := testRecords(t)
+	records.SingleWriter = true
+	fake.mu.Lock()
+	fake.ignoreIfMatch = true
+	fake.mu.Unlock()
+	ctx := context.Background()
+	if _, err := records.Preflight(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a"}); err != nil {
+		t.Fatal(err)
+	}
+	key := descriptorKey("consumer-a")
+	versions := func() []Record {
+		t.Helper()
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		var out []Record
+		for i, body := range fake.history[key] {
+			var rec Record
+			if err := json.Unmarshal([]byte(body), &rec); err != nil {
+				t.Fatalf("version %d: %v", i, err)
+			}
+			out = append(out, rec)
+		}
+		return out
+	}
+
+	// Eight concurrent issues: one secret, written once.
+	var wg sync.WaitGroup
+	secrets := make(chan string, 8)
+	errs := make(chan error, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cred, err := records.Credential(ctx, "consumer-a", "", "")
+			if err != nil {
+				errs <- err
+				return
+			}
+			secrets <- cred.SecretKey
+		}()
+	}
+	wg.Wait()
+	close(secrets)
+	first := <-secrets
+	for s := range secrets {
+		if s != first {
+			t.Fatal("concurrent issues handed out different secrets")
+		}
+	}
+	if v := versions(); len(v) != 2 || v[1].Secret != first {
+		t.Fatalf("%d versions after eight concurrent issues, want the creation and one secret", len(v))
+	}
+
+	// Issues, revocations and retention changes together.
+	for i := 0; i < 8; i++ {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			if _, err := records.Credential(ctx, "consumer-a", "", ""); err != nil {
+				errs <- err
+			}
+		}()
+		go func(days int32) {
+			defer wg.Done()
+			if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a", RetentionDays: days}); err != nil {
+				errs <- err
+			}
+		}(int32(i + 1))
+		go func() {
+			defer wg.Done()
+			if err := records.Revoke(ctx, "consumer-a"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	var prev Record
+	for i, rec := range versions() {
+		if rec.Disabled != (rec.Secret == "") {
+			t.Errorf("version %d is inconsistent: %+v", i, rec)
+		}
+		if i > 0 && prev.Secret != "" && rec.Secret != "" && rec.Secret != prev.Secret {
+			t.Errorf("version %d replaced a live secret: an update was lost", i)
+		}
+		prev = rec
+	}
+	rec, err := records.Get(ctx, "consumer-a")
+	if err != nil || rec.Disabled != (rec.Secret == "") || rec.RetentionDays < 1 || rec.RetentionDays > 8 {
+		t.Fatalf("final descriptor %+v, %v", rec, err)
 	}
 }

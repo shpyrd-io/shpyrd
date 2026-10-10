@@ -721,8 +721,9 @@ func TestTheServerDeploymentTakesItsApplicationsFromTheUIImage(t *testing.T) {
 	}
 }
 
-// Two stateless gateway replicas serve every S3 consumer; a drain or an
-// autoscaler eviction must leave one of them running.
+// A drain or an autoscaler eviction takes one gateway pod at a time: with
+// two replicas one keeps serving every S3 consumer, and the single replica
+// of a single writer (oci) does not block the drain.
 func TestObjectGatewayRendersADisruptionBudget(t *testing.T) {
 	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com", VarGatewayBucket: "gateway", VarGatewayEndpoint: "https://ns.compat.objectstorage.sa-saopaulo-1.oraclecloud.com", VarGatewayRegion: "sa-saopaulo-1"}, Reporter: &quiet{}})
 	if err != nil {
@@ -738,13 +739,72 @@ func TestObjectGatewayRendersADisruptionBudget(t *testing.T) {
 		case o.GetKind() == "Deployment" && o.GetName() == "object-storage":
 			deployment = true
 		case o.GetKind() == "PodDisruptionBudget" && o.GetName() == "object-storage":
-			min, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "minAvailable")
+			max, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "maxUnavailable")
+			_, hasMin, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "minAvailable")
 			app, _, _ := unstructured.NestedString(o.Object, "spec", "selector", "matchLabels", "app.kubernetes.io/name")
-			budget = fmt.Sprint(min) == "1" && app == "object-storage"
+			budget = fmt.Sprint(max) == "1" && !hasMin && app == "object-storage"
 		}
 	}
 	if !deployment || !budget {
 		t.Errorf("object-gateway: deployment=%v disruption budget=%v", deployment, budget)
+	}
+}
+
+// The gateway's pod count and writer mode are variables: OCI Object
+// Storage's S3 compatibility ignores If-Match, so the oci profile runs one
+// pod as the single writer of the descriptors; the other profiles run two.
+// A profile from before the variables renders the two as well.
+func TestObjectGatewayReplicasAndWriterModeAreVariables(t *testing.T) {
+	gateway := func(t *testing.T, profile string, vars map[string]string) (replicas, singleWriter string) {
+		t.Helper()
+		for k, v := range map[string]string{VarGatewayBucket: "gateway", VarGatewayEndpoint: "https://ns.compat.objectstorage.sa-saopaulo-1.oraclecloud.com", VarGatewayRegion: "sa-saopaulo-1"} {
+			vars[k] = v
+		}
+		eng, err := New(nil, Options{Profile: profile, Vars: vars, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		objs, err := eng.renderComponent(eng.components["object-gateway"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range objs {
+			if o.GetKind() != "Deployment" || o.GetName() != "object-storage" {
+				continue
+			}
+			n, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "replicas")
+			containers, _, _ := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+			env, _, _ := unstructured.NestedSlice(containers[0].(map[string]interface{}), "env")
+			for _, e := range env {
+				if m := e.(map[string]interface{}); m["name"] == "SHPYRD_GATEWAY_SINGLE_WRITER" {
+					singleWriter, _ = m["value"].(string)
+				}
+			}
+			return fmt.Sprint(n), singleWriter
+		}
+		t.Fatal("no object-storage Deployment")
+		return "", ""
+	}
+	if n, sw := gateway(t, "oci", map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com"}); n != "1" || sw != "true" {
+		t.Errorf("oci: replicas=%s single writer=%q, want 1 and true", n, sw)
+	}
+	for _, profile := range []string{"local", "aws"} {
+		if n, sw := gateway(t, profile, map[string]string{VarDomain: "example.test", VarACMEEmail: "ops@example.com"}); n != "2" || sw != "false" {
+			t.Errorf("%s: replicas=%s single writer=%q, want 2 and false", profile, n, sw)
+		}
+	}
+	// A profile from before the variables renders with the defaults; a set
+	// value is kept.
+	d := derivedVars(map[string]string{VarDomain: "x.test"}, nil)
+	if d[VarGatewayReplicas] != "2" || d[VarGatewaySingleWriter] != "false" {
+		t.Errorf("derived replicas=%q single writer=%q", d[VarGatewayReplicas], d[VarGatewaySingleWriter])
+	}
+	d = derivedVars(map[string]string{VarDomain: "x.test", VarGatewayReplicas: "1", VarGatewaySingleWriter: "true"}, nil)
+	if _, ok := d[VarGatewayReplicas]; ok {
+		t.Error("an explicit replica count must not be overridden")
+	}
+	if _, ok := d[VarGatewaySingleWriter]; ok {
+		t.Error("an explicit writer mode must not be overridden")
 	}
 }
 
