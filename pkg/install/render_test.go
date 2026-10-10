@@ -747,3 +747,53 @@ func TestObjectGatewayRendersADisruptionBudget(t *testing.T) {
 		t.Errorf("object-gateway: deployment=%v disruption budget=%v", deployment, budget)
 	}
 }
+
+// The backup job's memory limit is a variable with a default (#119: the
+// production job died at 512Mi) and the archive is written to a scratch
+// disk.
+func TestPlatformBackupMemoryIsAVariable(t *testing.T) {
+	for set, want := range map[string]string{"": DefaultBackupMemory, "2Gi": "2Gi"} {
+		vars := map[string]string{VarDomain: "example.test"}
+		if set != "" {
+			vars[VarBackupMemory] = set
+		}
+		eng, err := New(nil, Options{Profile: "local", Vars: vars, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		objs, err := eng.renderComponent(eng.components["platform-backup"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seen bool
+		for _, o := range objs {
+			if o.GetKind() != "CronJob" {
+				continue
+			}
+			seen = true
+			containers, _, _ := unstructured.NestedSlice(o.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+			if len(containers) != 1 {
+				t.Fatalf("containers = %v", containers)
+			}
+			mem, _, _ := unstructured.NestedString(containers[0].(map[string]interface{}), "resources", "limits", "memory")
+			if mem != want {
+				t.Errorf("SHPYRD_BACKUP_MEMORY=%q: memory limit = %q, want %q", set, mem, want)
+			}
+			y := mustYAML(t, o)
+			if !strings.Contains(y, `"mountPath":"/tmp"`) || !strings.Contains(y, `"emptyDir"`) {
+				t.Errorf("the archive needs a scratch disk on /tmp:\n%s", y)
+			}
+		}
+		if !seen {
+			t.Fatal("platform-backup rendered no CronJob")
+		}
+	}
+	// A profile from before the variable renders with the default; a set
+	// value is kept.
+	if d := derivedVars(map[string]string{VarDomain: "x.test"}, nil); d[VarBackupMemory] != DefaultBackupMemory {
+		t.Errorf("derived memory = %q", d[VarBackupMemory])
+	}
+	if d := derivedVars(map[string]string{VarDomain: "x.test", VarBackupMemory: "3Gi"}, nil); d[VarBackupMemory] != "" {
+		t.Errorf("an explicit memory limit must not be overridden: %q", d[VarBackupMemory])
+	}
+}

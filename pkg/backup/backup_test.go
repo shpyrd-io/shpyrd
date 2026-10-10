@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -234,5 +236,92 @@ func TestRestore(t *testing.T) {
 	// An unknown project is an error naming what the archive has.
 	if _, err := (&Restorer{Dynamic: dyn, Archive: a, Projects: []string{"nope"}}).Run(context.Background()); err == nil || !strings.Contains(err.Error(), "shop") {
 		t.Errorf("unknown project: %v", err)
+	}
+}
+
+// The daily job buffered the whole archive and died at its memory limit
+// (#119): the encrypted archive now goes to a file, ready to upload with its
+// size known, and a source streams into it when the server says how long it
+// is; one sent without a length is still read whole. An export that fails
+// leaves no file behind.
+func TestExportEncryptedSpoolsToDiskAndStreamsSources(t *testing.T) {
+	big := strings.Repeat("source bytes ", 4096)
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/sources/sized.tgz":
+			w.Header().Set("Content-Length", fmt.Sprint(len(big)))
+			_, _ = w.Write([]byte(big))
+		case "/api/sources/chunked.tgz":
+			w.(http.Flusher).Flush() // no length: chunked
+			_, _ = w.Write([]byte("short"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer src.Close()
+	exporter := func(shas ...string) *Exporter {
+		kube := kubefake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "app-shop", Labels: map[string]string{"shpyrd.io/project": "shop"}}})
+		var apps []runtime.Object
+		for _, sha := range shas {
+			apps = append(apps, &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "shpyrd.io/v1alpha1", "kind": "App",
+				"metadata": map[string]interface{}{"name": sha, "namespace": "app-shop"},
+				"spec":     map[string]interface{}{"source": map[string]interface{}{"blob": map[string]interface{}{"sha256": sha, "url": src.URL + "/api/sources/" + sha + ".tgz"}}},
+			}})
+		}
+		dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+			{Group: "shpyrd.io", Version: "v1alpha1", Resource: "apps"}:      "AppList",
+			{Group: "shpyrd.io", Version: "v1alpha1", Resource: "volumes"}:   "VolumeList",
+			{Group: "shpyrd.io", Version: "v1alpha1", Resource: "postgres"}:  "PostgresList",
+			{Group: "shpyrd.io", Version: "v1alpha1", Resource: "redis"}:     "RedisList",
+			{Group: "shpyrd.io", Version: "v1alpha1", Resource: "logdrains"}: "LogDrainList",
+			{Group: "dex.coreos.com", Version: "v1", Resource: "passwords"}:  "PasswordList",
+			{Group: "dex.coreos.com", Version: "v1", Resource: "connectors"}: "ConnectorList",
+		}, apps...)
+		return &Exporter{Kube: kube, Dynamic: dyn, SystemNamespace: "shpyrd-system", SourceBase: src.URL, Cluster: "dev"}
+	}
+
+	dir := t.TempDir()
+	f, man, err := exporter("sized", "chunked").ExportEncrypted(context.Background(), dir, "correct horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if man.Sources != 2 {
+		t.Errorf("manifest = %+v", man)
+	}
+	if !strings.HasPrefix(filepath.Base(f.Name()), "platform-backup-") || !strings.HasSuffix(f.Name(), ".tar.gz.age") || filepath.Dir(f.Name()) != dir {
+		t.Errorf("file = %s", f.Name())
+	}
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("stat: %v %+v", err, info)
+	}
+	// Open at the start: what the upload reads is the whole file.
+	data, err := io.ReadAll(f)
+	if err != nil || int64(len(data)) != info.Size() {
+		t.Fatalf("read %d of %d bytes: %v", len(data), info.Size(), err)
+	}
+	dec, err := Decrypt(bytes.NewReader(data), "correct horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Read(dec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a.Files["sources/sized.tgz"]) != big || string(a.Files["sources/chunked.tgz"]) != "short" || a.Manifest.Cluster != "dev" {
+		t.Errorf("sources: sized=%d chunked=%q cluster=%s", len(a.Files["sources/sized.tgz"]), a.Files["sources/chunked.tgz"], a.Manifest.Cluster)
+	}
+
+	// A source the server does not have fails the export, naming it, and
+	// the half-written file is removed.
+	failed := t.TempDir()
+	if _, _, err := exporter("missing").ExportEncrypted(context.Background(), failed, "correct horse"); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing source: %v", err)
+	}
+	if left, _ := os.ReadDir(failed); len(left) != 0 {
+		t.Errorf("files left after a failed export: %v", left)
 	}
 }

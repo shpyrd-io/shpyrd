@@ -71,6 +71,9 @@ vars:
   SHPYRD_BACKUP_REGION: ""
   SHPYRD_BACKUP_SCHEDULE: "0 3 * * *"
   SHPYRD_BACKUP_KEEP: "14"
+  # Memory limit of the backup job; raise it when the archives (every
+  # app's source) outgrow it and the run dies at its limit.
+  SHPYRD_BACKUP_MEMORY: 1Gi
   SHPYRD_SNAPSHOT_CLASS: oci-bv-backup
   SHPYRD_FSS_MOUNT_TARGET: ""
   SHPYRD_EFS_ID: ""

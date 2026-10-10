@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -117,6 +118,24 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			return err
 		}
 		_, err := tw.Write(data)
+		return err
+	}
+	// A source archive streams into the tar when the server says how long
+	// it is (the header needs the size up front); one without a length is
+	// read into memory first. The sources are the bulk of an archive.
+	addSource := func(name string, resp *http.Response) error {
+		if resp.ContentLength < 0 {
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			return add(name, data)
+		}
+		hdr := &tar.Header{Name: name, Mode: 0o600, Size: resp.ContentLength, ModTime: man.CreatedAt, Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		_, err := io.Copy(tw, resp.Body)
 		return err
 	}
 	addObjects := func(name string, items []unstructured.Unstructured) error {
@@ -290,13 +309,14 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 			if err != nil {
 				return nil, fmt.Errorf("source %s: %w", sha, err)
 			}
-			data, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil || resp.StatusCode != http.StatusOK {
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
 				return nil, fmt.Errorf("source %s: %s", sha, resp.Status)
 			}
-			if err := add("sources/"+sha+".tgz", data); err != nil {
-				return nil, err
+			err = addSource("sources/"+sha+".tgz", resp)
+			resp.Body.Close()
+			if err != nil {
+				return nil, fmt.Errorf("source %s: %w", sha, err)
 			}
 			man.Sources++
 		}
@@ -310,6 +330,44 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 		return nil, err
 	}
 	return man, gz.Close()
+}
+
+// ExportEncrypted writes the archive, encrypted with the passphrase, to a
+// temporary file in dir ("" is the system's) and returns it open at its
+// start with the manifest, ready to upload with its size known. The archive
+// is never held in memory as a whole: the daily job buffered it and was
+// killed at its memory limit on every run (#119). The caller closes and
+// removes the file.
+func (e *Exporter) ExportEncrypted(ctx context.Context, dir, passphrase string) (*os.File, *Manifest, error) {
+	f, err := os.CreateTemp(dir, "platform-backup-*.tar.gz.age")
+	if err != nil {
+		return nil, nil, err
+	}
+	man, err := e.exportEncrypted(ctx, f, passphrase)
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, nil, err
+	}
+	return f, man, nil
+}
+
+func (e *Exporter) exportEncrypted(ctx context.Context, w io.Writer, passphrase string) (*Manifest, error) {
+	enc, err := Encrypt(w, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	man, err := e.Export(ctx, enc)
+	if err != nil {
+		return nil, fmt.Errorf("export: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return man, nil
 }
 
 // backupWorthy says whether a managed Secret in a project namespace is

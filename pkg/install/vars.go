@@ -119,6 +119,7 @@ const (
 	VarBackupRegion   = "SHPYRD_BACKUP_REGION"
 	VarBackupSchedule = "SHPYRD_BACKUP_SCHEDULE"  // cron, UTC
 	VarBackupKeep     = "SHPYRD_BACKUP_KEEP"      // archives kept
+	VarBackupMemory   = "SHPYRD_BACKUP_MEMORY"    // memory limit of the backup job ("1Gi" unless the profile says otherwise)
 	VarFSSMountTarget = "SHPYRD_FSS_MOUNT_TARGET" // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
 	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
 	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
@@ -154,6 +155,10 @@ const (
 	// FrontDoorLB is a cloud load balancer in front of ingress-nginx.
 	FrontDoorLB = "lb"
 )
+
+// DefaultBackupMemory is the backup job's memory limit when the profile
+// names none. The production archive outgrew 512Mi (#119).
+const DefaultBackupMemory = "1Gi"
 
 // RegistrySecretName is the dockerconfigjson Secret with the credentials
 // builds push with and instances pull with (private registries).
@@ -390,6 +395,11 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	}
 	if _, ok := vars[VarNodeMaxCount]; !ok {
 		out[VarNodeMaxCount] = "5"
+	}
+	// The backup job's memory limit (RFC-0037): every profile in the tree
+	// sets it; a profile from before the variable renders with the default.
+	if _, ok := vars[VarBackupMemory]; !ok {
+		out[VarBackupMemory] = DefaultBackupMemory
 	}
 	out[VarRegistryS3Secure] = "true"
 	for _, v := range []string{VarGatewayBucket, VarGatewayEndpoint, VarGatewayRegion} {

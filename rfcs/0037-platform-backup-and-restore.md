@@ -39,7 +39,9 @@ Losing the cluster today means recreating projects, config vars and members by h
 - **Component `platform-backup`** (every profile, rc4 next to `shpyrd`; skipped when no
   target is set): a CronJob in `shpyrd-system` running `shpyrd-server backup` from the server
   image under the server's ServiceAccount, on `SHPYRD_BACKUP_SCHEDULE` (default `0 3 * * *`
-  UTC), keeping `SHPYRD_BACKUP_KEEP` archives (default 14). Hook `backup-target` generates
+  UTC), keeping `SHPYRD_BACKUP_KEEP` archives (default 14), with a memory limit of
+  `SHPYRD_BACKUP_MEMORY` (default 1Gi; the archive is written to a scratch disk and uploaded
+  from there, never held in memory as a whole). Hook `backup-target` generates
   the passphrase once (Secret `shpyrd-backup-key`) and stores the target in Secret
   `platform-backup-target`: `SHPYRD_BACKUP_TARGET` (`s3://bucket/prefix`),
   `SHPYRD_BACKUP_ENDPOINT`, `SHPYRD_BACKUP_REGION` and, when given, the access key.
@@ -121,3 +123,7 @@ Still missing, on purpose or for later:
 
 - 2026-09-22: RFC written.
 - 2026-09-25: implemented (component, CLI, API, dashboard card, Terraform roots).
+- 2026-10-10: the production job was killed at its 512Mi limit on every run (#119). The limit
+  is `SHPYRD_BACKUP_MEMORY` (default 1Gi), the archive is spooled to a scratch disk and the
+  sources stream into it; the monitoring component carries two alert rules, a failed run
+  (within 30 minutes) and no completed backup for 26 hours.

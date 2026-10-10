@@ -1,16 +1,14 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"github.com/shpyrd-io/shpyrd/pkg/api"
-	"io"
 	"log/slog"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/backup"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
@@ -59,23 +57,24 @@ func runBackup(logger *slog.Logger) error {
 		Store: st,
 	}
 
-	var enc bytes.Buffer
-	w, err := backup.Encrypt(&enc, passphrase)
+	// The archive goes through the job's scratch disk (the emptyDir the
+	// CronJob mounts on /tmp), not memory: with every app's source in it,
+	// buffering it is what killed the job at its memory limit (#119).
+	f, man, err := exp.ExportEncrypted(ctx, "", passphrase)
 	if err != nil {
 		return err
 	}
-	man, err := exp.Export(ctx, w)
+	defer os.Remove(f.Name())
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("export: %w", err)
-	}
-	if err := w.Close(); err != nil {
 		return err
 	}
 	name := exp.ArchiveName(man.CreatedAt)
-	if err := target.Upload(ctx, name, bytes.NewReader(enc.Bytes()), int64(enc.Len())); err != nil {
+	if err := target.Upload(ctx, name, f, info.Size()); err != nil {
 		return err
 	}
-	logger.Info("backup uploaded", "name", name, "bytes", enc.Len(), "projects", len(man.Projects), "objects", man.Objects, "sources", man.Sources)
+	logger.Info("backup uploaded", "name", name, "bytes", info.Size(), "projects", len(man.Projects), "objects", man.Objects, "sources", man.Sources)
 	if keep, _ := strconv.Atoi(os.Getenv("SHPYRD_BACKUP_KEEP")); keep > 0 {
 		if n, err := target.Prune(ctx, keep); err != nil {
 			logger.Warn("prune failed", "err", err.Error())
@@ -94,5 +93,3 @@ func firstNonEmptyStr(vals ...string) string {
 	}
 	return ""
 }
-
-var _ io.Reader = (*bytes.Buffer)(nil)
