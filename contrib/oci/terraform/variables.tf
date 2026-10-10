@@ -128,13 +128,17 @@ variable "apps_node_memory_gb" {
 # data_max_count > 0.
 
 variable "data_min_count" {
-  description = "Minimum nodes of the data pool. 1 keeps wakes at seconds; 0 lets the pool empty (node boot adds ~2 min to a database cold wake)."
+  description = "Nodes of the data pool, owned by Terraform (the autoscaler never resizes it). 2 is what a shared database server's anti-affinity and a node roll need; 1 is enough while every database is single-instance."
   type        = number
   default     = 1
+  validation {
+    condition     = var.data_min_count >= 1
+    error_message = "data_min_count is the size of the data pool and must be at least 1 (set data_max_count = 0 to have no data pool)."
+  }
 }
 
 variable "data_max_count" {
-  description = "Maximum nodes of the data pool; 0 means no data pool (databases share the platform pool)."
+  description = "0 means no data pool (databases share the platform pool); any other value enables the pool, whose size is data_min_count."
   type        = number
   default     = 0
 }
