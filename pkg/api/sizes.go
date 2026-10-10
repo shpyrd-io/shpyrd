@@ -176,8 +176,10 @@ func (s *Server) resizeApp(c *gin.Context) {
 type ProcessChange struct {
 	Size     *string `json:"size,omitempty"`
 	Replicas *int32  `json:"replicas,omitempty"`
-	// Sleep sets or clears HTTP sleep for the web process (RFC-0075):
-	// {"after":"15m","resuming":"page"}; after "off" disables.
+	// Sleep sets HTTP sleep for the web process (RFC-0075):
+	// {"after":"15m","resuming":"page"}. after "off" keeps the process
+	// awake even when the workspace has a default; after "default" clears
+	// the project's policy so the workspace's default applies (#135).
 	Sleep *shpyrdv1.SleepSpec `json:"sleep,omitempty"`
 }
 
@@ -211,20 +213,30 @@ func (s *Server) canSleep() bool {
 	return err == nil
 }
 
+// sleepOff is the after value of a policy that keeps a process awake. It
+// is stored as it is: the project opts out of the workspace's default, and
+// the controller reads it the same way (#135).
+const sleepOff = "off"
+
 // validateSleep checks a sleep change: only the web process sleeps, the
-// quiet period is 5m..24h (or "off"), resuming is page or wait. Returns
-// the normalised spec, or nil when sleep is being disabled.
+// quiet period is 5m..24h, resuming is page or wait. Returns the
+// normalised spec: an explicit off for "off", nil for "default" (and for
+// an empty value), which clears the project's policy so the workspace's
+// default applies.
 func validateSleep(process string, sp *shpyrdv1.SleepSpec) (*shpyrdv1.SleepSpec, error) {
 	if process != "web" {
 		return nil, fmt.Errorf("only the web process can sleep (got %s)", process)
 	}
 	after := strings.ToLower(strings.TrimSpace(sp.After))
-	if after == "" || after == "off" || after == "false" {
+	switch after {
+	case "", "default":
 		return nil, nil
+	case sleepOff, "false":
+		return &shpyrdv1.SleepSpec{After: sleepOff}, nil
 	}
 	d, err := time.ParseDuration(after)
 	if err != nil {
-		return nil, fmt.Errorf("sleep after: %q is not a duration (try 15m, 1h)", sp.After)
+		return nil, fmt.Errorf("sleep after: %q is not a quiet period (try 15m or 1h); off keeps the app awake, default follows the workspace", sp.After)
 	}
 	if d < 5*time.Minute || d > 24*time.Hour {
 		return nil, errors.New("sleep after must be between 5m and 24h")
@@ -238,6 +250,13 @@ func validateSleep(process string, sp *shpyrdv1.SleepSpec) (*shpyrdv1.SleepSpec,
 		return nil, fmt.Errorf("sleep resuming must be page or wait (got %s)", sp.Resuming)
 	}
 	return &shpyrdv1.SleepSpec{After: d.String(), Resuming: resuming}, nil
+}
+
+// sleepTurnsOn reports whether a validated spec makes the process sleep:
+// an explicit off and a cleared policy (nil) need neither auto sleep nor
+// the add-on.
+func sleepTurnsOn(sp *shpyrdv1.SleepSpec) bool {
+	return sp != nil && sp.After != sleepOff
 }
 
 type applyProcessesRequest struct {
@@ -270,11 +289,11 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				abort(c, http.StatusBadRequest, err)
 				return
 			}
-			if sp != nil && !s.sleepAllowed() {
+			if sleepTurnsOn(sp) && !s.sleepAllowed() {
 				abort(c, http.StatusPaymentRequired, errSleepLicensed)
 				return
 			}
-			if sp != nil && !s.canSleep() {
+			if sleepTurnsOn(sp) && !s.canSleep() {
 				abort(c, http.StatusConflict, errors.New("this cluster cannot put apps to sleep yet: enable the sleep extension first (shpyrd-ctl extensions enable sleep)"))
 				return
 			}
@@ -315,7 +334,7 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				p.Replicas = ch.Replicas
 			}
 			if ch.Sleep != nil {
-				p.Sleep = sleeps[name] // nil clears it
+				p.Sleep = sleeps[name] // nil clears it: the workspace's default applies
 			}
 			a.Spec.Processes[name] = p
 		}
@@ -345,9 +364,13 @@ func processChangesDetail(changes map[string]ProcessChange) string {
 			parts = append(parts, fmt.Sprintf("%s:%s", n, *ch.Size))
 		}
 		if ch.Sleep != nil {
-			if sp, _ := validateSleep(n, ch.Sleep); sp == nil {
+			// Off and the workspace's default are different states (#135).
+			switch sp, _ := validateSleep(n, ch.Sleep); {
+			case sp == nil:
+				parts = append(parts, n+" sleep workspace default")
+			case sp.After == sleepOff:
 				parts = append(parts, n+" sleep off")
-			} else {
+			default:
 				parts = append(parts, fmt.Sprintf("%s sleep after %s (%s)", n, sp.After, sp.Resuming))
 			}
 		}
