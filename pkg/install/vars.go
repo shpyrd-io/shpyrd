@@ -106,13 +106,14 @@ const (
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
-	VarProjectStorageClass = "SHPYRD_PROJECT_STORAGE_CLASS" // project data; separate from platform and legacy provider claims
-	VarStorageClass        = "SHPYRD_STORAGE_CLASS"         // class for single-instance volumes ("" = the cluster default)
-	VarStorageClassShared  = "SHPYRD_STORAGE_CLASS_SHARED"  // class for shared (ReadWriteMany) volumes
-	VarVolumeMinSize       = "SHPYRD_VOLUME_MIN_SIZE"       // provider minimum a request is rounded up to ("" = none)
-	VarSnapshotClass       = "SHPYRD_SNAPSHOT_CLASS"        // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
-	VarObjectStorageSize   = "SHPYRD_OBJECT_STORAGE_SIZE"   // volume of the object-storage extension (RFC-0046)
-	VarMonitoringSize      = "SHPYRD_MONITORING_SIZE"       // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
+	VarProjectStorageClass  = "SHPYRD_PROJECT_STORAGE_CLASS"  // project disks: "" = SHPYRD_STORAGE_CLASS with its minimum and snapshots (the cloud profiles); shpyrd-local = the node's disk (the local profile)
+	VarDatabaseStorageClass = "SHPYRD_DATABASE_STORAGE_CLASS" // Postgres and Redis data volumes: "" = SHPYRD_STORAGE_CLASS; shpyrd-local = the node's disk
+	VarStorageClass         = "SHPYRD_STORAGE_CLASS"          // class for single-instance volumes ("" = the cluster default)
+	VarStorageClassShared   = "SHPYRD_STORAGE_CLASS_SHARED"   // class for shared (ReadWriteMany) volumes
+	VarVolumeMinSize        = "SHPYRD_VOLUME_MIN_SIZE"        // provider minimum a request is rounded up to ("" = none)
+	VarSnapshotClass        = "SHPYRD_SNAPSHOT_CLASS"         // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
+	VarObjectStorageSize    = "SHPYRD_OBJECT_STORAGE_SIZE"    // volume of the object-storage extension (RFC-0046)
+	VarMonitoringSize       = "SHPYRD_MONITORING_SIZE"        // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
 	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume
@@ -275,6 +276,7 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	}
 	out := map[string]string{
 		VarProjectStorageClass:     vars[VarProjectStorageClass],
+		VarDatabaseStorageClass:    vars[VarDatabaseStorageClass],
 		VarDataPool:                vars[VarDataPool],
 		VarDashboardURL:            dashboardURL,
 		VarAuthURL:                 authURL,
@@ -533,22 +535,58 @@ func mergeVars(base, extra map[string]string) map[string]string {
 	return out
 }
 
-// ProjectStorageClass keeps old/custom profiles working until they opt in to
-// node-local project data. Platform claims still use the provider variables.
+// LocalStorageClass is the node-local class of the storage-local component:
+// its volumes live on one node's disk, with no provider minimum and no
+// snapshots, and that component's teardown deletes them with the claim.
+const LocalStorageClass = "shpyrd-local"
+
+// ProjectStorageClass is the class of a project's disks. Empty
+// SHPYRD_PROJECT_STORAGE_CLASS means the provider's class
+// (SHPYRD_STORAGE_CLASS) with its minimum size and its snapshots, as the
+// cloud profiles have it; shpyrd-local keeps the data on the node's disk,
+// as the local profile has it. Platform claims use the provider variables
+// either way. Claims that exist keep their class whatever the profile says
+// (the Volume reconciler never rewrites it; the datastores keep theirs too).
 func ProjectStorageClass(vars func(string) string) string {
 	if class := vars(VarProjectStorageClass); class != "" {
 		return class
 	}
 	return vars(VarStorageClass)
 }
+
+// ProjectSharedStorageClass is the class of a shared folder. On a node-local
+// profile it is the node-local class too (several processes on one node);
+// otherwise the provider's ReadWriteMany class, or nothing, and the API then
+// refuses shared folders in words.
 func ProjectSharedStorageClass(vars func(string) string) string {
 	if class := vars(VarProjectStorageClass); class != "" {
 		return class
 	}
 	return vars(VarStorageClassShared)
 }
+
+// ProjectVolumeMinSize is the provider minimum a disk is rounded up to;
+// none on the node's disk.
 func ProjectVolumeMinSize(vars func(string) string) string {
-	if vars(VarProjectStorageClass) == "shpyrd-local" {
+	if ProjectStorageClass(vars) == LocalStorageClass {
+		return ""
+	}
+	return vars(VarVolumeMinSize)
+}
+
+// DatabaseStorageClass is the class of Postgres and Redis data volumes:
+// SHPYRD_DATABASE_STORAGE_CLASS, else the provider's class.
+func DatabaseStorageClass(vars func(string) string) string {
+	if class := vars(VarDatabaseStorageClass); class != "" {
+		return class
+	}
+	return vars(VarStorageClass)
+}
+
+// DatabaseVolumeMinSize is the provider minimum a database disk is rounded
+// up to; none on the node's disk.
+func DatabaseVolumeMinSize(vars func(string) string) string {
+	if DatabaseStorageClass(vars) == LocalStorageClass {
 		return ""
 	}
 	return vars(VarVolumeMinSize)

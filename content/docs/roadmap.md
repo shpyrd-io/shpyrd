@@ -33,7 +33,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Item | RFC | Status |
 | --- | --- | --- |
 | Postgres pooling, credential rotation, resize | [RFC-0039](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0039-postgres-pooling-rotation-resize.md) | ready to implement (resize already shipped: `shpyrd pg resize`) |
-| Project portability and local storage: portable project archives, moves between nodes, data on the node's disk | [RFC-0081](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0081-project-portability-and-local-storage.md) | ready to implement (local storage, archives and moves already in the console) |
+| Project portability and local storage: portable project archives, moves between nodes, data on the node's disk (the local profile; cloud profiles use block volumes) | [RFC-0081](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0081-project-portability-and-local-storage.md) | ready to implement (local storage, archives and moves already in the console) |
 | Redis high availability and metrics exporter | [RFC-0040](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0040-redis-ha-and-exporter.md) | proposal |
 | Resource detail pages with their own metrics | [RFC-0028](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0028-resource-pages-and-metrics.md) | proposal |
 

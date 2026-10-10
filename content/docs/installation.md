@@ -203,12 +203,12 @@ A **profile** describes the environment the base stack is built for and therefor
 | TLS | development CA issued by cert-manager | Let's Encrypt (one wildcard with a DNS provider); the platform CA for the registry | Let's Encrypt (one wildcard through the Route 53 solver); the platform CA for the registry |
 | Registry | in-cluster, TLS from the CA | in-cluster, TLS from the CA; an Object Storage bucket with `--registry-credentials-file`, or OCIR with `--registry-host` | in-cluster, TLS from the CA |
 | Isolation | kindnet enforces `NetworkPolicy` | Calico in policy-only mode | the VPC CNI's network policy agent |
-| Project volumes and databases | the node's disk | the node's disk; File Storage for shared volumes (`--class shpyrd-fss`) | the node's disk; EFS for shared volumes (`--class shpyrd-efs`) |
+| Project volumes and databases | the node's disk | Block Volume (50 GB minimum, snapshots); File Storage for shared volumes (`--class shpyrd-fss`) | EBS `gp3` (snapshots); EFS for shared volumes (`--class shpyrd-efs`) |
 | Platform disks | the node's disk | Block Volume (50 GB minimum) | EBS `gp3` |
 | Object storage (extension `object-storage`) | Garage in the cluster | the S3 gateway in front of one Object Storage bucket (`--object-storage-credentials-file`), one writer | the S3 gateway in front of one S3 bucket (`--object-storage-credentials-file`) |
 | Access | this machine | WireGuard instance (profile from Terraform), or the Bastion tunnel | AWS Client VPN (profile from Terraform) |
 
-A volume on the node's disk has no minimum size and stays on that node. Project backups protect it; provider snapshots and resizing do not apply. A shared volume needs a class several nodes can mount, so name it when you create it (`shpyrd volumes create assets --size 20Gi --shared --class shpyrd-fss`). With `--object-storage-credentials-file` every bucket, Postgres backups included, goes through the S3 gateway to one provider bucket.
+On the cloud profiles a volume is a provider block volume: it starts at the provider minimum, grows, has snapshots and follows its process to another node. On the local profile it is on the node's disk: no minimum, no resize, no snapshots, and it stays on that node; project backups protect it. A shared volume needs a class several nodes can mount, so name it when you create it (`shpyrd volumes create assets --size 20Gi --shared --class shpyrd-fss`). With `--object-storage-credentials-file` every bucket, Postgres backups included, goes through the S3 gateway to one provider bucket.
 
 The dashboard's cluster page shows the installed profile, and the install record keeps every choice so `cluster init` re-runs need no flags.
 

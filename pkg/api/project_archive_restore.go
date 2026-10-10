@@ -197,6 +197,10 @@ func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, 
 		current = &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID}}, Spec: v.Spec}
 		current.Spec.FromSnapshot = ""
 		current.Spec.StorageClass = ""
+		// On the profile's class, as a new disk: the provider minimum
+		// applies (RFC-0060), or the Volume would ask for less than the
+		// disk it gets and refuse every later resize up to that size.
+		current.Spec.Size, _ = s.applyVolumeMinimum(current.Spec.Size)
 		if err := s.apps.Create(ctx, current); err != nil {
 			return err
 		}

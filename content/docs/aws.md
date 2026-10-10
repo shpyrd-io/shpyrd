@@ -117,7 +117,7 @@ What happens, in order:
 | Level | Components |
 | --- | --- |
 | rc0 | Prometheus Operator CRDs |
-| rc1 | node-local storage for project data, the AWS Load Balancer Controller, cert-manager (with ambient credentials for Route 53), the registry credential, the platform's Service, the snapshot controller and the EBS snapshot class, the `gp3` and `shpyrd-efs` storage classes; the S3 gateway with a bucket |
+| rc1 | the node-local storage class (for the project disks that still use it), the AWS Load Balancer Controller, cert-manager (with ambient credentials for Route 53), the registry credential, the platform's Service, the snapshot controller and the EBS snapshot class, the `gp3` and `shpyrd-efs` storage classes; the S3 gateway with a bucket |
 | rc2 | Let's Encrypt issuers, the platform CA and trust bundle, ingress-nginx behind an internet-facing NLB on the Elastic IPs and the internal one behind an internal NLB (both with pod targets), the registry and the node trust for it, ExternalDNS |
 | rc3 | kpack with the Paketo builder, kube-prometheus-stack, the wildcard certificate, the control-plane database |
 | rc4 | the shpyrd server, the platform backup schedule (with a backup target) |
@@ -154,7 +154,7 @@ At the defaults, on demand in us-east-1: the EKS control plane $0.10 per hour, t
 
 - **Addresses and hostnames.** The public front door has two static Elastic IPs (the A-record targets for a zone apex, shown on the project's **Domains** page) and a DNS name that ExternalDNS uses for alias records; the internal one has a DNS name only. Load balancers are managed by the AWS Load Balancer Controller with pod targets; an ALB is not used because it would terminate TLS with ACM certificates, which does not fit per-domain certificates from cert-manager.
 - **Network policy.** The VPC CNI enforces it with its own agent; `cluster init` recognises it and installs nothing.
-- **Project volumes live on the nodes' disks.** Project volumes and databases use the node's own disk (`shpyrd-local`): no minimum size, no resize, and project backups instead of EBS snapshots. EBS `gp3` holds only the platform's own disks (registry, control-plane database, monitoring).
+- **Project disks and databases are EBS volumes** (`gp3`): they grow with `shpyrd volumes resize`, have nightly snapshots, and follow their process or database to another node in the zone. Disks and databases made before this version are on the node's own disk (`shpyrd-local`) until migrated; the class stays installed while any remains. `SHPYRD_PROJECT_STORAGE_CLASS=shpyrd-local` and `SHPYRD_DATABASE_STORAGE_CLASS=shpyrd-local` put new ones on the node's disk again, on purpose.
 - **Shared volumes** are EFS access points (`shared_storage = true`). Name the class when you create one: `shpyrd volumes create assets --size 20Gi --shared --class shpyrd-efs`.
 - **Object storage in a bucket.** `contrib/aws/terraform/object-storage` creates an S3 bucket and writes `<name>-objects.env`. `--object-storage-credentials-file` with that file sends every bucket the platform hands out, Postgres backups included, through the S3 gateway to that one bucket. It uses an IAM user's access key, written to that file.
 - **Existing clusters.** The profile works on any EKS cluster that has the same add-ons and Pod Identity associations as the Terraform creates (CSI drivers, `kube-system/aws-load-balancer-controller`, `shpyrd-system/external-dns`, `cert-manager/cert-manager`, and `shpyrd-system/shpyrd-server` for backups), and subnets tagged for the in-tree load balancer discovery.
