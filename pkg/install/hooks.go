@@ -581,7 +581,7 @@ func backupTargetHook(ctx context.Context, e *Engine, c *Component) error {
 		"SHPYRD_BACKUP_ENDPOINT": e.vars[VarBackupEndpoint],
 		"SHPYRD_BACKUP_REGION":   e.vars[VarBackupRegion],
 	}
-	if e.vars[VarGatewayBucket] != "" {
+	if backupsViaGateway(e.vars) {
 		sec, err := secrets.Get(ctx, "gateway-platform-backups", metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -653,11 +653,13 @@ func controlPlaneDBHook(ctx context.Context, e *Engine, c *Component) error {
 // Registry object storage (RFC-0059 extension): when SHPYRD_REGISTRY_BUCKET
 // is set the registry stores blobs in OCI Object Storage instead of a PVC.
 // The credentials come from --registry-credentials-file, which the backups
-// Terraform module writes alongside the backup credentials.
+// Terraform module writes alongside the backup credentials. A registry on
+// the S3 gateway gets its credential from the gateway hook instead; one with
+// a provider bucket of its own keeps that bucket even when the gateway is on.
 const RegistryS3SecretName = "registry-s3"
 
 func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
-	if e.vars[VarGatewayBucket] != "" {
+	if registryViaGateway(e.vars) {
 		return nil
 	}
 	bucket := e.vars[VarRegistryBucket]

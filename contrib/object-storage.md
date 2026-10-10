@@ -18,7 +18,8 @@ The file contains `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 Keep the generated files and Terraform state private.
 
 With `SHPYRD_GATEWAY_BUCKET` configured, the installer directs every managed
-object consumer to `http://object-storage.shpyrd-system.svc:3900`:
+object consumer without a bucket of its own (see below) to
+`http://object-storage.shpyrd-system.svc:3900`:
 
 | Consumer | Logical bucket | Provider object prefix |
 | --- | --- | --- |
@@ -103,6 +104,18 @@ old claims or buckets. Before activating the gateway:
 Local profiles without a gateway keep filesystem sources/registry and
 Garage. The legacy direct-S3 registry/source settings remain available for
 staged migration, including `SHPYRD_SOURCES_BUCKET=` to keep sources on disk.
+
+The registry and the platform backups may stay direct while the gateway is
+on. When `--registry-credentials-file` (or explicit `SHPYRD_REGISTRY_BUCKET`,
+`SHPYRD_REGISTRY_ENDPOINT` and `SHPYRD_REGISTRY_REGION`) names a provider
+bucket, the installer leaves those settings as given: the registry keeps
+writing to that bucket with its own credential, so image pulls and pushes
+never depend on the gateway, and no `registry` logical bucket is created.
+Likewise an explicit `--backup-target` (`SHPYRD_BACKUP_TARGET`, with
+`--backup-credentials-file`) keeps the platform archives on their own bucket.
+Sources and every `ObjectBucket` always move to the gateway. To route the
+registry or the backups through the gateway on a later run, copy their data
+as described above and install without the explicit settings.
 
 ## Disaster recovery without the gateway
 

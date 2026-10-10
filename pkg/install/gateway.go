@@ -41,8 +41,8 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 	if err := records.CheckConditionalWrites(ctx); err != nil {
 		return err
 	}
-	endpoint := "http://object-storage." + c.Namespace + ".svc:3900"
-	for _, consumer := range []struct{ bucket, secret string }{{"registry", RegistryS3SecretName}, {"sources", "gateway-sources"}, {"platform-backups", "gateway-platform-backups"}} {
+	endpoint := gatewayEndpoint(c.Namespace)
+	for _, consumer := range gatewayConsumers(e.vars) {
 		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: consumer.bucket}); err != nil {
 			return err
 		}
@@ -56,6 +56,25 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 		}
 	}
 	return e.applyOpaqueSecret(ctx, c.Namespace, GatewayBackendSecret, map[string]string{"AWS_ACCESS_KEY_ID": creds["AWS_ACCESS_KEY_ID"], "AWS_SECRET_ACCESS_KEY": creds["AWS_SECRET_ACCESS_KEY"], VarGatewayBucket: e.vars[VarGatewayBucket], VarGatewayEndpoint: e.vars[VarGatewayEndpoint], VarGatewayRegion: e.vars[VarGatewayRegion]})
+}
+
+// gatewayConsumer is a platform flow with a logical bucket of its own on
+// the gateway and the Secret holding its credential.
+type gatewayConsumer struct{ bucket, secret string }
+
+// gatewayConsumers lists the platform flows the gateway serves. The registry
+// and the platform backups are left out while they keep a bucket of their
+// own (see derivedVars): writing the registry-s3 Secret for them would
+// replace the provider credential the registry hook keeps between runs.
+func gatewayConsumers(vars map[string]string) []gatewayConsumer {
+	consumers := []gatewayConsumer{{"sources", "gateway-sources"}}
+	if registryViaGateway(vars) {
+		consumers = append([]gatewayConsumer{{"registry", RegistryS3SecretName}}, consumers...)
+	}
+	if backupsViaGateway(vars) {
+		consumers = append(consumers, gatewayConsumer{"platform-backups", "gateway-platform-backups"})
+	}
+	return consumers
 }
 
 // On the first upgrade, give existing App sources their capabilities before

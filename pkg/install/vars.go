@@ -397,21 +397,49 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 			out[v] = ""
 		}
 	}
+	// The S3 gateway (RFC-0046) takes the consumers nobody gave a bucket of
+	// their own. A registry bucket named explicitly (--registry-credentials-file
+	// or SHPYRD_REGISTRY_*) keeps the registry writing straight to the
+	// provider, so image pulls never wait on the gateway; an explicit backup
+	// target likewise keeps the platform archives on their own bucket.
+	// Sources always move to the gateway.
 	if vars[VarGatewayBucket] != "" {
-		endpoint := "http://object-storage." + vars[VarSystemNS] + ".svc:3900"
-		out[VarRegistryBucket] = "registry"
-		out[VarRegistryEndpoint] = endpoint
-		out[VarRegistryRegion] = "garage"
-		out[VarRegistryS3Secure] = "false"
+		endpoint := gatewayEndpoint(vars[VarSystemNS])
+		if vars[VarRegistryBucket] == "" {
+			out[VarRegistryBucket] = "registry"
+			out[VarRegistryEndpoint] = endpoint
+			out[VarRegistryRegion] = "garage"
+			out[VarRegistryS3Secure] = "false"
+		}
 		out[VarSourcesBucket] = "sources"
 		out[VarSourcesEndpoint] = endpoint
 		out[VarSourcesRegion] = "garage"
 		out[VarSourcesSecret] = "gateway-sources"
-		out[VarBackupTarget] = "s3://platform-backups/platform"
-		out[VarBackupEndpoint] = endpoint
-		out[VarBackupRegion] = "garage"
+		if vars[VarBackupTarget] == "" {
+			out[VarBackupTarget] = "s3://platform-backups/platform"
+			out[VarBackupEndpoint] = endpoint
+			out[VarBackupRegion] = "garage"
+		}
 	}
 	return out
+}
+
+// gatewayEndpoint is where the S3 gateway listens inside the cluster: the
+// address Garage had, so consumers need no change when it replaces Garage.
+func gatewayEndpoint(namespace string) string {
+	return "http://object-storage." + namespace + ".svc:3900"
+}
+
+// registryViaGateway reports whether the registry stores images through the
+// S3 gateway, as opposed to a provider bucket of its own.
+func registryViaGateway(vars map[string]string) bool {
+	return vars[VarGatewayBucket] != "" && vars[VarRegistryEndpoint] == gatewayEndpoint(vars[VarSystemNS])
+}
+
+// backupsViaGateway reports whether the platform archives go through the S3
+// gateway, as opposed to a backup target of their own.
+func backupsViaGateway(vars map[string]string) bool {
+	return vars[VarGatewayBucket] != "" && vars[VarBackupEndpoint] == gatewayEndpoint(vars[VarSystemNS])
 }
 
 // URLPort is the https port public URLs carry: 443 when a front door

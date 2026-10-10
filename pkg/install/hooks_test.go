@@ -27,10 +27,9 @@ func (nopReporter) Step(string, string)        {}
 func (nopReporter) Done(string, time.Duration) {}
 func (nopReporter) Failed(string, error)       {}
 
-func TestRegistryCredentialsAreIndependentOfPlatformBackupCredentials(t *testing.T) {
-	ctx := context.Background()
-	cs := fake.NewClientset()
-	e := &Engine{kube: &kube.Client{Kube: cs}, rep: nopReporter{}, vars: map[string]string{VarRegistryBucket: "images", VarRegistryRegion: "region"}}
+// fakeEngine is an Engine whose Secret writes land in cs.
+func fakeEngine(ctx context.Context, cs *fake.Clientset, vars map[string]string) *Engine {
+	e := &Engine{kube: &kube.Client{Kube: cs}, rep: nopReporter{}, vars: vars}
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{corev1.SchemeGroupVersion})
 	mapper.Add(corev1.SchemeGroupVersion.WithKind("Secret"), meta.RESTScopeNamespace)
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -53,6 +52,13 @@ func TestRegistryCredentialsAreIndependentOfPlatformBackupCredentials(t *testing
 	})
 	e.kube.Mapper, e.kube.Dynamic = mapper, dyn
 	e.applier = &applier{kube: e.kube}
+	return e
+}
+
+func TestRegistryCredentialsAreIndependentOfPlatformBackupCredentials(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	e := fakeEngine(ctx, cs, map[string]string{VarRegistryBucket: "images", VarRegistryRegion: "region"})
 	e.opts.BackupCredentials = map[string]string{"AWS_ACCESS_KEY_ID": "backup-key", "AWS_SECRET_ACCESS_KEY": "backup-secret"}
 	c := &Component{Name: "registry", Namespace: "shpyrd-system"}
 	if err := registryS3Hook(ctx, e, c); err == nil {
@@ -87,6 +93,77 @@ func TestRegistryCredentialsAreIndependentOfPlatformBackupCredentials(t *testing
 	}
 	if e.opts.BackupCredentials["AWS_ACCESS_KEY_ID"] != "backup-key" {
 		t.Fatal("registry overwrote backup credential")
+	}
+}
+
+// With the gateway on, a registry given a provider bucket of its own keeps
+// writing there with its own credential; one without goes through the
+// gateway and leaves its credential to the gateway hook.
+func TestRegistryStaysDirectNextToTheGateway(t *testing.T) {
+	ctx := context.Background()
+	ns := "shpyrd-system"
+	c := &Component{Name: "registry", Namespace: ns}
+
+	cs := fake.NewClientset()
+	e := fakeEngine(ctx, cs, map[string]string{VarSystemNS: ns, VarGatewayBucket: "shpyrd-prod-objects", VarRegistryBucket: "shpyrd-prod-registry", VarRegistryEndpoint: "https://provider.example", VarRegistryRegion: "sa-saopaulo-1"})
+	e.opts.RegistryCredentials = map[string]string{"AWS_ACCESS_KEY_ID": "registry-key", "AWS_SECRET_ACCESS_KEY": "registry-secret"}
+	if err := registryS3Hook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := cs.CoreV1().Secrets(ns).Get(ctx, RegistryS3SecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["AWS_ACCESS_KEY_ID"]) != "registry-key" || string(sec.Data["bucket"]) != "shpyrd-prod-registry" || string(sec.Data["endpoint"]) != "https://provider.example" {
+		t.Errorf("direct registry next to the gateway: key=%s bucket=%s endpoint=%s", sec.Data["AWS_ACCESS_KEY_ID"], sec.Data["bucket"], sec.Data["endpoint"])
+	}
+
+	cs = fake.NewClientset()
+	e = fakeEngine(ctx, cs, map[string]string{VarSystemNS: ns, VarGatewayBucket: "shpyrd-prod-objects", VarRegistryBucket: "registry", VarRegistryEndpoint: gatewayEndpoint(ns), VarRegistryRegion: "garage"})
+	if err := registryS3Hook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CoreV1().Secrets(ns).Get(ctx, RegistryS3SecretName, metav1.GetOptions{}); err == nil {
+		t.Fatal("the registry hook wrote a credential for a registry on the gateway")
+	}
+}
+
+// The same for the platform archives: an explicit target keeps the
+// credential from the backup credentials file; without one the archives go
+// through the gateway with the credential the gateway hook made for them.
+func TestPlatformBackupsStayDirectNextToTheGateway(t *testing.T) {
+	ctx := context.Background()
+	ns := "shpyrd-system"
+	c := &Component{Name: "platform-backup", Namespace: ns}
+
+	cs := fake.NewClientset()
+	e := fakeEngine(ctx, cs, map[string]string{VarSystemNS: ns, VarGatewayBucket: "shpyrd-prod-objects", VarBackupTarget: "s3://shpyrd-prod-backups/shpyrd-prod", VarBackupEndpoint: "https://provider.example", VarBackupRegion: "sa-saopaulo-1"})
+	e.opts.BackupCredentials = map[string]string{"AWS_ACCESS_KEY_ID": "backup-key", "AWS_SECRET_ACCESS_KEY": "backup-secret"}
+	if err := backupTargetHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := cs.CoreV1().Secrets(ns).Get(ctx, BackupTargetSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["AWS_ACCESS_KEY_ID"]) != "backup-key" || string(sec.Data["SHPYRD_BACKUP_TARGET"]) != "s3://shpyrd-prod-backups/shpyrd-prod" || string(sec.Data["SHPYRD_BACKUP_ENDPOINT"]) != "https://provider.example" {
+		t.Errorf("direct backups next to the gateway: key=%s target=%s endpoint=%s", sec.Data["AWS_ACCESS_KEY_ID"], sec.Data["SHPYRD_BACKUP_TARGET"], sec.Data["SHPYRD_BACKUP_ENDPOINT"])
+	}
+
+	cs = fake.NewClientset()
+	if _, err := cs.CoreV1().Secrets(ns).Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "gateway-platform-backups", Namespace: ns}, Data: map[string][]byte{"AWS_ACCESS_KEY_ID": []byte("gateway-key"), "AWS_SECRET_ACCESS_KEY": []byte("gateway-secret")}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e = fakeEngine(ctx, cs, map[string]string{VarSystemNS: ns, VarGatewayBucket: "shpyrd-prod-objects", VarBackupTarget: "s3://platform-backups/platform", VarBackupEndpoint: gatewayEndpoint(ns), VarBackupRegion: "garage"})
+	if err := backupTargetHook(ctx, e, c); err != nil {
+		t.Fatal(err)
+	}
+	sec, err = cs.CoreV1().Secrets(ns).Get(ctx, BackupTargetSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["AWS_ACCESS_KEY_ID"]) != "gateway-key" || string(sec.Data["SHPYRD_BACKUP_TARGET"]) != "s3://platform-backups/platform" {
+		t.Errorf("backups through the gateway: key=%s target=%s", sec.Data["AWS_ACCESS_KEY_ID"], sec.Data["SHPYRD_BACKUP_TARGET"])
 	}
 }
 
