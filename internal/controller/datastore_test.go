@@ -285,6 +285,100 @@ func TestRedisMovesToARedisSize(t *testing.T) {
 	}
 }
 
+// RFC-0060, the profile switch: a datastore that runs on another class than
+// the profile's keeps that class and its disk. The node-local 1 GiB cluster
+// is not asked to grow to the provider minimum (the local provisioner cannot
+// expand), and the provider disk rounded up by a former minimum is not shrunk
+// when the profile goes back to node-local.
+func TestExistingDatastoresKeepTheirStorageAcrossAProfileSwitch(t *testing.T) {
+	ctx := context.Background()
+	oneGi := resource.MustParse("1Gi")
+	local := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "app-shop", Generation: 1}, Spec: shpyrdv1.PostgresSpec{Storage: &oneGi}}
+	localCluster := &unstructured.Unstructured{}
+	localCluster.SetGroupVersionKind(CNPGClusterGVK)
+	localCluster.SetName("local")
+	localCluster.SetNamespace("app-shop")
+	localCluster.Object["spec"] = map[string]interface{}{"instances": int64(1), "storage": map[string]interface{}{"size": "1Gi", "storageClass": LocalStorageClass}}
+
+	fiveGi := resource.MustParse("5Gi")
+	block := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "block", Namespace: "app-shop", Generation: 1}, Spec: shpyrdv1.PostgresSpec{Storage: &fiveGi}}
+	blockCluster := &unstructured.Unstructured{}
+	blockCluster.SetGroupVersionKind(CNPGClusterGVK)
+	blockCluster.SetName("block")
+	blockCluster.SetNamespace("app-shop")
+	blockCluster.Object["spec"] = map[string]interface{}{"instances": int64(1), "storage": map[string]interface{}{"size": "50Gi", "storageClass": "oci-bv"}}
+
+	rd := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "queue", Namespace: "app-shop", Generation: 1}, Spec: shpyrdv1.RedisSpec{Persistent: true, Storage: &oneGi}}
+	rdSts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "queue", Namespace: "app-shop"},
+		Spec: appsv1.StatefulSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "queue"}},
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "redis"}}}},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data"}, Spec: corev1.PersistentVolumeClaimSpec{
+				StorageClassName: ptr.To(LocalStorageClass),
+				Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: oneGi}},
+			}}},
+		},
+	}
+	base, c := newTestReconciler(t, local, localCluster, block, blockCluster, rd, rdSts)
+	storageOf := func(name string) (string, string) {
+		t.Helper()
+		cluster := &unstructured.Unstructured{}
+		cluster.SetGroupVersionKind(CNPGClusterGVK)
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, cluster); err != nil {
+			t.Fatal(err)
+		}
+		size, _, _ := unstructured.NestedString(cluster.Object, "spec", "storage", "size")
+		class, _, _ := unstructured.NestedString(cluster.Object, "spec", "storage", "storageClass")
+		return size, class
+	}
+
+	// The oci profile switched to block storage with its 50 GiB minimum.
+	toBlock := StorageProfile{Class: "oci-bv", MinSize: "50Gi"}
+	pgr := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", Storage: toBlock}
+	if _, err := pgr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: "local"}}); err != nil {
+		t.Fatal(err)
+	}
+	if size, class := storageOf("local"); size != "1Gi" || class != LocalStorageClass {
+		t.Errorf("node-local cluster after the switch to block = %s on %s, want 1Gi on %s", size, class, LocalStorageClass)
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "local"}, local)
+	if local.Status.Storage != "" {
+		t.Errorf("status.storage of the untouched local cluster = %q, want none", local.Status.Storage)
+	}
+	rdr := &RedisReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", Storage: toBlock}
+	if _, err := rdr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: "queue"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "queue"}, rd)
+	if rd.Status.Storage != "" {
+		t.Errorf("redis status.storage after the switch = %q, want none (its 1Gi local claim is what it has)", rd.Status.Storage)
+	}
+
+	// The profile back on node-local: the block disk is not shrunk.
+	toLocal := StorageProfile{Class: LocalStorageClass}
+	pgr = &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", Storage: toLocal}
+	if _, err := pgr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: "block"}}); err != nil {
+		t.Fatal(err)
+	}
+	if size, class := storageOf("block"); size != "50Gi" || class != "oci-bv" {
+		t.Errorf("block cluster after the switch back to local = %s on %s, want 50Gi on oci-bv", size, class)
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "block"}, block)
+	if block.Status.Storage != "50Gi" {
+		t.Errorf("status.storage of the kept block disk = %q, want 50Gi", block.Status.Storage)
+	}
+
+	// On the profile's own class the profile decides, as before.
+	pgr = &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", Storage: toBlock}
+	if _, err := pgr.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: "block"}}); err != nil {
+		t.Fatal(err)
+	}
+	if size, class := storageOf("block"); size != "50Gi" || class != "oci-bv" {
+		t.Errorf("block cluster on its own profile = %s on %s", size, class)
+	}
+}
+
 func TestDatastoresFollowStorageProfile(t *testing.T) {
 	pgStorage := resource.MustParse("5Gi")
 	pg := &shpyrdv1.Postgres{
