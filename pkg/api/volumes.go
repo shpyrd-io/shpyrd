@@ -173,6 +173,20 @@ func (s *Server) applyVolumeMinimum(size resource.Quantity) (resource.Quantity, 
 	return minimum, fmt.Sprintf("%s start at %s: created at %s instead of %s", provider, minimum.String(), minimum.String(), size.String())
 }
 
+// sharedFoldersUnavailable is what a project hears when it asks for a shared
+// folder on a cloud that has none (the storage plan: shared folders arrive
+// when the provider's file storage is set up and verified; files several
+// instances share belong in a bucket).
+const sharedFoldersUnavailable = "Shared folders are not available on this cloud yet. For files several instances share, use a bucket."
+
+// sharedFoldersOperatorHint tells the cluster's operator what turns them on.
+func (s *Server) sharedFoldersOperatorHint() string {
+	if s.vars(install.VarProfile) == "oci" {
+		return "Operators: create the File Storage mount target with contrib/oci/terraform (shared_storage = true) and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`."
+	}
+	return "Operators: install a ReadWriteMany storage class and name it in SHPYRD_STORAGE_CLASS_SHARED."
+}
+
 // checkVolumeClass refuses a volume whose storage class does not exist on
 // the cluster before anything is created: the shared class in particular
 // is installed only where the profile's shared storage is set up.
@@ -188,17 +202,19 @@ func (s *Server) checkVolumeClass(ctx context.Context, vol *shpyrdv1.Volume) err
 	if class == controller.LocalStorageClass && vol.Spec.FromSnapshot != "" {
 		return errors.New("node-local volumes restore from project archives, not provider snapshots")
 	}
+	// A shared folder needs a ReadWriteMany class that exists. Without one
+	// the request is refused in words, before anything is created; a shared
+	// folder never falls back to a node-local directory.
+	if vol.Shared() && vol.Spec.StorageClass == "" && class == "" {
+		return errors.New(sharedFoldersUnavailable + " " + s.sharedFoldersOperatorHint())
+	}
 	if class == "" || s.kube == nil || s.kube.Kube == nil {
 		return nil
 	}
 	_, err := s.kube.Kube.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err) && vol.Spec.StorageClass == "" && vol.Shared():
-		hint := "no ReadWriteMany storage class is installed"
-		if s.vars(install.VarProfile) == "oci" {
-			hint = "create the File Storage mount target with contrib/oci/terraform (shared_storage = true) and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`"
-		}
-		return fmt.Errorf("shared volumes are not set up on this cluster (storage class %s does not exist): %s", class, hint)
+		return fmt.Errorf("%s %s (storage class %s does not exist)", sharedFoldersUnavailable, s.sharedFoldersOperatorHint(), class)
 	case apierrors.IsNotFound(err):
 		return fmt.Errorf("storage class %q does not exist on this cluster", class)
 	case err != nil:
