@@ -133,14 +133,22 @@ func matchSegments(pat, segs []string) bool {
 // names, or the one found above the current folder. It fills
 // project.Build.Workspace and returns the folder to archive ("" for the
 // current one), and what it found ("" and nil when shpyrd.yaml said it).
-// A Dockerfile build written in shpyrd.yaml is left as it is.
+// A Dockerfile build (written in shpyrd.yaml, or the folder's own
+// Dockerfile) is left as it is.
 func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, error) {
-	if project.Build != nil && project.Build.Strategy == shpyrdv1.StrategyDockerfile {
-		return "", nil, nil
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", nil, err
+	}
+	// A Dockerfile build, written or the package's own Dockerfile, stays
+	// one; only the workspace root's Dockerfile is passed over.
+	if b := project.Build; b != nil && (b.Strategy == shpyrdv1.StrategyDockerfile || b.Dockerfile != "" || b.Target != "") {
+		return "", nil, nil
+	}
+	if project.Build == nil || project.Build.Strategy == "" {
+		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); err == nil {
+			return "", nil, nil
+		}
 	}
 	if project.Build != nil && project.Build.Workspace != "" {
 		w := normalizeWorkspacePath(project.Build.Workspace)

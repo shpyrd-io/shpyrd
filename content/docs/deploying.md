@@ -165,7 +165,7 @@ cd apps/web && shpyrd deploy
 
 The build installs what the package needs (its workspace dependencies included), with the package manager the root's lockfile says and the version its `packageManager` names, runs the package's `build` script, and starts it with its `start` script. If the package needs its workspace dependencies built first, its `build` script says so, as it would locally (`pnpm --filter @acme/ui run build && next build`, or `turbo run build --filter web`). A `Procfile` at the workspace's root replaces the `start` script.
 
-A workspace package builds with buildpacks, even when the folder or the root has a `Dockerfile`; `build.strategy: dockerfile` in `shpyrd.yaml` keeps a Dockerfile build, and then no workspace is detected. `build.workspace` can be written by hand, as the package's path from the workspace's root.
+A workspace package builds with buildpacks, even when the workspace's root has a `Dockerfile`. A `Dockerfile` in the package's own folder, or `build.strategy: dockerfile` in `shpyrd.yaml`, keeps a Dockerfile build, and then no workspace is detected. `build.workspace` can be written by hand, as the package's path from the workspace's root.
 
 ## Release phase
 

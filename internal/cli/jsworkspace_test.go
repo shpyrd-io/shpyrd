@@ -256,3 +256,28 @@ func TestProfilesLeaveAWorkspacesBuildpacksAlone(t *testing.T) {
 		t.Errorf("buildpacks = %v", pc.Build.Buildpacks)
 	}
 }
+
+// A package with a Dockerfile of its own, or a Dockerfile written in
+// shpyrd.yaml, keeps the Dockerfile build it had: only the root's
+// Dockerfile is passed over for a workspace build.
+func TestWorkspaceForKeepsAPackagesDockerfile(t *testing.T) {
+	top := t.TempDir()
+	files(t, top, map[string]string{
+		"package.json":          `{"workspaces":["apps/*"]}`,
+		"Dockerfile":            "FROM scratch\n",
+		"apps/api/package.json": `{"name":"api"}`,
+		"apps/api/Dockerfile":   "FROM node\n",
+		"apps/web/package.json": `{"name":"web"}`,
+	})
+	t.Chdir(filepath.Join(top, "apps/api"))
+	if root, ws, err := workspaceFor(&projectConfig{}, top); root != "" || ws != nil || err != nil {
+		t.Errorf("own Dockerfile: %q %+v %v", root, ws, err)
+	}
+	t.Chdir(filepath.Join(top, "apps/web"))
+	if root, ws, err := workspaceFor(&projectConfig{Build: &projectBuild{Target: "prod"}}, top); root != "" || ws != nil || err != nil {
+		t.Errorf("a written target: %q %+v %v", root, ws, err)
+	}
+	if root, ws, err := workspaceFor(&projectConfig{}, top); root != top || ws == nil || err != nil {
+		t.Errorf("the root's Dockerfile only: %q %+v %v", root, ws, err)
+	}
+}
