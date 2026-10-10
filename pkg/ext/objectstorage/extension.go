@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -143,20 +144,25 @@ func summarize(ctx context.Context, deps ext.Deps) (*Summary, error) {
 			out.Message = "object storage is not installed yet"
 			return out, nil
 		}
-		var store interface {
-			Usage(context.Context) (*objectstore.Capacity, error)
+		token := string(sec.Data["adminToken"])
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if out.Backend == "gateway" {
+			gw, err := connectGateway(out.Endpoint, AdminEndpoint(deps.SystemNamespace), token)
+			if err != nil {
+				out.Message = err.Error()
+				return out, nil
+			}
+			if err := summarizeGateway(cctx, gw, list.Items, out); err != nil {
+				out.Message = err.Error()
+			}
+			return out, nil
 		}
-		if deps.Var(install.VarGatewayBucket) != "" {
-			store, err = objectstore.ConnectGateway(out.Endpoint, AdminEndpoint(deps.SystemNamespace), string(sec.Data["adminToken"]))
-		} else {
-			store, err = objectstore.Connect(out.Endpoint, AdminEndpoint(deps.SystemNamespace), string(sec.Data["adminToken"]))
-		}
+		store, err := connectGarage(out.Endpoint, AdminEndpoint(deps.SystemNamespace), token)
 		if err != nil {
 			out.Message = err.Error()
 			return out, nil
 		}
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
 		if cap, err := store.Usage(cctx); err == nil {
 			out.TotalBytes, out.UsedBytes = cap.TotalBytes, cap.UsedBytes
 			if !cap.MeasuredAt.IsZero() {
@@ -173,6 +179,66 @@ func summarize(ctx context.Context, deps ext.Deps) (*Summary, error) {
 		}
 	}
 	return out, nil
+}
+
+var (
+	connectGarage  = objectstore.Connect
+	connectGateway = objectstore.ConnectGateway
+)
+
+// The gateway has no disk to report and measuring usage there means listing
+// objects, so the summary never asks it for the whole store. Each consumer's
+// bucket is already measured by its controller (status.usedBytes); the
+// platform's own buckets (registry, sources, platform backups) have no
+// ObjectBucket and are measured by prefix, one at a time, no more often than
+// platformUsageTTL across page loads.
+const platformUsageTTL = 5 * time.Minute
+
+var platformUsage struct {
+	sync.Mutex
+	buckets map[string]objectstore.Usage
+	at      time.Time
+}
+
+type bucketMeasurer interface {
+	BucketUsage(context.Context, string) (*objectstore.Capacity, error)
+}
+
+func summarizeGateway(ctx context.Context, gw bucketMeasurer, items []shpyrdv1.ObjectBucket, out *Summary) error {
+	platform, at, err := measurePlatformBuckets(ctx, gw)
+	if err != nil {
+		return err
+	}
+	oldest := at
+	for _, b := range items {
+		out.UsedBytes += b.Status.UsedBytes
+		if b.Status.MeasuredAt != nil && b.Status.MeasuredAt.Time.Before(oldest) {
+			oldest = b.Status.MeasuredAt.Time
+		}
+	}
+	for _, name := range install.PlatformGatewayBuckets {
+		out.UsedBytes += platform[name].Bytes
+	}
+	out.MeasuredAt = &oldest
+	return nil
+}
+
+func measurePlatformBuckets(ctx context.Context, gw bucketMeasurer) (map[string]objectstore.Usage, time.Time, error) {
+	platformUsage.Lock()
+	defer platformUsage.Unlock()
+	if platformUsage.buckets != nil && time.Since(platformUsage.at) < platformUsageTTL {
+		return platformUsage.buckets, platformUsage.at, nil
+	}
+	buckets := map[string]objectstore.Usage{}
+	for _, name := range install.PlatformGatewayBuckets {
+		cap, err := gw.BucketUsage(ctx, name)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		buckets[name] = cap.Buckets[name]
+	}
+	platformUsage.buckets, platformUsage.at = buckets, time.Now()
+	return buckets, platformUsage.at, nil
 }
 
 // CLI returns `shpyrd object-storage`.

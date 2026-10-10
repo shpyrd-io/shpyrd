@@ -21,6 +21,12 @@ import (
 
 const GatewayBackendSecret = "object-gateway-backend"
 
+// PlatformGatewayBuckets are the gateway's logical buckets that may belong to
+// the platform itself; they have no ObjectBucket resource. Which of them a
+// cluster actually routes through the gateway is gatewayConsumers' decision
+// (the registry and the platform backups may keep a bucket of their own).
+var PlatformGatewayBuckets = []string{"registry", "sources", "platform-backups"}
+
 // Bootstrap uses the provider credential only to create the small consumer
 // descriptors. All runtime object traffic uses the S3 gateway thereafter.
 func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error {
@@ -43,14 +49,15 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 	}
 	endpoint := gatewayEndpoint(c.Namespace)
 	for _, consumer := range gatewayConsumers(e.vars) {
-		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: consumer.bucket}); err != nil {
+		bucket := consumer.bucket
+		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: bucket}); err != nil {
 			return err
 		}
-		cred, err := records.Credential(ctx, consumer.bucket, "", "")
+		cred, err := records.Credential(ctx, bucket, "", "")
 		if err != nil {
 			return err
 		}
-		data := map[string]string{"AWS_ACCESS_KEY_ID": cred.AccessKey, "AWS_SECRET_ACCESS_KEY": cred.SecretKey, "bucket": consumer.bucket, "endpoint": endpoint, "region": objectgateway.Region}
+		data := map[string]string{"AWS_ACCESS_KEY_ID": cred.AccessKey, "AWS_SECRET_ACCESS_KEY": cred.SecretKey, "bucket": bucket, "endpoint": endpoint, "region": objectgateway.Region}
 		if err := e.applyOpaqueSecret(ctx, c.Namespace, consumer.secret, data); err != nil {
 			return err
 		}
