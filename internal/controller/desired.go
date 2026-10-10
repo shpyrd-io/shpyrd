@@ -97,8 +97,6 @@ type Config struct {
 	// DefaultBuilder is the kpack ClusterBuilder used when the App does not
 	// name one.
 	DefaultBuilder string
-	// LocalStorage keeps volume-backed processes on their data node.
-	LocalStorage bool
 	// AppsPool and PlatformPool are the shpyrd.io/pool label values of the
 	// node pools (RFC-0077); empty means a single pool and no selectors.
 	// Application processes, builds and one-off runs select AppsPool; the
@@ -710,9 +708,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 	}
 	d.Spec.Template.Spec.EnableServiceLinks = ptr.To(false)
 	d.Spec.Template.Spec.NodeSelector = c.processNodeSelector(app, p.Name)
-	if c.LocalStorage {
-		localVolumeAffinity(app, p.Name, &d.Spec.Template)
-	}
+	localVolumeAffinity(app, p.Name, &d.Spec.Template, mounts)
 	d.Spec.Template.Spec.ImagePullSecrets = c.imagePullSecrets()
 	d.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	hc := p.HealthCheck
