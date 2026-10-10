@@ -66,17 +66,13 @@ func TestClearProjectPins(t *testing.T) {
 	}
 }
 
-// A pin on data that lives on a node's disk stays: the pin is what keeps the
-// process or database with its data.
-func TestClearProjectPinsRefusesNodeLocalData(t *testing.T) {
-	for _, tc := range []struct{ volume, db, want string }{
-		{controller.LocalStorageClass, "oci-bv", "migrate the disk"},
-		{"oci-bv", controller.LocalStorageClass, "migrate the database"},
-	} {
-		s, app, _ := pinnedProject(t, tc.volume, tc.db)
-		rec := do(t, s, "DELETE", "/api/cluster/project-archives/"+archiveProjectID(app)+"/placement/pins", "", true)
-		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), tc.want) {
-			t.Errorf("volume %s / db %s: %d %s", tc.volume, tc.db, rec.Code, rec.Body.String())
-		}
+// A pin on data that lives on a node's disk goes too (the volume's node
+// affinity keeps the pod there); the answer says so. A storage migration
+// asks for exactly this before it runs.
+func TestClearProjectPinsOnNodeLocalDataSaysTheyStay(t *testing.T) {
+	s, app, _ := pinnedProject(t, controller.LocalStorageClass, controller.LocalStorageClass)
+	rec := do(t, s, "DELETE", "/api/cluster/project-archives/"+archiveProjectID(app)+"/placement/pins", "", true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "database db") || !strings.Contains(rec.Body.String(), "process web") || !strings.Contains(rec.Body.String(), "stay on their node either way") {
+		t.Errorf("unpin of node-local data: %d %s", rec.Code, rec.Body.String())
 	}
 }

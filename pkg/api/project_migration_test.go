@@ -54,7 +54,7 @@ func migrationFixture(t *testing.T) (*Server, *shpyrdv1.App, *projectArchiveOper
 	sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: controller.LocalStorageClass}, Provisioner: "shpyrd.io/local-path"}
 	s, cr := newTestServer(t, nil, []client.Object{app, vol, claim, source, sc})
 	s.apps = migrationBinder{cr}
-	move, err := s.prepareProjectMove(context.Background(), app, placementGroup{PlacementGroup: controller.PlacementGroup{ID: "volume:uploads", Volumes: []string{"uploads"}}}, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{corev1.LabelHostname: "target"}}})
+	move, err := s.prepareProjectMove(context.Background(), app, placementGroup{PlacementGroup: controller.PlacementGroup{ID: "volume:uploads", Volumes: []string{"uploads"}}}, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{corev1.LabelHostname: "target"}}}, controller.LocalStorageClass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,5 +393,72 @@ func TestRecoveryFinishesMigrationAfterWorkloadsResume(t *testing.T) {
 	retained, err := s.retainedMigrationDisks(ctx, app)
 	if err != nil || len(retained) != 1 {
 		t.Fatal("recovery failed to retain the old provider disk")
+	}
+}
+
+// A move with a target class carries a node-local disk onto the profile's
+// block class: the claim keeps its name on the new disk with the new class,
+// the Volume follows (rounded to the provider minimum), the old disk is
+// retained; the way back restores both.
+func TestClassMigrationRebindsOntoTheProfileClass(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "project", Namespace: "app-project", UID: "project-uid"}}
+	vol := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: app.Namespace}, Spec: shpyrdv1.VolumeSpec{AccessMode: corev1.ReadWriteOnce, Size: resource.MustParse("1Gi")}}
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: vol.PVCName(), Namespace: app.Namespace, UID: "local-claim", Annotations: map[string]string{"volume.kubernetes.io/selected-node": "old-node"}}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "local-disk", StorageClassName: ptr.To(controller.LocalStorageClass), AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}}}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+	source := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "local-disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: controller.LocalStorageClass, PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete, Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}, ClaimRef: &corev1.ObjectReference{Namespace: app.Namespace, Name: claim.Name, UID: claim.UID}}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeBound}}
+	block := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "oci-bv"}, Provisioner: "blockvolume.csi.oraclecloud.com"}
+	s, cr := newTestServer(t, nil, []client.Object{app, vol, claim, source, block})
+	s.apps = migrationBinder{cr}
+	s.opts.Vars = func(key string) string {
+		return map[string]string{install.VarStorageClass: "oci-bv", install.VarVolumeMinSize: "50Gi"}[key]
+	}
+	move, err := s.prepareProjectMove(ctx, app, placementGroup{PlacementGroup: controller.PlacementGroup{ID: "volume:data", Volumes: []string{"data"}}}, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{corev1.LabelHostname: "old-node"}}}, "oci-bv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !move.Claims[0].RetainSource || move.targetClass() != "oci-bv" {
+		t.Fatalf("a node-local source moving to block must be retained: %+v", move.Claims[0])
+	}
+	move.Claims[0].TargetClaim = "temporary"
+	move.Claims[0].TargetPV = "block-disk"
+	if err := cr.Create(ctx, &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "block-disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: "oci-bv", PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete}}); err != nil {
+		t.Fatal(err)
+	}
+	op := &projectArchiveOperation{ID: "class-migration", Kind: "move", Move: move, StartedAt: time.Now(), State: projectarchive.TransactionState{Phase: "committing"}}
+	for _, name := range []string{"local-disk", "block-disk"} {
+		if err := s.retainMovePV(ctx, name, op.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, forward := range []bool{true, false} {
+		if err := s.bindMoveClaim(ctx, app, op, &op.Move.Claims[0], forward); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.setMoveStorage(ctx, app, op, forward); err != nil {
+			t.Fatal(err)
+		}
+		current := &corev1.PersistentVolumeClaim{}
+		if err := s.apps.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: claim.Name}, current); err != nil {
+			t.Fatal(err)
+		}
+		volume := &shpyrdv1.Volume{}
+		if err := s.apps.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: "data"}, volume); err != nil {
+			t.Fatal(err)
+		}
+		if forward {
+			if current.Spec.VolumeName != "block-disk" || *current.Spec.StorageClassName != "oci-bv" {
+				t.Fatalf("forward binding: %+v", current.Spec)
+			}
+			if volume.Spec.StorageClass != "oci-bv" || volume.Spec.Size.String() != "50Gi" {
+				t.Fatalf("forward volume: class %q size %s (want oci-bv, 50Gi)", volume.Spec.StorageClass, volume.Spec.Size.String())
+			}
+		} else {
+			if current.Spec.VolumeName != "local-disk" || *current.Spec.StorageClassName != controller.LocalStorageClass {
+				t.Fatalf("rollback binding: %+v", current.Spec)
+			}
+			if volume.Spec.StorageClass != "" || volume.Spec.Size.String() != "1Gi" {
+				t.Fatalf("rollback volume: class %q size %s", volume.Spec.StorageClass, volume.Spec.Size.String())
+			}
+		}
 	}
 }

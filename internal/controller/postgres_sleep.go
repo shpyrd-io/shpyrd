@@ -107,6 +107,21 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 	if pg.Annotations[AnnotationDataMove] != "" {
 		return r.setCNPGHibernation(ctx, pg, true)
 	}
+	// A storage migration runs with the database awake and its Service in
+	// place: it briefly has two instances, which is not high availability,
+	// and it must not fall asleep between the steps.
+	if pg.Annotations[AnnotationStorageMigration] != "" {
+		if err := r.ensurePostgresAwake(ctx, pg); err != nil {
+			return err
+		}
+		if pg.Status.Sleep != nil && pg.Status.Sleep.State != pgAwake && pg.Status.Sleep.State != "" {
+			pg.Status.Sleep.State, pg.Status.Sleep.Message = pgAwake, "awake for a storage migration"
+		}
+		if pg.Status.Sleep != nil && pg.Status.Sleep.WakePort != nil {
+			return r.ensurePostgresService(ctx, pg)
+		}
+		return nil
+	}
 	after, suspended, fromPlan := r.effectiveSleep(ctx, pg)
 	// A suspended workspace costs nothing: its databases hibernate, HA ones
 	// too, volumes kept, and wake when it is activated.

@@ -74,8 +74,10 @@ func Exec(ctx context.Context, k *kube.Client, namespace, pod, container string,
 }
 
 // Run executes command in the container without a terminal and returns
-// what it printed; for short, non-interactive commands issued by the
-// server (a `sync` before a snapshot).
+// what it printed on stdout; what it printed on stderr is folded into the
+// error when the command fails. For short, non-interactive commands issued
+// by the server (a `sync` before a snapshot) and the CLI (the migration's
+// data checks).
 func Run(ctx context.Context, k *kube.Client, namespace, pod, container string, command []string) (string, error) {
 	req := k.Kube.CoreV1().RESTClient().Post().
 		Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").
@@ -95,9 +97,22 @@ func Run(ctx context.Context, k *kube.Client, namespace, pod, container string, 
 	if err != nil {
 		return "", err
 	}
-	var out bytes.Buffer
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: &out})
-	return out.String(), err
+	return collect(func(o remotecommand.StreamOptions) error { return executor.StreamWithContext(ctx, o) })
+}
+
+// collect runs stream with a buffer of its own for each of stdout and
+// stderr and returns stdout, stderr folded into a failure. The executor
+// copies the two streams from two goroutines; one bytes.Buffer shared
+// between them loses output (ReadFrom on the stream that ends empty cuts
+// the buffer back to where it started, which dropped a psql answer on a
+// third of the runs).
+func collect(stream func(remotecommand.StreamOptions) error) (string, error) {
+	var stdout, stderr bytes.Buffer
+	err := stream(remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr})
+	if err != nil && stderr.Len() > 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), err
 }
 
 // Attach streams a pod's main process.

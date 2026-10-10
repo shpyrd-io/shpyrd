@@ -37,6 +37,7 @@ func NewCtl(extra ...ext.Extension) *cobra.Command {
 	root.CompletionOptions.HiddenDefaultCmd = true
 
 	root.AddCommand(newClusterCmd(g))
+	root.AddCommand(newStorageCmd(g))
 	root.AddCommand(newExtensionsCmd(g))
 	root.AddCommand(newSizesCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
