@@ -208,6 +208,22 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 		storage = rounded
 		rd.Status.Storage = rounded.String()
 	}
+	// A claim template is immutable, so an existing store keeps the disk it
+	// has; when that disk is on another class than the profile's, the status
+	// reports the disk, not the profile's minimum (RFC-0060).
+	if rd.Spec.Persistent {
+		existing := &appsv1.StatefulSet{}
+		if r.Get(ctx, types.NamespacedName{Namespace: rd.Namespace, Name: rd.Name}, existing) == nil && len(existing.Spec.VolumeClaimTemplates) > 0 {
+			claim := existing.Spec.VolumeClaimTemplates[0].Spec
+			if ptr.Deref(claim.StorageClassName, "") != r.Storage.Class {
+				storage = *claim.Resources.Requests.Storage()
+				rd.Status.Storage = ""
+				if rd.Spec.Storage == nil || storage.Cmp(*rd.Spec.Storage) != 0 {
+					rd.Status.Storage = storage.String()
+				}
+			}
+		}
+	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		if sts.ResourceVersion == "" { // new object
 			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: redisLabels(rd)}

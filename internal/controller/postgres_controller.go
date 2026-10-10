@@ -55,6 +55,22 @@ type PostgresReconciler struct {
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
 // names one, the class (RFC-0060).
+// keepStorage returns the storage class and size a running cluster keeps
+// when the profile names another class: its own. On the profile's class the
+// profile decides (the rounded request), as for a new cluster.
+func keepStorage(current *unstructured.Unstructured, profileClass string, requested resource.Quantity) (string, resource.Quantity) {
+	class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass")
+	if class == profileClass {
+		return profileClass, requested
+	}
+	if previous, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "size"); previous != "" {
+		if quantity, err := resource.ParseQuantity(previous); err == nil {
+			return class, quantity
+		}
+	}
+	return class, requested
+}
+
 func cnpgStorage(size resource.Quantity, class string) map[string]interface{} {
 	out := map[string]interface{}{"size": size.String()}
 	if class != "" {
@@ -263,20 +279,24 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(CNPGClusterGVK)
 	err = r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name}, current)
+	storageClass := r.Storage.Class
 	if err == nil {
 		resources = keepMemory(current, size.Name, resources)
-		// Switching the default class must not shrink an existing provider disk
-		// that was rounded up by the former provider minimum.
-		if r.Storage.Class == LocalStorageClass {
-			class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass")
-			previous, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "size")
-			if quantity, parseErr := resource.ParseQuantity(previous); parseErr == nil && class != LocalStorageClass && quantity.Cmp(storage) > 0 {
-				storage = quantity
-				pg.Status.Storage = quantity.String()
+		// A profile switch leaves running clusters as they are: a cluster on
+		// another class keeps that class and its disk size (RFC-0060). The
+		// profile's minimum belongs to the profile's class; applied to a
+		// node-local 1 GiB cluster it would ask for a 50 GiB expansion the
+		// local provisioner cannot do, and the other way round it would
+		// shrink a provider disk that was rounded up by the former minimum.
+		storageClass, storage = keepStorage(current, storageClass, storage)
+		if class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass"); class != r.Storage.Class {
+			pg.Status.Storage = ""
+			if pg.Spec.Storage == nil || storage.Cmp(*pg.Spec.Storage) != 0 {
+				pg.Status.Storage = storage.String()
 			}
 		}
 	}
-	desired := desiredCNPGCluster(pg, storage, size, resources, r.Storage.Class, r.DataPool)
+	desired := desiredCNPGCluster(pg, storage, size, resources, storageClass, r.DataPool)
 	if err := controllerutil.SetControllerReference(pg, desired, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
