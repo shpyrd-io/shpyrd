@@ -8,6 +8,12 @@ application has to change.
 
 ## Unreleased
 
+## 0.1.1-0
+
+A prerelease, under the `next` tag, with nothing changed in the library:
+the first version published through npm's trusted publishing, with no
+token. `latest` stays 0.1.0.
+
 ## 0.1.0
 
 The first published version: the library as it is in shpyrd, and
