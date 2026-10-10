@@ -11,8 +11,8 @@ export const hero = {
 }
 
 export const gap = {
-  label: 'What comes next',
-  heading: 'An app that works isn’t an app people use',
+  label: 'Easily deploy your project.',
+  heading: 'Your app, database, and background processes. In one place',
   description:
     'You know how to build it. Then come the questions that keep it stuck on your laptop.',
   items: [
