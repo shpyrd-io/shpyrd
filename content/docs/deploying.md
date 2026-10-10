@@ -148,6 +148,25 @@ shpyrd deploy
 Some packages (libvips, ImageMagick) pull in glib, libcurl and other libraries that exist on the build image but not on the minimal run image. Use `build.stack: full` when the app crashes at start with a missing shared library that is not in your Aptfile.
 {% /callout %}
 
+### Monorepos and workspaces
+
+An app that is one package of an npm, pnpm or Yarn workspace deploys from its own folder:
+
+```bash
+cd apps/web && shpyrd deploy
+```
+
+`shpyrd deploy` finds the workspace's root above the folder (a `package.json` with `workspaces`, or a `pnpm-workspace.yaml`, that lists it), uploads the whole workspace and builds that package in it:
+
+```
+==> Detected a pnpm workspace at the repository's root; building apps/web in it
+    build.workspace=apps/web (shpyrd.yaml values win; --save writes it there)
+```
+
+The build installs what the package needs (its workspace dependencies included), with the package manager the root's lockfile says and the version its `packageManager` names, runs the package's `build` script, and starts it with its `start` script. If the package needs its workspace dependencies built first, its `build` script says so, as it would locally (`pnpm --filter @acme/ui run build && next build`, or `turbo run build --filter web`). A `Procfile` at the workspace's root replaces the `start` script.
+
+A workspace package builds with buildpacks, even when the folder or the root has a `Dockerfile`; `build.strategy: dockerfile` in `shpyrd.yaml` keeps a Dockerfile build, and then no workspace is detected. `build.workspace` can be written by hand, as the package's path from the workspace's root.
+
 ## Release phase
 
 When the image has a `release` process type — the Procfile line `release: bundle exec rails db:prepare` — the platform runs it before every new release rolls out. The rollout waits; a failure leaves the previous release serving and marks the project Failed with the reason.

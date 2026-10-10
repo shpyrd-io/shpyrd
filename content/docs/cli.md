@@ -150,7 +150,7 @@ Self-hosted: the platform's sender, set by the operator.
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately; `--save` writes what the build profile inferred into `shpyrd.yaml`. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
+| `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. From a package of an npm, pnpm or Yarn workspace it archives the workspace's root and builds that package ([Monorepos and workspaces](/docs/deploying#monorepos-and-workspaces)). `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately; `--save` writes what the build profile or workspace detection inferred into `shpyrd.yaml`. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
 | `shpyrd scale web=N worker=M` | Set instance counts per process type. |
 | `shpyrd resize web=SIZE worker=SIZE` | Set instance sizes per process type (a release). |
 | `shpyrd sizes list` | The instance sizes to choose from, in three lists with the same names: processes, Postgres and Redis (with their connections), each with its default (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |
