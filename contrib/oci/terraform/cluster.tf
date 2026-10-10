@@ -171,9 +171,12 @@ resource "oci_containerengine_node_pool" "apps" {
 }
 
 # The data pool (RFC-0077 Q1): customer databases and Redis, separate from
-# the platform pool so the platform nodes are not affected by database load
-# and the autoscaler can drain data nodes when all databases sleep.
-# Enabled when data_max_count > 0; the autoscaler owns the size.
+# the platform pool so the platform nodes are not affected by database load.
+# Enabled when data_max_count > 0. Its size is data_min_count and Terraform
+# owns it: databases are never evicted by a utilisation threshold, so the
+# autoscaler has nothing to decide here. Growth is a tfvars change and an
+# apply (the storage plan says when: requested memory past 70 % of a node,
+# no node with 4.5 GiB free, or a node's block-volume attachments past 24).
 resource "oci_containerengine_node_pool" "data" {
   count = var.data_max_count > 0 ? 1 : 0
 
@@ -201,7 +204,7 @@ resource "oci_containerengine_node_pool" "data" {
   }
 
   node_config_details {
-    size    = max(var.data_min_count, 1)
+    size    = var.data_min_count
     nsg_ids = [oci_core_network_security_group.workers.id]
 
     placement_configs {
@@ -218,7 +221,6 @@ resource "oci_containerengine_node_pool" "data" {
   }
 
   lifecycle {
-    ignore_changes = [node_config_details[0].size]
     precondition {
       condition     = local.node_image_id != null
       error_message = "No ${local.node_arch} OKE image for Kubernetes ${var.kubernetes_version} in this region."
