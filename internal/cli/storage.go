@@ -111,17 +111,31 @@ The project id is the one the console's project archives page shows. Say
 				return nil
 			}
 			body, _ := json.Marshal(map[string]string{"group": g.ID, "node": node, "targetClass": class})
-			out, err := serverRequest(ctx, k, "POST", "api/cluster/project-archives/"+project+"/move", body, "application/json")
+			request := func(method, path string, body []byte) ([]byte, error) {
+				return serverRequest(ctx, k, method, "api/cluster/project-archives/"+project+path, body, "application/json")
+			}
+			out, err := request("POST", "/move", body)
+			var warnings []string
 			if err != nil {
-				return err
+				if !lostConnection(err) {
+					return err
+				}
+				// The server keeps moving without us: wait for it to finish
+				// and read the result from the placement page.
+				fmt.Fprintf(cmd.OutOrStdout(), "the connection was lost while %s was being copied; the server goes on, waiting for it\n", volume)
+				if warnings, err = waitForMove(ctx, request, volume, class, 5*time.Second); err != nil {
+					return err
+				}
+			} else {
+				var answer struct {
+					Status   string   `json:"status"`
+					Warnings []string `json:"warnings"`
+				}
+				_ = json.Unmarshal(out, &answer)
+				warnings = answer.Warnings
 			}
-			var answer struct {
-				Status   string   `json:"status"`
-				Warnings []string `json:"warnings"`
-			}
-			_ = json.Unmarshal(out, &answer)
 			fmt.Fprintf(cmd.OutOrStdout(), "%s moved to %s on %s; the project is back. The old disk is kept for three days (the placement page lists it).\n", volume, class, node)
-			for _, w := range answer.Warnings {
+			for _, w := range warnings {
 				fmt.Fprintln(cmd.OutOrStdout(), "  "+w)
 			}
 			return nil
@@ -219,6 +233,81 @@ new instance goes), --no-checks accepts the numbers and finishes.`,
 	cmd.Flags().DurationVar(&wait, "wait", 20*time.Minute, "how long to wait for each step")
 	cmd.Flags().BoolVar(&back, "back", false, "return a database that stopped on two instances to its old volume")
 	return cmd
+}
+
+// lostConnection reports a request that died on the way, not an answer
+// from the server: the operation it asked for may be going on.
+func lostConnection(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	for _, s := range []string{"connection lost", "connection reset", "broken pipe", "EOF", "TLS handshake timeout", "use of closed network connection", "context deadline exceeded", "no such host", "connection refused"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForMove polls the project's archive status until no operation runs,
+// then reads the placement page: the volume on the class is the move done;
+// an operation that failed names its error. request is the server call for
+// a path under the project's archives.
+func waitForMove(ctx context.Context, request func(method, path string, body []byte) ([]byte, error), volume, class string, poll time.Duration) ([]string, error) {
+	deadline := time.Now().Add(time.Hour)
+	for {
+		raw, err := request("GET", "", nil)
+		if err == nil {
+			var status struct {
+				Kind     string   `json:"kind"`
+				Phase    string   `json:"phase"`
+				Error    string   `json:"error"`
+				Active   bool     `json:"active"`
+				Warnings []string `json:"warnings"`
+			}
+			if err := json.Unmarshal(raw, &status); err != nil {
+				return nil, fmt.Errorf("unexpected answer: %w", err)
+			}
+			if status.Error != "" {
+				return nil, fmt.Errorf("the move did not complete: %s (the project is back on its old disk)", status.Error)
+			}
+			if !status.Active && status.Kind == "" {
+				raw, err := request("GET", "/placement", nil)
+				if err != nil {
+					return nil, err
+				}
+				var placement struct {
+					Groups []placementGroupAnswer `json:"groups"`
+				}
+				if err := json.Unmarshal(raw, &placement); err != nil {
+					return nil, fmt.Errorf("unexpected answer: %w", err)
+				}
+				g := volumeGroup(placement.Groups, volume)
+				if g != nil && len(g.StorageClasses) == 1 && g.StorageClasses[0] == class {
+					return status.Warnings, nil
+				}
+				return nil, fmt.Errorf("the move did not complete: %s is still on %v (the project is back on its old disk); run this again", volume, classesOf(g))
+			}
+		} else if !lostConnection(err) {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("waited an hour for the move to finish; look at the project's placement page")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+func classesOf(g *placementGroupAnswer) []string {
+	if g == nil {
+		return nil
+	}
+	return g.StorageClasses
 }
 
 // placementGroupAnswer is a group of the placement page: a process with the

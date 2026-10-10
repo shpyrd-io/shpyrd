@@ -189,15 +189,22 @@ func (s *Server) confirmProjectMaintenance(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 	defer transport.CloseIdleConnections()
-	if address := s.opts.IngressService; address != "" {
+	address := s.projectIngressService(app)
+	if address != "" {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		transport.DialContext = func(c context.Context, network, _ string) (net.Conn, error) {
 			return dialer.DialContext(c, network, address)
 		}
 	}
 	httpc := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Bounded: a front door that never shows the page (the wrong controller,
+	// a host it does not know) must fail the operation before anything else
+	// changes, not hold the project in maintenance for the request's hour.
+	bounded, stop := context.WithTimeout(ctx, maintenanceConfirmTimeout)
+	defer stop()
 	confirmed := 0
-	return s.waitArchiveCondition(ctx, func(c context.Context) (bool, error) {
+	last := "no answer"
+	err = s.waitArchiveCondition(bounded, func(c context.Context) (bool, error) {
 		req, err := http.NewRequestWithContext(c, http.MethodHead, u.String(), nil)
 		if err != nil {
 			return false, err
@@ -205,10 +212,14 @@ func (s *Server) confirmProjectMaintenance(ctx context.Context, app *shpyrdv1.Ap
 		resp, err := httpc.Do(req)
 		if err != nil {
 			confirmed = 0
+			if c.Err() == nil { // a real failure, not the bound cutting the last request
+				last = err.Error()
+			}
 			return false, nil
 		}
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
+		last = resp.Status
 		if resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("X-Shpyrd-Maintenance") == "true" && resp.Header.Get("Retry-After") != "" {
 			confirmed++
 		} else {
@@ -216,11 +227,41 @@ func (s *Server) confirmProjectMaintenance(ctx context.Context, app *shpyrdv1.Ap
 		}
 		return confirmed >= 3, nil
 	})
+	if err != nil && ctx.Err() == nil && errors.Is(bounded.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("the project's address did not show the maintenance page within %s (last answer: %s, asked through %s): nothing else was changed", maintenanceConfirmTimeout, last, address)
+	}
+	return err
 }
 
-func (s *Server) drainProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
+// maintenanceConfirmTimeout bounds the wait for a project's front door to
+// show the maintenance page.
+var maintenanceConfirmTimeout = 2 * time.Minute
+
+// projectIngressService is the controller Service that serves a project's
+// hostnames: the internal front door for an internal project, the external
+// one otherwise (RFC-0036), and the platform's when neither is configured.
+func (s *Server) projectIngressService(app *shpyrdv1.App) string {
+	address := s.opts.IngressServiceExternal
+	if app.Spec.Exposure == "internal" {
+		address = s.opts.IngressServiceInternal
+	}
+	if address == "" {
+		address = s.opts.IngressService
+	}
+	return address
+}
+
+// drainProjectArchive pauses the project: the front door confirmed to show
+// the maintenance page, the phase set, every pod of the project gone. A
+// rollback is not strict about the confirmation: it is on its way to
+// resuming the project, and a door it cannot reach must not keep it paused;
+// the pods still have to be gone before claims are swapped back.
+func (s *Server) drainProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, strict bool) error {
 	if err := s.confirmProjectMaintenance(ctx, app); err != nil {
-		return err
+		if strict || ctx.Err() != nil {
+			return err
+		}
+		op.Warnings = append(op.Warnings, "the maintenance page was not confirmed before the rollback: "+err.Error())
 	}
 	if err := s.projectArchivePhase(ctx, app, op, "paused"); err != nil {
 		return err

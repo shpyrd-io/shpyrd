@@ -82,7 +82,11 @@ func (s *Server) moveProject(c *gin.Context) {
 		return
 	}
 	defer s.releaseArchiveRequest(app.Namespace)
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Hour)
+	// The move outlives the request: a client that loses its connection
+	// during the copy (a VPN drop on production) must not cancel a move
+	// half done; the operation record and the placement page show the
+	// result, which the CLI reads when its connection comes back.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), time.Hour)
 	defer cancel()
 	if rolloutInProgress(app) {
 		abort(c, http.StatusConflict, errors.New("wait for the current deployment to finish"))
@@ -341,7 +345,7 @@ func (s *Server) waitMoveQuiescent(ctx context.Context, app *shpyrdv1.App, op *p
 	})
 }
 func (s *Server) runProjectMove(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return err
 	}
 	if err := s.fenceArchiveDatabases(ctx, app, op, op.Original.Databases); err != nil {
@@ -712,7 +716,7 @@ func (s *Server) rollbackProjectMove(ctx context.Context, app *shpyrdv1.App, op 
 		}
 		return s.clearProjectArchive(ctx, app.Namespace, op)
 	}
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, false); err != nil {
 		return err
 	}
 	if err := s.markMoveResources(ctx, app, op, true); err != nil {

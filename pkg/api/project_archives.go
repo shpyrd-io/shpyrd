@@ -123,7 +123,7 @@ func (s *Server) buildProjectArchive(ctx context.Context, app *shpyrdv1.App, op 
 	if err := s.exportProjectGit(ctx, app, op, b, m); err != nil {
 		return "", err
 	}
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return "", err
 	}
 	if err := s.fenceArchiveDatabases(ctx, app, op, m.Databases); err != nil {
