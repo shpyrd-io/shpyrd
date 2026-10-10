@@ -101,12 +101,43 @@ func withoutAWSChunked(encoding *string) *string {
 	return aws.String(strings.Join(kept, ", "))
 }
 
+// putChecksumValues are the checksum values a consumer can declare on a PUT.
+// When none is set but an algorithm is, the front door derived the algorithm
+// from a trailer it has already consumed and verified; forwarded alone, the
+// algorithm makes the provider client compute the checksum itself, which
+// turns the upload back into an aws-chunked trailer stream (or fails outright
+// on a plain-HTTP provider, where the SDK refuses an unseekable body).
+func putChecksumValues(in *s3response.PutObjectInput) []*string {
+	return []*string{in.ChecksumCRC32, in.ChecksumCRC32C, in.ChecksumSHA1, in.ChecksumSHA256, in.ChecksumCRC64NVME, in.ChecksumSHA512, in.ChecksumMD5, in.ChecksumXXHASH64, in.ChecksumXXHASH3, in.ChecksumXXHASH128}
+}
+
+func partChecksumValues(in *s3.UploadPartInput) []*string {
+	return []*string{in.ChecksumCRC32, in.ChecksumCRC32C, in.ChecksumCRC64NVME, in.ChecksumSHA1, in.ChecksumSHA256}
+}
+
+// unvaluedAlgorithm reports an algorithm declared without any checksum value.
+func unvaluedAlgorithm(algorithm types.ChecksumAlgorithm, values []*string) bool {
+	if algorithm == "" {
+		return false
+	}
+	for _, v := range values {
+		if v != nil && *v != "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *Backend) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	in.GrantFullControl = nil
 	in.GrantRead = nil
 	in.GrantReadACP = nil
 	in.GrantWriteACP = nil
 	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
+	if unvaluedAlgorithm(in.ChecksumAlgorithm, putChecksumValues(&in)) {
+		in.ChecksumAlgorithm = ""
+	}
+	in.ExpectedBucketOwner = nil
 	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
@@ -131,6 +162,10 @@ func (b *Backend) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput) (*
 	return b.proxy.DeleteObject(ctx, in)
 }
 func (b *Backend) UploadPart(ctx context.Context, in *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
+	if unvaluedAlgorithm(in.ChecksumAlgorithm, partChecksumValues(in)) {
+		in.ChecksumAlgorithm = ""
+	}
+	in.ExpectedBucketOwner = nil
 	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return nil, err
 	}
@@ -145,6 +180,7 @@ func (b *Backend) CreateMultipartUpload(ctx context.Context, in s3response.Creat
 	in.GrantReadACP = nil
 	in.GrantWriteACP = nil
 	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
+	in.ExpectedBucketOwner = nil
 	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
@@ -201,6 +237,14 @@ func (b *Backend) CopyObject(ctx context.Context, in s3response.CopyObjectInput)
 	in.GrantRead = nil
 	in.GrantReadACP = nil
 	in.GrantWriteACP = nil
+	// The front door fills the expected owners with the consumer's own
+	// access key and whatever the request said; the provider knows neither,
+	// and AWS refuses anything but the real account id. The provider's
+	// storage class is the platform's choice, never a consumer's.
+	in.ExpectedBucketOwner = nil
+	in.ExpectedSourceBucketOwner = nil
+	in.StorageClass = ""
+	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	if err = b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.CopyObjectOutput{}, err
 	}
@@ -212,6 +256,8 @@ func (b *Backend) UploadPartCopy(ctx context.Context, in *s3.UploadPartCopyInput
 	if err != nil {
 		return s3response.CopyPartResult{}, err
 	}
+	in.ExpectedBucketOwner = nil
+	in.ExpectedSourceBucketOwner = nil
 	if err = b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.CopyPartResult{}, err
 	}
