@@ -304,7 +304,7 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 		default:
 			return fmt.Errorf("shpyrd.yaml: build.strategy must be buildpacks or dockerfile, got %q", pc.Build.Strategy)
 		}
-		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target, Buildpacks: pc.Build.Buildpacks, Stack: pc.Build.Stack, Workspace: pc.Build.Workspace}
+		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target, Buildpacks: pc.Build.Buildpacks, Stack: pc.Build.Stack, Workspace: normalizeWorkspacePath(pc.Build.Workspace)}
 		if b.Strategy == "" && (b.Dockerfile != "" || b.Target != "") {
 			b.Strategy = shpyrdv1.StrategyDockerfile
 		}

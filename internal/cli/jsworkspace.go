@@ -143,7 +143,7 @@ func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, er
 		return "", nil, err
 	}
 	if project.Build != nil && project.Build.Workspace != "" {
-		w := strings.Trim(project.Build.Workspace, "/")
+		w := normalizeWorkspacePath(project.Build.Workspace)
 		project.Build.Workspace = w
 		for _, seg := range strings.Split(w, "/") {
 			if seg == "" || seg == "." || seg == ".." {
@@ -177,6 +177,16 @@ func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, er
 		project.Build.Strategy = shpyrdv1.StrategyBuildpacks
 	}
 	return ws.Root, ws, nil
+}
+
+// normalizeWorkspacePath reads a package's path as people write folders:
+// "./apps/web/" is apps/web. ".." stays, for the checks to refuse.
+func normalizeWorkspacePath(p string) string {
+	p = strings.TrimSpace(p)
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimLeft(p[2:], "/")
+	}
+	return strings.TrimRight(p, "/")
 }
 
 // reportWorkspace says what detection found, as build profiles do; top is

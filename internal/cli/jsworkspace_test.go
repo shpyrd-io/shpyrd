@@ -218,3 +218,27 @@ func TestWorkspaceForWrittenPathIsAWorkspace(t *testing.T) {
 		t.Error("a root outside the repository was accepted")
 	}
 }
+
+// A path written loosely, as people write folders, is read as the package's
+// path: in the deploy from the package, and in what goes to the API (a
+// --git deploy too).
+func TestWorkspaceWrittenLoosely(t *testing.T) {
+	top := t.TempDir()
+	files(t, top, map[string]string{
+		"package.json":          `{"workspaces":["apps/*"]}`,
+		"apps/web/package.json": `{"name":"web"}`,
+	})
+	t.Chdir(filepath.Join(top, "apps/web"))
+	pc := &projectConfig{Build: &projectBuild{Workspace: "./apps/web/"}}
+	root, _, err := workspaceFor(pc, top)
+	if err != nil || root != top || pc.Build.Workspace != "apps/web" {
+		t.Errorf("workspaceFor: %q %v %q", root, err, pc.Build.Workspace)
+	}
+	app := &shpyrdv1.App{}
+	if err := (&projectConfig{Build: &projectBuild{Workspace: "./apps/web/"}}).applyTo(app); err != nil {
+		t.Fatal(err)
+	}
+	if app.Spec.Build == nil || app.Spec.Build.Workspace != "apps/web" {
+		t.Errorf("applyTo: %+v", app.Spec.Build)
+	}
+}
