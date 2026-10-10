@@ -12,6 +12,10 @@ You built an app with your agent. shpyrd is where it goes next: its own address,
 
 Download it for your computer and open it. It installs the shpyrd CLI, adds shpyrd to every AI agent it finds on your computer, and offers to sign you in.
 
+{% add-to-agent /%}
+
+Or pick the download yourself:
+
 - **macOS**: [Shpyrd-Installer.dmg](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.dmg)
 - **Windows**: [Shpyrd-Installer.exe](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.exe)
 - **Linux**: [Shpyrd-Installer-linux-amd64.tar.gz](https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer-linux-amd64.tar.gz)
