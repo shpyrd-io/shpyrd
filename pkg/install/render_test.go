@@ -24,10 +24,13 @@ func TestOCIProfileRenders(t *testing.T) {
 	if eng.vars[VarClusterIssuer] != "letsencrypt" || eng.vars[VarURLPort] != "443" || eng.vars[VarRegistrySecret] != RegistrySecretName || eng.vars[VarCASource] != CASourceCluster {
 		t.Errorf("oci vars: issuer=%s urlport=%s registrysecret=%s ca=%s", eng.vars[VarClusterIssuer], eng.vars[VarURLPort], eng.vars[VarRegistrySecret], eng.vars[VarCASource])
 	}
-	for _, present := range []string{"letsencrypt-issuers", "ca-issuers", "trust-manager", "registry-credentials", "registry", "registry-nodes", "ingress-nginx", "kpack", "shpyrd"} {
+	for _, present := range []string{"letsencrypt-issuers", "ca-issuers", "trust-manager", "registry-credentials", "registry", "registry-nodes", "ingress-nginx", "kpack", "shpyrd", "platform-snapshots"} {
 		if eng.components[present] == nil {
 			t.Errorf("oci profile must install %s", present)
 		}
+	}
+	if eng.vars[VarSnapshotSchedule] != "30 1 * * *" || eng.vars[VarSnapshotKeep] != "7" {
+		t.Errorf("snapshot job defaults = %q keep %q", eng.vars[VarSnapshotSchedule], eng.vars[VarSnapshotKeep])
 	}
 }
 

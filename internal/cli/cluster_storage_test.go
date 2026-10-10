@@ -24,3 +24,15 @@ func TestPlatformBackupsUseGatewayWithoutExplicitBackupTarget(t *testing.T) {
 		})
 	}
 }
+
+// The nightly disk snapshots need a snapshot class: without one (the local
+// profile) the job is left out, with one it is installed.
+func TestDiskSnapshotsNeedASnapshotClass(t *testing.T) {
+	prof := &install.Profile{Runlevels: []install.Runlevel{{Name: "rc4", Components: []string{"platform-snapshots"}}}}
+	if !contains(conditionalComponents(map[string]string{}, prof), "platform-snapshots") {
+		t.Error("without a snapshot class the job must be skipped")
+	}
+	if contains(conditionalComponents(map[string]string{install.VarSnapshotClass: "oci-bv-backup"}, prof), "platform-snapshots") {
+		t.Error("with a snapshot class the job must be installed")
+	}
+}

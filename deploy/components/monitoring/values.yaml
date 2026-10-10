@@ -182,6 +182,29 @@ additionalPrometheusRulesMap:
                 The node {{ $labels.node }} has more than 24 block volumes
                 attached; the machine stops accepting them at 32. Add a node to
                 its pool before that happens.
+          # No disk snapshot round completed for 26 hours where the platform
+          # takes them nightly: the fallback for every disk is stale.
+          - alert: DiskSnapshotsStale
+            expr: |
+              (
+                time() - kube_cronjob_status_last_successful_time{namespace="shpyrd-system", cronjob="platform-snapshots"} > 26 * 3600
+              )
+              or
+              (
+                (time() - kube_cronjob_created{namespace="shpyrd-system", cronjob="platform-snapshots"} > 26 * 3600)
+                unless on (namespace, cronjob)
+                kube_cronjob_status_last_successful_time{namespace="shpyrd-system", cronjob="platform-snapshots"}
+              )
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: volumes
+            annotations:
+              summary: No disk snapshots for more than a day
+              description: >-
+                The nightly round of disk snapshots has not completed for more
+                than 26 hours, or never has. The snapshots are the way back for
+                every block disk; the job's last run says which disk failed.
           # A node started with the registry-trust taint and kept it: the
           # trust was never written, so project pods cannot land there.
           - alert: NodeRegistryTrustPending
