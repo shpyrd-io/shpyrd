@@ -6,8 +6,8 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { glass } from "@shpyrd/ui/lib/glass";
-import { also, gap, hero, route } from "@shpyrd/content/site/home";
-import { secondaryCta } from "@shpyrd/content/site/offer";
+import { also, companies, gap, hero, route } from "@shpyrd/content/site/home";
+import { enterpriseContact, secondaryCta } from "@shpyrd/content/site/offer";
 import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
 import { FeatureBlocks } from "@/components/feature-blocks";
@@ -15,6 +15,8 @@ import { RouteTimeline } from "@/components/route-timeline";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { sectionsLive } from "@/lib/sections";
 import { Closing } from "@/components/proposals";
+import { River } from "@shpyrd/ui/components/river";
+import { AppsYard } from "@/components/tour/apps-yard";
 
 // The homepage, for the person who built an app with AI and cannot yet put it in
 // front of anyone (homepage proposal 1, chosen 2026-09-30). It starts where
@@ -138,6 +140,31 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         </ul>
       </Stack>
       )}
+
+      {/* For companies: their teams' apps, gathered behind one sign-in (the
+          manifesto's first slide), and the way to the Small Software
+          manifesto. 168px from what comes before, as every section. */}
+      <River
+        className="mt-26"
+        heading={
+          <span className="grid gap-3">
+            <span className="text-sm font-medium tracking-wide text-primary uppercase">{companies.label}</span>
+            {companies.heading}
+          </span>
+        }
+        description={companies.description}
+        link={
+          <span className="flex flex-wrap gap-3">
+            <Button asChild size="lg" iconEnd={<ArrowRight />}>
+              <Link href={companies.manifesto.href}>{companies.manifesto.label}</Link>
+            </Button>
+            <Button asChild size="lg" variant="outline">
+              <Link href={enterpriseContact.href}>{enterpriseContact.label}</Link>
+            </Button>
+          </span>
+        }
+        picture={<AppsYard className="aspect-[5/4]" />}
+      />
 
       <Closing />
     </PageLayoutContent>

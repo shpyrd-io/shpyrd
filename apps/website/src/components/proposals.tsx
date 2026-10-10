@@ -7,6 +7,7 @@ import { developerCta } from "@shpyrd/content/site/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { ShipyardCta } from "@/components/shipyard-cta";
 import { SimpleCta } from "@/components/simple-cta";
+import { signUp } from "@/lib/signup";
 
 // What the four homepage proposals share while they are being compared. None of
 // this outlives the decision: the one that wins moves to `/`, and its screens to
@@ -209,7 +210,7 @@ export function Closing() {
       actions={
         <>
           <Button size="lg" asChild>
-            <a href="/docs/getting-started">Get started</a>
+            <a href={signUp}>Get started</a>
           </Button>
           <Button variant="outline" size="lg" asChild>
             <a href="/docs/installation">Run it yourself</a>
