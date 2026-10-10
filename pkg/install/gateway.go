@@ -43,9 +43,18 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 	if err != nil {
 		return err
 	}
-	records := &objectgateway.Records{Store: store}
-	if err := records.CheckConditionalWrites(ctx); err != nil {
+	// The installer is a writer of its own, apart from the gateway pods. Its
+	// writes are creations, atomic through If-None-Match on every provider,
+	// or idempotent rewrites of the platform descriptors, which nothing but
+	// the installer touches: a provider that ignores If-Match is as safe here
+	// as in the single gateway process, under the same setting.
+	records := &objectgateway.Records{Store: store, SingleWriter: e.vars[VarGatewaySingleWriter] == "true"}
+	note, err := records.Preflight(ctx)
+	if err != nil {
 		return err
+	}
+	if note != "" {
+		e.rep.Step(c.Name, note)
 	}
 	endpoint := gatewayEndpoint(c.Namespace)
 	for _, consumer := range gatewayConsumers(e.vars) {

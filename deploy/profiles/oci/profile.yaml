@@ -63,6 +63,12 @@ vars:
   SHPYRD_DATABASE_URL: ""
   SHPYRD_CONTROL_PLANE_DB_SIZE: 50Gi
   SHPYRD_OBJECT_STORAGE_SIZE: 50Gi
+  # The S3 gateway (RFC-0046) on OCI: Object Storage's S3 compatibility
+  # honours If-None-Match but ignores If-Match, so the gateway runs as the
+  # single writer of its descriptors, in one pod, until they move to a store
+  # with conditional updates.
+  SHPYRD_GATEWAY_SINGLE_WRITER: "true"
+  SHPYRD_GATEWAY_REPLICAS: "1"
   # Prometheus keeps 15 days of metrics (the sleep activity signal and the
   # usage history read from it) on a block volume; OCI block volumes start
   # at 50 GB. Growing an existing claim follows the class's expansion rules.

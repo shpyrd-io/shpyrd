@@ -23,7 +23,9 @@ kind: Deployment
 metadata:
   name: object-storage
 spec:
-  replicas: 2
+  # Two replicas, or the one of a single writer (SHPYRD_GATEWAY_SINGLE_WRITER
+  # on a provider that ignores If-Match, see the oci profile).
+  replicas: ${SHPYRD_GATEWAY_REPLICAS}
   selector:
     matchLabels:
       app.kubernetes.io/name: object-storage
@@ -53,6 +55,8 @@ spec:
                 secretKeyRef:
                   name: object-storage-admin
                   key: adminToken
+            - name: SHPYRD_GATEWAY_SINGLE_WRITER
+              value: "${SHPYRD_GATEWAY_SINGLE_WRITER}"
             - name: GOMEMLIMIT
               value: 400MiB
           ports:
@@ -81,14 +85,16 @@ spec:
             capabilities:
               drop: [ALL]
 ---
-# A node drain or an autoscaler eviction keeps one gateway serving: S3
-# consumers (registry, sources, backups) never lose both replicas at once.
+# A node drain or an autoscaler eviction takes one gateway pod at a time:
+# with two replicas one keeps serving the S3 consumers (registry, sources,
+# backups); with the single replica of a single writer the drain is not
+# blocked and the pod comes back on another node.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: object-storage
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: object-storage
