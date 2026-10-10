@@ -199,6 +199,10 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				req.Git = &shpyrdv1.GitSource{URL: gitURL, Revision: ref}
 			default:
 				archive, ref, err := archiveSource(out, workingTree, workspaceRoot)
+				workspacePackage := ""
+				if workspaceRoot != "" && project != nil && project.Build != nil {
+					workspacePackage = project.Build.Workspace
+				}
 				if err != nil {
 					return err
 				}
@@ -210,7 +214,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				// An Aptfile: system packages through the .deb buildpack
 				// (RFC-0065), translated into the archive's project.toml.
 				if req.Build == nil || req.Build.Strategy != shpyrdv1.StrategyDockerfile {
-					patched, packages, unsupported, err := withSystemPackages(archive)
+					patched, packages, unsupported, err := withSystemPackages(archive, workspacePackage)
 					if err != nil {
 						return fmt.Errorf("Aptfile: %w", err)
 					}

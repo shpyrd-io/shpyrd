@@ -13,8 +13,14 @@ bp="${CNB_BUILDPACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 vars="$(node "$bp/lib/workspace.js" "${BP_NODE_WORKSPACE:-}")"
 eval "$vars"
 
+# A Procfile in the package's own folder, where the root has none: the
+# procfile buildpack after this one reads the root's.
+if [ ! -f Procfile ] && [ -f "$path/Procfile" ]; then
+  cp "$path/Procfile" Procfile
+fi
+
 if [ "$has_start" = 0 ] && [ ! -f Procfile ]; then
-  echo "shpyrd: add a start script to $path/package.json, or a Procfile at the workspace's root" >&2
+  echo "shpyrd: add a start script to $path/package.json, or a Procfile beside it" >&2
   exit 1
 fi
 
@@ -76,11 +82,16 @@ mkdir -p "$layers/launch-env/env.launch"
 printf 'production' > "$layers/launch-env/env.launch/NODE_ENV.default"
 printf '[types]\n  build = false\n  launch = true\n  cache = false\n' > "$layers/launch-env.toml"
 
+# A TOML string: backslashes and quotes escaped.
+toml() {
+  local s="${1//\\/\\\\}"
+  printf '"%s"' "${s//\"/\\\"}"
+}
 if [ "$has_start" = 1 ]; then
   case "$manager" in
-    npm) command='"npm", "run", "start", "--workspace", "'"$path"'"' ;;
-    pnpm) command='"pnpm", "--filter", "'"$name"'", "run", "start"' ;;
-    yarn | yarn1) command='"yarn", "workspace", "'"$name"'", "run", "start"' ;;
+    npm) command="\"npm\", \"run\", \"start\", \"--workspace\", $(toml "$path")" ;;
+    pnpm) command="\"pnpm\", \"--filter\", $(toml "$name"), \"run\", \"start\"" ;;
+    yarn | yarn1) command="\"yarn\", \"workspace\", $(toml "$name"), \"run\", \"start\"" ;;
   esac
   printf '[[processes]]\n  type = "web"\n  command = [%s]\n  default = true\n' "$command" > "$layers/launch.toml"
 fi

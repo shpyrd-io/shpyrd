@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"time"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -105,6 +107,8 @@ type buildState struct {
 	// BuilderReady condition ("" when kpack has not set it).
 	Reason       string
 	BuilderReady string
+	// ReadySince is when Ready last changed, when kpack says.
+	ReadySince time.Time
 	// Revision is the git commit the build resolved, when known.
 	Revision string
 }
@@ -136,6 +140,9 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 			st.Message = msg
 		}
 		st.Reason, _ = m["reason"].(string)
+		if at, _ := m["lastTransitionTime"].(string); at != "" {
+			st.ReadySince, _ = time.Parse(time.RFC3339, at)
+		}
 	}
 	// A new generation not yet observed means a build is about to start.
 	if observed, found, _ := unstructured.NestedInt64(img.Object, "status", "observedGeneration"); found && observed < img.GetGeneration() {

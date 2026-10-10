@@ -413,7 +413,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				case composesBuild(app) && build.builderNotReady():
 					// A builder of the project's own is made on its first
 					// deploy, and kpack waits for it (#143).
-					if msg := r.projectBuilderFailure(ctx, app); msg != "" {
+					if msg := r.projectBuilderFailure(ctx, app, build.ReadySince); msg != "" {
 						build.Message = msg
 					} else {
 						build.Ready = "Unknown"

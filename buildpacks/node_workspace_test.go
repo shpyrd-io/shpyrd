@@ -274,3 +274,46 @@ func TestNodeWorkspaceDetectAsksForTheEnginesNode(t *testing.T) {
 		t.Errorf("the package's own engines: %s", b)
 	}
 }
+
+// A Procfile in the package's own folder works as one at the root does:
+// the procfile buildpack after this one reads it there.
+func TestNodeWorkspacePackageProcfile(t *testing.T) {
+	needNode(t)
+	app := t.TempDir()
+	files := greetingWorkspace(map[string]string{
+		"package.json": `{"name":"root","private":true,"workspaces":["apps/*","packages/*"]}`,
+	})
+	files["apps/web/package.json"] = `{"name":"web","version":"1.0.0","private":true}`
+	files["apps/web/Procfile"] = "web: node apps/web/server.js\n"
+	writeFiles(t, app, files)
+	if out, err := run(t, app, nil, "npm", "install", "--package-lock-only", "--no-audit", "--no-fund"); err != nil {
+		t.Fatalf("lockfile: %v %s", err, out)
+	}
+	if out, err, _ := buildIn(t, app, "apps/web"); err != nil {
+		t.Fatalf("with the package's Procfile: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "Procfile")); string(b) != "web: node apps/web/server.js\n" {
+		t.Errorf("root Procfile = %q", b)
+	}
+}
+
+// A path with a quote in it still makes a launch.toml that says it.
+func TestNodeWorkspaceQuotesTheStartCommand(t *testing.T) {
+	needNode(t)
+	app := t.TempDir()
+	writeFiles(t, app, map[string]string{
+		"package.json":            `{"name":"root","private":true,"workspaces":["apps/*"]}`,
+		"apps/we\"b/package.json": `{"name":"web","version":"1.0.0","scripts":{"start":"node server.js"}}`,
+	})
+	if out, err := run(t, app, nil, "npm", "install", "--package-lock-only", "--no-audit", "--no-fund"); err != nil {
+		t.Fatalf("lockfile: %v %s", err, out)
+	}
+	out, err, layers := buildIn(t, app, `apps/we"b`)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	launch, _ := os.ReadFile(filepath.Join(layers, "launch.toml"))
+	if !strings.Contains(string(launch), `"apps/we\"b"`) {
+		t.Errorf("launch.toml:\n%s", launch)
+	}
+}

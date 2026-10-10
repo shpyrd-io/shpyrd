@@ -74,3 +74,23 @@ func TestFirstDeployWaitsForTheProjectsBuilder(t *testing.T) {
 		})
 	}
 }
+
+// A project's Builder that is not there at all fails the build once the
+// Image has waited for it longer than the grace; before that, it waits.
+func TestMissingProjectBuilder(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "site", Namespace: "app-site"},
+		Spec:       shpyrdv1.AppSpec{Build: &shpyrdv1.Build{Workspace: "apps/web"}},
+	}
+	r, _ := newTestReconciler(t, app)
+	ctx := context.Background()
+	if msg := r.projectBuilderFailure(ctx, app, time.Now().Add(-10*time.Second)); msg != "" {
+		t.Errorf("failed while waiting: %q", msg)
+	}
+	if msg := r.projectBuilderFailure(ctx, app, time.Time{}); msg != "" {
+		t.Errorf("failed with no time to go by: %q", msg)
+	}
+	if msg := r.projectBuilderFailure(ctx, app, time.Now().Add(-5*time.Minute)); !strings.Contains(msg, "builder") {
+		t.Errorf("waits forever: %q", msg)
+	}
+}

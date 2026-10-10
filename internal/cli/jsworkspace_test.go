@@ -281,3 +281,20 @@ func TestWorkspaceForKeepsAPackagesDockerfile(t *testing.T) {
 		t.Errorf("the root's Dockerfile only: %q %+v %v", root, ws, err)
 	}
 }
+
+// With a "**" pattern, a folder inside a package (its src) is not a
+// package: nothing is detected there.
+func TestFindWorkspaceNeedsAPackage(t *testing.T) {
+	top := t.TempDir()
+	files(t, top, map[string]string{
+		"package.json":              `{"workspaces":["packages/**"]}`,
+		"packages/foo/package.json": `{"name":"foo"}`,
+		"packages/foo/src/index.js": "",
+	})
+	if ws, err := findWorkspace(filepath.Join(top, "packages/foo/src"), top); ws != nil || err != nil {
+		t.Errorf("src detected: %+v %v", ws, err)
+	}
+	if ws, _ := findWorkspace(filepath.Join(top, "packages/foo"), top); ws == nil || ws.Package != "packages/foo" {
+		t.Errorf("the package: %+v", ws)
+	}
+}

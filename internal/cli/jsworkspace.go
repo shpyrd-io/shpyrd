@@ -33,6 +33,11 @@ func findWorkspace(dir, stop string) (*jsWorkspace, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Only a folder with a package.json is a package ("packages/**" also
+	// matches a package's src).
+	if _, err := os.Stat(filepath.Join(abs, "package.json")); err != nil {
+		return nil, nil
+	}
 	for cur := abs; cur != stop && filepath.Dir(cur) != cur; {
 		cur = filepath.Dir(cur)
 		rel, err := filepath.Rel(cur, abs)
@@ -166,9 +171,12 @@ func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, er
 		}
 		// The folder uploaded is a workspace that lists the package, inside
 		// the repository: a shpyrd.yaml never sends the folders above it.
-		patterns, _ := workspacePatterns(root)
-		inside := stop == "" || root == stop || strings.HasPrefix(root, stop+string(filepath.Separator))
-		if root == "" || patterns == nil || !workspaceListed(patterns, w) || !inside {
+		inside := root != "" && (stop == "" || root == stop || strings.HasPrefix(root, stop+string(filepath.Separator)))
+		var patterns []string
+		if inside {
+			patterns, _ = workspacePatterns(root)
+		}
+		if !inside || patterns == nil || !workspaceListed(patterns, w) {
 			return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace %s is not a package of a workspace at this folder or above it, inside the repository", w)
 		}
 		return root, nil, nil
