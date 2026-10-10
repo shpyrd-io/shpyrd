@@ -9,6 +9,62 @@ crds:
 alertmanager:
   enabled: false
 
+# Alerts on the platform's own jobs. There is no Alertmanager: they show as
+# firing in Prometheus (Alerts) and Grafana (Alerting > Alert rules) and the
+# operator console reads them from there. Every annotation says what
+# happened and what to do in words (#52): no command, tool or object name.
+additionalPrometheusRulesMap:
+  shpyrd-platform-backup:
+    groups:
+      - name: shpyrd-platform-backup
+        rules:
+          # A run of the platform backup (RFC-0037) ended in failure. The
+          # job's runs are joined to their owner, so a manual run from the
+          # console counts too. The run stays listed for a day, so this
+          # resolves within a day of the failure or when the run is removed.
+          - alert: PlatformBackupFailed
+            expr: |
+              max by (namespace, job_name) (kube_job_status_failed{namespace="shpyrd-system"}) > 0
+              and on (namespace, job_name)
+              kube_job_owner{namespace="shpyrd-system", owner_kind="CronJob", owner_name="platform-backup"}
+            for: 5m
+            labels:
+              severity: critical
+              shpyrd_component: platform-backup
+            annotations:
+              summary: A platform backup run failed
+              description: >-
+                A platform backup run ended without writing an archive. The
+                Backups page of the operator console lists the recent runs with
+                their error; fix the cause and start a backup from there. A run
+                that ran out of memory needs a higher memory limit for the
+                backup job.
+          # No archive younger than 26 hours: a daily schedule missed a run,
+          # or every run failed. A backup never completed since the job was
+          # set up more than 26 hours ago counts as stale as well.
+          - alert: PlatformBackupStale
+            expr: |
+              (
+                time() - kube_cronjob_status_last_successful_time{namespace="shpyrd-system", cronjob="platform-backup"} > 26 * 3600
+              )
+              or
+              (
+                (time() - kube_cronjob_created{namespace="shpyrd-system", cronjob="platform-backup"} > 26 * 3600)
+                unless on (namespace, cronjob)
+                kube_cronjob_status_last_successful_time{namespace="shpyrd-system", cronjob="platform-backup"}
+              )
+            for: 15m
+            labels:
+              severity: critical
+              shpyrd_component: platform-backup
+            annotations:
+              summary: No platform backup for more than a day
+              description: >-
+                The last platform backup that completed is more than 26 hours
+                old, or none has completed yet. The Backups page of the operator
+                console shows the schedule and the recent runs; start a backup
+                from there and check that it completes.
+
 prometheusOperator:
   admissionWebhooks:
     certManager:
@@ -70,6 +126,10 @@ grafana:
       memory: 128Mi
 
 kube-state-metrics:
+  # The chart's default collectors stay: the platform backup alerts above
+  # read the jobs and cronjobs collectors (kube_job_status_failed,
+  # kube_job_owner, kube_cronjob_status_last_successful_time,
+  # kube_cronjob_created), so `collectors` is not redefined here.
   # Expose the shpyrd labels on kube_pod_labels so the dashboard can break
   # CPU and memory down by process type (web, worker...).
   # Labels the metering loop attributes usage by (RFC-0075): process type,

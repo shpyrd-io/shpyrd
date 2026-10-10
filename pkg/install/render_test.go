@@ -797,3 +797,69 @@ func TestPlatformBackupMemoryIsAVariable(t *testing.T) {
 		t.Errorf("an explicit memory limit must not be overridden: %q", d[VarBackupMemory])
 	}
 }
+
+// The monitoring stack carries the rules that make a failed backup run and
+// a stale backup visible (#119), worded for an operator (#52), and keeps
+// the kube-state-metrics collectors they read.
+func TestPlatformBackupAlerts(t *testing.T) {
+	for _, profile := range []string{"local", "oci"} {
+		eng, err := New(nil, Options{Profile: profile, Vars: map[string]string{VarDomain: "example.test", VarACMEEmail: "ops@example.com"}, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals, err := loadValues(deploy.FS, valuesFiles(deploy.FS, eng.components["monitoring"], profile), eng.vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rulesMap, _ := vals["additionalPrometheusRulesMap"].(map[string]interface{})
+		groups, _, _ := unstructured.NestedSlice(rulesMap, "shpyrd-platform-backup", "groups")
+		if len(groups) != 1 {
+			t.Fatalf("%s: backup rule groups = %v", profile, groups)
+		}
+		rules, _, _ := unstructured.NestedSlice(groups[0].(map[string]interface{}), "rules")
+		alerts := map[string]map[string]interface{}{}
+		for _, r := range rules {
+			rule := r.(map[string]interface{})
+			alerts[rule["alert"].(string)] = rule
+		}
+		for _, name := range []string{"PlatformBackupFailed", "PlatformBackupStale"} {
+			rule := alerts[name]
+			if rule == nil {
+				t.Errorf("%s: no %s rule", profile, name)
+				continue
+			}
+			expr, _ := rule["expr"].(string)
+			if !strings.Contains(expr, "platform-backup") || !strings.Contains(expr, `namespace="shpyrd-system"`) {
+				t.Errorf("%s: %s expression does not select the backup job: %s", profile, name, expr)
+			}
+			if sev, _, _ := unstructured.NestedString(rule, "labels", "severity"); sev == "" {
+				t.Errorf("%s: %s has no severity", profile, name)
+			}
+			ann, _, _ := unstructured.NestedStringMap(rule, "annotations")
+			for _, k := range []string{"summary", "description"} {
+				if ann[k] == "" {
+					t.Errorf("%s: %s has no %s", profile, name, k)
+				}
+				for _, word := range []string{"kubectl", "CronJob", "Job", "pod", "namespace", "shpyrd-system", "`"} {
+					if strings.Contains(ann[k], word) {
+						t.Errorf("%s: %s %s names %q: %s", profile, name, k, word, ann[k])
+					}
+				}
+			}
+		}
+		if len(alerts) == 2 {
+			if !strings.Contains(alerts["PlatformBackupFailed"]["expr"].(string), "kube_job_status_failed") || !strings.Contains(alerts["PlatformBackupStale"]["expr"].(string), "kube_cronjob_status_last_successful_time") {
+				t.Errorf("%s: rules read the wrong metrics", profile)
+			}
+		}
+		// The alerts read the jobs and cronjobs collectors: the chart's
+		// default list must stay, or name both.
+		ksm, _ := vals["kube-state-metrics"].(map[string]interface{})
+		if collectors, has := ksm["collectors"]; has {
+			y := fmt.Sprint(collectors)
+			if !strings.Contains(y, "jobs") || !strings.Contains(y, "cronjobs") {
+				t.Errorf("%s: kube-state-metrics collectors drop jobs or cronjobs: %v", profile, collectors)
+			}
+		}
+	}
+}
