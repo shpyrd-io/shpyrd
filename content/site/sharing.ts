@@ -18,9 +18,9 @@ export const steps = [
     step: 'publish',
     title: 'The app is published',
     body:
-      'Its maintainer deploys from the code they already have. The cluster ' +
-      'builds it and gives it a URL with TLS, and sign-in sits in front of it ' +
-      'from the first release.',
+      'Its maintainer deploys from the code they already have. shpyrd builds ' +
+      'it and gives it a URL with TLS, and sign-in sits in front of it from ' +
+      'the first release.',
     screenshot: {
       src: '/screenshots/deploy-dialog-crop.png',
       alt: 'Deploying a project from the dashboard',
