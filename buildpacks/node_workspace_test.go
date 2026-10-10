@@ -245,3 +245,32 @@ func TestNodeWorkspaceOtherManagers(t *testing.T) {
 		})
 	}
 }
+
+// The Node version the workspace asks for, in engines.node (the package's
+// own first, then the root's), goes to node-engine, as Paketo's npm-install
+// would pass it.
+func TestNodeWorkspaceDetectAsksForTheEnginesNode(t *testing.T) {
+	needNode(t)
+	bp, _ := filepath.Abs("node-workspace/bin/detect")
+	app := t.TempDir()
+	writeFiles(t, app, map[string]string{
+		"package.json":          "{\n  \"name\": \"root\",\n  \"engines\": {\n    \"node\": \">=24 <25\"\n  }\n}\n",
+		"apps/web/package.json": `{"name":"web"}`,
+	})
+	plan := filepath.Join(t.TempDir(), "plan.toml")
+	env := []string{"CNB_BUILD_PLAN_PATH=" + plan, "BP_NODE_WORKSPACE=apps/web"}
+	if out, err := run(t, app, env, "bash", bp, "", plan); err != nil {
+		t.Fatalf("detect: %v %s", err, out)
+	}
+	b, _ := os.ReadFile(plan)
+	if !strings.Contains(string(b), `version = ">=24 <25"`) || !strings.Contains(string(b), `version-source = "package.json"`) {
+		t.Errorf("plan = %s", b)
+	}
+	writeFiles(t, app, map[string]string{"apps/web/package.json": `{"name":"web","engines":{"node":"22.x"}}`})
+	if out, err := run(t, app, env, "bash", bp, "", plan); err != nil {
+		t.Fatalf("detect: %v %s", err, out)
+	}
+	if b, _ := os.ReadFile(plan); !strings.Contains(string(b), `version = "22.x"`) {
+		t.Errorf("the package's own engines: %s", b)
+	}
+}
