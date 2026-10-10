@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"strings"
 	"time"
 
@@ -152,12 +153,14 @@ catches up, the primary switches over to it (seconds), the data on both
 instances is compared (the size within 5 %, every table's row count), the
 old instance goes and its volume is kept with the Retain policy for three
 days as the way back; a snapshot of the new volume is taken at the end. A
-database pinned to a node by an earlier move is refused: clear the pin first
-(shpyrd-ctl cluster unpin), which restarts it once, on purpose.
+database pinned to a node by an earlier move is refused: clear the project's
+pins first (shpyrd-ctl cluster unpin), a planned restart of each pinned
+process and database.
 
 Each step reads the state before acting: an interrupted run continues where
 it stopped when run again. When the data check fails the database keeps both
-instances and nothing is removed; --back returns it to the old volume.`,
+instances and nothing is removed; --back returns it to the old volume (the
+new instance goes), --no-checks accepts the numbers and finishes.`,
 		Example: `  shpyrd-ctl storage migrate database p-2f4vrjuxtxvq9bj8qlsjuz4gj/db
   shpyrd-ctl storage migrate database p-2f4vrjuxtxvq9bj8qlsjuz4gj/db --class oci-bv --wait 30m`,
 		Args: cobra.ExactArgs(1),
@@ -187,6 +190,16 @@ instances and nothing is removed; --back returns it to the old volume.`,
 				return err
 			}
 			opts := storagemigrate.Options{Namespace: namespace, Name: name, TargetClass: class, Back: back, Wait: wait, Out: g.progress(cmd)}
+			if class == install.DatabaseStorageClass(vars) {
+				// On the profile's class the volume grows to the profile's
+				// minimum once the mark is cleared; on another class it
+				// keeps its size.
+				if minSize := install.DatabaseVolumeMinSize(vars); minSize != "" {
+					if q, err := resource.ParseQuantity(minSize); err == nil {
+						opts.MinSize = q
+					}
+				}
+			}
 			if !noSnapshot {
 				opts.SnapshotClass = vars(install.VarSnapshotClass)
 			}
@@ -213,7 +226,17 @@ instances and nothing is removed; --back returns it to the old volume.`,
 }
 
 func printMigration(w io.Writer, res *storagemigrate.Result) {
+	if res.From == "" {
+		// Refused or failed before the database's state was read: the
+		// error says it all.
+		for _, n := range res.Notes {
+			fmt.Fprintln(w, "  "+n)
+		}
+		return
+	}
 	switch {
+	case res.ReturnedTo != "":
+		fmt.Fprintf(w, "%s: back on its old volume (%s) with one instance; the instance on %s removed, the migration mark cleared", res.Database, res.ReturnedTo, res.From)
 	case res.StoppedOn2:
 		fmt.Fprintf(w, "%s: stopped on two instances, the data check did not pass; nothing was removed", res.Database)
 	case res.Verified:

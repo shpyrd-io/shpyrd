@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -63,6 +65,10 @@ type Options struct {
 	// Back undoes a migration that stopped on two instances: the primary
 	// goes back to the instance on the old class and the new one is removed.
 	Back bool
+	// MinSize is what the new volume grows to once the mark is cleared (the
+	// profile's minimum on its class); zero when the size stays. The room
+	// check counts it against the workspace's storage ceiling.
+	MinSize resource.Quantity
 	// Wait bounds each step (default 20 minutes); Poll the checks (3s).
 	Wait, Poll time.Duration
 	// SQL runs the data checks on the instances; nil skips them.
@@ -86,11 +92,14 @@ type Result struct {
 	Notes      []string          `json:"notes,omitempty"`
 	Steps      []string          `json:"steps"`
 	StoppedOn2 bool              `json:"stoppedOnTwoInstances,omitempty"`
+	// ReturnedTo is the class of the old volume a --back run put the
+	// database back on.
+	ReturnedTo string `json:"returnedTo,omitempty"`
 }
 
 // ErrDataCheck is returned when the data on the new instance does not match
 // the old one; the database is left on its two instances.
-var ErrDataCheck = errors.New("the data check failed; the database keeps both instances, nothing was removed: look at the numbers, then run again with --back to return to the old volume, or without it to accept")
+var ErrDataCheck = errors.New("the data check failed; the database keeps both instances, nothing was removed: look at the numbers, then run again with --back to return to the old volume, or with --no-checks to accept them and finish")
 
 type migration struct {
 	c    client.Client
@@ -168,7 +177,7 @@ func (m *migration) run(ctx context.Context) error {
 		}
 		m.say("%s: marked for migration to %s", m.res.Database, m.opts.TargetClass)
 	}
-	if err := m.untilWithin(ctx, 3*time.Minute, "the platform to apply the migration class", func() (bool, error) {
+	if err := m.untilWithin(ctx, min(3*time.Minute, m.opts.Wait), "the platform to apply the migration class", func() (bool, error) {
 		cluster, err := m.cluster(ctx)
 		if err != nil {
 			return false, err
@@ -177,16 +186,19 @@ func (m *migration) run(ctx context.Context) error {
 		return class == m.opts.TargetClass, nil
 	}); err != nil {
 		_ = m.patchPostgres(ctx, func(pg *shpyrdv1.Postgres) { delete(pg.Annotations, controller.AnnotationStorageMigration) })
-		return errors.New("the platform did not apply the migration class: it runs a version without the storage migration (core v0.9.85 or later); the mark was removed and nothing changed")
+		return errors.New("the platform did not apply the migration class: it runs a version without the storage migration (core v0.9.85 or later), or its controller is not reconciling; the mark was removed and nothing changed")
 	}
-	// A sleeping database wakes for the mark; the steps need a primary.
-	if err := m.until(ctx, "the database to have a ready instance", func() (bool, error) {
+	// A sleeping database wakes for the mark; the steps need a primary,
+	// and a settled cluster: the restart an unpin causes, or the wake,
+	// must be over before anything else changes.
+	if err := m.until(ctx, "the database to have a ready instance and be settled", func() (bool, error) {
 		cluster, err := m.cluster(ctx)
 		if err != nil {
 			return false, err
 		}
 		ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
-		return ready >= 1 && primaryOf(cluster) != "", nil
+		phase, _, _ := unstructured.NestedString(cluster.Object, "status", "phase")
+		return ready >= 1 && primaryOf(cluster) != "" && phase == phaseHealthy, nil
 	}); err != nil {
 		return err
 	}
@@ -208,8 +220,9 @@ func (m *migration) run(ctx context.Context) error {
 	case m.res.From != m.opts.TargetClass:
 		// 2. A second instance, on the target class, in sync.
 		if ptr.Deref(pg.Spec.Instances, 1) < 2 {
-			if err := m.room(ctx, pg, cluster, primary); err != nil {
-				return err
+			if err := m.room(ctx, pg, cluster, primary, primaryClaim); err != nil {
+				_ = m.patchPostgres(ctx, func(pg *shpyrdv1.Postgres) { delete(pg.Annotations, controller.AnnotationStorageMigration) })
+				return fmt.Errorf("%w (the migration mark was taken back; nothing changed)", err)
 			}
 			if err := m.patchPostgres(ctx, func(pg *shpyrdv1.Postgres) { pg.Spec.Instances = ptr.To[int32](2) }); err != nil {
 				return fmt.Errorf("ask for a second instance: %w", err)
@@ -301,23 +314,27 @@ func (m *migration) back(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if pg.Annotations[controller.AnnotationStorageMigration] == "" {
+	target := pg.Annotations[controller.AnnotationStorageMigration]
+	if target == "" {
 		return errors.New("the database is not under migration; nothing to go back from")
 	}
+	// The instance to return to is the one the migration found: the
+	// lowest serial (CloudNativePG numbers new instances upwards). Its
+	// volume must still be off the mark's class, whatever --class says.
 	names, _, _ := unstructured.NestedStringSlice(cluster.Object, "status", "instanceNames")
-	var oldInstance string
-	for _, n := range names {
-		claim, err := m.claim(ctx, n)
-		if err != nil {
-			return err
-		}
-		if ptr.Deref(claim.Spec.StorageClassName, "") != m.opts.TargetClass {
-			oldInstance = n
-		}
-	}
+	oldInstance := oldestInstance(names)
 	if oldInstance == "" {
+		return errors.New("the database has no instance; nothing to go back to")
+	}
+	oldClaim, err := m.claim(ctx, oldInstance)
+	if err != nil {
+		return err
+	}
+	oldClass := ptr.Deref(oldClaim.Spec.StorageClassName, "")
+	if oldClass == target {
 		return errors.New("no instance on the old storage class is left; there is nothing to go back to (the migration completed; the old volume, if kept, is the way back by hand)")
 	}
+	m.res.From, m.res.To = target, oldClass
 	if primaryOf(cluster) != oldInstance {
 		if err := m.switchover(ctx, oldInstance); err != nil {
 			return err
@@ -333,9 +350,25 @@ func (m *migration) back(ctx context.Context) error {
 	if err := m.patchPostgres(ctx, func(pg *shpyrdv1.Postgres) { delete(pg.Annotations, controller.AnnotationStorageMigration) }); err != nil {
 		return err
 	}
-	m.say("%s: back on the old volume with one instance; the migration mark is cleared", m.res.Database)
-	m.res.Verified = true
+	m.say("%s: back on the old volume (%s) with one instance; the migration mark is cleared", m.res.Database, oldClass)
+	m.res.ReturnedTo = oldClass
 	return nil
+}
+
+// oldestInstance is the instance with the lowest serial; CloudNativePG
+// names them <cluster>-<serial> and never reuses a serial.
+func oldestInstance(names []string) string {
+	oldest, serial := "", -1
+	for _, n := range names {
+		s, err := strconv.Atoi(n[strings.LastIndex(n, "-")+1:])
+		if err != nil {
+			continue
+		}
+		if serial < 0 || s < serial {
+			oldest, serial = n, s
+		}
+	}
+	return oldest
 }
 
 // finish clears the mark so the profile's rules apply to the cluster on
@@ -371,11 +404,11 @@ func (m *migration) refusals(ctx context.Context, pg *shpyrdv1.Postgres, cluster
 	if pg.Annotations[controller.AnnotationDataMove] != "" {
 		return errors.New("the database is being moved between nodes; finish that first")
 	}
-	if pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended {
-		return errors.New("the database is suspended; resume it first, the migration needs it running")
+	if (pg.Spec.Sleep != nil && pg.Spec.Sleep.Suspended) || (pg.Status.Sleep != nil && pg.Status.Sleep.State == sleepSuspended) {
+		return errors.New("the database is suspended (by its own setting or with its workspace); resume it first, the migration needs it running")
 	}
 	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" {
-		return fmt.Errorf("the database is pinned to node %s by an earlier move; a migration must not change its pod while it runs, so clear the pin first (shpyrd-ctl cluster unpin <project-id>: one planned restart), then run this again", node)
+		return fmt.Errorf("the database is pinned to node %s by an earlier move; a migration must not change its pod while it runs, so clear the project's pins first (shpyrd-ctl cluster unpin <project-id>: a planned restart of each pinned process and database of the project), then run this again", node)
 	}
 	if n := ptr.Deref(pg.Spec.Instances, 1); n > 1 && pg.Annotations[controller.AnnotationStorageMigration] == "" {
 		return fmt.Errorf("the database runs %d instances; this moves single-instance databases (a replicated one changes class by its own switchover: add a replica on the new class, promote it, remove the old)", n)
@@ -390,12 +423,18 @@ func (m *migration) refusals(ctx context.Context, pg *shpyrdv1.Postgres, cluster
 // room checks that the second instance can be admitted: its namespace's
 // quota and another node of the pool must take the primary pod's requests
 // once more.
-func (m *migration) room(ctx context.Context, pg *shpyrdv1.Postgres, cluster *unstructured.Unstructured, primary string) error {
+func (m *migration) room(ctx context.Context, pg *shpyrdv1.Postgres, cluster *unstructured.Unstructured, primary string, claim *corev1.PersistentVolumeClaim) error {
 	pod := &corev1.Pod{}
 	if err := m.c.Get(ctx, types.NamespacedName{Namespace: m.opts.Namespace, Name: primary}, pod); err != nil {
 		return fmt.Errorf("the pod of instance %s: %w", primary, err)
 	}
 	needCPU, needMem := podRequests(pod)
+	// The new volume: the claim's size now, and what it grows to once the
+	// mark is cleared, while the old claim still counts.
+	needStorage := claim.Spec.Resources.Requests.Storage().Value()
+	if m.opts.MinSize.Value() > needStorage {
+		needStorage = m.opts.MinSize.Value()
+	}
 	quotas := &corev1.ResourceQuotaList{}
 	if err := m.c.List(ctx, quotas, client.InNamespace(m.opts.Namespace)); err != nil {
 		return err
@@ -405,7 +444,7 @@ func (m *migration) room(ctx context.Context, pg *shpyrdv1.Postgres, cluster *un
 			res  corev1.ResourceName
 			need int64
 			what string
-		}{{corev1.ResourceRequestsCPU, needCPU, "CPU"}, {corev1.ResourceRequestsMemory, needMem, "memory"}} {
+		}{{corev1.ResourceRequestsCPU, needCPU, "CPU"}, {corev1.ResourceRequestsMemory, needMem, "memory"}, {corev1.ResourceRequestsStorage, needStorage, "storage"}} {
 			hard, ok := q.Status.Hard[pair.res]
 			if !ok {
 				continue
@@ -549,31 +588,99 @@ func (m *migration) waitNewInstance(ctx context.Context, primary string) (string
 }
 
 // switchover asks CloudNativePG to make an instance the primary, as its own
-// promote does: the target primary in the status, with the phase. Done when
-// that instance is the primary and ready; the former primary rejoins as a
-// replica in its own time.
+// promote does: the target primary in the status, with the phase. The
+// cluster must be settled first, every instance ready: the operator cancels
+// a switchover whose target is not an active instance ("Wrong target
+// primary, the chosen one is not active or not present") and puts the
+// target back on the current primary; seen on kind when --back asked to
+// switch back while the demoted primary was still restarting. Should it
+// still do that, the ask is repeated a few times. Done when the instance
+// is the primary and every instance is ready again with the cluster
+// healthy: the former primary restarts as a replica right after the
+// switchover (seen on kind: its readiness fails for a minute), and the
+// comparison that follows reads both.
 func (m *migration) switchover(ctx context.Context, target string) error {
 	cluster, err := m.cluster(ctx)
 	if err != nil {
 		return err
 	}
-	if primaryOf(cluster) != target {
-		before := cluster.DeepCopy()
-		_ = unstructured.SetNestedField(cluster.Object, target, "status", "targetPrimary")
-		_ = unstructured.SetNestedField(cluster.Object, "Switchover in progress", "status", "phase")
-		_ = unstructured.SetNestedField(cluster.Object, "Switching over to "+target+" (storage migration)", "status", "phaseReason")
-		if err := m.c.Status().Patch(ctx, cluster, client.MergeFrom(before)); err != nil {
-			return fmt.Errorf("ask for the switchover: %w", err)
+	if primaryOf(cluster) == target {
+		return m.until(ctx, "the cluster to settle after the switchover to "+target, m.settledOn(ctx, target))
+	}
+	asked := 0
+	for {
+		if err := m.until(ctx, "every instance to be ready before the switchover to "+target, m.settledOn(ctx, primaryOf(cluster))); err != nil {
+			return err
+		}
+		if err := m.askSwitchover(ctx, target); err != nil {
+			return err
+		}
+		asked++
+		putBack := false
+		if err := m.until(ctx, "the switchover to "+target, func() (bool, error) {
+			cluster, err := m.cluster(ctx)
+			if err != nil {
+				return false, err
+			}
+			if primaryOf(cluster) == target {
+				return settled(cluster, target), nil
+			}
+			if tp, _, _ := unstructured.NestedString(cluster.Object, "status", "targetPrimary"); tp != target {
+				putBack = true
+				return true, nil
+			}
+			return false, nil
+		}); err != nil {
+			return err
+		}
+		if !putBack {
+			return nil
+		}
+		if asked >= 3 {
+			return fmt.Errorf("CloudNativePG put the target primary back on %s three times: it does not accept %s as the primary (its log says why); the database keeps both instances", primaryOf(cluster), target)
+		}
+		m.say("%s: the operator put the target primary back; asking for the switchover to %s again", m.res.Database, target)
+		if cluster, err = m.cluster(ctx); err != nil {
+			return err
 		}
 	}
-	return m.until(ctx, "the switchover to "+target, func() (bool, error) {
+}
+
+// askSwitchover writes the target primary into the Cluster's status, as
+// CloudNativePG's own promote does.
+func (m *migration) askSwitchover(ctx context.Context, target string) error {
+	cluster, err := m.cluster(ctx)
+	if err != nil {
+		return err
+	}
+	before := cluster.DeepCopy()
+	_ = unstructured.SetNestedField(cluster.Object, target, "status", "targetPrimary")
+	_ = unstructured.SetNestedField(cluster.Object, time.Now().UTC().Format(metav1.RFC3339Micro), "status", "targetPrimaryTimestamp")
+	_ = unstructured.SetNestedField(cluster.Object, "Switchover in progress", "status", "phase")
+	_ = unstructured.SetNestedField(cluster.Object, "Switching over to "+target+" (storage migration)", "status", "phaseReason")
+	if err := m.c.Status().Patch(ctx, cluster, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("ask for the switchover: %w", err)
+	}
+	return nil
+}
+
+// settled reports a cluster with primary as its primary, every instance
+// ready and nothing pending.
+func settled(cluster *unstructured.Unstructured, primary string) bool {
+	ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
+	phase, _, _ := unstructured.NestedString(cluster.Object, "status", "phase")
+	n := instancesIn(cluster)
+	return primaryOf(cluster) == primary && n > 0 && int(ready) == n && phase == phaseHealthy
+}
+
+func (m *migration) settledOn(ctx context.Context, primary string) func() (bool, error) {
+	return func() (bool, error) {
 		cluster, err := m.cluster(ctx)
 		if err != nil {
 			return false, err
 		}
-		ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
-		return primaryOf(cluster) == target && ready >= 1, nil
-	})
+		return settled(cluster, primary), nil
+	}
 }
 
 // retain keeps the old instance's volume: reclaim policy Retain and the
@@ -602,6 +709,8 @@ func (m *migration) retain(ctx context.Context, pg *shpyrdv1.Postgres, instance 
 	apps := &shpyrdv1.AppList{}
 	if err := m.c.List(ctx, apps, client.InNamespace(m.opts.Namespace)); err == nil && len(apps.Items) > 0 {
 		projectUID = apps.Items[0].UID
+	} else {
+		m.res.Notes = append(m.res.Notes, fmt.Sprintf("no project found in namespace %s: the kept volume %s will not be listed on a placement page; release it by hand after the keep (kubectl delete pv %s)", m.opts.Namespace, pv.Name, pv.Name))
 	}
 	capacity := pv.Spec.Capacity[corev1.ResourceStorage]
 	record, _ := json.Marshal(RetainedDisk{Name: pv.Name, Namespace: m.opts.Namespace, ProjectUID: projectUID, Claim: pvc.Name, StorageClass: pv.Spec.StorageClassName, Capacity: capacity.String(), RetainedAt: time.Now().UTC()})
@@ -669,6 +778,18 @@ func (m *migration) compare(ctx context.Context, old, newInstance string) error 
 		m.res.Verified = true
 		return nil
 	}
+	// Both must answer before they are read: a resumed run can find the
+	// former primary still restarting as a replica.
+	if err := m.until(ctx, "both instances to answer a query", func() (bool, error) {
+		for _, instance := range []string{old, newInstance} {
+			if _, err := m.opts.SQL(ctx, m.opts.Namespace, instance, "SELECT 1"); err != nil {
+				return false, nil
+			}
+		}
+		return true, nil
+	}); err != nil {
+		return err
+	}
 	sizeOld, rowsOld, err := m.measure(ctx, old)
 	if err != nil {
 		return err
@@ -729,9 +850,17 @@ func (m *migration) measure(ctx context.Context, instance string) (int64, map[st
 	if err != nil {
 		return 0, nil, fmt.Errorf("measure %s: unexpected size %q", instance, strings.TrimSpace(size))
 	}
-	tables, err := m.opts.SQL(ctx, m.opts.Namespace, instance, "SELECT quote_ident(schemaname)||'.'||quote_ident(relname) FROM pg_stat_user_tables ORDER BY 1")
+	// Unlogged tables are not carried by replication (empty on the new
+	// instance, and not readable on the replica): noted, not compared.
+	tables, err := m.opts.SQL(ctx, m.opts.Namespace, instance, "SELECT quote_ident(s.schemaname)||'.'||quote_ident(s.relname) FROM pg_stat_user_tables s JOIN pg_class c ON c.oid = s.relid WHERE c.relpersistence = 'p' ORDER BY 1")
 	if err != nil {
 		return 0, nil, fmt.Errorf("list tables on %s: %w", instance, err)
+	}
+	if unlogged, err := m.opts.SQL(ctx, m.opts.Namespace, instance, "SELECT quote_ident(s.schemaname)||'.'||quote_ident(s.relname) FROM pg_stat_user_tables s JOIN pg_class c ON c.oid = s.relid WHERE c.relpersistence = 'u' ORDER BY 1"); err == nil && strings.TrimSpace(unlogged) != "" {
+		note := "unlogged tables are not carried by replication, so they start empty on the new instance: " + strings.Join(strings.Fields(unlogged), ", ")
+		if !slices.Contains(m.res.Notes, note) {
+			m.res.Notes = append(m.res.Notes, note)
+		}
 	}
 	rows := map[string]int{}
 	for _, table := range strings.Split(strings.TrimSpace(tables), "\n") {
@@ -750,6 +879,14 @@ func (m *migration) measure(ctx context.Context, instance string) (int64, map[st
 	}
 	return bytes, rows, nil
 }
+
+// phaseHealthy is CloudNativePG's phase when every instance is ready and
+// nothing is pending.
+const phaseHealthy = "Cluster in healthy state"
+
+// sleepSuspended is the Postgres sleep state of a database suspended by
+// its own setting or with its workspace (the controller's pgSuspended).
+const sleepSuspended = "suspended"
 
 func primaryOf(cluster *unstructured.Unstructured) string {
 	p, _, _ := unstructured.NestedString(cluster.Object, "status", "currentPrimary")

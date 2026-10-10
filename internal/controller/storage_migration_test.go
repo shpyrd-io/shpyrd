@@ -18,7 +18,7 @@ import (
 )
 
 // Under the storage-migration annotation a node-local cluster is rendered
-// on the target class at the size it has, without its node pin; once the
+// on the target class at the size it has, its node pin untouched; once the
 // annotation is gone the profile decides, as for any cluster on its class.
 func TestStorageMigrationRendersTargetClassAtCurrentSize(t *testing.T) {
 	ctx := context.Background()
@@ -78,6 +78,46 @@ func TestStorageMigrationRendersTargetClassAtCurrentSize(t *testing.T) {
 	class, _, _ = unstructured.NestedString(cluster.Object, "spec", "storage", "storageClass")
 	if class != "oci-bv" || size != "50Gi" {
 		t.Errorf("after the migration = %s on %s, want 50Gi on oci-bv", size, class)
+	}
+}
+
+// A migration that went back leaves the Cluster's spec naming the target
+// class while the primary's volume is still node-local: the class the data
+// is on wins, at its size, or the profile's minimum would ask the local
+// provisioner for an expansion it cannot do.
+func TestStorageMigrationGoneBackKeepsTheDataClass(t *testing.T) {
+	ctx := context.Background()
+	oneGi := resource.MustParse("1Gi")
+	pg := &shpyrdv1.Postgres{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop", Generation: 1},
+		Spec:       shpyrdv1.PostgresSpec{Storage: &oneGi, Instances: ptr.To[int32](1)},
+	}
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(CNPGClusterGVK)
+	cluster.SetName("db")
+	cluster.SetNamespace("app-shop")
+	cluster.Object["spec"] = map[string]interface{}{"instances": int64(1), "storage": map[string]interface{}{"size": "1Gi", "storageClass": "oci-bv"}}
+	cluster.Object["status"] = map[string]interface{}{"currentPrimary": "db-1"}
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "db-1", Namespace: "app-shop"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: ptr.To(LocalStorageClass)}}
+	base, c := newTestReconciler(t, pg, cluster, claim)
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", Storage: StorageProfile{Class: "oci-bv", MinSize: "50Gi"}, DataPool: "data"}
+	key := types.NamespacedName{Namespace: "app-shop", Name: "db"}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, key, cluster); err != nil {
+		t.Fatal(err)
+	}
+	size, _, _ := unstructured.NestedString(cluster.Object, "spec", "storage", "size")
+	class, _, _ := unstructured.NestedString(cluster.Object, "spec", "storage", "storageClass")
+	if class != LocalStorageClass || size != "1Gi" {
+		t.Errorf("gone back = %s on %s, want 1Gi on %s", size, class, LocalStorageClass)
+	}
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Status.Storage != "" {
+		t.Errorf("status claims a size the disk does not have: %q", pg.Status.Storage)
 	}
 }
 

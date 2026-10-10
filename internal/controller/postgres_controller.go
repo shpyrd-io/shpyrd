@@ -68,9 +68,17 @@ func migratingStorage(current *unstructured.Unstructured, target string, request
 
 // keepStorage returns the storage class and size a running cluster keeps
 // when the profile names another class: its own. On the profile's class the
-// profile decides (the rounded request), as for a new cluster.
-func keepStorage(current *unstructured.Unstructured, profileClass string, requested resource.Quantity) (string, resource.Quantity) {
-	class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass")
+// profile decides (the rounded request), as for a new cluster. The class a
+// cluster is on is the one its primary's volume has (dataClass, "" when
+// there is no primary yet): the Cluster's spec can still name a migration's
+// target class after the migration went back to the old volume, and the
+// profile's minimum applied to that node-local claim would ask for an
+// expansion the local provisioner cannot do.
+func keepStorage(current *unstructured.Unstructured, profileClass string, requested resource.Quantity, dataClass string) (string, resource.Quantity) {
+	class := dataClass
+	if class == "" {
+		class, _, _ = unstructured.NestedString(current.Object, "spec", "storage", "storageClass")
+	}
 	if class == profileClass {
 		return profileClass, requested
 	}
@@ -80,6 +88,23 @@ func keepStorage(current *unstructured.Unstructured, profileClass string, reques
 		}
 	}
 	return class, requested
+}
+
+// dataClass is the storage class of the primary instance's volume, "" when
+// the cluster has no primary yet or its claim cannot be read.
+func (r *PostgresReconciler) dataClass(ctx context.Context, pg *shpyrdv1.Postgres, current *unstructured.Unstructured) string {
+	primary, _, _ := unstructured.NestedString(current.Object, "status", "currentPrimary")
+	if primary == "" {
+		return ""
+	}
+	claim := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: primary}, claim); err != nil {
+		return ""
+	}
+	if claim.Spec.StorageClassName == nil {
+		return ""
+	}
+	return *claim.Spec.StorageClassName
 }
 
 func cnpgStorage(size resource.Quantity, class string) map[string]interface{} {
@@ -299,7 +324,7 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		// node-local 1 GiB cluster it would ask for a 50 GiB expansion the
 		// local provisioner cannot do, and the other way round it would
 		// shrink a provider disk that was rounded up by the former minimum.
-		storageClass, storage = keepStorage(current, storageClass, storage)
+		storageClass, storage = keepStorage(current, storageClass, storage, r.dataClass(ctx, pg, current))
 		if target := pg.Annotations[AnnotationStorageMigration]; target != "" {
 			// Migrating: the new instance provisions on the target class at
 			// the size the cluster has (a size change with the class change
@@ -308,7 +333,7 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 			// the move is done and the annotation is gone.
 			storageClass, storage = migratingStorage(current, target, storage)
 		}
-		if class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass"); class != r.Storage.Class {
+		if storageClass != r.Storage.Class {
 			pg.Status.Storage = ""
 			if pg.Spec.Storage == nil || storage.Cmp(*pg.Spec.Storage) != 0 {
 				pg.Status.Storage = storage.String()

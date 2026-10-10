@@ -23,8 +23,9 @@ A move pins a project's processes and databases to the node it moved them to.
 With project disks on block storage the pins have no purpose: a block volume
 follows its process anywhere in the pool. This clears them; each pinned
 process and database restarts once. A process or database whose data is still
-on a node's disk keeps its pin (migrate the disk first). The project id is the
-one the console's project archives page shows.`),
+on a node's disk is unpinned too (the scheduler keeps it on that node through
+its volume), which is what a storage migration asks for first. The project id
+is the one the console's project archives page shows.`),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()

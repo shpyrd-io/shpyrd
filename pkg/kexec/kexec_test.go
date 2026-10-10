@@ -2,7 +2,10 @@ package kexec
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
@@ -79,5 +82,44 @@ func TestExecURL(t *testing.T) {
 	// there is only one terminal to write to.
 	if strings.Contains(u, "stderr=true") {
 		t.Errorf("ExecURL() with tty must not request stderr: %q", u)
+	}
+}
+
+// The two streams are copied concurrently; every line of stdout must come
+// back whatever stderr does at the same time, and stderr explains a failure.
+func TestCollectKeepsStdoutWholeNextToStderr(t *testing.T) {
+	const lines = 5000
+	out, err := collect(func(o remotecommand.StreamOptions) error {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < lines; i++ {
+				fmt.Fprintf(o.Stdout, "%d\n", i)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			io.WriteString(o.Stderr, "")
+			io.WriteString(o.Stderr, "NOTICE: nothing\n")
+		}()
+		wg.Wait()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out, "\n"); got != lines {
+		t.Errorf("stdout came back with %d of %d lines", got, lines)
+	}
+	if strings.Contains(out, "NOTICE") {
+		t.Error("stderr must not be mixed into stdout")
+	}
+	_, err = collect(func(o remotecommand.StreamOptions) error {
+		io.WriteString(o.Stderr, "psql: error: connection refused\n")
+		return kexec.CodeExitError{Err: errors.New("command terminated with exit code 2"), Code: 2}
+	})
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || ExitCode(RemoteExit(err)) != 2 {
+		t.Errorf("a failure carries stderr and keeps its exit code: %v", err)
 	}
 }

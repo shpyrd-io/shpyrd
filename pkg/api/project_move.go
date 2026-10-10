@@ -164,6 +164,9 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: group.Database}, pg); err != nil {
 			return nil, err
 		}
+		if pg.Annotations[controller.AnnotationStorageMigration] != "" {
+			return nil, fmt.Errorf("database %s is being migrated to another storage class; wait for that to finish", pg.Name)
+		}
 		if pg.Spec.Instances != nil && *pg.Spec.Instances != 1 {
 			return nil, errors.New("this MVP moves single-instance PostgreSQL databases only")
 		}
