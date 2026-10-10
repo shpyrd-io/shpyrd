@@ -28,17 +28,25 @@ The same three things the installer does.
 
 ```shell
 curl -fsSL https://shpyrd.io/install.sh | sh
-# or, with Homebrew
+# or, on macOS, with Homebrew
 brew install shpyrd-io/tap/shpyrd
 ```
 
-**Sign in.**
+**Sign in.** New to shpyrd? Create your account and your free workspace on shpyrd cloud:
 
 ```shell
-shpyrd login
+shpyrd login --signup
 ```
 
-Your browser opens on shpyrd cloud. Sign in, or sign up and name your free workspace - it answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`. Then approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
+Your browser opens on the signup. Prove your email and name your workspace - it answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`. The CLI is signed in to it when it is ready.
+
+Already have a workspace? Sign in to it:
+
+```shell
+shpyrd login --url https://acme.shpyrd.cloud
+```
+
+Your browser opens on its sign-in. Approve the code your terminal shows. Plain `shpyrd login` asks which of the two you want. The CLI is signed in as you for 30 days, and never with more than your roles allow.
 
 ## 2. Talk to it
 
@@ -73,7 +81,7 @@ Release 3 broke the totals, so everyone is on release 2 again - its code and its
 The people you shared it with sign in with their account and find the app among theirs. [Sign-in for your app](/docs/app-access) and [Teams, roles and security](/docs/access) say who can do what.
 
 {% callout title="How your agent does it" %}
-Before it writes code, your agent reads from shpyrd's server how an app should be built to run there. To put it online, share it and roll it back, it runs the shpyrd CLI for you, signed in as you. To also let it read your projects, logs and metrics from anywhere, add your workspace's own server - [Connecting AI assistants](/docs/mcp) says how.
+Before it writes code, your agent reads from shpyrd's server how an app should be built to run there. To put it online, share it and roll it back, it runs the shpyrd CLI for you, signed in as you. To also let it read your projects, logs and metrics from anywhere, add your workspace's own server - [AI assistants (MCP)](/docs/mcp) says how.
 {% /callout %}
 
 ## What you get

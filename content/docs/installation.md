@@ -3,7 +3,7 @@ title: Installation
 description: Create a local cluster with the shpyrd base stack, or install it on an existing Kubernetes cluster.
 ---
 
-shpyrd is open source; this page is for running it on your own cluster. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The single CLI, `shpyrd`, installs the platform on a Kubernetes cluster: a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
+On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). shpyrd is also open source, and this page is for running it yourself. Two CLIs install together: `shpyrd` for people who deploy, `shpyrd-ctl` for the operator who runs the cluster. Either installs the platform on a Kubernetes cluster (`shpyrd-ctl cluster …` and `shpyrd cluster …` are the same commands): a local kind cluster it creates for you, or a cluster you already have - on [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws), other providers as their profiles arrive. This page covers the local cluster and what every profile shares. {% .lead %}
 
 ## Requirements
 
@@ -23,13 +23,13 @@ macOS, with Homebrew:
 brew install shpyrd-io/tap/shpyrd
 ```
 
-macOS or Linux, with the install script (downloads the latest [release](https://github.com/shpyrd-io/shpyrd/releases), verifies its SHA-256 checksum and installs into `/usr/local/bin` or `~/.local/bin`):
+macOS or Linux, with the install script (downloads the latest [release](https://github.com/shpyrd-io/shpyrd/releases), verifies its SHA-256 checksum and installs `shpyrd` and `shpyrd-ctl` into `/usr/local/bin` or `~/.local/bin`):
 
 ```shell
 curl -fsSL https://shpyrd.io/install.sh | sh
 ```
 
-`SHPYRD_VERSION=v0.1.0` pins a version and `SHPYRD_INSTALL_DIR=...` picks the directory. The archives and checksums are also on the release page for a manual install. Check with `shpyrd version`.
+Homebrew installs both binaries too. `SHPYRD_VERSION=v0.1.0` pins a version and `SHPYRD_INSTALL_DIR=...` picks the directory. The archives and checksums are also on the release page for a manual install (Windows archives too; the script and the local cluster need WSL 2). Check with `shpyrd version`.
 
 Every release also publishes the server image `ghcr.io/shpyrd-io/shpyrd-server:<version>` for `linux/amd64` and `linux/arm64`; the CLI installs the image of its own version, so CLI and server always match. Upgrading is `brew upgrade shpyrd` (or re-running the script) followed by `shpyrd cluster init`.
 
@@ -48,10 +48,10 @@ This runs [kind](https://kind.sigs.k8s.io) as a library to create a two-node clu
 | Level | Components |
 | --- | --- |
 | rc0 | Prometheus Operator CRDs |
-| rc1 | cert-manager, the registry credential |
+| rc1 | node-local storage for project data, cert-manager, the registry credential, the platform's Service |
 | rc2 | development CA `ClusterIssuer`, trust-manager, ingress-nginx (host ports 80/443), the in-cluster registry (TLS from the CA) and the node trust for it |
 | rc3 | kpack with the Paketo buildpacks builder, kube-prometheus-stack + Grafana, the control-plane database (PostgreSQL) |
-| rc4 | shpyrd server (API, App controller, dashboard) |
+| rc4 | shpyrd server (API, App controller, dashboard), the platform backup schedule (only with a backup target) |
 
 The first run takes 10-20 minutes, mostly downloads. Re-running `cluster create` or `cluster init` on an existing cluster is idempotent and takes about 30 seconds.
 
@@ -112,17 +112,21 @@ shpyrd cluster status
 Profile: local  Version: v0.1.1  Domain: 127.0.0.1.nip.io  Updated: 2026-09-21T22:23:28Z
 Names: public DNS (127.0.0.1.nip.io) · Front door: kind on 80/443
 
-RUNLEVEL  COMPONENT        STATUS  VERSION  APPLIED
-rc0       monitoring-crds  ready   32.0.0   ...
-rc1       cert-manager     ready   v1.21.2  ...
-rc2       ca-issuers       ready            ...
-rc2       trust-manager    ready   v0.25.0  ...
-rc2       ingress-nginx    ready   4.15.1   ...
-rc2       registry         ready            ...
-rc3       kpack            ready            ...
-rc3       monitoring       ready   91.4.1   ...
-rc3       control-plane-db ready            ...
-rc4       shpyrd           ready            ...
+RUNLEVEL  COMPONENT             STATUS  VERSION  APPLIED
+rc0       monitoring-crds       ready   32.0.0   ...
+rc1       storage-local         ready            ...
+rc1       cert-manager          ready   v1.21.2  ...
+rc1       registry-credentials  ready            ...
+rc1       platform-service      ready            ...
+rc2       ca-issuers            ready            ...
+rc2       trust-manager         ready   v0.25.0  ...
+rc2       ingress-nginx         ready   4.15.1   ...
+rc2       registry              ready            ...
+rc2       registry-nodes        ready            ...
+rc3       kpack                 ready            ...
+rc3       monitoring            ready   91.4.1   ...
+rc3       control-plane-db      ready            ...
+rc4       shpyrd                ready            ...
 ```
 
 Endpoints on the default domain:
@@ -144,7 +148,7 @@ For one developer on a laptop that is all. For a team, enable accounts and make 
 
 ```shell
 shpyrd cluster init --enable auth-local
-shpyrd users add you@example.com --name "You"                                       # prompts for a password
+shpyrd-ctl users add you@example.com --name "You"                                   # prompts for a password
 shpyrd teams create platform --platform-role platform-admin --member you@example.com
 ```
 
@@ -183,9 +187,9 @@ Install the new CLI and run `shpyrd cluster init` again with the same context an
 
 - The apps keep serving throughout: the platform's server restarts, the apps do not depend on it at run time.
 - A release that changes what every instance is given (a new platform variable such as `REVISION`, a new resource model) rolls every app's instances once, one at a time; a single-instance app is unavailable for the seconds its new instance takes to start.
-- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so. v0.9.11 moved every image to a repository named after its workspace, which rebuilt every buildpack app once; the old repositories stay in the registry until a prune exists.
-- A release with a database migration (v0.9.11: identifiers became native `uuid`; v0.9.13: the `memberships` and `invitations` tables) migrates at the server's first start; take a backup first (`shpyrd cluster backup`, or `pg_dump` against the `control-plane-db` pod). Backups made by v0.9.13 carry workspace roles (dump version 2) and cannot be restored by an older server.
-- v0.9.13 adds workspace roles. Nothing changes for existing people: a team's `platformRole` still counts for anyone without a workspace role. Give yourself the owner role (`shpyrd people role you@example.com owner`) so the workspace has one; a workspace role, once set, decides over the team's.
+- A release that changes what builds are made of (the buildpacks, the stack, the run image) makes kpack rebuild every buildpack app; the previous release keeps serving until the new image is ready, and a failed rebuild leaves it serving and marks the project so.
+- A release with a database migration migrates at the server's first start. Take a backup first (`shpyrd cluster backup`, or `pg_dump` against the `control-plane-db` pod). A backup carries the format of the server that made it: an older server refuses a newer backup instead of dropping what it does not know.
+- What a release changes is in its notes on the [release page](https://github.com/shpyrd-io/shpyrd/releases); read them before you upgrade across several versions.
 - Re-applying every component (without `--only`) restarts ingress-nginx, which is a real interruption of a few seconds at the front door.
 
 ## Environment profiles
@@ -197,10 +201,14 @@ A **profile** describes the environment the base stack is built for and therefor
 | Load balancer | kind host ports 80/443, or your Caddy | OCI flexible load balancer on a reserved address; a private one for internal projects | Network Load Balancers with pod targets (AWS Load Balancer Controller): an internet-facing one on Elastic IPs, an internal one for internal projects |
 | DNS | `*.127.0.0.1.nip.io` or dnsmasq (`*.shpyrd.test`) | a wildcard record you create, or a zone in OCI DNS managed by ExternalDNS | a zone in Route 53 managed by ExternalDNS (alias records) |
 | TLS | development CA issued by cert-manager | Let's Encrypt (one wildcard with a DNS provider); the platform CA for the registry | Let's Encrypt (one wildcard through the Route 53 solver); the platform CA for the registry |
-| Registry | in-cluster, TLS from the CA | in-cluster, TLS from the CA; OCIR with `--registry-host` | in-cluster, TLS from the CA |
+| Registry | in-cluster, TLS from the CA | in-cluster, TLS from the CA; an Object Storage bucket with `--registry-credentials-file`, or OCIR with `--registry-host` | in-cluster, TLS from the CA |
 | Isolation | kindnet enforces `NetworkPolicy` | Calico in policy-only mode | the VPC CNI's network policy agent |
-| Storage | kind's local path | Block Volume (50 GB minimum), File Storage for shared volumes | EBS `gp3`, EFS for shared volumes |
+| Project volumes and databases | the node's disk | the node's disk; File Storage for shared volumes (`--class shpyrd-fss`) | the node's disk; EFS for shared volumes (`--class shpyrd-efs`) |
+| Platform disks | the node's disk | Block Volume (50 GB minimum) | EBS `gp3` |
+| Object storage (extension `object-storage`) | Garage in the cluster | the S3 gateway in front of one Object Storage bucket (`--object-storage-credentials-file`), one writer | the S3 gateway in front of one S3 bucket (`--object-storage-credentials-file`) |
 | Access | this machine | WireGuard instance (profile from Terraform), or the Bastion tunnel | AWS Client VPN (profile from Terraform) |
+
+A volume on the node's disk has no minimum size and stays on that node. Project backups protect it; provider snapshots and resizing do not apply. A shared volume needs a class several nodes can mount, so name it when you create it (`shpyrd volumes create assets --size 20Gi --shared --class shpyrd-fss`). With `--object-storage-credentials-file` every bucket, Postgres backups included, goes through the S3 gateway to one provider bucket.
 
 The dashboard's cluster page shows the installed profile, and the install record keeps every choice so `cluster init` re-runs need no flags.
 
@@ -215,7 +223,8 @@ shpyrd cluster export -o ./gitops --domain apps.example.test
 ## Remove everything
 
 ```shell
-shpyrd cluster destroy     # deletes the kind cluster
+shpyrd cluster destroy                  # deletes the kind cluster
+shpyrd cluster destroy --keep-cluster   # removes the platform, keeps the cluster for a fresh cluster init
 ```
 
 Projects, images and configuration live inside the cluster and disappear with it; the development CA under `~/.shpyrd/ca` is kept so the next cluster is trusted immediately.

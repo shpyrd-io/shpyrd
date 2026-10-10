@@ -1,122 +1,108 @@
 ---
 title: Tour
-description: The dashboard of a shpyrd cloud workspace, feature by feature, with three sample projects deployed.
+description: The dashboard of a shpyrd workspace, page by page.
 ---
 
-Every workspace on shpyrd cloud has a dashboard at its own address. These screenshots come from **acme.shpyrd.cloud**, running the three sample projects in `examples/`: **shop** (Go, buildpacks, a `web` and a `worker` process, an attached PostgreSQL database and a Valkey cache), **blog** (Node.js, buildpacks, a persistent volume) and **api** (Python, built from a Dockerfile). Everything below is also available from the CLI, which is how your agent does it. {% .lead %}
+Every workspace has a dashboard at its own address: on shpyrd cloud, `https://<workspace>.shpyrd.cloud`; on a cluster you run, the address you gave it. These screenshots show a sample workspace, **Acme**, signed in as its owner. Everything below is also available from the CLI, which is how your agent does it. {% .lead %}
 
 ## Signing in
 
-![Login page](/screenshots/login.png)
-
-The workspace's login page, at its own address. People sign in with their shpyrd account, or with your company's sign-in once the workspace has one - Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider - and the page carries the workspace's logo and colour. The CLI signs in through the same page: `shpyrd login` opens it in the browser.
+The workspace's login page, at its own address. People sign in with their shpyrd account, or with your company's sign-in once the workspace has one - Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider - and the page carries the workspace's logo and colour. The CLI signs in through the same page: `shpyrd login --url https://acme.shpyrd.cloud` opens it in the browser.
 
 ## The launcher
 
-![Launcher](/screenshots/launcher.png)
+![Launcher](/screenshots/docs-launcher.png)
 
-Where everyone lands after signing in: a tile for each app they may open, the featured ones first, each with its one-line description. People who only use apps see nothing else; people who build reach their projects from the **Projects** link.
-
-## Projects
-
-![Projects list](/screenshots/projects.png)
-
-Every project with its phase, current release, per-process health and URL. A project is what you deploy to: a name, a URL, config vars and a set of resources.
+Where everyone lands after signing in: a card for each app they may open, each with its one-line description, its address and who may open it. A dot gives its state: running, deploying, failed or asleep. People who only use apps see nothing else. People who build open a project from the gear on its card, and create one with **+**.
 
 ## A project
 
-![Project overview](/screenshots/project-overview.png)
+![Project overview](/screenshots/docs-project-overview.png)
 
-The overview of `shop`: source and build strategy, the current release and its build, and the **Processes** card where instance counts and sizes are edited as a draft and applied at once (one release). Below it the **Resources**, **Access**, **Roles**, **Recent actions** and **Releases** cards.
+A project is what you deploy to: a name, an address, config vars and a set of resources. On shpyrd cloud its app answers at `https://<workspace>-<slug>.shpyrd.app`, or at a domain of your own. Its pages are listed down the side, in three groups:
+
+- **Run**: Releases, Backups, Metrics, Logs and Shell.
+- **Configure**: Config, Resources, Domains and Drains.
+- **Access**: Access, Roles, Connections and Activity.
+
+The **Overview** sums it up: where the code comes from, how it is built, the current release, and each process with its size and instances. Beside it, the last thing done to the project. **Open**, **Deploy** and delete are at the top of every page.
 
 ### Resources and attachments
 
-![Resources card](/screenshots/resources-card.png)
+![Resources page](/screenshots/docs-project-resources.png)
 
-Everything in the project: the app, its volumes, databases and caches, with status, endpoint and what uses them. `db` (PostgreSQL 17 on CloudNativePG) and `cache` (Valkey 8) are attached to the app: their connection details are injected as `DATABASE_*` and `REDIS_*` config vars. **Detach** removes them in a new release; **Add resource** creates a volume, a database or a cache.
-
-![Add resource menu](/screenshots/add-resource.png)
+**Resources** holds the processes and what runs beside them. Each process has a size and a number of instances; changes are applied together, as one release. Below, the databases, caches and volumes of the project, with their state, endpoint and what uses them. An attached database or cache puts its connection details in the config vars, as `DATABASE_*` and `REDIS_*`. **Attach** and **Detach** each make a release; **Add** creates a volume, a database or a cache. A volume has its **Snapshots**.
 
 ### Releases and rollback
 
-![Releases card](/screenshots/releases-card.png)
+![Releases page](/screenshots/docs-project-releases.png)
 
-A release is a build plus the config in effect. Six releases of `shop`: the initial deploy, two attachments and a config change (all `config` releases reusing build #1), a second deploy (build #2) and a rollback to v4. Rollback re-releases a build together with its config vars, sizes and attachments.
+A release is a build plus the config in effect. Deploys make new builds; config changes and rollbacks reuse them. **Rollback** re-releases an earlier build together with its config vars, sizes and attachments. Below, the builds: how each was made, from which source, which releases use it and how long it took. **Output** shows what a build printed; one going on is followed as it prints.
 
 ### Access and roles
 
-![Access card](/screenshots/access-card.png)
+![Access page](/screenshots/docs-project-access.png)
 
-Who may open the app: sign-in required (the default), public, or public with signed-in visitors identified. **Open as** opens the app in a new tab as one of your teams, or as a stranger, so you see what your users see.
+**Access**: who may open the app. Sign-in required (the default), anyone, or anyone with signed-in visitors identified. **Open as** opens the app in a new tab as one of your teams, or as nobody, so you see what your users see.
 
-![Roles card](/screenshots/members-card.png)
+![Roles page](/screenshots/docs-project-roles.png)
 
-Roles on the project - `reader`, `user`, `viewer`, `developer`, `admin` - granted to people or teams. Next to it, **Recent actions** lists who did what, from the dashboard, the CLI or an agent.
+**Roles** on the project - `reader`, `user`, `viewer`, `developer`, `admin` - granted to people or teams. **Connections** lists the other projects that may call this one inside the cluster.
+
+![Activity page](/screenshots/docs-project-activity.png)
+
+**Activity** lists who did what, from the dashboard, the API, the CLI or an agent.
 
 ## Deploying
 
-![Deploy dialog](/screenshots/deploy-dialog.png)
+![Deploy dialog](/screenshots/docs-deploy-dialog.png)
 
-Deploy from a Git repository with buildpacks or a Dockerfile; local checkouts deploy with `shpyrd deploy`.
-
-![Activity panel while building](/screenshots/activity-building.png)
-
-While a build runs, the **Activity** panel streams its output; while a release rolls out it shows per-process progress, and when instances fail it shows the reason with a one-click rollback.
+**Deploy** builds a Git repository with buildpacks or its Dockerfile, and releases it. Local checkouts deploy with `shpyrd deploy`. While a build runs, its output streams on **Releases**; when instances fail, the project says why and offers a rollback.
 
 ## Metrics
 
-![Metrics tab](/screenshots/project-metrics.png)
+![Metrics page](/screenshots/docs-project-metrics.png)
 
-Traffic at the edge by status class, response time percentiles, instances per process type, CPU and memory as a percentage of each process' allocation, network. Orange dashed lines mark releases; the red line is 100% of the allocation.
+Response time, requests and failed requests at a glance, CPU and memory against what the processes reserve, then charts: response time percentiles, throughput by status class, CPU, memory, network and instances per process type. Releases are marked on the time axis. The range goes from the last hour to the last 7 days.
 
 ## Logs
 
-![Logs tab](/screenshots/project-logs.png)
-
-Every instance streamed live and named the Heroku way (`web.1`, `web.2`, `worker.1`), with a process filter, a text filter, level highlighting and pause. Here the `web` instances log JSON request lines and queue orders that `worker.1` fulfils.
-
-## Builds
-
-![Builds tab](/screenshots/project-builds.png)
-
-Build history with strategy, source and duration; select one to read its full output, and see which releases use it.
+Every instance streamed live and named the Heroku way (`web.1`, `web.2`, `worker.1`), with a process filter, a level filter, a text filter, and **Live** to pause. **Raw** shows JSON lines as the app wrote them.
 
 ## Config vars
 
-![Config tab](/screenshots/project-config.png)
+![Config page](/screenshots/docs-project-config.png)
 
-Config vars are write-only: names and last-updated times are shown, values never. Variables provided by attached resources (`DATABASE_URL`, `REDIS_URL`, ...) appear read-only with their provider and win over a config var of the same name.
-
-## Volumes
-
-![The blog project with a single-instance volume](/screenshots/project-blog.png)
-
-`blog` mounts a persistent volume at `/data` for its visit counter. A single-instance volume pins the process to one instance (the scale control is disabled) and rolls out with Recreate; the data survives deploys.
+Config vars are write-only: names and when each changed are shown, values never. Each change is a release. Variables provided by attached resources (`DATABASE_URL`, `REDIS_URL`, ...) appear read-only and win over a config var of the same name; global config vars set for the whole workspace appear too. **From a .env** sets many at once. Below, the plain environment every process sees: `PORT`, `SHPYRD_PROJECT`, `SHPYRD_RELEASE` and the others.
 
 ## The workspace
 
-![Workspace overview](/screenshots/workspace-overview.png)
+![Workspace page](/screenshots/docs-workspace-general.png)
 
-The **Workspace** page, for its owners and admins. **Overview**: the name, the look (logo and accent colour), the workspace's own domains, and the address for AI assistants.
+The **Workspace** page, for its owners and admins, also lists its pages down the side. **General**: the name, the look (logo and accent colour) and the plan, with what the projects use against it. Under **Platform**: config vars every project receives, log drains, the workspace's own domains, and **MCP**. On shpyrd cloud, **Billing** is under **Cloud**.
 
-![People tab](/screenshots/workspace-people.png)
+![People page](/screenshots/docs-workspace-people.png)
 
-**People**: everyone in the workspace with their role (owner, admin, member) and how they last signed in, an **Invite** link, and suspension when someone has to be switched off at once.
+**People**: everyone in the workspace with their role (owner, admin, member), how they sign in and when they were last seen, **Invite**, the pending invitations, and **Suspend** when someone has to be switched off at once.
 
-![Teams tab](/screenshots/teams.png)
+![Teams page](/screenshots/docs-workspace-teams.png)
 
 **Teams** group people - by email or by a group of your company's sign-in - so projects grant roles to many people at once.
 
-![Sign-in tab](/screenshots/workspace-signin.png)
+![Sign-in page](/screenshots/docs-workspace-signin.png)
 
-**Sign-in**: your company's login methods, who may join on first sign-in, and your claimed email domains. **API tokens** holds the tokens for CI and scripts. Billing is not a page of the workspace here: on shpyrd cloud it opens from the sidebar's **Cloud** section.
+**Sign-in**: your company's login methods, who may join, and your company's email domains. **API tokens** holds the tokens for CI and scripts, and **Connections** the AI assistants and pipelines that act for someone.
+
+![MCP page](/screenshots/docs-workspace-mcp.png)
+
+**MCP**: the address AI assistants connect to, the name they show, and how to add it to each one. See [AI assistants (MCP)](/docs/mcp).
 
 ## Try it yourself
 
 Sign in, then deploy the samples from a checkout of the repository:
 
 ```shell
-shpyrd login
+shpyrd login --url https://acme.shpyrd.cloud
 shpyrd projects create shop --public && cd examples/shop && shpyrd deploy   # a public shop; without --public visitors sign in
 shpyrd pg create db --project shop && shpyrd redis create cache --project shop
 shpyrd attach db && shpyrd attach cache

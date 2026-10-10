@@ -3,7 +3,7 @@ title: Oracle Cloud (OKE)
 description: Run shpyrd on Oracle Kubernetes Engine - the network and cluster from Terraform, then one command for the platform.
 ---
 
-This page is for running shpyrd yourself, in your own Oracle Cloud tenancy. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The `oci` profile installs shpyrd on Oracle Kubernetes Engine (OKE) with a public load balancer, Let's Encrypt certificates, an in-cluster registry, network policy enforcement and, optionally, automatic DNS. The reference infrastructure lives in [`contrib/oci`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/oci) as Terraform; the platform itself is `shpyrd cluster init`. {% .lead %}
+On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). This page is for running shpyrd yourself, in your own Oracle Cloud tenancy. The `oci` profile installs shpyrd on Oracle Kubernetes Engine (OKE) with a public load balancer, Let's Encrypt certificates, an in-cluster registry, network policy enforcement and, optionally, automatic DNS. The reference infrastructure lives in [`contrib/oci`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/oci) as Terraform; the platform itself is `shpyrd cluster init`. {% .lead %}
 
 Oracle Cloud went first among the cloud profiles for cost - the free tier and cheap flexible shapes - and because it exercises the harder path: a private API endpoint, private workers, CRI-O nodes. The layout is the one shpyrd's own development cluster runs on.
 
@@ -12,11 +12,12 @@ Oracle Cloud went first among the cloud profiles for cost - the free tier and ch
 | | |
 | --- | --- |
 | Network | a VCN (`10.0.0.0/16`) with private subnets for the Kubernetes API endpoint, the workers and the pods (VCN-native pod networking), a public and a private load balancer subnet, a Bastion subnet; internet, NAT and service gateways; network security groups with the rules OKE needs |
-| Cluster | OKE, Basic (free control plane) or Enhanced, private API endpoint reached over the VPN (or the OCI Bastion service), two node pools of flexible shapes: a fixed `platform` pool and an autoscaled `apps` pool ([Node pools](#node-pools)) |
+| Cluster | OKE, Basic (free control plane) or Enhanced, private API endpoint reached over the VPN (or the OCI Bastion service), node pools of flexible shapes: a fixed `platform` pool and, when you ask for them, an autoscaled `apps` pool and a `data` pool ([Node pools](#node-pools)) |
 | Access | a WireGuard instance in a public subnet, keys and profile from Terraform: the way to the private API endpoint, the private front door and the nodes |
 | Front doors | a public OCI flexible load balancer on a **reserved address** (survives cluster rebuilds); a private one for projects marked internal ([Domains and exposure](/docs/domains)) |
 | Certificates | Let's Encrypt; with a DNS provider, one wildcard certificate for every project hostname |
-| Registry | the in-cluster registry with TLS from the platform CA (no OCIR account needed; OCIR stays one flag away) |
+| Registry | the in-cluster registry with TLS from the platform CA (no OCIR account needed; an Object Storage bucket or OCIR stays one flag away) |
+| Storage | project volumes and databases on the nodes' disks; Block Volume for the platform's own disks; File Storage for shared volumes |
 | Isolation | Calico in policy-only mode, because OKE's VCN-native CNI does not enforce `NetworkPolicy` on its own |
 | DNS | optional: a public zone in OCI DNS managed by ExternalDNS, records for every host, delegated from your registrar once |
 
@@ -57,7 +58,7 @@ apps_node_memory_gb = 8
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
 dns_zone = "oci.example.com"   # public zone in OCI DNS; "" for none
-dns_auth = "key"               # key (any cluster), workload (enhanced clusters), none
+dns_auth = "key"               # key (any cluster), workload (enhanced clusters), none (the default: no DNS automation)
 ```
 
 ```shell
@@ -128,10 +129,10 @@ What happens, in order:
 | Level | Components |
 | --- | --- |
 | rc0 | Prometheus Operator CRDs |
-| rc1 | Calico (policy only), cert-manager, the registry credential |
+| rc1 | node-local storage for project data, Calico (policy only), cert-manager, the registry credential, the platform's Service, the snapshot controller, the File Storage class; the S3 gateway with a bucket |
 | rc2 | Let's Encrypt issuers, the platform CA (generated in the cluster) and trust bundle, ingress-nginx (public load balancer on the reserved address) and, with a subnet, the internal one, the registry and the node trust for it, ExternalDNS and the OCI DNS-01 solver |
-| rc3 | kpack with the Paketo builder (pushed to the in-cluster registry), kube-prometheus-stack, the wildcard certificate, the control-plane database |
-| rc4 | the shpyrd server |
+| rc3 | kpack with the Paketo builder (pushed to the in-cluster registry), kube-prometheus-stack, the wildcard certificate, the control-plane database, the cluster autoscaler |
+| rc4 | the shpyrd server, the platform backup schedule (with a backup target) |
 
 The installer waits for the load balancer address, for `shpyrd.<domain>` to resolve on public resolvers, and for the certificates. Twenty minutes on a fresh cluster, most of it downloads and Let's Encrypt. The summary at the end:
 
@@ -142,6 +143,8 @@ The installer waits for the load balancer address, for `shpyrd.<domain>` to reso
   External LB:   147.15.59.84 (ExternalDNS: *.oci.example.com)
   Internal LB:   10.0.10.179 (ExternalDNS: per host, exposure:internal)
 ```
+
+Grafana answers on the internal front door only: connect the VPN to open it. It has no anonymous access; its admin password is in the `monitoring-grafana` Secret (`kubectl --context oke-shpyrd-prod -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d`).
 
 Everything you passed is recorded in the cluster: later runs (`brew upgrade shpyrd && shpyrd cluster init --context oke-shpyrd-prod --profile oci`) need no flags, and the key never leaves the Secrets the installer wrote.
 
@@ -157,7 +160,7 @@ shpyrd cluster token --context oke-shpyrd-prod        # prints the token for the
 The token is a shared, full-rights credential meant for bootstrap and automation. Give people their own accounts instead (`--enable auth-local` above installed the sign-in service), then put yourself in a platform-admin team - the moment the first team exists, roles are enforced and anyone without one sees nothing:
 
 ```shell
-shpyrd users add you@example.com --name "You" --context oke-shpyrd-prod        # prompts for a password
+shpyrd-ctl users add you@example.com --name "You" --context oke-shpyrd-prod    # prompts for a password
 shpyrd teams create platform --platform-role platform-admin --member you@example.com --context oke-shpyrd-prod
 ```
 
@@ -182,13 +185,13 @@ A cloud cluster has kinds of workload that scale differently. The platform's own
 | `data` (optional) | `data_min_count` to `data_max_count` | every Postgres and Redis resource, the object store and the Postgres wake proxy |
 | `apps` | autoscaled, `apps_min_count` to `apps_max_count` | web and worker processes, release and one-off Jobs, build pods |
 
-The nodes are told apart by the label `shpyrd.io/pool` (OKE node pools have no taints), and the console's Cluster page shows each node's pool next to its name. The installer adds a node selector for the platform pool to every Deployment, StatefulSet and CronJob it installs, Helm's or its own (DaemonSets run on every node, as they should), and one for the data pool to the object store and the wake proxy; the controller puts one for the apps pool on everything it schedules for an app and pins databases and stores to the data pool, or to the platform pool when there is none. `cluster init` refuses to install when no node carries the platform pool's label: everything pinned there would wait forever. `cluster status`, and a warning on the Cluster page, list any pod of the platform running on an apps or data node, so nothing creeps back there.
+The nodes are told apart by the label `shpyrd.io/pool` (OKE node pools have no taints), and the console's **Overview** shows each node's pool next to its name. The installer adds a node selector for the platform pool to every Deployment, StatefulSet and CronJob it installs, Helm's or its own (DaemonSets run on every node, as they should), and one for the data pool to the object store and the wake proxy; the controller puts one for the apps pool on everything it schedules for an app and pins databases and stores to the data pool, or to the platform pool when there is none. `cluster init` refuses to install when no node carries the platform pool's label: everything pinned there would wait forever. `cluster status`, and a warning on the console's **Overview**, list any pod of the platform running on an apps or data node, so nothing creeps back there.
 
 CoreDNS is OKE's and stays where OKE puts it, on every node: OKE manages it, and the cluster's names should not depend on the platform pool alone. The warning leaves it out.
 
 The cluster autoscaler manages the apps pool alone: a node joins when a process has no room, and leaves when it has been under half used for ten minutes — which, with [sleep](/docs/cli) (`shpyrd sleep`) putting idle apps to zero, actually happens. The platform pool never changes size on its own.
 
-Two E5 nodes of 1 OCPU and 12 GB hold the platform of the first cloud with room: about 2.0 of their 3.7 allocatable cores reserved, the node agents included, once the data pool takes the databases.
+The default platform pool is two E5 nodes of 2 OCPU and 12 GB. Once a data pool takes the databases, `node_ocpus = 1` is enough: two such nodes have about 3.7 allocatable cores, and the platform reserves about 2.0 of them, the node agents included.
 
 `apps_min_count = 1` keeps one warm node so a sleeping app wakes in seconds; `0` lets the pool empty when every app sleeps, and the first request then also waits for a node (about two minutes). `apps_max_count = 0` (the default in Terraform) means no apps pool: a single-pool cluster as before.
 
@@ -198,14 +201,15 @@ In the autoscaler's log, `node pool not found for instance` for a platform node 
 
 ## Costs
 
-At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` platform nodes (2 OCPU, 12 GB) about $0.10 per hour each, plus one to three apps nodes (1 OCPU, 8 GB) about $0.04 per hour each while they exist; a flexible load balancer at 10 Mbps; the registry's 50 GB block volume; Enhanced clusters add about $0.10 per hour. The Bastion service, the VCN, the reserved addresses, the DNS zone, Calico and the Always Free VPN instance (`VM.Standard.E2.1.Micro`) are free; DNS queries are billed per million. `VM.Standard.A1.Flex` (Ampere, arm64) is Always Free up to 4 OCPUs and 24 GB when the region has capacity - everything shpyrd runs is multi-arch.
+At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` platform nodes (2 OCPU, 12 GB) about $0.10 per hour each, plus one to three apps nodes (1 OCPU, 8 GB) about $0.04 per hour each while they exist; a flexible load balancer at 10 Mbps; the platform's block volumes (registry, control-plane database, monitoring: 50 GB each); Enhanced clusters add about $0.10 per hour. The VPN instance (`VM.Standard.E5.Flex`, 1 OCPU, 2 GB) is about three cents an hour. The Bastion service, the VCN, the reserved addresses, the DNS zone and Calico are free; DNS queries are billed per million. `VM.Standard.A1.Flex` (Ampere, arm64) is Always Free up to 4 OCPUs and 24 GB when the region has capacity - everything shpyrd runs is multi-arch.
 
 ## Good to know
 
 - **Network policy.** OKE with VCN-native pod networking accepts `NetworkPolicy` objects without enforcing them. The profile installs Calico in policy-only mode (Oracle's supported path) so projects are isolated from each other and from the instance metadata service; `--set SHPYRD_NETWORK_POLICY=none` skips it on a cluster that already enforces policies. `cluster init` warns on any cluster where it finds no policy engine.
-- **Block volumes start at 50 GB.** A `shpyrd volumes create data --size 1Gi` is created at 50Gi and the command says so; the registry's volume is 50 GB for that reason. Snapshots (`shpyrd volumes snapshot`) are block volume backups.
-- **Shared volumes need File Storage.** Set `shared_storage = true` in `terraform.tfvars` and pass the two `--set SHPYRD_FSS_MOUNT_TARGET=… --set SHPYRD_FSS_AD=…` values `next_steps` prints to `shpyrd cluster init`. It needs the File Storage service limits `Mount Target Count` and `File System Count` above zero in the availability domain (Console: Governance > Limits, Quotas and Usage > File Storage); some tenancies start at 0 and must request an increase. The mount target is free; file systems bill by the space used.
+- **Project volumes live on the nodes' disks.** Project volumes and databases use the node's own disk (`shpyrd-local`): no minimum size, no resize, and project backups instead of block volume snapshots. A node holding such data is kept out of the autoscaler's scale-down. Block Volume holds only the platform's own disks (registry, control-plane database, monitoring), which start at 50 GB.
+- **Shared volumes need File Storage.** Set `shared_storage = true` in `terraform.tfvars`, `terraform apply`, and run `cluster init` with the vars file again (it carries `SHPYRD_FSS_MOUNT_TARGET` and `SHPYRD_FSS_AD`). Name the class when you create one: `shpyrd volumes create assets --size 20Gi --shared --class shpyrd-fss`. It needs the File Storage service limits `Mount Target Count` and `File System Count` above zero in the availability domain (Console: Governance > Limits, Quotas and Usage > File Storage); some tenancies start at 0 and must request an increase. The mount target is free; file systems bill by the space used.
 - **CRI-O.** OKE nodes run CRI-O, which refuses unqualified image names such as `redis:7`; shpyrd's own images are fully qualified, and so should yours be in a Dockerfile.
+- **Registry and object storage in buckets.** `contrib/oci/terraform/backups` also writes `<name>-registry.env` and `<name>-objects.env`. `--registry-credentials-file` keeps the registry's images in an Object Storage bucket. `--object-storage-credentials-file` sends every bucket the platform hands out, Postgres backups included, through the S3 gateway to one Object Storage bucket; on OCI the gateway runs as a single writer, in one pod.
 - **OCIR instead of the in-cluster registry.** `--registry-host <region>.ocir.io/<tenancy-namespace> --registry-user <namespace>/<user> --registry-token-file <file>` uses OCIR; the registry components are then skipped.
 - **Platform backups.** `contrib/oci/terraform/backups` creates a bucket that outlives the cluster and a key that opens only it; `backup_bucket` in the cluster root puts the target in the vars file, `--backup-credentials-file backups/<name>-backups.env` hands the key to `cluster init`. Nightly archives, `shpyrd cluster backup` now, `shpyrd cluster restore` on a new cluster: [Platform backups](/docs/backups).
 - **Upgrading.** `brew upgrade shpyrd` then `shpyrd cluster init` on the context. The recorded settings carry over; the CLI installs the server image of its own version.

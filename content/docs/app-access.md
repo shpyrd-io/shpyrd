@@ -9,9 +9,9 @@ New projects ask visitors to sign in. Only people with a role on the project get
 
 | Mode | Who opens the app | What the app receives |
 | --- | --- | --- |
-| **Sign-in required** (`authenticated`, the default for new projects) | People with a role on the project: teams or people with the `user` role, and its viewers, developers and admins. Everyone else is asked to sign in, or told which team the app is available to. | Identity on every request |
-| **Public** (`public`) | Anyone on the internet — a site, a landing page. Projects created before v0.5 are public. | Nothing |
-| **Public, signed-in visitors identified** (`identified`) | Anyone; people who happen to be signed in are identified. A site with a "Hi, Maria" corner. | Identity when there is one |
+| **Sign-in required** (`authenticated`, the default for new projects; "Who signs in" in the dashboard) | People with a role on the project: teams or people with the `user` or `reader` role, and its viewers, developers and admins. Everyone else is asked to sign in, or told which team the app is available to. | Identity on every request |
+| **Public** (`public`; "Anyone" in the dashboard) | Anyone on the internet — a site, a landing page. Projects created before v0.5 are public. | Nothing |
+| **Public, signed-in visitors identified** (`identified`; "Named people" in the dashboard) | Anyone; people who happen to be signed in are identified. A site with a "Hi, Maria" corner. | Identity when there is one |
 
 In `identified` mode nobody is asked to sign in, so a visitor is identified only once their browser holds the app's cookie: the launcher and the project page's **Open** button send people through `https://<app host>/.shpyrd/signin?rd=/` (silent when they are signed in), and your app can link there itself — "Hello, anonymous visitor — [sign in](/.shpyrd/signin?rd=/)". The [examples](https://github.com/shpyrd-io/shpyrd-examples) do exactly that.
 
@@ -22,7 +22,7 @@ shpyrd access --project expenses              # who may open it
 shpyrd access set public --project expenses   # anyone
 ```
 
-The dashboard has the same switch on the project page (Access card); making an app public asks for confirmation, and a badge says "Anyone can open this app" while it is.
+The dashboard has the same switch on the project's **Access** page (the "Who may open it" card); making an app public asks for confirmation, and a badge says "Anyone on the internet may open it" while it is.
 
 ## Who gets in
 
@@ -32,6 +32,12 @@ Grant the `user` role to a team or a person; `viewer`, `developer` and `admin` o
 shpyrd teams create finance --member joao@example.com --group Finance   # or a group of your identity provider
 shpyrd members add expenses --team finance --role user
 shpyrd members add expenses --user pedro@example.com --role user
+```
+
+Grant `reader` for read-only use: the edge refuses every request that changes things (anything but GET, HEAD, OPTIONS and TRACE) and the app receives `X-Shpyrd-Roles: reader`.
+
+```shell
+shpyrd members add reports --team everyone --role reader
 ```
 
 The built-in **everyone** team is every person who has signed in: `shpyrd members add expenses --team everyone --role user` opens the app to the whole company at once.
@@ -121,7 +127,7 @@ The [`examples/hello`](https://github.com/shpyrd-io/shpyrd/tree/main/examples/he
 
 ## Open as: seeing the app the way a team does
 
-Builders have no test users. On the project page, **Open as** opens the app in a new tab with a preview identity: your account, but the teams you chose (or none, or anonymous). The app sees a member of Finance; the token carries `"preview": true` and an `act` claim naming you, so an app can tell if it wants to. Previews are recorded in the project's audit trail.
+Builders have no test users. On the project's **Access** page, **Open as** opens the app in a new tab with a preview identity: your account, but the teams you chose (or none, or **Open as nobody** for an anonymous visitor); **Open as myself** ends the preview. It takes the developer role or above. The app sees a member of Finance; the token carries `"preview": true` and an `act` claim naming you, so an app can tell if it wants to. Previews are recorded in the project's audit trail.
 
 ```shell
 shpyrd members list expenses       # what a team would get
@@ -138,7 +144,7 @@ shpyrd members list expenses       # what a team would get
 
 ## Between projects
 
-Projects are network-isolated by default: nothing else running on the cluster may reach an app, even from the same workspace, except the front door, the platform and monitoring. A project opens itself to another with its allow list — on its page (**Connections**), with `shpyrd allow add project crm --project expenses`, or in `shpyrd.yaml`:
+Projects are network-isolated by default: nothing else running on the cluster may reach an app, even from the same workspace, except the front door, the platform and monitoring. A project opens itself to another with its allow list — on its **Connections** page, with `shpyrd allow add project crm --project expenses`, or in `shpyrd.yaml`:
 
 ```yaml
 allow:
@@ -146,3 +152,5 @@ allow:
 ```
 
 The listed project must be one of the workspace's own: allows never cross a workspace, and the platform refuses a name that is not there. Changes apply within seconds and create no release. The caller reaches the callee at `http://<callee>-web.<callee namespace>.svc` inside the cluster (or through its public hostname, which goes through the front door and the callee's access mode).
+
+The platform's own callers are let in the same way: `shpyrd allow add platform mcp --project expenses` lets the MCP connector call the app directly, and `shpyrd allow add platform actions --project expenses` lets the shpyrd server call it on a person's behalf.

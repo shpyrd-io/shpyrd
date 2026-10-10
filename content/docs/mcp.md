@@ -3,16 +3,16 @@ title: AI assistants (MCP)
 description: Every workspace is a remote MCP server. Add it to Claude, sign in through the workspace, and ask about your projects.
 ---
 
-Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see and changes nothing. {% .lead %}
+Every workspace is a [Model Context Protocol](https://modelcontextprotocol.io) server, at the workspace's own address: on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`. Add it to an assistant such as Claude as a connector, sign in through the workspace, and ask about your projects in plain language: *"check on Acme the metrics of the shop project for the last day"*. The assistant sees what you see. This is your workspace's own server; shpyrd's public server, `https://mcp.shpyrd.io/mcp`, needs no account and only teaches your agent how to build an app for shpyrd ([Getting started](/docs/getting-started#manually)). {% .lead %}
 
-The MCP server is an enterprise feature: always on shpyrd cloud, and on a self-hosted install with a license (`shpyrd-ctl license set`); without one, `/mcp` answers that it needs a license and the AI assistants card is not shown.
+The MCP server is an enterprise feature: always on shpyrd cloud, and on a self-hosted install with a license (`shpyrd-ctl license set`); without one, `/mcp` answers that it needs a license.
 
 ## Connecting Claude
 
-1. On **Workspace › Overview › AI assistants**, copy the **Server URL** (`https://<workspace>/mcp` - on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`).
+1. On **Workspace › MCP**, copy the **Address** (on shpyrd cloud, `https://acme.shpyrd.cloud/mcp`; on a cluster you run, `https://<workspace address>/mcp`).
 2. In Claude: **Settings › Connectors › Add custom connector**, paste the URL, **Connect**.
 3. Claude sends you to your workspace's sign-in; sign in as usual and **Allow** the connection. The consent page names the assistant and what it may do.
-4. In a conversation, enable the connector and ask. The server's name — what Claude shows — is set by a workspace admin on the same card; by default it is *"<workspace> on shpyrd"*.
+4. In a conversation, enable the connector and ask. The server's name — what Claude shows — is set by a workspace admin on the same page, under **Assistant name**; by default it is *"<workspace> on shpyrd"*.
 
 Any MCP client that speaks Streamable HTTP with OAuth 2.1 works the same way: the workspace publishes its authorization server (`/.well-known/oauth-authorization-server`), accepts dynamic client registration and requires PKCE.
 
@@ -25,11 +25,11 @@ Any MCP client that speaks Streamable HTTP with OAuth 2.1 works the same way: th
 | `get_logs` | the most recent log lines (how many, which process) |
 | `get_metrics` | requests, latency, errors, CPU and memory over a range, summarised (latest, average, peak) |
 
-Everything is **read-only** today and **within your roles**: a project you cannot open does not exist to the assistant; an owner's connection is a viewer's. Tools that change things (deploy, scale, config vars) come in a later release behind an explicit permission the consent page will name.
+The tools are **read-only** today and work **within your roles**: a project you cannot open does not exist to the assistant. A connection made with the default permission (`projects:read`) acts as a viewer, whatever your roles. A client may also ask for `projects:write` ("Change your projects: deploy, scale, configure"), which the consent page names: that connection acts with your project roles, through the workspace API. No connection gets a workspace owner's powers.
 
 ## Connections and revocation
 
-Your connected assistants are listed on the same card with what they may do and when they were last used; **disconnect** revokes the assistant's access at once (a token it already holds stops within the hour). The assistant asks you to sign in again the next time. Admins see everyone's connections (`?all=true` on the API).
+Your connected assistants are listed on **Workspace › Connections** with what they may do, when they were last used and until when; **Cut** revokes the assistant's access at once (a token it already holds stops within the hour). The assistant asks you to sign in again the next time. Admins see everyone's connections (`?all=true` on the API).
 
 ## For the platform operator
 

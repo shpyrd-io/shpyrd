@@ -3,7 +3,7 @@ title: AWS (EKS)
 description: Run shpyrd on Amazon EKS - the network, cluster and VPN from Terraform, then one command for the platform.
 ---
 
-This page is for running shpyrd yourself, in your own AWS account. On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). The `aws` profile installs shpyrd on Amazon EKS with Network Load Balancers for the public and the internal front door, Let's Encrypt certificates, Route 53 automation, an in-cluster registry and network policy enforcement from the VPC CNI. The reference infrastructure lives in [`contrib/aws`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/aws) as Terraform, including an AWS Client VPN as the way into private parts of the platform; the platform itself is `shpyrd cluster init`. {% .lead %}
+On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting-started). This page is for running shpyrd yourself, in your own AWS account. The `aws` profile installs shpyrd on Amazon EKS with Network Load Balancers for the public and the internal front door, Let's Encrypt certificates, Route 53 automation, an in-cluster registry and network policy enforcement from the VPC CNI. The reference infrastructure lives in [`contrib/aws`](https://github.com/shpyrd-io/shpyrd/tree/main/contrib/aws) as Terraform, including an AWS Client VPN as the way into private parts of the platform; the platform itself is `shpyrd cluster init`. {% .lead %}
 
 ## What you get
 
@@ -11,12 +11,12 @@ This page is for running shpyrd yourself, in your own AWS account. On shpyrd clo
 | --- | --- |
 | Network | a VPC (`10.0.0.0/16`) with two public subnets (load balancers, one NAT gateway per zone) and two private `/19` subnets for nodes and pods (the VPC CNI gives pods VPC addresses) |
 | Cluster | EKS in API authentication mode (the Terraform caller is the first administrator), a **private API endpoint** (reachable over the VPN; a public one restricted to your address is opt-in), one managed node group on Amazon Linux 2023, labelled as the platform pool (`shpyrd.io/pool=platform`: the installer pins the platform's pods to it), standard support only |
-| Credentials | EKS Pod Identity: IAM roles associated with the service accounts that need AWS (the load balancer controller, the EBS and EFS CSI drivers, ExternalDNS, cert-manager). No access keys are created or stored |
+| Credentials | EKS Pod Identity: IAM roles associated with the service accounts that need AWS (the load balancer controller, the EBS and EFS CSI drivers, ExternalDNS, cert-manager). The cluster's Terraform creates no access keys; the optional object storage module below is the one exception |
 | Front doors | Network Load Balancers from the AWS Load Balancer Controller with **pod targets**: an internet-facing one on two **Elastic IPs** (static addresses for allow-lists and apex A records), an internal one for projects marked internal ([Domains and exposure](/docs/domains)). DNS uses their hostnames as alias records |
 | Certificates | Let's Encrypt; with the zone in Route 53, one wildcard certificate for every project hostname through cert-manager's Route 53 solver |
 | Registry | the in-cluster registry with TLS from the platform CA |
 | Isolation | the VPC CNI's own network policy agent enforces `NetworkPolicy` (no Calico needed) |
-| Storage | EBS `gp3` (encrypted, 1 GiB minimum) with snapshots; EFS for shared volumes ([Resources](/docs/resources)) |
+| Storage | project volumes and databases on the nodes' disks; EBS `gp3` (encrypted) for the platform's own disks; EFS for shared volumes ([Resources](/docs/resources)) |
 | DNS | optional: a public zone in Route 53 managed by ExternalDNS, delegated from your registrar once |
 | Access | optional: an AWS Client VPN endpoint into the VPC, with a profile for the AWS VPN Client |
 
@@ -106,7 +106,7 @@ What the file carries, and where each value comes from:
 | --- | --- | --- |
 | `SHPYRD_DOMAIN` | the platform's domain | `dns_zone` |
 | `SHPYRD_AWS_CLUSTER`, `SHPYRD_AWS_REGION`, `SHPYRD_AWS_VPC_ID` | what the load balancer controller manages | the cluster; discovered from the cluster itself when absent |
-| `SHPYRD_AWS_LB_EIPS`, `SHPYRD_LB_IP` | the public front door's Elastic IPs (allocation ids for the controller, addresses for the Domains card) | the two `aws_eip.lb` |
+| `SHPYRD_AWS_LB_EIPS`, `SHPYRD_LB_IP` | the public front door's Elastic IPs (allocation ids for the controller, addresses for the project's **Domains** page) | the two `aws_eip.lb` |
 | `SHPYRD_EFS_ID` | the file system behind shared volumes | `shared_storage` |
 | `SHPYRD_DNS_PROVIDER`, `SHPYRD_DNS_ZONE_ID`, `SHPYRD_DNS_REGION` | Route 53 automation | the hosted zone |
 
@@ -117,10 +117,10 @@ What happens, in order:
 | Level | Components |
 | --- | --- |
 | rc0 | Prometheus Operator CRDs |
-| rc1 | the AWS Load Balancer Controller, cert-manager (with ambient credentials for Route 53), the registry credential, the snapshot controller and the EBS snapshot class, the `gp3` and `shpyrd-efs` storage classes |
+| rc1 | node-local storage for project data, the AWS Load Balancer Controller, cert-manager (with ambient credentials for Route 53), the registry credential, the platform's Service, the snapshot controller and the EBS snapshot class, the `gp3` and `shpyrd-efs` storage classes; the S3 gateway with a bucket |
 | rc2 | Let's Encrypt issuers, the platform CA and trust bundle, ingress-nginx behind an internet-facing NLB on the Elastic IPs and the internal one behind an internal NLB (both with pod targets), the registry and the node trust for it, ExternalDNS |
 | rc3 | kpack with the Paketo builder, kube-prometheus-stack, the wildcard certificate, the control-plane database |
-| rc4 | the shpyrd server |
+| rc4 | the shpyrd server, the platform backup schedule (with a backup target) |
 
 The installer waits for the load balancer hostname, for `shpyrd.<domain>` to resolve on public resolvers and for the certificates. The summary at the end:
 
@@ -140,7 +140,7 @@ The same as on Oracle Cloud: the admin token bootstraps, then accounts and a pla
 
 ```shell
 shpyrd cluster dashboard --context eks-shpyrd-prod
-shpyrd users add you@example.com --name "You" --context eks-shpyrd-prod
+shpyrd-ctl users add you@example.com --name "You" --context eks-shpyrd-prod
 shpyrd teams create platform --platform-role platform-admin --member you@example.com --context eks-shpyrd-prod
 shpyrd projects create shop --context eks-shpyrd-prod
 shpyrd deploy --project shop --context eks-shpyrd-prod
@@ -148,14 +148,16 @@ shpyrd deploy --project shop --context eks-shpyrd-prod
 
 ## Costs
 
-At the defaults, on demand in us-east-1: the EKS control plane $0.10 per hour, two `t3a.large` nodes $0.15, two NAT gateways $0.09 plus data (`nat_gateway_per_az = false` halves it), two Network Load Balancers $0.045, the Client VPN association $0.10 plus $0.05 per connection; about $0.50 per hour all in. EBS `gp3` $0.08 per GB-month, EFS by the space used, the zone $0.50 per month. A development cluster is created for a working session and destroyed after it.
+At the defaults, on demand in us-east-1: the EKS control plane $0.10 per hour, two `t3a.large` nodes $0.15, two NAT gateways $0.09 plus data (`nat_gateway_per_az = false` halves it), two Network Load Balancers $0.045, the Client VPN association $0.10 plus $0.05 per connection; about $0.50 per hour all in. EBS `gp3` $0.08 per GB-month for the platform's disks, EFS by the space used, the zone $0.50 per month. A development cluster is created for a working session and destroyed after it.
 
 ## Good to know
 
-- **Addresses and hostnames.** The public front door has two static Elastic IPs (the A-record targets for a zone apex, shown on the Domains card) and a DNS name that ExternalDNS uses for alias records; the internal one has a DNS name only. Load balancers are managed by the AWS Load Balancer Controller with pod targets; an ALB is not used because it would terminate TLS with ACM certificates, which does not fit per-domain certificates from cert-manager.
+- **Addresses and hostnames.** The public front door has two static Elastic IPs (the A-record targets for a zone apex, shown on the project's **Domains** page) and a DNS name that ExternalDNS uses for alias records; the internal one has a DNS name only. Load balancers are managed by the AWS Load Balancer Controller with pod targets; an ALB is not used because it would terminate TLS with ACM certificates, which does not fit per-domain certificates from cert-manager.
 - **Network policy.** The VPC CNI enforces it with its own agent; `cluster init` recognises it and installs nothing.
-- **Snapshots** are EBS snapshots, crash-consistent: shpyrd runs `sync` in the instances mounting the volume before taking one, so what the application had written is in the copy.
-- **Existing clusters.** The profile works on any EKS cluster that has the same add-ons and Pod Identity associations as the Terraform creates (CSI drivers, `shpyrd-system/external-dns`, `cert-manager/cert-manager`), and subnets tagged for the in-tree load balancer discovery.
+- **Project volumes live on the nodes' disks.** Project volumes and databases use the node's own disk (`shpyrd-local`): no minimum size, no resize, and project backups instead of EBS snapshots. EBS `gp3` holds only the platform's own disks (registry, control-plane database, monitoring).
+- **Shared volumes** are EFS access points (`shared_storage = true`). Name the class when you create one: `shpyrd volumes create assets --size 20Gi --shared --class shpyrd-efs`.
+- **Object storage in a bucket.** `contrib/aws/terraform/object-storage` creates an S3 bucket and writes `<name>-objects.env`. `--object-storage-credentials-file` with that file sends every bucket the platform hands out, Postgres backups included, through the S3 gateway to that one bucket. It uses an IAM user's access key, written to that file.
+- **Existing clusters.** The profile works on any EKS cluster that has the same add-ons and Pod Identity associations as the Terraform creates (CSI drivers, `kube-system/aws-load-balancer-controller`, `shpyrd-system/external-dns`, `cert-manager/cert-manager`, and `shpyrd-system/shpyrd-server` for backups), and subnets tagged for the in-tree load balancer discovery.
 - **Upgrading.** `brew upgrade shpyrd` then `shpyrd cluster init` on the context.
 - **Platform backups.** `contrib/aws/terraform/backups` creates an S3 bucket that outlives the cluster; `backup_bucket` in the cluster root grants the platform's service account access through Pod Identity (no keys) and puts the target in the vars file. Nightly archives, `shpyrd cluster backup` now, `shpyrd cluster restore` on a new cluster: [Platform backups](/docs/backups).
 
