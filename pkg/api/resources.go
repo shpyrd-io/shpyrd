@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"net/http"
 	"regexp"
 	"sort"
@@ -273,6 +274,18 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 			return
 		}
 		note = n
+		// Its disk counts against the workspace's storage ceiling, as the
+		// namespace quota will count it: refused here, in words, rather
+		// than left waiting for a claim the quota never admits.
+		if disk, has := s.storeDisk(t.Kind, spec); has {
+			if err := s.checkStorageLimit(ctx, s.workspace(c), disk); err != nil {
+				abort(c, http.StatusConflict, err)
+				return
+			}
+			if requested := storeRequestedDisk(spec); requested == nil || disk.Cmp(*requested) > 0 {
+				note = strings.TrimSpace(note + fmt.Sprintf(" Its disk is %s, the provider minimum.", disk.String()))
+			}
+		}
 	}
 	if err := s.apps.Create(ctx, u); err != nil {
 		switch {
@@ -707,3 +720,33 @@ func (s *Server) mutatePostgres(c *gin.Context, mutate func(*shpyrdv1.Postgres) 
 
 // userError marks a mutate error as the caller's (400, not 502).
 type userError struct{ error }
+
+// storeRequestedDisk reads the disk size a database or store asked for.
+func storeRequestedDisk(spec map[string]interface{}) *resource.Quantity {
+	raw, _ := spec["storage"].(string)
+	if raw == "" {
+		return nil
+	}
+	q, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return nil
+	}
+	return &q
+}
+
+// storeDisk is the disk a new database or persistent store gets: the
+// request, or the default, rounded to the provider minimum. A store without
+// persistence has none.
+func (s *Server) storeDisk(kind string, spec map[string]interface{}) (resource.Quantity, bool) {
+	requested := storeRequestedDisk(spec)
+	switch kind {
+	case "Postgres":
+		return s.databaseDiskSize(requested), true
+	case "Redis":
+		if persistent, _ := spec["persistent"].(bool); !persistent {
+			return resource.Quantity{}, false
+		}
+		return s.redisDiskSize(requested), true
+	}
+	return resource.Quantity{}, false
+}

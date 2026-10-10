@@ -151,9 +151,12 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 	for _, v := range original.Volumes {
 		oldV[v.Name] = true
 	}
+	// Counted as the disks they become: a restored disk is rounded to the
+	// provider minimum like a new one (shared folders are file systems,
+	// with no minimum), and so is a database's data volume.
 	for _, v := range restored.Volumes {
 		if !oldV[v.Name] {
-			extra.Add(v.Spec.Size)
+			extra.Add(s.restoredVolumeSize(v.Spec))
 		}
 	}
 	oldPG := map[string]bool{}
@@ -162,11 +165,7 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 	}
 	for _, pg := range restored.Databases {
 		if !oldPG[pg.Name] {
-			if pg.Spec.Storage != nil {
-				extra.Add(*pg.Spec.Storage)
-			} else {
-				extra.Add(resource.MustParse("5Gi"))
-			}
+			extra.Add(s.databaseDiskSize(pg.Spec.Storage))
 		}
 	}
 	ws := s.workspaceOfApp(ctx, app)
@@ -200,7 +199,7 @@ func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, 
 		// On the profile's class, as a new disk: the provider minimum
 		// applies (RFC-0060), or the Volume would ask for less than the
 		// disk it gets and refuse every later resize up to that size.
-		current.Spec.Size, _ = s.applyVolumeMinimum(current.Spec.Size)
+		current.Spec.Size = s.restoredVolumeSize(current.Spec)
 		if err := s.apps.Create(ctx, current); err != nil {
 			return err
 		}
@@ -487,4 +486,15 @@ func (s *Server) removeCreatedArchiveResources(ctx context.Context, app *shpyrdv
 	op.CreatedVolumes = nil
 	op.CreatedDatabases = nil
 	return s.saveProjectArchive(ctx, app.Namespace, op)
+}
+
+// restoredVolumeSize is what a restored volume's disk becomes: rounded to
+// the provider minimum unless it is a shared folder (a file system, which
+// has no minimum and ignores the size).
+func (s *Server) restoredVolumeSize(spec shpyrdv1.VolumeSpec) resource.Quantity {
+	if spec.AccessMode == corev1.ReadWriteMany {
+		return spec.Size
+	}
+	size, _ := s.applyVolumeMinimum(spec.Size)
+	return size
 }

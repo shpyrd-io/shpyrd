@@ -17,7 +17,7 @@ Oracle Cloud went first among the cloud profiles for cost - the free tier and ch
 | Front doors | a public OCI flexible load balancer on a **reserved address** (survives cluster rebuilds); a private one for projects marked internal ([Domains and exposure](/docs/domains)) |
 | Certificates | Let's Encrypt; with a DNS provider, one wildcard certificate for every project hostname |
 | Registry | the in-cluster registry with TLS from the platform CA (no OCIR account needed; an Object Storage bucket or OCIR stays one flag away) |
-| Storage | project volumes and databases on the nodes' disks; Block Volume for the platform's own disks; File Storage for shared volumes |
+| Storage | Block Volume for project disks, databases and the platform's own disks (50 GB minimum, snapshots); the node's disk only for disks made before this version; File Storage for shared volumes |
 | Isolation | Calico in policy-only mode, because OKE's VCN-native CNI does not enforce `NetworkPolicy` on its own |
 | DNS | optional: a public zone in OCI DNS managed by ExternalDNS, records for every host, delegated from your registrar once |
 

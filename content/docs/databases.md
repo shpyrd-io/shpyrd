@@ -19,7 +19,7 @@ shpyrd-ctl extensions enable redis
 ## PostgreSQL
 
 ```shell
-shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi, 1 instance, size shared-s (128Mi)
+shpyrd pg create db --project shop                        # PostgreSQL 17, 5Gi (50Gi on Oracle Cloud, the block volume minimum), 1 instance, size shared-s (128Mi)
 shpyrd pg create db --project shop --size shared-m --storage 20Gi --instances 3   # HA with replicas
 shpyrd pg resize db shared-l --project shop               # another size; the instances restart one at a time
 shpyrd pg list --project shop
@@ -27,7 +27,7 @@ shpyrd pg psql db --project shop -- -c 'select version()'
 shpyrd pg delete db --project shop --yes                  # refused while attached (or --force)
 ```
 
-Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; The data volume sits on the node's own disk, like every project volume ([Volumes](/docs/resources#volumes)); the database's backups are what protect it.
+Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; The data volume is a block volume on shpyrd cloud and the cloud profiles (50 GiB on Oracle Cloud, the provider minimum; a smaller request is rounded up and the status says so) and sits on the node's own disk on the local profile, like every project volume ([Volumes](/docs/resources#volumes)); the database's backups are what protect it.
 
 ### Sizes
 

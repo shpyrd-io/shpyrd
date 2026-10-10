@@ -16,7 +16,7 @@ On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting
 | Certificates | Let's Encrypt; with the zone in Route 53, one wildcard certificate for every project hostname through cert-manager's Route 53 solver |
 | Registry | the in-cluster registry with TLS from the platform CA |
 | Isolation | the VPC CNI's own network policy agent enforces `NetworkPolicy` (no Calico needed) |
-| Storage | project volumes and databases on the nodes' disks; EBS `gp3` (encrypted) for the platform's own disks; EFS for shared volumes ([Resources](/docs/resources)) |
+| Storage | EBS `gp3` (encrypted, snapshots) for project disks, databases and the platform's own disks; the node's disk only for disks made before this version; EFS for shared volumes ([Resources](/docs/resources)) |
 | DNS | optional: a public zone in Route 53 managed by ExternalDNS, delegated from your registrar once |
 | Access | optional: an AWS Client VPN endpoint into the VPC, with a profile for the AWS VPN Client |
 

@@ -49,6 +49,9 @@ export function ProjectPlacement({ id, name }: { id: string; name: string }) {
   const recommended = group ? placementCandidates(group, nodes, "balanced").find((candidate) => !candidate.reason && candidate.known) : undefined;
   const selected = candidates.find((candidate) => candidate.node.name === target && !candidate.reason);
   const migrating = group?.needsMigration === true;
+  // On block storage a disk follows its process to any node of the pool:
+  // there is nothing to copy, so there is no move to plan for it.
+  const followsProcess = !!group && !migrating && (group.storageClasses?.length ?? 0) > 0 && !group.storageClasses!.includes("shpyrd-local");
   const title = group ? groupTitle(group) : "";
   return <Card>
     <CardHeader><CardTitle>Plan a move</CardTitle><CardDescription>Compare the space your workload needs with the capacity left on each destination. Processes sharing a volume move together; databases move separately.</CardDescription></CardHeader>
@@ -63,6 +66,7 @@ export function ProjectPlacement({ id, name }: { id: string; name: string }) {
           <p className="text-sm text-muted-foreground">Currently on {group.nodes.join(", ") || "no node"} · {group.pool || "shared"} pool{group.volumes.length > 0 ? ` · Volumes: ${group.volumes.join(", ")}` : ""}</p>
           <p className="text-xs text-muted-foreground">A manual move pins this group to the selected node. Estimates cover current replicas; future scaling needs additional headroom.</p>
         </div>
+        {followsProcess && <Alert><AlertTitle>These disks follow their processes</AlertTitle><AlertDescription>Currently on {group.storageClasses?.join(", ")}: block storage that reattaches on any node of the pool. There is nothing to copy, so there is no move to plan. To place this group elsewhere, drain the node or clear the project's pins.</AlertDescription></Alert>}
         {migrating && <Alert><AlertTitle>Migrate provider storage to local disk</AlertTitle><AlertDescription>Currently using {group.storageClasses?.join(", ") || "provider storage"}. Files and mount paths are preserved. Shared volumes will share one node. Old provider disks remain retained and billable until you delete them below after checking the project.</AlertDescription></Alert>}
         <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-3">
           <div><p className="text-sm text-muted-foreground">CPU to move</p><p className="text-lg font-medium">{cores(group.cpuRequestedMillicores)}</p><p className="text-xs text-muted-foreground">Reserved across current pods</p></div>
@@ -100,7 +104,7 @@ export function ProjectPlacement({ id, name }: { id: string; name: string }) {
             action={preview ? (migrating ? "Simulate migration" : "Simulate move") : migrating ? "Pause and migrate" : "Pause and move"} onConfirm={() => {
               if (disabled || submitting.current || !selected) return;
               submitting.current = true; setMessage(""); move.mutate({ group: group.id, node: selected.node.name, migrateToLocal: migrating });
-            }} trigger={<Button disabled={disabled || !selected} icon={move.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : undefined}>{move.isPending ? (migrating ? "Migrating…" : "Moving…") : preview ? (migrating ? "Preview migration" : "Preview move") : migrating ? "Pause and migrate" : "Pause and move"}</Button>} />
+            }} trigger={<Button disabled={disabled || !selected || followsProcess} icon={move.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : undefined}>{move.isPending ? (migrating ? "Migrating…" : "Moving…") : preview ? (migrating ? "Preview migration" : "Preview move") : migrating ? "Pause and migrate" : "Pause and move"}</Button>} />
         </div>
       </> : <p className="text-sm text-muted-foreground">No processes, volumes or databases to move.</p>}
       {!!placement.data.retainedVolumes?.length && <div className="grid gap-3 border-t pt-5">

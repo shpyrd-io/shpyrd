@@ -17,7 +17,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Shared volumes (`storage-rwx`) | [RFC-0041](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0041-shared-volumes.md) | ready to implement (shared volumes already work on one node's disk, and on EFS or File Storage for older volumes) |
+| Shared volumes (`storage-rwx`) | [RFC-0041](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0041-shared-volumes.md) | ready to implement (shared volumes work on EFS or File Storage where the cloud has them, and on one node's disk on the local profile) |
 | Private repositories (tokens, deploy keys) | [RFC-0017](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0017-git-credentials.md) | proposal |
 | Auto-deploy on push (webhooks, polling) | [RFC-0018](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0018-repository-monitoring.md) | proposal |
 | GitHub App: connect once, pick repositories, statuses | [RFC-0054](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0054-github-app.md) | ready to implement |
