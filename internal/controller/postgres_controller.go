@@ -55,6 +55,17 @@ type PostgresReconciler struct {
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
 // names one, the class (RFC-0060).
+// migratingStorage is what a cluster under migration is rendered with: the
+// target class, at the size it has now.
+func migratingStorage(current *unstructured.Unstructured, target string, requested resource.Quantity) (string, resource.Quantity) {
+	if previous, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "size"); previous != "" {
+		if quantity, err := resource.ParseQuantity(previous); err == nil {
+			return target, quantity
+		}
+	}
+	return target, requested
+}
+
 // keepStorage returns the storage class and size a running cluster keeps
 // when the profile names another class: its own. On the profile's class the
 // profile decides (the rounded request), as for a new cluster.
@@ -289,6 +300,14 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		// local provisioner cannot do, and the other way round it would
 		// shrink a provider disk that was rounded up by the former minimum.
 		storageClass, storage = keepStorage(current, storageClass, storage)
+		if target := pg.Annotations[AnnotationStorageMigration]; target != "" {
+			// Migrating: the new instance provisions on the target class at
+			// the size the cluster has (a size change with the class change
+			// makes CloudNativePG try to grow the old claim first, and never
+			// create the new instance). The profile's minimum applies once
+			// the move is done and the annotation is gone.
+			storageClass, storage = migratingStorage(current, target, storage)
+		}
 		if class, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass"); class != r.Storage.Class {
 			pg.Status.Storage = ""
 			if pg.Spec.Storage == nil || storage.Cmp(*pg.Spec.Storage) != 0 {
@@ -378,6 +397,17 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 	patch := client.MergeFrom(current.DeepCopy())
 	if cur, _, _ := unstructured.NestedInt64(current.Object, "spec", "instances"); cur != int64(instances(pg)) {
 		_ = unstructured.SetNestedField(current.Object, int64(instances(pg)), "spec", "instances")
+		changed = true
+	}
+	// The storage class follows the render: kept as it is for a running
+	// cluster (keepStorage), the target class under a migration.
+	wantClass, _, _ := unstructured.NestedString(desired.Object, "spec", "storage", "storageClass")
+	if curClass, _, _ := unstructured.NestedString(current.Object, "spec", "storage", "storageClass"); curClass != wantClass {
+		if wantClass == "" {
+			unstructured.RemoveNestedField(current.Object, "spec", "storage", "storageClass")
+		} else {
+			_ = unstructured.SetNestedField(current.Object, wantClass, "spec", "storage", "storageClass")
+		}
 		changed = true
 	}
 	wantSize, _, _ := unstructured.NestedString(desired.Object, "spec", "storage", "size")
@@ -632,7 +662,9 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		// the projects' data (RFC-0077).
 		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: pool}}
 	}
-	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" {
+	// A node pin is for data on that node's disk; a migration needs the
+	// new instance on another node, so the pin is set aside while it runs.
+	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" && pg.Annotations[AnnotationStorageMigration] == "" {
 		selector := map[string]interface{}{corev1.LabelHostname: node}
 		if pool != "" {
 			selector[PoolLabel] = pool
