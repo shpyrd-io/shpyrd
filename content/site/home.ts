@@ -103,7 +103,7 @@ export const boundariesSection = {
 // (Patrick, 2026-10-09: "alguma sessão na home falando de empresas e botão
 // chamando pra ver o small software manifesto").
 export const companies = {
-  label: 'For business',
+  label: 'For businesses',
   heading: 'Every team is building its own apps. Give them one place to run.',
   description:
     'Finance, sales, people, ops: they all build their tools with AI now. ' +
