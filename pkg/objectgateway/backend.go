@@ -74,11 +74,39 @@ func (b *Backend) ListBuckets(ctx context.Context, in s3response.ListBucketsInpu
 	}
 	return out, nil
 }
+
+// withoutAWSChunked drops the "aws-chunked" token from a Content-Encoding the
+// consumer sent. The front door has already decoded the chunked body by the
+// time the backend runs, so the token describes nothing the provider will
+// receive; forwarded, a provider that honours the SigV4 streaming rules (OCI,
+// AWS itself) refuses the PUT: "x-amz-content-sha256 must be
+// STREAMING-AWS4-HMAC-SHA256-PAYLOAD ... for aws-chunked uploads". What the
+// consumer declared beyond that token ("aws-chunked, gzip") is the object's
+// own encoding and stays.
+func withoutAWSChunked(encoding *string) *string {
+	if encoding == nil {
+		return nil
+	}
+	var kept []string
+	for _, token := range strings.Split(*encoding, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" || strings.EqualFold(token, "aws-chunked") {
+			continue
+		}
+		kept = append(kept, token)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return aws.String(strings.Join(kept, ", "))
+}
+
 func (b *Backend) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	in.GrantFullControl = nil
 	in.GrantRead = nil
 	in.GrantReadACP = nil
 	in.GrantWriteACP = nil
+	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
@@ -116,6 +144,7 @@ func (b *Backend) CreateMultipartUpload(ctx context.Context, in s3response.Creat
 	in.GrantRead = nil
 	in.GrantReadACP = nil
 	in.GrantWriteACP = nil
+	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
