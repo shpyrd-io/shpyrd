@@ -1,0 +1,29 @@
+/* The tour (src/components/tour): the private link's dots, running from
+   the company to shpyrd. */
+@keyframes tour-dots {
+  to {
+    background-position: 6px 0;
+  }
+}
+
+/* The bar on the lit layer of the platform slide, filling until the next. */
+@keyframes tour-fill {
+  from {
+    height: 0;
+  }
+  to {
+    height: 100%;
+  }
+}
+
+/* A new line of the audit trail opening its room before it shows. */
+@keyframes tour-open {
+  from {
+    max-height: 0;
+    opacity: 0;
+  }
+  to {
+    max-height: 4rem;
+    opacity: 1;
+  }
+}
