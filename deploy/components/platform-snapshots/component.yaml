@@ -1,0 +1,6 @@
+name: platform-snapshots
+description: Nightly provider snapshots of every block disk (projects' disks and databases, the platform's own), a bounded number kept per disk (RFC-0060)
+namespace: shpyrd-system
+kustomize:
+  path: base
+timeout: 2m

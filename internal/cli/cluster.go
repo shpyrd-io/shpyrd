@@ -906,6 +906,10 @@ func conditionalComponents(vars map[string]string, prof *install.Profile) []stri
 	if effectiveVar(vars, prof, install.VarBackupTarget) == "" && effectiveVar(vars, prof, install.VarGatewayBucket) == "" && prof.HasComponent("platform-backup") {
 		skip = append(skip, "platform-backup")
 	}
+	// Disk snapshots need a snapshot class (RFC-0060); the local profile has none.
+	if effectiveVar(vars, prof, install.VarSnapshotClass) == "" && prof.HasComponent("platform-snapshots") {
+		skip = append(skip, "platform-snapshots")
+	}
 	// No DNS provider: no records automation, no wildcard certificate.
 	if dns := effectiveVar(vars, prof, install.VarDNSProvider); dns == "" || dns == "none" {
 		for _, c := range []string{"external-dns", "dns01-oci", "dns"} {

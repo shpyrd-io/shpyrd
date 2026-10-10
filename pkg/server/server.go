@@ -102,6 +102,15 @@ func Main(opts Options) {
 		}
 		return
 	}
+	// `shpyrd-server snapshots`: one round of disk snapshots, then exit.
+	if len(os.Args) > 1 && os.Args[1] == "snapshots" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runSnapshots(logger); err != nil {
+			logger.Error("disk snapshots failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server backup`: one platform backup, then exit (RFC-0037).
 	if len(os.Args) > 1 && os.Args[1] == "backup" {
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

@@ -121,12 +121,16 @@ const (
 	VarBackupTarget   = "SHPYRD_BACKUP_TARGET"   // s3://bucket/prefix ("" = component skipped)
 	VarBackupEndpoint = "SHPYRD_BACKUP_ENDPOINT" // S3 endpoint URL ("" = AWS S3 in the region)
 	VarBackupRegion   = "SHPYRD_BACKUP_REGION"
-	VarBackupSchedule = "SHPYRD_BACKUP_SCHEDULE"  // cron, UTC
-	VarBackupKeep     = "SHPYRD_BACKUP_KEEP"      // archives kept
-	VarBackupMemory   = "SHPYRD_BACKUP_MEMORY"    // memory limit of the backup job ("1Gi" unless the profile says otherwise)
-	VarFSSMountTarget = "SHPYRD_FSS_MOUNT_TARGET" // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
-	VarFSSAD          = "SHPYRD_FSS_AD"           // availability domain of the shared volumes' file systems (OCI)
-	VarEFSID          = "SHPYRD_EFS_ID"           // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
+	VarBackupSchedule = "SHPYRD_BACKUP_SCHEDULE" // cron, UTC
+	VarBackupKeep     = "SHPYRD_BACKUP_KEEP"     // archives kept
+	// The nightly provider snapshots of the block disks (RFC-0060): when,
+	// and how many stay per disk. Taken where VarSnapshotClass is set.
+	VarSnapshotSchedule = "SHPYRD_SNAPSHOT_SCHEDULE" // cron, UTC
+	VarSnapshotKeep     = "SHPYRD_SNAPSHOT_KEEP"     // snapshots kept per disk
+	VarBackupMemory     = "SHPYRD_BACKUP_MEMORY"     // memory limit of the backup job ("1Gi" unless the profile says otherwise)
+	VarFSSMountTarget   = "SHPYRD_FSS_MOUNT_TARGET"  // OCI File Storage mount target OCID behind shared volumes ("" = no shared volumes)
+	VarFSSAD            = "SHPYRD_FSS_AD"            // availability domain of the shared volumes' file systems (OCI)
+	VarEFSID            = "SHPYRD_EFS_ID"            // EFS file system behind shared volumes ("" = no shared volumes) (AWS)
 	// Node pools (RFC-0077): values of the shpyrd.io/pool label ("" = no such pool).
 	VarAppsPool     = "SHPYRD_APPS_POOL"     // apps, builds, one-off runs
 	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components
@@ -387,6 +391,13 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	for _, v := range []string{VarAppsPool, VarPlatformPool, VarDataPool} {
 		if _, ok := vars[v]; !ok {
 			out[v] = ""
+		}
+	}
+	// The disk snapshots job renders on every profile; it is skipped where
+	// there is no snapshot class.
+	for v, def := range map[string]string{VarSnapshotSchedule: "30 1 * * *", VarSnapshotKeep: "7"} {
+		if _, ok := vars[v]; !ok {
+			out[v] = def
 		}
 	}
 	// Cluster autoscaler (RFC-0075): always defined so the deployment YAML

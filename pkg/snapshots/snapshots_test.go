@@ -1,4 +1,4 @@
-package cli
+package snapshots
 
 import (
 	"bytes"
@@ -87,8 +87,8 @@ var interimNow = func() time.Time { return time.Date(2026, 10, 10, 1, 30, 0, 0, 
 
 func TestInterimSnapshotsRefuseWithoutClass(t *testing.T) {
 	var out bytes.Buffer
-	res, err := takeInterimSnapshots(context.Background(), &out, interimTestClient(t), interimSnapshotOptions{Class: "oci-bv", Keep: 7})
-	if !errors.Is(err, errNoSnapshotClass) || res != nil {
+	res, err := Take(context.Background(), &out, interimTestClient(t), Options{Class: "oci-bv", Keep: 7})
+	if !errors.Is(err, ErrNoSnapshotClass) || res != nil {
 		t.Fatalf("expected the refusal, got %v (%v)", err, res)
 	}
 	for _, word := range []string{"SHPYRD_", "kubectl", "--", "VolumeSnapshot"} {
@@ -96,7 +96,7 @@ func TestInterimSnapshotsRefuseWithoutClass(t *testing.T) {
 			t.Errorf("refusal names an internal (%q): %s", word, err)
 		}
 	}
-	if _, err := takeInterimSnapshots(context.Background(), &out, interimTestClient(t), interimSnapshotOptions{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 0}); err == nil {
+	if _, err := Take(context.Background(), &out, interimTestClient(t), Options{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 0}); err == nil {
 		t.Error("keep 0 accepted")
 	}
 }
@@ -107,7 +107,7 @@ func TestInterimSnapshotsRefuseWithoutClass(t *testing.T) {
 func TestInterimSnapshotsSelectNameAndKeep(t *testing.T) {
 	c := interimTestClient(t)
 	var out bytes.Buffer
-	res, err := takeInterimSnapshots(context.Background(), &out, c, interimSnapshotOptions{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 2, Now: interimNow})
+	res, err := Take(context.Background(), &out, c, Options{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 2, Now: interimNow})
 	if err != nil {
 		t.Fatalf("take: %v\n%s", err, out.String())
 	}
@@ -171,7 +171,7 @@ func TestInterimSnapshotsSelectNameAndKeep(t *testing.T) {
 func TestInterimSnapshotsSystemAndPrefix(t *testing.T) {
 	c := interimTestClient(t)
 	var out bytes.Buffer
-	res, err := takeInterimSnapshots(context.Background(), &out, c, interimSnapshotOptions{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, System: true, Now: interimNow})
+	res, err := Take(context.Background(), &out, c, Options{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, System: true, Now: interimNow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestInterimSnapshotsSystemAndPrefix(t *testing.T) {
 	}
 
 	out.Reset()
-	res, err = takeInterimSnapshots(context.Background(), &out, interimTestClient(t), interimSnapshotOptions{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, NamespacePrefix: "oth", Now: interimNow})
+	res, err = Take(context.Background(), &out, interimTestClient(t), Options{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, NamespacePrefix: "oth", Now: interimNow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestInterimSnapshotsSystemAndPrefix(t *testing.T) {
 	}
 
 	out.Reset()
-	res, err = takeInterimSnapshots(context.Background(), &out, interimTestClient(t), interimSnapshotOptions{Class: "gp3", SnapshotClass: "ebs-snapshot", Keep: 7, Now: interimNow})
+	res, err = Take(context.Background(), &out, interimTestClient(t), Options{Class: "gp3", SnapshotClass: "ebs-snapshot", Keep: 7, Now: interimNow})
 	if err != nil || len(res) != 0 || !strings.Contains(out.String(), "No disks of class gp3") {
 		t.Errorf("no disks of the class: %v %+v\n%s", err, res, out.String())
 	}
@@ -235,8 +235,8 @@ func TestInterimSnapshotsWaitReadyOrFail(t *testing.T) {
 		_ = unstructured.SetNestedField(s.Object, "50Gi", "status", "restoreSize")
 	})
 	var out bytes.Buffer
-	opts := interimSnapshotOptions{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, System: true, Wait: 5 * time.Second, Poll: 5 * time.Millisecond, Now: interimNow}
-	res, err := takeInterimSnapshots(ctx, &out, c, opts)
+	opts := Options{Class: "oci-bv", SnapshotClass: "oci-bv-backup", Keep: 7, System: true, Wait: 5 * time.Second, Poll: 5 * time.Millisecond, Now: interimNow}
+	res, err := Take(ctx, &out, c, opts)
 	if err != nil {
 		t.Fatalf("ready: %v\n%s", err, out.String())
 	}
@@ -255,7 +255,7 @@ func TestInterimSnapshotsWaitReadyOrFail(t *testing.T) {
 		_ = unstructured.SetNestedField(s.Object, "the provider refused the backup", "status", "error", "message")
 	})
 	out.Reset()
-	res, err = takeInterimSnapshots(ctx, &out, c, opts)
+	res, err = Take(ctx, &out, c, opts)
 	if err == nil || !strings.Contains(err.Error(), "2 of 3 snapshots did not complete") {
 		t.Fatalf("failures must fail the run: %v\n%s", err, out.String())
 	}
@@ -274,7 +274,7 @@ func TestInterimSnapshotsWaitReadyOrFail(t *testing.T) {
 	// operator looks again.
 	out.Reset()
 	opts.Wait = 20 * time.Millisecond
-	res, err = takeInterimSnapshots(context.Background(), &out, interimTestClient(t), opts)
+	res, err = Take(context.Background(), &out, interimTestClient(t), opts)
 	if err == nil || res[0].Status != "in-progress" || !strings.Contains(out.String(), "still being taken after") {
 		t.Errorf("timeout: %v %+v\n%s", err, res, out.String())
 	}
@@ -298,7 +298,7 @@ func TestInterimSnapshotName(t *testing.T) {
 }
 
 func TestInterimSnapshotsList(t *testing.T) {
-	views, err := listInterimSnapshots(context.Background(), interimTestClient(t))
+	views, err := List(context.Background(), interimTestClient(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestInterimSnapshotsList(t *testing.T) {
 		t.Errorf("view: %+v", views[1])
 	}
 	var out bytes.Buffer
-	printInterimSnapshots(&out, views)
+	Print(&out, views)
 	if !strings.Contains(out.String(), "NAMESPACE") || !strings.Contains(out.String(), "vol-data-20261003-013000") {
 		t.Errorf("table:\n%s", out.String())
 	}
