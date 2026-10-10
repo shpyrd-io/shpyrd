@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
 
@@ -57,5 +61,29 @@ func TestConfirmProjectMaintenanceDialsTheProjectsFrontDoorAndGivesUp(t *testing
 	cancel()
 	if err := s.confirmProjectMaintenance(ctx, app); err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("a cancelled caller: %v", err)
+	}
+}
+
+// A rollback drains without insisting on the maintenance page: the door it
+// cannot reach is noted, the pause goes on, the project will be resumed.
+func TestRollbackDrainToleratesAnUnconfirmedMaintenancePage(t *testing.T) {
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer external.Close()
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "p-shop"}, Spec: shpyrdv1.AppSpec{Exposure: "external"}, Status: shpyrdv1.AppStatus{URL: "http://platform-shop.example"}}
+	record := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-project-operation", Namespace: "p-shop"}}
+	s, _ := newTestServer(t, nil, []client.Object{app, record})
+	s.opts.IngressServiceExternal = strings.TrimPrefix(external.URL, "http://")
+	old := maintenanceConfirmTimeout
+	maintenanceConfirmTimeout = time.Second
+	defer func() { maintenanceConfirmTimeout = old }()
+	op := &projectArchiveOperation{ID: "op1", Kind: "move", Move: &projectMove{}}
+	if err := s.drainProjectArchive(context.Background(), app, op, false); err != nil {
+		t.Fatalf("a rollback's drain must go on without the page: %v", err)
+	}
+	if len(op.Warnings) != 1 || !strings.Contains(op.Warnings[0], "not confirmed before the rollback") {
+		t.Errorf("the unconfirmed page is noted: %v", op.Warnings)
+	}
+	if err := s.drainProjectArchive(context.Background(), app, op, true); err == nil {
+		t.Error("a move's drain insists on the page")
 	}
 }

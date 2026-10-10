@@ -379,7 +379,7 @@ func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *p
 	if err := s.importArchiveAssets(ctx, app, op, b, m); err != nil {
 		return err
 	}
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return err
 	}
 	if err := s.createArchiveResources(ctx, app, op, m); err != nil {
@@ -421,7 +421,7 @@ func (s *Server) rollbackProjectArchive(ctx context.Context, app *shpyrdv1.App, 
 		}
 		return s.clearProjectArchive(ctx, app.Namespace, op)
 	}
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return err
 	}
 	resources := s.archiveParticipants(app, op, &op.Original, nil)

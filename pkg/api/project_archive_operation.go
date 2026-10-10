@@ -251,9 +251,17 @@ func (s *Server) projectIngressService(app *shpyrdv1.App) string {
 	return address
 }
 
-func (s *Server) drainProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
+// drainProjectArchive pauses the project: the front door confirmed to show
+// the maintenance page, the phase set, every pod of the project gone. A
+// rollback is not strict about the confirmation: it is on its way to
+// resuming the project, and a door it cannot reach must not keep it paused;
+// the pods still have to be gone before claims are swapped back.
+func (s *Server) drainProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, strict bool) error {
 	if err := s.confirmProjectMaintenance(ctx, app); err != nil {
-		return err
+		if strict || ctx.Err() != nil {
+			return err
+		}
+		op.Warnings = append(op.Warnings, "the maintenance page was not confirmed before the rollback: "+err.Error())
 	}
 	if err := s.projectArchivePhase(ctx, app, op, "paused"); err != nil {
 		return err

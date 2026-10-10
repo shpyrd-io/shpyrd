@@ -345,7 +345,7 @@ func (s *Server) waitMoveQuiescent(ctx context.Context, app *shpyrdv1.App, op *p
 	})
 }
 func (s *Server) runProjectMove(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation) error {
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return err
 	}
 	if err := s.fenceArchiveDatabases(ctx, app, op, op.Original.Databases); err != nil {
@@ -716,7 +716,7 @@ func (s *Server) rollbackProjectMove(ctx context.Context, app *shpyrdv1.App, op 
 		}
 		return s.clearProjectArchive(ctx, app.Namespace, op)
 	}
-	if err := s.drainProjectArchive(ctx, app, op); err != nil {
+	if err := s.drainProjectArchive(ctx, app, op, false); err != nil {
 		return err
 	}
 	if err := s.markMoveResources(ctx, app, op, true); err != nil {
