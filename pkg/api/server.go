@@ -76,6 +76,13 @@ type Options struct {
 	// IngressService is the cluster-internal address of the ingress
 	// controller, used to reach issuers published on the cluster domain.
 	IngressService string
+	// IngressServiceExternal and IngressServiceInternal are the two front
+	// doors' controller Services (RFC-0036), for calls that must reach a
+	// project the way its own ingress does: the maintenance check before a
+	// pause dials the one of the project's exposure. Empty falls back to
+	// IngressService.
+	IngressServiceExternal string
+	IngressServiceInternal string
 	// RegistryGC is the in-cluster registry's garbage collector (RFC-0059);
 	// nil when this replica does not run the controller.
 	RegistryGC RegistryGC
