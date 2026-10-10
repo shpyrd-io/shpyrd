@@ -77,7 +77,7 @@ type Options struct {
 // error. It is the whole main() of cmd/shpyrd-server.
 func Main(opts Options) {
 	if len(os.Args) > 1 && os.Args[1] == "project-volume" {
-		if err := projectarchive.VolumeMain(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+		if err := projectarchive.VolumeMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 			slog.Error("project volume operation failed", "error", err)
 			os.Exit(1)
 		}
