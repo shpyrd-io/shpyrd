@@ -1,16 +1,17 @@
-# Releases @shpyrd/ui in two runs around a person (design/ui/README.md,
-# "Releasing"). When the version in design/ui/package.json is one npm does
-# not have: its gates, then the version *staged* on npm with provenance,
-# which nobody can install until a maintainer approves it on npm with 2FA.
-# Once it is approved, the next run (by hand, or any later push) finds it on
-# npm and makes the ui-v<version> tag and a GitHub release with the
-# version's CHANGELOG section. A push that changes no version stages nothing.
+# Releases @shpyrd/ui in one run when the version in design/ui/package.json
+# is one npm does not have (design/ui/README.md, "Releasing"): its gates,
+# then the package packed once, its commit tagged ui-v<version>, a GitHub
+# release with the version's CHANGELOG section and that tarball, and the
+# same tarball *staged* on npm with provenance. Nobody can install it until
+# a maintainer approves it on npm with 2FA; the run's summary says how. A
+# push that changes no version releases nothing.
 #
 # Two jobs, so that no dependency's code runs where publishing is possible:
 # the gates install the dependencies (and run their install scripts) with a
 # token that can only read; the publishing job installs nothing but a pinned
-# npm, keeps no credentials in its checkout, and is the only one that may ask
-# for an OIDC token or write the repository.
+# npm, packs the tarball itself (the package needs nothing installed to
+# pack), keeps no credentials in its checkout, and is the only one that may
+# ask for an OIDC token or write the repository.
 #
 # npm trusts this workflow (trusted publishing, OIDC; set on the package's
 # npm settings: repository shpyrd-io/shpyrd, workflow ui-release.yml, no
@@ -23,8 +24,6 @@ on:
   push:
     branches: [main]
     paths: ["design/ui/**", ".github/workflows/ui-release.yml"]
-  # After a staged version is approved on npm: its tag and GitHub release.
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.plan.outputs.publish }}
-      git_tag: ${{ steps.plan.outputs.git_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,13 +64,13 @@ jobs:
   publish:
     name: "@shpyrd/ui to npm"
     needs: gates
-    # A new version to stage, or one on npm that may still lack its
-    # GitHub release.
-    if: needs.gates.outputs.git_tag != ''
+    if: needs.gates.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write # the ui-v tag and its GitHub release
       id-token: write # npm trusted publishing and provenance
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,45 +83,68 @@ jobs:
         id: plan
         working-directory: design/ui
         run: node scripts/release-plan.mjs
-      # A version already staged and not yet approved fails here: approve or
-      # reject it on npm first.
-      # The tag marks what npm gets: this run's own commit, which the next
-      # step packs. Made before staging, and accepted again when it is
-      # already there on this commit, so a re-run after a failed staging
-      # goes on. A version rejected on npm leaves it behind: delete it by
-      # hand (git push origin :refs/tags/ui-v<version>).
+      # Packed once, here, from this commit: the file the GitHub release
+      # carries is the file npm stages.
+      - name: Pack
+        id: pack
+        if: steps.plan.outputs.publish == 'true'
+        working-directory: design/ui
+        run: |
+          npm install --global npm@11.21.0 # has npm stage; trusted publishing needs 11.5.1 or later
+          node scripts/check-pack.mjs
+          mkdir -p "$RUNNER_TEMP/pack"
+          file=$(npm pack --pack-destination "$RUNNER_TEMP/pack" --json | node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename)')
+          echo "tarball=$RUNNER_TEMP/pack/$file" >> "$GITHUB_OUTPUT"
+      # The tag marks what npm gets: this run's own commit, which GitHub
+      # always lets this workflow tag. Accepted again when it is already
+      # there on this commit, so a re-run goes on.
       - name: Tag the commit npm gets
         if: steps.plan.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.git_tag }}
         run: |
           at=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null || true)
           if [ -z "$at" ]; then
             gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" > /dev/null
           elif [ "$at" != "$GITHUB_SHA" ]; then
-            echo "::error title=$TAG is on another commit::$TAG points at $at, not at this run's $GITHUB_SHA. If that version was rejected on npm, delete the tag (git push origin :refs/tags/$TAG) and run again."
+            echo "::error title=$TAG is on another commit::$TAG points at $at, not at this run's $GITHUB_SHA. If that version was rejected on npm, delete its GitHub release and tag (gh release delete $TAG --cleanup-tag) and run again."
             exit 1
           fi
-      - name: Stage on npm
-        if: steps.plan.outputs.publish == 'true'
-        working-directory: design/ui
-        run: |
-          npm install --global npm@11.21.0 # has npm stage; trusted publishing needs 11.5.1 or later
-          npm stage publish --access public --provenance --tag "${{ steps.plan.outputs.dist_tag }}"
-          echo "::notice title=@shpyrd/ui ${{ steps.plan.outputs.version }} is staged::Approve it on npm (the package's page, or npm stage approve), then run this workflow again for its GitHub release. Rejecting it instead? Delete its tag too."
-      # Only for a version npm has, that is approved, from the tag its
-      # staging made. Never the repository's latest release: that is the
-      # CLI's, which the install script follows. Made only when missing, so
-      # every later run leaves it alone.
+      # Never the repository's latest release: that is the CLI's, which the
+      # install script follows. Made only when missing, so a re-run goes on.
       - name: GitHub release
-        if: steps.plan.outputs.publish == 'false' && steps.plan.outputs.git_tag != ''
+        if: steps.plan.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.git_tag }}
           VERSION: ${{ steps.plan.outputs.version }}
           NOTES: ${{ steps.plan.outputs.notes_file }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
           PRERELEASE: ${{ steps.plan.outputs.dist_tag == 'next' && '--prerelease' || '' }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 && exit 0
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" --latest=false $PRERELEASE
+          gh release create "$TAG" "$TARBALL" --repo "$GITHUB_REPOSITORY" --verify-tag --title "@shpyrd/ui $VERSION" --notes-file "$NOTES" --latest=false $PRERELEASE
+      # Last: the one step a re-run cannot repeat. A version already staged
+      # and not yet approved fails here: approve or reject it on npm first.
+      - name: Stage on npm
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          DIST_TAG: ${{ steps.plan.outputs.dist_tag }}
+        run: npm stage publish "$TARBALL" --access public --provenance --tag "$DIST_TAG"
+      - name: How to approve it
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.git_tag }}
+        run: |
+          {
+            echo "### @shpyrd/ui $VERSION is staged on npm"
+            echo
+            echo "It is **not installable yet**. Approve it with 2FA:"
+            echo
+            echo "- npmjs.com → @shpyrd/ui → **Staged Packages** → **Approve**, or"
+            echo "- \`npm stage list @shpyrd/ui\`, then \`npm stage approve <id>\`"
+            echo
+            echo "Rejecting it instead? Also delete its GitHub release and tag: \`gh release delete $TAG --cleanup-tag\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=@shpyrd/ui $VERSION is staged::Approve it on npm; the run's summary says how."

@@ -61,11 +61,24 @@ describe("the release workflow", () => {
     expect(publish.indexOf("- name: Tag the commit npm gets")).toBeLessThan(publish.indexOf("- name: Stage on npm"));
   });
 
-  it("makes the GitHub release only for a version npm has, that is, approved, and only from that tag", () => {
+  it("packs once, in the job that installs nothing, and checks what ships there", () => {
     const publish = job("publish");
-    expect(publish).toMatch(/- name: GitHub release\n\s+if: steps\.plan\.outputs\.publish == 'false'/);
-    expect(publish).toMatch(/gh release create[^\n]*--verify-tag/);
+    expect(publish).toMatch(/node scripts\/check-pack\.mjs\n\s+mkdir -p "\$RUNNER_TEMP\/pack"\n\s+file=\$\(npm pack /);
+    expect(publish.match(/npm pack /g)).toHaveLength(1);
+  });
+
+  it("gives the GitHub release and npm the same tarball, from the tag on this commit", () => {
+    const publish = job("publish");
+    expect(publish).toMatch(/gh release create "\$TAG" "\$TARBALL"[^\n]*--verify-tag/);
     expect(publish).not.toMatch(/gh release create[^\n]*--target/);
+    expect(publish).toMatch(/npm stage publish "\$TARBALL"/);
+  });
+
+  it("stages last, the one step a re-run cannot repeat", () => {
+    const publish = job("publish");
+    const order = ["- name: Pack", "- name: Tag the commit npm gets", "- name: GitHub release", "- name: Stage on npm"].map((s) => publish.indexOf(s));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
   });
 
   it("makes the GitHub release only when it is missing, so a re-run does not fail on it", () => {

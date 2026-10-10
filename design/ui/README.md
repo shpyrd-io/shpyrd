@@ -52,15 +52,19 @@ Changes are collected, not released one by one: each change to `src/`
 adds a line under `## Unreleased` in `CHANGELOG.md` (a breaking one starts
 with `**Breaking:**`). A release is a pull request of its own that turns
 `## Unreleased` into the version's section and sets `package.json`'s
-version. Merging it stages the version: `.github/workflows/ui-release.yml`
-sees a version npm does not have, runs the library's gates, tags the
-commit it packs `ui-v<version>` and *stages* it on npm, where nobody can
-install it yet. A maintainer approves it on npm, with two-factor
-authentication; only then is it published. Run the workflow again after
-that (`gh workflow run ui-release.yml`): it makes the GitHub release from
-the tag, with the section. A staged version rejected on npm leaves its tag
-behind: delete it (`git push origin :refs/tags/ui-v<version>`). The
-workflow can never publish by itself: npm trusts it for staging only.
+version. Merging it releases, in two steps:
+
+1. `.github/workflows/ui-release.yml` sees a version npm does not have,
+   runs the library's gates, packs the package once, tags its commit
+   `ui-v<version>`, makes a GitHub release with the section and that
+   tarball, and *stages* the same tarball on npm, where nobody can
+   install it yet.
+2. A maintainer approves it on npm, with two-factor authentication (the
+   run's summary says how). Only then is it published.
+
+A staged version rejected on npm leaves its GitHub release and tag
+behind: delete both (`gh release delete ui-v<version> --cleanup-tag`).
+The workflow can never publish by itself: npm trusts it for staging only.
 
 The steps, for a person or an agent: `design/DESIGN_FOR_AGENT.md`,
 "Release the library".
