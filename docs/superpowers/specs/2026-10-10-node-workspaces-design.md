@@ -139,8 +139,12 @@ Otherwise it fails detection and ordinary Node apps keep Paketo.
    <path>/package.json, or a Procfile". A `Procfile` (Paketo's procfile
    buildpack runs after) replaces `web` and may add other types.
 
-Not in this version: removing dev dependencies from the image (it works
-without it; the image is larger).
+7. **Dev dependencies** leave the image once the build is done (the root's
+   tools included), from the managers' caches, without the network: `npm
+   prune --omit=dev`; pnpm reinstalls with `--prod --offline`; Yarn 4
+   `workspaces focus --all --production`; Yarn 1 reinstalls with
+   `--production`. Yarn 2 and 3, without `focus`, keep them and say so.
+   `BP_KEEP_DEV_DEPENDENCIES=true` keeps them, the name RFC-0079 gives it.
 
 ## 3. Platform plumbing
 
@@ -210,8 +214,6 @@ without it; the image is larger).
 
 ## Risks
 
-- **Image size**: dev dependencies stay in the image. Pruning is a later
-  step.
 - **corepack** downloads pnpm and Yarn at build time: a build needs the
   network to reach their registry (as installs already do).
 - **Yarn 1** installs the whole workspace: slower for large monorepos.

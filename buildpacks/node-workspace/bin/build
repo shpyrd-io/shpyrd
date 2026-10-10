@@ -3,7 +3,7 @@
 # app's directory, so node_modules and the build's output stay where the
 # package expects them, and records its start script as the web process
 # (shpyrd #145). The install keeps dev dependencies whatever NODE_ENV says:
-# the build needs them. pnpm and Yarn come through corepack, at the version
+# the build needs them; they leave the image after it. pnpm and Yarn come through corepack, at the version
 # packageManager names; Node from 25 on has no corepack, and then it is
 # installed. The managers' downloads are cached between builds.
 set -euo pipefail
@@ -74,6 +74,27 @@ if [ "$has_build" = 1 ]; then
     npm) npm run build --workspace "$path" ;;
     pnpm) pnpm --filter "$name" run build ;;
     yarn | yarn1) yarn workspace "$name" run build ;;
+  esac
+fi
+
+# The image keeps what the app runs with: dev dependencies (the root's
+# tools included) go once the build is done, from the cache, without the
+# network. BP_KEEP_DEV_DEPENDENCIES=true keeps them (RFC-0079's name).
+if [ "${BP_KEEP_DEV_DEPENDENCIES:-}" = true ]; then
+  echo "shpyrd: keeping dev dependencies (BP_KEEP_DEV_DEPENDENCIES=true)"
+else
+  echo "shpyrd: removing dev dependencies"
+  case "$manager" in
+    npm) npm prune --omit=dev --no-audit --no-fund ;;
+    pnpm) pnpm install --frozen-lockfile --prod --offline --config.confirmModulesPurge=false --filter "$name..." < /dev/null ;;
+    yarn)
+      if yarn workspaces focus --help > /dev/null 2>&1; then
+        yarn workspaces focus --all --production
+      else
+        echo "shpyrd: this Yarn has no workspaces focus (Yarn 4 has it); dev dependencies stay"
+      fi
+      ;;
+    yarn1) yarn install --frozen-lockfile --production=true --prefer-offline --non-interactive ;;
   esac
 fi
 

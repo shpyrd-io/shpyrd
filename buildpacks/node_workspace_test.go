@@ -1,6 +1,9 @@
 package buildpacks
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,10 +65,15 @@ func greetingWorkspace(root map[string]string) map[string]string {
 	files := map[string]string{
 		"packages/greeting/package.json": `{"name":"greeting","version":"1.0.0","main":"index.js"}`,
 		"packages/greeting/index.js":     `module.exports = "hello from greeting";`,
+		"packages/lib/package.json":      `{"name":"lib","version":"1.0.0","main":"index.js"}`,
+		"packages/lib/index.js":          `module.exports = "lib";`,
 		"apps/web/package.json": `{"name":"web","version":"1.0.0","private":true,
-			"devDependencies":{"greeting":"1.0.0"},
+			"dependencies":{"lib":"1.0.0","webprod":"file:../../vendor/webprod.tgz"},
+			"devDependencies":{"greeting":"1.0.0","webdev":"file:../../vendor/webdev.tgz"},
 			"scripts":{"build":"node -e \"require('fs').writeFileSync('built.txt', require('greeting'))\"","start":"node server.js"}}`,
 		"apps/web/server.js": `console.log("up")`,
+		"vendor/webprod.tgz": packageTarball("webprod"),
+		"vendor/webdev.tgz":  packageTarball("webdev"),
 	}
 	for k, v := range root {
 		files[k] = v
@@ -73,10 +81,52 @@ func greetingWorkspace(root map[string]string) map[string]string {
 	return files
 }
 
+// resolves says whether node, run in dir, finds module.
+func resolves(t *testing.T, dir, module string) bool {
+	t.Helper()
+	_, err := run(t, dir, nil, "node", "-e", "require.resolve('"+module+"')")
+	return err == nil
+}
+
+// packageTarball is a package as a registry serves it, for file:
+// dependencies: workspace packages are always linked, whatever kind of
+// dependency they are, so pruning shows only on packages from outside.
+func packageTarball(name string) string {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for file, body := range map[string]string{
+		"package/package.json": `{"name":"` + name + `","version":"1.0.0","main":"index.js"}`,
+		"package/index.js":     `module.exports = "` + name + `";`,
+	} {
+		_ = tw.WriteHeader(&tar.Header{Name: file, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write([]byte(body))
+	}
+	_ = tw.Close()
+	_ = zw.Close()
+	return buf.String()
+}
+
+// pruned checks the image keeps the package's dependencies and drops the
+// dev ones, the root's included.
+func pruned(t *testing.T, app string) {
+	t.Helper()
+	web := filepath.Join(app, "apps/web")
+	if !resolves(t, web, "webprod") {
+		t.Error("a production dependency was pruned")
+	}
+	for _, dev := range []string{"webdev", "rootdev"} {
+		if resolves(t, web, dev) {
+			t.Errorf("dev dependency %s is still there", dev)
+		}
+	}
+}
+
 func withRootTool(files map[string]string, version string) map[string]string {
 	files["packages/tool/package.json"] = `{"name":"tool","version":"1.0.0","main":"index.js"}`
 	files["packages/tool/index.js"] = `module.exports = "tool";`
-	files["package.json"] = strings.Replace(files["package.json"], `"private":true`, `"private":true,"devDependencies":{"tool":"`+version+`"}`, 1)
+	files["vendor/rootdev.tgz"] = packageTarball("rootdev")
+	files["package.json"] = strings.Replace(files["package.json"], `"private":true`, `"private":true,"devDependencies":{"tool":"`+version+`","rootdev":"file:vendor/rootdev.tgz"}`, 1)
 	files["apps/web/package.json"] = strings.Replace(files["apps/web/package.json"], `\"require('fs')`, `\"require('tool'); require('fs')`, 1)
 	return files
 }
@@ -99,6 +149,7 @@ func TestNodeWorkspaceNpm(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(app, "apps/web/built.txt")); string(b) != "hello from greeting" {
 		t.Errorf("the package's build did not run in place: %q\n%s", b, out)
 	}
+	pruned(t, app)
 	launch, _ := os.ReadFile(filepath.Join(layers, "launch.toml"))
 	for _, want := range []string{`type = "web"`, `"npm"`, `"start"`, `"apps/web"`, "default = true"} {
 		if !strings.Contains(string(launch), want) {
@@ -208,6 +259,7 @@ func TestNodeWorkspaceOtherManagers(t *testing.T) {
 			files := greetingWorkspace(root)
 			if tc.lock == "pnpm" {
 				files["apps/web/package.json"] = strings.Replace(files["apps/web/package.json"], `"greeting":"1.0.0"`, `"greeting":"workspace:*"`, 1)
+				files["apps/web/package.json"] = strings.Replace(files["apps/web/package.json"], `"lib":"1.0.0"`, `"lib":"workspace:*"`, 1)
 			}
 			if tc.rootTool {
 				version := "1.0.0"
@@ -237,6 +289,10 @@ func TestNodeWorkspaceOtherManagers(t *testing.T) {
 			}
 			if b, _ := os.ReadFile(filepath.Join(app, "apps/web/built.txt")); string(b) != "hello from greeting" {
 				t.Errorf("build output = %q\n%s", b, out)
+			}
+			// Under Plug'n'Play nothing resolves without Yarn's loader.
+			if tc.rootTool {
+				pruned(t, app)
 			}
 			launch, _ := os.ReadFile(filepath.Join(layers, "launch.toml"))
 			if !strings.Contains(string(launch), `type = "web"`) || !strings.Contains(string(launch), `"start"`) {
@@ -315,5 +371,23 @@ func TestNodeWorkspaceQuotesTheStartCommand(t *testing.T) {
 	launch, _ := os.ReadFile(filepath.Join(layers, "launch.toml"))
 	if !strings.Contains(string(launch), `"apps/we\"b"`) {
 		t.Errorf("launch.toml:\n%s", launch)
+	}
+}
+
+// BP_KEEP_DEV_DEPENDENCIES=true keeps them, as RFC-0079 names it.
+func TestNodeWorkspaceKeepsDevDependenciesWhenAsked(t *testing.T) {
+	needNode(t)
+	app := t.TempDir()
+	writeFiles(t, app, withRootTool(greetingWorkspace(map[string]string{
+		"package.json": `{"name":"root","private":true,"workspaces":["apps/*","packages/*"]}`,
+	}), "1.0.0"))
+	if out, err := run(t, app, nil, "npm", "install", "--package-lock-only", "--no-audit", "--no-fund"); err != nil {
+		t.Fatalf("lockfile: %v %s", err, out)
+	}
+	if out, err, _ := buildIn(t, app, "apps/web", "BP_KEEP_DEV_DEPENDENCIES=true"); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	if !resolves(t, filepath.Join(app, "apps/web"), "webdev") {
+		t.Error("dev dependencies pruned though asked to keep them")
 	}
 }
