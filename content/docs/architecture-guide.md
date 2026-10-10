@@ -17,7 +17,7 @@ On shpyrd cloud the platform is run for you: see [Getting started](/docs/getting
 | [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) + an OCI DNS-01 solver (`oci` profile, optional) | publishes records for every hostname and issues the platform's wildcard certificate |
 | [kpack](https://github.com/buildpacks-community/kpack) + [Paketo buildpacks](https://paketo.io) | builds source into images inside the cluster; polls Git branches for new commits |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | Prometheus (its data on a volume sized by `SHPYRD_MONITORING_SIZE` on cloud profiles), Grafana, node-exporter, kube-state-metrics |
-| local-path provisioner (`shpyrd-local`) | project volumes and databases on the node's own disk, in every profile |
+| local-path provisioner (`shpyrd-local`) | project volumes and databases on the node's own disk: the local profile, and the disks made on a cloud profile before block storage became the default |
 | [CloudNativePG](https://cloudnative-pg.io) + barman-cloud (extension `postgres`) | PostgreSQL databases, their WAL archive and base backups |
 | [Dex](https://dexidp.io) (extension `auth-local`) | the OpenID Connect issuer for accounts and company sign-in connectors |
 | [KEDA](https://keda.sh) + its HTTP add-on (extension `sleep`) | web processes that scale to zero and wake on the first request |

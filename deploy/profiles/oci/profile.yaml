@@ -1,8 +1,13 @@
 name: oci
 description: Oracle Cloud (OKE) with a public load balancer, Let's Encrypt certificates and the in-cluster registry
 vars:
-  # Project data uses the node disk. Existing claims keep their storage class.
-  SHPYRD_PROJECT_STORAGE_CLASS: shpyrd-local
+  # Project disks and databases are provider block volumes (SHPYRD_STORAGE_CLASS
+  # below, with its minimum size and its snapshots): they follow their process
+  # or database to another node, so a node can be drained or lost without
+  # losing data. Claims that exist keep their class; shpyrd-local (the node's
+  # disk) stays installed for them until the last one is migrated.
+  SHPYRD_PROJECT_STORAGE_CLASS: ""
+  SHPYRD_DATABASE_STORAGE_CLASS: ""
   # Pass --domain (a wildcard DNS record you own) and the address
   # (contrib/oci/terraform creates the cluster and prints them):
   #   --set SHPYRD_ACME_EMAIL=you@example.com --set SHPYRD_LB_IP=<reserved address>

@@ -2,39 +2,66 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
-const LocalStorageClass = "shpyrd-local"
+const LocalStorageClass = install.LocalStorageClass
 const localDataProtection = "shpyrd.io/local-data-protection"
 const scaleDownDisabled = "cluster-autoscaler.kubernetes.io/scale-down-disabled"
 
 // LocalStorageProtection prevents ordinary autoscaler consolidation from
-// destroying the only copy of local data. Retained migration sources count
-// too. It cannot protect against machine/disk failure or an operator deleting
-// a node, and never removes a protection annotation owned by someone else.
+// destroying the only copy of local data: a node that holds a node-local
+// PersistentVolume (whatever the volume's phase; a Released one still holds
+// the bytes) carries scale-down-disabled until the last such volume is gone.
+// It cannot protect against machine/disk failure or an operator deleting a
+// node, and never removes a protection annotation owned by someone else.
+//
+// It runs as a controller fed by the PersistentVolume and Node informers:
+// an event on a node-local volume or on a node is one reconcile of the
+// whole picture, which is small (nodes × local volumes). With no node-local
+// volume left it has nothing to do and nothing to watch for.
 type LocalStorageProtection struct{ Client client.Client }
 
-func (r *LocalStorageProtection) NeedLeaderElection() bool { return true }
-func (r *LocalStorageProtection) Start(ctx context.Context) error {
-	tick := time.NewTicker(10 * time.Second)
-	defer tick.Stop()
-	for {
-		// A temporary API failure must leave existing protection intact.
-		if err := r.reconcile(ctx); err != nil {
-			log.FromContext(ctx).Error(err, "protect nodes containing local data")
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-tick.C:
-		}
-	}
+// protectionRequest is the one key every event maps to, so a burst of
+// events coalesces into one reconcile.
+var protectionRequest = reconcile.Request{NamespacedName: types.NamespacedName{Name: "local-data-protection"}}
+
+func toProtection(context.Context, client.Object) []reconcile.Request {
+	return []reconcile.Request{protectionRequest}
 }
+
+func isLocalPV(o client.Object) bool {
+	pv, ok := o.(*corev1.PersistentVolume)
+	return ok && pv.Spec.StorageClassName == LocalStorageClass
+}
+
+// SetupWithManager registers the controller: node-local volumes (created,
+// released, deleted) and nodes (joined, relabelled, annotated) trigger it.
+func (r *LocalStorageProtection) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("local-data-protection").
+		Watches(&corev1.PersistentVolume{}, handler.EnqueueRequestsFromMapFunc(toProtection), builder.WithPredicates(predicate.NewPredicateFuncs(isLocalPV))).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(toProtection)).
+		Complete(r)
+}
+
+// Reconcile recomputes which nodes hold local data and patches the ones
+// whose protection changed. A failing patch is retried with backoff; the
+// protection that exists stays as it is meanwhile.
+func (r *LocalStorageProtection) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.Result, error) {
+	return ctrl.Result{}, r.reconcile(ctx)
+}
+
 func (r *LocalStorageProtection) reconcile(ctx context.Context) error {
 	var volumes corev1.PersistentVolumeList
 	if err := r.Client.List(ctx, &volumes); err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"io"
 	"net/http"
 	"os"
@@ -87,7 +88,18 @@ func (s *Server) moveProject(c *gin.Context) {
 		return
 	}
 	for _, claim := range move.Claims {
-		if claim.RetainSource && !req.MigrateToLocal {
+		if !claim.RetainSource {
+			continue
+		}
+		// A move copies node-local data. On a profile whose disks are
+		// block volumes there is nothing to copy, and copying a block disk
+		// onto a node's disk is the direction this platform retires: never,
+		// whatever the request says.
+		if install.ProjectStorageClass(s.vars) != controller.LocalStorageClass {
+			abort(c, http.StatusConflict, errors.New("this project's disks are provider block volumes that follow their processes: there is nothing to copy, so the scheduler places them (drain the node, or clear the project's pins); a move only copies node-local disks"))
+			return
+		}
+		if !req.MigrateToLocal {
 			abort(c, http.StatusConflict, errors.New("provider volumes require explicit migration to local storage"))
 			return
 		}

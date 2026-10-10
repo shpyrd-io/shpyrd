@@ -111,6 +111,11 @@ func (s *Server) projectPlacement(ctx context.Context, app *shpyrdv1.App) ([]pla
 				}
 			}
 		}
+		// A move copies node-local data between nodes. On a node-local
+		// profile a claim on another class has to be migrated first; on a
+		// profile whose disks are provider block volumes nothing needs
+		// copying: the disk follows the process, a move is a reschedule.
+		nodeLocalProfile := install.ProjectStorageClass(s.vars) == controller.LocalStorageClass
 		classes := map[string]bool{}
 		for _, name := range group.Claims {
 			for _, claim := range claims.Items {
@@ -120,7 +125,7 @@ func (s *Server) projectPlacement(ctx context.Context, app *shpyrdv1.App) ([]pla
 						class = *claim.Spec.StorageClassName
 					}
 					classes[class] = true
-					if class != controller.LocalStorageClass {
+					if nodeLocalProfile && class != controller.LocalStorageClass {
 						group.NeedsMigration = true
 					}
 				}

@@ -267,6 +267,12 @@ jobs:
           ./bin/shpyrd logs --project hello-world -n 5 --context kind-ci
           ./bin/shpyrd volumes create data --size 1Gi --project api --context kind-ci
           ./bin/shpyrd volumes list --project api --context kind-ci
+          # The local profile keeps project data on the node's disk: the claim is shpyrd-local.
+          for i in $(seq 1 30); do
+            class=$(kubectl --context kind-ci get pvc -A -l shpyrd.io/volume=data -o jsonpath='{.items[0].spec.storageClassName}' 2>/dev/null || true)
+            [ "$class" = shpyrd-local ] && break; sleep 2
+          done
+          [ "$class" = shpyrd-local ] || { echo "volume claim class is '$class', want shpyrd-local"; kubectl --context kind-ci get pvc -A; exit 1; }
           ./bin/shpyrd teams create platform --platform-role platform-admin --member ci@example.com --context kind-ci
           ./bin/shpyrd members add hello-world --user dev@example.com --role developer --context kind-ci
           ./bin/shpyrd members add hello-world --team platform --role user --context kind-ci

@@ -3,8 +3,10 @@ package controller
 import (
 	"context"
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"reflect"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,13 +77,65 @@ func TestLocalDataProtectionPreservesOperatorOwnedProtection(t *testing.T) {
 }
 func TestLocalVolumeAffinityKeepsSharedProcessesTogether(t *testing.T) {
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "project"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {Volumes: []shpyrdv1.VolumeMount{{Name: "shared"}}}, "worker": {Volumes: []shpyrdv1.VolumeMount{{Name: "shared"}}}}}}
+	local := []resolvedMount{{Name: "shared", Class: LocalStorageClass}}
 	a, b := &corev1.PodTemplateSpec{}, &corev1.PodTemplateSpec{}
-	localVolumeAffinity(app, "web", a)
-	localVolumeAffinity(app, "worker", b)
+	localVolumeAffinity(app, "web", a, local)
+	localVolumeAffinity(app, "worker", b, local)
 	if a.Labels["shpyrd.io/placement-group"] == "" || !reflect.DeepEqual(a.Spec.Affinity, b.Spec.Affinity) {
 		t.Fatal("shared volume consumers can diverge")
 	}
 	if a.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] != "false" {
 		t.Fatal("local workload can be evicted")
+	}
+}
+
+// The gate is the claim's class (RFC-0060): a process on block storage, or
+// on a claim that does not exist yet, is not pinned to a node, and a pin
+// left from a node-local past is cleared.
+func TestLocalVolumeAffinityIsKeyedOnTheClaim(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "project"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {Volumes: []shpyrdv1.VolumeMount{{Name: "data"}}}}}}
+	for _, class := range []string{"oci-bv", ""} {
+		pod := &corev1.PodTemplateSpec{}
+		localVolumeAffinity(app, "web", pod, []resolvedMount{{Name: "data", Class: class}})
+		if pod.Labels["shpyrd.io/placement-group"] != "" || pod.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] != "" || pod.Spec.Affinity != nil {
+			t.Errorf("class %q: pinned a process whose disk follows it (labels %v, annotations %v, affinity %v)", class, pod.Labels, pod.Annotations, pod.Spec.Affinity)
+		}
+	}
+	// Pinned while node-local, then migrated to block storage: the pin goes.
+	pod := &corev1.PodTemplateSpec{}
+	localVolumeAffinity(app, "web", pod, []resolvedMount{{Name: "data", Class: LocalStorageClass}})
+	if pod.Labels["shpyrd.io/placement-group"] == "" {
+		t.Fatal("a node-local mount must pin")
+	}
+	localVolumeAffinity(app, "web", pod, []resolvedMount{{Name: "data", Class: "oci-bv"}})
+	if pod.Labels["shpyrd.io/placement-group"] != "" || pod.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] != "" || pod.Spec.Affinity != nil {
+		t.Errorf("the pin of a migrated process was not cleared: labels %v, annotations %v, affinity %v", pod.Labels, pod.Annotations, pod.Spec.Affinity)
+	}
+}
+
+// Through the reconciler: the Deployment of a process on a node-local claim
+// carries the pin; on a block claim it does not, whatever the profile.
+func TestLocalClaimGatesPlacementThroughReconciler(t *testing.T) {
+	for _, tc := range []struct {
+		class  string
+		pinned bool
+	}{{LocalStorageClass, true}, {"oci-bv", false}, {"", false}} {
+		app := sampleApp("gate")
+		app.Spec.Image = "registry.test/v@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		app.Spec.Processes = map[string]shpyrdv1.Process{"web": {Volumes: []shpyrdv1.VolumeMount{{Name: "data", Path: "/data"}}}}
+		vol := testVolume("data", "1Gi", corev1.ReadWriteOnce)
+		vol.Namespace = "app-gate"
+		vol.Status.StorageClass = tc.class
+		r, c := newTestReconciler(t, app, vol)
+		runReconcile(t, r, app)
+		dep := &appsv1.Deployment{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-gate", Name: "gate-web"}, dep); err != nil {
+			t.Fatal(err)
+		}
+		tpl := dep.Spec.Template
+		pinned := tpl.Labels["shpyrd.io/placement-group"] != "" && tpl.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] == "false" && tpl.Spec.Affinity != nil
+		if pinned != tc.pinned {
+			t.Errorf("claim class %q: pinned=%v, want %v (labels %v, affinity %v)", tc.class, pinned, tc.pinned, tpl.Labels, tpl.Spec.Affinity)
+		}
 	}
 }

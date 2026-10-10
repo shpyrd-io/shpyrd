@@ -485,7 +485,6 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			RegistryDeletes:       os.Getenv("SHPYRD_REGISTRY_IP") != "",
 			BuildCacheRegistry:    os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
 			AppsPool:              os.Getenv("SHPYRD_APPS_POOL"),
-			LocalStorage:          install.ProjectStorageClass(os.Getenv) == controller.LocalStorageClass,
 			PlatformPool:          os.Getenv("SHPYRD_PLATFORM_POOL"),
 			WildcardTLS:           os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
 			IngressClassExternal:  envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),
@@ -505,8 +504,8 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
 	}
-	if err := mgr.Add(&controller.LocalStorageProtection{Client: mgr.GetClient()}); err != nil {
-		return nil, err
+	if err := (&controller.LocalStorageProtection{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("local data protection: %w", err)
 	}
 	volumes := &controller.VolumeReconciler{
 		Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"),

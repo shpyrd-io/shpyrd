@@ -119,7 +119,7 @@ shpyrd-ctl cluster snapshots take --class oci-bv --system   # the platform's own
 shpyrd-ctl cluster snapshots list
 ```
 
-On the cloud profiles the platform takes these nightly (01:30 UTC, the newest 7 kept per disk; the `platform-snapshots` job); the commands take one now and list them. These are the disks still on provider block storage: the platform's own, and project disks made before project storage moved to the node's disk. A snapshot is consistent at the block level. A database's own backups are the real backup; the snapshot is the fallback. Project volumes on the node's own disk (`shpyrd-local`) have no provider snapshots.
+On the cloud profiles the platform takes these nightly (01:30 UTC, the newest 7 kept per disk; the `platform-snapshots` job); the commands take one now and list them. These are the disks on provider block storage: the platform's own, and the project disks and databases of the cloud profiles. A snapshot is consistent at the block level. A database's own backups are the real backup; the snapshot is the fallback. Project volumes on the node's own disk (`shpyrd-local`: the local profile, and disks made on a cloud profile before block storage) have no provider snapshots.
 
 ## Restoring
 

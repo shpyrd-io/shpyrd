@@ -36,11 +36,11 @@ processes:
 
 ### Where the bytes live
 
-A project's volumes live on the disk of the node that runs them (the `shpyrd-local` storage class), in every profile: on shpyrd cloud, and on a cluster you run. A local disk is fast and costs nothing extra; the price is that the data is on one node. The processes that mount a volume run on that node, and the platform keeps the cluster's autoscaler from removing a node that holds project data. Databases and persistent stores keep their data the same way.
+On shpyrd cloud and on the Oracle Cloud and AWS profiles, a volume is a provider block volume (`oci-bv`, `gp3`): it starts at the provider's minimum (50 GB on Oracle Cloud; the size you ask for is rounded up and the answer says so), it can grow, it has nightly snapshots, and it follows its process to another node, so a node can be drained or lost without losing data. Databases and persistent stores keep their data the same way.
 
-Because the data is on one node, backups are what protect it: a database's own [backups](/docs/databases#backups-and-point-in-time-recovery), and for volumes, the project archive a cluster admin exports from the console (a project's volumes' files and its databases, in one portable file). The console also moves a project, data included, to another node.
+On the local profile (a kind cluster on your machine) volumes live on the node's own disk (the `shpyrd-local` class): no minimum, no resize, no snapshots, and the processes that mount one run on that node. Volumes made on a cloud profile before it moved to block storage are still on the node's disk; they keep their class until a cluster admin migrates them, and the platform keeps the autoscaler from removing a node that holds such data.
 
-Volumes made before project storage moved to the node's disk keep their storage class (provider block storage or a network filesystem) until they are migrated.
+Backups protect the bytes either way: a database's own [backups](/docs/databases#backups-and-point-in-time-recovery), the nightly snapshots of block volumes, and the project archive a cluster admin exports from the console (a project's volumes' files and its databases, in one portable file).
 
 ### Single-instance and shared volumes
 
@@ -48,7 +48,7 @@ shpyrd enforces who can mount a disk, so you cannot end up with a rollout that w
 
 | | Single-instance (default) | Shared (`--shared`) |
 | --- | --- | --- |
-| Who mounts it | one process type, running **one instance** | any number of instances and process types, on the volume's node |
+| Who mounts it | one process type, running **one instance** | any number of instances and process types |
 | Rollouts | stop, release the disk, start (a few seconds of downtime per deploy, no data risk) | rolling, as usual |
 | Good for | SQLite, uploads, caches, tool state | assets shared by several instances |
 | Not for | anything needing more than one instance | SQLite and other file-locking databases |
@@ -57,7 +57,7 @@ The rules are explained where they bite: `shpyrd scale web=3` on a process with 
 
 ### Size and status
 
-`shpyrd volumes list` shows the size, the mode, the status (`Pending: created; the disk is provisioned when a process mounts it`, then `Bound`, or `Failed` with the reason) and what mounts it. The size is what the volume needs on its node. A volume on the node's disk shares that disk's space and cannot be resized: `shpyrd volumes resize` explains that you grow the node's disk or move the project to a larger node. The access mode and storage class cannot change after creation.
+`shpyrd volumes list` shows the size, the mode, the status (`Pending: created; the disk is provisioned when a process mounts it`, then `Bound`, or `Failed` with the reason) and what mounts it. A block volume grows with `shpyrd volumes resize` (never below the provider minimum). A volume on the node's disk shares that disk's space and cannot be resized: `shpyrd volumes resize` explains that you grow the node's disk or move the project to a larger node. The access mode and storage class cannot change after creation.
 
 Any image user can write to a mounted volume: the platform hands the disk to a group every container in the instance belongs to, so a Dockerfile `USER` or a buildpack's non-root user needs no `chown` step.
 
@@ -65,7 +65,7 @@ Self-hosted: on the local profile the node is the kind container, so `shpyrd clu
 
 ### Snapshots
 
-Volumes on the node's disk have no provider snapshots: `shpyrd volumes snapshot` refuses them and points to the project's backups. Snapshots remain for volumes made earlier on provider block storage, where the profile supports them:
+Block volumes have snapshots where the profile supports them (Oracle Cloud and AWS); volumes on the node's disk have none: `shpyrd volumes snapshot` refuses them and points to the project's backups.
 
 ```shell
 shpyrd volumes snapshot data --name before-migration   # a point-in-time copy of the disk

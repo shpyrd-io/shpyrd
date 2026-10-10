@@ -1,8 +1,13 @@
 name: aws
 description: AWS (EKS) with Network Load Balancers, Let's Encrypt certificates, Route 53 and the in-cluster registry
 vars:
-  # Project data uses the node disk. Existing claims keep their storage class.
-  SHPYRD_PROJECT_STORAGE_CLASS: shpyrd-local
+  # Project disks and databases are provider block volumes (SHPYRD_STORAGE_CLASS
+  # below, with its minimum size and its snapshots): they follow their process
+  # or database to another node, so a node can be drained or lost without
+  # losing data. Claims that exist keep their class; shpyrd-local (the node's
+  # disk) stays installed for them until the last one is migrated.
+  SHPYRD_PROJECT_STORAGE_CLASS: ""
+  SHPYRD_DATABASE_STORAGE_CLASS: ""
   # Pass --domain (the Route 53 zone) and the ACME e-mail; contrib/aws/terraform
   # creates the cluster and prints the command:
   #   --set SHPYRD_ACME_EMAIL=you@example.com --dns aws --dns-zone-id <id> --dns-region <region>

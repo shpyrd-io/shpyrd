@@ -459,7 +459,7 @@ func setVolumeCondition(vol *shpyrdv1.Volume, status metav1.ConditionStatus, rea
 // RWO permits multiple pods on that node; the public Shared flag retains its
 // process/replica semantics. Never rewrite an already provisioned RWX claim.
 func claimMode(vol *shpyrdv1.Volume, class *string) corev1.PersistentVolumeAccessMode {
-	if class != nil && *class == "shpyrd-local" {
+	if class != nil && *class == LocalStorageClass {
 		return corev1.ReadWriteOnce
 	}
 	return vol.Mode()
