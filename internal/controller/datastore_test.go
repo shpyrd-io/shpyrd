@@ -409,6 +409,11 @@ func TestDatastoresFollowStorageProfile(t *testing.T) {
 	if size != "50Gi" || class != "oci-bv" {
 		t.Errorf("cnpg storage = %v", cluster.Object["spec"].(map[string]interface{})["storage"])
 	}
+	// A single instance has no disruption budget: a drain must be able to
+	// move it, since that is how its disk follows it to another node.
+	if pdb, found, _ := unstructured.NestedBool(cluster.Object, "spec", "enablePDB"); !found || pdb {
+		t.Errorf("single-instance cluster enablePDB = %v (found %v), want false", pdb, found)
+	}
 	_ = c.Get(context.Background(), key, pg)
 	if pg.Status.Storage != "50Gi" || pg.Spec.Storage.String() != "5Gi" {
 		t.Errorf("postgres status.storage = %q spec = %s", pg.Status.Storage, pg.Spec.Storage.String())

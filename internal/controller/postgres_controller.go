@@ -611,6 +611,13 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},
+		// CloudNativePG guards the primary with a PodDisruptionBudget. On a
+		// single instance that budget can never be met, so a node drain
+		// (the autoscaler, a node roll) waits on it forever; the instance
+		// restarts on another node either way, and a drain is how its disk
+		// follows it there. Clusters with replicas keep the budget: a drain
+		// then waits for a switchover, which is the point.
+		"enablePDB": instances(pg) > 1,
 	}
 	params := map[string]interface{}{}
 	for k, v := range postgresParameters(size) {
