@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -274,7 +275,20 @@ func TestMigrationRequiresOptInBeforePausing(t *testing.T) {
 	if err := s.apps.Create(ctx, node); err != nil {
 		t.Fatal(err)
 	}
+	// On a profile whose disks are block volumes a move copies nothing: the
+	// answer says so and does not ask for a migration to local storage.
 	response := do(t, s, "POST", "/api/cluster/project-archives/"+archiveProjectID(app)+"/move", `{"group":"volume:uploads","node":"target"}`, true)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "follow their processes") {
+		t.Fatalf("move of a block disk on a block profile: %d %s", response.Code, response.Body)
+	}
+	// On a node-local profile the provider disk must be migrated on purpose.
+	s.opts.Vars = func(key string) string {
+		if key == install.VarProjectStorageClass {
+			return install.LocalStorageClass
+		}
+		return ""
+	}
+	response = do(t, s, "POST", "/api/cluster/project-archives/"+archiveProjectID(app)+"/move", `{"group":"volume:uploads","node":"target"}`, true)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "explicit migration") {
 		t.Fatalf("migration opt-in: %d %s", response.Code, response.Body)
 	}

@@ -50,6 +50,12 @@ to take a backup before a risky release. Every provider has a variant of each.
   shared class until RFC-0041, no minimum, no snapshots. `oci`: `oci-bv` (balanced
   performance, expansion allowed), `shpyrd-fss` (OCI File Storage), `50Gi`, `oci-bv-backup`
   (incremental block volume backups). AWS (RFC-0035): `gp3`, `efs`, `1Gi`, `ebs-snapshot`.
+  Added later: `SHPYRD_PROJECT_STORAGE_CLASS` (project disks) and
+  `SHPYRD_DATABASE_STORAGE_CLASS` (Postgres and Redis data). Empty means the provider class
+  above with its minimum and snapshots; `shpyrd-local` keeps the data on the node's disk, as
+  the local profile does. Since 2026-10 the cloud profiles leave both empty (RFC-0081's
+  node-local default on the cloud profiles is withdrawn: a node's disk cannot follow a
+  drained or lost node); claims that exist keep their class.
 - The Volume controller, Postgres and Redis claim on the profile's classes when no class is
   given; `--class` stays for the exceptions (a higher performance tier). The registry claim
   keeps the cluster default (it is created before the platform knows anything).

@@ -155,6 +155,8 @@ spec:
             # Volumes (RFC-0060): classes, provider minimum and snapshot class.
             - name: SHPYRD_PROJECT_STORAGE_CLASS
               value: "${SHPYRD_PROJECT_STORAGE_CLASS}"
+            - name: SHPYRD_DATABASE_STORAGE_CLASS
+              value: "${SHPYRD_DATABASE_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS
               value: "${SHPYRD_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS_SHARED

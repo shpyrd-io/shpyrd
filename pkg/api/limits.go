@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -168,16 +169,29 @@ func (s *Server) workspaceQuotaUsage(ctx context.Context, ws string, cat *sizes.
 	var pgs shpyrdv1.PostgresList
 	if err := s.apps.List(ctx, &pgs); err == nil {
 		for _, pg := range pgs.Items {
-			if res, n, ok := storeResources(cat, "Postgres", pg.Spec.Size, pg.Spec.Instances); ok && namespaces[pg.Namespace] {
+			if !namespaces[pg.Namespace] {
+				continue
+			}
+			if res, n, ok := storeResources(cat, "Postgres", pg.Spec.Size, pg.Spec.Instances); ok {
 				u.addSized(res, n)
 			}
+			// Its data volume counts against the storage ceiling as the
+			// namespace quota counts it: the disk it has, else the disk it
+			// gets (the provider minimum rounds the request up).
+			u.storage.Add(existingOrRounded(pg.Status.Storage, s.databaseDiskSize(pg.Spec.Storage)))
 		}
 	}
 	var rds shpyrdv1.RedisList
 	if err := s.apps.List(ctx, &rds); err == nil {
 		for _, rd := range rds.Items {
-			if res, n, ok := storeResources(cat, "Redis", rd.Spec.Size, nil); ok && namespaces[rd.Namespace] {
+			if !namespaces[rd.Namespace] {
+				continue
+			}
+			if res, n, ok := storeResources(cat, "Redis", rd.Spec.Size, nil); ok {
 				u.addSized(res, n)
+			}
+			if rd.Spec.Persistent {
+				u.storage.Add(existingOrRounded(rd.Status.Storage, s.redisDiskSize(rd.Spec.Storage)))
 			}
 		}
 	}
@@ -324,4 +338,42 @@ func (s *Server) usageOf(ctx context.Context, ws string) *Usage {
 	}
 	v := u.view()
 	return &v
+}
+
+// databaseDiskSize is the disk a database gets for a request: the request
+// (the controller's 5Gi default when none), rounded to the provider minimum
+// of the database class.
+func (s *Server) databaseDiskSize(requested *resource.Quantity) resource.Quantity {
+	size := resource.MustParse("5Gi")
+	if requested != nil {
+		size = *requested
+	}
+	return roundToMinimum(size, install.DatabaseVolumeMinSize(s.vars))
+}
+
+// redisDiskSize is the same for a persistent store (1Gi by default).
+func (s *Server) redisDiskSize(requested *resource.Quantity) resource.Quantity {
+	size := resource.MustParse("1Gi")
+	if requested != nil {
+		size = *requested
+	}
+	return roundToMinimum(size, install.DatabaseVolumeMinSize(s.vars))
+}
+
+func roundToMinimum(size resource.Quantity, minimum string) resource.Quantity {
+	if minimum == "" {
+		return size
+	}
+	if q, err := resource.ParseQuantity(minimum); err == nil && size.Cmp(q) < 0 {
+		return q
+	}
+	return size
+}
+
+// existingOrRounded prefers what the status reports the disk is.
+func existingOrRounded(status string, rounded resource.Quantity) resource.Quantity {
+	if q, err := resource.ParseQuantity(status); err == nil && status != "" {
+		return q
+	}
+	return rounded
 }

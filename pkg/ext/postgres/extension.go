@@ -36,7 +36,7 @@ func (extension) Components() []ext.ComponentRef {
 
 // Register runs the Postgres controller and makes the kind attachable.
 func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
-	r := &controller.PostgresReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.ProjectStorageClass(deps.Var), MinSize: install.ProjectVolumeMinSize(deps.Var)}, DataPool: install.DataPool(deps.Var)}
+	r := &controller.PostgresReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.DatabaseStorageClass(deps.Var), MinSize: install.DatabaseVolumeMinSize(deps.Var)}, DataPool: install.DataPool(deps.Var)}
 	r.SleepAllowed = deps.SleepAllowed
 	if deps.Store != nil {
 		r.WorkspaceSleepDefault = workspaceSleepDefault(mgr.GetClient(), deps.Store)

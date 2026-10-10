@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,7 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-const LocalStorageClass = "shpyrd-local"
+const LocalStorageClass = install.LocalStorageClass
 const localDataProtection = "shpyrd.io/local-data-protection"
 const scaleDownDisabled = "cluster-autoscaler.kubernetes.io/scale-down-disabled"
 

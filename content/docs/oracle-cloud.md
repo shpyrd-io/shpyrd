@@ -17,7 +17,7 @@ Oracle Cloud went first among the cloud profiles for cost - the free tier and ch
 | Front doors | a public OCI flexible load balancer on a **reserved address** (survives cluster rebuilds); a private one for projects marked internal ([Domains and exposure](/docs/domains)) |
 | Certificates | Let's Encrypt; with a DNS provider, one wildcard certificate for every project hostname |
 | Registry | the in-cluster registry with TLS from the platform CA (no OCIR account needed; an Object Storage bucket or OCIR stays one flag away) |
-| Storage | project volumes and databases on the nodes' disks; Block Volume for the platform's own disks; File Storage for shared volumes |
+| Storage | Block Volume for project disks, databases and the platform's own disks (50 GB minimum, snapshots); the node's disk only for disks made before this version; File Storage for shared volumes |
 | Isolation | Calico in policy-only mode, because OKE's VCN-native CNI does not enforce `NetworkPolicy` on its own |
 | DNS | optional: a public zone in OCI DNS managed by ExternalDNS, records for every host, delegated from your registrar once |
 
@@ -130,7 +130,7 @@ What happens, in order:
 | Level | Components |
 | --- | --- |
 | rc0 | Prometheus Operator CRDs |
-| rc1 | node-local storage for project data, Calico (policy only), cert-manager, the registry credential, the platform's Service, the snapshot controller, the File Storage class; the S3 gateway with a bucket |
+| rc1 | the node-local storage class (for the project disks that still use it), Calico (policy only), cert-manager, the registry credential, the platform's Service, the snapshot controller, the File Storage class; the S3 gateway with a bucket |
 | rc2 | Let's Encrypt issuers, the platform CA (generated in the cluster) and trust bundle, ingress-nginx (public load balancer on the reserved address) and, with a subnet, the internal one, the registry and the node trust for it, ExternalDNS and the OCI DNS-01 solver |
 | rc3 | kpack with the Paketo builder (pushed to the in-cluster registry), kube-prometheus-stack, the wildcard certificate, the control-plane database, the cluster autoscaler |
 | rc4 | the shpyrd server, the platform backup schedule (with a backup target) |
@@ -209,7 +209,7 @@ At the defaults, on the pay-as-you-go price list: two `VM.Standard.E5.Flex` plat
 ## Good to know
 
 - **Network policy.** OKE with VCN-native pod networking accepts `NetworkPolicy` objects without enforcing them. The profile installs Calico in policy-only mode (Oracle's supported path) so projects are isolated from each other and from the instance metadata service; `--set SHPYRD_NETWORK_POLICY=none` skips it on a cluster that already enforces policies. `cluster init` warns on any cluster where it finds no policy engine.
-- **Project volumes live on the nodes' disks.** Project volumes and databases use the node's own disk (`shpyrd-local`): no minimum size, no resize, and project backups instead of block volume snapshots. A node holding such data is kept out of the autoscaler's scale-down. Block Volume holds only the platform's own disks (registry, control-plane database, monitoring), which start at 50 GB.
+- **Project disks and databases are Block Volumes** (`oci-bv`): they start at 50 GB (a smaller request is rounded up and the answer says so), grow with `shpyrd volumes resize`, have nightly snapshots (`oci-bv-backup`), and follow their process or database to another node, so a node can be drained or lost without losing data. Disks and databases made before this version are on the node's own disk (`shpyrd-local`) until migrated; a node holding such data is kept out of the autoscaler's scale-down, and the class stays installed while any remains. `SHPYRD_PROJECT_STORAGE_CLASS=shpyrd-local` and `SHPYRD_DATABASE_STORAGE_CLASS=shpyrd-local` put new ones on the node's disk again, on purpose.
 - **Shared volumes need File Storage.** Set `shared_storage = true` in `terraform.tfvars`, `terraform apply`, and run `cluster init` with the vars file again (it carries `SHPYRD_FSS_MOUNT_TARGET` and `SHPYRD_FSS_AD`). Name the class when you create one: `shpyrd volumes create assets --size 20Gi --shared --class shpyrd-fss`. It needs the File Storage service limits `Mount Target Count` and `File System Count` above zero in the availability domain (Console: Governance > Limits, Quotas and Usage > File Storage); some tenancies start at 0 and must request an increase. The mount target is free; file systems bill by the space used.
 - **CRI-O.** OKE nodes run CRI-O, which refuses unqualified image names such as `redis:7`; shpyrd's own images are fully qualified, and so should yours be in a Dockerfile.
 - **Registry and object storage in buckets.** `contrib/oci/terraform/backups` also writes `<name>-registry.env` and `<name>-objects.env`. `--registry-credentials-file` keeps the registry's images in an Object Storage bucket. `--object-storage-credentials-file` sends every bucket the platform hands out, Postgres backups included, through the S3 gateway to one Object Storage bucket; on OCI the gateway runs as a single writer, in one pod.
