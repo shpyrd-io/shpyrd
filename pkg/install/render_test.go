@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -717,5 +718,32 @@ func TestTheServerDeploymentTakesItsApplicationsFromTheUIImage(t *testing.T) {
 	}
 	if _, kept := eng.overrides()[VarUIImage]; kept {
 		t.Errorf("SHPYRD_UI_IMAGE must not be recorded as an override: %v", eng.overrides())
+	}
+}
+
+// Two stateless gateway replicas serve every S3 consumer; a drain or an
+// autoscaler eviction must leave one of them running.
+func TestObjectGatewayRendersADisruptionBudget(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com", VarGatewayBucket: "gateway", VarGatewayEndpoint: "https://ns.compat.objectstorage.sa-saopaulo-1.oraclecloud.com", VarGatewayRegion: "sa-saopaulo-1"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := eng.renderComponent(eng.components["object-gateway"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deployment, budget bool
+	for _, o := range objs {
+		switch {
+		case o.GetKind() == "Deployment" && o.GetName() == "object-storage":
+			deployment = true
+		case o.GetKind() == "PodDisruptionBudget" && o.GetName() == "object-storage":
+			min, _, _ := unstructured.NestedFieldNoCopy(o.Object, "spec", "minAvailable")
+			app, _, _ := unstructured.NestedString(o.Object, "spec", "selector", "matchLabels", "app.kubernetes.io/name")
+			budget = fmt.Sprint(min) == "1" && app == "object-storage"
+		}
+	}
+	if !deployment || !budget {
+		t.Errorf("object-gateway: deployment=%v disruption budget=%v", deployment, budget)
 	}
 }
