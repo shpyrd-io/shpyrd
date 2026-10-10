@@ -434,6 +434,13 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 		_ = unstructured.SetNestedField(current.Object, true, "spec", "monitoring", "enablePodMonitor")
 		changed = true
 	}
+	// The disruption budget follows the instance count (none on a single
+	// instance, or a drain waits forever).
+	wantPDB, _, _ := unstructured.NestedBool(desired.Object, "spec", "enablePDB")
+	if curPDB, set, _ := unstructured.NestedBool(current.Object, "spec", "enablePDB"); !set || curPDB != wantPDB {
+		_ = unstructured.SetNestedField(current.Object, wantPDB, "spec", "enablePDB")
+		changed = true
+	}
 	// Node pool (RFC-0077): follow the desired affinity (set or absent).
 	wantAff, _, _ := unstructured.NestedMap(desired.Object, "spec", "affinity")
 	if curAff, _, _ := unstructured.NestedMap(current.Object, "spec", "affinity"); !equalJSON(curAff, wantAff) {
