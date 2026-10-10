@@ -180,6 +180,33 @@ spec:
     namespace: ${SHPYRD_SYSTEM_NS}
   image: ghcr.io/shpyrd-io/buildpack-build-env:0.1.0
 ---
+# A package of a JavaScript workspace (shpyrd #145) builds with Node alone
+# from Paketo, then shpyrd's workspace buildpack, in a builder of the
+# project's own (internal/controller/builder.go).
+apiVersion: kpack.io/v1alpha2
+kind: ClusterBuildpack
+metadata:
+  name: paketo-node-engine
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  serviceAccountRef:
+    name: kpack-builder
+    namespace: ${SHPYRD_SYSTEM_NS}
+  image: index.docker.io/paketobuildpacks/node-engine:latest
+---
+apiVersion: kpack.io/v1alpha2
+kind: ClusterBuildpack
+metadata:
+  name: shpyrd-node-workspace
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+spec:
+  serviceAccountRef:
+    name: kpack-builder
+    namespace: ${SHPYRD_SYSTEM_NS}
+  image: ghcr.io/shpyrd-io/buildpack-node-workspace:0.1.0
+---
 apiVersion: kpack.io/v1alpha2
 kind: ClusterBuilder
 metadata:

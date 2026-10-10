@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Takes part when the build names a package of a workspace (BP_NODE_WORKSPACE,
+# which the controller sets from build.workspace). It needs Node, from
+# node-engine, to build and to run. A missing lockfile fails the build, with
+# a sentence, rather than detection, with none.
+set -euo pipefail
+plan="${CNB_BUILD_PLAN_PATH:-$2}"
+[ -n "${BP_NODE_WORKSPACE:-}" ] || exit 100
+printf '[[requires]]\n  name = "node"\n  [requires.metadata]\n    build = true\n    launch = true\n' > "$plan"
