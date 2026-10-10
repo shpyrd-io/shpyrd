@@ -118,9 +118,9 @@ Otherwise it fails detection and ordinary Node apps keep Paketo.
 
    | Manager | Command |
    |---|---|
-   | npm | `npm ci --workspace <path>` |
+   | npm | `npm ci` (the whole workspace: `--workspace` leaves out the root's own tools, such as turbo) |
    | pnpm | `pnpm install --frozen-lockfile --filter ./<path>...` |
-   | Yarn 2+ | `yarn workspaces focus <name>` |
+   | Yarn 2+ | `yarn install --immutable` (`workspaces focus` leaves out the root's tools too) |
    | Yarn 1 | `yarn install --frozen-lockfile` (it cannot install one package alone) |
 
    The managers' download caches (npm's cache, pnpm's store, Yarn's cache)

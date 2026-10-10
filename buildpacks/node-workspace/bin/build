@@ -51,17 +51,14 @@ if [ "$manager" != npm ]; then
   fi
 fi
 
+# pnpm installs the package, what it needs and the root; npm and Yarn
+# cannot leave the other packages out and keep the root's own tools (turbo,
+# typescript), so they install the whole workspace.
 echo "shpyrd: installing $path with ${package_manager:-$manager}"
 case "$manager" in
-  npm) npm ci --workspace "$path" --include=dev --no-audit --no-fund ;;
+  npm) npm ci --include=dev --no-audit --no-fund ;;
   pnpm) pnpm install --frozen-lockfile --prod=false --filter "$name..." ;;
-  yarn)
-    if yarn workspaces focus --help > /dev/null 2>&1; then
-      YARN_ENABLE_IMMUTABLE_INSTALLS=true yarn workspaces focus "$name"
-    else
-      yarn install --immutable
-    fi
-    ;;
+  yarn) yarn install --immutable ;;
   yarn1) yarn install --frozen-lockfile --production=false --non-interactive ;;
 esac
 

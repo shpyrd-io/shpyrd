@@ -56,6 +56,8 @@ func buildIn(t *testing.T, app, pkg string, env ...string) (string, error, strin
 
 // greetingWorkspace is a workspace whose web package needs greeting, a
 // workspace package, as a dev dependency, at build time only.
+// withRootTool makes the build need tool too, a dev dependency of the
+// workspace's root, as turbo is in a Turborepo.
 func greetingWorkspace(root map[string]string) map[string]string {
 	files := map[string]string{
 		"packages/greeting/package.json": `{"name":"greeting","version":"1.0.0","main":"index.js"}`,
@@ -71,12 +73,20 @@ func greetingWorkspace(root map[string]string) map[string]string {
 	return files
 }
 
+func withRootTool(files map[string]string, version string) map[string]string {
+	files["packages/tool/package.json"] = `{"name":"tool","version":"1.0.0","main":"index.js"}`
+	files["packages/tool/index.js"] = `module.exports = "tool";`
+	files["package.json"] = strings.Replace(files["package.json"], `"private":true`, `"private":true,"devDependencies":{"tool":"`+version+`"}`, 1)
+	files["apps/web/package.json"] = strings.Replace(files["apps/web/package.json"], `\"require('fs')`, `\"require('tool'); require('fs')`, 1)
+	return files
+}
+
 func TestNodeWorkspaceNpm(t *testing.T) {
 	needNode(t)
 	app := t.TempDir()
-	writeFiles(t, app, greetingWorkspace(map[string]string{
+	writeFiles(t, app, withRootTool(greetingWorkspace(map[string]string{
 		"package.json": `{"name":"root","private":true,"workspaces":["apps/*","packages/*"]}`,
-	}))
+	}), "1.0.0"))
 	if out, err := run(t, app, nil, "npm", "install", "--package-lock-only", "--no-audit", "--no-fund"); err != nil {
 		t.Fatalf("lockfile: %v %s", err, out)
 	}
@@ -104,8 +114,8 @@ func TestNodeWorkspaceReadsThePath(t *testing.T) {
 	needNode(t)
 	app := t.TempDir()
 	writeFiles(t, app, greetingWorkspace(map[string]string{
-		"package.json":      `{"name":"root","private":true,"workspaces":["apps/*","packages/*","!packages/legacy"]}`,
-		"package-lock.json": `{}`,
+		"package.json":                 `{"name":"root","private":true,"workspaces":["apps/*","packages/*","!packages/legacy"]}`,
+		"package-lock.json":            `{}`,
 		"packages/legacy/package.json": `{"name":"legacy"}`,
 	}))
 	bp, _ := filepath.Abs("node-workspace/lib/workspace.js")
@@ -178,10 +188,14 @@ func TestNodeWorkspaceOtherManagers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("downloads pnpm and Yarn")
 	}
-	for _, tc := range []struct{ name, pm, lock string }{
-		{"pnpm", "pnpm@9.15.0", "pnpm"},
-		{"yarn 4", "yarn@4.5.3", "yarn"},
-		{"yarn 1", "yarn@1.22.22", "yarn"},
+	for _, tc := range []struct {
+		name, pm, lock string
+		rootTool       bool
+	}{
+		{"pnpm", "pnpm@9.15.0", "pnpm", true},
+		{"yarn 4", "yarn@4.5.3", "yarn", true},
+		{"yarn 4 pnp", "yarn@4.5.3", "yarn", false},
+		{"yarn 1", "yarn@1.22.22", "yarn", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := t.TempDir()
@@ -194,6 +208,18 @@ func TestNodeWorkspaceOtherManagers(t *testing.T) {
 			files := greetingWorkspace(root)
 			if tc.lock == "pnpm" {
 				files["apps/web/package.json"] = strings.Replace(files["apps/web/package.json"], `"greeting":"1.0.0"`, `"greeting":"workspace:*"`, 1)
+			}
+			if tc.rootTool {
+				version := "1.0.0"
+				if tc.lock == "pnpm" {
+					version = "workspace:*"
+				}
+				files = withRootTool(files, version)
+				// Under Plug'n'Play a package reads only what it declares:
+				// the root's tools are reached through node_modules.
+				if tc.pm == "yarn@4.5.3" {
+					files[".yarnrc.yml"] = "nodeLinker: node-modules\n"
+				}
 			}
 			writeFiles(t, app, files)
 			lockArgs := map[string][]string{
