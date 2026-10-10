@@ -407,9 +407,19 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			// kpack's own sentence names a pod and kubectl: the customer
 			// reads what failed, in words, instead (#52).
 			if build.Ready == "False" {
-				if kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild) {
+				switch {
+				case kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild):
 					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
-				} else {
+				case composesBuild(app) && build.builderNotReady():
+					// A builder of the project's own is made on its first
+					// deploy, and kpack waits for it (#143).
+					if msg := r.projectBuilderFailure(ctx, app); msg != "" {
+						build.Message = msg
+					} else {
+						build.Ready = "Unknown"
+						build.Message = "preparing the project's builder"
+					}
+				default:
 					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
 				}
 			}

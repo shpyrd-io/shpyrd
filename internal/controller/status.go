@@ -101,6 +101,10 @@ type buildState struct {
 	// Ready mirrors the kpack Ready condition: "True", "False" or "Unknown".
 	Ready   string
 	Message string
+	// Reason is kpack's reason for Ready; BuilderReady mirrors the Image's
+	// BuilderReady condition ("" when kpack has not set it).
+	Reason       string
+	BuilderReady string
 	// Revision is the git commit the build resolved, when known.
 	Revision string
 }
@@ -115,7 +119,14 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 	conds, _, _ := unstructured.NestedSlice(img.Object, "status", "conditions")
 	for _, raw := range conds {
 		m, ok := raw.(map[string]interface{})
-		if !ok || m["type"] != "Ready" {
+		if !ok {
+			continue
+		}
+		if m["type"] == "BuilderReady" {
+			st.BuilderReady, _ = m["status"].(string)
+			continue
+		}
+		if m["type"] != "Ready" {
 			continue
 		}
 		if s, ok := m["status"].(string); ok && s != "" {
@@ -124,6 +135,7 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 		if msg, ok := m["message"].(string); ok {
 			st.Message = msg
 		}
+		st.Reason, _ = m["reason"].(string)
 	}
 	// A new generation not yet observed means a build is about to start.
 	if observed, found, _ := unstructured.NestedInt64(img.Object, "status", "observedGeneration"); found && observed < img.GetGeneration() {
@@ -131,6 +143,12 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 		st.Message = "build pending"
 	}
 	return st
+}
+
+// builderNotReady says kpack has not started the build because the
+// Image's builder is not ready yet.
+func (s buildState) builderNotReady() bool {
+	return s.Reason == "BuilderNotReady" || s.BuilderReady == "False"
 }
 
 // sourceID describes the source of a release for humans: git commit, blob
