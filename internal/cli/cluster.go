@@ -200,6 +200,7 @@ func newClusterCmd(g *globalFlags) *cobra.Command {
 		newClusterCreateCmd(g),
 		newClusterInitCmd(g),
 		newClusterStatusCmd(g),
+		newClusterUnpinCmd(g),
 		newClusterDestroyCmd(g),
 		newClusterTrustCACmd(g),
 		newClusterUntrustCACmd(g),
@@ -702,6 +703,14 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 			discoverAWS(ctx, out, k, vars, prof)
 		}
 		skip = append(append([]string{}, skip...), conditionalComponents(vars, prof)...)
+		// storage-local's teardown is what deletes a node-local volume's
+		// directory, and the autoscaler protection reads its class: while
+		// any such volume exists the component cannot be left out.
+		if !prof.HasComponent("storage-local") || contains(skip, "storage-local") {
+			if local, err := install.NodeLocalVolumes(ctx, k); err == nil && len(local) > 0 {
+				return fmt.Errorf("%d node-local volume(s) (class %s) still exist; storage-local must stay installed until they are migrated or deleted (`shpyrd-ctl cluster status` lists them)", len(local), install.LocalStorageClass)
+			}
+		}
 	}
 	opts := install.Options{
 		Profile:             flags.profile,
@@ -1249,10 +1258,20 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 			if misplaced == nil {
 				misplaced = []install.MisplacedPod{}
 			}
+			// Node-local volumes, Released and retained ones included: the
+			// nodes they are on cannot go, and storage-local must stay
+			// installed until the count is 0 (storage plan, step 1).
+			localVolumes, err := install.NodeLocalVolumes(ctx, k)
+			if err != nil {
+				return err
+			}
+			if localVolumes == nil {
+				localVolumes = []install.NodeLocalVolume{}
+			}
 			result := map[string]any{
 				"profile": info.Profile, "version": info.Version, "domain": info.Vars[install.VarDomain],
 				"updatedAt": info.UpdatedAt, "ready": allReady, "components": components,
-				"misplaced": misplaced,
+				"misplaced": misplaced, "nodeLocalVolumes": localVolumes,
 			}
 			if err := g.print(cmd, result, func(out io.Writer) {
 				fmt.Fprintf(out, "Profile: %s  Version: %s  Domain: %s  Updated: %s\n", info.Profile, info.Version, info.Vars[install.VarDomain], info.UpdatedAt)
@@ -1271,6 +1290,7 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 				}
 				_ = tw.Flush()
 				printMisplaced(out, misplaced, info.Vars[install.VarPlatformPool])
+				printNodeLocalVolumes(out, localVolumes)
 			}); err != nil {
 				return err
 			}
@@ -1282,6 +1302,29 @@ func newClusterStatusCmd(g *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to evaluate (defaults to the installed one)")
 	return cmd
+}
+
+// printNodeLocalVolumes lists the volumes still on a node's disk, by node:
+// what keeps those nodes from being removed and storage-local installed.
+func printNodeLocalVolumes(out io.Writer, volumes []install.NodeLocalVolume) {
+	if len(volumes) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n%d node-local volume(s) (class %s): their nodes stay until they are migrated or deleted, and storage-local stays installed.\n", len(volumes), install.LocalStorageClass)
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NODE\tVOLUME\tCLAIM\tPHASE")
+	for _, v := range volumes {
+		claim := "-"
+		if v.Claim != "" {
+			claim = v.Namespace + "/" + v.Claim
+		}
+		phase := v.Phase
+		if v.Retained {
+			phase += " (retained)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", v.Node, v.Name, claim, phase)
+	}
+	_ = tw.Flush()
 }
 
 // printMisplaced warns about the platform's pods outside the platform
