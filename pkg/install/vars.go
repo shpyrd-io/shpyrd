@@ -110,6 +110,7 @@ const (
 	VarVolumeMinSize       = "SHPYRD_VOLUME_MIN_SIZE"       // provider minimum a request is rounded up to ("" = none)
 	VarSnapshotClass       = "SHPYRD_SNAPSHOT_CLASS"        // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
 	VarObjectStorageSize   = "SHPYRD_OBJECT_STORAGE_SIZE"   // volume of the object-storage extension (RFC-0046)
+	VarMonitoringSize      = "SHPYRD_MONITORING_SIZE"       // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
 	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume

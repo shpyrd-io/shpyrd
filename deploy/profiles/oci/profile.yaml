@@ -63,6 +63,10 @@ vars:
   SHPYRD_DATABASE_URL: ""
   SHPYRD_CONTROL_PLANE_DB_SIZE: 50Gi
   SHPYRD_OBJECT_STORAGE_SIZE: 50Gi
+  # Prometheus keeps 15 days of metrics (the sleep activity signal and the
+  # usage history read from it) on a block volume; OCI block volumes start
+  # at 50 GB. Growing an existing claim follows the class's expansion rules.
+  SHPYRD_MONITORING_SIZE: 50Gi
   # Platform backups (RFC-0037): nightly encrypted archives of the platform's
   # state to the provider's object storage (contrib/*/terraform prints the
   # target); empty means none.

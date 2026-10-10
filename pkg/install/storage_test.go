@@ -159,3 +159,68 @@ func TestGatewayRoutesEveryConsumerAndKeepsProviderKeyPrivate(t *testing.T) {
 		}
 	}
 }
+
+// Prometheus keeps its metrics (the sleep activity signal and the usage
+// history the platform reads from it) on a claim of SHPYRD_MONITORING_SIZE
+// with the class of the platform's volumes, so a restart loses nothing. The
+// local profile sets no size and keeps the chart's emptyDir, as does any
+// install that empties the variable.
+func TestPrometheusKeepsItsDataOnAClaimSizedByTheProfile(t *testing.T) {
+	claim := func(t *testing.T, profile string, vars map[string]string) (map[string]interface{}, map[string]interface{}) {
+		t.Helper()
+		e, err := New(nil, Options{Profile: profile, Vars: vars, Reporter: &quiet{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		vals, err := e.componentValues(e.components[MonitoringComponent])
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := vals["prometheus"].(map[string]interface{})["prometheusSpec"].(map[string]interface{})
+		storage, _ := spec["storageSpec"].(map[string]interface{})
+		return spec, storage
+	}
+	for _, tc := range []struct {
+		profile, size, class, retention string
+	}{
+		{"oci", "50Gi", "oci-bv", "15d"},
+		{"aws", "20Gi", "gp3", "7d"},
+		{"local", "", "", "2d"},
+	} {
+		t.Run(tc.profile, func(t *testing.T) {
+			spec, storage := claim(t, tc.profile, map[string]string{VarDomain: "example.test"})
+			if spec["retention"] != tc.retention {
+				t.Errorf("retention = %v, want %s", spec["retention"], tc.retention)
+			}
+			if tc.size == "" {
+				if storage != nil {
+					t.Fatalf("local Prometheus must keep the chart's emptyDir, got %v", storage)
+				}
+				return
+			}
+			raw := storageYAML(t, &unstructured.Unstructured{Object: storage})
+			for _, want := range []string{"volumeClaimTemplate:", "storage: " + tc.size, "storageClassName: " + tc.class, "- ReadWriteOnce"} {
+				if !strings.Contains(raw, want) {
+					t.Errorf("missing %q in:\n%s", want, raw)
+				}
+			}
+		})
+	}
+	// Emptying the size on a cloud profile keeps the emptyDir; an empty class
+	// leaves the claim to the cluster's default class, as the registry's.
+	if _, storage := claim(t, "oci", map[string]string{VarDomain: "example.test", VarMonitoringSize: ""}); storage != nil {
+		t.Errorf("SHPYRD_MONITORING_SIZE=\"\" must make no claim, got %v", storage)
+	}
+	_, storage := claim(t, "oci", map[string]string{VarDomain: "example.test", VarStorageClass: ""})
+	if raw := storageYAML(t, &unstructured.Unstructured{Object: storage}); strings.Contains(raw, "storageClassName") {
+		t.Errorf("an empty class must be left to the cluster default:\n%s", raw)
+	}
+	// A size that is not one is refused before anything is rendered.
+	e, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "example.test", VarMonitoringSize: "fifty"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.componentValues(e.components[MonitoringComponent]); err == nil || !strings.Contains(err.Error(), VarMonitoringSize) {
+		t.Errorf("SHPYRD_MONITORING_SIZE=fifty: err = %v, want a refusal naming the variable", err)
+	}
+}

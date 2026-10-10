@@ -36,6 +36,8 @@ vars:
   SHPYRD_DATABASE_URL: ""
   SHPYRD_CONTROL_PLANE_DB_SIZE: 2Gi
   SHPYRD_OBJECT_STORAGE_SIZE: 20Gi
+  # Prometheus keeps its metrics on the node (lost when it restarts): no claim.
+  SHPYRD_MONITORING_SIZE: ""
   # Platform backups (RFC-0037): nightly encrypted archives of the platform's
   # state to the provider's object storage (contrib/*/terraform prints the
   # target); empty means none.

@@ -83,6 +83,10 @@ prometheus:
     ruleSelectorNilUsesHelmValues: false
     probeSelectorNilUsesHelmValues: false
     scrapeConfigSelectorNilUsesHelmValues: false
+    # Where the data lives is decided by SHPYRD_MONITORING_SIZE (pkg/install):
+    # a persistent claim of that size with the class of SHPYRD_STORAGE_CLASS,
+    # or the chart's emptyDir when it is empty (the local profile). The
+    # retention must fit the claim; the cloud profiles set both.
     retention: 7d
     resources:
       requests:
