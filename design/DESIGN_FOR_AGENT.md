@@ -136,13 +136,19 @@ system"** (or "release @shpyrd/ui", "lançar o design system").
    `releasing @shpyrd/ui@<version> under latest, tagged ui-v<version>`.
 7. **Commit** `release(ui): @shpyrd/ui <version>` (the three files), push,
    and open the pull request with the version's CHANGELOG section as its
-   body. Merging it publishes: say so in the pull request.
+   body. Merging it stages the version on npm: say so in the pull request.
 8. **After the merge**, follow `ui-release.yml` (`gh run list --workflow
-   ui-release.yml`) to the end, then check `npm view @shpyrd/ui@<version>
-   version` and `gh release view ui-v<version>`. If the run failed after npm
-   published, run it again: it skips npm and finishes the GitHub release.
-9. **Report**: the version, what it carries, and that each project gets a
-   pull request from its Dependabot to take it.
+   ui-release.yml`) to the end: it stages the version.
+9. **The person approves it on npm**, with two-factor authentication: on
+   the package's page on npmjs.com, or `npm stage approve <id>` (`npm stage
+   list @shpyrd/ui` gives the id). An agent cannot do this step: ask, and
+   wait.
+10. **Once approved**, check `npm view @shpyrd/ui@<version> version`, then
+    run `gh workflow run ui-release.yml` and follow it: it makes the
+    `ui-v<version>` tag, on the release's commit, and the GitHub release.
+    Check `gh release view ui-v<version>`.
+11. **Report**: the version, what it carries, and that each project gets a
+    pull request from its Dependabot to take it.
 
 A version with a suffix (`0.4.0-rc.1`), for trying a change in one project
 before the others, is released the same way and goes to npm's `next`
