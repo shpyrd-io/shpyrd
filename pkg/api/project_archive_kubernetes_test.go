@@ -473,7 +473,7 @@ func TestProjectExportPodsDeclareRequests(t *testing.T) {
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "p-shop"}}
 	volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "p-shop"}}
 	for name, pod := range map[string]*corev1.Pod{
-		"volume": archiveVolumePod(app, volume, "op", "registry.test/server:dev"),
+		"volume": archiveVolumePod(app, volume, "op", "registry.test/server:dev", nil),
 		"source": projectSourcePod(app, "op", controller.DefaultBuildKitImage),
 	} {
 		if fault := controller.QuotaRequestsFault(pod.Spec); fault != "" {
