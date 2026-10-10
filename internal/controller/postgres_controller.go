@@ -669,9 +669,11 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		// the projects' data (RFC-0077).
 		spec["affinity"] = map[string]interface{}{"nodeSelector": map[string]interface{}{PoolLabel: pool}}
 	}
-	// A node pin is for data on that node's disk; a migration needs the
-	// new instance on another node, so the pin is set aside while it runs.
-	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" && pg.Annotations[AnnotationStorageMigration] == "" {
+	// A node pin stays as it is during a migration: changing the pod spec
+	// of the running primary makes CloudNativePG restart it at a moment of
+	// its choosing. The migration refuses a pinned database and asks for
+	// the pin to be cleared first (its own, announced restart).
+	if node := pg.Annotations[shpyrdv1.AnnotationPlacement]; node != "" {
 		selector := map[string]interface{}{corev1.LabelHostname: node}
 		if pool != "" {
 			selector[PoolLabel] = pool

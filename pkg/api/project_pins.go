@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -58,10 +59,7 @@ func (s *Server) clearProjectPins(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"processes": []string{}, "databases": []string{}, "note": "nothing was pinned"})
 		return
 	}
-	if err := s.pinsKeepLocalData(ctx, app, pinned, pinnedDatabases); err != nil {
-		abort(c, http.StatusConflict, err)
-		return
-	}
+	local := s.pinsOnLocalData(ctx, app, pinned, pinnedDatabases)
 
 	processes := make([]string, 0, len(pinned))
 	for process := range pinned {
@@ -93,16 +91,22 @@ func (s *Server) clearProjectPins(c *gin.Context) {
 	}
 	sort.Strings(names)
 	s.audit(c, app.Name, "project.unpin", app.Name, fmt.Sprintf("processes %v, databases %v", processes, names))
-	c.JSON(http.StatusOK, gin.H{"processes": processes, "databases": names, "note": "the scheduler places them by pool now; each pinned process and database restarts once"})
+	note := "the scheduler places them by pool now; each pinned process and database restarts once"
+	if len(local) > 0 {
+		note += "; " + strings.Join(local, ", ") + " stay on their node either way: their data is on its disk"
+	}
+	c.JSON(http.StatusOK, gin.H{"processes": processes, "databases": names, "note": note})
 }
 
-// pinsKeepLocalData refuses to unpin a process or a database whose data is
-// on a node's disk: without the pin its pod could only ever run on that
-// node anyway (the volume's own affinity), and would wait forever elsewhere.
-func (s *Server) pinsKeepLocalData(ctx context.Context, app *shpyrdv1.App, pinned map[string]string, databases []*shpyrdv1.Postgres) error {
+// pinsOnLocalData names the pinned processes and databases whose data is on
+// a node's disk. Their pin can go: the volume's own node affinity keeps the
+// pod on that node, so the answer says the restart changes nothing for them.
+// Clearing it is what a storage migration asks for before it runs.
+func (s *Server) pinsOnLocalData(ctx context.Context, app *shpyrdv1.App, pinned map[string]string, databases []*shpyrdv1.Postgres) []string {
+	var out []string
 	var volumes shpyrdv1.VolumeList
 	if err := s.apps.List(ctx, &volumes, client.InNamespace(app.Namespace)); err != nil {
-		return err
+		return nil
 	}
 	local := map[string]bool{}
 	for _, v := range volumes.Items {
@@ -111,26 +115,27 @@ func (s *Server) pinsKeepLocalData(ctx context.Context, app *shpyrdv1.App, pinne
 		}
 	}
 	processes := app.EffectiveProcesses()
-	for process, node := range pinned {
+	for process := range pinned {
 		for _, m := range processes[process].Volumes {
 			if local[m.Name] {
-				return fmt.Errorf("process %s mounts the disk %q on node %s's own storage: the pin is what keeps it with its data; migrate the disk to block storage first", process, m.Name, node)
+				out = append(out, "process "+process)
+				break
 			}
 		}
 	}
-	if len(databases) == 0 {
-		return nil
-	}
-	var claims corev1.PersistentVolumeClaimList
-	if err := s.apps.List(ctx, &claims, client.InNamespace(app.Namespace)); err != nil {
-		return err
-	}
-	for _, pg := range databases {
-		for _, claim := range claims.Items {
-			if claim.Labels["cnpg.io/cluster"] == pg.Name && claim.Spec.StorageClassName != nil && *claim.Spec.StorageClassName == controller.LocalStorageClass {
-				return fmt.Errorf("database %s has its data on node %s's own storage: the pin is what keeps it with its data; migrate the database to block storage first", pg.Name, pg.Annotations[shpyrdv1.AnnotationPlacement])
+	if len(databases) > 0 {
+		var claims corev1.PersistentVolumeClaimList
+		if err := s.apps.List(ctx, &claims, client.InNamespace(app.Namespace)); err == nil {
+			for _, pg := range databases {
+				for _, claim := range claims.Items {
+					if claim.Labels["cnpg.io/cluster"] == pg.Name && claim.Spec.StorageClassName != nil && *claim.Spec.StorageClassName == controller.LocalStorageClass {
+						out = append(out, "database "+pg.Name)
+						break
+					}
+				}
 			}
 		}
 	}
-	return nil
+	sort.Strings(out)
+	return out
 }

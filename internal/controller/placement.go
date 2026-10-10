@@ -17,8 +17,8 @@ const AnnotationDataMove = "shpyrd.io/data-move"
 // AnnotationStorageMigration marks a database whose data is moving to the
 // profile's storage class by switchover (storage plan, step 1): its Cluster
 // is rendered on that class at its current size (never rounded until the
-// move is done), without the node pin, awake, and with its Service kept
-// while it briefly runs two instances. The value is the target class.
+// move is done), awake, and with its Service kept while it briefly runs two
+// instances. The value is the target class. A node pin is left as it is.
 const AnnotationStorageMigration = "shpyrd.io/storage-migration"
 
 // PlacementGroups is the transitive closure of processes sharing volumes.

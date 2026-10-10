@@ -140,7 +140,7 @@ The project id is the one the console's project archives page shows. Say
 
 func newStorageMigrateDatabaseCmd(g *globalFlags) *cobra.Command {
 	var class string
-	var noSnapshot, noChecks bool
+	var noSnapshot, noChecks, back bool
 	var wait time.Duration
 	cmd := &cobra.Command{
 		Use:   "database <namespace>/<name>",
@@ -148,13 +148,16 @@ func newStorageMigrateDatabaseCmd(g *globalFlags) *cobra.Command {
 		Long: `Moves a database's data from the storage class it is on (a node's disk,
 for the databases made before block storage) to the profile's database class,
 without stopping it: a second instance is provisioned on the new class and
-catches up, the primary switches over to it (seconds), the old instance goes
-and its volume is kept with the Retain policy for three days as the way
-back. The database size and every table's row count are read before and
-after and compared; a snapshot of the new volume is taken at the end.
+catches up, the primary switches over to it (seconds), the data on both
+instances is compared (the size within 5 %, every table's row count), the
+old instance goes and its volume is kept with the Retain policy for three
+days as the way back; a snapshot of the new volume is taken at the end. A
+database pinned to a node by an earlier move is refused: clear the pin first
+(shpyrd-ctl cluster unpin), which restarts it once, on purpose.
 
 Each step reads the state before acting: an interrupted run continues where
-it stopped when run again. The project keeps working throughout.`,
+it stopped when run again. When the data check fails the database keeps both
+instances and nothing is removed; --back returns it to the old volume.`,
 		Example: `  shpyrd-ctl storage migrate database p-2f4vrjuxtxvq9bj8qlsjuz4gj/db
   shpyrd-ctl storage migrate database p-2f4vrjuxtxvq9bj8qlsjuz4gj/db --class oci-bv --wait 30m`,
 		Args: cobra.ExactArgs(1),
@@ -183,7 +186,7 @@ it stopped when run again. The project keeps working throughout.`,
 			if err != nil {
 				return err
 			}
-			opts := storagemigrate.Options{Namespace: namespace, Name: name, TargetClass: class, Wait: wait, Out: g.progress(cmd)}
+			opts := storagemigrate.Options{Namespace: namespace, Name: name, TargetClass: class, Back: back, Wait: wait, Out: g.progress(cmd)}
 			if !noSnapshot {
 				opts.SnapshotClass = vars(install.VarSnapshotClass)
 			}
@@ -205,14 +208,18 @@ it stopped when run again. The project keeps working throughout.`,
 	cmd.Flags().BoolVar(&noSnapshot, "no-snapshot", false, "do not snapshot the new volume at the end")
 	cmd.Flags().BoolVar(&noChecks, "no-checks", false, "skip the row-count and size checks")
 	cmd.Flags().DurationVar(&wait, "wait", 20*time.Minute, "how long to wait for each step")
+	cmd.Flags().BoolVar(&back, "back", false, "return a database that stopped on two instances to its old volume")
 	return cmd
 }
 
 func printMigration(w io.Writer, res *storagemigrate.Result) {
-	if res.Verified {
+	switch {
+	case res.StoppedOn2:
+		fmt.Fprintf(w, "%s: stopped on two instances, the data check did not pass; nothing was removed", res.Database)
+	case res.Verified:
 		fmt.Fprintf(w, "%s: data on %s, verified", res.Database, res.To)
-	} else {
-		fmt.Fprintf(w, "%s: data on %s, NOT verified", res.Database, res.To)
+	default:
+		fmt.Fprintf(w, "%s: data on %s, not checked", res.Database, res.To)
 	}
 	if res.OldPV != "" {
 		fmt.Fprintf(w, "; old volume %s kept", res.OldPV)

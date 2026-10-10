@@ -50,12 +50,15 @@ func TestStorageMigrationRendersTargetClassAtCurrentSize(t *testing.T) {
 	if class != "oci-bv" || size != "1Gi" || instances != 2 {
 		t.Errorf("migrating cluster = %s on %s with %d instances, want 1Gi on oci-bv with 2", size, class, instances)
 	}
-	if _, pinned := selector[corev1.LabelHostname]; pinned || selector[PoolLabel] != "data" {
-		t.Errorf("migrating cluster keeps the node pin or loses the pool: %v", selector)
+	// The pin is not touched: a pod-spec change would make CloudNativePG
+	// restart the running primary at its own moment.
+	if selector[corev1.LabelHostname] != "10.0.1.228" || selector[PoolLabel] != "data" {
+		t.Errorf("migrating cluster must keep its node pin and pool: %v", selector)
 	}
 
-	// Done: the annotation and the pin gone, one instance; the cluster is on
-	// the profile's class now, so the profile's minimum applies.
+	// Done: the annotation gone (the pin cleared by its own step), one
+	// instance; the cluster is on the profile's class now, so the profile's
+	// minimum applies.
 	if err := c.Get(ctx, key, pg); err != nil {
 		t.Fatal(err)
 	}

@@ -98,19 +98,14 @@ func (s *Server) moveProject(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
+	// A class change is asked for by name, never inferred: it rounds the
+	// disk to the provider minimum and leaves the old disk billable until
+	// released, which the caller must have meant.
 	target := req.TargetClass
 	if target == "" {
 		target = controller.LocalStorageClass
 	}
 	blockProfile := install.ProjectStorageClass(s.vars) != controller.LocalStorageClass
-	if target == controller.LocalStorageClass && blockProfile && req.TargetClass == "" {
-		// On a profile whose disks are block volumes a move between nodes
-		// copies nothing: the disk follows the process. The one move that
-		// makes sense there is off the node's disk, onto the profile's class.
-		if groupOnClass(group, controller.LocalStorageClass) {
-			target = install.ProjectStorageClass(s.vars)
-		}
-	}
 	move, err := s.prepareProjectMove(ctx, app, group, node, target)
 	if err != nil {
 		abort(c, http.StatusConflict, err)
@@ -161,18 +156,6 @@ func (s *Server) moveProject(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "moved", "targetClass": move.targetClass(), "warnings": op.Warnings})
 }
 
-// groupOnClass says whether every claim of the group is on that class.
-func groupOnClass(group placementGroup, class string) bool {
-	if len(group.StorageClasses) == 0 {
-		return false
-	}
-	for _, c := range group.StorageClasses {
-		if c != class {
-			return false
-		}
-	}
-	return true
-}
 func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, group placementGroup, node *corev1.Node, target string) (*projectMove, error) {
 	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], TargetClass: target, BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes], BeforeVolumes: map[string]shpyrdv1.VolumeSpec{}}
 	var claims []corev1.PersistentVolumeClaim
@@ -219,6 +202,9 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 			}
 			if volume.Annotations[shpyrdv1.AnnotationRestoreFrom] != "" || volume.Annotations[controller.AnnotationDataMove] != "" {
 				return nil, errors.New("volume already has pending maintenance")
+			}
+			if volume.Shared() && target != controller.LocalStorageClass {
+				return nil, fmt.Errorf("the shared folder %q stays where it is: a block disk is mounted by one instance, so a move onto %s would end its sharing", name, target)
 			}
 			move.BeforeVolumes[name] = *volume.Spec.DeepCopy()
 			pvc := corev1.PersistentVolumeClaim{}

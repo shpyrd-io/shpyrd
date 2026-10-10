@@ -80,6 +80,11 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd extensions list` | Extensions known to this build and whether they are enabled on the cluster. |
 | `shpyrd extensions enable <name>` | Install the extension's component and restart the server with it (`--set`). Also `cluster init --enable <name>`. |
 | `shpyrd extensions disable <name>` | Remove the component (`--yes`); refused while resources of the extension exist. |
+| `shpyrd-ctl cluster status` | The installed components and their state; the platform's pods outside its pool; the volumes still on a node's disk (their nodes stay until they are migrated). |
+| `shpyrd-ctl cluster snapshots take --class <storage-class> [--keep 7]`, `list` | Provider snapshots of every block disk of a class now (the `platform-snapshots` job takes them nightly on the cloud profiles), and the list of them. |
+| `shpyrd-ctl cluster unpin <project-id>` | Clear the node pins a move left on a project (its processes and databases); each restarts once, the scheduler places them by pool. |
+| `shpyrd-ctl storage migrate database <namespace>/<name>` | Move a database's data to the profile's storage class by switchover, without stopping it; the old volume is kept three days; `--back` returns to it when the data check failed. |
+| `shpyrd-ctl storage migrate volume <project-id> <volume> --yes` | Move a volume's data to the profile's storage class through the project move; the project pauses for the copy. |
 | `shpyrd-ctl users add <email>` | Create a local account (extension `auth-local`); `--name`, `--password <secret\|@file>` (prompted when omitted), or `--invite` for an account without a password, set later through the reset flow or a workspace invite. |
 | `shpyrd-ctl users list`, `passwd <email>`, `rm <email>` | Manage local accounts. |
 
