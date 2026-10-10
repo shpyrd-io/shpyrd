@@ -394,6 +394,13 @@ func TestPostgresBackupsAndRecovery(t *testing.T) {
 	if dest != "s3://shpyrd-app-shop-db-backups/" || endpoint != "http://object-storage.shpyrd-system.svc:3900" || retention != "7d" || keyRef != "db-backups-object-storage" {
 		t.Errorf("object store spec = %v", store.Object["spec"])
 	}
+	// The sidecar must ask for CPU and memory, or a namespace with a quota on
+	// requests refuses the database pod.
+	sidecarCPU, _, _ := unstructured.NestedString(store.Object, "spec", "instanceSidecarConfiguration", "resources", "requests", "cpu")
+	sidecarMem, _, _ := unstructured.NestedString(store.Object, "spec", "instanceSidecarConfiguration", "resources", "requests", "memory")
+	if sidecarCPU == "" || sidecarMem == "" {
+		t.Errorf("object store sidecar without requests: %v", store.Object["spec"])
+	}
 	sched := &unstructured.Unstructured{}
 	sched.SetGroupVersionKind(CNPGScheduledBackupGVK)
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db-scheduled"}, sched); err != nil {

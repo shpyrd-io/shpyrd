@@ -28,6 +28,17 @@ import (
 // BarmanObjectStoreGVK is the plugin's store description.
 var BarmanObjectStoreGVK = schema.GroupVersionKind{Group: "barmancloud.cnpg.io", Version: "v1", Kind: "ObjectStore"}
 
+// BarmanSidecarResources is what the plugin's sidecar container (it archives
+// WAL and takes the base backups) asks for in every database pod. The plugin
+// adds the container without any requests; a project namespace with a
+// ResourceQuota on requests then refuses the whole pod ("must specify
+// requests.cpu for: plugin-barman-cloud") and the database never comes back
+// from the restart that turning backups on causes.
+var BarmanSidecarResources = map[string]interface{}{
+	"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+	"limits":   map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
+}
+
 // CNPGScheduledBackupGVK and CNPGBackupGVK are CloudNativePG's backup kinds.
 var (
 	CNPGScheduledBackupGVK = schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "ScheduledBackup"}
@@ -139,7 +150,8 @@ func (r *PostgresReconciler) reconcileBackups(ctx context.Context, pg *shpyrdv1.
 		store.SetLabels(map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
 		secret := bucket.CredentialSecretName()
 		store.Object["spec"] = map[string]interface{}{
-			"retentionPolicy": retention,
+			"retentionPolicy":              retention,
+			"instanceSidecarConfiguration": map[string]interface{}{"resources": BarmanSidecarResources},
 			"configuration": map[string]interface{}{
 				"destinationPath": "s3://" + bucket.Status.Bucket + "/",
 				"endpointURL":     bucket.Status.Endpoint,
