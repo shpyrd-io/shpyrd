@@ -89,7 +89,7 @@ func (s *Server) restoreProjectArchive(c *gin.Context) {
 		return
 	}
 	s.audit(c, project.SlugOf(app), "project.restore", project.SlugOf(app), "restored a portable project archive")
-	c.JSON(http.StatusOK, gin.H{"status": "restored"})
+	c.JSON(http.StatusOK, gin.H{"status": "restored", "warnings": op.Warnings})
 }
 
 func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.App, original, restored *projectArchiveMetadata) error {
@@ -228,7 +228,7 @@ func (s *Server) archiveParticipants(app *shpyrdv1.App, op *projectArchiveOperat
 	for _, v := range m.Volumes {
 		invoke := func(ctx context.Context, action string, r io.Reader) error {
 			volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: app.Namespace}, Spec: v.Spec}
-			cmd, err := s.archiveVolumeHelper(ctx, app, volume, op.ID)
+			cmd, err := s.archiveVolumeHelper(ctx, app, volume, op.ID, op.warn)
 			if err != nil {
 				return err
 			}

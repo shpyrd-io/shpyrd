@@ -39,7 +39,7 @@ func (s *Server) projectArchiveStatus(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": op.ID, "kind": op.Kind, "startedAt": op.StartedAt, "phase": op.State.Phase, "resource": op.State.Resource, "error": op.State.Error, "active": active})
+	c.JSON(http.StatusOK, gin.H{"id": op.ID, "kind": op.Kind, "startedAt": op.StartedAt, "phase": op.State.Phase, "resource": op.State.Resource, "error": op.State.Error, "active": active, "warnings": op.Warnings})
 }
 
 func (s *Server) exportProjectArchive(c *gin.Context) {
@@ -110,7 +110,7 @@ func (s *Server) exportProjectArchive(c *gin.Context) {
 	retained = true
 	s.audit(c, project.SlugOf(app), "project.export", project.SlugOf(app), "portable project archive generated")
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"ticket": ticket, "expiresInSeconds": 300})
+	c.JSON(http.StatusOK, gin.H{"ticket": ticket, "expiresInSeconds": 300, "warnings": op.Warnings})
 }
 
 func (s *Server) buildProjectArchive(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, b *projectarchive.Bundle, m *projectArchiveMetadata) (string, error) {
@@ -131,7 +131,7 @@ func (s *Server) buildProjectArchive(ctx context.Context, app *shpyrdv1.App, op 
 	}
 	for _, v := range m.Volumes {
 		volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: app.Namespace}, Spec: v.Spec}
-		command, err := s.archiveVolumeHelper(ctx, app, volume, op.ID)
+		command, err := s.archiveVolumeHelper(ctx, app, volume, op.ID, op.warn)
 		if err != nil {
 			return "", err
 		}

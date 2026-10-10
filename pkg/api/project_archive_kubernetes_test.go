@@ -170,7 +170,7 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		command, err := s.archiveVolumeHelper(ctx, app, volume, "seed")
+		command, err := s.archiveVolumeHelper(ctx, app, volume, "seed", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +253,7 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 	archive := request("GET", base+"/download?ticket="+ticket.Ticket, nil).Body.Bytes()
 	for _, name := range []string{"uploads", "documents"} {
 		v := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
-		command, err := s.archiveVolumeHelper(ctx, app, v, "mutate")
+		command, err := s.archiveVolumeHelper(ctx, app, v, "mutate", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +276,7 @@ func TestProjectArchiveKubernetesRoundTrip(t *testing.T) {
 	request("POST", base+"/restore", bytes.NewReader(archive))
 	for _, name := range []string{"uploads", "documents"} {
 		v := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
-		command, err := s.archiveVolumeHelper(ctx, app, v, "verify")
+		command, err := s.archiveVolumeHelper(ctx, app, v, "verify", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -373,7 +373,7 @@ func runKubernetesMoves(t *testing.T, ctx context.Context, s *Server, app *shpyr
 		t.Logf("moved %s", group)
 	}
 	v := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: ns}}
-	command, err := s.archiveVolumeHelper(ctx, app, v, "verify-move")
+	command, err := s.archiveVolumeHelper(ctx, app, v, "verify-move", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -119,7 +119,7 @@ func (s *Server) moveProject(c *gin.Context) {
 		return
 	}
 	s.audit(c, app.Name, "project.move", group.ID, "moved to "+node.Name)
-	c.JSON(http.StatusOK, gin.H{"status": "moved"})
+	c.JSON(http.StatusOK, gin.H{"status": "moved", "warnings": op.Warnings})
 }
 func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, group placementGroup, node *corev1.Node) (*projectMove, error) {
 	move := &projectMove{Group: group, Destination: node.Labels[corev1.LabelHostname], BeforeProcesses: app.Annotations[controller.AnnotationProcessNodes], BeforeVolumes: map[string]shpyrdv1.VolumeSpec{}}
@@ -359,7 +359,7 @@ func (s *Server) copyMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	if err := s.apps.Create(ctx, target); err != nil {
 		return err
 	}
-	destination, err := s.archiveClaimHelper(ctx, app, target.Name, target.Name, op.ID, op.Move.Destination)
+	destination, err := s.archiveClaimHelper(ctx, app, target.Name, target.Name, op.ID, op.Move.Destination, op.warn)
 	if err != nil {
 		return err
 	}
@@ -376,7 +376,7 @@ func (s *Server) copyMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	if err := s.retainMovePV(ctx, claim.TargetPV, op.ID); err != nil {
 		return err
 	}
-	source, err := s.projectClaimHelper(ctx, app, claim.Original.Name, "source-"+claim.TargetClaim, op.ID, "", true)
+	source, err := s.projectClaimHelper(ctx, app, claim.Original.Name, "source-"+claim.TargetClaim, op.ID, "", true, op.warn)
 	if err != nil {
 		return err
 	}
@@ -386,8 +386,14 @@ func (s *Server) copyMoveClaim(ctx context.Context, app *shpyrdv1.App, op *proje
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
+	warned := len(op.Warnings)
 	if err := source(ctx, []string{"/shpyrd-server", "project-volume", "export", "/data"}, nil, &archiveBoundedWriter{Writer: file, Remaining: projectarchive.DefaultLimit}); err != nil {
 		return err
+	}
+	if len(op.Warnings) != warned {
+		if err := s.saveProjectArchive(ctx, app.Namespace, op); err != nil {
+			return err
+		}
 	}
 	st, err := file.Stat()
 	if err != nil {

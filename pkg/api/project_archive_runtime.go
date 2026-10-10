@@ -29,13 +29,17 @@ type limitedErrorWriter struct{ text strings.Builder }
 
 func (w *limitedErrorWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	if left := 8192 - w.text.Len(); left > 0 {
+	if left := 64<<10 - w.text.Len(); left > 0 {
 		w.text.Write(p[:min(left, len(p))])
 	}
 	return n, nil
 }
 
-func (s *Server) archiveCommand(namespace, pod, container string) projectarchive.Command {
+// archiveCommand runs one command in a helper. What the helper says on its
+// error stream is kept: on failure it is part of the error; on success each
+// line it marked as a warning goes to warn, when given, for the operation's
+// report (#129).
+func (s *Server) archiveCommand(namespace, pod, container string, warn func(string)) projectarchive.Command {
 	return func(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 		if stdin == nil {
 			stdin = strings.NewReader("")
@@ -48,7 +52,19 @@ func (s *Server) archiveCommand(namespace, pod, container string) projectarchive
 		if err != nil {
 			return fmt.Errorf("%s: %w: %s", args[0], err, strings.TrimSpace(stderr.text.String()))
 		}
+		if warn != nil {
+			archiveWarnings(stderr.text.String(), warn)
+		}
 		return nil
+	}
+}
+
+// archiveWarnings hands warn every warning line of a helper's error stream.
+func archiveWarnings(stderr string, warn func(string)) {
+	for _, line := range strings.Split(stderr, "\n") {
+		if sentence, ok := strings.CutPrefix(line, projectarchive.WarningPrefix); ok {
+			warn(strings.TrimSpace(sentence))
+		}
 	}
 }
 
@@ -59,7 +75,7 @@ func (s *Server) archiveDatabase(ctx context.Context, namespace, name string) (p
 	}
 	for _, pod := range pods.Items {
 		if pod.DeletionTimestamp == nil && pod.Status.Phase == corev1.PodRunning {
-			return projectarchive.PostgreSQL{Exec: s.archiveCommand(namespace, pod.Name, "postgres")}, nil
+			return projectarchive.PostgreSQL{Exec: s.archiveCommand(namespace, pod.Name, "postgres", nil)}, nil
 		}
 	}
 	return projectarchive.PostgreSQL{}, fmt.Errorf("database %s has no running primary", name)
@@ -80,15 +96,17 @@ func archiveVolumePod(app *shpyrdv1.App, volume *shpyrdv1.Volume, operation, ima
 	}
 }
 
-func (s *Server) archiveVolumeHelper(ctx context.Context, app *shpyrdv1.App, volume *shpyrdv1.Volume, operation string) (projectarchive.Command, error) {
-	return s.archiveClaimHelper(ctx, app, volume.PVCName(), volume.Name, operation, "")
+// The helpers take warn, the operation's report, for what the helper says
+// about the volume without failing (#129); nil drops it.
+func (s *Server) archiveVolumeHelper(ctx context.Context, app *shpyrdv1.App, volume *shpyrdv1.Volume, operation string, warn func(string)) (projectarchive.Command, error) {
+	return s.archiveClaimHelper(ctx, app, volume.PVCName(), volume.Name, operation, "", warn)
 }
 
-func (s *Server) archiveClaimHelper(ctx context.Context, app *shpyrdv1.App, claim, key, operation, node string) (projectarchive.Command, error) {
-	return s.projectClaimHelper(ctx, app, claim, key, operation, node, false)
+func (s *Server) archiveClaimHelper(ctx context.Context, app *shpyrdv1.App, claim, key, operation, node string, warn func(string)) (projectarchive.Command, error) {
+	return s.projectClaimHelper(ctx, app, claim, key, operation, node, false, warn)
 }
 
-func (s *Server) projectClaimHelper(ctx context.Context, app *shpyrdv1.App, claim, key, operation, node string, readOnly bool) (projectarchive.Command, error) {
+func (s *Server) projectClaimHelper(ctx context.Context, app *shpyrdv1.App, claim, key, operation, node string, readOnly bool, warn func(string)) (projectarchive.Command, error) {
 	volume := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: app.Namespace}}
 
 	var helpers corev1.PodList
@@ -156,7 +174,7 @@ func (s *Server) projectClaimHelper(ctx context.Context, app *shpyrdv1.App, clai
 			return nil, errors.New("volume helper is terminating; retry recovery after it stops")
 		}
 		if pod.Status.Phase == corev1.PodRunning {
-			return s.archiveCommand(app.Namespace, pod.Name, "archive"), nil
+			return s.archiveCommand(app.Namespace, pod.Name, "archive", warn), nil
 		}
 		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 			return nil, fmt.Errorf("volume helper stopped: %s", pod.Status.Message)
@@ -280,7 +298,7 @@ func (s *Server) exportProjectGit(ctx context.Context, app *shpyrdv1.App, op *pr
 	}); err != nil {
 		return err
 	}
-	command := s.archiveCommand(app.Namespace, pod.Name, "source")
+	command := s.archiveCommand(app.Namespace, pod.Name, "source", nil)
 	m.SourceEntry = "source/source.tgz"
 	return addArchiveStream(ctx, b, m.SourceEntry, func(out io.Writer) error {
 		return command(ctx, []string{"sh", "-ec", `export GIT_ALLOW_PROTOCOL=https:http:ssh

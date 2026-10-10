@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +38,23 @@ type projectArchiveOperation struct {
 	Limits           map[string]int                  `json:"limits"`
 	CreatedVolumes   []string                        `json:"createdVolumes,omitempty"`
 	CreatedDatabases []string                        `json:"createdDatabases,omitempty"`
+	// Warnings is the operation's report: what a helper said about the data
+	// without failing, such as a link copied as it is (#129). Each sentence
+	// names the file it is about.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// warn adds a sentence to the operation's report, once. The report is
+// bounded so the operation's record stays small; past the bound it says so.
+func (op *projectArchiveOperation) warn(sentence string) {
+	const bound = 100
+	if sentence == "" || slices.Contains(op.Warnings, sentence) || len(op.Warnings) > bound {
+		return
+	}
+	if len(op.Warnings) == bound {
+		sentence = "Further warnings were left out of this report."
+	}
+	op.Warnings = append(op.Warnings, sentence)
 }
 
 // Starting workloads (including workers and direct database clients) can

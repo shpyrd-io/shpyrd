@@ -113,6 +113,15 @@ func walkMessages(v interface{}, f func(key, msg string)) {
 					f(k, s)
 					continue
 				}
+			case "warnings":
+				if list, ok := val.([]interface{}); ok {
+					for _, e := range list {
+						if s, ok := e.(string); ok {
+							f(k, s)
+						}
+					}
+					continue
+				}
 			}
 			walkMessages(val, f)
 		}
