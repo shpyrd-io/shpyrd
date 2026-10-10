@@ -833,6 +833,17 @@ func validateDeployRequest(req *DeployRequest) error {
 				return fmt.Errorf("unknown buildpack %q in build.buildpacks; the catalog has: %s", name, strings.Join(controller.CatalogNames(), ", "))
 			}
 		}
+		if w := req.Build.Workspace; w != "" {
+			if err := validateWorkspacePath(w); err != nil {
+				return err
+			}
+			if req.Build.Strategy == shpyrdv1.StrategyDockerfile || req.Strategy == shpyrdv1.StrategyDockerfile {
+				return errors.New("build.workspace builds with buildpacks; it cannot be used with strategy: dockerfile")
+			}
+			if len(req.Build.Buildpacks) > 0 {
+				return errors.New("build.workspace chooses its own buildpacks; remove build.buildpacks")
+			}
+		}
 	}
 	switch req.Exposure {
 	case "", "external", "internal":
@@ -1319,4 +1330,19 @@ func (s *Server) renameApp(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, detail(fresh, nil))
+}
+
+// validateWorkspacePath accepts a package's path inside the source, as
+// the CLI writes it: relative, slash-separated, every segment a name.
+func validateWorkspacePath(p string) error {
+	bad := strings.HasPrefix(p, "/") || strings.Contains(p, `\`)
+	for _, s := range strings.Split(p, "/") {
+		if s == "" || s == "." || s == ".." {
+			bad = true
+		}
+	}
+	if bad {
+		return fmt.Errorf("build.workspace must be a package's path inside the source, like apps/web; got %q", p)
+	}
+	return nil
 }

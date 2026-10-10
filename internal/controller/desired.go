@@ -608,6 +608,17 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App) (*unstructured.Unstructured
 	build := map[string]interface{}{}
 	var env []interface{}
 	if app.Spec.Build != nil {
+		// The package of a JavaScript workspace (#145), unless build.env
+		// names one itself.
+		if w := app.Spec.Build.Workspace; w != "" {
+			written := false
+			for _, e := range app.Spec.Build.Env {
+				written = written || e.Name == NodeWorkspaceEnv
+			}
+			if !written {
+				env = append(env, map[string]interface{}{"name": NodeWorkspaceEnv, "value": w})
+			}
+		}
 		for _, e := range app.Spec.Build.Env {
 			env = append(env, map[string]interface{}{"name": e.Name, "value": e.Value})
 		}

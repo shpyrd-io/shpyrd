@@ -324,6 +324,13 @@ spec:
                   target:
                     description: Target is the multi-stage build target.
                     type: string
+                  workspace:
+                    description: |-
+                      Workspace is the path, from the source's root, of the package to
+                      build inside a JavaScript workspace (npm, pnpm or Yarn): "apps/web"
+                      (shpyrd #145). The project gets a builder of its own that installs
+                      and builds that package in place. Buildpacks only.
+                    type: string
                 type: object
               domains:
                 description: |-

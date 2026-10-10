@@ -101,6 +101,29 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 					project.Build.Dockerfile = dockerfile
 				}
 			}
+			// A package of a JavaScript workspace (#145): the workspace's
+			// root is what gets built.
+			workspaceRoot := ""
+			if image == "" && gitURL == "" && subPath == "" {
+				if project == nil {
+					project = &projectConfig{}
+				}
+				top, _ := gitOutput("rev-parse", "--show-toplevel")
+				root, found, err := workspaceFor(project, top)
+				if err != nil {
+					return err
+				}
+				workspaceRoot = root
+				if found != nil {
+					reportWorkspace(out, found, top)
+					if save {
+						det := &detection{inferred: []inference{{what: "build.workspace", value: found.Package}}}
+						if _, _, err := saveInferences(".", name, det, false); err != nil {
+							return err
+						}
+					}
+				}
+			}
 			if image == "" && gitURL == "" {
 				project = detectDockerfile(project, subPath)
 				// Build profiles (RFC-0067): what the directory says the
@@ -175,7 +198,11 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, ref, name)
 				req.Git = &shpyrdv1.GitSource{URL: gitURL, Revision: ref}
 			default:
-				archive, ref, err := archiveSource(out, workingTree)
+				archive, ref, err := archiveSource(out, workingTree, workspaceRoot)
+				workspacePackage := ""
+				if workspaceRoot != "" && project != nil && project.Build != nil {
+					workspacePackage = project.Build.Workspace
+				}
 				if err != nil {
 					return err
 				}
@@ -187,7 +214,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				// An Aptfile: system packages through the .deb buildpack
 				// (RFC-0065), translated into the archive's project.toml.
 				if req.Build == nil || req.Build.Strategy != shpyrdv1.StrategyDockerfile {
-					patched, packages, unsupported, err := withSystemPackages(archive)
+					patched, packages, unsupported, err := withSystemPackages(archive, workspacePackage)
 					if err != nil {
 						return fmt.Errorf("Aptfile: %w", err)
 					}
@@ -280,7 +307,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 	cmd.Flags().BoolVar(&workingTree, "working-tree", false, "archive the directory as it is on disk instead of the committed HEAD")
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "build with this Dockerfile (path relative to the deployed directory) instead of buildpacks")
 	cmd.Flags().Lookup("dockerfile").NoOptDefVal = "auto"
-	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile inferred into shpyrd.yaml")
+	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile or workspace detection inferred into shpyrd.yaml")
 	return cmd
 }
 
@@ -306,34 +333,36 @@ func detectDockerfile(project *projectConfig, subPath string) *projectConfig {
 	return project
 }
 
-// archiveSource returns a tar.gz of the current directory and a reference
-// for the release description. Inside a Git repository the committed HEAD
-// tree of the current directory is used unless workingTree is set (or the
-// directory has no tracked files); elsewhere the directory is tarred.
-func archiveSource(out io.Writer, workingTree bool) ([]byte, string, error) {
+// archiveSource returns a tar.gz of dir ("" for the current folder; a
+// JavaScript workspace's root, #145) and a reference for the release
+// description. Inside a Git repository the committed HEAD tree of dir is
+// used unless workingTree is set (or dir has no tracked files); elsewhere
+// the folder is tarred.
+func archiveSource(out io.Writer, workingTree bool, dir string) ([]byte, string, error) {
+	tarDir := firstNonEmpty(dir, ".")
 	// --show-prefix is the current directory relative to the repository root
 	// ("" at the root, "sub/dir/" below). `git archive HEAD` run inside a
 	// subdirectory archives just that subtree with paths relative to it.
-	prefix, err := gitOutput("rev-parse", "--show-prefix")
+	prefix, err := gitOutputIn(dir, "rev-parse", "--show-prefix")
 	if err != nil {
 		fmt.Fprintln(out, "==> Archiving current directory (not a git repository)")
-		data, err := tarDirectory(".")
+		data, err := tarDirectory(tarDir)
 		return data, "", err
 	}
-	commit, _ := gitOutput("rev-parse", "--short=12", "HEAD")
-	if tracked, _ := gitOutput("ls-files", "--", "."); tracked == "" && !workingTree {
+	commit, _ := gitOutputIn(dir, "rev-parse", "--short=12", "HEAD")
+	if tracked, _ := gitOutputIn(dir, "ls-files", "--", "."); tracked == "" && !workingTree {
 		fmt.Fprintln(out, "    nothing here is committed yet; archiving the working tree instead")
 		workingTree = true
 	}
 	if workingTree {
 		fmt.Fprintf(out, "==> Archiving working tree (%s)\n", firstNonEmpty(commit, "uncommitted"))
-		data, err := tarDirectory(".")
+		data, err := tarDirectory(tarDir)
 		if commit != "" {
 			commit += "-dirty"
 		}
 		return data, commit, err
 	}
-	if dirty, _ := gitOutput("status", "--porcelain", "--", "."); dirty != "" {
+	if dirty, _ := gitOutputIn(dir, "status", "--porcelain", "--", "."); dirty != "" {
 		fmt.Fprintln(out, "    warning: uncommitted changes are not included (use --working-tree to deploy them)")
 	}
 	what := "HEAD"
@@ -342,6 +371,7 @@ func archiveSource(out io.Writer, workingTree bool) ([]byte, string, error) {
 	}
 	fmt.Fprintf(out, "==> Archiving %s (%s)\n", what, commit)
 	cmd := exec.Command("git", "archive", "--format=tar.gz", "HEAD")
+	cmd.Dir = dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	data, err := cmd.Output()
@@ -351,8 +381,12 @@ func archiveSource(out io.Writer, workingTree bool) ([]byte, string, error) {
 	return data, commit, nil
 }
 
-func gitOutput(args ...string) (string, error) {
+func gitOutput(args ...string) (string, error) { return gitOutputIn("", args...) }
+
+// gitOutputIn runs git in dir ("" for the current folder).
+func gitOutputIn(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
 	cmd.Stderr = io.Discard
 	b, err := cmd.Output()
 	if err != nil {

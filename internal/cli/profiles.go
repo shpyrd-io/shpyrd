@@ -199,7 +199,8 @@ func applyProfiles(pc *projectConfig, dir string) (*projectConfig, *detection) {
 			if pc.Build == nil {
 				pc.Build = &projectBuild{}
 			}
-			if len(p.Buildpacks) > 0 && len(pc.Build.Buildpacks) == 0 {
+			// A workspace package chooses its own buildpacks (#145).
+			if len(p.Buildpacks) > 0 && len(pc.Build.Buildpacks) == 0 && pc.Build.Workspace == "" {
 				pc.Build.Buildpacks = append([]string(nil), p.Buildpacks...)
 				det.inferred = append(det.inferred, inference{"build.buildpacks", "[" + strings.Join(p.Buildpacks, ", ") + "]"})
 			}

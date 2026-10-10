@@ -1,0 +1,16 @@
+# One package of a JavaScript workspace (npm, pnpm or Yarn), built in place
+# (shpyrd #145). Paketo's npm-install and yarn-install move workspace
+# packages into layers of their own; this installs the package and what it
+# needs in /workspace, runs its build script, and records its start script
+# as the web process. Node comes from node-engine, before it in the group
+# the controller composes for a project with build.workspace.
+api = "0.9"
+
+[buildpack]
+  id = "shpyrd/node-workspace"
+  version = "0.1.0"
+  name = "shpyrd JavaScript workspace"
+  homepage = "https://github.com/shpyrd-io/shpyrd/tree/main/buildpacks/node-workspace"
+
+[[stacks]]
+  id = "*"

@@ -1,0 +1,226 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+)
+
+// JavaScript workspaces (shpyrd #145): a package of an npm, pnpm or Yarn
+// workspace is deployed from its own folder. Its build needs the whole
+// workspace, so the deploy archives the workspace's root and names the
+// package with build.workspace.
+
+type jsWorkspace struct {
+	Root    string // the workspace's root, absolute
+	Package string // the package's path from the root, slash-separated
+	Manager string // npm, pnpm or yarn
+}
+
+// findWorkspace walks up from dir to stop (included; "" for the
+// filesystem's root) to the nearest folder that declares a workspace
+// listing dir; nil when none does.
+func findWorkspace(dir, stop string) (*jsWorkspace, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Only a folder with a package.json is a package ("packages/**" also
+	// matches a package's src).
+	if _, err := os.Stat(filepath.Join(abs, "package.json")); err != nil {
+		return nil, nil
+	}
+	for cur := abs; cur != stop && filepath.Dir(cur) != cur; {
+		cur = filepath.Dir(cur)
+		rel, err := filepath.Rel(cur, abs)
+		if err != nil {
+			return nil, err
+		}
+		if patterns, manager := workspacePatterns(cur); patterns != nil && workspaceListed(patterns, filepath.ToSlash(rel)) {
+			return &jsWorkspace{Root: cur, Package: filepath.ToSlash(rel), Manager: manager}, nil
+		}
+	}
+	return nil, nil
+}
+
+// workspacePatterns reads the folders a workspace root declares: pnpm's
+// pnpm-workspace.yaml, or package.json's workspaces (a list, or Yarn 1's
+// {packages: [...]}).
+func workspacePatterns(dir string) ([]string, string) {
+	if b, err := os.ReadFile(filepath.Join(dir, "pnpm-workspace.yaml")); err == nil {
+		var w struct {
+			Packages []string `yaml:"packages"`
+		}
+		if yaml.Unmarshal(b, &w) == nil && len(w.Packages) > 0 {
+			return w.Packages, "pnpm"
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil, ""
+	}
+	var pkg struct {
+		Workspaces json.RawMessage `json:"workspaces"`
+	}
+	if json.Unmarshal(b, &pkg) != nil || len(pkg.Workspaces) == 0 {
+		return nil, ""
+	}
+	var list []string
+	if json.Unmarshal(pkg.Workspaces, &list) != nil {
+		var yarn1 struct {
+			Packages []string `json:"packages"`
+		}
+		if json.Unmarshal(pkg.Workspaces, &yarn1) != nil {
+			return nil, ""
+		}
+		list = yarn1.Packages
+	}
+	manager := "npm"
+	if _, err := os.Stat(filepath.Join(dir, "yarn.lock")); err == nil {
+		manager = "yarn"
+	}
+	return list, manager
+}
+
+func workspaceListed(patterns []string, rel string) bool {
+	listed := false
+	for _, p := range patterns {
+		if neg := strings.TrimPrefix(p, "!"); neg != p {
+			if matchWorkspaceGlob(neg, rel) {
+				return false
+			}
+		} else if matchWorkspaceGlob(p, rel) {
+			listed = true
+		}
+	}
+	return listed
+}
+
+// matchWorkspaceGlob matches the managers' globs: path.Match within a
+// segment, "**" for any number of segments. The buildpack matches the same
+// way (buildpacks/node-workspace/lib/workspace.js).
+func matchWorkspaceGlob(pattern, p string) bool {
+	for strings.HasPrefix(pattern, "./") {
+		pattern = pattern[2:]
+	}
+	pattern = strings.TrimRight(pattern, "/")
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
+}
+
+func matchSegments(pat, segs []string) bool {
+	if len(pat) == 0 {
+		return len(segs) == 0
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(segs); i++ {
+			if matchSegments(pat[1:], segs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(segs) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pat[0], segs[0])
+	return ok && matchSegments(pat[1:], segs[1:])
+}
+
+// workspaceFor settles a local deploy's workspace: the one shpyrd.yaml
+// names, or the one found above the current folder. It fills
+// project.Build.Workspace and returns the folder to archive ("" for the
+// current one), and what it found ("" and nil when shpyrd.yaml said it).
+// A Dockerfile build (written in shpyrd.yaml, or the folder's own
+// Dockerfile) is left as it is.
+func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", nil, err
+	}
+	// A Dockerfile build, written or the package's own Dockerfile, stays
+	// one; only the workspace root's Dockerfile is passed over.
+	if b := project.Build; b != nil && (b.Strategy == shpyrdv1.StrategyDockerfile || b.Dockerfile != "" || b.Target != "") {
+		return "", nil, nil
+	}
+	if project.Build == nil || project.Build.Strategy == "" {
+		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); err == nil {
+			return "", nil, nil
+		}
+	}
+	if project.Build != nil && project.Build.Workspace != "" {
+		w := normalizeWorkspacePath(project.Build.Workspace)
+		project.Build.Workspace = w
+		for _, seg := range strings.Split(w, "/") {
+			if seg == "" || seg == "." || seg == ".." {
+				return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace must be a package's path from the workspace's root, like apps/web; got %q", w)
+			}
+		}
+		root := ""
+		if suffix := string(filepath.Separator) + filepath.FromSlash(w); strings.HasSuffix(cwd, suffix) {
+			root = strings.TrimSuffix(cwd, suffix)
+		} else if _, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(w), "package.json")); err == nil {
+			root = cwd
+		}
+		// The folder uploaded is a workspace that lists the package, inside
+		// the repository: a shpyrd.yaml never sends the folders above it.
+		inside := root != "" && (stop == "" || root == stop || strings.HasPrefix(root, stop+string(filepath.Separator)))
+		var patterns []string
+		if inside {
+			patterns, _ = workspacePatterns(root)
+		}
+		if !inside || patterns == nil || !workspaceListed(patterns, w) {
+			return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace %s is not a package of a workspace at this folder or above it, inside the repository", w)
+		}
+		return root, nil, nil
+	}
+	ws, err := findWorkspace(cwd, stop)
+	if err != nil || ws == nil {
+		return "", nil, err
+	}
+	if project.Build == nil {
+		project.Build = &projectBuild{}
+	}
+	project.Build.Workspace = ws.Package
+	if project.Build.Strategy == "" {
+		project.Build.Strategy = shpyrdv1.StrategyBuildpacks
+	}
+	return ws.Root, ws, nil
+}
+
+// normalizeWorkspacePath reads a package's path as people write folders:
+// "./apps/web/" is apps/web. ".." stays, for the checks to refuse.
+func normalizeWorkspacePath(p string) string {
+	p = strings.TrimSpace(p)
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimLeft(p[2:], "/")
+	}
+	return strings.TrimRight(p, "/")
+}
+
+// reportWorkspace says what detection found, as build profiles do; top is
+// the repository's root ("" outside one).
+func reportWorkspace(out io.Writer, ws *jsWorkspace, top string) {
+	where := ws.Root
+	if top != "" {
+		if rel, err := filepath.Rel(top, ws.Root); err == nil {
+			where = filepath.ToSlash(rel)
+			if rel == "." {
+				where = "the repository's root"
+			}
+		}
+	}
+	article := "a"
+	if ws.Manager == "npm" {
+		article = "an"
+	}
+	fmt.Fprintf(out, "==> Detected %s %s workspace at %s; building %s in it\n", article, ws.Manager, where, ws.Package)
+	fmt.Fprintf(out, "    build.workspace=%s (shpyrd.yaml values win; --save writes it there)\n", ws.Package)
+}
