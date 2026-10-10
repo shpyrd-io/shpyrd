@@ -242,3 +242,17 @@ func TestWorkspaceWrittenLoosely(t *testing.T) {
 		t.Errorf("applyTo: %+v", app.Spec.Build)
 	}
 }
+
+// A build profile's buildpack list (the Vite app's web-servers) is left out
+// for a workspace package, which chooses its own buildpacks: the API would
+// refuse the two together.
+func TestProfilesLeaveAWorkspacesBuildpacksAlone(t *testing.T) {
+	dir := t.TempDir()
+	files(t, dir, map[string]string{
+		"package.json": `{"name":"web","devDependencies":{"vite":"6"},"scripts":{"build":"vite build"}}`,
+	})
+	pc, _ := applyProfiles(&projectConfig{Build: &projectBuild{Workspace: "apps/web"}}, dir)
+	if len(pc.Build.Buildpacks) != 0 {
+		t.Errorf("buildpacks = %v", pc.Build.Buildpacks)
+	}
+}
