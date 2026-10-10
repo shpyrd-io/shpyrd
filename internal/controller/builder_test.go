@@ -129,3 +129,46 @@ func TestComposedBuilderReadsTheProjectsVariables(t *testing.T) {
 		}
 	}
 }
+// A package of a JavaScript workspace (#145) gets a builder of its own:
+// Node from node-engine, then the workspace buildpack, then a Procfile if
+// there is one; with a buildpack list as well, it is refused.
+func TestWorkspaceBuilder(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "site", Namespace: "app-site"},
+		Spec:       shpyrdv1.AppSpec{Build: &shpyrdv1.Build{Workspace: "apps/website"}},
+	}
+	r, c := newTestReconciler(t, app)
+	r.Config.RegistryHost = "10.96.0.50:5000"
+	ref, err := r.reconcileBuilder(ctx, app)
+	if err != nil || ref["kind"] != "Builder" || ref["name"] != "site-builder" {
+		t.Fatalf("ref = %v %v", ref, err)
+	}
+	b := &unstructured.Unstructured{}
+	b.SetGroupVersionKind(BuilderGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-site", Name: "site-builder"}, b); err != nil {
+		t.Fatal(err)
+	}
+	order, _, _ := unstructured.NestedSlice(b.Object, "spec", "order")
+	if len(order) != 1 {
+		t.Fatalf("groups = %d", len(order))
+	}
+	var names []string
+	for _, e := range order[0].(map[string]interface{})["group"].([]interface{}) {
+		m := e.(map[string]interface{})
+		n := m["name"].(string)
+		if m["optional"] == true {
+			n += "?"
+		}
+		names = append(names, n)
+	}
+	if got := strings.Join(names, ","); got != "paketo-node-engine,shpyrd-node-workspace,paketo-procfile?" {
+		t.Errorf("group = %s", got)
+	}
+
+	both := app.DeepCopy()
+	both.Spec.Build.Buildpacks = []string{"node"}
+	if _, err := r.reconcileBuilder(ctx, both); err == nil || !strings.Contains(err.Error(), "build.buildpacks") {
+		t.Errorf("workspace and buildpacks: %v", err)
+	}
+}

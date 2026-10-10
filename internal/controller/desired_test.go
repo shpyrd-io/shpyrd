@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	corev1 "k8s.io/api/core/v1"
 	"strings"
 	"testing"
 
@@ -115,3 +116,40 @@ func TestImageTagPerWorkspace(t *testing.T) {
 }
 
 func ids58(id string) string { return ids.Short(id) }
+
+// The workspace's package reaches the build as BP_NODE_WORKSPACE (#145);
+// a value the project writes in build.env wins.
+func TestWorkspaceBuildVariable(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "site", Namespace: "app-site"},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Blob: &shpyrdv1.BlobSource{URL: "http://blobs/a.tgz", SHA256: "abc"}},
+			Build:  &shpyrdv1.Build{Workspace: "apps/website"},
+		},
+	}
+	r, _ := newTestReconciler(t, app)
+	r.Config.RegistryHost = "10.96.0.50:5000"
+	env := func() map[string]string {
+		img, err := r.Config.desiredKpackImage(app)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, _, _ := unstructured.NestedSlice(img.Object, "spec", "build", "env")
+		out := map[string]string{}
+		for _, e := range list {
+			m := e.(map[string]interface{})
+			if _, seen := out[m["name"].(string)]; seen {
+				t.Errorf("%s twice", m["name"])
+			}
+			out[m["name"].(string)] = m["value"].(string)
+		}
+		return out
+	}
+	if got := env()["BP_NODE_WORKSPACE"]; got != "apps/website" {
+		t.Errorf("BP_NODE_WORKSPACE = %q", got)
+	}
+	app.Spec.Build.Env = []corev1.EnvVar{{Name: "BP_NODE_WORKSPACE", Value: "apps/other"}}
+	if got := env()["BP_NODE_WORKSPACE"]; got != "apps/other" {
+		t.Errorf("written value lost: %q", got)
+	}
+}

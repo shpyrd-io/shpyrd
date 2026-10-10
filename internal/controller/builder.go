@@ -50,6 +50,15 @@ var BuildpackCatalog = map[string]string{
 // Stacks maps the stack names of shpyrd.yaml to ClusterStack names.
 var Stacks = map[string]string{"": "jammy", "base": "jammy", "full": "jammy-full"}
 
+// A package of a JavaScript workspace (#145) builds with Node alone from
+// Paketo, then shpyrd's workspace buildpack (buildpacks/node-workspace),
+// which reads the package's path from NodeWorkspaceEnv.
+const (
+	NodeEngineBuildpack    = "paketo-node-engine"
+	NodeWorkspaceBuildpack = "shpyrd-node-workspace"
+	NodeWorkspaceEnv       = "BP_NODE_WORKSPACE"
+)
+
 // CatalogNames lists the short names, sorted, for error messages.
 func CatalogNames() []string {
 	seen := map[string]bool{}
@@ -86,7 +95,8 @@ func ResolveBuildpack(name string) (string, bool) {
 
 // composesBuild says the app asked for a builder of its own.
 func composesBuild(app *shpyrdv1.App) bool {
-	return app.Spec.Build != nil && (len(app.Spec.Build.Buildpacks) > 0 || app.Spec.Build.Stack != "" || app.Spec.Build.SystemPackages)
+	b := app.Spec.Build
+	return b != nil && (len(b.Buildpacks) > 0 || b.Stack != "" || b.SystemPackages || b.Workspace != "")
 }
 
 // detectionOrder is the platform builder's order, as short names.
@@ -121,7 +131,15 @@ func (c Config) desiredBuilder(app *shpyrdv1.App, buildEnv bool) (*unstructured.
 	}
 	var group []interface{}
 	names := app.Spec.Build.Buildpacks
-	if len(names) == 0 {
+	if app.Spec.Build.Workspace != "" {
+		if len(names) > 0 {
+			return nil, fmt.Errorf("build.workspace chooses its own buildpacks; remove build.buildpacks")
+		}
+		g := append(append([]interface{}{}, prefix...), entry(NodeEngineBuildpack), entry(NodeWorkspaceBuildpack))
+		procfile := entry(BuildpackCatalog["procfile"])
+		procfile["optional"] = true
+		group = []interface{}{map[string]interface{}{"group": append(g, procfile)}}
+	} else if len(names) == 0 {
 		// No explicit list: the platform's detection, one group per
 		// language in the platform builder's order, on the chosen stack.
 		for _, n := range detectionOrder {
