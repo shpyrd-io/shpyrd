@@ -9,8 +9,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
@@ -180,7 +182,7 @@ func TestAppMountsSingleInstanceVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	if web.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType || *web.Spec.Replicas != 1 {
-		t.Errorf("web must be Recreate with 1 replica: %s/%d", web.Spec.Strategy.Type, *web.Spec.Replicas)
+		t.Errorf("web must be Recreate with its declared single instance: %s/%d", web.Spec.Strategy.Type, *web.Spec.Replicas)
 	}
 	if len(web.Spec.Template.Spec.Volumes) != 2 || web.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName != "vol-data" {
 		t.Errorf("web volumes = %+v", web.Spec.Template.Spec.Volumes)
@@ -367,5 +369,105 @@ func TestVolumeRestoreInPlace(t *testing.T) {
 	got = reconcileVolume(t, r, got)
 	if _, still := got.Annotations[shpyrdv1.AnnotationRestoreFrom]; still || got.Status.RestoredFrom != "data-before" {
 		t.Errorf("second restore done: annotations=%v restoredFrom=%q", got.Annotations, got.Status.RestoredFrom)
+	}
+}
+
+// newSleepTestReconciler is newTestReconciler with the KEDA kinds known to
+// the client's scheme and REST mapper, so the reconciler sees the sleep
+// add-on as installed and hands the web replica count to the scaler.
+func newSleepTestReconciler(t *testing.T, objs ...client.Object) (*AppReconciler, client.Client) {
+	t.Helper()
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(objs...).
+		WithStatusSubresource(&shpyrdv1.App{}, &shpyrdv1.Volume{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
+	}
+	return r, c
+}
+
+// #94: an app with a single-instance volume and a sleep policy. The volume
+// is a ceiling of one instance, not a count the controller writes back:
+// once the scaler has put the app to sleep (0 instances) a reconcile must
+// leave it asleep, or the app restarts every 30 s.
+func TestSleepingAppKeepsSingleInstanceVolume(t *testing.T) {
+	vol := testVolume("acervo", "5Gi", "")
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "app-demo", Generation: 1},
+		Spec: shpyrdv1.AppSpec{
+			Image: "ghcr.io/o/demo:1",
+			Processes: map[string]shpyrdv1.Process{"web": {
+				Port:    ptr.To[int32](8080),
+				Sleep:   &shpyrdv1.SleepSpec{After: "10m", Resuming: "page"},
+				Volumes: []shpyrdv1.VolumeMount{{Name: "acervo", Path: "/dados"}},
+			}},
+		},
+	}
+	r, c := newSleepTestReconciler(t, app, vol)
+	got := runReconcile(t, r, app)
+	if got.Status.Phase == shpyrdv1.PhaseFailed {
+		t.Fatalf("unexpected failure: %s", got.Status.Message)
+	}
+	key := types.NamespacedName{Namespace: "app-demo", Name: "demo-web"}
+	web := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), key, web); err != nil {
+		t.Fatal(err)
+	}
+	if web.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType || *web.Spec.Replicas != 1 {
+		t.Fatalf("awake: want Recreate with 1 instance, got %s/%d", web.Spec.Strategy.Type, *web.Spec.Replicas)
+	}
+	so := &unstructured.Unstructured{}
+	so.SetGroupVersionKind(ScaledObjectGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "demo-sleep"}, so); err != nil {
+		t.Fatal(err)
+	}
+	if maxR, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount"); maxR != 1 {
+		t.Errorf("the scaler's maximum = %d, want the single instance", maxR)
+	}
+
+	// The scaler puts the app to sleep.
+	web.Spec.Replicas = ptr.To[int32](0)
+	if err := c.Update(context.Background(), web); err != nil {
+		t.Fatal(err)
+	}
+	got = runReconcile(t, r, got)
+	if got.Status.Phase == shpyrdv1.PhaseFailed {
+		t.Fatalf("unexpected failure: %s", got.Status.Message)
+	}
+	if err := c.Get(context.Background(), key, web); err != nil {
+		t.Fatal(err)
+	}
+	if *web.Spec.Replicas != 0 {
+		t.Errorf("asleep: the reconcile woke the app (replicas %d, want 0)", *web.Spec.Replicas)
+	}
+	if web.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("asleep: strategy = %s, want Recreate", web.Spec.Strategy.Type)
+	}
+	if got.Status.Processes["web"].Pinned != "single-instance volume acervo" {
+		t.Errorf("pinned note = %q", got.Status.Processes["web"].Pinned)
+	}
+
+	// The ceiling holds: a count above one is brought back to one.
+	web.Spec.Replicas = ptr.To[int32](3)
+	if err := c.Update(context.Background(), web); err != nil {
+		t.Fatal(err)
+	}
+	runReconcile(t, r, got)
+	if err := c.Get(context.Background(), key, web); err != nil {
+		t.Fatal(err)
+	}
+	if *web.Spec.Replicas != 1 {
+		t.Errorf("over the ceiling: replicas %d, want 1", *web.Spec.Replicas)
 	}
 }
