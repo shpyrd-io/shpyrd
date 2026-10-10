@@ -55,10 +55,13 @@ export const boundaries: Boundary[] = [
   },
   {
     id: 'licence',
-    claim: 'Open source, MPL-2.0.',
+    claim: 'Open source: the core under MPL-2.0.',
     limit:
-      'You can read it, run it, and plan to operate it yourself. That isn’t ' +
-      'the same as zero migration work.',
+      'The enterprise features (company sign-in, sleep, costs, the MCP server) ' +
+      'are in the same repository under the shpyrd Enterprise License: always ' +
+      'on in shpyrd cloud, on with a license on your own cluster. You can read ' +
+      'it all, run it, and plan to operate it yourself. That isn’t the same as ' +
+      'zero migration work.',
     step: null,
   },
 ]

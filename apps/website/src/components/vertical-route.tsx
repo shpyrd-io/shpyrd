@@ -55,7 +55,10 @@ export function VerticalRoute({
         setShown(true);
         seen.disconnect();
       },
-      { threshold: 0.2 },
+      // As soon as the list's top is well into the window: a share of the
+      // whole list would wait, on a phone, until the reader has scrolled
+      // past its first step.
+      { threshold: 0, rootMargin: "0px 0px -15% 0px" },
     );
     seen.observe(list);
     return () => seen.disconnect();

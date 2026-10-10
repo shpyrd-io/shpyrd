@@ -240,7 +240,7 @@ export function FeatureBlocks() {
         alt="The Deploy from Git dialog: a repository, a branch and a directory, built with buildpacks"
         className="md:col-span-2"
       >
-        Buildpacks or your Dockerfile; new commits on the branch rebuild by themselves.
+        Buildpacks or your Dockerfile; with buildpacks, new commits on the branch rebuild by themselves.
       </Shot>
 
       <Block
