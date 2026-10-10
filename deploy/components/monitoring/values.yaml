@@ -64,6 +64,140 @@ additionalPrometheusRulesMap:
                 old, or none has completed yet. The Backups page of the operator
                 console shows the schedule and the recent runs; start a backup
                 from there and check that it completes.
+  # Storage and databases (RFC-0060, the storage plan): what an operator
+  # must act on when a disk, a database or a node is not where it should be.
+  shpyrd-storage:
+    groups:
+      - name: shpyrd-storage
+        rules:
+          # The database's WAL archive is what makes its backups recoverable
+          # to a point in time. A quiet database still archives a segment
+          # every few minutes, so none for 30 minutes means archiving broke.
+          - alert: DatabaseWALArchiveStale
+            expr: |
+              cnpg_pg_stat_archiver_seconds_since_last_archival > 1800
+            for: 10m
+            labels:
+              severity: critical
+              shpyrd_component: postgres
+            annotations:
+              summary: A database has not archived WAL for 30 minutes
+              description: >-
+                The database {{ $labels.namespace }}/{{ $labels.cluster }} has
+                not written to its WAL archive for more than 30 minutes, so its
+                backups cannot restore past the last archived segment. The
+                database's page in the console shows the archive's last error;
+                the object storage behind it is the usual cause.
+          # The last archive attempt failed and nothing succeeded since.
+          - alert: DatabaseWALArchiveFailing
+            expr: |
+              cnpg_pg_stat_archiver_seconds_since_last_failure < cnpg_pg_stat_archiver_seconds_since_last_archival
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: postgres
+            annotations:
+              summary: A database's WAL archiving is failing
+              description: >-
+                The last WAL archive attempt of {{ $labels.namespace }}/{{ $labels.cluster }}
+                failed and none has succeeded since. Point-in-time recovery
+                stops at the last archived segment until it recovers.
+          # An instance of a database is not ready: restarting, waiting for
+          # its disk to attach on another node, or refused by a quota.
+          - alert: DatabaseInstanceNotReady
+            expr: |
+              max by (namespace, pod) (kube_pod_status_ready{condition="true"} == 0)
+              and on (namespace, pod)
+              kube_pod_labels{label_cnpg_io_cluster!=""}
+            for: 5m
+            labels:
+              severity: critical
+              shpyrd_component: postgres
+            annotations:
+              summary: A database instance has not been ready for 5 minutes
+              description: >-
+                The database instance {{ $labels.namespace }}/{{ $labels.pod }}
+                is not ready. Its disk may be attaching to another node after a
+                drain (a few minutes after a node loss), or its pod was refused.
+                The database's page in the console shows the instance's state.
+          # A pod stuck creating for 5 minutes: most often a disk that cannot
+          # be attached or mounted (still attached elsewhere, or missing).
+          - alert: PodStuckCreating
+            expr: |
+              max by (namespace, pod) (kube_pod_container_status_waiting_reason{reason="ContainerCreating"} == 1)
+            for: 5m
+            labels:
+              severity: warning
+              shpyrd_component: volumes
+            annotations:
+              summary: A pod has been creating for 5 minutes
+              description: >-
+                {{ $labels.namespace }}/{{ $labels.pod }} has been starting for
+                more than 5 minutes. A disk that cannot be attached or mounted is
+                the usual cause: the pod's events say which one and why.
+          # A released disk is one a migration or a deletion left behind,
+          # kept for a way back. Three days is the agreed keep.
+          - alert: RetainedDiskOlderThanThreeDays
+            expr: |
+              kube_persistentvolume_status_phase{phase="Released"} == 1
+            for: 72h
+            labels:
+              severity: warning
+              shpyrd_component: volumes
+            annotations:
+              summary: A retained disk is more than three days old
+              description: >-
+                The disk {{ $labels.persistentvolume }} was released more than
+                three days ago and is still kept. If the migration or deletion
+                it came from is verified, release it; it costs money while it
+                exists.
+          # A provider disk nobody claims still bills by the hour.
+          - alert: UnclaimedBlockDisk
+            expr: |
+              kube_persistentvolume_status_phase{phase="Available"} == 1
+              and on (persistentvolume)
+              kube_persistentvolume_info{storageclass!="shpyrd-local", storageclass!=""}
+            for: 1h
+            labels:
+              severity: warning
+              shpyrd_component: volumes
+            annotations:
+              summary: A block disk has been unclaimed for an hour
+              description: >-
+                The disk {{ $labels.persistentvolume }} exists at the provider
+                but nothing claims it. Bind it to what it was made for, or
+                delete it.
+          # A virtual machine attaches a bounded number of block volumes (32
+          # on Oracle Cloud); a node past 24 needs a neighbour.
+          - alert: NodeBlockVolumeAttachmentsHigh
+            expr: |
+              count by (node) (kube_volumeattachment_info) > 24
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: volumes
+            annotations:
+              summary: A node has more than 24 block volumes attached
+              description: >-
+                The node {{ $labels.node }} has more than 24 block volumes
+                attached; the machine stops accepting them at 32. Add a node to
+                its pool before that happens.
+          # A node started with the registry-trust taint and kept it: the
+          # trust was never written, so project pods cannot land there.
+          - alert: NodeRegistryTrustPending
+            expr: |
+              kube_node_spec_taint{key="shpyrd.io/registry-trust"} == 1
+            for: 5m
+            labels:
+              severity: warning
+              shpyrd_component: registry
+            annotations:
+              summary: A node has waited more than 5 minutes for registry trust
+              description: >-
+                The node {{ $labels.node }} still carries the taint that keeps
+                project pods away until it trusts the in-cluster registry. The
+                registry trust pod on that node did not finish; its logs say
+                why.
 
 prometheusOperator:
   admissionWebhooks:
