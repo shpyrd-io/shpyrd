@@ -29,3 +29,21 @@ func TestPrintMigrationSaysNothingAboutDataItNeverRead(t *testing.T) {
 		t.Errorf("stopped run = %q", got)
 	}
 }
+
+// A volume nothing mounts is its own group; a mounted one belongs to the
+// group of the process that mounts it, whose id is the process's.
+func TestVolumeGroupFindsAMountedVolumeByItsProcess(t *testing.T) {
+	groups := []placementGroupAnswer{
+		{ID: "volume:data", Volumes: []string{"data"}, Nodes: []string{"10.0.1.38"}},
+		{ID: "process:web", Processes: []string{"web"}, Volumes: []string{"fluxyr"}, Nodes: []string{"10.0.1.38"}, StorageClasses: []string{"shpyrd-local"}},
+	}
+	if g := volumeGroup(groups, "data"); g == nil || g.ID != "volume:data" {
+		t.Errorf("own group: %+v", g)
+	}
+	if g := volumeGroup(groups, "fluxyr"); g == nil || g.ID != "process:web" {
+		t.Errorf("mounted volume must be found through its process: %+v", g)
+	}
+	if g := volumeGroup(groups, "uploads"); g != nil {
+		t.Errorf("unknown volume: %+v", g)
+	}
+}

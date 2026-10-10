@@ -82,42 +82,35 @@ The project id is the one the console's project archives page shows. Say
 				return err
 			}
 			var placement struct {
-				Groups []struct {
-					ID             string   `json:"id"`
-					Nodes          []string `json:"nodes"`
-					StorageClasses []string `json:"storageClasses"`
-				} `json:"groups"`
+				Groups []placementGroupAnswer `json:"groups"`
 			}
 			if err := json.Unmarshal(raw, &placement); err != nil {
 				return fmt.Errorf("unexpected answer: %w", err)
 			}
-			group := "volume:" + volume
-			var node string
-			found := false
-			for _, g := range placement.Groups {
-				if g.ID != group {
-					continue
-				}
-				found = true
-				if len(g.Nodes) > 0 {
-					node = g.Nodes[0]
-				}
-				if len(g.StorageClasses) == 1 && g.StorageClasses[0] == class {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s is already on %s; nothing to move.\n", volume, class)
-					return nil
-				}
-			}
-			if !found {
+			g := volumeGroup(placement.Groups, volume)
+			if g == nil {
 				return fmt.Errorf("the project has no volume %q (groups are listed on its placement page)", volume)
+			}
+			if len(g.StorageClasses) == 1 && g.StorageClasses[0] == class {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s is already on %s; nothing to move.\n", volume, class)
+				return nil
+			}
+			var node string
+			if len(g.Nodes) > 0 {
+				node = g.Nodes[0]
 			}
 			if node == "" {
 				return errors.New("the volume is on no node (it has never been mounted); it needs a node for the copy, mount it first")
 			}
+			with := ""
+			if len(g.Processes) > 0 {
+				with = " (with " + strings.Join(g.Processes, ", ") + ", which mounts it)"
+			}
 			if !yes {
-				fmt.Fprintf(cmd.OutOrStdout(), "This pauses project %s while %s is copied to %s on %s. Add --yes to go on.\n", project, volume, class, node)
+				fmt.Fprintf(cmd.OutOrStdout(), "This pauses project %s while %s%s is copied to %s on %s. Add --yes to go on.\n", project, volume, with, class, node)
 				return nil
 			}
-			body, _ := json.Marshal(map[string]string{"group": group, "node": node, "targetClass": class})
+			body, _ := json.Marshal(map[string]string{"group": g.ID, "node": node, "targetClass": class})
 			out, err := serverRequest(ctx, k, "POST", "api/cluster/project-archives/"+project+"/move", body, "application/json")
 			if err != nil {
 				return err
@@ -226,6 +219,34 @@ new instance goes), --no-checks accepts the numbers and finishes.`,
 	cmd.Flags().DurationVar(&wait, "wait", 20*time.Minute, "how long to wait for each step")
 	cmd.Flags().BoolVar(&back, "back", false, "return a database that stopped on two instances to its old volume")
 	return cmd
+}
+
+// placementGroupAnswer is a group of the placement page: a process with the
+// volumes it mounts, or a volume on its own.
+type placementGroupAnswer struct {
+	ID             string   `json:"id"`
+	Processes      []string `json:"processes"`
+	Volumes        []string `json:"volumes"`
+	Nodes          []string `json:"nodes"`
+	StorageClasses []string `json:"storageClasses"`
+}
+
+// volumeGroup finds the group a volume belongs to: its own when nothing
+// mounts it, the mounting process's otherwise (the group's id is the
+// process's then, so the id alone would miss it).
+func volumeGroup(groups []placementGroupAnswer, volume string) *placementGroupAnswer {
+	for i := range groups {
+		g := &groups[i]
+		if g.ID == "volume:"+volume {
+			return g
+		}
+		for _, v := range g.Volumes {
+			if v == volume {
+				return g
+			}
+		}
+	}
+	return nil
 }
 
 func printMigration(w io.Writer, res *storagemigrate.Result) {
