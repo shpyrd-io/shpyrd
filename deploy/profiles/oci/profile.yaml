@@ -150,4 +150,4 @@ runlevels:
   - name: rc3
     components: [kpack, monitoring, dns, control-plane-db, cluster-autoscaler]
   - name: rc4
-    components: [shpyrd, platform-backup]
+    components: [shpyrd, platform-backup, platform-snapshots]

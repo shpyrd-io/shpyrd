@@ -1,0 +1,56 @@
+# A provider snapshot of every block disk of the profile's class, nightly:
+# the projects' disks and databases and the platform's own, the newest
+# SHPYRD_SNAPSHOT_KEEP kept per disk (RFC-0060). A database's own backups
+# are its real backup; the snapshot is the fallback, and for a disk it is the
+# backup. `shpyrd-ctl cluster snapshots take` runs the same by hand.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: platform-snapshots
+spec:
+  schedule: "${SHPYRD_SNAPSHOT_SCHEDULE}"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: platform-snapshots
+            app.kubernetes.io/part-of: shpyrd
+        spec:
+          serviceAccountName: shpyrd-server
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: snapshots
+              image: ${SHPYRD_SERVER_IMAGE}
+              args: ["snapshots"]
+              env:
+                - name: SHPYRD_SYSTEM_NAMESPACE
+                  value: shpyrd-system
+                - name: SHPYRD_STORAGE_CLASS
+                  value: "${SHPYRD_STORAGE_CLASS}"
+                - name: SHPYRD_SNAPSHOT_CLASS
+                  value: "${SHPYRD_SNAPSHOT_CLASS}"
+                - name: SHPYRD_SNAPSHOT_KEEP
+                  value: "${SHPYRD_SNAPSHOT_KEEP}"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]

@@ -34,8 +34,14 @@ var BarmanObjectStoreGVK = schema.GroupVersionKind{Group: "barmancloud.cnpg.io",
 // ResourceQuota on requests then refuses the whole pod ("must specify
 // requests.cpu for: plugin-barman-cloud") and the database never comes back
 // from the restart that turning backups on causes.
+//
+// The requests are small on purpose: the sidecar idles between WAL
+// segments, and a data node carries many databases; 50m each pushed the
+// one data node of production past its CPU and two primaries could not be
+// scheduled back onto their local volumes. 10m is what an idle archiver
+// needs; the limits leave room for a base backup.
 var BarmanSidecarResources = map[string]interface{}{
-	"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+	"requests": map[string]interface{}{"cpu": "10m", "memory": "64Mi"},
 	"limits":   map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
 }
 

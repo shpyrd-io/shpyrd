@@ -623,6 +623,7 @@ func (s *Server) routes() error {
 	archives.GET("/placement", s.getProjectPlacement)
 	archives.POST("/placement/measure", s.measureProjectPlacement)
 	archives.POST("/move", s.moveProject)
+	archives.DELETE("/placement/pins", s.clearProjectPins) // the node pins a move left: shpyrd.io/process-nodes, shpyrd.io/project-node
 	archives.DELETE("/retained-volumes/:volume", s.deleteRetainedMigrationDisk)
 	archives.POST("/export", s.exportProjectArchive)
 	archives.GET("/download", s.downloadProjectArchive)
