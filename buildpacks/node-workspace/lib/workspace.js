@@ -68,7 +68,7 @@ function pnpmPackages() {
 
 // The managers' globs: "*" and "?" within a segment, "**" any number of
 // segments, a leading "!" excludes. The CLI matches the same way
-// (internal/cli/workspace.go).
+// (internal/cli/jsworkspace.go).
 function matches(pattern, p) {
   const pat = pattern.replace(/^(\.\/)+/, "").replace(/\/+$/, "").split("/");
   return segments(pat, p.split("/"));

@@ -218,6 +218,10 @@ type projectBuild struct {
 	Buildpacks []string `json:"buildpacks,omitempty"`
 	// Stack is "base" (default) or "full".
 	Stack string `json:"stack,omitempty"`
+	// Workspace is the package to build inside a JavaScript workspace, as
+	// a path from the workspace's root (shpyrd #145). The CLI finds it when
+	// deploying from a package's folder.
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // applyTo writes the project settings into the App spec. Declared process
@@ -300,7 +304,7 @@ func (pc *projectConfig) applyTo(a *shpyrdv1.App) error {
 		default:
 			return fmt.Errorf("shpyrd.yaml: build.strategy must be buildpacks or dockerfile, got %q", pc.Build.Strategy)
 		}
-		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target, Buildpacks: pc.Build.Buildpacks, Stack: pc.Build.Stack}
+		b := &shpyrdv1.Build{Strategy: pc.Build.Strategy, Builder: pc.Build.Builder, Dockerfile: pc.Build.Dockerfile, Target: pc.Build.Target, Buildpacks: pc.Build.Buildpacks, Stack: pc.Build.Stack, Workspace: pc.Build.Workspace}
 		if b.Strategy == "" && (b.Dockerfile != "" || b.Target != "") {
 			b.Strategy = shpyrdv1.StrategyDockerfile
 		}
