@@ -3,7 +3,7 @@ title: How to contribute
 description: Set up a development environment, find something to work on and send a change.
 ---
 
-shpyrd is developed in the open at [github.com/shpyrd-io/shpyrd](https://github.com/shpyrd-io/shpyrd) under the MPL-2.0 license. Issues, ideas and pull requests are welcome. {% .lead %}
+shpyrd is developed in the open at [github.com/shpyrd-io/shpyrd](https://github.com/shpyrd-io/shpyrd) under the MPL-2.0 license. The exception is `ee/`, the enterprise features: its source is public under the shpyrd Enterprise License, and only the shpyrd team changes it for now, so pull requests there are not accepted. Issues, ideas and pull requests are welcome everywhere else. {% .lead %}
 
 ## Where to start
 
@@ -18,7 +18,7 @@ Docker, Go 1.27 and Node.js 24, the version in `.nvmrc` (`nvm use`; for the appl
 
 ```shell
 git clone https://github.com/shpyrd-io/shpyrd && cd shpyrd
-make cli                      # ./bin/shpyrd
+make cli                      # ./bin/shpyrd and ./bin/shpyrd-ctl
 make dev-cluster              # kind cluster with everything except the shpyrd server
 make dev-deploy               # build the server image, load it into kind, apply the shpyrd component
 ```
@@ -37,11 +37,11 @@ How an application is made, and how a design session runs, are in [apps/AGENTS.m
 Useful targets:
 
 ```shell
-make test vet                 # Go tests and vet
+make test vet                 # Go tests, the applications' tests, and go vet
 make generate                 # regenerate the App CRD and deepcopy code after editing api/
 make ui                       # build the applications the server embeds
 npm --prefix apps/workspace run lint && npm --prefix apps/workspace run test
-shpyrd cluster init --only shpyrd --set SHPYRD_SERVER_IMAGE=shpyrd-server:dev   # re-apply one component
+./bin/shpyrd-ctl cluster init --only shpyrd --set SHPYRD_SERVER_IMAGE=shpyrd-server:dev   # re-apply one component
 ```
 
 Manifests under `deploy/` are embedded in the binaries: rebuild the CLI after editing them.

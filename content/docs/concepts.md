@@ -7,14 +7,15 @@ On shpyrd cloud you work with projects, processes, builds, releases and config v
 
 ## Project and resources
 
-A project is what you deploy to: a name, a domain, config vars and a set of **resources**. It has a display name ("My Shop") and a **slug** derived from it (`my-shop`) that identifies it everywhere precise: `--project`, `shpyrd.yaml`, the dashboard URL `/projects/my-shop` and the hostname `my-shop.<domain>`. The name can change; the slug cannot. Resource types today are the **app** (your code with its process types) and **volumes** (persistent disks); databases and caches follow (see [Resources](/docs/resources) and the [roadmap](/docs/roadmap)). A project without a web process is a worker or an agent; no separate type is needed. Under the hood (what you see with `kubectl` on a cluster you run yourself) the project is a namespace, `app-<slug>` (label `shpyrd.io/project`), holding an `App` custom resource (`shpyrd.io/v1alpha1`), the `Volume` resources and everything the controller creates for them. `kubectl get apps,volumes.shpyrd.io -A` lists them all; `shpyrd projects info` and the dashboard's Resources card show the same list with status and what uses each resource.
+A project is what you deploy to: a name, a domain, config vars and a set of **resources**. It has a display name ("My Shop") and a **slug** derived from it (`my-shop`) that names it everywhere precise: `--project`, `shpyrd.yaml`, the dashboard URL `/projects/my-shop` and its address. Both can change: `shpyrd projects rename my-shop "My Store" --slug my-store`; the old address redirects for 30 days. Underneath, a project has an id that never changes. Resource types are the **app** (your code with its process types), **volumes** (persistent disks), **PostgreSQL databases** and **Redis-compatible stores** (see [Resources](/docs/resources) and [Databases and caches](/docs/databases)). A project without a web process is a worker or an agent; no separate type is needed. Under the hood (what you see with `kubectl` on a cluster you run yourself) the project is a namespace named by its id, `p-<id>` (older projects: `app-<slug>`), labelled `shpyrd.io/project=<slug>`. It holds an `App` custom resource (`shpyrd.io/v1alpha1`), the `Volume`, `Postgres` and `Redis` resources and everything the controllers create for them. `kubectl get apps,volumes.shpyrd.io -A` lists them all; `shpyrd projects info` and the project's **Resources** page show the same list with status and what uses each resource.
 
 ```yaml
 apiVersion: shpyrd.io/v1alpha1
 kind: App
 metadata:
-  name: hello-world
-  namespace: app-hello-world
+  name: 0f8k2m...            # the project's id, short form
+  namespace: p-0f8k2m...
+  labels: { shpyrd.io/project: hello-world }
 spec:
   source:
     git: { url: https://github.com/shpyrd-io/shpyrd, revision: main }
@@ -26,7 +27,7 @@ spec:
     env: [{ name: BP_GO_TARGETS, value: ./cmd/web:./cmd/worker }]
 status:
   phase: Running
-  url: https://hello-world.127.0.0.1.nip.io
+  url: https://hello-world.127.0.0.1.nip.io   # a local cluster
   releases: [...]
 ```
 
@@ -41,7 +42,7 @@ Two size kinds exist:
 - **shared**: the `cpu` value is a ceiling the process may use; it is guaranteed a 1/8 share of it and borrows the rest from idle neighbours (Kubernetes burstable QoS). Many small shared instances fit on one node.
 - **dedicated**: requests equal limits — whole cores, Guaranteed QoS.
 
-Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-s` (up to 0.5 CPU, 64 MiB). Databases and stores have lists of their own with the same names ([Databases](/docs/databases#sizes)). `shpyrd sizes list` shows the full catalog.
+Memory is never overcommitted: requests equal limits for both kinds. The default size is `shared-m` (up to 0.5 CPU, 256 MiB) for Node.js, Ruby, Python and Java, and `shared-s` (up to 0.5 CPU, 64 MiB) otherwise. Databases and stores have lists of their own with the same names ([Databases](/docs/databases#sizes)). `shpyrd sizes list` shows the full catalog.
 
 Instances are named the way Heroku names dynos: `web.1`, `web.2`, `worker.1`, in creation order. Logs and the dashboard use these names.
 
@@ -71,22 +72,22 @@ When an image has a `release` process type (a `Procfile` line `release: bundle e
 
 ## Config vars
 
-Config vars are environment variables for every process. Three sources, in increasing priority:
+Config vars are environment variables for every process. Four sources, in increasing priority:
 
 1. **Global vars** — set once by a workspace admin, on the workspace's Config vars page or with `shpyrd globals set`; every project of the workspace receives them.
 2. **`env:` in `shpyrd.yaml`** — plain, non-secret vars committed with the code (`RACK_ENV`, `NODE_ENV`). Travels with the deploy; wins over globals.
 3. **Secrets** — written with `shpyrd secrets set`, stored in Secret `<app>-env`. Write-only: names and timestamps are shown, values never. Wins over `env:`.
 4. **Bound vars** — injected by attached resources (`DATABASE_URL`, `REDIS_URL`); win over secrets of the same name.
 
-Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `RUNNING_IN_SHPYRD`, `SHPYRD_PROJECT`, `SHPYRD_PROJECT_ID`, `SHPYRD_PROJECT_NAME`, `SHPYRD_WORKSPACE`, `SHPYRD_PROCESS`, `SHPYRD_RELEASE`, `SHPYRD_ISSUER`) that cannot be overridden from `shpyrd.yaml`.
+Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `RUNNING_IN_SHPYRD`, `SHPYRD_PROJECT`, `SHPYRD_PROJECT_ID`, `SHPYRD_PROJECT_NAME`, `SHPYRD_WORKSPACE`, `SHPYRD_PROCESS`, `SHPYRD_RELEASE`, `SHPYRD_RELEASE_VERSION`, `SHPYRD_REVISION`, `SHPYRD_PROJECT_REVISION`, `SHPYRD_ISSUER`; `SHPYRD_RELEASE_PHASE` in the release phase) that cannot be overridden from `shpyrd.yaml`.
 
 ## Domains and TLS
 
-A project's `web` process is published at its own address - on shpyrd cloud, `https://acme-<name>.shpyrd.app`, or `https://<name>.<domain>` when the workspace brings a domain of its own; on a cluster you run yourself, `https://<name>.<domain>` (additional `domains` can be declared). Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
+A project's `web` process is published at its own address - on shpyrd cloud, `https://<workspace>-<slug>.shpyrd.app` (the workspace itself is at `https://<workspace>.shpyrd.cloud`), or under the workspace's own domain when it brings one; on a cluster you run yourself, `https://<slug>.<domain>`. Additional `domains` can be declared. Certificates come from cert-manager: the development CA on the local profile, a public or private CA on cloud profiles.
 
 ## Extensions
 
-Self-hosted: optional capabilities are **extensions**, compiled into shpyrd, switched on per cluster with `shpyrd extensions enable`, each bringing its installer component, resource types and commands. `auth-local` (accounts for the dashboard) is the first; databases and caches follow. See [Extensions and sign-in](/docs/extensions).
+Self-hosted: optional capabilities are **extensions**, compiled into shpyrd, switched on per cluster with `shpyrd extensions enable`, each bringing its installer component, resource types and commands. Among them: `auth-local` (accounts for the dashboard), `postgres`, `redis`, `object-storage`, `mail` and `sleep`. See [Extensions and sign-in](/docs/extensions).
 
 ## Environment profile
 

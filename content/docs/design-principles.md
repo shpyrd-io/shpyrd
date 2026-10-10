@@ -9,7 +9,7 @@ A repository with a `go.mod`, a `package.json` or a `pom.xml` is a deployable pr
 
 ## A familiar model on Kubernetes objects
 
-Projects, processes, instances (`web.1`), builds, releases, config vars, rollbacks: the model people already know. Underneath, each concept is a plain Kubernetes object in the project's namespace (an `App`, Deployments, Secrets, kpack `Image`s) that `kubectl` shows and GitOps tools can manage. Nothing is hidden in a database.
+Projects, processes, instances (`web.1`), builds, releases, config vars, rollbacks: the model people already know. Underneath, each workload is a plain Kubernetes object in the project's namespace (an `App`, Deployments, Secrets, kpack `Image`s, `Postgres` and `Volume` resources) that `kubectl` shows. Who belongs where (workspaces, people, teams, grants) lives in the platform's own PostgreSQL database, and the platform backup carries it.
 
 ## Releases are the unit of change
 
@@ -17,7 +17,7 @@ Every deploy, config change and rollback is a numbered release that records its 
 
 ## One binary, no external tooling
 
-The CLI embeds the manifests and drives kind, Helm and Kustomize as libraries. Users need Docker and nothing else; there is no Flux, Terraform or shell script between them and a working cluster. The same manifests can be exported for teams that want GitOps.
+The CLI embeds the manifests and drives kind, Helm and Kustomize as libraries. On shpyrd cloud there is nothing to install but the CLI. For a local cluster, users need Docker and nothing else; there is no Flux or shell script between them and a working cluster. On a cloud provider, a Terraform root in `contrib/` creates the infrastructure once, and the CLI does the rest. The same manifests can be exported for teams that want GitOps.
 
 ## Ordered, observable installation
 
@@ -25,7 +25,7 @@ Platform components are installed in runlevels with explicit readiness condition
 
 ## Abstract the cloud, do not emulate it
 
-Load balancing, DNS, TLS and the registry are provided by an **environment profile**. The local profile uses host ports, a wildcard `nip.io` domain, a development CA and an in-cluster registry; cloud profiles will use the provider's services. No LocalStack-style emulation.
+Load balancing, DNS, TLS and the registry are provided by an **environment profile**. The local profile uses host ports, a wildcard `nip.io` domain, a development CA and an in-cluster registry; the cloud profiles (`oci`, `aws`) use the provider's load balancers, DNS, certificates and object storage. No LocalStack-style emulation.
 
 ## Secrets are write-only
 

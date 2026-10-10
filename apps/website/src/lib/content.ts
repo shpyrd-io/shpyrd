@@ -86,6 +86,8 @@ function configFor(seen: Map<string, number>): Config {
       // what it did before it answered, in `steps`.
       // How to add shpyrd to each agent: a tab for each.
       "agent-setup": { render: "AgentSetup", selfClosing: true },
+      // The site's "Add to <agent>" button: the installer for the reader's computer.
+      "add-to-agent": { render: "AddToAgent", selfClosing: true, attributes: { manual: { type: Boolean, default: false } } },
       chat: {
         render: "Chat",
         attributes: { title: { type: String, default: "Your agent" }, detail: { type: String } },

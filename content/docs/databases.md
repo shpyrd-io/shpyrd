@@ -5,14 +5,14 @@ description: PostgreSQL databases (CloudNativePG) and Redis-compatible stores (V
 
 A project can have PostgreSQL databases (run by the CloudNativePG operator) and Valkey or Redis caches and queues. Attach one to the app and it appears as `DATABASE_URL` or `REDIS_URL`. {% .lead %}
 
-On shpyrd cloud, add them from the project page: the Resources card's **Add resource** menu creates a database or a store, and **Attach** hands it to the app; `shpyrd attach` and `shpyrd detach` work from the CLI as well ([Attaching](#attaching)).
+On shpyrd cloud, add them from the project's **Resources** page: its **Add resource** menu creates a database or a store, and **Attach** hands it to the app; `shpyrd attach` and `shpyrd detach` work from the CLI as well ([Attaching](#attaching)).
 
 {% callout title="Self-hosted" %}
-The `shpyrd pg` and `shpyrd redis` commands on this page need a cluster you run: pass `--context` (see the [CLI reference](/docs/cli)). There, two extensions add the data stores:
+On a cluster you run, two extensions add the data stores. The `shpyrd pg` and `shpyrd redis` commands then work the same way, signed in with `shpyrd login`, or through a kubeconfig with `--context` (see the [CLI reference](/docs/cli)):
 
 ```shell
-shpyrd extensions enable postgres
-shpyrd extensions enable redis
+shpyrd-ctl extensions enable postgres
+shpyrd-ctl extensions enable redis
 ```
 {% /callout %}
 
@@ -27,7 +27,7 @@ shpyrd pg psql db --project shop -- -c 'select version()'
 shpyrd pg delete db --project shop --yes                  # refused while attached (or --force)
 ```
 
-Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; storage grows (`shpyrd pg create` again is not needed, edit the resource) but never shrinks.
+Each database is its own [CloudNativePG](https://cloudnative-pg.io) cluster in the project namespace: streaming replication and failover when `--instances` is 2 or 3, a `db-rw` service for the primary and `db-ro` for replicas, a database `app` owned by user `app`. The instance size sets CPU and memory; The data volume sits on the node's own disk, like every project volume ([Volumes](/docs/resources#volumes)); the database's backups are what protect it.
 
 ### Sizes
 
@@ -49,7 +49,7 @@ From 256 MiB up, `shared_buffers` is a quarter of the memory, `effective_cache_s
 
 How they were chosen: each size up to 1 GiB ran PostgreSQL 17 in its memory, less what CloudNativePG's instance manager keeps, with pgbench on every connection the app may open, a write load and then hash-and-sort queries on all of them while an index was built. None was killed for memory; the peaks were 86% (`shared-s`), 87% (`shared-m`), 57% (`shared-l`) and 41% (`shared-xl`) of what was left.
 
-`shpyrd pg resize`, or **Resize** on the project's Resources card, gives a database another size of the list; its instances restart with it one at a time, so a database with one instance is unavailable for a moment. Memory goes down only when the size does. The workspace's memory and CPU limits count databases with the processes: a database or a resize that would pass them is refused, and so is a process scaled into memory a database holds.
+`shpyrd pg resize`, or **Resize** on the project's **Resources** page, gives a database another size of the list; its instances restart with it one at a time, so a database with one instance is unavailable for a moment. Memory goes down only when the size does. The workspace's memory and CPU limits count databases with the processes: a database or a resize that would pass them is refused, and so is a process scaled into memory a database holds.
 
 A database made before databases had sizes of their own is given the Postgres size with the CPU and memory it runs with (one that named no size ran 256 MiB: `shared-m`), and restarts once with that size's settings: its connections become the size's.
 
@@ -67,7 +67,7 @@ shpyrd pg restore db --as db-restored --to 2026-09-25T16:58:02Z --project shop
 
 These commands speak the workspace API: signed in with `shpyrd login`, they need no kubeconfig. `pg info` and the dashboard show the state (`on, daily at 02:00 UTC, kept 7d, last …, recoverable from …`). A restore never touches the source: it creates a **new** database recovered to the moment you name (RFC 3339, UTC; the latest possible when omitted), any second inside the window, with its own credentials; when it is ready, `shpyrd attach db-restored` and detach the old one. Restores are refused before the earliest recoverable point, in the future and onto the database itself; the new database takes the source's size unless `--size` names another Postgres size. `shpyrd pg backups disable` stops archiving; existing backups stay restorable until the database is deleted, when its bucket goes with it.
 
-Backups live in the cluster's object store and go with the cluster: a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents. Copying the in-cluster store to the provider's bucket is the open follow-up; until then, `pg_dump` what must survive the cluster.
+Where the backups live depends on the platform's object store ([Object storage](/docs/extensions#object-storage)). On shpyrd cloud, and on a cluster you run that was installed with `--object-storage-credentials-file`, they go through the platform's S3 gateway into a bucket at the cloud provider: they outlive the cluster, and the operator can reach them there during a recovery. On a cluster without the gateway (a local one), they live in the cluster's own store and go with the cluster; `pg_dump` what must survive it. Either way, a [platform backup](/docs/backups) restores the database's definition on a new cluster, not its contents.
 
 ### Sleep
 
@@ -75,14 +75,17 @@ A database nobody is connected to can be put to sleep: its instance stops, its v
 
 ```shell
 shpyrd pg sleep db --project shop --after 30m      # sleep after 30 min without client connections
-shpyrd pg sleep db --project shop --after off      # never sleep
+shpyrd pg sleep db --project shop --after off      # never sleep, whatever the workspace's default
+shpyrd pg sleep db --project shop --after default  # follow the workspace's default again
 shpyrd pg suspend db --project shop                # stop now and stay stopped; connections are refused
 shpyrd pg resume db --project shop
 ```
 
+A workspace can set a default quiet period for its databases; a database with no policy of its own follows it. `off` is a policy of its own: the database stays awake even when the workspace's default changes.
+
 How it decides: every five minutes the platform counts the database's client sessions. Any connection counts — an application's idle connection pool keeps its database awake, on purpose; a database sleeps when its app has no connection open, which is what happens when the app itself is [asleep](/docs/cli#deploying-and-running) or has no pool. The database will not sleep when the count is stale (the metrics pipeline is down), when the quiet period has not elapsed, or when the wake proxy is not running; `pg info` says which.
 
-How it wakes: the database's address stays the same. While it sleeps, connections land on a proxy that holds them, starts the database and hands them over once PostgreSQL accepts connections — the client sees a slow connect, not an error. **Expect about 30–40 s** for the first connection after sleep on a cloud block volume (PostgreSQL start plus volume attach); the next connections take milliseconds. An app whose first request needs its database therefore sees the app wake plus the database wake; the app's `resuming: page` mode covers that with a "waking up" page, `wait` mode may exceed HTTP client timeouts.
+How it wakes: the database's address stays the same. While it sleeps, connections land on a proxy that holds them, starts the database and hands them over once PostgreSQL accepts connections — the client sees a slow connect, not an error. **Expect up to 30–40 s** for the first connection after sleep, while PostgreSQL starts; the next connections take milliseconds. An app whose first request needs its database therefore sees the app wake plus the database wake; the app's `resuming: page` mode covers that with a "waking up" page, `wait` mode may exceed HTTP client timeouts.
 
 Only single-instance databases sleep; a database with `--instances 2` or more exists to be available. Setting or removing a policy re-releases the attached apps once (their database host changes to the platform's wake-capable address). Sleep keeps the volume; it is not a backup — see above for those.
 
@@ -123,6 +126,6 @@ shpyrd attach sessions --prefix SESSIONS        # SESSIONS_URL, ... when two sto
 shpyrd detach db --project shop
 ```
 
-Attaching adds a binding to the app and releases it (`Attach Postgres db`); the variables are read-only in the Config tab and in `shpyrd secrets list`, shown with the resource providing them, and they win over a config var of the same name. If the resource is still provisioning, the app waits (phase `Pending`, "waiting for an attached resource") and releases when it is ready. Detaching removes the variables in a new release, and rollback restores the attachments a release had. The dashboard's Resources card has **Attach**/**Detach** buttons and an **Add resource** menu with the same forms.
+Attaching adds a binding to the app and releases it (`Attach Postgres db`); the variables are read-only on the project's **Config** page and in `shpyrd secrets list`, shown with the resource providing them, and they win over a config var of the same name. If the resource is still provisioning, the app waits (phase `Pending`, "waiting for an attached resource") and releases when it is ready. Detaching removes the variables in a new release, and rollback restores the attachments a release had. The project's **Resources** page has **Attach**/**Detach** buttons and an **Add resource** menu with the same forms.
 
 Resources live inside the project's network policy: only the project's own processes can reach them, other projects cannot.

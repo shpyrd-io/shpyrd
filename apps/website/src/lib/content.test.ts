@@ -66,4 +66,10 @@ describe("the texts of the site", () => {
     expect(html).not.toMatch(/https:\/\/shpyrd\.io/);
     expect(html).toMatch(/\/screenshots\//);
   });
+
+  it("puts the site's Add to button in Getting Started, with no manual link of its own", () => {
+    const found = JSON.stringify(read("getting-started").content).match(/"name":"AddToAgent","attributes":(\{[^}]*\})/);
+    expect(found).toBeTruthy();
+    expect(JSON.parse(found![1])).toEqual({ manual: false });
+  });
 });

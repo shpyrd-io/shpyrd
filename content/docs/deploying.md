@@ -12,11 +12,11 @@ Signed in to your workspace with `shpyrd login` (see [Getting started](/docs/get
 ## Create a project
 
 ```shell
-shpyrd projects create "My Service"        # slug my-service: namespace app-my-service + App resource
+shpyrd projects create "My Service"        # slug my-service: a namespace of its own (p-<id>) + App resource
 shpyrd projects create "My Service" --save # also writes shpyrd.yaml (project: my-service, plus what the directory's build profile implies)
 ```
 
-Names are lowercase letters, digits and dashes (max 40 characters) and become the hostname: `https://my-service.<domain>`.
+The name is free text. The slug derived from it (lowercase letters, digits and dashes, max 40 characters; `--slug` chooses it) becomes the address: on shpyrd cloud `https://<workspace>-<slug>.shpyrd.app`, such as `https://acme-my-service.shpyrd.app`; on a cluster you run, `https://my-service.<domain>`. `shpyrd projects rename --slug` changes it later; the old address redirects for 30 days.
 
 A new project asks its visitors to sign in: only people with a role on it can open the app, and the app receives who they are. For a site anyone may open, create it with `--public` or switch later with `shpyrd access set public`. See [Sign-in for your app](/docs/app-access).
 
@@ -30,14 +30,16 @@ shpyrd deploy                 # app from shpyrd.yaml, or --project my-service
 
 What happens:
 
-1. **Archive.** The committed tree of the current directory (`git archive HEAD`) is packed; run it from a subdirectory to deploy just that service of a monorepo. Uncommitted changes are not included unless you pass `--working-tree` (also chosen automatically when nothing in the directory is committed yet). Outside a Git repository the directory is tarred.
+1. **Archive.** The committed tree of the current directory (`git archive HEAD`) is packed; run it from a subdirectory to deploy just that service of a monorepo. Uncommitted changes are not included unless you pass `--working-tree` (also chosen automatically when nothing in the directory is committed yet). Outside a Git repository the directory is tarred, without `.git` and `node_modules`.
 2. **Upload.** The archive is sent to your workspace over its API (self-hosted, with `--context`: through the Kubernetes API server).
 3. **Build.** In the cluster, with the Paketo buildpacks (kpack) or, when the directory has a `Dockerfile`, with BuildKit; the CLI streams every step.
 4. **Release.** The controller rolls the new image out process by process and prints the release number and URL.
 
 ```
 ==> Archiving HEAD:examples/hello (654f4925638e)
+==> Building with buildpacks
 ==> Uploading source (2.6 KiB)
+    archive 3f1c2a9b7d04
 ==> Building
 ===> prepare
 ===> detect
@@ -64,7 +66,7 @@ shpyrd deploy --no-wait                                                         
 Deploying from Git is also available in the dashboard (**Deploy** button, or when creating the project).
 
 {% callout title="Which languages?" %}
-Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
+Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, PHP, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
 {% /callout %}
 
 ## Buildpacks: languages, stacks and system packages
@@ -119,7 +121,7 @@ build:
 
 ### Buildpacks and stacks
 
-`build.buildpacks` pins the buildpack group the project uses (names from `shpyrd sizes list`); `build.stack` chooses the base image. The full stack (`jammy-full`) carries more system libraries than the base (`jammy`, default) and is useful when a language extension needs a C library that is present on Ubuntu but not in Paketo's minimal base image:
+`build.buildpacks` pins the buildpack group the project uses (names in [shpyrd.yaml](/docs/shpyrd-yaml#fields)); `build.stack` chooses the base image. The full stack (`jammy-full`) carries more system libraries than the base (`jammy`, default) and is useful when a language extension needs a C library that is present on Ubuntu but not in Paketo's minimal base image:
 
 ```yaml
 build:
@@ -163,9 +165,9 @@ web:     bundle exec puma -C config/puma.rb
 Released v2: Deploy abc123def456
 ```
 
-The command's output streams into the deploy (`release | ...`) and stays in `shpyrd logs --process release`. `shpyrd projects info` lists the process types, including `release`, and a pending or failed release phase; the project page shows the phase while it runs and, when it fails, the reason, the output and a **Run it again** button (`shpyrd redeploy` does the same: with a failed release command, a redeploy runs the command again rather than restarting instances that never rolled out).
+The command's output streams into the deploy (`release | ...`) and stays in `shpyrd logs --process release`. `shpyrd projects info <project>` lists the process types, including `release`, and a pending or failed release phase; the project page shows the phase while it runs and, when it fails, the reason, the output and a **Run it again** button (`shpyrd redeploy` does the same: with a failed release command, a redeploy runs the command again rather than restarting instances that never rolled out).
 
-For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml`:
+The release command runs at the `web` process's size unless `processes.release` sets its own. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
 
 ```yaml
 processes:
@@ -211,7 +213,7 @@ processes:
 
 From Git, detection is not possible; say so explicitly: `shpyrd deploy --git https://github.com/o/r --dockerfile` (optionally `--dockerfile deploy/Dockerfile`). The dashboard's **Deploy** dialog has the same choice. Git sources with a Dockerfile are rebuilt when the revision or the build settings change, not on every new commit as buildpack builds are; pass a commit or redeploy to rebuild a branch.
 
-Failures show BuildKit's error in the CLI, the Activity panel and `shpyrd projects info`; the previous release keeps serving. `examples/hello-docker` in the repository is a complete example.
+Failures show BuildKit's error in the CLI, the Activity panel and `shpyrd projects info <project>`; the previous release keeps serving. `examples/hello-docker` in the repository is a complete example.
 
 ## Processes and sizes
 
@@ -234,7 +236,11 @@ Scale at any time; counts survive deploys:
 
 ```shell
 shpyrd scale web=3 worker=2
+shpyrd resize web=shared-l worker=dedicated-s   # change the size; a release
+shpyrd sleep my-service --after 15m             # scale web to zero when idle (sleep extension)
 ```
+
+Without a size, a process gets `shared-m` for Node.js, Ruby, Python and Java, and `shared-s` for the rest. `shpyrd sizes list` shows the catalog.
 
 ## Config vars
 
@@ -244,7 +250,7 @@ shpyrd secrets unset LOG_LEVEL
 shpyrd secrets list            # names and when each was last set; values are never shown
 ```
 
-Every change is a release (`Set DATABASE_URL config var`) and restarts the processes with the new environment. The dashboard's **Config** tab does the same, including pasting `.env` files.
+Every change is a release (`Set DATABASE_URL config var`) and restarts the processes with the new environment. The project's **Config** page does the same, including pasting `.env` files.
 
 Plain, non-secret variables can also live in `shpyrd.yaml` under `env:` and travel with the code — useful for things like `RACK_ENV`, `RAILS_ENV` or `NODE_ENV` that belong in the repository rather than in the cluster's secret store:
 
@@ -268,7 +274,7 @@ A build can reach the project's database: it runs in the project's own network. 
 
 ### Global config vars
 
-Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a platform admin and injected into every process of every project:
+Settings every project should have (an `OPENAI_API_KEY`, a region) are set once by a workspace admin and injected into every process of every project of the workspace:
 
 ```shell
 shpyrd globals set OPENAI_API_KEY=sk-... REGION=eu
@@ -276,7 +282,7 @@ shpyrd globals unset REGION
 shpyrd globals list            # names and when each was set; values are never shown
 ```
 
-Globals come first in the environment: a project's own config var of the same name wins, and variables from attached resources win over both. A change is a **Global config change** release in every project that receives them (the Cluster page's card asks first and says how many). `shpyrd secrets list` and the Config tab show them as *provided by cluster* and mark project vars that override one. A project opts out in `shpyrd.yaml`:
+Globals come first in the environment: a project's own config var of the same name wins, and variables from attached resources win over both. A change is a **Global config change** release in every project that receives them (the workspace's **Config vars** page asks first and says how many). `shpyrd secrets list` and the project's **Config** page show them as *provided by cluster* and mark project vars that override one. A project opts out in `shpyrd.yaml`:
 
 ```yaml
 globals: false                       # none of them
@@ -289,9 +295,11 @@ shpyrd configures probes automatically. No configuration is needed for the commo
 
 | Process type | Default probe |
 |---|---|
-| `web` (or any process with a port) | HTTP `GET /` on `PORT` |
-| Any process with `port:` set | TCP on that port |
+| `web` | HTTP `GET /` on `PORT` |
+| Any other process with `port:` set | TCP on that port |
 | Workers and other processes without a port | None — relies on restart-on-crash |
+
+The same check runs three ways: at start (the grace period), for readiness (3 failures take the instance out of rotation) and for liveness (6 failures in a row restart it). Defaults: every 10s, a 5s timeout per check, a 30s grace period (also the minimum) and a 5s shutdown delay.
 
 The deploy waits for each new instance to pass its readiness probe before the old one is removed, so traffic is always served. If a new instance never becomes healthy the rollout stalls, the Activity panel shows the reason (exit code, probe error) and a rollback button; the old instances keep serving.
 
@@ -303,7 +311,8 @@ processes:
     healthCheck:
       path: /healthz          # HTTP GET on PORT; replaces the default /
       interval: 5s
-      gracePeriod: 30s        # startup time before failures count
+      timeout: 3s             # per check
+      gracePeriod: 60s        # startup time before failures count
       shutdownDelay: 5s       # drain time before SIGTERM
   worker:
     healthCheck:
@@ -316,13 +325,14 @@ processes:
       disabled: true          # no probe
 ```
 
-`shpyrd projects info` shows the health config per process. `shpyrd.yaml` changes take effect on the next deploy.
+`shpyrd projects info <project>` shows the health config per process. `shpyrd.yaml` changes take effect on the next deploy.
 
 ## Shell and one-off commands
 
 ```shell
 shpyrd shell                          # bash (or sh) in web.1
 shpyrd shell --instance worker.2      # a specific instance
+shpyrd shell --process worker         # the first instance of a process type
 shpyrd shell -- cat /etc/os-release   # run one command and return its exit code
 ```
 
@@ -334,11 +344,7 @@ shpyrd run --size shared-l python manage.py import big.csv
 shpyrd run --detach ./nightly.sh            # start and return; follow with shpyrd logs -p run
 ```
 
-`shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). Instances left by `--detach` or a killed terminal are cleaned up after they finish.
-
-{% callout title="Self-hosted" %}
-`shpyrd run`, and `shpyrd shell` given a command, need a cluster you run: pass `--context`. Signed in to a workspace, `shpyrd shell` opens the image's shell.
-{% /callout %}
+`shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). A one-off instance stops after an hour at most; `--detach` leaves it running until then.
 
 ## Volumes
 
@@ -365,7 +371,7 @@ Volumes are persistent: they outlive deploys, scaling and crashes and are delete
 shpyrd logs --project shop -f
 ```
 
-The **Logs** tab streams every instance live. The [Logs](/docs/logs) page covers the log agent, the on-node limits and drains to your log provider.
+The project's **Logs** page streams every instance live. The [Logs](/docs/logs) page covers the log agent, the on-node limits and drains to your log provider.
 
 ## Releases and rollback
 
@@ -390,7 +396,7 @@ A rollback is refused while another release is still rolling out (`--force` over
 
 ## When something fails
 
-The project says what failed, in words, in the dashboard, the CLI (`shpyrd projects info`) and the workspace's MCP server alike:
+The project says what failed, in words, in the dashboard, the CLI (`shpyrd projects info <project>`) and the workspace's MCP server alike:
 
 - **A build**: the script that was running and, when the build's output makes it plain, why - a variable the build reads and nobody set, a module that is not installed, a source no buildpack recognises. The output itself is the build's log: `shpyrd logs --build`.
 - **The release phase**: that it failed, ran past its 30 minutes, or could not start. Its output is `shpyrd logs -p release`.
@@ -405,12 +411,12 @@ shpyrd redeploy                # new instances of the current release
 shpyrd redeploy --rebuild      # build the same source again
 ```
 
-Redeploy tries the current release again without creating a release. With a healthy or unhealthy release it starts new instances of it (a rolling restart: the fix for an instance stuck on a dependency that came back). When the last build failed - a registry hiccup, a flaky download - it builds the same source again instead, and the release that results is a normal deploy. The project page has the same button; in the card of a failed release it reads **Retry build**.
+Redeploy tries the current release again without creating a release. With a healthy or unhealthy release it starts new instances of it (a rolling restart: the fix for an instance stuck on a dependency that came back). When the last build failed - a registry hiccup, a flaky download - it builds the same source again instead, and the release that results is a normal deploy. The project page has the same button; after a failed build it reads **Build the same source again**.
 
 ## Open and inspect
 
 ```shell
-shpyrd open                 # opens https://my-service.<domain>
+shpyrd open                 # opens https://acme-my-service.shpyrd.app (shpyrd cloud) or https://my-service.<domain>
 shpyrd projects info my-service     # status, releases and every resource of the project (app, volumes...)
 shpyrd projects list
 ```
@@ -418,7 +424,7 @@ shpyrd projects list
 ## Destroy
 
 ```shell
-shpyrd projects destroy my-service      # deletes namespace app-my-service and everything in it
+shpyrd projects destroy my-service      # deletes the project's namespace (p-<id>; older projects: app-<slug>) and everything in it
 ```
 
 The command warns about the data on the project's volumes before asking for confirmation. Images stay in the registry.

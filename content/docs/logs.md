@@ -8,11 +8,12 @@ Every process writes to stdout and stderr; shpyrd names the instance (`web.1`, `
 ## Live logs
 
 ```shell
-shpyrd logs --project shop              # last 200 lines of every instance
+shpyrd logs --project shop              # last 100 lines of every instance (-n to change)
 shpyrd logs --project shop -f -p worker # follow one process type
+shpyrd logs --project shop --build      # the latest build's output
 ```
 
-The dashboard's **Logs** tab streams the same lines with a process filter, a text filter and level highlighting. There is nothing to set up: on shpyrd cloud and on a cluster you run yourself alike, this path reads from the Kubernetes API with nothing enabled.
+The project's **Logs** page streams the same lines. Pick a process and a minimum level (Everything, Info and up, Warnings and up, Errors only), filter by text, switch **Live** off to pause, and **Raw** to see the lines as written. There is nothing to set up: on shpyrd cloud and on a cluster you run yourself alike, this path reads from the Kubernetes API with nothing enabled.
 
 ## The log agent
 
@@ -29,7 +30,7 @@ Lines that are JSON get `level` and `msg` promoted and the rest kept in `fields`
 On a cluster you run yourself, the operator switches the agent on with `shpyrd extensions enable logs-agent`.
 {% /callout %}
 
-**Bounded on the node.** Each container keeps at most 20 MiB of logs on disk (two files of 10 MiB, rotated by the kubelet), so an application logging at full speed cannot fill a node. History beyond that lives wherever you drain it.
+**Bounded on the node.** The kubelet rotates every container's log files, so an application logging at full speed cannot fill a node. On a local cluster each container keeps at most 20 MiB (two files of 10 MiB); cloud profiles keep their provider's default. History beyond that lives wherever you drain it.
 
 **Fenced in.** A network policy lets the agent reach the drains' receivers (on the internet or in a platform namespace), DNS and the API server, and nothing in a project; only the platform reads its counters. On a local cluster the enriched stream is also written to the agent's own pod log (`kubectl logs -n logs-system daemonset/vector`), to see the pipeline at work; the cloud profiles leave that out.
 
@@ -44,8 +45,8 @@ A drain forwards lines as they are written. Two kinds of receiver:
 
 And three scopes:
 
-- a **project drain** receives that project's lines; project admins add them on the project page or with `--project`;
-- a **workspace drain** receives every project's lines of the workspace, labelled with the project; workspace admins add them on the workspace's Log drains page or with `--workspace`;
+- a **project drain** receives that project's lines; project admins add them on the project's **Drains** page or with `--project`;
+- a **workspace drain** receives every project's lines of the workspace, labelled with the project; workspace owners and admins add them on **Workspace › Log drains** or with `--workspace`;
 - a **cluster drain** (self-hosted) receives every project's lines of the platform; the operator of a cluster you run yourself adds them over a kubeconfig with `--cluster`.
 
 ```shell
