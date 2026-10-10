@@ -1,0 +1,17 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  apps/web:
+    dependencies:
+      '@monorepo/greeting':
+        specifier: workspace:*
+        version: link:../../packages/greeting
+
+  packages/greeting: {}

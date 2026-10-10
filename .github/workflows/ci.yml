@@ -214,7 +214,7 @@ jobs:
           make dev-load SERVER_IMAGE=shpyrd-server:ci CLUSTER=ci
           ./bin/shpyrd cluster init --context kind-ci --only shpyrd --set SHPYRD_SERVER_IMAGE=shpyrd-server:ci --http-port 8080 --https-port 8443
           ./bin/shpyrd cluster status --context kind-ci
-      - name: Deploy a buildpacks project and a Dockerfile project
+      - name: Deploy a buildpacks project, a Dockerfile project and a workspace package
         run: |
           set -euo pipefail
           export SHPYRD_CONTEXT=kind-ci
@@ -223,6 +223,9 @@ jobs:
           (cd examples/hello && ../../bin/shpyrd deploy --project hello-world --context kind-ci)
           ./bin/shpyrd projects create api --context kind-ci
           (cd examples/api && ../../bin/shpyrd deploy --project api --context kind-ci)
+          # A package of a pnpm workspace, from its own folder (#145).
+          ./bin/shpyrd projects create monorepo --public --context kind-ci
+          (cd examples/monorepo/apps/web && ../../../../bin/shpyrd deploy --project monorepo --context kind-ci)
           ./bin/shpyrd projects list --context kind-ci
       - name: The projects answer on their URLs
         run: |
@@ -260,6 +263,11 @@ jobs:
           done
           echo "public api: $code"; [ "$code" = "200" ]
           grep -q '"service"' /tmp/api-public.html
+          for i in $(seq 1 30); do
+            if curl -fsk --max-time 5 "https://monorepo.127.0.0.1.nip.io:8443/" >/tmp/monorepo.html; then break; fi
+            sleep 5
+          done
+          grep -q "Hello from a workspace package" /tmp/monorepo.html
       - name: Scale, logs, volumes, roles
         run: |
           set -euo pipefail
