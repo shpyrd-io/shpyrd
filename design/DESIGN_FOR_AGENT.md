@@ -138,15 +138,16 @@ system"** (or "release @shpyrd/ui", "lançar o design system").
    and open the pull request with the version's CHANGELOG section as its
    body. Merging it stages the version on npm: say so in the pull request.
 8. **After the merge**, follow `ui-release.yml` (`gh run list --workflow
-   ui-release.yml`) to the end: it stages the version.
+   ui-release.yml`) to the end: it tags the commit it packs
+   `ui-v<version>` and stages the version.
 9. **The person approves it on npm**, with two-factor authentication: on
    the package's page on npmjs.com, or `npm stage approve <id>` (`npm stage
    list @shpyrd/ui` gives the id). An agent cannot do this step: ask, and
-   wait.
+   wait. If the person rejects it instead, delete its tag (`git push origin
+   :refs/tags/ui-v<version>`) and stop.
 10. **Once approved**, check `npm view @shpyrd/ui@<version> version`, then
-    run `gh workflow run ui-release.yml` and follow it: it makes the
-    `ui-v<version>` tag, on the release's commit, and the GitHub release.
-    Check `gh release view ui-v<version>`.
+    run `gh workflow run ui-release.yml` and follow it: it makes the GitHub
+    release from the tag. Check `gh release view ui-v<version>`.
 11. **Report**: the version, what it carries, and that each project gets a
     pull request from its Dependabot to take it.
 

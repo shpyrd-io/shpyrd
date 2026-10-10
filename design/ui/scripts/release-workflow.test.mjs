@@ -54,8 +54,18 @@ describe("the release workflow", () => {
     expect(job("publish")).toMatch(/- name: Stage on npm\n\s+if: steps\.plan\.outputs\.publish == 'true'/);
   });
 
-  it("tags and makes the GitHub release only for a version npm has, that is, approved", () => {
-    expect(job("publish")).toMatch(/- name: Tag and GitHub release\n\s+if: steps\.plan\.outputs\.publish == 'false'/);
+  it("tags the run's own commit, the one npm gets, before staging it", () => {
+    const publish = job("publish");
+    expect(publish).toMatch(/- name: Tag the commit npm gets\n\s+if: steps\.plan\.outputs\.publish == 'true'/);
+    expect(publish).toContain('-f sha="$GITHUB_SHA"');
+    expect(publish.indexOf("- name: Tag the commit npm gets")).toBeLessThan(publish.indexOf("- name: Stage on npm"));
+  });
+
+  it("makes the GitHub release only for a version npm has, that is, approved, and only from that tag", () => {
+    const publish = job("publish");
+    expect(publish).toMatch(/- name: GitHub release\n\s+if: steps\.plan\.outputs\.publish == 'false'/);
+    expect(publish).toMatch(/gh release create[^\n]*--verify-tag/);
+    expect(publish).not.toMatch(/gh release create[^\n]*--target/);
   });
 
   it("makes the GitHub release only when it is missing, so a re-run does not fail on it", () => {
