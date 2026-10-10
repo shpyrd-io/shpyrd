@@ -26,6 +26,9 @@ func TestFirstDeployWaitsForTheProjectsBuilder(t *testing.T) {
 		contains string
 	}{
 		{"being made", 10 * time.Second, nil, shpyrdv1.PhaseBuilding, "preparing the project's builder"},
+		// An older Builder being remade (a changed buildpack, an upgrade):
+		// the grace runs from its Ready condition's last change.
+		{"remade", 30 * time.Minute, []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "message": "rebuilding", "lastTransitionTime": time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)}}, shpyrdv1.PhaseBuilding, "preparing the project's builder"},
 		{"failed for good", 5 * time.Minute, []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "message": "buildpack image not found"}}, shpyrdv1.PhaseFailed, "buildpack image not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

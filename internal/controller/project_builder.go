@@ -16,16 +16,17 @@ import (
 const builderGrace = 2 * time.Minute
 
 // projectBuilderFailure is the sentence for a project's Builder that is
-// not ready builderGrace after it was made, or "" while it may still be.
+// not ready builderGrace after it was made or last changed, or "" while
+// it may still be.
 func (r *AppReconciler) projectBuilderFailure(ctx context.Context, app *shpyrdv1.App) string {
 	b := &unstructured.Unstructured{}
 	b.SetGroupVersionKind(BuilderGVK)
 	if err := r.Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: builderName(app)}, b); err != nil {
 		return ""
 	}
-	if time.Since(b.GetCreationTimestamp().Time) < builderGrace {
-		return ""
-	}
+	// The grace runs from the Builder's making, or from its Ready
+	// condition's last change when kpack remakes an older one.
+	since := b.GetCreationTimestamp().Time
 	reason := "it is still not ready"
 	conds, _, _ := unstructured.NestedSlice(b.Object, "status", "conditions")
 	for _, raw := range conds {
@@ -39,6 +40,14 @@ func (r *AppReconciler) projectBuilderFailure(ctx context.Context, app *shpyrdv1
 		if msg, _ := m["message"].(string); msg != "" {
 			reason = msg
 		}
+		if at, _ := m["lastTransitionTime"].(string); at != "" {
+			if t, err := time.Parse(time.RFC3339, at); err == nil && t.After(since) {
+				since = t
+			}
+		}
+	}
+	if time.Since(since) < builderGrace {
+		return ""
 	}
 	return "The project's builder could not be made: " + reason + ". A fault of the platform, not of the app; deploying again later usually passes."
 }
