@@ -37,7 +37,7 @@ func helperFixture(t *testing.T, objects ...client.Object) (*Server, *shpyrdv1.A
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.projectClaimHelper(ctx, app, claim.Name, "data", operation, "", true)
+		_, err := s.projectClaimHelper(ctx, app, claim.Name, "data", operation, "", true, nil)
 		done <- err
 	}()
 	var pods corev1.PodList
