@@ -192,3 +192,29 @@ func TestArchiveSourceOfAWorkspaceRoot(t *testing.T) {
 		t.Errorf("archive = %v", names)
 	}
 }
+
+// A written build.workspace never makes the deploy upload a folder that is
+// not a workspace listing it, nor one outside the repository: a cloned
+// project's shpyrd.yaml cannot send the folders above it.
+func TestWorkspaceForWrittenPathIsAWorkspace(t *testing.T) {
+	top := t.TempDir()
+	files(t, top, map[string]string{
+		"home/project/package.json":  `{"name":"p"}`,
+		"repo/package.json":          `{"workspaces":["apps/*"]}`,
+		"repo/apps/web/package.json": `{"name":"web"}`,
+	})
+	// The folder's own name, written as a workspace: the parent is no
+	// workspace, so nothing above is uploaded.
+	t.Chdir(filepath.Join(top, "home/project"))
+	if root, _, err := workspaceFor(&projectConfig{Build: &projectBuild{Workspace: "project"}}, ""); err == nil {
+		t.Errorf("a parent that declares no workspace was accepted: %q", root)
+	}
+	t.Chdir(filepath.Join(top, "repo/apps/web"))
+	if _, _, err := workspaceFor(&projectConfig{Build: &projectBuild{Workspace: "../web"}}, ""); err == nil || !strings.Contains(err.Error(), "build.workspace") {
+		t.Errorf("a path with ..: %v", err)
+	}
+	// A real workspace, but above the repository's root: refused.
+	if _, _, err := workspaceFor(&projectConfig{Build: &projectBuild{Workspace: "apps/web"}}, filepath.Join(top, "repo/apps")); err == nil {
+		t.Error("a root outside the repository was accepted")
+	}
+}

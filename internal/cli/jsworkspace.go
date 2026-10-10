@@ -145,13 +145,25 @@ func workspaceFor(project *projectConfig, stop string) (string, *jsWorkspace, er
 	if project.Build != nil && project.Build.Workspace != "" {
 		w := strings.Trim(project.Build.Workspace, "/")
 		project.Build.Workspace = w
+		for _, seg := range strings.Split(w, "/") {
+			if seg == "" || seg == "." || seg == ".." {
+				return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace must be a package's path from the workspace's root, like apps/web; got %q", w)
+			}
+		}
+		root := ""
 		if suffix := string(filepath.Separator) + filepath.FromSlash(w); strings.HasSuffix(cwd, suffix) {
-			return strings.TrimSuffix(cwd, suffix), nil, nil
+			root = strings.TrimSuffix(cwd, suffix)
+		} else if _, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(w), "package.json")); err == nil {
+			root = cwd
 		}
-		if _, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(w), "package.json")); err == nil {
-			return cwd, nil, nil
+		// The folder uploaded is a workspace that lists the package, inside
+		// the repository: a shpyrd.yaml never sends the folders above it.
+		patterns, _ := workspacePatterns(root)
+		inside := stop == "" || root == stop || strings.HasPrefix(root, stop+string(filepath.Separator))
+		if root == "" || patterns == nil || !workspaceListed(patterns, w) || !inside {
+			return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace %s is not a package of a workspace at this folder or above it, inside the repository", w)
 		}
-		return "", nil, fmt.Errorf("shpyrd.yaml: build.workspace %s is neither this folder nor a package below it", w)
+		return root, nil, nil
 	}
 	ws, err := findWorkspace(cwd, stop)
 	if err != nil || ws == nil {
