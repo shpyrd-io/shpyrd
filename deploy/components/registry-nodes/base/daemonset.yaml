@@ -4,8 +4,13 @@
 # with a hosts.toml, read on the fly when config_path is set, as kind, OKE,
 # EKS and GKE images do; CRI-O: /etc/containers/certs.d/<host>/ca.crt, read
 # at pull time). The init container does the work; a pause container holds
-# the pod so the DaemonSet reports readiness and new nodes get it before any
-# project pod is scheduled (system-node-critical).
+# the pod so the DaemonSet reports readiness.
+#
+# Readiness orders nothing: a node is Ready seconds before this pod has run,
+# and a project pod scheduled in that gap fails to pull (shpyrd-io/shpyrd#44).
+# A node pool that starts its nodes tainted shpyrd.io/registry-trust=pending
+# (the OCI module's registry_trust_taint) closes the gap: project pods cannot
+# land until the init containers after the CA remove the taint.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -64,6 +69,7 @@ spec:
         app.kubernetes.io/name: registry-nodes
     spec:
       priorityClassName: system-node-critical
+      serviceAccountName: registry-nodes
       tolerations:
         - operator: Exists
       initContainers:
@@ -92,6 +98,61 @@ spec:
               mountPath: /host/etc/containerd
             - name: containers
               mountPath: /host/etc/containers
+        # Removing a taint that is not there is an error, and a strategic
+        # merge delete is not honoured for taints on a node that has other
+        # taints (the control plane of a kind cluster, a node the autoscaler
+        # is draining); so the taint is first set (a no-op where it is
+        # pending, a moment's NoSchedule where it was not) and then removed.
+        # On a node that never had it nothing is scheduled in that moment
+        # and nothing running is touched.
+        - name: taint
+          image: registry.k8s.io/kubectl:v1.36.1
+          args: [taint, nodes, $(NODE_NAME), shpyrd.io/registry-trust=pending:NoSchedule, --overwrite]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: KUBECACHEDIR
+              value: /tmp/kubectl
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        - name: untaint
+          image: registry.k8s.io/kubectl:v1.36.1
+          args: [taint, nodes, $(NODE_NAME), shpyrd.io/registry-trust-]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: KUBECACHEDIR
+              value: /tmp/kubectl
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.10
@@ -106,6 +167,8 @@ spec:
             capabilities:
               drop: [ALL]
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: scripts
           configMap:
             name: registry-nodes

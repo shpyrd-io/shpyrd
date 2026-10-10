@@ -5,4 +5,5 @@ labels:
   - pairs:
       app.kubernetes.io/part-of: shpyrd
 resources:
+  - rbac.yaml
   - daemonset.yaml

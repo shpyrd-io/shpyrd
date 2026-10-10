@@ -127,6 +127,12 @@ variable "apps_node_memory_gb" {
 # platform pool. Same autoscaler mechanism as the apps pool. Enabled when
 # data_max_count > 0.
 
+variable "registry_trust_taint" {
+  description = "Start apps-pool nodes tainted shpyrd.io/registry-trust=pending:NoSchedule until the registry-nodes DaemonSet has written the platform CA, so no project pod is scheduled before the node can pull from the in-cluster registry (shpyrd-io/shpyrd#44). Roll `shpyrd-ctl cluster init` with a version that removes the taint (v0.9.82 or later) before turning this on; it applies to nodes created afterwards."
+  type        = bool
+  default     = false
+}
+
 variable "data_min_count" {
   description = "Nodes of the data pool, owned by Terraform (the autoscaler never resizes it). 2 is what a shared database server's anti-affinity and a node roll need; 1 is enough while every database is single-instance."
   type        = number

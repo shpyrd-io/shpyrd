@@ -115,6 +115,19 @@ resource "oci_containerengine_node_pool" "workers" {
 # between apps_min_count and apps_max_count. The initial size is the
 # minimum (or 1, so the pool exists); the autoscaler owns the count from
 # then on — Terraform ignores changes to it.
+# A new apps node is Ready before the registry-nodes DaemonSet has written
+# the platform CA, and project pods scheduled in that gap fail to pull from
+# the in-cluster registry (shpyrd-io/shpyrd#44). OKE node pools have no
+# taint field, so the kubelet registers the node with the taint itself,
+# through the pool's cloud-init; the DaemonSet removes it after the CA.
+locals {
+  apps_cloud_init = <<-EOT
+    #!/bin/bash
+    curl --fail -H "Authorization: Bearer Oracle" -L0 http://169.254.169.254/opc/v2/instance/metadata/oke_init_script | base64 --decode >/var/run/oke-init.sh
+    bash /var/run/oke-init.sh --kubelet-extra-args "--register-with-taints=shpyrd.io/registry-trust=pending:NoSchedule"
+  EOT
+}
+
 resource "oci_containerengine_node_pool" "apps" {
   count = var.apps_max_count > 0 ? 1 : 0
 
@@ -140,6 +153,8 @@ resource "oci_containerengine_node_pool" "apps" {
     key   = "shpyrd.io/pool"
     value = "apps"
   }
+
+  node_metadata = var.registry_trust_taint ? { user_data = base64encode(local.apps_cloud_init) } : null
 
   node_config_details {
     size    = max(var.apps_min_count, 1)
