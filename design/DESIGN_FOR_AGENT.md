@@ -92,13 +92,61 @@ design").
 2. **Pay what is owed**, entry by entry, and mark each as paid.
 3. **Run the gates** of everything the session touched: `npm run lint`,
    `npm run typecheck`, `npm run test`, `npm run build`. When `design/ui`
-   changed, also build every application that uses it: a change there can
-   break a screen elsewhere.
-4. **Report**: what changed, what was paid, what is still owed and why.
-   The summary goes into the pull request; the changelog itself is never
-   committed.
+   changed, also build every application of this repository that uses it:
+   a change there can break a screen elsewhere.
+4. **Note it for the next release** when the session changed
+   `design/ui/src`: a line per change under `## Unreleased` in
+   `design/ui/CHANGELOG.md`, what changed in words. A change that breaks
+   something an application uses (a prop renamed or removed, a component
+   removed, a behaviour a screen relies on changed) starts with
+   `**Breaking:**` and says what the application has to change. The version
+   is not touched: releasing is its own step (Release the library, below).
+5. **Report**: what changed, what was paid, what is still owed and why.
+   The summary goes into the pull request; the session's changelog
+   (`tmp/design-session/`) is never committed.
 
 A session is not finished while a gate fails.
+
+## Release the library
+
+The library reaches the other projects (shpyrd-signup, legal,
+shpyrd-billing, shpyrd-cloud) only as a version of `@shpyrd/ui` on npm.
+What the sessions changed waits under `## Unreleased` in
+`design/ui/CHANGELOG.md` until the person says **"release the design
+system"** (or "release @shpyrd/ui", "lançar o design system").
+
+1. **Start from `main`** as it is on GitHub: `git switch main && git pull`.
+2. **Read `## Unreleased`.** Nothing under it: say so and stop, there is
+   nothing to release.
+3. **Choose the version** from the one in `design/ui/package.json`. Before
+   1.0: a line marked `**Breaking:**` makes it the next minor (`0.3.4` →
+   `0.4.0`); otherwise the next patch (`0.3.4` → `0.3.5`). From 1.0 on,
+   breaking is the next major and a new component or prop the next minor.
+   Tell the person the version and why before going on.
+4. **Branch** `release/ui-<version>`.
+5. **Write the release:**
+   - in `design/ui/CHANGELOG.md`, `## Unreleased` becomes `## <version>`,
+     and a new empty `## Unreleased` goes above it;
+   - in `design/ui/package.json`, `"version"` becomes `<version>`;
+   - `npm install --no-audit --no-fund` at the root, which records the new
+     version in `package-lock.json`.
+6. **Run the gates:** `npm run lint`, `npm run typecheck` and
+   `npm run test` with `--workspace design/ui`; `node scripts/check-pack.mjs`
+   and `node scripts/release-plan.mjs` in `design/ui`. The last must say
+   `releasing @shpyrd/ui@<version> under latest, tagged ui-v<version>`.
+7. **Commit** `release(ui): @shpyrd/ui <version>` (the three files), push,
+   and open the pull request with the version's CHANGELOG section as its
+   body. Merging it publishes: say so in the pull request.
+8. **After the merge**, follow `ui-release.yml` (`gh run list --workflow
+   ui-release.yml`) to the end, then check `npm view @shpyrd/ui@<version>
+   version` and `gh release view ui-v<version>`. If the run failed after npm
+   published, run it again: it skips npm and finishes the GitHub release.
+9. **Report**: the version, what it carries, and that each project gets a
+   pull request from its Dependabot to take it.
+
+A version with a suffix (`0.4.0-rc.1`), for trying a change in one project
+before the others, is released the same way and goes to npm's `next`
+dist-tag, never `latest`.
 
 ## The gallery
 

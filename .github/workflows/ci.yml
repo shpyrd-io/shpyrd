@@ -71,6 +71,15 @@ jobs:
           done <<< "$(git diff --no-renames --name-only "$BASE" HEAD)"
           echo "go=$go" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          # A change to the library waits for its release under "Unreleased"
+          # in its CHANGELOG (design/DESIGN_FOR_AGENT.md, "Release the
+          # library"): a change to its source that does not note it is worth
+          # a word, not a failure.
+          if git diff --no-renames --name-only "$BASE" HEAD -- design/ui/src \
+              | grep -vE '\.test\.tsx?$|^design/ui/src/test\.ts$' | grep -q . \
+            && ! git diff --name-only "$BASE" HEAD -- design/ui/CHANGELOG.md | grep -q .; then
+            echo "::warning file=design/ui/CHANGELOG.md::design/ui/src changed and its CHANGELOG did not: note the change under Unreleased, for the next release (design/DESIGN_FOR_AGENT.md)"
+          fi
 
   go:
     name: Go tests
@@ -126,6 +135,9 @@ jobs:
       - run: npm run lint --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: npm run typecheck --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
       - run: npm run test --workspace design/ui --workspace apps/shared --workspace apps/console --workspace apps/workspace
+      - name: What @shpyrd/ui would ship
+        working-directory: design/ui
+        run: node scripts/check-pack.mjs
       - run: make ui
 
   # What a release builds (the CLIs for every system, the server and the
