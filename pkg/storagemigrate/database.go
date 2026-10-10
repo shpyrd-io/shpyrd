@@ -452,7 +452,7 @@ func (m *migration) room(ctx context.Context, pg *shpyrdv1.Postgres, cluster *un
 			used := q.Status.Used[pair.res]
 			left := hard.DeepCopy()
 			left.Sub(used)
-			if left.CmpInt64(pair.need) < 0 {
+			if !fits(left, pair.need, pair.res) {
 				return fmt.Errorf("the workspace's %s ceiling leaves no room for a second instance of %s (%s of %s used; the instance needs %s more); raise the ceiling for the evening, or migrate when the workspace uses less", pair.what, m.opts.Name, used.String(), hard.String(), quantityOf(pair.need, pair.res))
 			}
 		}
@@ -502,6 +502,16 @@ func podRequests(pod *corev1.Pod) (cpu, mem int64) {
 		}
 	}
 	return cpu, mem
+}
+
+// fits reports whether need (millicores for CPU, bytes otherwise) is within
+// left. Quantity.CmpInt64 compares in the base unit, cores for CPU, which
+// once refused a 72m instance under a 16-core ceiling.
+func fits(left resource.Quantity, need int64, res corev1.ResourceName) bool {
+	if res == corev1.ResourceRequestsCPU {
+		return left.MilliValue() >= need
+	}
+	return left.Value() >= need
 }
 
 func quantityOf(v int64, res corev1.ResourceName) string {
