@@ -541,6 +541,15 @@ func TestDatabaseMigrationNeedsRoom(t *testing.T) {
 	if ptr.Deref(pg.Spec.Instances, 1) != 1 || pg.Annotations[controller.AnnotationStorageMigration] != "" {
 		t.Errorf("no second instance may be asked for without room, and the mark goes back: %v %v", pg.Spec.Instances, pg.Annotations)
 	}
+	// Room under the ceiling: a 16-core quota with 72m used has room for a
+	// 62m instance (millicores against cores once refused this).
+	wide := corev1.ResourceList{corev1.ResourceRequestsCPU: resource.MustParse("16"), corev1.ResourceRequestsMemory: resource.MustParse("32Gi")}
+	wideQuota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd", Namespace: "p-shop"}, Spec: corev1.ResourceQuotaSpec{Hard: wide}, Status: corev1.ResourceQuotaStatus{Hard: wide, Used: corev1.ResourceList{corev1.ResourceRequestsCPU: resource.MustParse("72m"), corev1.ResourceRequestsMemory: resource.MustParse("192Mi")}}}
+	f4 := newFixture(t, &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop"}}, wideQuota)
+	go f4.fakeOperator(ctx, true)
+	if res, err := Database(ctx, f4.c, opts(f4.ns, f4.name, nil)); err != nil {
+		t.Fatalf("a 62m instance fits under a 16-core ceiling with 72m used: %v\n%s", err, strings.Join(res.Steps, "\n"))
+	}
 	// The storage ceiling: the new volume at the size it grows to.
 	storageHard := corev1.ResourceList{corev1.ResourceRequestsStorage: resource.MustParse("40Gi")}
 	storageQuota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-storage", Namespace: "p-shop"}, Spec: corev1.ResourceQuotaSpec{Hard: storageHard}, Status: corev1.ResourceQuotaStatus{Hard: storageHard, Used: corev1.ResourceList{corev1.ResourceRequestsStorage: resource.MustParse("1Gi")}}}

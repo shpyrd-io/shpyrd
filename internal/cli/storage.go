@@ -209,7 +209,10 @@ new instance goes), --no-checks accepts the numbers and finishes.`,
 				}
 			}
 			res, err := storagemigrate.Database(ctx, c, opts)
-			if res != nil {
+			// The summary is for a run that reached an end: done, or stopped
+			// on two instances. A refusal or a failed step has its error and
+			// the steps already narrated.
+			if res != nil && (err == nil || errors.Is(err, storagemigrate.ErrDataCheck)) {
 				if perr := g.print(cmd, res, func(w io.Writer) { printMigration(w, res) }); perr != nil {
 					return perr
 				}
