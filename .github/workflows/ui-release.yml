@@ -10,9 +10,9 @@
 # npm, keeps no credentials in its checkout, and is the only one that may ask
 # for an OIDC token or write the repository.
 #
-# npm trusts this workflow (trusted publishing, OIDC): no token is stored.
-# NPM_TOKEN is only for a first publication, before npm can be told to
-# trust the workflow; remove the secret once it is.
+# npm trusts this workflow (trusted publishing, OIDC; set on the package's
+# npm settings: repository shpyrd-io/shpyrd, workflow ui-release.yml, no
+# environment): no token is stored.
 name: ui-release
 
 on:
@@ -79,8 +79,6 @@ jobs:
       - name: Publish
         if: steps.plan.outputs.publish == 'true'
         working-directory: design/ui
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install --global npm@11.21.0 # trusted publishing needs 11.5.1 or later
           npm publish --access public --provenance --tag "${{ steps.plan.outputs.dist_tag }}"
