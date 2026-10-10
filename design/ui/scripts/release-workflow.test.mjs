@@ -30,11 +30,16 @@ describe("the release workflow", () => {
     expect(gates).not.toMatch(/id-token|contents: write/);
   });
 
-  it("publishes from a job that installs nothing but a pinned npm", () => {
+  it("stages from a job that installs nothing but a pinned npm", () => {
     const publish = job("publish");
     expect(publish).toContain("id-token: write");
-    expect(publish).toContain("npm publish");
+    expect(publish).toContain("npm stage publish");
     expect(publish).not.toMatch(/npm ci|npm install(?! --global npm@\d+\.\d+\.\d+\s)/);
+  });
+
+  it("only stages: a version reaches npm when a maintainer approves it, never from the workflow alone", () => {
+    const commands = workflow.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    expect(commands).not.toMatch(/npm publish/);
   });
 
   it("leaves no credentials in the publishing job's checkout", () => {
@@ -45,11 +50,15 @@ describe("the release workflow", () => {
     expect(job("publish")).toMatch(/gh release create[^\n]*--latest=false/);
   });
 
-  it("publishes to npm only what npm does not have, so a re-run can finish a half-done release", () => {
-    expect(job("publish")).toMatch(/- name: Publish\n\s+if: steps\.plan\.outputs\.publish == 'true'/);
+  it("stages only what npm does not have", () => {
+    expect(job("publish")).toMatch(/- name: Stage on npm\n\s+if: steps\.plan\.outputs\.publish == 'true'/);
+  });
+
+  it("tags and makes the GitHub release only for a version npm has, that is, approved", () => {
+    expect(job("publish")).toMatch(/- name: Tag and GitHub release\n\s+if: steps\.plan\.outputs\.publish == 'false'/);
   });
 
   it("makes the GitHub release only when it is missing, so a re-run does not fail on it", () => {
-    expect(job("publish")).toMatch(/gh release view "\$TAG"[^\n]*\|\|\s*gh release create/);
+    expect(job("publish")).toMatch(/gh release view "\$TAG"[^\n]*&& exit 0\n[\s\S]*gh release create/);
   });
 });
