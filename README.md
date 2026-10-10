@@ -1,6 +1,6 @@
 # shpyrd
 
-**Opensource Cloud PaaS.** Manage applications and agents stack from one
+**Opensource PaaS.** Manage applications and agents stack from one
 place, from deploy to monitoring: cluster bootstrap, buildpack and Dockerfile
 builds, releases and rollbacks, URLs with TLS, config vars, logs and metrics, from one
 CLI and one dashboard on top of Kubernetes.
