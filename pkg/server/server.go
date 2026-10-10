@@ -476,7 +476,6 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			RegistryDeletes:       os.Getenv("SHPYRD_REGISTRY_IP") != "",
 			BuildCacheRegistry:    os.Getenv("SHPYRD_BUILD_CACHE_REGISTRY"),
 			AppsPool:              os.Getenv("SHPYRD_APPS_POOL"),
-			LocalStorage:          install.ProjectStorageClass(os.Getenv) == controller.LocalStorageClass,
 			PlatformPool:          os.Getenv("SHPYRD_PLATFORM_POOL"),
 			WildcardTLS:           os.Getenv("SHPYRD_WILDCARD_TLS") == "true",
 			IngressClassExternal:  envOr("SHPYRD_INGRESS_CLASS_EXTERNAL", "nginx"),

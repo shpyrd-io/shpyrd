@@ -24,9 +24,27 @@ type resolvedMount struct {
 	Path   string
 	Claim  string
 	Shared bool
+	// Class is the storage class of the volume's claim: what the Volume
+	// reports once its claim exists, else what its spec asked for (the
+	// class is immutable after creation). Empty when the claim is not there
+	// yet or uses the cluster default; the node-local gates then stay off.
+	Class string
 	// Restoring says the volume is being restored from a snapshot
 	// (RFC-0060): the process stops until the new claim is bound.
 	Restoring bool
+}
+
+// Local says the mount's data lives on one node's disk (the storage-local
+// class): the process must stay on that node, and the node must stay.
+func (m resolvedMount) Local() bool { return m.Class == LocalStorageClass }
+
+func anyLocal(mounts []resolvedMount) bool {
+	for _, m := range mounts {
+		if m.Local() {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveMounts validates the volumes of every process against the
@@ -66,7 +84,7 @@ func (r *AppReconciler) resolveMounts(ctx context.Context, app *shpyrdv1.App) (m
 					return nil, fmt.Errorf("process %q mounts single-instance volume %q and can run 1 instance, not %d (a shared volume allows more)", p.Name, m.Name, p.replicas())
 				}
 			}
-			out[p.Name] = append(out[p.Name], resolvedMount{Name: m.Name, Path: clean, Claim: vol.PVCName(), Shared: vol.Shared(), Restoring: vol.Status.Phase == shpyrdv1.VolumeRestoring || vol.Annotations[shpyrdv1.AnnotationRestoreFrom] != ""})
+			out[p.Name] = append(out[p.Name], resolvedMount{Name: m.Name, Path: clean, Claim: vol.PVCName(), Shared: vol.Shared(), Class: firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass), Restoring: vol.Status.Phase == shpyrdv1.VolumeRestoring || vol.Annotations[shpyrdv1.AnnotationRestoreFrom] != ""})
 		}
 	}
 	return out, nil

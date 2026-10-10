@@ -89,14 +89,23 @@ func (c Config) processNodeSelector(app *shpyrdv1.App, process string) map[strin
 	return selector
 }
 
-// A shared local volume still allows several replicas, all on its node.
-// Self-matching required affinity lets the first pod choose a node and then
-// serializes placement of the rest of a connected volume group there.
-func localVolumeAffinity(app *shpyrdv1.App, process string, pod *corev1.PodTemplateSpec) {
+// A process whose mount is on a node's disk (the storage-local class) stays
+// on that node and keeps the node: a placement-group label, a required
+// self-matching pod affinity on the hostname, and safe-to-evict=false for
+// the autoscaler. A shared local volume still allows several replicas, all
+// on its node: the affinity lets the first pod choose the node and then
+// serializes the rest of the connected volume group there. The gate is the
+// claim's class, not the profile's (RFC-0060): a process on block storage
+// moves with its disk and needs none of this, and a stale gate from before
+// is cleared.
+func localVolumeAffinity(app *shpyrdv1.App, process string, pod *corev1.PodTemplateSpec, mounts []resolvedMount) {
 	if pod.Labels["shpyrd.io/placement-group"] != "" {
 		delete(pod.Labels, "shpyrd.io/placement-group")
 		delete(pod.Annotations, "cluster-autoscaler.kubernetes.io/safe-to-evict")
 		pod.Spec.Affinity = nil
+	}
+	if !anyLocal(mounts) {
+		return
 	}
 	for _, group := range PlacementGroups(app, nil) {
 		if len(group.Volumes) == 0 {
