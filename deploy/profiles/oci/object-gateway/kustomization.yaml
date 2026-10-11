@@ -9,3 +9,13 @@ patches:
         path: /imagePullSecrets
         value:
           - name: ocir-pull
+  # One writer at a time (SHPYRD_GATEWAY_SINGLE_WRITER on this provider): a
+  # rolling update would run the new pod next to the old one for a moment.
+  - target:
+      kind: Deployment
+      name: object-storage
+    patch: |
+      - op: add
+        path: /spec/strategy
+        value:
+          type: Recreate

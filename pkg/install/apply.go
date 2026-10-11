@@ -175,9 +175,46 @@ func (a *applier) applyOneAs(ctx context.Context, o *unstructured.Unstructured, 
 	opts := metav1.PatchOptions{FieldManager: manager, Force: ptr.To(true)}
 	if dryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
+	} else if err := a.clearRollingUpdate(ctx, ri, o); err != nil {
+		return err
 	}
 	_, err = ri.Patch(ctx, o.GetName(), types.ApplyPatchType, data, opts)
 	return err
+}
+
+// clearRollingUpdate makes room for a Deployment's strategy to become
+// Recreate. The API server defaults the rollingUpdate block on a
+// RollingUpdate deployment; nobody owns those fields, so an apply that
+// names Recreate leaves them in place and the API rejects the pair
+// ("rollingUpdate may not be specified when strategy type is Recreate").
+// A merge patch sets the type and takes the block out in one request.
+func (a *applier) clearRollingUpdate(ctx context.Context, ri dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
+	if desired.GetAPIVersion() != "apps/v1" || desired.GetKind() != "Deployment" {
+		return nil
+	}
+	live, err := ri.Get(ctx, desired.GetName(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !needsRollingUpdateCleared(desired, live) {
+		return nil
+	}
+	_, err = ri.Patch(ctx, desired.GetName(), types.MergePatchType, []byte(`{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}`), metav1.PatchOptions{FieldManager: fieldManager})
+	return err
+}
+
+// needsRollingUpdateCleared: the desired strategy is Recreate and the live
+// object still carries a rollingUpdate block.
+func needsRollingUpdateCleared(desired, live *unstructured.Unstructured) bool {
+	want, _, _ := unstructured.NestedString(desired.Object, "spec", "strategy", "type")
+	if want != "Recreate" {
+		return false
+	}
+	_, has, _ := unstructured.NestedMap(live.Object, "spec", "strategy", "rollingUpdate")
+	return has
 }
 
 // resourceFor resolves the dynamic client for o, filling in the namespace of
