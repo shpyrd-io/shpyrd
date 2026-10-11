@@ -54,9 +54,15 @@ curl -H "Authorization: Bearer shp_…" https://acme-expenses.shpyrd.app/api/rep
 
 The app receives the owner's identity (`X-Shpyrd-User`, the JWT with `sub` = the person's id and `provider: api-token`) and the owner's teams. A token with no role on the project is refused with `403`; a revoked one with `401`. Any other bearer is treated as anonymous: an authenticated app asks it to sign in, an `identified` app receives it as sent — so a public app can run its own API authentication behind the door.
 
+## Health checks and sign-in
+
+Health checks reach the process directly, bypassing the edge. They have no signed-in user, cookies or identity headers. If your app checks identity itself, exempt its health route from that middleware and return `2xx` to a plain GET. Do not redirect the check to `/.shpyrd/signin`: that route is served by the edge, which the check never reaches.
+
+The default web check uses `/`. When that path requires sign-in, set `processes.web.healthCheck.path: /healthz` in `shpyrd.yaml` and provide an unauthenticated route there, or set `processes.web.healthCheck.tcp: true` to check only the listening port. Redeploy to apply the change. Startup and liveness failures can restart an otherwise running process; readiness failures keep it out of traffic. See [Health checks](/docs/deploying#health-checks) for the configuration.
+
 ## What the app receives
 
-Every request that reaches an app with sign-in required (or an identified visitor of an `identified` app) carries:
+Every visitor request through the edge that reaches an app with sign-in required (or an identified visitor of an `identified` app) carries:
 
 ```
 X-Shpyrd-User:   joao@example.com
