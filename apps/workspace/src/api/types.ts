@@ -319,6 +319,7 @@ export type Connection = {
 };
 
 export type Person = {
+ id?: string;
   email: string;
   name?: string;
   provider?: string;

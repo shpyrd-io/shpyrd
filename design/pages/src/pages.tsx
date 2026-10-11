@@ -1,7 +1,8 @@
 import { Fragment, type ReactNode } from "react";
-import { Check, Lock, Rocket } from "lucide-react";
+import { Check, Lock, Rocket, Terminal, CircleCheck, CircleX } from "lucide-react";
 import { LogoMark } from "@shpyrd/ui/components/brand";
 import { ClaudeIcon, CopilotIcon, CursorIcon, GeminiIcon, OpenAIIcon, VSCodeIcon, WarpIcon } from "@shpyrd/ui/components/brand-icons";
+import { Input } from "@shpyrd/ui/components/input";
 import { Button } from "@shpyrd/ui/components/button";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { StatePage } from "@shpyrd/ui/components/state-page";
@@ -156,6 +157,37 @@ export const pages: Record<string, ServerPage> = {
         </div>
       </StatePage>
     ),
+  },
+  "cli-activate": {
+    title: "Authorize the CLI",
+    about: "Approve a terminal's device code within the workspace (pkg/api/clilogin.go).",
+    sample: {Workspace: "Demo workspace", Account: "demo@example.com", Device: "Demo MacBook", Code: "BCDF-GHJK", CSRF: "preview", Problem: ""},
+    render: (f) => <StatePage className="py-20"
+      picture={<div className="flex items-center gap-3" aria-hidden><span className="inline-flex size-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground"><Terminal className="size-8" /></span><span className="text-muted-foreground">···</span><LogoMark className="size-16" /></div>}
+      title={`Sign in the CLI to ${f.word("Workspace")}?`}
+      description={<><strong className="font-medium text-foreground">{f.word("Device")}</strong> will act as <strong className="font-medium text-foreground">{f.word("Account")}</strong>, with your current workspace permissions.</>}>
+      <div className="grid w-full max-w-sm gap-6 text-left">
+        <form method="post" action="/cli/activate" name="cli-authorization" aria-label="Authorize your terminal" className="grid gap-3">
+          <input type="hidden" name="csrf" value={f.word("CSRF")} />
+          <label htmlFor="device-code" className="text-sm font-medium">Code shown in your terminal</label>
+          <Input id="device-code" name="code" aria-label="Code shown in your terminal" defaultValue={f.word("Code")} autoComplete="off" spellCheck={false} autoCapitalize="characters" placeholder="XXXX-XXXX" required size="lg" className="text-center font-mono uppercase tracking-widest" />
+          <p role="alert" className="text-sm text-destructive empty:hidden">{f.word("Problem")}</p>
+          <Button type="submit" name="decision" value="allow" aria-label="Authorize this terminal" size="lg" className="w-full">Authorize terminal</Button>
+          <Button type="submit" name="decision" value="deny" aria-label="Deny this terminal" variant="ghost" size="lg" className="w-full">Deny</Button>
+        </form>
+        <p className="text-center text-xs text-balance text-muted-foreground">Only approve a code you requested from your own terminal. Access lasts 30 days. You can revoke it at any time in your workspace.</p>
+      </div>
+    </StatePage>,
+  },
+  "cli-done": {
+    title: "CLI authorization result",
+    about: "Success, refusal, or an expired authorization form (pkg/api/clilogin.go).",
+    sample: {Title:"Your CLI is connected", Text:"Your terminal is signed in to Demo workspace as demo@example.com.", Outcome:"success", Hint:"You can close this tab."},
+    render: (f) => <StatePage className="py-20"
+      picture={<div className="relative"><LogoMark className="size-16" /><span className="absolute -right-2 -bottom-2 rounded-full bg-background p-1">{f.choose("Outcome",{success:<CircleCheck className="size-6 text-success" />},<CircleX className="size-6 text-muted-foreground" />)}</span></div>}
+      title={f.word("Title")} description={f.word("Text")}>
+      <p role="status" className="max-w-sm text-sm text-balance text-muted-foreground">{f.word("Hint")}</p>
+    </StatePage>,
   },
   mark: {
     title: "The mark",

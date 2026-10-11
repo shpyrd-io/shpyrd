@@ -70,9 +70,6 @@ type InviteResult struct {
 	// (nothing when mail is not configured: the inviter sends the link).
 	Emailed   bool   `json:"emailed"`
 	MailError string `json:"mailError,omitempty"`
-	// SetPasswordLink is where a person without a password chooses one
-	// (RFC-0014; 24 hours); empty when they have one or auth-local is off.
-	SetPasswordLink string `json:"setPasswordLink,omitempty"`
 }
 
 // InvitationPublicView is GET /api/invitations/:token: what the holder of
@@ -194,9 +191,9 @@ func (s *Server) createInvitation(c *gin.Context) {
 	}
 	// Someone the workspace knows (and has not suspended) gets the role
 	// now; taking an owner's role needs an owner.
-	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Status != store.StatusSuspended {
+	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Subject != "" && known.Status != store.StatusSuspended {
 		snap, _ := s.authz.SnapshotFor(ctx, ws.Slug)
-		if snap != nil && snap.WorkspaceRole(email) == store.WorkspaceRoleOwner && !roles.Can(authz.WorkspaceOwner, "") {
+		if snap != nil && snap.WorkspaceRole(known.ID) == store.WorkspaceRoleOwner && !roles.Can(authz.WorkspaceOwner, "") {
 			abort(c, http.StatusForbidden, denial(roles, authz.WorkspaceOwner, ""))
 			return
 		}
@@ -227,8 +224,8 @@ func (s *Server) createInvitation(c *gin.Context) {
 func (s *Server) invite(c *gin.Context, ws *store.Workspace, email, role, team string, by ext.Identity) (*InviteResult, int, error) {
 	ctx := c.Request.Context()
 	result := &InviteResult{Email: email, Role: role, Team: team}
-	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Status != store.StatusSuspended {
-		if err := s.applyRole(c, ws.Slug, email, role, team, "invited"); err != nil {
+	if known, err := s.store.GetIdentity(ctx, ws.Slug, email); err == nil && known.Subject != "" && known.Status != store.StatusSuspended {
+		if err := s.applyRole(c, ws.Slug, known.ID, role, team, "invited"); err != nil {
 			return nil, 0, err
 		}
 		result.Applied = true
@@ -250,16 +247,8 @@ func (s *Server) invite(c *gin.Context, ws *store.Workspace, email, role, team s
 	result.Link = s.invitationLink(ws, token)
 	s.audit(c, "", "workspace.invitation.create", email, "role "+role+teamDetail(team))
 
-	// RFC-0014: a person without a password gets a way to choose one, on
-	// the same door. One email carries both ways in.
-	setLink, err := s.passwordWayIn(ctx, email, strings.SplitN(email, "@", 2)[0], s.dashboardURLOf(ws))
-	if err != nil {
-		s.log.Warn("invite: no set-password link", "email", email, "err", err.Error())
-	}
-	result.SetPasswordLink = setLink
-
 	if s.mailer != nil && s.mailer.Configured(ctx) {
-		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, by, result.Link, setLink)); err != nil {
+		if err := s.mailer.Send(ctx, s.invitationMail(ws, *inv, by, result.Link)); err != nil {
 			result.MailError = err.Error()
 			s.log.Warn("invitation email failed", "to", email, "err", err.Error())
 			s.audit(c, "", "workspace.invitation.mail_failed", email, err.Error())
@@ -303,7 +292,7 @@ func (s *Server) inviteHook(c *gin.Context, wsSlug, email, role string) (*ext.In
 	if err != nil {
 		return nil, err
 	}
-	out := &ext.InviteOutcome{Applied: res.Applied, Link: res.Link, SetPasswordLink: res.SetPasswordLink, Emailed: res.Emailed, MailError: res.MailError}
+	out := &ext.InviteOutcome{Applied: res.Applied, Link: res.Link, Emailed: res.Emailed, MailError: res.MailError}
 	if res.Invitation != nil {
 		out.ExpiresAt = res.Invitation.ExpiresAt
 	}
@@ -328,13 +317,17 @@ func (s *Server) applyRole(c *gin.Context, ws, email, role, team, how string) er
 		t, err := s.store.GetTeam(ctx, ws, team)
 		if err == nil && !t.Everyone {
 			present := false
-			for _, m := range t.Members {
+			for _, m := range t.PrincipalIDs {
 				if m == email {
 					present = true
 				}
 			}
 			if !present {
-				t.Members = append(t.Members, email)
+				person, err := s.store.GetIdentity(ctx, ws, email)
+				if err != nil {
+					return err
+				}
+				t.PrincipalIDs = append(t.PrincipalIDs, person.ID)
 				if _, _, err := s.store.PutTeam(ctx, ws, *t); err != nil {
 					return err
 				}
@@ -421,7 +414,7 @@ func (s *Server) acceptInvitation(c *gin.Context) {
 		return
 	}
 	me, ok := ext.IdentityFrom(c)
-	if !ok || me.Email == "" {
+	if !ok || me.Email == "" || !me.EmailVerified {
 		abort(c, http.StatusForbidden, errors.New("sign in with the invited address to accept"))
 		return
 	}
@@ -442,12 +435,14 @@ func (s *Server) acceptInvitation(c *gin.Context) {
 
 // accept turns an invitation into a membership and removes it.
 func (s *Server) accept(c *gin.Context, ws string, inv store.Invitation) error {
-	if err := s.applyRole(c, ws, inv.Email, inv.Role, inv.Team, "invitation accepted"); err != nil {
+	id, ok := ext.IdentityFrom(c)
+	if !ok || !id.EmailVerified || !strings.EqualFold(id.Email, inv.Email) {
+		return errors.New("a verified invited email is required")
+	}
+	if err := s.store.AcceptInvitation(c.Request.Context(), ws, inv.ID, id.Subject); err != nil {
 		return err
 	}
-	if err := s.store.DeleteInvitation(c.Request.Context(), ws, inv.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
+	s.membershipChanged()
 	s.audit(c, "", "workspace.invitation.accept", inv.Email, "role "+inv.Role+teamDetail(inv.Team)+", invited by "+firstNonEmpty(inv.InvitedBy, "-"))
 	return nil
 }
@@ -456,7 +451,7 @@ func (s *Server) accept(c *gin.Context, ws string, inv store.Invitation) error {
 // invitation, if any, is accepted without the link. Failures are logged,
 // never surfaced: a sign-in does not depend on it.
 func (s *Server) acceptPendingInvitation(c *gin.Context, id ext.Identity) {
-	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
+	if !id.EmailVerified || id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
 		return
 	}
 	ws := s.workspace(c)
@@ -469,12 +464,8 @@ func (s *Server) acceptPendingInvitation(c *gin.Context, id ext.Identity) {
 	}
 }
 
-// invitationMail is the email carrying the link (RFC-0013).
-// invitationMail is the one email an invited person receives. With a
-// set-password link the call to action is to choose a password (they
-// have none), the invitation link being the other way in — signing in
-// with a method the workspace offers. Without one, it is the invitation.
-func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ext.Identity, link, setLink string) ext.Message {
+// invitationMail carries the invitation; authentication remains at the IdP.
+func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ext.Identity, link string) ext.Message {
 	inviter := firstNonEmpty(by.Name, by.Email, "An administrator")
 	if by.Name != "" && by.Email != "" {
 		inviter = by.Name + " (" + by.Email + ")"
@@ -487,24 +478,7 @@ func (s *Server) invitationMail(ws *store.Workspace, inv store.Invitation, by ex
 	until := inv.ExpiresAt.UTC().Format("Jan 2, 2006")
 	door := emails.Host(s.dashboardURLOf(ws))
 
-	var text string
-	kind := emails.Invite
-	if setLink != "" {
-		kind = emails.InvitePassword
-		text = fmt.Sprintf(`%s invited you to join %s %s.
-
-Choose a password to get in (this link works for 24 hours):
-
-  %s
-
-You will then sign in at %s as %s. Prefer another way? Open the invitation and sign in with a method %s offers:
-
-  %s
-
-The invitation works until %s. If you were not expecting this, ignore it.
-`, inviter, name, what, setLink, door, inv.Email, name, link, until)
-	} else {
-		text = fmt.Sprintf(`%s invited you to join %s %s.
+	text := fmt.Sprintf(`%s invited you to join %s %s.
 
 Accept the invitation by opening this link and signing in as %s:
 
@@ -512,10 +486,9 @@ Accept the invitation by opening this link and signing in as %s:
 
 The link works until %s. If you were not expecting this, ignore it.
 `, inviter, name, what, inv.Email, link, until)
-	}
-	_, htmlBody, err := emails.Render(kind, emails.Words{
-		"Logo": emails.Logo(s.dashboardURLOf(ws)), "Door": door, "Email": inv.Email, "Inviter": inviter,
-		"Workspace": name, "What": what, "Link": link, "SetLink": setLink, "Until": until,
+	_, htmlBody, err := emails.Render(emails.Invite, emails.Words{
+		"Logo": strings.TrimSuffix(s.dashboardURLOf(ws), "/") + "/logo-full.png", "Door": door, "Email": inv.Email, "Inviter": inviter,
+		"Workspace": name, "What": what, "Link": link, "Until": until,
 	})
 	if err != nil {
 		// The text says it all; an email that could not be drawn is sent

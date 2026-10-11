@@ -179,7 +179,8 @@ func TestCLIBrowserSignIn(t *testing.T) {
 
 	// Listed as a sign-in, with an expiry; signing in again from the same
 	// machine replaces it rather than adding one.
-	tokens, _ := s.store.ListTokens(ctx, store.DefaultWorkspace, "dev@example.test")
+	person, _ := s.store.GetIdentity(ctx, store.DefaultWorkspace, "dev@example.test")
+	tokens, _ := s.store.ListTokens(ctx, store.DefaultWorkspace, person.ID)
 	var sessions []store.APIToken
 	for _, tk := range tokens {
 		if tk.Kind == store.TokenKindSession {
@@ -197,7 +198,7 @@ func TestCLIBrowserSignIn(t *testing.T) {
 	if code, _ := pollDevice(t, s, device2); code != http.StatusOK {
 		t.Fatalf("second approval poll = %d", code)
 	}
-	tokens, _ = s.store.ListTokens(ctx, store.DefaultWorkspace, "dev@example.test")
+	tokens, _ = s.store.ListTokens(ctx, store.DefaultWorkspace, person.ID)
 	sessions = sessions[:0]
 	for _, tk := range tokens {
 		if tk.Kind == store.TokenKindSession {

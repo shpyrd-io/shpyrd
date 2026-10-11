@@ -57,6 +57,9 @@ func (s *Server) rolesOf(c *gin.Context) (authz.Roles, error) {
 // platform admins too.
 func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
 	ctx := c.Request.Context()
+	if !s.identityMethodAllowed(s.authConfigFor(c), id) {
+		return authz.Roles{Projects: map[string]string{}, Enforced: true}, nil
+	}
 	t, err := s.door(c)
 	if err == nil && t.Internal {
 		roles, err := s.authz.RolesIn(ctx, "", id)
@@ -74,6 +77,10 @@ func (s *Server) rolesAt(c *gin.Context, id ext.Identity) (authz.Roles, error) {
 // rolesInWorkspace is someone's roles in a workspace, as its own door would
 // give them: what the gates ask, whose visitors come from another host.
 func (s *Server) rolesInWorkspace(ctx context.Context, ws *store.Workspace, id ext.Identity) (authz.Roles, error) {
+	if !s.identityMethodAllowed(s.realms.Methods(ctx, ws, s.authConfig()), id) {
+		return authz.Roles{Projects: map[string]string{}, Enforced: true}, nil
+	}
+
 	roles, err := s.authz.RolesIn(ctx, ws.Slug, id)
 	if err != nil {
 		return roles, err
@@ -204,6 +211,7 @@ func (s *Server) canViewApp(c *gin.Context, app *shpyrdv1.App) bool {
 
 // TeamView is a team as returned by the API.
 type TeamView struct {
+	PrincipalIDs []string `json:"principalIds"`
 	Name         string   `json:"name"`
 	Description  string   `json:"description,omitempty"`
 	Members      []string `json:"members"`
@@ -214,7 +222,7 @@ type TeamView struct {
 }
 
 func teamView(t store.Team) TeamView {
-	v := TeamView{Name: t.Name, Description: t.Description, Members: t.Members, Groups: t.Groups, PlatformRole: t.PlatformRole, Everyone: t.Everyone}
+	v := TeamView{PrincipalIDs: t.PrincipalIDs, Name: t.Name, Description: t.Description, Members: t.Members, Groups: t.Groups, PlatformRole: t.PlatformRole, Everyone: t.Everyone}
 	if v.Members == nil {
 		v.Members = []string{}
 	}
@@ -226,6 +234,7 @@ func teamView(t store.Team) TeamView {
 
 // TeamRequest creates or replaces a team.
 type TeamRequest struct {
+	PrincipalIDs []string `json:"principalIds,omitempty"`
 	Name         string   `json:"name"`
 	Description  string   `json:"description,omitempty"`
 	Members      []string `json:"members"`
@@ -494,7 +503,7 @@ func (s *Server) putTeam(c *gin.Context) {
 		return
 	}
 	s.claimOwnershipInBootstrap(c) // the first team ends bootstrap: its author stays in charge
-	team, created, err := s.store.PutTeam(c.Request.Context(), s.workspace(c), store.Team{Name: name, Description: req.Description, Members: members, Groups: compact(req.Groups), PlatformRole: req.PlatformRole})
+	team, created, err := s.store.PutTeam(c.Request.Context(), s.workspace(c), store.Team{PrincipalIDs: req.PrincipalIDs, Name: name, Description: req.Description, Members: members, Groups: compact(req.Groups), PlatformRole: req.PlatformRole})
 	if err != nil {
 		storeErr(c, err, "team")
 		return
@@ -524,8 +533,9 @@ func (s *Server) deleteTeam(c *gin.Context) {
 
 // MemberView is one grant on a project.
 type MemberView struct {
-	Name string `json:"name"`
-	ID   string `json:"id,omitempty"`
+	PrincipalID string `json:"principalId,omitempty"`
+	Name        string `json:"name"`
+	ID          string `json:"id,omitempty"`
 	// Project is the stable grant key (short base36 project ID for
 	// ID-named projects, slug for legacy ones).
 	Project string `json:"project"`
@@ -539,13 +549,14 @@ type MemberView struct {
 
 // MemberRequest grants a role to a user or a team.
 type MemberRequest struct {
-	Role string `json:"role" binding:"required"`
-	User string `json:"user,omitempty"`
-	Team string `json:"team,omitempty"`
+	PrincipalID string `json:"principalId,omitempty"`
+	Role        string `json:"role" binding:"required"`
+	User        string `json:"user,omitempty"`
+	Team        string `json:"team,omitempty"`
 }
 
 func memberView(g store.Grant) MemberView {
-	return MemberView{Name: MemberName(g.Project, g.Role, g.User, g.Team), ID: g.ID, Project: g.Project, Role: g.Role, User: g.User, Team: g.Team}
+	return MemberView{PrincipalID: g.PrincipalID, Name: MemberName(g.Project, g.Role, g.User, g.Team), ID: g.ID, Project: g.Project, Role: g.Role, User: g.User, Team: g.Team}
 }
 
 // memberViewWithSlug is memberView with the project slug resolved from the
@@ -650,7 +661,7 @@ func (s *Server) addMember(c *gin.Context) {
 		abort(c, http.StatusBadRequest, errors.New("role must be reader, user, viewer, developer or admin"))
 		return
 	}
-	if (req.User == "") == (req.Team == "") {
+	if (req.User == "" && req.PrincipalID == "") == (req.Team == "") {
 		abort(c, http.StatusBadRequest, errors.New("give exactly one of user (email) or team"))
 		return
 	}
@@ -663,7 +674,7 @@ func (s *Server) addMember(c *gin.Context) {
 		req.User = emails[0]
 	}
 	s.claimOwnershipInBootstrap(c) // the first grant ends bootstrap: its author stays in charge
-	g, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{Project: project, Role: req.Role, User: req.User, Team: req.Team})
+	g, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{PrincipalID: req.PrincipalID, Project: project, Role: req.Role, User: req.User, Team: req.Team})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			abort(c, http.StatusNotFound, errors.New("team not found"))
@@ -754,4 +765,27 @@ func workspaceOnlyPath(p string) bool {
 		}
 	}
 	return false
+}
+
+// identityMethodAllowed also applies to existing sessions and token owners.
+// Removing a provider, disabling its license, or selecting company-only SSO
+// must withdraw access from credentials issued before the change.
+func (s *Server) identityMethodAllowed(cfg AuthConfig, id ext.Identity) bool {
+	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
+		return true
+	}
+	if s.rp == nil {
+		return false
+	}
+	p := s.rp.provider(id.Provider)
+	if p == nil || !p.available() || !s.offersIn(cfg, id.Provider) {
+		return false
+	}
+	if p.ConnectorID != "" {
+		issuer := firstNonEmpty(p.UpstreamIssuer, p.Issuer)
+		if id.Issuer != issuer || id.FederatedConnector != p.ConnectorID {
+			return false
+		}
+	}
+	return true
 }

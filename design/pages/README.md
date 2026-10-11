@@ -2,7 +2,8 @@
 
 The pages the Go server serves by itself, where no application answers:
 nothing here, no access, waking up, service unavailable, and the mark
-alone (the root of the sign-in host). They are the design guide's state
+alone (the root of the sign-in host), OAuth consent, CLI device authorization,
+and CLI authorization results. They are the design guide's state
 pages (`design/ui`, Layouts & Pages, State pages), drawn from the same
 `StatePage` component, so a change to the component reaches them.
 

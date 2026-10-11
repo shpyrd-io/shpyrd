@@ -28,7 +28,7 @@ import (
 func newLayoutServer(t *testing.T) (*Server, store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	st := store.NewMemory()
+	st := principalFixtureStore()
 	if _, err := st.UpdateWorkspaceAddress(ctx, store.DefaultWorkspace, "platform.shpyrd.cloud"); err != nil {
 		t.Fatal(err)
 	}

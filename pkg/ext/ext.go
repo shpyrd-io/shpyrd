@@ -7,7 +7,6 @@ package ext
 
 import (
 	"context"
-	"errors"
 	"io"
 	"time"
 
@@ -139,10 +138,6 @@ type Deps struct {
 	// Mail sends email on the platform's behalf (RFC-0013): the mail
 	// extension provides it; nil when none is enabled.
 	Mail Mailer
-	// LocalAccounts is the authlocal user store (RFC-0014): the auth-local
-	// extension provides it so the server can check lockout and set passwords
-	// during reset/invite flows. Nil when auth-local is not enabled.
-	LocalAccounts LocalAccountStore
 	// Invite brings a person into a workspace with a role (RFC-0033): one
 	// the workspace knows holds the role at once; anyone else gets an
 	// invitation whose link, and the set-password link of a pending local
@@ -153,19 +148,6 @@ type Deps struct {
 	// that sends a first owner's invitation once their workspace is ready.
 	// The platform itself is the inviter.
 	InviteBackground func(ctx context.Context, workspace, email, role string) (*InviteOutcome, error)
-	// SetSignupPassword gives a person who proved their email a password
-	// on the platform's local sign-in (RFC-0014), as the signup does, so
-	// no set-password step follows: the account is created if it does not
-	// exist and activated. ErrAccountHasPassword when the person has one
-	// already (they sign in with it); an error when the platform has no
-	// local sign-in. Nil without a store.
-	SetSignupPassword func(ctx context.Context, email, name, password string) error
-	// SignInTicket is a link that signs a person in at a workspace's door
-	// once, within ten minutes, with no form: a one-time code the door
-	// turns into a session, for the signup to hand the person it just made
-	// a workspace for straight into it. The person must be admitted there
-	// as any sign-in is (a membership, the join policy). Nil without a store.
-	SignInTicket func(ctx context.Context, workspace, email string) (string, error)
 	// GateAdmits says whether a gate would let a visitor in now: the
 	// project's access in the gate's own workspace, the gate's rule
 	// elsewhere (RFC-0083). False for a gate that does not exist.
@@ -178,10 +160,6 @@ type Deps struct {
 	WorkspaceUsage func(ctx context.Context, slug string) *Usage
 }
 
-// ErrAccountHasPassword says the person has a password already: the one
-// they chose at signup is not applied, and they sign in with theirs.
-var ErrAccountHasPassword = errors.New("the account has a password already")
-
 // InviteOutcome is what Invite produced.
 type InviteOutcome struct {
 	// Applied says the person was known already and holds the role now;
@@ -190,9 +168,7 @@ type InviteOutcome struct {
 	// Link is the invitation link, shown once; empty when Applied.
 	Link      string    `json:"link,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
-	// SetPasswordLink is where a person without a password chooses one
-	// (RFC-0014; 24 hours); empty when they have one or auth-local is off.
-	SetPasswordLink string `json:"setPasswordLink,omitempty"`
+
 	// Emailed says the link went out by email; MailError says why not
 	// (empty when mail is not configured: the inviter passes the link on).
 	Emailed   bool   `json:"emailed"`
@@ -208,26 +184,6 @@ type InviteOutcome struct {
 type SleepGate interface {
 	SleepAllowed() bool
 }
-
-// LocalAccountStore is the interface the server uses from the auth-local
-// extension (RFC-0014). The concrete type is *authlocal.Store.
-type LocalAccountStore interface {
-	IsLocked(ctx context.Context, email string) (bool, error)
-	Lock(ctx context.Context, email string, until time.Time) error
-	MarkVerified(ctx context.Context, email string) error
-	ActivateFromInvite(ctx context.Context, email, password string) error
-	SetPasswordAndVerify(ctx context.Context, email, password string) error
-	CreatePending(ctx context.Context, email, name string) error
-	// Status is active, pending or locked; "" when there is no account.
-	Status(ctx context.Context, email string) (string, error)
-}
-
-// Account states a LocalAccountStore reports.
-const (
-	AccountActive  = "active"
-	AccountPending = "pending"
-	AccountLocked  = "locked"
-)
 
 // Var reads an install variable, "" when none is configured.
 func (d Deps) Var(name string) string {
@@ -272,6 +228,8 @@ type AuthRegistry interface {
 
 // OIDCProvider configures one OpenID Connect issuer.
 type OIDCProvider struct {
+	// UpstreamIssuer comes from trusted broker configuration, never a token hint.
+	UpstreamIssuer string
 	// ID is used in URLs (/api/auth/login?provider=<id>).
 	ID string
 	// Label is shown on the login page ("Email and password").
@@ -401,11 +359,17 @@ func Find(list []Extension, name string) Extension {
 
 // Identity is a signed-in user as seen by the server (RFC-0007).
 type Identity struct {
-	// Subject is the provider's stable id; "admin-token" for the token.
-	Subject string   `json:"subject"`
-	Email   string   `json:"email,omitempty"`
-	Name    string   `json:"name,omitempty"`
-	Groups  []string `json:"groups,omitempty"`
+	// Subject becomes the local principal ID after sign-in; "admin-token" for the token.
+	Subject string `json:"subject"`
+	// Preserve the verified external identity when Subject becomes the local ID.
+	Issuer             string   `json:"issuer,omitempty"`
+	ExternalSubject    string   `json:"externalSubject,omitempty"`
+	EmailVerified      bool     `json:"emailVerified,omitempty"`
+	FederatedConnector string   `json:"federatedConnector,omitempty"`
+	FederatedSubject   string   `json:"federatedSubject,omitempty"`
+	Email              string   `json:"email,omitempty"`
+	Name               string   `json:"name,omitempty"`
+	Groups             []string `json:"groups,omitempty"`
 	// Provider is the login provider id ("local", "okta"); "token" for the
 	// admin token.
 	Provider string `json:"provider"`

@@ -50,6 +50,7 @@ func wrapConnector(err error) error {
 
 // Connector is a Dex connector as shown to people: no secrets.
 type Connector struct {
+	Issuer string `json:"-"`
 	// ID is the connector's id within its scope: "google" for the
 	// platform's Google method and for workspace acme's own. FullID is
 	// Dex's connector id and the sign-in provider's id, unique on the
@@ -370,6 +371,7 @@ func connectorOf(u unstructured.Unstructured) Connector {
 				Issuer        string      `json:"issuer"`
 			}
 			_ = json.Unmarshal(raw, &cfg)
+			c.Issuer = cfg.Issuer
 			switch {
 			case len(cfg.Orgs) > 0:
 				c.Detail = "organisation " + cfg.Orgs[0].Name

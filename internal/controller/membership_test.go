@@ -22,6 +22,12 @@ func TestMembershipMirror(t *testing.T) {
 	other := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}
 	st := store.NewMemory()
 	ctx := context.Background()
+	for _, email := range []string{"ada@example.test", "bob@example.test", "ops@example.test", "guest@example.test"} {
+		if _, err := st.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{ID: email, Email: email, Issuer: "https://idp.test", Subject: email}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if _, _, err := st.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "web", Members: []string{"Ada@Example.test", "bob@example.test"}, Groups: []string{"engineering"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,15 +51,14 @@ func TestMembershipMirror(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shpyrd-developer"}, rb); err != nil {
 		t.Fatalf("developer binding: %v", err)
 	}
-	if rb.RoleRef.Name != "shpyrd-project-developer" || len(rb.Subjects) != 3 {
+	if rb.RoleRef.Name != "shpyrd-project-developer" || len(rb.Subjects) != 2 {
 		t.Fatalf("developer binding = %+v", rb)
 	}
-	// Sorted: groups after users; emails lower-cased.
-	if rb.Subjects[0].Kind != "Group" || rb.Subjects[0].Name != "engineering" || rb.Subjects[1].Name != "ada@example.test" || rb.Subjects[2].Name != "bob@example.test" {
-		t.Errorf("subjects = %+v", rb.Subjects)
+	if rb.Subjects[0].Name != "shpyrd:principal:ada@example.test" || rb.Subjects[1].Name != "shpyrd:principal:bob@example.test" {
+		t.Errorf("principal subjects: %+v", rb.Subjects)
 	}
 	viewer := &rbacv1.RoleBinding{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shpyrd-viewer"}, viewer); err != nil || len(viewer.Subjects) != 1 || viewer.Subjects[0].Name != "guest@example.test" {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shpyrd-viewer"}, viewer); err != nil || len(viewer.Subjects) != 1 || viewer.Subjects[0].Name != "shpyrd:principal:guest@example.test" {
 		t.Errorf("viewer binding: %v %+v", err, viewer.Subjects)
 	}
 	// No admins on shop, nobody on blog: no bindings there.
@@ -65,7 +70,7 @@ func TestMembershipMirror(t *testing.T) {
 	}
 	// Platform admins are bound cluster-wide.
 	crb := &rbacv1.ClusterRoleBinding{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "shpyrd-platform-admin-project-admin"}, crb); err != nil || len(crb.Subjects) != 1 || crb.Subjects[0].Name != "ops@example.test" {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "shpyrd-platform-admin-project-admin"}, crb); err != nil || len(crb.Subjects) != 1 || crb.Subjects[0].Name != "shpyrd:principal:ops@example.test" {
 		t.Errorf("platform binding: %v %+v", err, crb.Subjects)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "shpyrd-platform-viewer-project-viewer"}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {

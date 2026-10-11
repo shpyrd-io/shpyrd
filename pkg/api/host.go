@@ -98,7 +98,11 @@ func (h *host) DashboardURLOf(ws *store.Workspace) string         { return h.s.d
 
 func (h *host) RolesOf(c *gin.Context) (authz.Roles, error) { return h.s.rolesOf(c) }
 func (h *host) RolesIn(ctx context.Context, ws string, id ext.Identity) (authz.Roles, error) {
-	return h.s.authz.RolesIn(ctx, ws, id)
+	w, err := h.s.store.Workspace(ctx, ws)
+	if err != nil {
+		return authz.Roles{}, err
+	}
+	return h.s.rolesInWorkspace(ctx, w, id)
 }
 func (h *host) SetRoles(c *gin.Context, roles authz.Roles) { c.Set(rolesKey, roles) }
 

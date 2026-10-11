@@ -749,6 +749,8 @@ func TestShellOpensForADeveloper(t *testing.T) {
 		t.Fatalf("open frame = %v", open)
 	}
 	// The slot belongs to the developer, not to whoever minted last.
+	principal, _ := f.s.store.GetIdentity(context.Background(), store.DefaultWorkspace, dev.Email)
+	dev.Subject = principal.ID
 	if !f.s.shells.held(actorKey(dev), "blog") {
 		t.Error("the shell slot was not claimed for the developer")
 	}
@@ -956,7 +958,7 @@ func TestShellTicketWorkspace(t *testing.T) {
 					}
 					return nil
 				}
-				sess, err := s.rp.sessions.create(ctx, store.RealmWorkspace, "acme", id, "")
+				sess, err := principalFixtureSession(s, ctx, store.RealmWorkspace, "acme", id, "")
 				if err != nil {
 					t.Fatal(err)
 				}

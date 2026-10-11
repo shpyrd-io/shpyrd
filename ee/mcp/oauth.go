@@ -547,7 +547,7 @@ func (s *server) oauthToken(c *gin.Context) {
 			}
 			scope = strings.Join(keep, " ")
 		}
-		s.issueTokens(c, ws, client, tok.Email, "", scope, tok)
+		s.issueTokens(c, ws, client, tok.Email, tok.Subject, scope, tok)
 	default:
 		oauthError(c, http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
 	}
@@ -558,8 +558,8 @@ func (s *server) oauthToken(c *gin.Context) {
 func (s *server) issueTokens(c *gin.Context, ws *store.Workspace, client *store.OAuthClient, email, subject, scope string, previous *store.OAuthToken) {
 	ctx := c.Request.Context()
 	// The person as the workspace knows them: suspended people get nothing.
-	person, err := s.h.Store().GetIdentity(ctx, ws.Slug, email)
-	if err != nil || person.Status == store.StatusSuspended {
+	person, err := s.h.Store().GetIdentity(ctx, ws.Slug, subject)
+	if err != nil || person.ID != subject || person.Subject == "" || person.Status == store.StatusSuspended {
 		oauthError(c, http.StatusBadRequest, "invalid_grant", "the account is not available")
 		return
 	}
@@ -580,7 +580,7 @@ func (s *server) issueTokens(c *gin.Context, ws *store.Workspace, client *store.
 			return
 		}
 	} else {
-		if _, err := s.h.Store().CreateOAuthToken(ctx, ws.Slug, store.OAuthToken{ClientID: client.ClientID, Email: person.Email, Scope: scope, Hash: hashToken(refresh), ExpiresAt: now.Add(oauthRefreshTTL)}); err != nil {
+		if _, err := s.h.Store().CreateOAuthToken(ctx, ws.Slug, store.OAuthToken{ClientID: client.ClientID, Email: person.Email, Subject: person.ID, Scope: scope, Hash: hashToken(refresh), ExpiresAt: now.Add(oauthRefreshTTL)}); err != nil {
 			oauthError(c, http.StatusBadGateway, "server_error", err.Error())
 			return
 		}
@@ -631,12 +631,12 @@ func (s *server) identifyWithOAuth(c *gin.Context) bool {
 		return true
 	}
 	ctx := c.Request.Context()
-	person, err := s.h.Store().GetIdentity(ctx, ws.Slug, claims.Email)
-	if err != nil || person.Status == store.StatusSuspended {
+	person, err := s.h.Store().GetIdentity(ctx, ws.Slug, claims.Subject)
+	if err != nil || person.ID != claims.Subject || person.Subject == "" || person.Status == store.StatusSuspended {
 		abort(c, http.StatusUnauthorized, errors.New("the token's owner is not available"))
 		return true
 	}
-	owner := ext.Identity{Subject: person.ID, Email: person.Email, Name: person.Name, Provider: person.Provider, Groups: person.Groups}
+	owner := ext.Identity{Subject: person.ID, Issuer: person.Issuer, ExternalSubject: person.Subject, FederatedConnector: person.Connector, Email: person.Email, Name: person.Name, Provider: person.Provider, Groups: person.Groups}
 	roles, err := s.h.RolesIn(ctx, ws.Slug, owner)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
@@ -689,7 +689,7 @@ type ConnectionView struct {
 func (s *server) listConnections(c *gin.Context) {
 	roles, _ := s.h.RolesOf(c)
 	id, _ := ext.IdentityFrom(c)
-	email := id.Email
+	email := id.Subject
 	if roles.Can(authz.ClusterAdmin, "") && c.Query("all") == "true" {
 		email = ""
 	}
@@ -718,7 +718,7 @@ func (s *server) deleteConnection(c *gin.Context) {
 	}
 	for _, t := range list {
 		if t.ID == c.Param("id") {
-			if !strings.EqualFold(t.Email, id.Email) && !roles.Can(authz.ClusterAdmin, "") {
+			if t.Subject != id.Subject && !roles.Can(authz.ClusterAdmin, "") {
 				abort(c, http.StatusForbidden, errors.New("that connection is someone else's"))
 				return
 			}

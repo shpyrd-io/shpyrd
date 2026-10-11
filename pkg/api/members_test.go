@@ -26,7 +26,7 @@ import (
 // signIn creates a session for a user and returns its cookie and CSRF token.
 func signIn(t *testing.T, s *Server, id ext.Identity) (string, string) {
 	t.Helper()
-	sess, err := s.rp.sessions.create(context.Background(), store.RealmWorkspace, store.DefaultWorkspace, id, "")
+	sess, err := principalFixtureSession(s, context.Background(), store.RealmWorkspace, store.DefaultWorkspace, id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestExtensionAdminRoutesNeedPlatformAdmin(t *testing.T) {
 	}
 	cr := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(shop).WithStatusSubresource(&shpyrdv1.App{}).Build()
 	k := &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
-	s, err := newServer(k, Options{Token: testToken, Apps: cr, Extensions: []ext.Extension{adminOnlyExt{}}, Public: PublicConfig{Domain: "example.test"}}, nil)
+	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Extensions: []ext.Extension{adminOnlyExt{}}, Public: PublicConfig{Domain: "example.test"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

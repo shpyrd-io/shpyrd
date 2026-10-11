@@ -94,7 +94,7 @@ export function People() {
               </TableHeader>
               <TableBody>
                 {people.data!.map((p) => (
-                  <TableRow key={p.email}>
+                  <TableRow key={p.id ?? p.email}>
                     <TableCell>
                       <Stack direction="horizontal" align="center" gap="condensed">
                         <Avatar size={24} alt={p.name ?? p.email} />
@@ -107,7 +107,7 @@ export function People() {
                       </Stack>
                     </TableCell>
                     <TableCell>
-                      <Select value={p.role ?? "member"} disabled={(p.role === "owner" && !perms.owner) || setRole.isPending} onValueChange={(role) => setRole.mutate({ email: p.email, role: role as WorkspaceRole })}>
+                      <Select value={p.role ?? "member"} disabled={(p.role === "owner" && !perms.owner) || setRole.isPending} onValueChange={(role) => setRole.mutate({ email: p.id ?? p.email, role: role as WorkspaceRole })}>
                         <SelectTrigger size="sm" className="w-28">
                           <SelectValue />
                         </SelectTrigger>
@@ -129,7 +129,7 @@ export function People() {
                           size="xs"
                           icon={p.status === "suspended" ? <UserRoundCheck /> : <Ban />}
                           disabled={setStatus.isPending}
-                          onClick={() => setStatus.mutate({ email: p.email, status: p.status === "suspended" ? "active" : "suspended" })}
+                          onClick={() => setStatus.mutate({ email: p.id ?? p.email, status: p.status === "suspended" ? "active" : "suspended" })}
                         >
                           {p.status === "suspended" ? "Let back in" : "Suspend"}
                         </Button>
@@ -141,7 +141,7 @@ export function People() {
                           title={`Remove ${p.name ?? p.email}?`}
                           description="They lose every role here. Their account stays, on the platform."
                           action="Remove"
-                          onConfirm={() => remove.mutate(p.email)}
+                          onConfirm={() => remove.mutate(p.id ?? p.email)}
                         />
                       )}
                     </TableCell>

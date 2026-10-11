@@ -102,7 +102,6 @@ export const backend: Api = {
   config: () => request("/api/config"),
   me: () => request("/api/me"),
   links: () => request("/api/links"),
-  passwordLogin: (body) => request("/api/auth/password", json("POST", body)),
   tokenLogin: (body) => request("/api/auth/token", json("POST", body)),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   invitation: (token) => request(`/api/invitations/${encodeURIComponent(token)}`),

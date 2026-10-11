@@ -17,7 +17,7 @@ func every() Words {
 }
 
 func TestEveryEmailIsEmbeddedAndFillsIn(t *testing.T) {
-	for _, name := range []Name{Invite, InvitePassword, Reset, PasswordChanged, Code, Notice, Test} {
+	for _, name := range []Name{Invite, Notice, Test} {
 		subject, html, err := Render(name, every())
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -54,9 +54,9 @@ func TestTheWordsAreEscapedForWhereTheyGo(t *testing.T) {
 
 func TestAWordNotGivenIsAnError(t *testing.T) {
 	words := every()
-	delete(words, "Code")
-	if _, _, err := Render(Code, words); err == nil {
-		t.Errorf("the code email was sent without its code")
+	delete(words, "Link")
+	if _, _, err := Render(Invite, words); err == nil {
+		t.Errorf("the invitation was sent without its link")
 	}
 	if _, _, err := Render("nothing", every()); err == nil {
 		t.Errorf("an email that does not exist was drawn")

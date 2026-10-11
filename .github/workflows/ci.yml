@@ -293,6 +293,14 @@ jobs:
             [ "$class" = shpyrd-local ] && break; sleep 2
           done
           [ "$class" = shpyrd-local ] || { echo "volume claim class is '$class', want shpyrd-local"; kubectl --context kind-ci get pvc -A; exit 1; }
+          # RBAC grants bind existing principals. Fixture users must exist before
+          # assigning by email; production never creates an identity from a grant.
+          kubectl --context kind-ci -n shpyrd-system exec -i control-plane-db-0 -- psql -U shpyrd -d shpyrd -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO identities (workspace_id,realm,email,provider,issuer,subject,connector)
+          SELECT id,'workspace',person.email,'ci','https://ci.example.test',person.email,'ci'
+          FROM workspaces CROSS JOIN (VALUES ('ci@example.com'),('dev@example.com')) AS person(email)
+          WHERE slug='default';
+          SQL
           ./bin/shpyrd teams create platform --platform-role platform-admin --member ci@example.com --context kind-ci
           ./bin/shpyrd members add hello-world --user dev@example.com --role developer --context kind-ci
           ./bin/shpyrd members add hello-world --team platform --role user --context kind-ci

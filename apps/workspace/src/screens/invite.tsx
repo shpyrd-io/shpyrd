@@ -14,12 +14,6 @@ import type { Identity, PublicConfig } from "@/api/types";
 import { useBrandColor } from "@/lib/branding";
 
 const article = (role: string) => (/^[aeiou]/.test(role) ? "an" : "a");
-const roleWords: Record<string, string> = {
-  owner: "Owners administer the workspace and every project, and name other owners.",
-  admin: "Admins administer the workspace and every project.",
-  member: "Members make projects and administer the ones they make; teams and roles give the rest.",
-};
-
 // An invitation link: what the holder was invited to. Signed out, it
 // sends them to sign in and back; signed in as the invited, one click
 // accepts; signed in as someone else, it says so. Signing in with the
@@ -52,7 +46,7 @@ export function Invite({ token, config, me }: { token: string; config: PublicCon
           <h1 className="font-heading text-2xl font-medium">{inv ? inv.workspace.name : (config.workspace?.name ?? "An invitation")}</h1>
           <p className="text-sm text-muted-foreground">{inv ? "You were invited here." : "An invitation"}</p>
         </div>
-        <Stack gap="normal" className="w-full text-left">
+        <Stack gap="normal" className="w-full text-center">
           {invitation.isLoading && <Skeleton className="h-24 w-full" />}
           {joined && me && (
             <>
@@ -81,7 +75,6 @@ export function Invite({ token, config, me }: { token: string; config: PublicCon
                 )}
                 .
               </p>
-              <p className="text-xs text-muted-foreground">{roleWords[inv.role]}</p>
               {inv.expired ? (
                 <Alert variant="destructive">
                   <AlertTitle>This invitation has expired</AlertTitle>
@@ -89,9 +82,6 @@ export function Invite({ token, config, me }: { token: string; config: PublicCon
                 </Alert>
               ) : !me ? (
                 <>
-                  <p className="text-sm">
-                    Sign in with <b className="font-medium">{inv.email}</b> to accept. Any method works, as long as it gives that address.
-                  </p>
                   <Button size="xl" className="w-full" icon={<LogIn />} asChild>
                     <a href={`/?next=${encodeURIComponent(here)}`}>Sign in to accept</a>
                   </Button>
@@ -123,7 +113,7 @@ export function Invite({ token, config, me }: { token: string; config: PublicCon
                   </Button>
                 </>
               )}
-              <p className="text-xs text-muted-foreground">Not expecting this? Ignore it: nothing happens until the invited address signs in.</p>
+              <p className="text-xs text-muted-foreground">Not expecting this? Just ignore.</p>
             </>
           )}
         </Stack>

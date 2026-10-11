@@ -161,30 +161,57 @@ func (m *Memory) AddConsoleUser(_ context.Context, email, by string) (*ConsoleUs
 	if m.console == nil {
 		m.console = map[string]ConsoleUser{}
 	}
-	u, ok := m.console[email]
+	var person *Identity
+	for _, p := range m.identities {
+		if p.ID == email && p.Realm == RealmConsole {
+			copy := p
+			person = &copy
+		}
+	}
+	if person == nil {
+		return nil, ErrNotFound
+	}
+	email = person.Email
+	u, ok := m.console[person.ID]
 	if !ok {
-		u = ConsoleUser{Email: email, AddedAt: m.now(), AddedBy: by}
-		m.console[email] = u
+		u = ConsoleUser{PrincipalID: person.ID, Email: email, AddedAt: m.now(), AddedBy: by}
+		m.console[person.ID] = u
 	}
 	return &u, nil
 }
 
-func (m *Memory) RemoveConsoleUser(_ context.Context, email string) error {
+func (m *Memory) RemoveConsoleUser(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	email = normEmail(email)
-	if _, ok := m.console[email]; !ok {
+	if _, ok := m.console[key]; ok {
+		delete(m.console, key)
+		return nil
+	}
+	found := ""
+	for id, u := range m.console {
+		if strings.EqualFold(u.Email, key) {
+			if found != "" {
+				return ErrConflict
+			}
+			found = id
+		}
+	}
+	if found == "" {
 		return ErrNotFound
 	}
-	delete(m.console, email)
+	delete(m.console, found)
 	return nil
 }
 
 func (m *Memory) IsConsoleUser(_ context.Context, email string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.console[normEmail(email)]
-	return ok, nil
+	for _, u := range m.console {
+		if strings.EqualFold(u.Email, email) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *Memory) ws(slug string) (*Workspace, error) {
@@ -279,6 +306,24 @@ func (m *Memory) CreateWorkspace(_ context.Context, w Workspace) (*Workspace, er
 	if w.Owner == "" {
 		w.Owner = WorkspaceOwnerCustomer
 	}
+	if owner := w.InitialOwner; owner != nil {
+		if owner.Issuer == "" || owner.Subject == "" || owner.Email == "" {
+			return nil, errors.New("initial owner needs a verified identity")
+		}
+		person := *owner
+		person.ID = newID()
+		person.WorkspaceID = w.ID
+		person.Realm = RealmWorkspace
+		person.Status = StatusActive
+		person.FirstSeenAt = t
+		person.LastSeenAt = t
+		m.identities = append(m.identities, person)
+		m.memberships = append(m.memberships, Membership{ID: newID(), WorkspaceID: w.ID, Email: normEmail(person.Email), PrincipalID: person.ID, Role: WorkspaceRoleOwner, CreatedAt: t, UpdatedAt: t})
+	} else {
+		w.OwnerInvitePending = normEmail(w.InitialOwnerEmail)
+	}
+	w.InitialOwnerEmail = ""
+	w.InitialOwner = nil
 	c := w
 	m.workspaces[w.Slug] = &c
 	m.teams = append(m.teams, Team{ID: newID(), WorkspaceID: c.ID, Name: TeamEveryone, Description: "Everyone who has signed in", Members: []string{}, Groups: []string{}, Everyone: true, CreatedAt: t, UpdatedAt: t})
@@ -426,6 +471,9 @@ func (m *Memory) DeleteDomainClaim(_ context.Context, ws, domain string) error {
 }
 
 func (m *Memory) TouchIdentity(_ context.Context, ws string, id Identity) (*Identity, error) {
+	if (id.Subject == "") != (id.Issuer == "") {
+		return nil, errors.New("issuer and subject are required together")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -440,7 +488,7 @@ func (m *Memory) TouchIdentity(_ context.Context, ws string, id Identity) (*Iden
 	now := m.now()
 	for i := range m.identities {
 		it := &m.identities[i]
-		if it.WorkspaceID == w.ID && it.Realm == realm && it.Email == email {
+		if it.WorkspaceID == w.ID && it.Realm == realm && ((id.Subject != "" && it.Subject == id.Subject && it.Issuer == id.Issuer && it.Connector == id.Connector) || (id.Subject == "" && it.Subject == "" && it.Email == email)) {
 			if id.Name != "" {
 				it.Name = id.Name
 			}
@@ -450,12 +498,20 @@ func (m *Memory) TouchIdentity(_ context.Context, ws string, id Identity) (*Iden
 			if id.Groups != nil {
 				it.Groups = append([]string(nil), id.Groups...)
 			}
+			it.Email = email
 			it.LastSeenAt = now
 			c := *it
 			return &c, nil
 		}
 	}
-	it := Identity{ID: newID(), WorkspaceID: w.ID, Realm: realm, Email: email, Name: id.Name, Provider: id.Provider, Groups: append([]string(nil), id.Groups...), Status: StatusActive, FirstSeenAt: now, LastSeenAt: now}
+	if id.ID != "" {
+		for _, existing := range m.identities {
+			if existing.ID == id.ID {
+				return nil, ErrConflict
+			}
+		}
+	}
+	it := Identity{ID: firstID(id.ID), Issuer: id.Issuer, Subject: id.Subject, Connector: id.Connector, WorkspaceID: w.ID, Realm: realm, Email: email, Name: id.Name, Provider: id.Provider, Groups: append([]string(nil), id.Groups...), Status: StatusActive, FirstSeenAt: now, LastSeenAt: now}
 	m.identities = append(m.identities, it)
 	return &it, nil
 }
@@ -477,23 +533,20 @@ func (m *Memory) ListIdentities(_ context.Context, ws string) ([]Identity, error
 	return out, nil
 }
 
-func (m *Memory) GetIdentity(_ context.Context, ws, email string) (*Identity, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w, err := m.ws(ws)
+func (m *Memory) GetIdentity(ctx context.Context, ws, key string) (*Identity, error) {
+	people, err := m.ListIdentities(ctx, ws)
 	if err != nil {
 		return nil, err
 	}
-	for _, it := range m.identities {
-		if it.WorkspaceID == w.ID && strings.EqualFold(it.Email, email) {
-			c := it
-			return &c, nil
-		}
-	}
-	return nil, ErrNotFound
+	return selectIdentity(people, key)
 }
 
-func (m *Memory) SetIdentityStatus(_ context.Context, ws, email, status string) (*Identity, error) {
+func (m *Memory) SetIdentityStatus(ctx context.Context, ws, email, status string) (*Identity, error) {
+	person, err := m.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return nil, err
+	}
+	email = person.ID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -503,7 +556,7 @@ func (m *Memory) SetIdentityStatus(_ context.Context, ws, email, status string) 
 	email = strings.ToLower(email)
 	for i := range m.identities {
 		it := &m.identities[i]
-		if it.WorkspaceID == w.ID && it.Email == email {
+		if it.WorkspaceID == w.ID && it.ID == email {
 			it.Status = status
 			c := *it
 			return &c, nil
@@ -512,7 +565,12 @@ func (m *Memory) SetIdentityStatus(_ context.Context, ws, email, status string) 
 	return nil, ErrNotFound
 }
 
-func (m *Memory) DeleteIdentity(_ context.Context, ws, email string) error {
+func (m *Memory) DeleteIdentity(ctx context.Context, ws, email string) error {
+	person, err := m.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return err
+	}
+	email = person.ID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -521,8 +579,8 @@ func (m *Memory) DeleteIdentity(_ context.Context, ws, email string) error {
 	}
 	email = strings.ToLower(email)
 	for i, it := range m.identities {
-		if it.WorkspaceID == w.ID && it.Email == email {
-			m.identities = append(m.identities[:i], m.identities[i+1:]...)
+		if it.WorkspaceID == w.ID && it.ID == email {
+			m.identities[i].Status = StatusSuspended
 			return nil
 		}
 	}
@@ -562,7 +620,12 @@ func (m *Memory) GetTeam(_ context.Context, ws, name string) (*Team, error) {
 	return nil, ErrNotFound
 }
 
-func (m *Memory) PutTeam(_ context.Context, ws string, t Team) (*Team, bool, error) {
+func (m *Memory) PutTeam(ctx context.Context, ws string, t Team) (*Team, bool, error) {
+	resolved, err := resolveTeam(ctx, m, ws, t)
+	if err != nil {
+		return nil, false, err
+	}
+	t = resolved
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -579,6 +642,7 @@ func (m *Memory) PutTeam(_ context.Context, ws string, t Team) (*Team, bool, err
 			if e.Everyone {
 				return nil, false, ErrBuiltIn
 			}
+			e.PrincipalIDs = append([]string(nil), t.PrincipalIDs...)
 			e.Description, e.Members, e.Groups, e.PlatformRole, e.UpdatedAt = t.Description, t.Members, t.Groups, t.PlatformRole, now
 			c := cloneTeam(*e)
 			return &c, false, nil
@@ -653,7 +717,17 @@ func (m *Memory) ListProjectGrants(ctx context.Context, ws, project string) ([]G
 	return out, nil
 }
 
-func (m *Memory) AddGrant(_ context.Context, ws string, g Grant) (*Grant, error) {
+func (m *Memory) AddGrant(ctx context.Context, ws string, g Grant) (*Grant, error) {
+	if g.User != "" {
+		person, err := m.GetIdentity(ctx, ws, firstKey(g.PrincipalID, g.User))
+		if err != nil {
+			return nil, err
+		}
+		if person.Realm != RealmWorkspace {
+			return nil, ErrNotFound
+		}
+		g.PrincipalID, g.User = person.ID, person.Email
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -673,7 +747,7 @@ func (m *Memory) AddGrant(_ context.Context, ws string, g Grant) (*Grant, error)
 		}
 	}
 	for _, e := range m.grants {
-		if e.WorkspaceID == w.ID && e.Project == g.Project && e.Role == g.Role && e.User == g.User && e.Team == g.Team {
+		if e.WorkspaceID == w.ID && e.Project == g.Project && e.Role == g.Role && e.PrincipalID == g.PrincipalID && e.Team == g.Team {
 			return nil, ErrConflict
 		}
 	}
@@ -756,6 +830,38 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 			_, _ = s.MarkDomainVerified(ctx, ws, dc.Domain, *dc.VerifiedAt)
 		}
 	}
+	for _, id := range d.Identities {
+		if _, err := s.TouchIdentity(ctx, ws, id); err != nil {
+			return res, err
+		}
+		if id.Status == StatusSuspended {
+			_, _ = s.SetIdentityStatus(ctx, ws, id.ID, StatusSuspended)
+		}
+		res.Identities++
+	}
+	if d.Version < 4 {
+		// Old backups contain email-only permissions. Restore their contacts as
+		// unbound principals, which cannot authorize any login until explicitly bound.
+		contacts := []string{}
+		for _, team := range d.Teams {
+			contacts = append(contacts, team.Members...)
+		}
+		for _, g := range d.Grants {
+			if g.User != "" {
+				contacts = append(contacts, g.User)
+			}
+		}
+		for _, mb := range d.Memberships {
+			contacts = append(contacts, mb.Email)
+		}
+		for _, email := range normalizeEmails(contacts) {
+			if _, err := s.GetIdentity(ctx, ws, email); err == ErrNotFound {
+				if _, err = s.TouchIdentity(ctx, ws, Identity{Email: email}); err != nil {
+					return res, err
+				}
+			}
+		}
+	}
 	for _, t := range d.Teams {
 		if t.Everyone || t.Name == TeamEveryone {
 			continue // built in everywhere
@@ -782,15 +888,6 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 			return res, err
 		}
 	}
-	for _, id := range d.Identities {
-		if _, err := s.TouchIdentity(ctx, ws, id); err != nil {
-			return res, err
-		}
-		if id.Status == StatusSuspended {
-			_, _ = s.SetIdentityStatus(ctx, ws, id.Email, StatusSuspended)
-		}
-		res.Identities++
-	}
 	// Roles: a person's role is replaced only when overwriting; a role
 	// unknown to this version is skipped rather than refused.
 	existing := map[string]bool{}
@@ -809,7 +906,7 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 			res.Skipped++
 			continue
 		}
-		if _, err := s.PutMembership(ctx, ws, email, mb.Role); err != nil {
+		if _, err := s.PutMembership(ctx, ws, firstKey(mb.PrincipalID, email), mb.Role); err != nil {
 			return res, err
 		}
 		res.Memberships++
@@ -835,6 +932,7 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 }
 
 func cloneTeam(t Team) Team {
+	t.PrincipalIDs = append([]string(nil), t.PrincipalIDs...)
 	t.Members = append([]string(nil), t.Members...)
 	t.Groups = append([]string(nil), t.Groups...)
 	return t
@@ -1007,7 +1105,7 @@ func (m *Memory) CreateToken(_ context.Context, ws string, t APIToken, hash stri
 	}
 	t.OwnerEmail = strings.ToLower(t.OwnerEmail)
 	for _, e := range m.tokens {
-		if e.token.WorkspaceID == w.ID && e.token.OwnerEmail == t.OwnerEmail && e.token.Name == t.Name {
+		if e.token.WorkspaceID == w.ID && e.token.PrincipalID == t.PrincipalID && e.token.Name == t.Name {
 			return nil, ErrConflict
 		}
 	}
@@ -1052,7 +1150,7 @@ func (m *Memory) ListTokens(_ context.Context, ws, ownerEmail string) ([]APIToke
 		if e.token.WorkspaceID != w.ID {
 			continue
 		}
-		if ownerEmail != "" && !strings.EqualFold(e.token.OwnerEmail, ownerEmail) {
+		if ownerEmail != "" && e.token.PrincipalID != ownerEmail {
 			continue
 		}
 		out = append(out, e.token)
@@ -1096,10 +1194,18 @@ func (m *Memory) ListMemberships(_ context.Context, ws string) ([]Membership, er
 	return out, nil
 }
 
-func (m *Memory) PutMembership(_ context.Context, ws, email, role string) (*Membership, error) {
+func (m *Memory) PutMembership(ctx context.Context, ws, email, role string) (*Membership, error) {
 	if !ValidWorkspaceRole(role) {
 		return nil, fmt.Errorf("role %q is not a workspace role", role)
 	}
+	person, err := m.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return nil, err
+	}
+	if person.Realm != RealmWorkspace {
+		return nil, ErrNotFound
+	}
+	email = person.Email
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -1113,7 +1219,7 @@ func (m *Memory) PutMembership(_ context.Context, ws, email, role string) (*Memb
 	now := m.now()
 	for i := range m.memberships {
 		mb := &m.memberships[i]
-		if mb.WorkspaceID == w.ID && mb.Email == email {
+		if mb.WorkspaceID == w.ID && mb.PrincipalID == person.ID {
 			if mb.Role != role {
 				mb.Role, mb.UpdatedAt = role, now
 			}
@@ -1121,12 +1227,17 @@ func (m *Memory) PutMembership(_ context.Context, ws, email, role string) (*Memb
 			return &c, nil
 		}
 	}
-	mb := Membership{ID: newID(), WorkspaceID: w.ID, Email: email, Role: role, CreatedAt: now, UpdatedAt: now}
+	mb := Membership{PrincipalID: person.ID, ID: newID(), WorkspaceID: w.ID, Email: email, Role: role, CreatedAt: now, UpdatedAt: now}
 	m.memberships = append(m.memberships, mb)
 	return &mb, nil
 }
 
-func (m *Memory) DeleteMembership(_ context.Context, ws, email string) error {
+func (m *Memory) DeleteMembership(ctx context.Context, ws, email string) error {
+	person, err := m.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return err
+	}
+	email = person.ID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.ws(ws)
@@ -1135,7 +1246,7 @@ func (m *Memory) DeleteMembership(_ context.Context, ws, email string) error {
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	for i, mb := range m.memberships {
-		if mb.WorkspaceID == w.ID && mb.Email == email {
+		if mb.WorkspaceID == w.ID && mb.PrincipalID == email {
 			m.memberships = append(m.memberships[:i], m.memberships[i+1:]...)
 			return nil
 		}
@@ -1508,7 +1619,7 @@ func (m *Memory) ListOAuthTokens(_ context.Context, ws, email string) ([]OAuthTo
 	}
 	var out []OAuthToken
 	for _, t := range m.otokens {
-		if t.WorkspaceID == w.ID && (email == "" || strings.EqualFold(t.Email, email)) {
+		if t.WorkspaceID == w.ID && (email == "" || t.Subject == email) {
 			t.ClientName = names[t.ClientID]
 			out = append(out, t)
 		}

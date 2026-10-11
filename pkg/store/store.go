@@ -30,11 +30,16 @@ var (
 // <app>.<Address>. The default workspace, created at install, is one of
 // them; in the open-source layout its address is the platform domain.
 type Workspace struct {
-	ID      string `json:"id"`
-	Slug    string `json:"slug"`
-	Name    string `json:"name"`
-	Address string `json:"address,omitempty"`
-	Status  string `json:"status"` // WorkspaceActive or WorkspaceSuspended
+	// CreationFingerprint is an immutable provisioning fingerprint for safe service retries.
+	CreationFingerprint string `json:"-"`
+	// InitialOwnerEmail is an input-only owner grant committed with workspace creation.
+	InitialOwnerEmail string    `json:"-"`
+	InitialOwner      *Identity `json:"-"`
+	ID                string    `json:"id"`
+	Slug              string    `json:"slug"`
+	Name              string    `json:"name"`
+	Address           string    `json:"address,omitempty"`
+	Status            string    `json:"status"` // WorkspaceActive or WorkspaceSuspended
 	// Owner distinguishes operator workspaces (COGS, never invoiced) from
 	// customer workspaces (revenue). RFC-0078.
 	Owner    string            `json:"owner,omitempty"` // "operator" | "customer"
@@ -185,6 +190,8 @@ type Limits struct {
 // APIToken is a scoped, named credential (RFC-0031): shp_<id>_<random>.
 // The random part is shown once and not stored; Hash is SHA-256(random).
 type APIToken struct {
+	PrincipalID string `json:"principalId,omitempty"`
+
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspaceId"`
 	Name        string `json:"name"`
@@ -235,6 +242,10 @@ type DomainClaim struct {
 // sign-in so the workspace has a list of its people before RFC-0033's
 // invitations and provisioning arrive.
 type Identity struct {
+	Issuer    string `json:"issuer,omitempty"`
+	Subject   string `json:"subject,omitempty"`
+	Connector string `json:"connector,omitempty"`
+
 	ID          string    `json:"id"`
 	WorkspaceID string    `json:"workspaceId"`
 	Realm       string    `json:"realm"` // workspace, console, operator
@@ -255,6 +266,8 @@ const TeamEveryone = "everyone"
 // Team groups people by email or by identity-provider group; a team may
 // carry a platform role (RFC-0008) until workspace roles replace it.
 type Team struct {
+	PrincipalIDs []string `json:"principalIds,omitempty"`
+
 	ID           string   `json:"id"`
 	WorkspaceID  string   `json:"workspaceId"`
 	Name         string   `json:"name"`
@@ -300,6 +313,8 @@ func ValidWorkspaceRole(role string) bool {
 // person has signed in (an invitation accepted, an owner named at
 // creation) and stays when their sign-in record is forgotten.
 type Membership struct {
+	PrincipalID string `json:"principalId,omitempty"`
+
 	ID          string    `json:"id"`
 	WorkspaceID string    `json:"workspaceId"`
 	Email       string    `json:"email"` // lower case
@@ -400,6 +415,8 @@ type OAuthCode struct {
 // OAuthToken is a refresh token a person granted a client: what the
 // person's settings list and revoke. Only its hash is stored.
 type OAuthToken struct {
+	Subject string `json:"subject,omitempty"`
+
 	ID          string     `json:"id"`
 	WorkspaceID string     `json:"workspaceId"`
 	ClientID    string     `json:"clientId"`
@@ -607,6 +624,8 @@ const (
 // ConsoleUser is someone who may open the operator's console: an email,
 // independent of every workspace. All of them are its admins for now.
 type ConsoleUser struct {
+	PrincipalID string `json:"principalId,omitempty"`
+
 	Email   string    `json:"email"`
 	AddedAt time.Time `json:"addedAt"`
 	AddedBy string    `json:"addedBy,omitempty"`
@@ -750,11 +769,14 @@ type Memberships interface {
 	// not; ErrNotFound otherwise.
 	InvitationByToken(ctx context.Context, tokenHash string) (*Invitation, error)
 	DeleteInvitation(ctx context.Context, ws, id string) error
+	AcceptInvitation(ctx context.Context, ws, invitationID, principalID string) error
 }
 
 // Grant gives a role on a project to a user (email) or to a team; exactly
 // one of the two is set.
 type Grant struct {
+	PrincipalID string `json:"principalId,omitempty"`
+
 	ID          string    `json:"id"`
 	WorkspaceID string    `json:"workspaceId"`
 	Project     string    `json:"project"`
@@ -804,6 +826,7 @@ type Store interface {
 	// updates name, provider, groups and the time otherwise.
 	TouchIdentity(ctx context.Context, ws string, id Identity) (*Identity, error)
 	ListIdentities(ctx context.Context, ws string) ([]Identity, error)
+	BindIdentity(ctx context.Context, ws, id, issuer, subject, connector string) error
 	// GetIdentity finds a person by email (case-insensitive); ErrNotFound
 	// when the workspace has never seen them.
 	GetIdentity(ctx context.Context, ws, email string) (*Identity, error)
@@ -914,4 +937,4 @@ type ImportResult struct {
 // DumpVersion is the format of Dump: 2 added memberships (v0.9.13), 3 the
 // workspace's hosts (v0.9.16); a server that knows only an older version
 // refuses a newer dump instead of dropping what it does not know.
-const DumpVersion = 3
+const DumpVersion = 4

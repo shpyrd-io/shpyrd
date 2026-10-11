@@ -1,17 +1,14 @@
 // Package authlocal is the auth-local extension (RFC-0007 step 3.1): a Dex
-// issuer with local email/password accounts, registered as a login
-// provider of the dashboard, plus account management for admins.
+// identity broker. Optional local credentials are managed in Dex configuration.
 package authlocal
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,6 +20,8 @@ import (
 // Name of the extension.
 const Name = "auth-local"
 
+var ErrNotEnabled = errors.New("the bundled Dex issuer is not enabled: run `shpyrd extensions enable auth-local`")
+
 // ProviderID is the login provider id ("/api/auth/login?provider=local").
 const ProviderID = "local"
 
@@ -33,7 +32,7 @@ func New() ext.Extension { return extension{} }
 
 func (extension) Name() string { return Name }
 func (extension) Description() string {
-	return "Sign in with email and password: a bundled Dex issuer stores local accounts (shpyrd users add)"
+	return "Bundled Dex identity broker; optional operator-managed static credentials"
 }
 func (extension) Components() []ext.ComponentRef {
 	return []ext.ComponentRef{{Name: "dex", Runlevel: "rc4"}} // after dns (rc3): its certificate may use the DNS-01 issuer
@@ -41,35 +40,15 @@ func (extension) Components() []ext.ComponentRef {
 func (extension) Register(ctrl.Manager, ext.Deps) error { return nil }
 func (extension) Types() []ext.ResourceType             { return nil }
 
-// Routes registers the Dex issuer as a login provider and mounts the users API.
+// Routes registers redirect-based Dex login; no password or user CRUD API is mounted.
 func (extension) Routes(r ext.Router, deps ext.Deps) error {
 	issuer := deps.Vars(install.VarAuthURL)
 	if issuer == "" {
 		return errors.New("SHPYRD_AUTH_URL is not set")
 	}
-	if deps.Auth != nil && deps.Kube != nil {
+	if deps.Auth != nil && deps.Kube != nil && deps.Var("SHPYRD_DEX_LOCAL_LOGIN") != "false" {
 		go registerProvider(context.Background(), deps, issuer)
 	}
-	store := &Store{Namespace: deps.SystemNamespace}
-	if deps.Kube != nil {
-		store.Dynamic = deps.Kube.Dynamic
-	}
-	// Surface the store to the server for lockout, reset and invite flows
-	// (RFC-0014). The Deps pointer is not available for direct mutation here,
-	// but ext.Router carries the same Deps by reference — set it through the
-	// router's Deps setter if available, otherwise ignore.
-	if setter, ok := r.(interface{ SetLocalAccounts(ext.LocalAccountStore) }); ok {
-		setter.SetLocalAccounts(store)
-	}
-	// Accounts are managed by platform administrators (RFC-0007, RFC-0008).
-	h := &handlers{store: store}
-	api := r.Admin()
-	api.GET("/users", h.list)
-	api.POST("/users", h.create)
-	api.PUT("/users/:email/password", h.setPassword)
-	api.DELETE("/users/:email", h.delete)
-	// Sign-in through other identity providers (GitHub, Google, Microsoft,
-	// any OIDC issuer) is the enterprise's: ee/sso adds them to this issuer.
 	return nil
 }
 
@@ -83,9 +62,12 @@ func registerProvider(ctx context.Context, deps ext.Deps, issuer string) {
 		if err == nil {
 			clientID, secret := strings.TrimSpace(string(sec.Data["client-id"])), strings.TrimSpace(string(sec.Data["client-secret"]))
 			err = deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
-				ID: ProviderID, Label: "Email and password", Issuer: issuer, Password: true,
+				ID: ProviderID, Label: "Email and password", Issuer: issuer, ConnectorID: "local",
 				ClientID: clientID, ClientSecret: secret,
 			})
+			if err == nil {
+				err = deps.Auth.AddOIDC(ctx, ext.OIDCProvider{ID: "local-console", Label: "Email and password", Issuer: issuer, ConnectorID: "local", Realm: ext.RealmConsole, ClientID: clientID, ClientSecret: secret})
+			}
 		}
 		if err == nil {
 			return
@@ -104,85 +86,5 @@ func registerProvider(ctx context.Context, deps ext.Deps, issuer string) {
 	}
 }
 
-// ---- users API ---------------------------------------------------------------
-
-type handlers struct{ store *Store }
-
-type createUserRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Name     string `json:"name"`
-	Password string `json:"password" binding:"required"`
-}
-
-type passwordRequest struct {
-	Password string `json:"password" binding:"required"`
-}
-
-func (h *handlers) list(c *gin.Context) {
-	users, err := h.store.List(c.Request.Context())
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, users)
-}
-
-func (h *handlers) create(c *gin.Context) {
-	var req createUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	u, err := h.store.Create(c.Request.Context(), req.Email, req.Name, req.Password)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, u)
-}
-
-func (h *handlers) setPassword(c *gin.Context) {
-	var req passwordRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := h.store.SetPassword(c.Request.Context(), c.Param("email"), req.Password); err != nil {
-		fail(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
-
-func (h *handlers) delete(c *gin.Context) {
-	if id, ok := ext.IdentityFrom(c); ok && strings.EqualFold(id.Email, c.Param("email")) {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "you cannot delete the account you are signed in with"})
-		return
-	}
-	if err := h.store.Delete(c.Request.Context(), c.Param("email")); err != nil {
-		fail(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
-
-// fail maps store errors to status codes.
-func fail(c *gin.Context, err error) {
-	status := http.StatusBadRequest
-	switch {
-	case errors.Is(err, ErrNotEnabled):
-		status = http.StatusServiceUnavailable
-	case strings.Contains(err.Error(), "not found"):
-		status = http.StatusNotFound
-	case strings.Contains(err.Error(), "already exists"):
-		status = http.StatusConflict
-	}
-	c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
-}
-
-// CLI returns `shpyrd users`.
-func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
-	// Accounts and the platform's login methods are the operator's; a
-	// workspace's own sign-in methods are its admins' (RFC-0033).
-	return []*cobra.Command{ext.ForOperator(newUsersCmd(g))}
-}
+// Credentials live in Dex configuration; there is no shpyrd user/password API.
+func (extension) CLI(ext.CLIGlobals) []*cobra.Command { return nil }

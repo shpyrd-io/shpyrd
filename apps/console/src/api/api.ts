@@ -43,7 +43,6 @@ export type Api = {
   recoverProject: (id: string) => Promise<void>;
   config: () => Promise<PublicConfig>;
   me: () => Promise<Identity>;
-  passwordLogin: (body: { email: string; password: string; next?: string }) => Promise<{ next: string }>;
   tokenLogin: (body: { token: string; next?: string }) => Promise<{ next: string }>;
   logout: () => Promise<{ redirect: string }>;
   // The workspaces the platform hosts: the open-source platform's one, as
@@ -81,7 +80,8 @@ export type Api = {
   saveSizes: (catalog: SizeCatalog) => Promise<SizeCatalog>;
   // The accounts of the auth-local extension.
   consoleUsers: () => Promise<ConsoleUser[]>;
-  addConsoleUser: (body: { email: string; password?: string }) => Promise<ConsoleUser>;
+  consolePrincipals: () => Promise<{id:string;email:string;name?:string;provider?:string}[]>;
+  addConsoleUser: (body: { principalId: string }) => Promise<ConsoleUser>;
   removeConsoleUser: (email: string) => Promise<void>;
   users: () => Promise<LocalUser[]>;
   createUser: (body: { email: string; name?: string; password: string }) => Promise<LocalUser>;

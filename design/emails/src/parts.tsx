@@ -164,3 +164,22 @@ export function Facts({ rows }: { rows: [string, ReactNode][] }) {
     </table>
   );
 }
+
+// Accounts' email layout, with workspace-specific copy and no central-account dependency.
+export function InvitationEmail({preview,logo,children}:{preview:string;logo:string;children:ReactNode}) {
+  const brand=(width:number)=><img src={logo} width={width} alt="shpyrd" style={{display:"block",width,maxWidth:"100%",height:"auto",border:0}} />;
+  return <div id="email" style={{margin:0,padding:0,background:ink.card}}>
+    <div style={{display:"none",maxHeight:0,overflow:"hidden",opacity:0,fontSize:1,lineHeight:"1px"}}>{preview}</div>
+    <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={{background:ink.card,fontFamily:sans}}><tbody><tr><td align="center" style={{padding:"40px 20px"}}>
+      <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={{maxWidth:520}}><tbody>
+        <tr><td style={{padding:"0 0 28px"}}>{brand(112)}</td></tr>
+        <tr><td style={{padding:"0 0 32px"}}>{children}</td></tr>
+        <tr><td style={{padding:24,background:ink.background,borderRadius:12}}>
+          <table role="presentation" width="100%" cellPadding={0} cellSpacing={0}><tbody>
+            <tr><td align="center">{brand(88)}</td></tr>
+          </tbody></table>
+        </td></tr>
+      </tbody></table>
+    </td></tr></tbody></table>
+  </div>;
+}

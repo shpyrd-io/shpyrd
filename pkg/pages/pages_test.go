@@ -125,3 +125,22 @@ func TestTheConsentSaysWhoAsksWhereTheAnswerGoesAndAnswers(t *testing.T) {
 		t.Errorf("a client the page has no mark for is not drawn by its initial")
 	}
 }
+
+func TestCLIAuthorizationPreservesTheFormAndEscapesDeviceInput(t *testing.T) {
+	page := CLIPage{Workspace: "<workspace>", Account: "demo@example.com", Device: `<script>alert(1)</script>`, Code: `BCDF-"HIJ`, CSRF: `token"value`, Problem: "<expired>"}
+	body := markup(HTML(CLIActivate, page))
+	for _, want := range []string{`action="/cli/activate"`, `method="post"`, `name="csrf" value="token&#34;value"`, `name="code"`, `value="BCDF-&#34;HIJ"`, `name="decision"`, `value="allow"`, `value="deny"`, `&lt;workspace&gt;`, `&lt;expired&gt;`, `&lt;script&gt;`, `aria-label="shpyrd"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<script") || strings.Contains(body, "{{") {
+		t.Fatal("unsafe or unresolved markup")
+	}
+	for _, outcome := range []string{"success", "stopped"} {
+		body = markup(HTML(CLIDone, CLIPage{Title: "Done", Text: "<result>", Outcome: outcome, Hint: "Close this tab."}))
+		if !strings.Contains(body, "&lt;result&gt;") || !strings.Contains(body, "Close this tab.") || strings.Contains(body, "<form") {
+			t.Fatal("invalid result page")
+		}
+	}
+}

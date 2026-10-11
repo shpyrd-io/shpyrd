@@ -146,11 +146,6 @@ export const mock: Api = {
   },
   links: async () => [{ section: "Cloud", label: "Billing", url: "/.shpyrd/gate?name=billing", icon: "credit-card" }],
 
-  passwordLogin: async ({ email, password, next }) => {
-    await wait();
-    if (!email || !password) throw new ApiError(401, "the email or the password is not right");
-    return { next: next ?? "/" };
-  },
   tokenLogin: async ({ token, next }) => {
     await wait();
     if (!token) throw new ApiError(401, "the token is not right");

@@ -36,7 +36,9 @@ const (
 	ServiceUnavailable Kind = "service-unavailable"
 	// An application asks to act for the person: allow or deny. It says
 	// a ConsentPage, not a Page.
-	Consent Kind = "consent"
+	Consent     Kind = "consent"
+	CLIActivate Kind = "cli-activate"
+	CLIDone     Kind = "cli-done"
 	// Nothing to say: the mark alone. The words are not shown.
 	Mark Kind = "mark"
 )
@@ -75,6 +77,12 @@ type ConsentPage struct {
 	Refresh int
 }
 
+// CLIPage supplies escaped words and form values for terminal authorization.
+type CLIPage struct {
+	Title, Text, Workspace, Account, Device, Code, CSRF, Problem, Outcome, Hint string
+	Refresh                                                                     int
+}
+
 // Scope is something the application asks to do, in words.
 type Scope struct{ Text string }
 
@@ -89,7 +97,7 @@ var (
 )
 
 func init() {
-	for _, kind := range []Kind{Nothing, NoAccess, Waking, ServiceUnavailable, Mark, Consent} {
+	for _, kind := range []Kind{Nothing, NoAccess, Waking, ServiceUnavailable, Mark, Consent, CLIActivate, CLIDone} {
 		src, err := files.ReadFile("html/" + string(kind) + ".html")
 		if err != nil {
 			panic(fmt.Sprintf("pages: %s: %v", kind, err))

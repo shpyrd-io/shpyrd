@@ -18,7 +18,7 @@ const out = resolve("out");
 const target = resolve("../../pkg/pages/html");
 mkdirSync(target, { recursive: true });
 
-const PAGES = ["nothing", "no-access", "waking", "mark", "service-unavailable", "consent"];
+const PAGES = ["nothing", "no-access", "waking", "mark", "service-unavailable", "consent", "cli-activate", "cli-done"];
 
 // The pages with a script, and where it comes from.
 const SCRIPTS = { "service-unavailable": "scripts/shipyard.ts" };
