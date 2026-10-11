@@ -686,6 +686,24 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 			vars[k] = v
 		}
 	}
+	// A cluster on the object gateway keeps it without the credentials
+	// file: its backend Secret names the bucket, endpoint and region and
+	// holds the credentials. Without this a run that forgot the file put
+	// Garage back over the gateway (the production deploy pipeline, once).
+	if vars[install.VarGatewayBucket] == "" {
+		settings, err := install.GatewaySettingsFromCluster(ctx, k.Kube, install.DefaultSystemNamespace)
+		if err != nil {
+			return err
+		}
+		if settings != nil {
+			for key, v := range settings {
+				if vars[key] == "" {
+					vars[key] = v
+				}
+			}
+			fmt.Fprintf(out, "Object storage: the gateway to %s stays, with the credentials the cluster holds (no --object-storage-credentials-file this run).\n", settings[install.VarGatewayBucket])
+		}
+	}
 	// Extensions already enabled on the cluster stay enabled.
 	extNames := mergeExtensions(recordedExtensions(ctx, k), flags.enable, flags.disable)
 	extComps, err := extensionComponents(extNames)

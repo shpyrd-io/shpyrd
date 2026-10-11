@@ -73,7 +73,9 @@ For the S3 gateway on AWS, `contrib/aws/terraform/object-storage` creates the sh
 
 A cluster installed with `--object-storage-credentials-file` keeps its object storage in one bucket at the provider, behind the platform's S3 gateway. Without `--backup-target`, the platform backups go there too: the target is `s3://platform-backups/platform`, a bucket of the gateway. Seen from outside the cluster, with the provider's own credential, the archives are at `s3://<shared bucket>/buckets/platform-backups/platform`. An explicit `--backup-target` keeps the archives on their own bucket, straight to the provider.
 
-On Oracle Cloud the gateway runs as a single pod: OCI's S3 API ignores `If-Match`, so one process writes the gateway's records (`SHPYRD_GATEWAY_SINGLE_WRITER=true`, `SHPYRD_GATEWAY_REPLICAS=1`, set by the `oci` profile). On AWS it runs two.
+On Oracle Cloud the gateway runs as a single pod: OCI's S3 API ignores `If-Match`, so one process writes the gateway's records (`SHPYRD_GATEWAY_SINGLE_WRITER=true`, `SHPYRD_GATEWAY_REPLICAS=1`, set by the `oci` profile), and the pod is replaced rather than rolled, so two never run at once. On AWS it runs two.
+
+A later `cluster init` keeps the gateway without the file: the cluster's backend secret names the bucket, endpoint and region and holds the credentials. Pass the file again to change them.
 
 ### Any S3-compatible bucket
 
