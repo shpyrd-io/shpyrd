@@ -7,11 +7,13 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -307,5 +309,100 @@ func TestBuildRefusedAtCreation(t *testing.T) {
 				t.Errorf("next pass: phase=%q message=%q", got.Status.Phase, got.Status.Message)
 			}
 		})
+	}
+}
+
+func TestDockerfileSupersededBuilds(t *testing.T) {
+	for _, state := range []string{"pending", "active", "failed without pod", "succeeded"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			app := dockerfileApp()
+			r, c := newTestReconciler(t, app)
+			if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+				t.Fatal(err)
+			}
+			old := getJob(t, c, app.Namespace, "dk-build-1")
+			switch state {
+			case "active":
+				old.Status.Active = 1
+				if err := c.Status().Update(ctx, old); err != nil {
+					t.Fatal(err)
+				}
+			case "failed without pod":
+				old.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
+				if err := c.Status().Update(ctx, old); err != nil {
+					t.Fatal(err)
+				}
+			case "succeeded":
+				finishBuild(t, c, old, 0, `{"image":"registry.test/dk@`+testDigest+`"}`)
+			}
+			app.Spec.Source.Blob.SHA256 = "new-source"
+			for pass := 0; pass < 2; pass++ {
+				got, err := r.reconcileDockerfileBuild(ctx, app)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.LatestBuild != "dk-build-2" || got.Ready != "Unknown" {
+					t.Fatalf("replacement state = %+v", got)
+				}
+				old = getJob(t, c, app.Namespace, "dk-build-1")
+				switch state {
+				case "pending", "active":
+					if !ptr.Deref(old.Spec.Suspend, false) || old.Annotations[shpyrdv1.AnnotationBuildFailure] != "The build was superseded by a newer build." {
+						t.Fatalf("superseded build = %+v", old)
+					}
+				case "failed without pod":
+					if ptr.Deref(old.Spec.Suspend, false) || old.Annotations[shpyrdv1.AnnotationBuildFailure] != "The build did not finish within 30 minutes." {
+						t.Fatalf("failed build = %+v", old)
+					}
+				case "succeeded":
+					if ptr.Deref(old.Spec.Suspend, false) || old.Annotations[shpyrdv1.AnnotationBuildImage] != "registry.test/dk@"+testDigest || got.LatestImage != "registry.test/dk@"+testDigest {
+						t.Fatalf("successful history lost: job=%+v state=%+v", old, got)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	for n := 1; n <= 2; n++ {
+		job, err := r.Config.desiredBuildJob(app, n, buildKey(app))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 1 {
+			job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
+		}
+		if err := c.Create(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if got := getJob(t, c, app.Namespace, "dk-build-1").Annotations[shpyrdv1.AnnotationBuildFailure]; got != "The build did not finish within 30 minutes." {
+		t.Fatalf("old failure = %q", got)
+	}
+}
+
+func TestStopBuildDoesNotOverwriteConcurrentCompletion(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	stale := getJob(t, c, app.Namespace, "dk-build-1")
+	finishBuild(t, c, stale.DeepCopy(), 0, `{"image":"registry.test/dk@`+testDigest+`"}`)
+	if err := r.stopBuildJob(ctx, stale, "superseded"); !apierrors.IsConflict(err) {
+		t.Fatalf("stale cancellation error = %v, want conflict", err)
+	}
+	got := getJob(t, c, app.Namespace, stale.Name)
+	if ptr.Deref(got.Spec.Suspend, false) || got.Annotations[shpyrdv1.AnnotationBuildFailure] != "" {
+		t.Fatalf("completed build was stopped: %+v", got)
 	}
 }

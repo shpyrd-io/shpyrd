@@ -76,10 +76,17 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return buildState{}, fmt.Errorf("create build job: %w", err)
 		}
+		// Only stop older builds once their replacement exists.
+		if err := r.reconcileSupersededBuilds(ctx, builds); err != nil {
+			return buildState{}, err
+		}
 		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildRequested", "started Dockerfile build %s", job.Name)
 		return buildState{LatestBuild: job.Name, Ready: "Unknown", Message: "build pending", LatestImage: lastImage(builds)}, nil
 	}
 
+	if err := r.reconcileSupersededBuilds(ctx, builds[:len(builds)-1]); err != nil {
+		return buildState{}, err
+	}
 	st := buildState{LatestBuild: latest.Name, Ready: "Unknown", Message: "building"}
 	switch {
 	case latest.Annotations[shpyrdv1.AnnotationBuildImage] != "":
@@ -106,9 +113,9 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		}
 		st.Ready, st.LatestImage, st.Revision = "True", res.Image, res.Revision
 		r.Recorder.Eventf(app, corev1.EventTypeNormal, "BuildSucceeded", "%s pushed %s", latest.Name, shortImage(res.Image))
-	case jobFailed(latest):
+	case JobFailed(latest):
 		_, msg := r.buildOutcome(ctx, latest)
-		st.Ready, st.Message = "False", firstNonEmpty(msg, "build failed")
+		st.Ready, st.Message = "False", firstNonEmpty(msg, JobFailureMessage(latest))
 		if err := r.annotateJob(ctx, latest, map[string]string{shpyrdv1.AnnotationBuildFailure: st.Message}); err != nil {
 			return st, err
 		}
@@ -165,13 +172,59 @@ func lastImage(builds []batchv1.Job) string {
 	return ""
 }
 
-func jobFailed(j *batchv1.Job) bool {
+// JobFailed reports terminal Job failure, independently of failed pod counts.
+func JobFailed(j *batchv1.Job) bool {
 	for _, c := range j.Status.Conditions {
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
 			return true
 		}
 	}
 	return false
+}
+
+// JobFailureMessage describes a terminal failure even when no pod was created.
+func JobFailureMessage(j *batchv1.Job) string {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			if c.Reason == "DeadlineExceeded" {
+				return "The build did not finish within 30 minutes."
+			}
+			return firstNonEmpty(c.Message, c.Reason, "The Dockerfile build failed. "+buildLogHint)
+		}
+	}
+	return "The Dockerfile build failed. " + buildLogHint
+}
+
+// reconcileSupersededBuilds preserves completed outcomes and stops older pending
+// or active builds. Suspended Jobs retain their history without consuming quota.
+func (r *AppReconciler) reconcileSupersededBuilds(ctx context.Context, builds []batchv1.Job) error {
+	for i := range builds {
+		job := &builds[i]
+		if job.Annotations[shpyrdv1.AnnotationBuildImage] != "" || job.Annotations[shpyrdv1.AnnotationBuildFailure] != "" {
+			continue
+		}
+		switch {
+		case JobFailed(job):
+			_, msg := r.buildOutcome(ctx, job)
+			if err := r.annotateJob(ctx, job, map[string]string{shpyrdv1.AnnotationBuildFailure: firstNonEmpty(msg, JobFailureMessage(job))}); err != nil {
+				return err
+			}
+		case job.Status.Succeeded > 0:
+			res, msg := r.buildOutcome(ctx, job)
+			ann := map[string]string{shpyrdv1.AnnotationBuildFailure: firstNonEmpty(msg, "build finished without reporting an image")}
+			if res != nil {
+				ann = map[string]string{shpyrdv1.AnnotationBuildImage: res.Image, shpyrdv1.AnnotationBuildRevision: res.Revision}
+			}
+			if err := r.annotateJob(ctx, job, ann); err != nil {
+				return err
+			}
+		default:
+			if err := r.stopBuildJob(ctx, job, "The build was superseded by a newer build."); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // buildKey identifies the source and build settings a Job builds.
@@ -237,10 +290,12 @@ func (r *AppReconciler) annotateJob(ctx context.Context, job *batchv1.Job, ann m
 	return nil
 }
 
-// stopBuildJob records a build that cannot start as failed and suspends its
-// Job, so Kubernetes stops trying to create its instance.
+// stopBuildJob records a failed or superseded build and suspends its Job,
+// stopping existing instances and preventing new ones.
 func (r *AppReconciler) stopBuildJob(ctx context.Context, job *batchv1.Job, msg string) error {
-	patch := client.MergeFrom(job.DeepCopy())
+	// Retry if the Job changed since listing, rather than suspend a build
+	// that completed concurrently.
+	patch := client.MergeFromWithOptions(job.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	job.Annotations = mergeMaps(job.Annotations, map[string]string{shpyrdv1.AnnotationBuildFailure: msg})
 	job.Spec.Suspend = ptr.To(true)
 	if err := r.Patch(ctx, job, patch); err != nil {
@@ -260,7 +315,7 @@ func (r *AppReconciler) pruneBuildJobs(ctx context.Context, builds []batchv1.Job
 		switch {
 		case j.Annotations[shpyrdv1.AnnotationBuildImage] != "":
 			succeeded = append(succeeded, j)
-		case j.Annotations[shpyrdv1.AnnotationBuildFailure] != "" || jobFailed(&j):
+		case j.Annotations[shpyrdv1.AnnotationBuildFailure] != "" || JobFailed(&j):
 			failed = append(failed, j)
 		}
 	}
