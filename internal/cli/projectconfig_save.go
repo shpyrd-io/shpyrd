@@ -55,6 +55,8 @@ func saveInferences(dir, projectName string, det *detection, setProject bool) (s
 				seq.Content = append(seq.Content, scalar(strings.TrimSpace(bp)))
 			}
 			setPath(root, []string{"build", "buildpacks"}, seq)
+		case inf.what == "build.workspace":
+			setPath(root, []string{"build", "workspace"}, scalar(inf.value))
 		case inf.what == "build.stack":
 			setPath(root, []string{"build", "stack"}, scalar(inf.value))
 		case strings.HasPrefix(inf.what, "env."):

@@ -8,6 +8,7 @@
 # buildpack build fails, the end-to-end CI job's included.
 #
 #   git tag buildpack-build-env/v0.1.0 && git push origin buildpack-build-env/v0.1.0
+#   git tag buildpack-node-workspace/v0.1.0 && git push origin buildpack-node-workspace/v0.1.0
 #
 # A buildpack of shell scripts runs on any architecture, so one image serves
 # amd64 and arm64 nodes alike.
@@ -36,6 +37,7 @@ jobs:
           dir="buildpacks/${name}"
           test -f "${dir}/buildpack.toml" || { echo "no buildpack at ${dir}" >&2; exit 1; }
           grep -q "^  version = \"${version}\"" "${dir}/buildpack.toml" || { echo "${dir}/buildpack.toml is not version ${version}" >&2; exit 1; }
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
           echo "dir=${dir}" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/shpyrd-io/buildpack-${name}:${version}" >> "$GITHUB_OUTPUT"
       - uses: buildpacks/github-actions/setup-pack@v6.1.1
@@ -54,5 +56,5 @@ jobs:
         run: |
           crane mutate "${{ steps.tag.outputs.image }}" \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
-            --label org.opencontainers.image.description="shpyrd's build-env buildpack" \
+            --label org.opencontainers.image.description="shpyrd's ${{ steps.tag.outputs.name }} buildpack" \
             --tag "${{ steps.tag.outputs.image }}"

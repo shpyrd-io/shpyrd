@@ -363,6 +363,12 @@ type Build struct {
 	// it when it finds the file.
 	// +optional
 	SystemPackages bool `json:"systemPackages,omitempty"`
+	// Workspace is the path, from the source's root, of the package to
+	// build inside a JavaScript workspace (npm, pnpm or Yarn): "apps/web"
+	// (shpyrd #145). The project gets a builder of its own that installs
+	// and builds that package in place. Buildpacks only.
+	// +optional
+	Workspace string `json:"workspace,omitempty"`
 	// Dockerfile is the path of the Dockerfile inside the source (after
 	// subPath). Defaults to "Dockerfile".
 	// +optional

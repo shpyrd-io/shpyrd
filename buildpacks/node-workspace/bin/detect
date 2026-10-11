@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Takes part when the build names a package of a workspace (BP_NODE_WORKSPACE,
+# which the controller sets from build.workspace). It needs Node, from
+# node-engine, to build and to run, at the version engines.node asks for
+# (the package's own, else the root's), as Paketo's npm-install would ask.
+# A missing lockfile fails the build, with a sentence, rather than
+# detection, with none. No Node yet here: the JSON is read with sed.
+set -euo pipefail
+plan="${CNB_BUILD_PLAN_PATH:-$2}"
+[ -n "${BP_NODE_WORKSPACE:-}" ] || exit 100
+engine=""
+for f in "${BP_NODE_WORKSPACE%/}/package.json" package.json; do
+  [ -f "$f" ] || continue
+  engine="$(tr -d '\n\r' < "$f" | grep -o '"engines"[[:space:]]*:[[:space:]]*{[^}]*}' | grep -o '"node"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | head -n 1)" || true
+  [ -n "$engine" ] && break
+done
+{
+  printf '[[requires]]\n  name = "node"\n  [requires.metadata]\n    build = true\n    launch = true\n'
+  if [ -n "$engine" ]; then
+    printf '    version = "%s"\n    version-source = "package.json"\n' "$engine"
+  fi
+} > "$plan"

@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Installs and builds one package of a JavaScript workspace in place, in the
+# app's directory, so node_modules and the build's output stay where the
+# package expects them, and records its start script as the web process
+# (shpyrd #145). The install keeps dev dependencies whatever NODE_ENV says:
+# the build needs them; they leave the image after it. pnpm and Yarn come through corepack, at the version
+# packageManager names; Node from 25 on has no corepack, and then it is
+# installed. The managers' downloads are cached between builds.
+set -euo pipefail
+layers="${CNB_LAYERS_DIR:-$1}"
+bp="${CNB_BUILDPACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+vars="$(node "$bp/lib/workspace.js" "${BP_NODE_WORKSPACE:-}")"
+eval "$vars"
+
+# A Procfile in the package's own folder, where the root has none: the
+# procfile buildpack after this one reads the root's.
+if [ ! -f Procfile ] && [ -f "$path/Procfile" ]; then
+  cp "$path/Procfile" Procfile
+fi
+
+if [ "$has_start" = 0 ] && [ ! -f Procfile ]; then
+  echo "shpyrd: add a start script to $path/package.json, or a Procfile beside it" >&2
+  exit 1
+fi
+
+# Downloads, kept between builds and out of the image.
+cache="$layers/cache"
+mkdir -p "$cache"
+printf '[types]\n  build = false\n  launch = false\n  cache = true\n' > "$layers/cache.toml"
+export npm_config_cache="$cache/npm"
+export npm_config_store_dir="$cache/pnpm-store"
+export YARN_CACHE_FOLDER="$cache/yarn"
+export YARN_ENABLE_GLOBAL_CACHE=false
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+export COREPACK_ENABLE_STRICT=0
+
+# pnpm and Yarn: corepack's shims in a layer of their own, on PATH here,
+# for the build scripts and at launch, with the managers it downloads.
+if [ "$manager" != npm ]; then
+  tools="$layers/corepack"
+  mkdir -p "$tools/bin" "$tools/env"
+  export COREPACK_HOME="$tools/home"
+  printf '%s' "$COREPACK_HOME" > "$tools/env/COREPACK_HOME.override"
+  printf '[types]\n  build = true\n  launch = true\n  cache = true\n' > "$layers/corepack.toml"
+  corepack="corepack"
+  if ! corepack --version > /dev/null 2>&1; then
+    echo "shpyrd: this Node has no corepack; installing it"
+    npm install --global --prefix "$tools/corepack" --no-audit --no-fund corepack > /dev/null
+    corepack="$tools/corepack/bin/corepack"
+  fi
+  "$corepack" enable --install-directory "$tools/bin" pnpm yarn
+  export PATH="$tools/bin:$PATH"
+  # Where the shims find corepack itself, at launch too.
+  if [ "$corepack" != corepack ]; then
+    ln -sf "$corepack" "$tools/bin/corepack"
+  fi
+fi
+
+# pnpm installs the package, what it needs and the root; npm and Yarn
+# cannot leave the other packages out and keep the root's own tools (turbo,
+# typescript), so they install the whole workspace.
+echo "shpyrd: installing $path with ${package_manager:-$manager}"
+case "$manager" in
+  npm) npm ci --include=dev --no-audit --no-fund ;;
+  pnpm) pnpm install --frozen-lockfile --prod=false --filter "$name..." ;;
+  yarn) yarn install --immutable ;;
+  yarn1) yarn install --frozen-lockfile --production=false --non-interactive ;;
+esac
+
+if [ "$has_build" = 1 ]; then
+  echo "shpyrd: building $path"
+  case "$manager" in
+    npm) npm run build --workspace "$path" ;;
+    pnpm) pnpm --filter "$name" run build ;;
+    yarn | yarn1) yarn workspace "$name" run build ;;
+  esac
+fi
+
+# The image keeps what the app runs with: dev dependencies (the root's
+# tools included) go once the build is done, from the cache, without the
+# network. BP_KEEP_DEV_DEPENDENCIES=true keeps them (RFC-0079's name).
+if [ "${BP_KEEP_DEV_DEPENDENCIES:-}" = true ]; then
+  echo "shpyrd: keeping dev dependencies (BP_KEEP_DEV_DEPENDENCIES=true)"
+else
+  echo "shpyrd: removing dev dependencies"
+  case "$manager" in
+    npm) npm prune --omit=dev --no-audit --no-fund ;;
+    pnpm) pnpm install --frozen-lockfile --prod --offline --config.confirmModulesPurge=false --filter "$name..." < /dev/null ;;
+    yarn)
+      if yarn workspaces focus --help > /dev/null 2>&1; then
+        yarn workspaces focus --all --production
+      else
+        echo "shpyrd: this Yarn has no workspaces focus (Yarn 4 has it); dev dependencies stay"
+      fi
+      ;;
+    yarn1) yarn install --frozen-lockfile --production=true --prefer-offline --non-interactive ;;
+  esac
+fi
+
+# Production at launch, unless the project says otherwise.
+mkdir -p "$layers/launch-env/env.launch"
+printf 'production' > "$layers/launch-env/env.launch/NODE_ENV.default"
+printf '[types]\n  build = false\n  launch = true\n  cache = false\n' > "$layers/launch-env.toml"
+
+# A TOML string: backslashes and quotes escaped.
+toml() {
+  local s="${1//\\/\\\\}"
+  printf '"%s"' "${s//\"/\\\"}"
+}
+if [ "$has_start" = 1 ]; then
+  case "$manager" in
+    npm) command="\"npm\", \"run\", \"start\", \"--workspace\", $(toml "$path")" ;;
+    pnpm) command="\"pnpm\", \"--filter\", $(toml "$name"), \"run\", \"start\"" ;;
+    yarn | yarn1) command="\"yarn\", \"workspace\", $(toml "$name"), \"run\", \"start\"" ;;
+  esac
+  printf '[[processes]]\n  type = "web"\n  command = [%s]\n  default = true\n' "$command" > "$layers/launch.toml"
+fi
+echo "shpyrd: $path is built"

@@ -53,8 +53,10 @@ func debPackagesSection(packages []string) string {
 
 // withSystemPackages returns the archive with a project.toml carrying the
 // Aptfile's packages (a new file, or the section appended to the one there),
-// the packages found, and whether an Aptfile was there at all.
-func withSystemPackages(archive []byte) ([]byte, []string, []string, error) {
+// the packages found, and whether an Aptfile was there at all. pkg is a
+// JavaScript workspace's package ("" otherwise, #145): its own Aptfile
+// comes first, the root's after.
+func withSystemPackages(archive []byte, pkg string) ([]byte, []string, []string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return nil, nil, nil, err
@@ -65,7 +67,11 @@ func withSystemPackages(archive []byte) ([]byte, []string, []string, error) {
 		body []byte
 	}
 	var entries []entry
-	var aptfile, projectTOML string
+	var aptfile, pkgAptfile, projectTOML string
+	pkgName := ""
+	if pkg != "" {
+		pkgName = strings.TrimSuffix(pkg, "/") + "/Aptfile"
+	}
 	hasProject := false
 	for {
 		hdr, err := tr.Next()
@@ -83,10 +89,16 @@ func withSystemPackages(archive []byte) ([]byte, []string, []string, error) {
 		switch {
 		case name == "Aptfile" && hdr.Typeflag == tar.TypeReg:
 			aptfile = string(body)
+		case pkgName != "" && name == pkgName && hdr.Typeflag == tar.TypeReg:
+			pkgAptfile = string(body)
 		case name == "project.toml" && hdr.Typeflag == tar.TypeReg:
 			projectTOML, hasProject = string(body), true
 		}
 		entries = append(entries, entry{hdr: hdr, body: body})
+	}
+	used := "Aptfile"
+	if pkgAptfile != "" {
+		aptfile, used = pkgAptfile, pkgName
 	}
 	if aptfile == "" {
 		return archive, nil, nil, nil
@@ -109,7 +121,7 @@ func withSystemPackages(archive []byte) ([]byte, []string, []string, error) {
 	tw := tar.NewWriter(zw)
 	wrote := false
 	for _, e := range entries {
-		if strings.TrimPrefix(e.hdr.Name, "./") == "Aptfile" && e.hdr.Typeflag == tar.TypeReg {
+		if strings.TrimPrefix(e.hdr.Name, "./") == used && e.hdr.Typeflag == tar.TypeReg {
 			continue // translated; its presence only draws a deprecation notice
 		}
 		if strings.TrimPrefix(e.hdr.Name, "./") == "project.toml" {

@@ -1,0 +1,9 @@
+{
+  "name": "@monorepo/web",
+  "private": true,
+  "dependencies": { "@monorepo/greeting": "workspace:*" },
+  "scripts": {
+    "build": "pnpm --filter @monorepo/greeting run build",
+    "start": "node server.js"
+  }
+}
