@@ -123,6 +123,19 @@ func TestLayoutOldNamesRedirect(t *testing.T) {
 		t.Errorf("the API at the old address: %d %s", rec.Code, rec.Body.String())
 	}
 
+	for _, host := range []string{"acme.shpyrd.app", "acme.shpyrd.cloud", "older.shpyrd.app"} {
+		for _, path := range []string{"/api/config?ignored=yes", "/api/projects", "/api/sources"} {
+			rec := at(t, s, host, "GET", path, "")
+			want := ""
+			if host == "acme.shpyrd.app" {
+				want = "https://acme.shpyrd.cloud"
+			}
+			if got := rec.Header().Get("X-Shpyrd-Workspace-URL"); got != want {
+				t.Errorf("%s%s move header = %q, want %q", host, path, got, want)
+			}
+		}
+	}
+
 	// A new name inside the layout: no hyphen; the old label redirects,
 	// its apps too, and nobody else may take it.
 	if rec := at(t, s, "acme.shpyrd.cloud", "PATCH", "/api/workspace", `{"address":"acme-co"}`); rec.Code != http.StatusBadRequest {

@@ -114,6 +114,39 @@ func TestSharedFrontDoors(t *testing.T) {
 	if get(workspaceHostFrontDoorName("acme", "oldacme.shpyrd.cloud")) != nil {
 		t.Error("a rename inside the layout got a door")
 	}
+	oldDoor := workspaceHostFrontDoorName("acme", "acme.shpyrd.app")
+	for name, limit := range map[string]string{sourcesFrontDoorName(oldDoor): SourcesBodySize, archivesFrontDoorName(oldDoor): ProjectArchivesBodySize} {
+		ing := get(name)
+		if ing == nil || ing.Annotations["nginx.ingress.kubernetes.io/proxy-body-size"] != limit || ing.Spec.Rules[0].Host != "acme.shpyrd.app" || ing.Spec.TLS[0].SecretName != oldDoor+"-tls" {
+			t.Fatalf("moved host upload ingress %s = %+v", name, ing)
+		}
+		if ing.Annotations["nginx.ingress.kubernetes.io/proxy-request-buffering"] != "off" {
+			t.Errorf("moved host uploads must stream: %s", name)
+		}
+		ing.Annotations["test/retained"] = "yes"
+		if err := c.Update(ctx, ing); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{sourcesFrontDoorName(oldDoor), archivesFrontDoorName(oldDoor)} {
+		if ing := get(name); ing == nil || ing.Annotations["test/retained"] != "yes" {
+			t.Fatalf("active moved host ingress was deleted and recreated: %s", name)
+		}
+	}
+	if err := st.DeleteWorkspaceHost(ctx, "acme", "acme.shpyrd.app"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{oldDoor, sourcesFrontDoorName(oldDoor), archivesFrontDoorName(oldDoor)} {
+		if get(name) != nil {
+			t.Errorf("retired host left ingress %s", name)
+		}
+	}
 	// older, not moved yet: the door it had.
 	if g := get("workspace-older"); g == nil || hosts(g)[1] != "*.older.shpyrd.app" {
 		t.Errorf("older door = %+v", g)
