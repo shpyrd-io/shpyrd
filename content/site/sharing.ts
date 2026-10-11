@@ -1,84 +1,53 @@
-// /getting-started — the journey, in the order the research's demonstration
-// script uses: the useful work first, the platform second.
-//
-// Each step names the screenshot it needs. Two of them do not exist yet; see
-// the spec's dependency note.
+// /getting-started — from an idea to a link you can share.
 
 export const intro = {
   title: 'Getting Started',
-  lead:
-    'Four steps, in the order they happen. An app is published, a colleague ' +
-    'opens it and does real work, someone outside the team is turned away, and ' +
-    'the person who maintains it ships a change and takes it back.',
+  lead: 'From your idea to a live app or website in three steps.',
 }
 
 export const steps = [
   {
+    id: 'build',
+    title: 'Build with your favorite AI',
+    body:
+      'Create your app or website with the AI you already love. ' +
+      'Make it yours, try it out, and get it ready to share.',
+    note: {
+      title: 'Start with one useful thing.',
+      body: 'A page for your business, a tool for your team, or a side project. Get the first version working, then ask your AI to improve it as you go.',
+    },
+  },
+  {
     id: 'publish',
-    step: 'publish',
-    title: 'The app is published',
+    title: 'Ask shpyrd to put it online',
     body:
-      'Its maintainer deploys from the code they already have. shpyrd builds ' +
-      'it and gives it a URL with TLS, and sign-in sits in front of it from ' +
-      'the first release.',
-    screenshot: {
-      src: '/screenshots/deploy-dialog-crop.png',
-      alt: 'Deploying a project from the dashboard',
-      exists: true,
+      'Tell your AI to deploy with shpyrd. shpyrd takes care of getting ' +
+      'your app or website onto the internet and gives you a link to open it.',
+    note: {
+      title: 'Connect shpyrd to your AI first.',
+      body: 'Add shpyrd to your AI tool and sign in. Then ask it to deploy the project you’ve been working on, right from the same conversation.',
     },
   },
   {
-    id: 'open',
-    step: 'access',
-    title: 'A colleague opens it and does the work',
+    id: 'share',
+    title: 'Give access. Bring everyone in.',
     body:
-      'Someone in Finance signs in and sees the apps they are allowed to open — ' +
-      'not a list of everything that exists. They open the tracker and complete ' +
-      'a real task. This is the part that matters; everything else is in ' +
-      'service of it.',
-    screenshot: {
-      src: '/screenshots/launcher.png',
-      alt: 'The app launcher as a use-only colleague sees it',
-      exists: true,
-    },
-  },
-  {
-    id: 'denied',
-    step: 'access',
-    title: 'Someone outside the team is turned away',
-    body:
-      'An account without access to that app does not reach it. The check ' +
-      'happens before the request gets to your application, so it does not ' +
-      'depend on your app implementing sign-in correctly.',
-    screenshot: {
-      src: '/screenshots/denied.png',
-      alt: 'An account without access being denied',
-      exists: true,
-    },
-  },
-  {
-    id: 'operate',
-    step: 'operate',
-    title: 'The maintainer ships a change, and takes it back',
-    body:
-      'Every deploy and config change is a numbered release. When a change ' +
-      'turns out to be wrong, rolling back restores the previous release and ' +
-      'the config that went with it.',
-    screenshot: {
-      src: '/screenshots/releases-card-crop.png',
-      alt: 'Numbered releases with a rollback action',
-      exists: true,
+      'Your app or website is live at its own address. Make it public for ' +
+      'everyone, or keep it private and give access to the people or teams ' +
+      'you choose.',
+    note: {
+      title: 'All their apps, in one place.',
+      body: 'The people you give access to can sign in to the launcher, see all the apps available to them, and open any of them with a click. No hunting through messages for the right link.',
     },
   },
 ]
 
-export const runs = {
-  step: 'runs',
-  title: 'Where all of this runs',
-  body:
-    'On shpyrd cloud, with nothing to run. Or on a Kubernetes cluster your ' +
-    'company controls: locally on kind while you try it, on Oracle Cloud (OKE) ' +
-    'or AWS (EKS) when it matters. A cluster of your own needs an owner.',
-  // The way to start: the sign-up (apps/website/src/lib/signup.ts).
+export const closing = {
+  title: 'Ready to put your idea online?',
   action: 'Get started',
+}
+
+export const buildExample = {
+  prompt: 'Build me a simple app to track my team’s expenses.',
+  reply: 'Here’s a first version with an expense form, a list of entries, and a monthly total. Try it out and tell me what you’d like to change.',
 }
