@@ -1,0 +1,129 @@
+# Account identity separation
+
+Status: implemented, deployed to local Kind, and interactive Accounts/Dex login verified on 2026-10-11.
+
+## Responsibilities
+
+Accounts owns central identity UX (Clerk), commercial contacts and products.
+Accounts calls Billing directly. Registering an account creates no workspace:
+`/signup/cloud` is the public Cloud landing, and `/products/workspaces/new`
+creates additional workspaces from the account center.
+
+A workspace owns admission, memberships, teams, project permissions, invitations,
+CLI/MCP grants and revocation in every edition. Accounts product/contact access
+does not grant workspace or console permissions. Console administration has its
+own principals and allowlist.
+
+| Edition | Authentication | Authorization |
+| --- | --- | --- |
+| OSS | Operator-configured Dex static credentials, stable userID | Workspace |
+| EE | Customer IdP through Dex | Workspace; company admission policy |
+| Cloud | shpyrd Accounts, customer SSO, or both | Workspace |
+| Console | Separately configured console providers / operator credentials | Console allowlist |
+
+With company-only methods enabled, central Accounts cannot enter that workspace.
+Removing/disabling a provider also removes permissions from existing sessions and
+personal/OAuth token owners. Operator kubeconfig/admin credentials remain
+break-glass access. A single offered provider redirects without a chooser flash;
+errors and explicit alternatives remain visible. Provider-specific launchers use
+`/api/auth/login/<provider-id>?next=/`.
+
+## Identity and provisioning
+
+Authorization references an internal principal ID. External identities are unique
+by workspace, realm, trusted issuer, connector and upstream subject. Email is
+mutable contact data, never a login-time permission key. Same-email identities
+remain distinct, including in the console. Administrative email selection is only
+a convenience when unambiguous; APIs also accept explicit principal IDs.
+
+Dex's signed `federated_claims`, requested with `federated:id`, supplies connector
+and upstream user ID. The RP validates the broker token, issuer, audience, nonce
+and expected connector. Upstream issuer comes from trusted connector config.
+Accounts provisioning creates the bound principal and owner membership atomically,
+using the server-verified Clerk issuer/subject. A browser-supplied user ID is never
+the source of ownership.
+
+`creation_fingerprint` is SHA-256 of length-prefixed immutable creation fields:
+request ID, contact ID, issuer, subject, email, slug and name. It correlates retries;
+the service credential still authenticates Accounts. A retry with different input
+conflicts, and a successful retry never restores a revoked owner. Status requests
+use `X-Shpyrd-Creation-Fingerprint`.
+
+Invitations do not create credentials. The recipient signs in using an allowed
+IdP with verified email. Acceptance consumes the invitation and applies its
+membership/team in one transaction; concurrent acceptance cannot bind two people.
+The workspace sends its invitation email. Password/MFA/recovery messages belong
+to the IdP. The old Cloud signup verification and workspace password/reset/signup
+ticket endpoints, local account CRUD and their email templates are removed.
+
+## Rollout
+
+1. Back up the control-plane database and Accounts product database. Keep the
+   previous images and deployment configuration. Retain operator kubeconfig or
+   admin-token access during migration.
+2. Configure trusted providers and all console/workspace Dex callback URLs.
+   Cloud's central connector ID is `shpyrd-accounts`; its upstream issuer must
+   equal the issuer used by Accounts provisioning. Configure the Accounts↔Cloud
+   service key on both servers. Configure Billing in Accounts independently.
+3. Deploy matching Core/Cloud and Accounts versions together: migration 25 renames
+   the provisioning column; migration 26 adds principal references and clears
+   existing browser sessions. Existing IDs and permission references are retained.
+   Pre-login permission recipients become unbound legacy principals.
+4. Explicitly bind each legacy principal to a verified upstream subject, using
+   operator credentials and trusted IdP inventory. Do this before asking users to
+   log in, otherwise the new external identity deliberately creates another ID.
+   Never derive this mapping automatically from email. Workspace APIs:
+   - `GET /api/workspace/people` returns IDs.
+   - `POST /api/workspace/principals/:id/bind` with
+     `{"provider":"shpyrd-accounts","subject":"user_..."}`.
+   Console APIs use `/api/cluster/principals` and
+   `/api/cluster/principals/:id/bind`; the principal must belong to the console
+   realm. Where the legacy console row has no console principal, sign in once
+   through the console IdP, then explicitly authorize its ID with
+   `shpyrd-ctl console-users add PRINCIPAL_ID`. Remove the old unbound entry
+   with the console-user removal API (email is accepted only when unambiguous).
+   Binding is audited; already-bound identities cannot be silently replaced.
+5. For OSS, keep `enablePasswordDB: true` and configure Dex `staticPasswords`
+   with bcrypt hashes and stable, never-recycled `userID` values. No password
+   recovery or credential-management API is exposed by shpyrd. The extension
+   registers redirect-based workspace and console login.
+   For Cloud/customer SSO-only, set `SHPYRD_DEX_LOCAL_LOGIN=false` in the server
+   environment and `enablePasswordDB: false` in Dex. Retain the Dex broker.
+   Old Password CRs are not deleted automatically; disable local auth first and
+   archive/remove them separately after verification.
+6. Verify central-only, company-only and mixed login, account creation without a
+   product, workspace provisioning/retry, invitations, CLI/MCP revocation and
+   console isolation. Verify readiness and generated UI assets.
+
+Migration 26 cannot safely be reversed with a down migration: restoring
+email-based keys would merge identities. Roll back matching binaries/configuration
+and restore the pre-migration database backup during maintenance.
+
+The optional Kubernetes RBAC mirror now emits `shpyrd:principal:<internal-id>`
+usernames, never email or raw upstream groups. Operators using direct Kubernetes
+OIDC must adapt their authenticator mapping; workspace API/CLI access and
+operator kubeconfig do not require this mapping.
+
+## Validation
+
+- Tests cover issuer/subject isolation, email changes/reuse, explicit binding,
+  stable permission references, suspension, same-email console principals,
+  concurrent invitation acceptance, old backup import, owner provisioning and
+  idempotent retries without privilege restoration.
+- Removed auth/signup routes have regression checks ensuring they return 404.
+- Existing IdP removal and company-only policy have session/token-owner policy
+  regression coverage. CLI/MCP tests exercise workspace-owned authorization.
+- PostgreSQL migration/store tests use an isolated disposable database.
+- Full core suite additionally revealed and corrected backup and RBAC mirror
+  fixtures. Accounts: 46 tests passed, 2 opt-in integration tests skipped.
+- Workspace and console production builds completed.
+
+## Local integration verification
+
+The matching Core, Cloud and Accounts changes were deployed on a disposable Kind
+cluster with schema 26 clean. Real Accounts provisioning, retry and isolation
+checks passed. The browser round trip through Dex and Accounts preserved the
+explicitly bound owner's principal and permissions without creating a duplicate.
+Disabling consent on the trusted development OAuth application was independently
+verified and a fresh authorization completed without an approval screen.
+Workspace CLI/MCP consent remains independent. No production configuration changed.

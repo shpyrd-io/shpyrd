@@ -63,7 +63,6 @@ export type Api = {
   links: () => Promise<Link[]>;
   // The door: a password or a token opens a session; a provider is a
   // link (`/api/auth/login?provider=`), not a call.
-  passwordLogin: (body: { email: string; password: string; next?: string }) => Promise<{ next: string }>;
   tokenLogin: (body: { token: string; next?: string }) => Promise<{ next: string }>;
   logout: () => Promise<{ redirect: string }>;
   // An invitation link, before and after signing in.

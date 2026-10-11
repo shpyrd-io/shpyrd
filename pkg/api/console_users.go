@@ -27,19 +27,7 @@ type ConsoleUserView struct {
 // AddConsoleUserRequest puts someone on the list. With a password and no
 // account yet, the account is made with it.
 type AddConsoleUserRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Password string `json:"password,omitempty"`
-}
-
-func (s *Server) accountOf(c *gin.Context, email string) string {
-	if s.localAccounts == nil {
-		return ""
-	}
-	st, err := s.localAccounts.Status(c.Request.Context(), email)
-	if err != nil {
-		return ""
-	}
-	return st
+	PrincipalID string `json:"principalId" binding:"required"`
 }
 
 func (s *Server) listConsoleUsers(c *gin.Context) {
@@ -50,7 +38,7 @@ func (s *Server) listConsoleUsers(c *gin.Context) {
 	}
 	out := make([]ConsoleUserView, 0, len(list))
 	for _, u := range list {
-		out = append(out, ConsoleUserView{ConsoleUser: u, Account: s.accountOf(c, u.Email)})
+		out = append(out, ConsoleUserView{ConsoleUser: u, Account: ""})
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -61,36 +49,18 @@ func (s *Server) addConsoleUser(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if !strings.Contains(email, "@") {
-		abort(c, http.StatusBadRequest, errors.New("a console user is an email"))
+	email := strings.TrimSpace(req.PrincipalID)
+	if email == "" {
+		abort(c, http.StatusBadRequest, errors.New("select a console principal"))
 		return
 	}
 	ctx := c.Request.Context()
-	if req.Password != "" {
-		if s.localAccounts == nil {
-			abort(c, http.StatusBadRequest, errors.New("accounts with a password need the auth-local extension"))
-			return
-		}
-		if st, err := s.localAccounts.Status(ctx, email); err == nil && st != "" {
-			abort(c, http.StatusConflict, errors.New(email+" already has an account: leave the password out, or change it under Accounts"))
-			return
-		}
-		if err := s.localAccounts.CreatePending(ctx, email, ""); err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
-		}
-		if err := s.localAccounts.SetPasswordAndVerify(ctx, email, req.Password); err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return
-		}
-	}
 	id, _ := ext.IdentityFrom(c)
 	// The first console user ends bootstrap mode: a person adding someone
 	// else then is put on the list too, or the change would take their own
 	// access with it (claimOwnershipInBootstrap does the same for owners).
 	if roles, err := s.rolesOf(c); err == nil && !roles.Enforced && id.Email != "" && id.Provider != "token" && id.Provider != "kubeconfig" {
-		if _, err := s.store.AddConsoleUser(ctx, id.Email, id.Email); err != nil {
+		if _, err := s.store.AddConsoleUser(ctx, id.Subject, id.Email); err != nil {
 			abort(c, http.StatusBadGateway, err)
 			return
 		}
@@ -102,15 +72,43 @@ func (s *Server) addConsoleUser(c *gin.Context) {
 	}
 	s.authz.Invalidate()
 	s.audit(c, "", "console-user.add", email, "")
-	c.JSON(http.StatusCreated, ConsoleUserView{ConsoleUser: *u, Account: s.accountOf(c, email)})
+	c.JSON(http.StatusCreated, ConsoleUserView{ConsoleUser: *u, Account: ""})
 }
 
 func (s *Server) removeConsoleUser(c *gin.Context) {
-	email := strings.ToLower(strings.TrimSpace(c.Param("email")))
-	if id, ok := ext.IdentityFrom(c); ok && strings.EqualFold(id.Email, email) {
-		abort(c, http.StatusBadRequest, errors.New("you cannot take yourself off the console"))
+	email := strings.TrimSpace(c.Param("email"))
+	list, err := s.store.ListConsoleUsers(c.Request.Context())
+	if err != nil {
+		abort(c, 502, err)
 		return
 	}
+	target := ""
+	for _, u := range list {
+		if u.PrincipalID == email {
+			target = u.PrincipalID
+			break
+		}
+	}
+	if target == "" {
+		for _, u := range list {
+			if strings.EqualFold(u.Email, email) {
+				if target != "" {
+					abort(c, 409, errors.New("select the principal ID"))
+					return
+				}
+				target = firstNonEmpty(u.PrincipalID, u.Email)
+			}
+		}
+	}
+	if target == "" {
+		abort(c, 404, errors.New("console user not found"))
+		return
+	}
+	if id, ok := ext.IdentityFrom(c); ok && id.Subject == target {
+		abort(c, 400, errors.New("you cannot take yourself off the console"))
+		return
+	}
+	email = target
 	if err := s.store.RemoveConsoleUser(c.Request.Context(), email); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			abort(c, http.StatusNotFound, errors.New(email+" is not a console user"))

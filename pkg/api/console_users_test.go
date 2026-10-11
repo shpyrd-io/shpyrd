@@ -24,7 +24,7 @@ func consoleAs(t *testing.T, s *Server, email, method, path, body string) *httpt
 	if email == "" {
 		req.Header.Set("Authorization", "Bearer "+testToken)
 	} else {
-		sess, err := s.rp.sessions.create(context.Background(), store.RealmConsole, "", ext.Identity{Email: email, Provider: "local"}, "")
+		sess, err := principalFixtureSession(s, context.Background(), store.RealmConsole, "", ext.Identity{Email: email, Provider: "local"}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,8 +50,12 @@ func TestTheConsoleHasItsOwnUsers(t *testing.T) {
 	if rec := consoleAs(t, s, "owner@example.test", "GET", "/api/cluster/console-users", ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("a workspace owner, not a console user = %d %s", rec.Code, rec.Body)
 	}
-	// The operator adds her with the admin token (the kubeconfig does the same).
-	if rec := consoleAs(t, s, "", "POST", "/api/cluster/console-users", `{"email":"Owner@Example.test"}`); rec.Code != http.StatusCreated {
+	owner, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Realm: store.RealmConsole, Email: "owner@example.test", Provider: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The operator selects the verified console principal.
+	if rec := consoleAs(t, s, "", "POST", "/api/cluster/console-users", `{"principalId":"`+owner.ID+`"}`); rec.Code != http.StatusCreated {
 		t.Fatalf("add = %d %s", rec.Code, rec.Body)
 	}
 	rec := consoleAs(t, s, "owner@example.test", "GET", "/api/cluster/console-users", "")
@@ -85,7 +89,11 @@ func TestTheFirstConsoleUserEndsBootstrapWithoutLockingOut(t *testing.T) {
 	if rec := consoleAs(t, s, "first@example.test", "GET", "/api/cluster/console-users", ""); rec.Code != http.StatusOK {
 		t.Fatalf("bootstrap = %d %s", rec.Code, rec.Body)
 	}
-	if rec := consoleAs(t, s, "first@example.test", "POST", "/api/cluster/console-users", `{"email":"second@example.test"}`); rec.Code != http.StatusCreated {
+	second, err := s.store.TouchIdentity(context.Background(), store.DefaultWorkspace, store.Identity{Realm: store.RealmConsole, Email: "second@example.test", Provider: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := consoleAs(t, s, "first@example.test", "POST", "/api/cluster/console-users", `{"principalId":"`+second.ID+`"}`); rec.Code != http.StatusCreated {
 		t.Fatalf("add = %d %s", rec.Code, rec.Body)
 	}
 	s.authz.Invalidate()

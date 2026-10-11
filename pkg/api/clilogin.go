@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
-	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -276,40 +276,26 @@ func (s *Server) deviceNameOf(c *gin.Context, code string) string {
 // terminal: a form, like the OAuth consent page (RFC-0032).
 func (s *Server) cliActivateForm(c *gin.Context, id ext.Identity, csrf, code, problem string) {
 	ws, _ := s.tenant(c)
-	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in the shpyrd CLI</title>`)
-	b.WriteString(cliPageStyle)
-	b.WriteString(`</head><body><main>`)
-	b.WriteString(`<h1>Sign in the shpyrd CLI to ` + html.EscapeString(firstNonEmpty(ws.Name, "this workspace")) + `?</h1>`)
-	b.WriteString(`<p>The CLI will act as <strong>` + html.EscapeString(firstNonEmpty(id.Email, id.Name, "you")) + `</strong>, with what your roles allow, for 30 days. The code is on your terminal.</p>`)
-	if name := s.deviceNameOf(c, code); name != "" {
-		b.WriteString(`<p>This code was asked for by <strong>` + html.EscapeString(name) + `</strong>.</p>`)
+	page := pages.CLIPage{
+		Title: "Authorize the shpyrd CLI", Workspace: firstNonEmpty(ws.Name, "this workspace"),
+		Account: firstNonEmpty(id.Email, id.Name, "you"), Device: firstNonEmpty(s.deviceNameOf(c, code), "Your terminal"),
+		Code: code, CSRF: csrf, Problem: problem,
 	}
-	if problem != "" {
-		b.WriteString(`<p class="problem">` + html.EscapeString(problem) + `</p>`)
-	}
-	b.WriteString(`<form method="post" action="/cli/activate">`)
-	b.WriteString(`<input type="hidden" name="csrf" value="` + html.EscapeString(csrf) + `">`)
-	b.WriteString(`<label>Code <input name="code" value="` + html.EscapeString(code) + `" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX" required></label>`)
-	b.WriteString(`<p><button class="allow" name="decision" value="allow">Sign in</button><button name="decision" value="deny">Deny</button></p></form>`)
-	b.WriteString(`<p><small>Only approve a code you asked for yourself, from a terminal you are at. This creates a session token, listed with your API tokens on the Workspace page; revoke it there at any time.</small></p></main></body></html>`)
 	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(b.String()))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.CLIActivate, page)))
 }
 
-// cliDonePage says how it ended, with nothing more to do in the browser.
+// cliDonePage reports the result without changing the authorization decision.
 func (s *Server) cliDonePage(c *gin.Context, status int, title, text string) {
-	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title>`)
-	b.WriteString(cliPageStyle)
-	b.WriteString(`</head><body><main><h1>` + html.EscapeString(title) + `</h1><p>` + html.EscapeString(text) + `</p><p><small>You can close this tab.</small></p></main></body></html>`)
+	outcome, hint := "stopped", "You can close this tab."
+	if title == "The CLI is signed in" {
+		outcome, hint = "success", "You can close this tab."
+	}
 	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
-	c.Data(status, "text/html; charset=utf-8", []byte(b.String()))
+	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(pages.CLIDone, pages.CLIPage{Title: title, Text: text, Outcome: outcome, Hint: hint})))
 }
-
-const cliPageStyle = `<style>body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f6f6f6;color:#111;display:flex;min-height:100vh;align-items:center;justify-content:center}main{max-width:26rem;width:100%;padding:2rem;background:#fff;border-radius:12px;border:1px solid #e5e5e5}h1{font-size:1.2rem;margin:0 0 .5rem}p{margin:0 0 1rem;color:#444}label{display:block;margin:0 0 1rem;color:#333}input{font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.15em;text-transform:uppercase;padding:.5rem .7rem;border:1px solid #ddd;border-radius:8px;width:11rem;margin-left:.5rem}button{font:inherit;padding:.6rem 1.1rem;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:pointer;margin-right:.5rem}button.allow{background:#ff4f00;border-color:#ff4f00;color:#fff;font-weight:600}small{color:#777}.problem{color:#b00020}</style>`
 
 // cliActivateDecide is POST /cli/activate: the form's answer. Approval
 // mints the person's CLI credential and hands it to the waiting CLI.
@@ -356,9 +342,9 @@ func (s *Server) cliActivateDecide(c *gin.Context) {
 	}
 	// One credential per machine: approving again from the same host
 	// replaces the previous one rather than piling up tokens.
-	if existing, err := s.store.ListTokens(c.Request.Context(), ws.Slug, id.Email); err == nil {
+	if existing, err := s.store.ListTokens(c.Request.Context(), ws.Slug, id.Subject); err == nil {
 		for _, t := range existing {
-			if t.Kind == store.TokenKindSession && t.Name == name && strings.EqualFold(t.OwnerEmail, id.Email) {
+			if t.Kind == store.TokenKindSession && t.Name == name && t.PrincipalID == id.Subject {
 				_ = s.store.DeleteToken(c.Request.Context(), ws.Slug, t.ID)
 			}
 		}
@@ -369,7 +355,7 @@ func (s *Server) cliActivateDecide(c *gin.Context) {
 		return
 	}
 	exp := time.Now().Add(cliSessionTTL)
-	created, err := s.store.CreateToken(c.Request.Context(), ws.Slug, store.APIToken{Name: name, OwnerEmail: id.Email, Kind: store.TokenKindSession, ExpiresAt: &exp}, hash)
+	created, err := s.store.CreateToken(c.Request.Context(), ws.Slug, store.APIToken{Name: name, OwnerEmail: id.Email, PrincipalID: id.Subject, Kind: store.TokenKindSession, ExpiresAt: &exp}, hash)
 	if err != nil {
 		storeErr(c, err, "token")
 		return

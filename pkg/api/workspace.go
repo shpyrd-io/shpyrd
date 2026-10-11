@@ -77,6 +77,7 @@ type WorkspaceView struct {
 // or holds a workspace role and has not yet (then the seen times are
 // absent).
 type PersonView struct {
+	ID       string   `json:"id"`
 	Email    string   `json:"email"`
 	Name     string   `json:"name,omitempty"`
 	Provider string   `json:"provider,omitempty"`
@@ -98,7 +99,7 @@ func personView(id store.Identity) PersonView {
 		groups = []string{}
 	}
 	first, last := id.FirstSeenAt, id.LastSeenAt
-	return PersonView{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: groups, Realm: id.Realm, Status: firstNonEmpty(id.Status, store.StatusActive), FirstSeenAt: &first, LastSeenAt: &last}
+	return PersonView{ID: id.ID, Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: groups, Realm: id.Realm, Status: firstNonEmpty(id.Status, store.StatusActive), FirstSeenAt: &first, LastSeenAt: &last}
 }
 
 // withRoles fills the workspace role (and the team-given platform role)
@@ -107,9 +108,9 @@ func (s *Server) withRoles(snap *authz.Snapshot, p PersonView) PersonView {
 	if snap == nil {
 		return p
 	}
-	p.Role = snap.WorkspaceRole(p.Email)
+	p.Role = snap.WorkspaceRole(p.ID)
 	if p.Role == "" {
-		roles := snap.RolesFor(ext.Identity{Email: p.Email, Provider: "person"})
+		roles := snap.RolesFor(ext.Identity{Subject: p.ID, Email: p.Email, Provider: "person"})
 		if roles.Enforced && !roles.Suspended {
 			p.PlatformRole = roles.Platform
 		}
@@ -502,11 +503,10 @@ func (s *Server) admitConsole(ctx context.Context, id ext.Identity) error {
 	}
 	people, err := s.store.ListIdentities(ctx, s.defaultSlug(ctx))
 	if err != nil {
-		return nil // the store is down: sign-in must not depend on it
+		return err
 	}
-	email := strings.ToLower(id.Email)
 	for i := range people {
-		if people[i].Email == email && people[i].Status == store.StatusSuspended {
+		if matchesExternal(people[i], id, store.RealmConsole) && people[i].Status == store.StatusSuspended {
 			return errors.New("your access is suspended; ask an administrator")
 		}
 	}
@@ -523,12 +523,13 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	}
 	people, err := s.store.ListIdentities(ctx, ws)
 	if err != nil {
-		return nil // the store is down: sign-in must not depend on it
+		return fmt.Errorf("could not verify workspace access: %w", err)
 	}
 	var known *store.Identity
 	for i := range people {
-		if people[i].Email == email {
+		if matchesExternal(people[i], id, store.RealmWorkspace) {
 			known = &people[i]
+			id.Subject = known.ID
 		}
 	}
 	if known != nil && known.Status == store.StatusSuspended {
@@ -538,7 +539,10 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	if i := strings.LastIndex(email, "@"); i > 0 {
 		emailDomain = email[i+1:]
 	}
-	claims, _ := s.store.ListDomainClaims(ctx, ws)
+	claims, err := s.store.ListDomainClaims(ctx, ws)
+	if err != nil {
+		return fmt.Errorf("could not verify sign-in policy: %w", err)
+	}
 	var claimed *store.DomainClaim
 	for i := range claims {
 		if claims[i].Domain == emailDomain && claims[i].VerifiedAt != nil {
@@ -562,15 +566,18 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	}
 	w, err := s.store.Workspace(ctx, ws)
 	if err != nil {
-		return nil
+		return fmt.Errorf("could not verify workspace policy: %w", err)
 	}
 	// An invitation, or a role given ahead of the first sign-in, is the
 	// explicit act every join policy asks for.
-	if inv := s.pendingInvitation(ctx, ws, email); inv != nil {
+	if inv := s.pendingInvitation(ctx, ws, email); inv != nil && id.EmailVerified {
 		return nil
 	}
 	snap, err := s.authz.SnapshotFor(ctx, ws)
-	if err == nil && snap.WorkspaceRole(email) != "" {
+	if err != nil {
+		return fmt.Errorf("could not verify workspace permissions: %w", err)
+	}
+	if err == nil && snap.WorkspaceRole(id.Subject) != "" {
 		return nil
 	}
 	// The operator's workspaces follow the console: rolesInWorkspace makes
@@ -580,22 +587,22 @@ func (s *Server) admitSignIn(ctx context.Context, ws string, id ext.Identity) er
 	}
 	switch w.Settings.JoinPolicy {
 	case store.JoinCompany:
-		if claimed == nil {
+		if claimed == nil || !id.EmailVerified {
 			return fmt.Errorf("only accounts of the company's domain can join; ask an administrator to invite you")
 		}
 	case store.JoinListed:
 		if snap == nil {
-			return nil
+			return errors.New("workspace permissions unavailable")
 		}
 		for _, t := range snap.Teams {
-			for _, m := range t.Members {
-				if m == email {
+			for _, m := range t.PrincipalIDs {
+				if m != "" && m == id.Subject {
 					return nil
 				}
 			}
 		}
 		for _, g := range snap.Grants {
-			if g.User == email {
+			if g.PrincipalID != "" && g.PrincipalID == id.Subject {
 				return nil
 			}
 		}
@@ -617,13 +624,13 @@ func (s *Server) listPeople(c *gin.Context) {
 	out := make([]PersonView, 0, len(ids))
 	seen := map[string]bool{}
 	for _, id := range ids {
-		seen[id.Email] = true
+		seen[id.ID] = true
 		out = append(out, s.withRoles(snap, personView(id)))
 	}
 	if snap != nil {
 		for _, m := range snap.Memberships {
-			if !seen[m.Email] {
-				out = append(out, s.withRoles(snap, PersonView{Email: m.Email, Groups: []string{}, Status: store.StatusActive}))
+			if !seen[m.PrincipalID] {
+				out = append(out, s.withRoles(snap, PersonView{ID: m.PrincipalID, Email: m.Email, Groups: []string{}, Status: store.StatusActive}))
 			}
 		}
 	}
@@ -650,6 +657,12 @@ func (s *Server) updatePerson(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	email := strings.ToLower(c.Param("email"))
+	target, err := s.store.GetIdentity(ctx, s.workspace(c), email)
+	if err != nil {
+		storeErr(c, err, "person")
+		return
+	}
+	email = target.ID
 	me, _ := ext.IdentityFrom(c)
 	var person *PersonView
 	if req.Status != nil {
@@ -657,7 +670,7 @@ func (s *Server) updatePerson(c *gin.Context) {
 			abort(c, http.StatusBadRequest, errors.New("status must be active or suspended"))
 			return
 		}
-		if strings.EqualFold(me.Email, email) && *req.Status == store.StatusSuspended {
+		if me.Subject == email && *req.Status == store.StatusSuspended {
 			abort(c, http.StatusBadRequest, errors.New("you cannot suspend yourself"))
 			return
 		}
@@ -675,10 +688,6 @@ func (s *Server) updatePerson(c *gin.Context) {
 		role := strings.TrimSpace(*req.Role)
 		if role != "" && !store.ValidWorkspaceRole(role) {
 			abort(c, http.StatusBadRequest, errors.New("role must be owner, admin, member or empty (no role)"))
-			return
-		}
-		if !validEmail(email) {
-			abort(c, http.StatusBadRequest, errors.New("that is not an email address"))
 			return
 		}
 		s.claimOwnershipInBootstrap(c)
@@ -739,7 +748,7 @@ func (s *Server) claimOwnershipInBootstrap(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	if _, err := s.store.PutMembership(ctx, s.workspace(c), me.Email, store.WorkspaceRoleOwner); err != nil {
+	if _, err := s.store.PutMembership(ctx, s.workspace(c), me.Subject, store.WorkspaceRoleOwner); err != nil {
 		s.log.Warn("could not claim ownership", "email", me.Email, "err", err.Error())
 		return
 	}
@@ -760,16 +769,45 @@ func validEmail(email string) bool {
 	return err == nil && strings.EqualFold(addr.Address, email)
 }
 
-// forgetPerson removes the record of a person; grants and team memberships
-// are by email and stay (remove those explicitly). Sign-in recreates the
-// record.
+// forgetPerson retains a suspended principal so signing in cannot resurrect access.
 func (s *Server) forgetPerson(c *gin.Context) {
-	email := strings.ToLower(c.Param("email"))
-	if err := s.store.DeleteIdentity(c.Request.Context(), s.workspace(c), email); err != nil {
+	ctx := c.Request.Context()
+	person, err := s.store.GetIdentity(ctx, s.workspace(c), c.Param("email"))
+	if err != nil {
 		storeErr(c, err, "person")
 		return
 	}
-	s.audit(c, "", "workspace.person.forget", email, "")
+	me, _ := ext.IdentityFrom(c)
+	if me.Subject == person.ID {
+		abort(c, 400, errors.New("you cannot remove yourself"))
+		return
+	}
+	snap, err := s.authz.SnapshotFor(ctx, s.workspace(c))
+	if err != nil {
+		abort(c, 502, err)
+		return
+	}
+	if snap.WorkspaceRole(person.ID) == store.WorkspaceRoleOwner {
+		roles, err := s.rolesOf(c)
+		if err != nil {
+			abort(c, 502, err)
+			return
+		}
+		if !roles.Can(authz.WorkspaceOwner, "") {
+			abort(c, 403, denial(roles, authz.WorkspaceOwner, ""))
+			return
+		}
+		if len(snap.Owners()) == 1 {
+			abort(c, 409, errors.New("name another owner first"))
+			return
+		}
+	}
+	if err := s.store.DeleteIdentity(ctx, s.workspace(c), person.ID); err != nil {
+		storeErr(c, err, "person")
+		return
+	}
+	s.membershipChanged()
+	s.audit(c, "", "workspace.person.remove", person.ID, "")
 	c.Status(http.StatusNoContent)
 }
 
@@ -778,20 +816,23 @@ func (s *Server) forgetPerson(c *gin.Context) {
 // JWT's subject: stable across login methods, unlike a provider's). Tokens
 // and the admin token are not people. Failures are logged, never surfaced:
 // a sign-in must not depend on the store.
-func (s *Server) recordSignIn(c *gin.Context, id ext.Identity) *store.Identity {
-	if id.Email == "" || id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
-		return nil
+func matchesExternal(p store.Identity, id ext.Identity, realm string) bool {
+	return p.Realm == realm && p.Subject != "" && p.Subject == id.ExternalSubject && p.Issuer == id.Issuer && p.Connector == id.FederatedConnector
+}
+
+func (s *Server) recordSignIn(c *gin.Context, id ext.Identity) (*store.Identity, error) {
+	if id.Provider == "token" || id.Provider == "kubeconfig" || id.Subject == "admin-token" {
+		return nil, nil
 	}
-	ws := s.workspace(c)
+	if id.Issuer == "" || id.ExternalSubject == "" {
+		return nil, errors.New("verified issuer and subject are required")
+	}
+	ws, realm := s.workspace(c), store.RealmWorkspace
 	if ws == "" {
-		ws = s.defaultSlug(c.Request.Context()) // the console: the operator's people
+		ws = s.defaultSlug(c.Request.Context())
+		realm = store.RealmConsole
 	}
-	person, err := s.store.TouchIdentity(c.Request.Context(), ws, store.Identity{Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups})
-	if err != nil {
-		s.log.Warn("could not record sign-in", "email", id.Email, "err", err.Error())
-		return nil
-	}
-	return person
+	return s.store.TouchIdentity(c.Request.Context(), ws, store.Identity{Realm: realm, Issuer: id.Issuer, Subject: id.ExternalSubject, Connector: id.FederatedConnector, Email: id.Email, Name: id.Name, Provider: id.Provider, Groups: id.Groups})
 }
 
 // exportWorkspace is GET /api/workspace/export: the store's content as the

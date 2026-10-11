@@ -73,6 +73,9 @@ func TestExportEncryptReadRoundTrip(t *testing.T) {
 	}, app, team)
 
 	st := store.NewMemory()
+	if _, err := st.TouchIdentity(context.Background(), store.DefaultWorkspace, store.Identity{Email: "ops@example.test", Issuer: "https://idp.test", Subject: "ops"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := st.PutTeam(context.Background(), store.DefaultWorkspace, store.Team{Name: "platform", Members: []string{"ops@example.test"}}); err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ export type WorkspaceSummary = {
 
 // Who may open the console: its own list, independent of every workspace.
 // account is the auth-local account's state, "" when there is none.
-export type ConsoleUser = { email: string; addedAt: string; addedBy?: string; account: "" | "active" | "pending" | "locked" };
+export type ConsoleUser = { principalId?: string; email: string; addedAt: string; addedBy?: string; account: "" | "active" | "pending" | "locked" };
 
 // What the open-source platform's one workspace may use, and when its
 // projects and databases sleep by default; null is none.

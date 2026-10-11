@@ -58,7 +58,7 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 	}
 	cs := kubefake.NewSimpleClientset(toRuntime(runtimeObjs)...)
 	k := &kube.Client{Kube: cs, Namespace: "shpyrd-system"}
-	s, err := newServer(k, Options{Token: testToken, Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
+	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1407,37 +1407,13 @@ func TestProjectRename(t *testing.T) {
 // RFC-0014: password reset endpoint always 200s; lockout stops sign-in.
 func TestPasswordResetAndLockout(t *testing.T) {
 	s, _ := newTestServer(t, nil, nil)
-
-	// POST /api/auth/reset always 200 regardless of whether the account exists.
-	for _, email := range []string{"ada@example.test", "nobody@example.test"} {
-		rec := do(t, s, "POST", "/api/auth/reset", `{"email":"`+email+`"}`, false)
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "reset link") {
-			t.Errorf("reset %s: %d %s", email, rec.Code, rec.Body.String())
+	for _, path := range []string{"/api/auth/reset", "/account/reset", "/account/set-password"} {
+		for _, method := range []string{"GET", "POST"} {
+			rec := do(t, s, method, path, "", false)
+			if rec.Code != http.StatusNotFound || cookieValue(rec, sessionCookie) != "" {
+				t.Errorf("retired credential endpoint %s %s: %d", method, path, rec.Code)
+			}
 		}
-	}
-
-	// GET /account/reset with a token serves the form.
-	rec := do(t, s, "GET", "/account/reset?token=abc", "", false)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Reset your password") {
-		t.Errorf("reset form: %d %s", rec.Code, rec.Body.String())
-	}
-
-	// POST /account/reset with a bad token shows an error page (200 with form).
-	rec = doForm(t, s, "POST", "/account/reset", map[string]string{"token": "badtoken", "password": "newpass1", "confirm": "newpass1"})
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<form") {
-		t.Errorf("bad token reset: %d %s", rec.Code, rec.Body.String())
-	}
-
-	// GET /account/set-password serves the invite form.
-	rec = do(t, s, "GET", "/account/set-password?token=abc", "", false)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Set your password") {
-		t.Errorf("invite form: %d %s", rec.Code, rec.Body.String())
-	}
-
-	// Password mismatch is caught.
-	rec = doForm(t, s, "POST", "/account/reset", map[string]string{"token": "x", "password": "pass1", "confirm": "pass2"})
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "do not match") {
-		t.Errorf("mismatch: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

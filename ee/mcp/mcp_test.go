@@ -33,16 +33,21 @@ const testToken = "test-admin-token"
 
 // hostGrab is an extension that keeps the Host it is given, for the test
 // to open sessions with.
-type hostGrab struct{ h api.Host }
+type hostGrab struct {
+	h      api.Host
+	issuer string
+}
 
 func (*hostGrab) Name() string                          { return "host-grab" }
 func (*hostGrab) Description() string                   { return "" }
 func (*hostGrab) Components() []ext.ComponentRef        { return nil }
 func (*hostGrab) Register(ctrl.Manager, ext.Deps) error { return nil }
-func (*hostGrab) Routes(ext.Router, ext.Deps) error     { return nil }
-func (*hostGrab) CLI(ext.CLIGlobals) []*cobra.Command   { return nil }
-func (*hostGrab) Types() []ext.ResourceType             { return nil }
-func (g *hostGrab) MountRoot(h api.Host) error          { g.h = h; return nil }
+func (g *hostGrab) Routes(_ ext.Router, d ext.Deps) error {
+	return d.Auth.AddOIDC(context.Background(), ext.OIDCProvider{ID: "local", Issuer: g.issuer, ClientID: "test"})
+}
+func (*hostGrab) CLI(ext.CLIGlobals) []*cobra.Command { return nil }
+func (*hostGrab) Types() []ext.ResourceType           { return nil }
+func (g *hostGrab) MountRoot(h api.Host) error        { g.h = h; return nil }
 
 type testServer struct {
 	*api.Server
@@ -59,7 +64,12 @@ func newTestServer(t *testing.T, objs []client.Object) *testServer {
 	cr := crfake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&shpyrdv1.App{}).Build()
 	k := &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
 	st := store.NewMemory()
-	grab := &hostGrab{}
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"issuer": issuer.URL, "authorization_endpoint": issuer.URL + "/authorize", "token_endpoint": issuer.URL + "/token", "jwks_uri": issuer.URL + "/keys", "id_token_signing_alg_values_supported": []string{"RS256"}})
+	}))
+	t.Cleanup(issuer.Close)
+	grab := &hostGrab{issuer: issuer.URL}
 	s, err := api.NewWithoutHelm(k, api.Options{Token: testToken, Apps: cr, Store: st, Public: api.PublicConfig{Domain: "example.test"}, Extensions: []ext.Extension{New(), grab}})
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +111,11 @@ func doCookie(t *testing.T, s *testServer, method, path, body, sid, csrf string)
 
 func signIn(t *testing.T, s *testServer, id ext.Identity) (string, string) {
 	t.Helper()
+	person, err := s.store.GetIdentity(context.Background(), store.DefaultWorkspace, id.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.Subject = person.ID
 	sid, csrf, err := s.host.OpenSession(context.Background(), store.RealmWorkspace, store.DefaultWorkspace, id)
 	if err != nil {
 		t.Fatal(err)
@@ -160,10 +175,13 @@ func TestOAuthAndMCP(t *testing.T) {
 
 	// The person: a developer on shop, nothing on vault.
 	ada := ext.Identity{Subject: "u1", Email: "ada@example.test", Name: "Ada", Provider: "local"}
-	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: ada.Email, Name: ada.Name, Provider: "local"}); err != nil {
+	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Issuer: "https://fixtures.test", Subject: "ada", Email: ada.Email, Name: ada.Name, Provider: "local"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.store.AddGrant(ctx, store.DefaultWorkspace, store.Grant{Project: "shop", Role: shpyrdv1.RoleDeveloper, User: ada.Email}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Issuer: "https://fixtures.test", Subject: "owner", Email: "owner@example.test"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.store.PutMembership(ctx, store.DefaultWorkspace, "owner@example.test", store.WorkspaceRoleOwner); err != nil {

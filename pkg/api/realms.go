@@ -70,7 +70,7 @@ type allMethods = DefaultRealms
 func (s *Server) consoleMethods(ctx context.Context, all AuthConfig) AuthConfig {
 	out := AuthConfig{Token: all.Token, Providers: []ProviderInfo{}}
 	for _, p := range all.Providers {
-		if p.Realm == ext.RealmConsole {
+		if p.Realm == ext.RealmConsole && (p.ID != "local-console" || s.consolePasswordSignIn(ctx)) {
 			out.Providers = append(out.Providers, p)
 		}
 	}

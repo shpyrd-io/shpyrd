@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, KeyRound, Lock, UserRound } from "lucide-react";
+import { ArrowRight, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
@@ -10,7 +10,9 @@ import { Button } from "@shpyrd/ui/components/button";
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { api, ApiError } from "@/api/api";
+import { singleProviderDestination } from "@shpyrd/shared/auth/login";
+import { StatePage } from "@shpyrd/ui/components/state-page";
+import { api } from "@/api/api";
 import { useBrandColor } from "@/lib/branding";
 import type { PublicConfig } from "@/api/types";
 
@@ -24,9 +26,12 @@ export function Login({ config }: { config: PublicConfig }) {
   const asked = new URLSearchParams(window.location.search).get("next");
   const next = asked && asked.startsWith("/") && !asked.startsWith("//") ? asked : window.location.pathname === "/" ? "/" : window.location.pathname + window.location.search;
   const providers = config.auth.providers;
-  const [way, setWay] = useState<"password" | "token">("password");
+  const destination = singleProviderDestination(config.auth, window.location.search, next);
+  const loginError = new URLSearchParams(window.location.search).get("login_error") || new URLSearchParams(window.location.search).get("error");
+  useEffect(() => {if(destination) window.location.replace(destination);}, [destination]);
   const done = () => queries.invalidateQueries({ queryKey: ["me"] });
   useBrandColor(config.workspace?.branding?.color);
+  if(destination)return <StatePage waiting title="Signing you in" description="Redirecting to your sign-in provider." />;
   return (
     <div className="relative flex min-h-svh items-center justify-center bg-background px-6">
       <div className="grid w-full max-w-sm justify-items-center gap-6 text-center">
@@ -40,26 +45,21 @@ export function Login({ config }: { config: PublicConfig }) {
           <p className="text-sm text-muted-foreground">Sign in to administer the platform.</p>
         </div>
         <Stack gap="normal" className="w-full text-left">
+          {loginError && <Alert variant="destructive"><AlertTitle>Sign-in could not be completed</AlertTitle><AlertDescription>{loginError}</AlertDescription></Alert>}
           {providers.map((p) => (
             <Button key={p.id} size="xl" variant="outline" className="w-full" iconEnd={<ArrowRight />} asChild>
-              <a href={`/api/auth/login?provider=${encodeURIComponent(p.id)}&next=${encodeURIComponent(next)}`}>Continue with {p.label}</a>
+              <a href={`/api/auth/login/${encodeURIComponent(p.id)}?next=${encodeURIComponent(next)}`}>Continue with {p.label}</a>
             </Button>
           ))}
-          {providers.length > 0 && (config.auth.password || config.auth.token) && (
+          {providers.length > 0 && config.auth.token && (
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span className="h-px flex-1 bg-border" />
               or
               <span className="h-px flex-1 bg-border" />
             </div>
           )}
-          {way === "password" && config.auth.password && <Password next={next} onDone={done} />}
-          {way === "token" && config.auth.token && <Token next={next} onDone={done} />}
-          {config.auth.password && config.auth.token && (
-            <button type="button" className="text-xs text-muted-foreground underline-offset-4 hover:underline" onClick={() => setWay(way === "password" ? "token" : "password")}>
-              {way === "password" ? "Sign in with a token instead" : "Sign in with email and password instead"}
-            </button>
-          )}
-          {!config.auth.password && !config.auth.token && providers.length === 0 && (
+          {config.auth.token && <Token next={next} onDone={done} />}
+          {!config.auth.token && providers.length === 0 && (
             <Alert variant="warning">
               <AlertTitle>No way in</AlertTitle>
               <AlertDescription>This workspace offers no sign-in method yet. Ask its owner.</AlertDescription>
@@ -69,37 +69,6 @@ export function Login({ config }: { config: PublicConfig }) {
       </div>
       <Wordmark className="absolute bottom-5 left-5 h-5 opacity-60" />
     </div>
-  );
-}
-
-function Password({ next, onDone }: { next: string; onDone: () => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const signIn = useMutation({
-    mutationFn: () => api.passwordLogin({ email: email.trim(), password, next }),
-    onSuccess: (r) => (r.next && r.next !== window.location.pathname + window.location.search ? window.location.assign(r.next) : onDone()),
-    onError: (e: Error) => setError(e instanceof ApiError && e.status === 401 ? "The email or the password is not right." : e.message),
-  });
-  return (
-    <form
-      className="grid gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        setError(null);
-        signIn.mutate();
-      }}
-    >
-      <Field label="Email address" error={error ?? undefined}>
-        <Input size="lg" type="email" icon={<UserRound />} divider placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoFocus />
-      </Field>
-      <Field label="Password">
-        <Input size="lg" type="password" icon={<Lock />} divider placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-      </Field>
-      <Button type="submit" size="xl" className="w-full" iconEnd={<ArrowRight />} disabled={!email.trim() || !password || signIn.isPending}>
-        Sign in
-      </Button>
-    </form>
   );
 }
 

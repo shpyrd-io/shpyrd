@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/gin-gonic/gin"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +108,9 @@ func TestWorkspaceRoles(t *testing.T) {
 	}
 	// The operator (admin token) holds the owner's actions and sees
 	// everyone with a role, signed in or not.
+	if _, err := s.store.TouchIdentity(context.Background(), store.DefaultWorkspace, store.Identity{Email: "new@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
 	if rec := do(t, s, "PATCH", "/api/workspace/people/new@example.test", `{"role":"owner"}`, true); rec.Code != http.StatusOK {
 		t.Fatalf("operator naming an owner: %d %s", rec.Code, rec.Body.String())
 	}
@@ -118,7 +123,7 @@ func TestWorkspaceRoles(t *testing.T) {
 	for _, p := range people {
 		found[p.Email] = p
 	}
-	if p := found["new@example.test"]; p.Role != "owner" || p.LastSeenAt != nil {
+	if p := found["new@example.test"]; p.Role != "owner" || p.ID == "" {
 		t.Errorf("person with a role who never signed in: %+v", p)
 	}
 	if p := found["eve@example.test"]; p.Role != "member" || p.LastSeenAt != nil {
@@ -159,6 +164,9 @@ func TestInvitations(t *testing.T) {
 	s.mailer = mail
 
 	// The owner: named by the operator; the workspace only admits listed people.
+	if _, err := s.store.TouchIdentity(context.Background(), store.DefaultWorkspace, store.Identity{Email: "owner@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
 	if rec := do(t, s, "PATCH", "/api/workspace/people/owner@example.test", `{"role":"owner"}`, true); rec.Code != http.StatusOK {
 		t.Fatalf("owner: %d %s", rec.Code, rec.Body.String())
 	}
@@ -184,9 +192,9 @@ func TestInvitations(t *testing.T) {
 		}
 	}
 
-	// An unlisted person cannot sign in.
-	if rec := do(t, s, "POST", "/api/auth/password", `{"email":"new@example.test","password":"pw-new"}`, false); rec.Code != http.StatusForbidden {
-		t.Fatalf("unlisted sign-in: %d %s", rec.Code, rec.Body.String())
+	// An unlisted verified IdP identity cannot join.
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "new@example.test", Email: "new@example.test", EmailVerified: true, Provider: "local"}); err == nil {
+		t.Fatal("unlisted identity admitted")
 	}
 
 	// Invite: a link, emailed; listed afterwards; a re-invite replaces it.
@@ -228,11 +236,28 @@ func TestInvitations(t *testing.T) {
 	}
 
 	// Signing in with the invited address accepts it: role set, invitation gone.
-	rec = do(t, s, "POST", "/api/auth/password", `{"email":"new@example.test","password":"pw-new"}`, false)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("invited sign-in: %d %s", rec.Code, rec.Body.String())
+	id := ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "new@example.test", Email: "new@example.test", EmailVerified: true, Provider: "local"}
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, id); err != nil {
+		t.Fatal(err)
 	}
-	newSID, newCSRF := cookieValue(rec, sessionCookie), cookieValue(rec, csrfCookie)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/", nil)
+	if _, ok := s.openSession(c, id, "", "test"); !ok {
+		t.Fatal("IdP session failed")
+	}
+	newSID, newCSRF := "", ""
+	for _, cookie := range c.Writer.Header().Values("Set-Cookie") {
+		response := &http.Response{Header: http.Header{"Set-Cookie": []string{cookie}}}
+		for _, v := range response.Cookies() {
+			if v.Name == sessionCookie {
+				newSID = v.Value
+			}
+			if v.Name == csrfCookie {
+				newCSRF = v.Value
+			}
+		}
+	}
+
 	if me := doCookie(t, s, "GET", "/api/me", "", newSID, ""); !strings.Contains(me.Body.String(), `"workspace":"admin"`) {
 		t.Errorf("after accepting at sign-in: %s", me.Body.String())
 	}
@@ -317,9 +342,10 @@ func TestInvitations(t *testing.T) {
 	if rec := doCookie(t, s, "DELETE", "/api/workspace/invitations/"+revokedID, "", ownerSID, ownerCSRF); rec.Code != http.StatusNotFound {
 		t.Errorf("revoke again: %d", rec.Code)
 	}
-	if rec := do(t, s, "POST", "/api/auth/password", `{"email":"revoked@example.test","password":"pw-revoked"}`, false); rec.Code != http.StatusForbidden {
-		t.Errorf("revoked, then sign-in: %d %s", rec.Code, rec.Body.String())
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "revoked", Email: "revoked@example.test", EmailVerified: true, Provider: "local"}); err == nil {
+		t.Fatal("revoked invitation admitted")
 	}
+
 	// Expired: visible as such, not acceptable.
 	_, hash, _ := newInvitationToken()
 	if _, err := s.store.CreateInvitation(ctx, store.DefaultWorkspace, store.Invitation{Email: "late@example.test", Role: "member", ExpiresAt: time.Now().Add(-time.Minute)}, hash); err != nil {

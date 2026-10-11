@@ -532,7 +532,7 @@ func (s *Server) grantCreator(c *gin.Context, slug string) {
 		return
 	}
 	email := strings.ToLower(me.Email)
-	if _, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{Project: slug, Role: shpyrdv1.RoleAdmin, User: email}); err != nil && !errors.Is(err, store.ErrConflict) {
+	if _, err := s.store.AddGrant(c.Request.Context(), s.workspace(c), store.Grant{Project: slug, Role: shpyrdv1.RoleAdmin, User: email, PrincipalID: me.Subject}); err != nil && !errors.Is(err, store.ErrConflict) {
 		s.log.Warn("could not grant the creator", "project", slug, "email", email, "err", err.Error())
 		return
 	}

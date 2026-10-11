@@ -23,15 +23,14 @@ data:
     oauth2:
       skipApprovalScreen: true
       responseTypes: [code]
-      # The dashboard signs local accounts in through the password grant
-      # from its own page (RFC-0012).
-      passwordConnector: local
     expiry:
       idTokens: 24h
       refreshTokens:
         validIfNotUsedFor: 168h
         absoluteLifetime: 720h
-    # Local accounts (Password objects managed with `shpyrd users`).
+    # Optional OSS credentials are managed by the operator in this file.
+    # Keep each userID stable; never recycle it for another person.
+    staticPasswords: []
     enablePasswordDB: true
     # The platform's client is an OAuth2Client resource the server keeps
     # (RFC-0080): its redirect URIs are the console's and every workspace's

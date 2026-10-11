@@ -127,7 +127,7 @@ func registerOnce(ctx context.Context, deps ext.Deps, issuer string) error {
 	}
 	for _, c := range list {
 		if err := deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
-			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, Issuer: issuer,
+			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, UpstreamIssuer: c.Issuer, Issuer: issuer,
 			ClientID: clientID, ClientSecret: secret, Realm: c.Realm, Workspace: c.Workspace,
 			Available: licensing.Active,
 		}); err != nil {

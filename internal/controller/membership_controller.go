@@ -155,8 +155,8 @@ func projectSubjects(snap *authz.Snapshot, project, role string) []rbacv1.Subjec
 		if g.Project != project || g.Role != role {
 			continue
 		}
-		if g.User != "" {
-			set.user(g.User)
+		if g.PrincipalID != "" {
+			set.principal(snap, g.PrincipalID)
 		}
 		if g.Team != "" {
 			set.team(snap, g.Team)
@@ -178,13 +178,15 @@ func platformSubjects(snap *authz.Snapshot, role string) []rbacv1.Subject {
 
 type subjectSet map[string]rbacv1.Subject
 
-func (s subjectSet) user(email string) {
-	email = strings.ToLower(email)
-	s["u:"+email] = rbacv1.Subject{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: email}
-}
-
-func (s subjectSet) group(name string) {
-	s["g:"+name] = rbacv1.Subject{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: name}
+// Native Kubernetes access requires an authenticator emitting this principal
+// username. Never mirror email or unscoped upstream groups into RBAC.
+func (s subjectSet) principal(snap *authz.Snapshot, id string) {
+	p, ok := snap.Principals[id]
+	if !ok || p.Subject == "" || p.Status == store.StatusSuspended {
+		return
+	}
+	name := "shpyrd:principal:" + id
+	s[name] = rbacv1.Subject{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: name}
 }
 
 func (s subjectSet) team(snap *authz.Snapshot, name string) {
@@ -198,12 +200,19 @@ func (s subjectSet) team(snap *authz.Snapshot, name string) {
 			// edge honours it; kubectl does not.
 			continue
 		}
-		for _, m := range t.Members {
-			s.user(m)
+		for _, id := range t.PrincipalIDs {
+			s.principal(snap, id)
 		}
-		for _, g := range t.Groups {
-			s.group(g)
+		for id, p := range snap.Principals {
+			for _, g := range t.Groups {
+				for _, claim := range p.Groups {
+					if claim == g {
+						s.principal(snap, id)
+					}
+				}
+			}
 		}
+
 	}
 }
 

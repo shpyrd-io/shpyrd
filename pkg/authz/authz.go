@@ -153,8 +153,9 @@ func platformRank(role string) int {
 
 // Snapshot is the membership state at one point in time.
 type Snapshot struct {
-	Teams  []store.Team
-	Grants []store.Grant
+	Principals map[string]store.Identity
+	Teams      []store.Team
+	Grants     []store.Grant
 	// Memberships are the workspace roles by email (RFC-0033).
 	Memberships []store.Membership
 	// Suspended lists the emails of people whose access is switched off.
@@ -182,14 +183,14 @@ func (s *Snapshot) Enforced() bool {
 	return len(s.Grants) > 0 || len(s.Memberships) > 0
 }
 
-// WorkspaceRole is the workspace role held by an email, "" when none.
+// WorkspaceRole is the workspace role held by an internal principal ID.
 func (s *Snapshot) WorkspaceRole(email string) string {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return ""
 	}
 	for _, m := range s.Memberships {
-		if m.Email == email {
+		if m.PrincipalID != "" && m.PrincipalID == email {
 			return m.Role
 		}
 	}
@@ -208,7 +209,7 @@ func (s *Snapshot) Owners() []string {
 	return out
 }
 
-// teamsOf returns the teams an identity belongs to (by email or group).
+// teamsOf returns teams matched by principal ID or configured group rules.
 func (s *Snapshot) teamsOf(id ext.Identity) map[string]*store.Team {
 	out := map[string]*store.Team{}
 	email := strings.ToLower(id.Email)
@@ -219,8 +220,8 @@ func (s *Snapshot) teamsOf(id ext.Identity) map[string]*store.Team {
 			continue
 		}
 		if email != "" {
-			for _, m := range t.Members {
-				if strings.EqualFold(m, email) {
+			for _, m := range t.PrincipalIDs {
+				if m == id.Subject && m != "" {
 					out[t.Name] = t
 				}
 			}
@@ -250,8 +251,13 @@ func (s *Snapshot) RolesFor(id ext.Identity) Roles {
 		r.Platform, r.Workspace = shpyrdv1.RolePlatformAdmin, store.WorkspaceRoleOwner
 		return r
 	}
+	// Only an existing, externally bound principal can receive user permissions.
+	if p, ok := s.Principals[id.Subject]; !ok || p.Subject == "" {
+		r.Enforced = true
+		return r
+	}
 	// A suspended person has nothing, bootstrap or not.
-	if id.Email != "" && s.Suspended[strings.ToLower(id.Email)] {
+	if id.Email != "" && s.Suspended[id.Subject] {
 		r.Suspended, r.Enforced = true, true
 		return r
 	}
@@ -260,7 +266,7 @@ func (s *Snapshot) RolesFor(id ext.Identity) Roles {
 		return r
 	}
 	teams := s.teamsOf(id)
-	switch r.Workspace = s.WorkspaceRole(id.Email); r.Workspace {
+	switch r.Workspace = s.WorkspaceRole(id.Subject); r.Workspace {
 	case store.WorkspaceRoleOwner, store.WorkspaceRoleAdmin:
 		r.Platform = shpyrdv1.RolePlatformAdmin
 	case store.WorkspaceRoleMember:
@@ -271,9 +277,8 @@ func (s *Snapshot) RolesFor(id ext.Identity) Roles {
 			}
 		}
 	}
-	email := strings.ToLower(id.Email)
 	for _, g := range s.Grants {
-		match := (g.User != "" && email != "" && strings.EqualFold(g.User, email)) ||
+		match := (g.PrincipalID != "" && g.PrincipalID == id.Subject) ||
 			(g.Team != "" && teams[g.Team] != nil)
 		if !match {
 			continue
@@ -335,11 +340,15 @@ func Load(ctx context.Context, st store.Store, workspace string, bootstrap bool)
 		return nil, err
 	}
 	snap := &Snapshot{Teams: teams, Grants: grants, Memberships: memberships, Suspended: map[string]bool{}, Explicit: !bootstrap}
-	if people, err := st.ListIdentities(ctx, workspace); err == nil {
-		for _, p := range people {
-			if p.Status == store.StatusSuspended {
-				snap.Suspended[p.Email] = true
-			}
+	people, err := st.ListIdentities(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+	snap.Principals = map[string]store.Identity{}
+	for _, p := range people {
+		snap.Principals[p.ID] = p
+		if p.Status == store.StatusSuspended {
+			snap.Suspended[p.ID] = true
 		}
 	}
 	return snap, nil
@@ -402,9 +411,7 @@ func (r *Resolver) SnapshotFor(ctx context.Context, ws string) (*Snapshot, error
 	}
 	snap, err := Load(ctx, r.Store, ws, bootstrap)
 	if err != nil {
-		if c, ok := r.snaps[key]; ok {
-			return c.snap, nil // stale beats down
-		}
+
 		return nil, err
 	}
 	if r.snaps == nil {
@@ -441,7 +448,21 @@ func (r *Resolver) ConsoleRoles(ctx context.Context, id ext.Identity) (Roles, er
 	if err != nil {
 		return out, err
 	}
-	if email := strings.ToLower(strings.TrimSpace(id.Email)); email != "" && users[email] {
+	people, err := r.Store.ListIdentities(ctx, r.defaultSlug(ctx))
+	if err != nil {
+		return out, err
+	}
+	var principal *store.Identity
+	for _, p := range people {
+		if (p.ID == id.Subject || (id.Issuer != "" && p.Issuer == id.Issuer && p.Subject == id.ExternalSubject && p.Connector == id.FederatedConnector)) && p.Realm == store.RealmConsole && p.Subject != "" && p.Status != store.StatusSuspended {
+			copy := p
+			principal = &copy
+		}
+	}
+	if principal == nil {
+		return out, nil
+	}
+	if users[principal.ID] {
 		out.Platform = shpyrdv1.RolePlatformAdmin
 		return out, nil
 	}
@@ -484,14 +505,16 @@ func (r *Resolver) consoleUsers(ctx context.Context) (map[string]bool, error) {
 	}
 	list, err := r.Store.ListConsoleUsers(ctx)
 	if err != nil {
-		if r.console != nil {
-			return r.console, nil // stale beats down
-		}
+
 		return nil, err
 	}
 	r.console = map[string]bool{}
 	for _, u := range list {
-		r.console[strings.ToLower(u.Email)] = true
+		if u.PrincipalID != "" {
+			r.console[u.PrincipalID] = true
+		} else {
+			r.console["unbound:"+u.Email] = true
+		}
 	}
 	r.consoleAt = now()
 	return r.console, nil

@@ -173,16 +173,17 @@ func (s *Server) tokenOwnerRoles(c *gin.Context, snap *authz.Snapshot, t *store.
 	if err != nil || ws.ID != t.WorkspaceID {
 		return ext.Identity{}, authz.Roles{}, false
 	}
-	if t.OwnerEmail == "" {
+	if t.OwnerEmail == "" && t.PrincipalID == "" {
 		admin := ext.Identity{Subject: "admin-token", Provider: "token"}
 		return admin, snap.RolesFor(admin), true
 	}
-	person, err := s.store.GetIdentity(ctx, ws.Slug, t.OwnerEmail)
-	if err != nil || person == nil {
+	person, err := s.store.GetIdentity(ctx, ws.Slug, t.PrincipalID)
+	if err != nil || person == nil || person.ID != t.PrincipalID || person.Subject == "" || person.Status == store.StatusSuspended {
 		return ext.Identity{}, authz.Roles{}, false
 	}
 	owner := ext.Identity{
-		Subject:  person.ID,
+		Subject: person.ID,
+		Issuer:  person.Issuer, ExternalSubject: person.Subject, FederatedConnector: person.Connector,
 		Email:    person.Email,
 		Name:     person.Name,
 		Provider: person.Provider,
@@ -193,7 +194,7 @@ func (s *Server) tokenOwnerRoles(c *gin.Context, snap *authz.Snapshot, t *store.
 	// which the workspace's snapshot alone would not show.
 	roles, err := s.rolesAt(c, owner)
 	if err != nil {
-		roles = snap.RolesFor(owner)
+		return ext.Identity{}, authz.Roles{}, false
 	}
 	if roles.Suspended {
 		return ext.Identity{}, authz.Roles{}, false
@@ -275,7 +276,7 @@ func (s *Server) listTokens(c *gin.Context) {
 	id, _ := ext.IdentityFrom(c)
 	email := ""
 	if !roles.Can(authz.ClusterAdmin, "") {
-		email = id.Email
+		email = id.Subject
 	}
 	tokens, err := s.store.ListTokens(c.Request.Context(), s.workspace(c), email)
 	if err != nil {
@@ -375,6 +376,7 @@ func (s *Server) createToken(c *gin.Context) {
 	tok := store.APIToken{
 		Name:         req.Name,
 		OwnerEmail:   callerID.Email,
+		PrincipalID:  callerID.Subject,
 		PlatformRole: req.PlatformRole,
 		ProjectRoles: grantKeyRoles,
 		ExpiresAt:    exp,
@@ -420,7 +422,7 @@ func (s *Server) deleteToken(c *gin.Context) {
 		abort(c, http.StatusNotFound, errors.New("token not found"))
 		return
 	}
-	if !strings.EqualFold(target.OwnerEmail, callerID.Email) && !caller.Can(authz.ClusterAdmin, "") {
+	if target.PrincipalID != callerID.Subject && !caller.Can(authz.ClusterAdmin, "") {
 		abort(c, http.StatusForbidden, errors.New("you may only revoke your own tokens"))
 		return
 	}

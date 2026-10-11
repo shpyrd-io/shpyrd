@@ -90,7 +90,7 @@ type gateWorld struct {
 func newGateWorld(t *testing.T, opts ...func(*gateExt)) *gateWorld {
 	t.Helper()
 	ctx := context.Background()
-	st := store.NewMemory()
+	st := principalFixtureStore()
 	if _, err := st.UpdateWorkspaceAddress(ctx, store.DefaultWorkspace, "example.test"); err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +163,10 @@ func (w *gateWorld) visitor(t *testing.T, ws string, id ext.Identity) (ext.Visit
 	t.Helper()
 	ctx := context.Background()
 	wsp, err := w.st.Workspace(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err = principalFixtureIdentity(w.s, ctx, store.RealmWorkspace, ws, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +272,7 @@ func (w *gateWorld) get(t *testing.T, host, path, sid string, cookies ...*http.C
 // session opens a workspace session for someone.
 func (w *gateWorld) session(t *testing.T, ws string, id ext.Identity) string {
 	t.Helper()
-	sess, err := w.s.rp.sessions.create(context.Background(), store.RealmWorkspace, ws, id, "")
+	sess, err := principalFixtureSession(w.s, context.Background(), store.RealmWorkspace, ws, id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +777,7 @@ func TestTheConsoleHasLinksOfItsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.s.authz.Invalidate()
-	sess, err := w.s.rp.sessions.create(ctx, store.RealmConsole, "", w.dora, "")
+	sess, err := principalFixtureSession(w.s, ctx, store.RealmConsole, "", w.dora, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1103,20 +1107,8 @@ func TestAGateIsEnteredFromAWorkspaceWhoseDoorIsACustomDomain(t *testing.T) {
 	if rec := w.get(t, "acme.shpyrd.test", "/app.js", ""); rec.Code != http.StatusOK || rec.Body.String() != "js" {
 		t.Errorf("the application's file = %d %s", rec.Code, rec.Body.String())
 	}
-	// The password sign-in opens the session at the platform address and
-	// sends the person back to the gate.
-	req := httptest.NewRequest("POST", "https://acme.shpyrd.test/api/auth/password", strings.NewReader(`{"email":"`+w.ana.Email+`","password":"correct-horse","next":"`+gate+`"}`))
-	req.Host = "acme.shpyrd.test"
-	req.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	w.s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"next":"/.shpyrd/gate?name=billing"`) {
-		t.Fatalf("password sign-in = %d %s", rec.Code, rec.Body.String())
-	}
-	sid := cookieValue(rec, sessionCookie)
-	if sid == "" {
-		t.Fatal("no session opened")
-	}
+	// IdP authentication opens the session at the workspace's own address.
+	sid := w.session(t, "acme", w.ana)
 	// Signed in, the sign-in page goes on to the gate.
 	if rec := w.get(t, "acme.shpyrd.test", signIn, sid); rec.Code != http.StatusFound || rec.Header().Get("Location") != gate {
 		t.Errorf("the sign-in page signed in = %d %s", rec.Code, rec.Header().Get("Location"))

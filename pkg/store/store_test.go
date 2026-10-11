@@ -93,6 +93,11 @@ func TestStoreConformance(t *testing.T) {
 				t.Errorf("delete unknown claim: %v", err)
 			}
 
+			for _, email := range []string{"ops@example.test", "dev@example.test", "fin@example.test", "owner@example.test"} {
+				if _, err := s.TouchIdentity(ctx, DefaultWorkspace, Identity{Email: email, Issuer: "https://idp.test", Subject: email}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			// Teams: create, update in place, normalised emails.
 			team, created, err := s.PutTeam(ctx, DefaultWorkspace, Team{Name: "platform", Description: "ops", Members: []string{" Ops@Example.test ", "ops@example.test", "dev@example.test"}, Groups: []string{"g1", "g1"}, PlatformRole: "platform-admin"})
 			if err != nil || !created || team.ID == "" || len(team.Members) != 2 || team.Members[0] != "ops@example.test" || len(team.Groups) != 1 {
@@ -183,7 +188,7 @@ func TestStoreConformance(t *testing.T) {
 				t.Fatalf("touch again: %+v %v", id2, err)
 			}
 			ids, _ := s.ListIdentities(ctx, DefaultWorkspace)
-			if len(ids) != 1 || ids[0].Status != StatusActive {
+			if len(ids) != 5 || ids[0].Status != StatusActive {
 				t.Errorf("identities = %+v", ids)
 			}
 			if sus, err := s.SetIdentityStatus(ctx, DefaultWorkspace, "maria@example.test", StatusSuspended); err != nil || sus.Status != StatusSuspended {
@@ -207,12 +212,12 @@ func TestStoreConformance(t *testing.T) {
 				t.Fatal(err)
 			}
 			dump, err := s.Export(ctx, DefaultWorkspace)
-			if err != nil || dump.Version != DumpVersion || len(dump.Teams) != 3 || len(dump.Grants) != 1 || len(dump.Identities) != 1 || len(dump.Domains) != 1 || len(dump.Memberships) != 1 {
+			if err != nil || dump.Version != DumpVersion || len(dump.Teams) != 3 || len(dump.Grants) != 1 || len(dump.Identities) != 5 || len(dump.Domains) != 1 || len(dump.Memberships) != 1 {
 				t.Fatalf("export: %+v %v", dump, err)
 			}
 			fresh := NewMemory()
 			res, err := fresh.Import(ctx, DefaultWorkspace, dump, false)
-			if err != nil || res.Teams != 2 || res.Grants != 1 || res.Identities != 1 || res.Memberships != 1 {
+			if err != nil || res.Teams != 2 || res.Grants != 1 || res.Identities != 5 || res.Memberships != 1 {
 				t.Fatalf("import: %+v %v", res, err)
 			}
 			if claims, _ := fresh.ListDomainClaims(ctx, DefaultWorkspace); len(claims) != 1 || claims[0].VerifiedAt == nil {
@@ -239,7 +244,12 @@ func TestMembershipsAndInvitations(t *testing.T) {
 			s := open(t)
 			ws := DefaultWorkspace
 
-			// Roles: upsert by email, case-insensitive, validated.
+			for _, email := range []string{"ada@example.test", "bob@example.test"} {
+				if _, err := s.TouchIdentity(ctx, ws, Identity{Email: email, Issuer: "https://idp.test", Subject: email}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Roles: administrative email lookup resolves to an existing principal.
 			if _, err := s.PutMembership(ctx, ws, "ada@example.test", "king"); err == nil {
 				t.Error("an unknown role was accepted")
 			}
@@ -453,7 +463,7 @@ func TestOAuthRecords(t *testing.T) {
 				t.Errorf("expired code: %v", err)
 			}
 			// Refresh tokens: found by hash while live, rotated, listed per person, deleted.
-			tok, err := s.CreateOAuthToken(ctx, ws, OAuthToken{ClientID: "cl_1", Email: "Ada@x.test", Scope: "projects:read", Hash: "r1", ExpiresAt: time.Now().Add(time.Hour)})
+			tok, err := s.CreateOAuthToken(ctx, ws, OAuthToken{ClientID: "cl_1", Email: "Ada@x.test", Subject: "principal-ada", Scope: "projects:read", Hash: "r1", ExpiresAt: time.Now().Add(time.Hour)})
 			if err != nil || tok.ID == "" || tok.Email != "ada@x.test" {
 				t.Fatalf("token: %+v %v", tok, err)
 			}
@@ -475,7 +485,7 @@ func TestOAuthRecords(t *testing.T) {
 			if _, err := s.OAuthTokenByHash(ctx, "r3"); !errors.Is(err, ErrNotFound) {
 				t.Errorf("expired token: %v", err)
 			}
-			if list, _ := s.ListOAuthTokens(ctx, ws, "ADA@x.test"); len(list) != 1 || list[0].ClientName != "Claude" {
+			if list, _ := s.ListOAuthTokens(ctx, ws, "principal-ada"); len(list) != 1 || list[0].ClientName != "Claude" {
 				t.Errorf("list: %+v", list)
 			}
 			if all, _ := s.ListOAuthTokens(ctx, ws, ""); len(all) != 2 {
@@ -696,16 +706,16 @@ func TestTokens(t *testing.T) {
 			ctx := context.Background()
 			s := open(t)
 			tok, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{
-				Name: "ci", OwnerEmail: "joao@acme.test", ProjectRoles: map[string]string{"shop": "developer"},
+				Name: "ci", OwnerEmail: "joao@acme.test", PrincipalID: "principal-joao", ProjectRoles: map[string]string{"shop": "developer"},
 			}, "hash-1")
 			if err != nil || tok.ID == "" || tok.WorkspaceID == "" || tok.CreatedAt.IsZero() {
 				t.Fatalf("create: %+v %v", tok, err)
 			}
-			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "ci", OwnerEmail: "Joao@acme.test"}, "hash-2"); !errors.Is(err, ErrConflict) {
+			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "ci", OwnerEmail: "Joao@acme.test", PrincipalID: "principal-joao"}, "hash-2"); !errors.Is(err, ErrConflict) {
 				t.Errorf("duplicate name for the same owner: %v", err)
 			}
 			// Names are per person: someone else may also call theirs "ci".
-			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "ci", OwnerEmail: "ana@acme.test"}, "hash-3"); err != nil {
+			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "ci", OwnerEmail: "ana@acme.test", PrincipalID: "principal-ana"}, "hash-3"); err != nil {
 				t.Errorf("same name, other owner: %v", err)
 			}
 			// Lookup by hash works, records first use, and misses on unknown hashes.
@@ -717,7 +727,7 @@ func TestTokens(t *testing.T) {
 				t.Errorf("first use did not record last_used_at")
 			}
 			// The write must be visible to a pure read, not only on the returned struct.
-			if listed, _ := s.ListTokens(ctx, DefaultWorkspace, "joao@acme.test"); len(listed) != 1 || listed[0].LastUsedAt == nil {
+			if listed, _ := s.ListTokens(ctx, DefaultWorkspace, "principal-joao"); len(listed) != 1 || listed[0].LastUsedAt == nil {
 				t.Errorf("last_used_at not persisted: %+v", listed)
 			}
 			if miss, err := s.LookupToken(ctx, "nope"); err != nil || miss != nil {
@@ -725,13 +735,13 @@ func TestTokens(t *testing.T) {
 			}
 			// Expired tokens are invisible to lookup but still listed.
 			past := time.Now().Add(-time.Hour)
-			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "old", OwnerEmail: "joao@acme.test", ExpiresAt: &past}, "hash-old"); err != nil {
+			if _, err := s.CreateToken(ctx, DefaultWorkspace, APIToken{Name: "old", OwnerEmail: "joao@acme.test", PrincipalID: "principal-joao", ExpiresAt: &past}, "hash-old"); err != nil {
 				t.Fatal(err)
 			}
 			if exp, _ := s.LookupToken(ctx, "hash-old"); exp != nil {
 				t.Errorf("expired token accepted: %+v", exp)
 			}
-			mine, err := s.ListTokens(ctx, DefaultWorkspace, "joao@acme.test")
+			mine, err := s.ListTokens(ctx, DefaultWorkspace, "principal-joao")
 			if err != nil || len(mine) != 2 {
 				t.Fatalf("list mine: %d %v", len(mine), err)
 			}
@@ -939,6 +949,9 @@ func TestMigrateBridgesLegacyRunner(t *testing.T) {
 	if err := p.Migrate(ctx, DefaultWorkspaceSpec{Name: "platform"}); err != nil {
 		t.Errorf("second migrate: %v", err)
 	}
+	if _, err := p.TouchIdentity(ctx, "acme", Identity{Email: "joao@acme.test", Issuer: "https://idp.test", Subject: "joao"}); err != nil {
+		t.Fatal(err)
+	}
 	// The store keeps working on uuid columns: ids in, ids out.
 	if _, _, err := p.PutTeam(ctx, "acme", Team{Name: "finance", Members: []string{"joao@acme.test"}}); err != nil {
 		t.Errorf("put team on uuid columns: %v", err)
@@ -1087,14 +1100,22 @@ func TestConsoleUsers(t *testing.T) {
 			if list, err := s.ListConsoleUsers(ctx); err != nil || len(list) != 0 {
 				t.Fatalf("fresh: %v %v", list, err)
 			}
-			u, err := s.AddConsoleUser(ctx, " Ana@Example.test ", "ops@example.test")
+			ana, err := s.TouchIdentity(ctx, DefaultWorkspace, Identity{Realm: RealmConsole, Email: "ana@example.test", Issuer: "https://idp.test", Subject: "ana"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bob, err := s.TouchIdentity(ctx, DefaultWorkspace, Identity{Realm: RealmConsole, Email: "bob@example.test", Issuer: "https://idp.test", Subject: "bob"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, err := s.AddConsoleUser(ctx, ana.ID, "ops@example.test")
 			if err != nil || u.Email != "ana@example.test" || u.AddedBy != "ops@example.test" || u.AddedAt.IsZero() {
 				t.Fatalf("add: %+v %v", u, err)
 			}
-			if again, err := s.AddConsoleUser(ctx, "ana@example.test", "someone else"); err != nil || again.AddedBy != "ops@example.test" {
+			if again, err := s.AddConsoleUser(ctx, ana.ID, "someone else"); err != nil || again.AddedBy != "ops@example.test" {
 				t.Fatalf("add again keeps the first: %+v %v", again, err)
 			}
-			if _, err := s.AddConsoleUser(ctx, "bob@example.test", ""); err != nil {
+			if _, err := s.AddConsoleUser(ctx, bob.ID, ""); err != nil {
 				t.Fatal(err)
 			}
 			if ok, err := s.IsConsoleUser(ctx, "ANA@example.test"); err != nil || !ok {
@@ -1150,6 +1171,9 @@ func TestConsoleUsersMigrationCopiesTheConsoleAdmins(t *testing.T) {
 		{DefaultWorkspace, "default-owner@example.test", WorkspaceRoleOwner},
 		{"acme", "customer@acme.test", WorkspaceRoleOwner},
 	} {
+		if _, err := p.TouchIdentity(ctx, m.ws, Identity{Email: m.email, Issuer: "https://idp.test", Subject: m.email}); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := p.PutMembership(ctx, m.ws, m.email, m.role); err != nil {
 			t.Fatal(err)
 		}
@@ -1161,11 +1185,18 @@ func TestConsoleUsersMigrationCopiesTheConsoleAdmins(t *testing.T) {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM console_users`); err != nil {
 		t.Fatal(err)
 	}
+	// Replay this historical migration against its own table shape.
+	if _, err := p.pool.Exec(ctx, "DROP TABLE console_users"); err != nil {
+		t.Fatal(err)
+	}
 	sql, err := migrationFiles.ReadFile("migrations/000021_console_users.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.pool.Exec(ctx, string(sql)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.pool.Exec(ctx, "ALTER TABLE console_users ADD COLUMN principal_id text NOT NULL DEFAULT ''"); err != nil {
 		t.Fatal(err)
 	}
 	list, err := p.ListConsoleUsers(ctx)

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Button, Code, Email, Facts, Fallback, Heading, Small, Strong, Text } from "./parts";
+import { Button, Email, InvitationEmail, Facts, Fallback, Heading, Small, Strong, Text } from "./parts";
 
 // The emails the platform sends. Each is drawn from its words: built, a
 // word is a Go template's mark ({{.Name}}), filled by pkg/emails; in the
@@ -30,6 +30,7 @@ function sentFrom(w: Words, why: ReactNode) {
 }
 
 const invitation = {
+  Logo: "/logo-full.png",
   Inviter: "Ana Ribeiro (ana@acme.com)",
   Workspace: "Acme",
   What: "as a developer, in team platform",
@@ -47,10 +48,9 @@ export const mails: Record<string, Mail> = {
     subject: "{{.Inviter}} invited you to {{.Workspace}}",
     sample: invitation,
     render: (w) => (
-      <Email
+      <InvitationEmail
         preview={`Join ${w.Workspace} on shpyrd ${w.What}.`}
         logo={w.Logo}
-        footer={sentFrom(w, <>You got this because {w.Inviter} invited {w.Email}.</>)}
       >
         <Heading>Join {w.Workspace} on shpyrd</Heading>
         <Text>
@@ -60,88 +60,7 @@ export const mails: Record<string, Mail> = {
         <Button href={w.Link}>Accept invitation</Button>
         <Fallback href={w.Link} />
         <Small>The invitation works until {w.Until}. If you were not expecting it, you can ignore this email.</Small>
-      </Email>
-    ),
-  },
-  "invite-password": {
-    title: "Invitation with a password",
-    group: "Platform",
-    about: "A person is invited to a workspace with password sign-in, and chooses one (pkg/api/invitations.go).",
-    subject: "{{.Inviter}} invited you to {{.Workspace}}",
-    sample: { ...invitation, SetLink: "https://acme.shpyrd.app/account/set-password?token=b81d40" },
-    render: (w) => (
-      <Email
-        preview={`Join ${w.Workspace} on shpyrd ${w.What}.`}
-        logo={w.Logo}
-        footer={sentFrom(w, <>You got this because {w.Inviter} invited {w.Email}.</>)}
-      >
-        <Heading>Join {w.Workspace} on shpyrd</Heading>
-        <Text>
-          <Strong>{w.Inviter}</Strong> invited you to join <Strong>{w.Workspace}</Strong> {w.What}.
-        </Text>
-        <Text>
-          Choose a password to get in. You will then sign in at <Strong>{w.Door}</Strong> as <Strong>{w.Email}</Strong>.
-        </Text>
-        <Button href={w.SetLink}>Choose a password</Button>
-        <Fallback href={w.SetLink} />
-        <Small>
-          This link works for 24 hours. Prefer another way?{" "}
-          <a href={w.Link} style={{ color: "inherit" }}>
-            Open the invitation
-          </a>{" "}
-          and sign in with a method {w.Workspace} offers; it works until {w.Until}. If you were not expecting it, you can ignore this email.
-        </Small>
-      </Email>
-    ),
-  },
-  reset: {
-    title: "Password reset",
-    group: "Platform",
-    about: "A person asks for a new password at the sign-in page (pkg/api/account.go).",
-    subject: "Reset your password",
-    sample: { Email: "joao@acme.com", Door: "acme.shpyrd.app", Link: "https://acme.shpyrd.app/account/reset?token=c90e11" },
-    render: (w) => (
-      <Email preview="Choose a new password. The link works for one hour." logo={w.Logo} footer={sentFrom(w, <>You got this because a new password was asked for {w.Email}.</>)}>
-        <Heading>Reset your password</Heading>
-        <Text>
-          Someone asked to reset the password of <Strong>{w.Email}</Strong> at {w.Door}. Choose a new one here:
-        </Text>
-        <Button href={w.Link}>Choose a new password</Button>
-        <Fallback href={w.Link} />
-        <Small>The link works for one hour. If you did not ask for it, you can ignore this email: your password stays as it is.</Small>
-      </Email>
-    ),
-  },
-  "password-changed": {
-    title: "Password changed",
-    group: "Platform",
-    about: "A person's password was changed, after a reset (pkg/api/account.go).",
-    subject: "Your password was changed",
-    sample: { Email: "joao@acme.com", Door: "acme.shpyrd.app", When: "Oct 3, 2026 at 14:32 UTC" },
-    render: (w) => (
-      <Email preview={`The password of ${w.Email} was changed.`} logo={w.Logo} footer={sentFrom(w, <>You got this because the password of {w.Email} changed.</>)}>
-        <Heading>Your password was changed</Heading>
-        <Text>
-          The password of <Strong>{w.Email}</Strong> at {w.Door} was changed on {w.When}, and every session was signed out.
-        </Text>
-        <Text style={{ margin: 0 }}>If it was you, there is nothing to do.</Text>
-        <Small>If it was not you, tell your workspace&apos;s administrator now: someone may have access to your email.</Small>
-      </Email>
-    ),
-  },
-  code: {
-    title: "Sign-up code",
-    group: "Cloud",
-    about: "A person signs up to shpyrd cloud and proves the address (shpyrd-cloud, pkg/cloud/signup.go).",
-    subject: "Your shpyrd code: {{.Code}}",
-    sample: { Code: "482913", Email: "joao@acme.com", Door: "shpyrd.io" },
-    render: (w) => (
-      <Email preview={`${w.Code} is your shpyrd code.`} logo={w.Logo} footer={sentFrom(w, <>You got this because {w.Email} was given to sign up to shpyrd.</>)}>
-        <Heading>Your sign-up code</Heading>
-        <Text>Type this code where you signed up to confirm your email:</Text>
-        <Code>{w.Code}</Code>
-        <Small>The code works for ten minutes. If you did not ask for it, you can ignore this email.</Small>
-      </Email>
+      </InvitationEmail>
     ),
   },
   notice: {

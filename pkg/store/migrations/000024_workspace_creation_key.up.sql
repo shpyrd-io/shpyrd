@@ -1,0 +1,1 @@
+ALTER TABLE workspaces ADD COLUMN creation_key TEXT NOT NULL DEFAULT '';

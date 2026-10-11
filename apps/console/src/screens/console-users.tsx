@@ -9,9 +9,9 @@ import { Button } from "@shpyrd/ui/components/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Field } from "@shpyrd/ui/components/field";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
-import { Input } from "@shpyrd/ui/components/input";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
@@ -27,7 +27,7 @@ export function ConsoleUsers() {
   const users = useQuery({ queryKey: ["console-users"], queryFn: api.consoleUsers });
   const refresh = () => queries.invalidateQueries({ queryKey: ["console-users"] });
   const remove = useMutation({
-    mutationFn: (u: ConsoleUser) => api.removeConsoleUser(u.email),
+    mutationFn: (u: ConsoleUser) => api.removeConsoleUser(u.principalId ?? u.email),
     onSuccess: (_, u) => {
       toast.success(`${u.email} may no longer open the console`);
       refresh();
@@ -39,7 +39,7 @@ export function ConsoleUsers() {
       <CardHeader>
         <CardTitle>Console users</CardTitle>
         <CardDescription>
-          Who may open this console. No workspace's roles reach it: being here is what lets someone in, with an email and password account or the console's sign-in methods. Also from the CLI: <InlineCode>shpyrd-ctl console-users add you@example.com</InlineCode>.
+          Who may open this console. No workspace's roles reach it: being here is what lets someone in, through the console's configured identity provider. Also from the CLI: <InlineCode>shpyrd-ctl console-users add PRINCIPAL_ID</InlineCode>.
         </CardDescription>
         <CardAction>
           <AddDialog onDone={refresh} />
@@ -118,13 +118,12 @@ export function accountWords(account: ConsoleUser["account"]): string {
 function AddDialog({ onDone }: { onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const principals = useQuery({queryKey:["console-principals"], queryFn:api.consolePrincipals});
   const reset = () => {
     setEmail("");
-    setPassword("");
   };
   const add = useMutation({
-    mutationFn: () => api.addConsoleUser({ email: email.trim(), password: password || undefined }),
+    mutationFn: () => api.addConsoleUser({ principalId: email }),
     onSuccess: (u) => {
       toast.success(`${u.email} may open the console`);
       setOpen(false);
@@ -133,7 +132,7 @@ function AddDialog({ onDone }: { onDone: () => void }) {
     },
     onError: (e: Error) => toast.error(e.message),
   });
-  const valid = /^\S+@\S+\.\S+$/.test(email.trim()) && (password === "" || password.length >= 8);
+  const valid = !!email;
   return (
     <Dialog
       open={open}
@@ -150,7 +149,7 @@ function AddDialog({ onDone }: { onDone: () => void }) {
       <DialogContent>
         <DialogHeader divider>
           <DialogTitle>Add someone to the console</DialogTitle>
-          <DialogDescription>They sign in with an account they already have, or with the password you give here, which makes one.</DialogDescription>
+          <DialogDescription>Select a person who has signed in through the console identity provider.</DialogDescription>
         </DialogHeader>
         <form
           className="grid gap-4"
@@ -159,11 +158,11 @@ function AddDialog({ onDone }: { onDone: () => void }) {
             if (valid) add.mutate();
           }}
         >
-          <Field label="Email">
-            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
-          </Field>
-          <Field label="Password" hint="Optional: only for someone without an account. At least 8 characters.">
-            <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <Field label="Person">
+            <Select name="principalId" value={email} onValueChange={setEmail}>
+              <SelectTrigger aria-label="Console user"><SelectValue placeholder="Select a person" /></SelectTrigger>
+              <SelectContent>{principals.data?.map((p)=><SelectItem key={p.id} value={p.id}>{p.name || p.email} — {p.provider}</SelectItem>)}</SelectContent>
+            </Select>
           </Field>
           <DialogFooter>
             <DialogClose asChild>

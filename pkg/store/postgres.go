@@ -254,12 +254,12 @@ func (p *Postgres) wsID(ctx context.Context, q interface {
 	return id, err
 }
 
-const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at, readiness, ready_at, owner_invite_pending`
+const workspaceColumns = `id, slug, name, address, status, owner, settings, created_at, updated_at, readiness, ready_at, owner_invite_pending, creation_fingerprint`
 
 func scanWorkspace(row pgx.Row) (*Workspace, error) {
 	var w Workspace
 	var settings, readiness []byte
-	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt, &readiness, &w.ReadyAt, &w.OwnerInvitePending)
+	err := row.Scan(&w.ID, &w.Slug, &w.Name, &w.Address, &w.Status, &w.Owner, &settings, &w.CreatedAt, &w.UpdatedAt, &readiness, &w.ReadyAt, &w.OwnerInvitePending, &w.CreationFingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -340,8 +340,8 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 		}
 	}
 	id := newID()
-	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings, owner) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		id, w.Slug, w.Name, address, status, settings, w.Owner); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO workspaces (id, slug, name, address, status, settings, owner, creation_fingerprint) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, w.Slug, w.Name, address, status, settings, w.Owner, w.CreationFingerprint); err != nil {
 		if isUnique(err) {
 			return nil, ErrConflict
 		}
@@ -350,6 +350,23 @@ func (p *Postgres) CreateWorkspace(ctx context.Context, w Workspace) (*Workspace
 	if _, err := tx.Exec(ctx, `INSERT INTO teams (id, workspace_id, name, description, kind) VALUES ($1, $2, $3, 'Everyone who has signed in', 'everyone')`,
 		newID(), id, TeamEveryone); err != nil {
 		return nil, err
+	}
+	if owner := w.InitialOwner; owner != nil {
+		if owner.Issuer == "" || owner.Subject == "" || owner.Email == "" {
+			return nil, errors.New("initial owner needs a verified identity")
+		}
+		principal := newID()
+		if _, err := tx.Exec(ctx, `INSERT INTO identities(id,workspace_id,realm,email,name,provider,issuer,subject,connector) VALUES($1,$2,'workspace',$3,$4,$5,$6,$7,$8)`, principal, id, normEmail(owner.Email), owner.Name, owner.Provider, owner.Issuer, owner.Subject, owner.Connector); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO memberships(id,workspace_id,email,role,principal_id) VALUES($1,$2,$3,'owner',$4)`, newID(), id, normEmail(owner.Email), principal); err != nil {
+			return nil, err
+		}
+	} else if email := normEmail(w.InitialOwnerEmail); email != "" {
+		// Console-created workspaces require an invitation or explicit principal mapping.
+		if _, err := tx.Exec(ctx, `UPDATE workspaces SET owner_invite_pending=$2 WHERE id=$1`, id, email); err != nil {
+			return nil, err
+		}
 	}
 	out, err := scanWorkspace(tx.QueryRow(ctx, `SELECT `+workspaceColumns+` FROM workspaces WHERE id = $1`, id))
 	if err != nil {
@@ -489,32 +506,34 @@ func (p *Postgres) TouchIdentity(ctx context.Context, ws string, id Identity) (*
 	if err != nil {
 		return nil, err
 	}
-	email := strings.ToLower(strings.TrimSpace(id.Email))
 	realm := id.Realm
 	if realm == "" {
 		realm = "workspace"
 	}
+	if (id.Subject == "") != (id.Issuer == "") {
+		return nil, errors.New("issuer and subject are required together")
+	}
 	groups, _ := json.Marshal(id.Groups)
 	if id.Groups == nil {
-		groups = nil // keep the stored value
+		groups = nil
+	}
+	conflict := "(workspace_id, realm, issuer, connector, subject) WHERE subject <> ''"
+	if id.Subject == "" {
+		conflict = "(workspace_id, realm, email) WHERE subject = ''"
 	}
 	var out Identity
-	var groupsRaw []byte
-	err = p.pool.QueryRow(ctx, `
-		INSERT INTO identities (id, workspace_id, realm, email, name, provider, groups)
-		VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '[]'::jsonb))
-		ON CONFLICT (workspace_id, realm, email) DO UPDATE SET
-			name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE identities.name END,
-			provider = CASE WHEN EXCLUDED.provider <> '' THEN EXCLUDED.provider ELSE identities.provider END,
-			groups = COALESCE($7::jsonb, identities.groups),
-			last_seen_at = now()
-		RETURNING id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at`,
-		newID(), wsID, realm, email, id.Name, id.Provider, groups).
-		Scan(&out.ID, &out.WorkspaceID, &out.Realm, &out.Email, &out.Name, &out.Provider, &groupsRaw, &out.Status, &out.FirstSeenAt, &out.LastSeenAt)
+	var raw []byte
+	err = p.pool.QueryRow(ctx, `INSERT INTO identities (id, workspace_id, realm, email, name, provider, groups, issuer, subject, connector)
+ VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::jsonb,'[]'::jsonb),$8,$9,$10)
+ ON CONFLICT `+conflict+` DO UPDATE SET email = EXCLUDED.email,
+ name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE identities.name END, provider = CASE WHEN EXCLUDED.provider <> '' THEN EXCLUDED.provider ELSE identities.provider END, groups = COALESCE($7::jsonb,identities.groups), last_seen_at = now()
+ RETURNING id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at, issuer, subject, connector`,
+		firstID(id.ID), wsID, realm, normEmail(id.Email), id.Name, id.Provider, groups, id.Issuer, id.Subject, id.Connector).
+		Scan(&out.ID, &out.WorkspaceID, &out.Realm, &out.Email, &out.Name, &out.Provider, &raw, &out.Status, &out.FirstSeenAt, &out.LastSeenAt, &out.Issuer, &out.Subject, &out.Connector)
 	if err != nil {
 		return nil, err
 	}
-	_ = json.Unmarshal(groupsRaw, &out.Groups)
+	_ = json.Unmarshal(raw, &out.Groups)
 	return &out, nil
 }
 
@@ -523,7 +542,7 @@ func (p *Postgres) ListIdentities(ctx context.Context, ws string) ([]Identity, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := p.pool.Query(ctx, `SELECT id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at FROM identities WHERE workspace_id = $1 ORDER BY email`, wsID)
+	rows, err := p.pool.Query(ctx, `SELECT id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at, issuer, subject, connector FROM identities WHERE workspace_id = $1 ORDER BY email`, wsID)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +551,7 @@ func (p *Postgres) ListIdentities(ctx context.Context, ws string) ([]Identity, e
 	for rows.Next() {
 		var it Identity
 		var groupsRaw []byte
-		if err := rows.Scan(&it.ID, &it.WorkspaceID, &it.Realm, &it.Email, &it.Name, &it.Provider, &groupsRaw, &it.Status, &it.FirstSeenAt, &it.LastSeenAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.WorkspaceID, &it.Realm, &it.Email, &it.Name, &it.Provider, &groupsRaw, &it.Status, &it.FirstSeenAt, &it.LastSeenAt, &it.Issuer, &it.Subject, &it.Connector); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(groupsRaw, &it.Groups)
@@ -541,35 +560,29 @@ func (p *Postgres) ListIdentities(ctx context.Context, ws string) ([]Identity, e
 	return out, rows.Err()
 }
 
-func (p *Postgres) GetIdentity(ctx context.Context, ws, email string) (*Identity, error) {
-	wsID, err := p.wsID(ctx, p.pool, ws)
+func (p *Postgres) GetIdentity(ctx context.Context, ws, key string) (*Identity, error) {
+	people, err := p.ListIdentities(ctx, ws)
 	if err != nil {
 		return nil, err
 	}
-	var it Identity
-	var groupsRaw []byte
-	err = p.pool.QueryRow(ctx, `SELECT id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at FROM identities WHERE workspace_id = $1 AND lower(email) = lower($2)`, wsID, email).
-		Scan(&it.ID, &it.WorkspaceID, &it.Realm, &it.Email, &it.Name, &it.Provider, &groupsRaw, &it.Status, &it.FirstSeenAt, &it.LastSeenAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	_ = json.Unmarshal(groupsRaw, &it.Groups)
-	return &it, nil
+	return selectIdentity(people, key)
 }
 
 func (p *Postgres) SetIdentityStatus(ctx context.Context, ws, email, status string) (*Identity, error) {
+	person, err := p.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return nil, err
+	}
+	email = person.ID
 	wsID, err := p.wsID(ctx, p.pool, ws)
 	if err != nil {
 		return nil, err
 	}
 	var out Identity
 	var groupsRaw []byte
-	err = p.pool.QueryRow(ctx, `UPDATE identities SET status = $3 WHERE workspace_id = $1 AND email = $2
-		RETURNING id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at`, wsID, strings.ToLower(email), status).
-		Scan(&out.ID, &out.WorkspaceID, &out.Realm, &out.Email, &out.Name, &out.Provider, &groupsRaw, &out.Status, &out.FirstSeenAt, &out.LastSeenAt)
+	err = p.pool.QueryRow(ctx, `UPDATE identities SET status = $3 WHERE workspace_id = $1 AND id::text = $2
+		RETURNING id, workspace_id, realm, email, name, provider, groups, status, first_seen_at, last_seen_at, issuer, subject, connector`, wsID, strings.ToLower(email), status).
+		Scan(&out.ID, &out.WorkspaceID, &out.Realm, &out.Email, &out.Name, &out.Provider, &groupsRaw, &out.Status, &out.FirstSeenAt, &out.LastSeenAt, &out.Issuer, &out.Subject, &out.Connector)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -581,11 +594,16 @@ func (p *Postgres) SetIdentityStatus(ctx context.Context, ws, email, status stri
 }
 
 func (p *Postgres) DeleteIdentity(ctx context.Context, ws, email string) error {
+	person, err := p.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return err
+	}
+	email = person.ID
 	wsID, err := p.wsID(ctx, p.pool, ws)
 	if err != nil {
 		return err
 	}
-	tag, err := p.pool.Exec(ctx, `DELETE FROM identities WHERE workspace_id = $1 AND email = $2`, wsID, strings.ToLower(email))
+	tag, err := p.pool.Exec(ctx, `UPDATE identities SET status = 'suspended' WHERE workspace_id = $1 AND id::text = $2`, wsID, strings.ToLower(email))
 	if err != nil {
 		return err
 	}
@@ -595,18 +613,19 @@ func (p *Postgres) DeleteIdentity(ctx context.Context, ws, email string) error {
 	return nil
 }
 
-const teamColumns = `t.id, t.workspace_id, t.name, t.description, t.members, t.groups, t.platform_role, t.kind, t.created_at, t.updated_at`
+const teamColumns = `t.id, t.workspace_id, t.name, t.description, t.members, t.groups, t.platform_role, t.kind, t.created_at, t.updated_at, t.principal_ids`
 
 func scanTeam(row pgx.Row) (*Team, error) {
 	var t Team
-	var members, groups []byte
+	var members, groups, principals []byte
 	var kind string
-	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.Description, &members, &groups, &t.PlatformRole, &kind, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.Description, &members, &groups, &t.PlatformRole, &kind, &t.CreatedAt, &t.UpdatedAt, &principals); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
+	_ = json.Unmarshal(principals, &t.PrincipalIDs)
 	_ = json.Unmarshal(members, &t.Members)
 	_ = json.Unmarshal(groups, &t.Groups)
 	if t.Members == nil {
@@ -656,23 +675,30 @@ func (p *Postgres) PutTeam(ctx context.Context, ws string, t Team) (*Team, bool,
 	if t.Name == TeamEveryone {
 		return nil, false, ErrBuiltIn
 	}
+	resolved, err := resolveTeam(ctx, p, ws, t)
+	if err != nil {
+		return nil, false, err
+	}
+	t = resolved
+	principals, _ := json.Marshal(t.PrincipalIDs)
 	members, _ := json.Marshal(normalizeEmails(t.Members))
 	groups, _ := json.Marshal(dedupe(t.Groups))
 	var inserted bool
 	row := p.pool.QueryRow(ctx, `
-		INSERT INTO teams (id, workspace_id, name, description, members, groups, platform_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO teams (id, workspace_id, name, description, members, groups, platform_role, principal_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (workspace_id, name) DO UPDATE SET
 			description = EXCLUDED.description, members = EXCLUDED.members, groups = EXCLUDED.groups,
-			platform_role = EXCLUDED.platform_role, updated_at = now()
+			principal_ids = EXCLUDED.principal_ids, platform_role = EXCLUDED.platform_role, updated_at = now()
 		RETURNING `+strings.ReplaceAll(teamColumns, "t.", "")+`, (xmax = 0) AS inserted`,
-		newID(), wsID, t.Name, t.Description, members, groups, t.PlatformRole)
+		newID(), wsID, t.Name, t.Description, members, groups, t.PlatformRole, principals)
 	var out Team
-	var m, g []byte
+	var m, g, ids []byte
 	var kind string
-	if err := row.Scan(&out.ID, &out.WorkspaceID, &out.Name, &out.Description, &m, &g, &out.PlatformRole, &kind, &out.CreatedAt, &out.UpdatedAt, &inserted); err != nil {
+	if err := row.Scan(&out.ID, &out.WorkspaceID, &out.Name, &out.Description, &m, &g, &out.PlatformRole, &kind, &out.CreatedAt, &out.UpdatedAt, &ids, &inserted); err != nil {
 		return nil, false, err
 	}
+	_ = json.Unmarshal(ids, &out.PrincipalIDs)
 	_ = json.Unmarshal(m, &out.Members)
 	_ = json.Unmarshal(g, &out.Groups)
 	return &out, inserted, nil
@@ -697,7 +723,7 @@ func (p *Postgres) DeleteTeam(ctx context.Context, ws, name string) error {
 	return nil
 }
 
-const grantSelect = `SELECT g.id, g.workspace_id, g.project, g.role, g.user_email, COALESCE(t.name, ''), g.created_at
+const grantSelect = `SELECT g.id, g.workspace_id, g.project, g.role, g.user_email, COALESCE(t.name, ''), g.created_at, g.principal_id
 	FROM grants g LEFT JOIN teams t ON t.id = g.team_id`
 
 func (p *Postgres) listGrants(ctx context.Context, where string, args ...any) ([]Grant, error) {
@@ -709,7 +735,7 @@ func (p *Postgres) listGrants(ctx context.Context, where string, args ...any) ([
 	var out []Grant
 	for rows.Next() {
 		var g Grant
-		if err := rows.Scan(&g.ID, &g.WorkspaceID, &g.Project, &g.Role, &g.User, &g.Team, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.WorkspaceID, &g.Project, &g.Role, &g.User, &g.Team, &g.CreatedAt, &g.PrincipalID); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -738,6 +764,16 @@ func (p *Postgres) AddGrant(ctx context.Context, ws string, g Grant) (*Grant, er
 	if err != nil {
 		return nil, err
 	}
+	if g.User != "" {
+		person, err := p.GetIdentity(ctx, ws, firstKey(g.PrincipalID, g.User))
+		if err != nil {
+			return nil, err
+		}
+		if person.Realm != RealmWorkspace {
+			return nil, ErrNotFound
+		}
+		g.PrincipalID, g.User = person.ID, person.Email
+	}
 	var teamID *string
 	if g.Team != "" {
 		var id string
@@ -751,8 +787,8 @@ func (p *Postgres) AddGrant(ctx context.Context, ws string, g Grant) (*Grant, er
 		teamID = &id
 	}
 	id := newID()
-	_, err = p.pool.Exec(ctx, `INSERT INTO grants (id, workspace_id, project, role, user_email, team_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, wsID, g.Project, g.Role, strings.ToLower(strings.TrimSpace(g.User)), teamID)
+	_, err = p.pool.Exec(ctx, `INSERT INTO grants (id, workspace_id, project, role, user_email, team_id, principal_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, wsID, g.Project, g.Role, strings.ToLower(strings.TrimSpace(g.User)), teamID, g.PrincipalID)
 	if err != nil {
 		if isUnique(err) {
 			return nil, ErrConflict
@@ -965,10 +1001,10 @@ func (p *Postgres) CreateToken(ctx context.Context, ws string, t APIToken, hash 
 	if kind == "" {
 		kind = TokenKindToken
 	}
-	row := p.pool.QueryRow(ctx, `INSERT INTO api_tokens (id, workspace_id, name, owner_email, hash, platform_role, project_roles, expires_at, kind)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind`,
-		newID(), wsID, t.Name, strings.ToLower(t.OwnerEmail), hash, t.PlatformRole, roles, t.ExpiresAt, kind)
+	row := p.pool.QueryRow(ctx, `INSERT INTO api_tokens (id, workspace_id, name, owner_email, hash, platform_role, project_roles, expires_at, kind, principal_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind, principal_id`,
+		newID(), wsID, t.Name, strings.ToLower(t.OwnerEmail), hash, t.PlatformRole, roles, t.ExpiresAt, kind, t.PrincipalID)
 	out, err := scanToken(row)
 	if isUnique(err) {
 		return nil, ErrConflict
@@ -979,7 +1015,7 @@ func (p *Postgres) CreateToken(ctx context.Context, ws string, t APIToken, hash 
 func scanToken(row pgx.Row) (*APIToken, error) {
 	var t APIToken
 	var roles []byte
-	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.OwnerEmail, &t.PlatformRole, &roles, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &t.Kind); err != nil {
+	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.OwnerEmail, &t.PlatformRole, &roles, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &t.Kind, &t.PrincipalID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -993,7 +1029,7 @@ func scanToken(row pgx.Row) (*APIToken, error) {
 }
 
 func (p *Postgres) LookupToken(ctx context.Context, hash string) (*APIToken, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind
+	row := p.pool.QueryRow(ctx, `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind, principal_id
 		FROM api_tokens WHERE hash = $1 AND (expires_at IS NULL OR expires_at > now())`, hash)
 	t, err := scanToken(row)
 	if err != nil || t == nil {
@@ -1013,10 +1049,10 @@ func (p *Postgres) ListTokens(ctx context.Context, ws, ownerEmail string) ([]API
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind FROM api_tokens WHERE workspace_id = $1`
+	q := `SELECT id, workspace_id, name, owner_email, platform_role, project_roles, created_at, expires_at, last_used_at, kind, principal_id FROM api_tokens WHERE workspace_id = $1`
 	args := []any{wsID}
 	if ownerEmail != "" {
-		q += ` AND lower(owner_email) = lower($2)`
+		q += ` AND principal_id = $2`
 		args = append(args, ownerEmail)
 	}
 	q += ` ORDER BY name`
@@ -1055,11 +1091,11 @@ func (p *Postgres) DeleteToken(ctx context.Context, ws, id string) error {
 
 // ---- workspace roles and invitations (RFC-0033) ------------------------------
 
-const membershipColumns = `id, workspace_id, email, role, created_at, updated_at`
+const membershipColumns = `id, workspace_id, email, role, created_at, updated_at, principal_id`
 
 func scanMembership(row pgx.Row) (*Membership, error) {
 	var mb Membership
-	if err := row.Scan(&mb.ID, &mb.WorkspaceID, &mb.Email, &mb.Role, &mb.CreatedAt, &mb.UpdatedAt); err != nil {
+	if err := row.Scan(&mb.ID, &mb.WorkspaceID, &mb.Email, &mb.Role, &mb.CreatedAt, &mb.UpdatedAt, &mb.PrincipalID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -1089,30 +1125,33 @@ func (p *Postgres) ListMemberships(ctx context.Context, ws string) ([]Membership
 	return out, rows.Err()
 }
 
-func (p *Postgres) PutMembership(ctx context.Context, ws, email, role string) (*Membership, error) {
+func (p *Postgres) PutMembership(ctx context.Context, ws, key, role string) (*Membership, error) {
 	if !ValidWorkspaceRole(role) {
-		return nil, fmt.Errorf("role %q is not a workspace role", role)
+		return nil, errors.New("invalid workspace role")
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return nil, errors.New("email is required")
-	}
-	wsID, err := p.wsID(ctx, p.pool, ws)
+	person, err := p.GetIdentity(ctx, ws, key)
 	if err != nil {
 		return nil, err
 	}
-	return scanMembership(p.pool.QueryRow(ctx, `INSERT INTO memberships (id, workspace_id, email, role) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (workspace_id, email) DO UPDATE SET role = EXCLUDED.role,
-			updated_at = CASE WHEN memberships.role <> EXCLUDED.role THEN now() ELSE memberships.updated_at END
-		RETURNING `+membershipColumns, newID(), wsID, email, role))
+	if person.Realm != RealmWorkspace {
+		return nil, ErrNotFound
+	}
+	return scanMembership(p.pool.QueryRow(ctx, `INSERT INTO memberships (id,workspace_id,email,role,principal_id) VALUES ($1,$2,$3,$4,$5)
+ ON CONFLICT (workspace_id,principal_id) WHERE principal_id <> '' DO UPDATE SET role=EXCLUDED.role,email=EXCLUDED.email,updated_at=now()
+ RETURNING `+membershipColumns, newID(), person.WorkspaceID, person.Email, role, person.ID))
 }
 
 func (p *Postgres) DeleteMembership(ctx context.Context, ws, email string) error {
+	person, err := p.GetIdentity(ctx, ws, email)
+	if err != nil {
+		return err
+	}
+	email = person.ID
 	wsID, err := p.wsID(ctx, p.pool, ws)
 	if err != nil {
 		return err
 	}
-	tag, err := p.pool.Exec(ctx, `DELETE FROM memberships WHERE workspace_id = $1 AND email = $2`, wsID, strings.ToLower(strings.TrimSpace(email)))
+	tag, err := p.pool.Exec(ctx, `DELETE FROM memberships WHERE workspace_id = $1 AND principal_id = $2`, wsID, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		return err
 	}
@@ -1459,12 +1498,12 @@ func (p *Postgres) TakeOAuthCode(ctx context.Context, hash string) (*OAuthCode, 
 	return &c, nil
 }
 
-const otokenSelect = `SELECT t.id, t.workspace_id, t.client_id, COALESCE(c.name, ''), t.email, t.scope, t.hash, t.created_at, t.expires_at, t.last_used_at
+const otokenSelect = `SELECT t.id, t.workspace_id, t.client_id, COALESCE(c.name, ''), t.email, t.scope, t.hash, t.created_at, t.expires_at, t.last_used_at, t.subject
 	FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id`
 
 func scanOAuthToken(row pgx.Row) (*OAuthToken, error) {
 	var t OAuthToken
-	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.ClientID, &t.ClientName, &t.Email, &t.Scope, &t.Hash, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.WorkspaceID, &t.ClientID, &t.ClientName, &t.Email, &t.Scope, &t.Hash, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &t.Subject); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -1482,8 +1521,8 @@ func (p *Postgres) CreateOAuthToken(ctx context.Context, ws string, t OAuthToken
 		return nil, err
 	}
 	id := newID()
-	if _, err := p.pool.Exec(ctx, `INSERT INTO oauth_tokens (id, workspace_id, client_id, email, scope, hash, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		id, wsID, t.ClientID, strings.ToLower(t.Email), t.Scope, t.Hash, t.ExpiresAt); err != nil {
+	if _, err := p.pool.Exec(ctx, `INSERT INTO oauth_tokens (id, workspace_id, client_id, email, scope, hash, expires_at, subject) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, wsID, t.ClientID, strings.ToLower(t.Email), t.Scope, t.Hash, t.ExpiresAt, t.Subject); err != nil {
 		return nil, err
 	}
 	return scanOAuthToken(p.pool.QueryRow(ctx, otokenSelect+` WHERE t.id = $1`, id))
@@ -1511,7 +1550,7 @@ func (p *Postgres) ListOAuthTokens(ctx context.Context, ws, email string) ([]OAu
 	}
 	q, args := otokenSelect+` WHERE t.workspace_id = $1`, []any{wsID}
 	if email != "" {
-		q += ` AND t.email = $2`
+		q += ` AND t.subject = $2`
 		args = append(args, strings.ToLower(email))
 	}
 	rows, err := p.pool.Query(ctx, q+` ORDER BY t.created_at`, args...)
@@ -1955,7 +1994,7 @@ func (p *Postgres) SetSetting(ctx context.Context, key, value string) error {
 // ---- console users -------------------------------------------------------------
 
 func (p *Postgres) ListConsoleUsers(ctx context.Context) ([]ConsoleUser, error) {
-	rows, err := p.pool.Query(ctx, `SELECT email, added_at, added_by FROM console_users ORDER BY email`)
+	rows, err := p.pool.Query(ctx, `SELECT email, added_at, added_by, principal_id FROM console_users ORDER BY email`)
 	if err != nil {
 		return nil, err
 	}
@@ -1963,7 +2002,7 @@ func (p *Postgres) ListConsoleUsers(ctx context.Context) ([]ConsoleUser, error) 
 	out := []ConsoleUser{}
 	for rows.Next() {
 		var u ConsoleUser
-		if err := rows.Scan(&u.Email, &u.AddedAt, &u.AddedBy); err != nil {
+		if err := rows.Scan(&u.Email, &u.AddedAt, &u.AddedBy, &u.PrincipalID); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -1972,20 +2011,50 @@ func (p *Postgres) ListConsoleUsers(ctx context.Context) ([]ConsoleUser, error) 
 }
 
 func (p *Postgres) AddConsoleUser(ctx context.Context, email, by string) (*ConsoleUser, error) {
-	email = normEmail(email)
+	var principal, contact string
+	err := p.pool.QueryRow(ctx, `SELECT id::text,email FROM identities WHERE realm='console' AND id::text=$1`, email).Scan(&principal, &contact)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	email = contact
 	if email == "" {
 		return nil, errors.New("a console user needs an email")
 	}
-	if _, err := p.pool.Exec(ctx, `INSERT INTO console_users (email, added_by) VALUES ($1,$2) ON CONFLICT (email) DO NOTHING`, email, by); err != nil {
+	if _, err := p.pool.Exec(ctx, `INSERT INTO console_users (email, added_by, principal_id) VALUES ($1,$2,$3) ON CONFLICT (principal_id) WHERE principal_id <> '' DO UPDATE SET email=EXCLUDED.email`, email, by, principal); err != nil {
 		return nil, err
 	}
 	var u ConsoleUser
-	err := p.pool.QueryRow(ctx, `SELECT email, added_at, added_by FROM console_users WHERE email = $1`, email).Scan(&u.Email, &u.AddedAt, &u.AddedBy)
+	err = p.pool.QueryRow(ctx, `SELECT email, added_at, added_by, principal_id FROM console_users WHERE principal_id = $1`, principal).Scan(&u.Email, &u.AddedAt, &u.AddedBy, &u.PrincipalID)
 	return &u, err
 }
 
 func (p *Postgres) RemoveConsoleUser(ctx context.Context, email string) error {
-	tag, err := p.pool.Exec(ctx, `DELETE FROM console_users WHERE email = $1`, normEmail(email))
+	list, err := p.ListConsoleUsers(ctx)
+	if err != nil {
+		return err
+	}
+	key := ""
+	for _, u := range list {
+		if u.PrincipalID == email {
+			key = u.PrincipalID
+			break
+		}
+	}
+	if key == "" {
+		for _, u := range list {
+			if strings.EqualFold(u.Email, email) {
+				if key != "" {
+					return ErrConflict
+				}
+				key = firstKey(u.PrincipalID, u.Email)
+			}
+		}
+	}
+	if key == "" {
+		return ErrNotFound
+	}
+
+	tag, err := p.pool.Exec(ctx, `DELETE FROM console_users WHERE principal_id = $1 OR (principal_id = '' AND email = $1)`, key)
 	if err != nil {
 		return err
 	}

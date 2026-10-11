@@ -36,7 +36,7 @@ import (
 func newTenantServer(t *testing.T) (*Server, client.Client, store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	st := store.NewMemory()
+	st := principalFixtureStore()
 	// The operator's default workspace answers at the platform domain
 	// (RFC-0080, open-source layout); the console at shpyrd.example.test.
 	if _, err := st.UpdateWorkspaceAddress(ctx, store.DefaultWorkspace, "example.test"); err != nil {
@@ -246,9 +246,9 @@ func TestTenancyIsolation(t *testing.T) {
 	s.authz.Invalidate()
 	// Maria's console session (RFC-0080); a workspace session of hers at the
 	// default workspace's own host; Ana's at acme.
-	mariaSID, _ := s.rp.sessions.create(ctx, store.RealmConsole, "", ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
-	mariaWS, _ := s.rp.sessions.create(ctx, store.RealmWorkspace, store.DefaultWorkspace, ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
-	anaSID, _ := s.rp.sessions.create(ctx, store.RealmWorkspace, "acme", ext.Identity{Email: "ana@acme.test", Provider: "local"}, "")
+	mariaSID, _ := principalFixtureSession(s, ctx, store.RealmConsole, "", ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
+	mariaWS, _ := principalFixtureSession(s, ctx, store.RealmWorkspace, store.DefaultWorkspace, ext.Identity{Email: "maria@example.test", Provider: "local"}, "")
+	anaSID, _ := principalFixtureSession(s, ctx, store.RealmWorkspace, "acme", ext.Identity{Email: "ana@acme.test", Provider: "local"}, "")
 
 	me := func(host, sid string) (int, string) {
 		req := httptest.NewRequest("GET", "https://"+host+"/api/me", nil)
@@ -354,7 +354,7 @@ func TestPerHostSignIn(t *testing.T) {
 		return rec
 	}
 	signInAt := func(host, provider string) (*httptest.ResponseRecorder, string) {
-		rec := get(host, "/api/auth/login?provider="+provider+"&next=/projects")
+		rec := get(host, "/api/auth/login/"+provider+"?next=/projects")
 		authURL, _ := url.Parse(rec.Header().Get("Location"))
 		if rec.Code != http.StatusFound || !strings.HasPrefix(authURL.String(), issuer.srv.URL+"/auth?") {
 			t.Fatalf("%s login -> %d %s %s", host, rec.Code, rec.Header().Get("Location"), rec.Body.String())
@@ -377,6 +377,9 @@ func TestPerHostSignIn(t *testing.T) {
 	}
 
 	// 1. At acme: the platform default is offered, the console's is not.
+	if rec := get("acme.shpyrd.test", "/api/auth/login/console-test?provider=test"); rec.Code != http.StatusBadRequest {
+		t.Errorf("launcher must enforce path provider scope = %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := get("acme.shpyrd.test", "/api/auth/login?provider=console-test"); rec.Code != http.StatusBadRequest {
 		t.Errorf("console method at acme = %d %s", rec.Code, rec.Body.String())
 	}
@@ -422,6 +425,13 @@ func TestPerHostSignIn(t *testing.T) {
 	if rec.Code != http.StatusFound || osid == "" {
 		t.Fatalf("platform callback -> %d %s", rec.Code, rec.Body.String())
 	}
+	if code, body := me("platform.shpyrd.test", osid); code != 200 || strings.Contains(body, `"workspace":"owner"`) {
+		t.Fatalf("workspace login acquired console bootstrap: %d %s", code, body)
+	}
+	if rec, sid := signInAt("shpyrd.example.test", "console-test"); rec.Code != http.StatusFound || sid == "" {
+		t.Fatal("console authentication failed")
+	}
+	s.authz.Invalidate()
 	if code, body := me("platform.shpyrd.test", osid); code != 200 || !strings.Contains(body, `"workspace":"owner"`) || !strings.Contains(body, `"enforced":false`) || !strings.Contains(body, `"console":true`) {
 		t.Errorf("first person at the operator's workspace on a fresh cluster = %d %s (bootstrap owner)", code, body)
 	}
@@ -700,6 +710,14 @@ func TestPerWorkspaceLoginMethods(t *testing.T) {
 	}
 	if got := providers("acme.shpyrd.test"); strings.Join(got, ",") != "ws-acme-okta" {
 		t.Errorf("acme with own methods only: %v", got)
+	}
+	for _, blocked := range []string{"github", "console-google", "ws-closed-google"} {
+		if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login/"+blocked, ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("disallowed launcher %s at acme: %d", blocked, rec.Code)
+		}
+	}
+	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login/ws-acme-okta", ""); rec.Code != http.StatusFound {
+		t.Errorf("corporate launcher with central login disabled: %d", rec.Code)
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "GET", "/api/auth/login?provider=github", ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("hidden platform method at acme: %d", rec.Code)

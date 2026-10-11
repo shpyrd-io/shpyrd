@@ -2,17 +2,11 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
-	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -85,6 +79,11 @@ type oidcProvider struct {
 
 // idTokenClaims are the claims the dashboard reads from an id_token.
 type idTokenClaims struct {
+	EmailVerified   bool `json:"email_verified"`
+	FederatedClaims struct {
+		ConnectorID string `json:"connector_id"`
+		UserID      string `json:"user_id"`
+	} `json:"federated_claims"`
 	Email             string   `json:"email"`
 	Name              string   `json:"name"`
 	PreferredUsername string   `json:"preferred_username"`
@@ -150,6 +149,9 @@ func (rp *relyingParty) AddOIDC(ctx context.Context, p ext.OIDCProvider) error {
 		return fmt.Errorf("discover %s: %w", p.Issuer, err)
 	}
 	scopes := append([]string{oidc.ScopeOpenID, "email", "profile"}, p.Scopes...)
+	if p.ConnectorID != "" {
+		scopes = append(scopes, "federated:id")
+	}
 	var discovery struct {
 		EndSessionEndpoint string `json:"end_session_endpoint"`
 	}
@@ -257,69 +259,6 @@ func (rp *relyingParty) provider(id string) *oidcProvider {
 	return rp.providers[id]
 }
 
-// errBadCredentials is the password grant's "wrong email or password".
-var errBadCredentials = errors.New("wrong email or password")
-
-// lockoutThreshold is the number of failed password attempts before the
-// account is locked for lockoutDuration (RFC-0014).
-const (
-	lockoutThreshold = 10
-	lockoutWindow    = 15 * time.Minute
-	lockoutDuration  = 15 * time.Minute
-)
-
-// password signs a user in with the OAuth2 password grant (RFC-0012): the
-// credentials go to the issuer's token endpoint server to server, and the
-// id_token that comes back is verified like the code flow's. The request is
-// built by hand because oauth2.Config cannot carry the nonce Dex accepts.
-func (rp *relyingParty) password(ctx context.Context, email, password string) (ext.Identity, string, error) {
-	p := rp.passwordProvider()
-	if p == nil {
-		return ext.Identity{}, "", errors.New("password sign-in is not enabled")
-	}
-	nonce, err := randomToken(24)
-	if err != nil {
-		return ext.Identity{}, "", err
-	}
-	form := url.Values{
-		"grant_type": {"password"}, "username": {email}, "password": {password},
-		"scope": {strings.Join(p.oauth.Scopes, " ")}, "nonce": {nonce},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.oauth.Endpoint.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return ext.Identity{}, "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(url.QueryEscape(p.ClientID), url.QueryEscape(p.ClientSecret))
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return ext.Identity{}, "", fmt.Errorf("token endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var tok struct {
-		IDToken          string `json:"id_token"`
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
-	}
-	_ = json.Unmarshal(body, &tok)
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || tok.Error == "access_denied" || tok.Error == "invalid_grant":
-		return ext.Identity{}, "", errBadCredentials
-	case resp.StatusCode/100 != 2:
-		return ext.Identity{}, "", fmt.Errorf("token endpoint: %s (%s)", resp.Status, firstNonEmpty(tok.ErrorDescription, tok.Error))
-	case tok.IDToken == "":
-		return ext.Identity{}, "", errors.New("issuer returned no id_token")
-	}
-	id, err := rp.identity(ctx, p, tok.IDToken, nonce)
-	if err != nil {
-		return ext.Identity{}, "", err
-	}
-	return id, tok.IDToken, nil
-}
-
-// identity verifies a raw id_token from provider p and reads the user out
-// of it; wantNonce must match the token's nonce.
 func (rp *relyingParty) identity(ctx context.Context, p *oidcProvider, raw, wantNonce string) (ext.Identity, error) {
 	idt, err := p.verifier.Verify(oidc.ClientContext(ctx, p.client), raw)
 	if err != nil {
@@ -332,7 +271,19 @@ func (rp *relyingParty) identity(ctx context.Context, p *oidcProvider, raw, want
 	if err := idt.Claims(&claims); err != nil {
 		return ext.Identity{}, fmt.Errorf("read claims: %w", err)
 	}
+	if p.ConnectorID != "" && (claims.FederatedClaims.ConnectorID != p.ConnectorID || claims.FederatedClaims.UserID == "") {
+		return ext.Identity{}, errors.New("id_token does not identify the requested connector")
+	}
+	issuer, subject := idt.Issuer, idt.Subject
+	if p.ConnectorID != "" {
+		subject = claims.FederatedClaims.UserID
+		if p.UpstreamIssuer != "" {
+			issuer = p.UpstreamIssuer
+		}
+	}
 	return ext.Identity{
+		Issuer: issuer, ExternalSubject: subject, EmailVerified: claims.EmailVerified,
+		FederatedConnector: claims.FederatedClaims.ConnectorID, FederatedSubject: claims.FederatedClaims.UserID,
 		Subject: idt.Subject, Email: strings.ToLower(claims.Email), Name: firstNonEmpty(claims.Name, claims.PreferredUsername, claims.Email),
 		Groups: claims.Groups, Provider: p.ID, Admin: true,
 	}, nil
@@ -469,13 +420,6 @@ func (s *Server) authConfig() AuthConfig {
 	return cfg
 }
 
-// PasswordLoginRequest is the email/password form (RFC-0012).
-type PasswordLoginRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Next     string `json:"next"`
-}
-
 // tokenLoginRequest is POST /api/auth/token.
 type tokenLoginRequest struct {
 	Token string `json:"token" binding:"required"`
@@ -520,71 +464,6 @@ func (s *Server) authToken(c *gin.Context) {
 // password grant and opens a session. Wrong credentials are 401 with a
 // message the page shows in place; failures per account are throttled and
 // every attempt is audited by email.
-func (s *Server) authPassword(c *gin.Context) {
-	var req PasswordLoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		abort(c, http.StatusBadRequest, errors.New("email and password are required"))
-		return
-	}
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if s.rp == nil || s.rp.passwordProvider() == nil {
-		abort(c, http.StatusNotFound, errors.New("password sign-in is not enabled"))
-		return
-	}
-	// The password grant needs no browser round trip, so it works at any
-	// door directly, when that door offers it (RFC-0080).
-	if !s.offersAt(c, s.rp.passwordProvider().ID) {
-		abort(c, http.StatusNotFound, errors.New("password sign-in is not offered here"))
-		return
-	}
-	// RFC-0014 lockout: check durable lock first, then in-memory rate limit.
-	if s.localAccounts != nil {
-		if locked, _ := s.localAccounts.IsLocked(c.Request.Context(), email); locked {
-			c.Header("Retry-After", "900")
-			abort(c, http.StatusTooManyRequests, errors.New("account is locked due to repeated failed attempts; try again in 15 minutes or use 'Forgot password'"))
-			return
-		}
-	}
-	if s.passwordFailures.exhausted(email) {
-		c.Header("Retry-After", "60")
-		abort(c, http.StatusTooManyRequests, errors.New("too many failed attempts for this account; try again in a minute"))
-		return
-	}
-	id, idToken, err := s.rp.password(c.Request.Context(), email, req.Password)
-	if err != nil {
-		s.log.Warn("password sign-in failed", "email", email, "error", err, "remote", c.ClientIP())
-		if errors.Is(err, errBadCredentials) {
-			// Count the failure; lock the account after the threshold.
-			if !s.passwordFailures.allow(email) && s.localAccounts != nil {
-				until := time.Now().Add(lockoutDuration)
-				if lerr := s.localAccounts.Lock(c.Request.Context(), email, until); lerr == nil {
-					s.auditFailure(c, "auth.locked", email, "account locked after repeated failures")
-				}
-			}
-			s.auditFailure(c, "auth.login_failed", email, "wrong password")
-			abort(c, http.StatusUnauthorized, err)
-			return
-		}
-		s.auditFailure(c, "auth.login_failed", email, err.Error())
-		abort(c, http.StatusBadGateway, errors.New("the sign-in service is not reachable; try again"))
-		return
-	}
-	// Successful sign-in: clear in-memory failure count.
-	if s.localAccounts != nil {
-		_ = s.localAccounts.Lock(c.Request.Context(), email, time.Time{}) // unlock
-	}
-	if err := s.admitAt(c, id); err != nil {
-		s.auditFailure(c, "auth.refused", id.Email, err.Error())
-		abort(c, http.StatusForbidden, err)
-		return
-	}
-	next, ok := s.openSession(c, id, idToken, "password")
-	if !ok {
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"next": firstNonEmpty(safeNextOrEmpty(req.Next), next)})
-}
-
 // safeNextOrEmpty is safeNext without the "/" default.
 func safeNextOrEmpty(next string) string {
 	if next == "" {
@@ -602,9 +481,15 @@ func (s *Server) openSession(c *gin.Context, id ext.Identity, idToken, how strin
 	}
 	// The person's id in this workspace is the subject apps see, whatever
 	// login method brought them (RFC-0033: the JWT's sub is the identity).
-	if person := s.recordSignIn(c, id); person != nil && person.ID != "" {
+	person, err := s.recordSignIn(c, id)
+	if err != nil {
+		abort(c, http.StatusBadGateway, errors.New("could not record your identity; try again"))
+		return "", false
+	}
+	if person != nil {
 		id.Subject = person.ID
 	}
+	ext.SetIdentity(c, id)
 	// An invitation for this address is accepted by signing in (RFC-0033).
 	s.acceptPendingInvitation(c, id)
 	sess, err := s.rp.sessions.create(c.Request.Context(), s.realmAt(c), s.workspace(c), id, idToken)
@@ -628,6 +513,9 @@ func (s *Server) authLogin(c *gin.Context) {
 		return
 	}
 	provider, next := c.Query("provider"), c.Query("next")
+	if c.Param("provider") != "" {
+		provider = c.Param("provider")
+	}
 	if _, err := s.door(c); err != nil {
 		abort(c, http.StatusNotFound, err)
 		return
@@ -711,88 +599,6 @@ func (s *Server) authTicket(c *gin.Context) {
 	ext.SetIdentity(c, id)
 	s.audit(c, "", "auth.login", actor, "one-time ticket from the CLI")
 	c.Redirect(http.StatusFound, safeNext(c.Query("next")))
-}
-
-// A sign-in ticket (ext.Deps.SignInTicket): the signup made a person a
-// workspace and proved their email; rather than a login form at the new
-// door, the page sends them through a one-time code that the door turns
-// into a session. The code lives in the store's one-time codes, bound to
-// the door's host, for ten minutes, and is taken on first use.
-
-const signupTicketTTL = 10 * time.Minute
-
-// signupTicketClaims is what a sign-in ticket carries.
-type signupTicketClaims struct {
-	Email string `json:"email"`
-	Name  string `json:"name,omitempty"`
-}
-
-func (s *Server) signInTicketHook(ctx context.Context, wsSlug, email string) (string, error) {
-	if s.store == nil {
-		return "", errors.New("no control-plane store")
-	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if !validEmail(email) {
-		return "", errors.New("that is not an email address")
-	}
-	ws, err := s.store.Workspace(ctx, wsSlug)
-	if err != nil {
-		return "", err
-	}
-	if ws.Address == "" {
-		return "", errors.New("the workspace has no address yet")
-	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	code := base64.RawURLEncoding.EncodeToString(raw)
-	claims, _ := json.Marshal(signupTicketClaims{Email: email, Name: strings.SplitN(email, "@", 2)[0]})
-	if err := s.store.PutCode(ctx, store.Code{Code: code, Host: strings.ToLower(ws.Address), Claims: claims, ExpiresAt: time.Now().Add(signupTicketTTL)}); err != nil {
-		return "", err
-	}
-	return s.dashboardURLOf(ws) + "/api/auth/signup-ticket?code=" + url.QueryEscape(code), nil
-}
-
-// authSignupTicket is GET /api/auth/signup-ticket?code=…: the door takes
-// the code once, admits the person as any sign-in would and opens their
-// session here, then sends them to the launcher. Whatever else the link
-// carries goes on with them, refused or not (carryQuery).
-func (s *Server) authSignupTicket(c *gin.Context) {
-	redirect := func(to string) { c.Redirect(http.StatusFound, carryQuery(c, to, "code")) }
-	fail := func(err error) { redirect(loginErrorURL(err)) }
-	code := c.Query("code")
-	if code == "" || s.store == nil || s.rp == nil {
-		fail(errors.New("no such sign-in link"))
-		return
-	}
-	ticket, err := s.store.TakeCode(c.Request.Context(), code)
-	if err != nil || ticket == nil || time.Now().After(ticket.ExpiresAt) {
-		s.auditAnonymous(c, "auth.signup_ticket_failed", "unknown or expired")
-		fail(errors.New("this sign-in link was used already or expired; sign in with your email and password"))
-		return
-	}
-	if ws := s.workspace(c); ticket.Host != tenancy.Host(c.Request.Host) && (ws == "" || ticket.Host != s.workspaceAddress(c)) {
-		s.auditAnonymous(c, "auth.signup_ticket_failed", "another door")
-		fail(errors.New("this sign-in link is for another workspace"))
-		return
-	}
-	var claims signupTicketClaims
-	if json.Unmarshal(ticket.Claims, &claims) != nil || claims.Email == "" {
-		fail(errors.New("this sign-in link is not valid"))
-		return
-	}
-	id := ext.Identity{Subject: claims.Email, Email: claims.Email, Name: firstNonEmpty(claims.Name, claims.Email), Provider: "signup"}
-	if err := s.admitAt(c, id); err != nil {
-		s.auditFailure(c, "auth.refused", id.Email, err.Error())
-		fail(err)
-		return
-	}
-	next, ok := s.openSession(c, id, "", "signup ticket")
-	if !ok {
-		return
-	}
-	redirect(next)
 }
 
 // carryQuery is where a link that ends in a redirect sends the browser,

@@ -237,17 +237,11 @@ type Server struct {
 	hosts hostsCache
 	// tokenFailures throttles clients presenting wrong admin tokens.
 	tokenFailures *rateLimiter
-	// passwordFailures throttles wrong passwords per account (RFC-0012).
-	passwordFailures *rateLimiter
-	// resetRateLimit throttles POST /api/auth/reset per IP (RFC-0014).
-	resetRateLimit *rateLimiter
+
 	// defaultSlug's cache (RFC-0078): the operator's default workspace.
 	defaultSlugMu  sync.Mutex
 	defaultSlugVal string
 	defaultSlugAt  time.Time
-	// localAccounts is the authlocal user store (RFC-0014): set by the
-	// auth-local extension; used for lockout, reset and invite.
-	localAccounts ext.LocalAccountStore
 	// regCache holds the registry catalog summary for a minute.
 	regCache registryCache
 	// The web terminal (RFC-0026): unredeemed tickets and the live shells.
@@ -344,8 +338,6 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s := &Server{opts: opts, log: opts.Logger, kube: k, apps: opts.Apps, helm: helmCfg, sources: opts.Sources, prom: opts.Prometheus, store: opts.Store, tenancy: opts.Tenancy, realms: opts.Realms}
 	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
-	s.passwordFailures = newRateLimiter(10)
-	s.resetRateLimit = newRateLimiter(resetRequestsPerMinute)
 	s.execTickets = newTicketStore(execTicketTTL)
 	s.archiveDownloads = newArchiveDownloads()
 	s.shells = newShellRegistry()
@@ -423,8 +415,6 @@ func (s *Server) deps() ext.Deps {
 	if s.store != nil {
 		d.Invite = s.inviteHook
 		d.InviteBackground = s.inviteBackgroundHook
-		d.SetSignupPassword = s.setSignupPasswordHook
-		d.SignInTicket = s.signInTicketHook
 	}
 	return d
 }
@@ -435,13 +425,8 @@ type routeGroups struct {
 	s                                  *Server
 }
 
-func (r routeGroups) Public() gin.IRouter   { return r.pub }
-func (r routeGroups) Platform() gin.IRouter { return r.platform }
-func (r routeGroups) SetLocalAccounts(la ext.LocalAccountStore) {
-	if r.s != nil {
-		r.s.localAccounts = la
-	}
-}
+func (r routeGroups) Public() gin.IRouter         { return r.pub }
+func (r routeGroups) Platform() gin.IRouter       { return r.platform }
 func (r routeGroups) Protected() gin.IRouter      { return r.api }
 func (r routeGroups) WorkspaceAdmin() gin.IRouter { return r.wsAdmin }
 func (r routeGroups) Admin() gin.IRouter          { return r.admin }
@@ -527,10 +512,6 @@ func (s *Server) routes() error {
 
 	s.engine.GET("/api/healthz", s.healthz)
 	// Account self-service pages (RFC-0014): no session required.
-	s.engine.GET("/account/reset", s.showResetPage)
-	s.engine.POST("/account/reset", s.handleReset)
-	s.engine.GET("/account/set-password", s.showSetPasswordPage)
-	s.engine.POST("/account/set-password", s.handleSetPassword)
 	pub := s.engine.Group("/api", tenant)
 	pub.GET("/config", s.config)
 	// Archives are content addressed (SHA-256) and fetched by build
@@ -546,15 +527,13 @@ func (s *Server) routes() error {
 	pub.GET("/auth/providers", s.authProviders)
 	login := newRateLimiter(30).middleware()
 	pub.GET("/auth/login", login, s.authLogin)
+	pub.GET("/auth/login/:provider", login, s.authLogin)
 	pub.GET("/auth/callback", login, s.authCallback)
 	pub.GET("/auth/ticket", login, s.authTicket)
-	pub.GET("/auth/signup-ticket", login, s.authSignupTicket) // a one-time sign-in from the signup
-	pub.POST("/auth/password", login, s.authPassword)         // RFC-0012
-	pub.POST("/auth/reset", s.requestReset)                   // RFC-0014: send reset link (public)
-	pub.POST("/auth/token", login, s.authToken)               // the admin token as a session (RFC-0033)
-	pub.GET("/invitations/:token", login, s.getInvitation)    // an invitation link, before signing in (RFC-0033)
-	pub.GET("/auth/route", login, s.authRoute)                // the method a claimed email domain routes to
-	pub.GET("/workspace/logo", s.workspaceLogo)               // the workspace's logo, for the login page too
+	pub.POST("/auth/token", login, s.authToken)            // the admin token as a session (RFC-0033)
+	pub.GET("/invitations/:token", login, s.getInvitation) // an invitation link, before signing in (RFC-0033)
+	pub.GET("/auth/route", login, s.authRoute)             // the method a claimed email domain routes to
+	pub.GET("/workspace/logo", s.workspaceLogo)            // the workspace's logo, for the login page too
 	// The CLI's browser sign-in (RFC-0052): a device code the CLI polls
 	// and a page where the person approves it, with the dashboard session.
 	pub.POST("/cli/device", login, s.cliDeviceStart)
@@ -588,6 +567,8 @@ func (s *Server) routes() error {
 	api.GET("/sizes", s.getSizes) // any signed-in user: the size selector needs it
 	api.PUT("/sizes", console, s.require(authz.ClusterAdmin), s.putSizes)
 	api.PATCH("/cluster/settings", console, s.require(authz.ClusterAdmin), s.patchClusterSettings) // RFC-0078
+	api.GET("/cluster/principals", console, s.require(authz.ClusterAdmin), s.consolePrincipals)
+	api.POST("/cluster/principals/:id/bind", console, s.require(authz.ClusterAdmin), s.bindPrincipal)
 	api.GET("/cluster/console-users", console, s.require(authz.ClusterAdmin), s.listConsoleUsers)
 	api.POST("/cluster/console-users", console, s.require(authz.ClusterAdmin), s.addConsoleUser)
 	api.DELETE("/cluster/console-users/:email", console, s.require(authz.ClusterAdmin), s.removeConsoleUser)
@@ -613,6 +594,7 @@ func (s *Server) routes() error {
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)
+	api.POST("/workspace/principals/:id/bind", s.require(authz.WorkspaceOwner), s.bindPrincipal)
 	api.PATCH("/workspace/people/:email", s.require(authz.ClusterAdmin), s.updatePerson)
 	api.GET("/workspace/invitations", s.require(authz.ClusterAdmin), s.listInvitations)
 	api.POST("/workspace/invitations", s.require(authz.ClusterAdmin), s.createInvitation)

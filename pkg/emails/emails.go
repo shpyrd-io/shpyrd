@@ -23,14 +23,6 @@ type Name string
 const (
 	// A person is invited to a workspace and signs in through a provider.
 	Invite Name = "invite"
-	// A person is invited to a workspace with password sign-in.
-	InvitePassword Name = "invite-password"
-	// A person asked for a new password.
-	Reset Name = "reset"
-	// A person's password was changed.
-	PasswordChanged Name = "password-changed"
-	// A person signing up proves the address with a code.
-	Code Name = "code"
 	// The owners of a workspace are told what happened to it.
 	Notice Name = "notice"
 	// An administrator checks that the platform's mail is sent.

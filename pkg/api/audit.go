@@ -62,7 +62,7 @@ func (s *Server) subjectOf(c *gin.Context, id ext.Identity) string {
 	if ws == "" {
 		ws = s.defaultSlug(c.Request.Context())
 	}
-	person, err := s.store.GetIdentity(c.Request.Context(), ws, id.Email)
+	person, err := s.store.GetIdentity(c.Request.Context(), ws, id.Subject)
 	if err != nil || person == nil {
 		return ""
 	}

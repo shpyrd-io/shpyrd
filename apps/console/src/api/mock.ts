@@ -138,11 +138,6 @@ export const mock: Api = {
     await wait();
     return me as Identity;
   },
-  passwordLogin: async ({ email, password, next }) => {
-    await wait();
-    if (!email || !password) throw new ApiError(401, "the email or the password is not right");
-    return { next: next ?? "/" };
-  },
   tokenLogin: async ({ token, next }) => {
     await wait();
     if (!token) throw new ApiError(401, "the token is not right");
@@ -287,7 +282,9 @@ export const mock: Api = {
   },
 
   consoleUsers: async () => (await thingsOf.get()).consoleUsers,
-  addConsoleUser: async ({ email, password }) => {
+  consolePrincipals: async () => [],
+  addConsoleUser: async ({ principalId }) => {
+ const email = principalId, password = undefined;
     await wait();
     const all = await thingsOf.get();
     const address = email.trim().toLowerCase();

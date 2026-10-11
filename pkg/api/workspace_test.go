@@ -66,13 +66,13 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	}
 
 	// Admission: @acme.com must come through google; others are free (open policy).
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "joao@acme.com", Provider: "local"}); err == nil || !strings.Contains(err.Error(), "sign in with") {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "joao@acme.com", EmailVerified: true, Email: "joao@acme.com", Provider: "local"}); err == nil || !strings.Contains(err.Error(), "sign in with") {
 		t.Errorf("claimed domain through another method: %v", err)
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "joao@acme.com", Provider: "google"}); err != nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "joao@acme.com", EmailVerified: true, Email: "joao@acme.com", Provider: "google"}); err != nil {
 		t.Errorf("claimed domain through its connector: %v", err)
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "guest@other.test", Provider: "local"}); err != nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "guest@other.test", EmailVerified: true, Email: "guest@other.test", Provider: "local"}); err != nil {
 		t.Errorf("open policy: %v", err)
 	}
 	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Subject: "admin-token", Provider: "token"}); err != nil {
@@ -83,16 +83,16 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	if rec := adminJSON(t, s, "PATCH", "/api/workspace", `{"joinPolicy":"company"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"joinPolicy":"company"`) {
 		t.Fatalf("policy = %d %s", rec.Code, rec.Body.String())
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "guest@other.test", Provider: "local"}); err == nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "guest@other.test", EmailVerified: true, Email: "guest@other.test", Provider: "local"}); err == nil {
 		t.Error("company policy must refuse strangers")
 	}
 	if _, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "guest@other.test", Provider: "local"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "guest@other.test", Provider: "local"}); err != nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "guest@other.test", EmailVerified: true, Email: "guest@other.test", Provider: "local"}); err != nil {
 		t.Errorf("known person under company policy: %v", err)
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "maria@acme.com", Provider: "google"}); err != nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "maria@acme.com", EmailVerified: true, Email: "maria@acme.com", Provider: "google"}); err != nil {
 		t.Errorf("company account: %v", err)
 	}
 
@@ -100,14 +100,14 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	if rec := adminJSON(t, s, "PATCH", "/api/workspace", `{"joinPolicy":"listed"}`); rec.Code != http.StatusOK {
 		t.Fatal(rec.Body.String())
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "new@other.test", Provider: "local"}); err == nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "new@other.test", EmailVerified: true, Email: "new@other.test", Provider: "local"}); err == nil {
 		t.Error("listed policy must refuse the unlisted")
 	}
 	if _, _, err := s.store.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "web", Members: []string{"new@other.test"}}); err != nil {
 		t.Fatal(err)
 	}
 	s.authz.Invalidate()
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "new@other.test", Provider: "local"}); err != nil {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "new@other.test", EmailVerified: true, Email: "new@other.test", Provider: "local"}); err != nil {
 		t.Errorf("listed person: %v", err)
 	}
 	if rec := adminJSON(t, s, "PATCH", "/api/workspace", `{"joinPolicy":"whatever"}`); rec.Code != http.StatusBadRequest {
@@ -118,7 +118,7 @@ func TestDomainClaimsAndAdmission(t *testing.T) {
 	if _, err := s.store.SetIdentityStatus(ctx, store.DefaultWorkspace, "guest@other.test", store.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Email: "guest@other.test", Provider: "local"}); err == nil || !strings.Contains(err.Error(), "suspended") {
+	if err := s.admitSignIn(ctx, store.DefaultWorkspace, ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "guest@other.test", EmailVerified: true, Email: "guest@other.test", Provider: "local"}); err == nil || !strings.Contains(err.Error(), "suspended") {
 		t.Errorf("suspended at sign-in: %v", err)
 	}
 	if rec := adminJSON(t, s, "DELETE", "/api/workspace/domain-claims/acme.com", ""); rec.Code != http.StatusNoContent {
@@ -179,7 +179,7 @@ func TestConsoleAdminSignsInToTheOperatorsWorkspace(t *testing.T) {
 	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.test", Owner: store.WorkspaceOwnerCustomer, Settings: store.WorkspaceSettings{JoinPolicy: store.JoinListed}}); err != nil {
 		t.Fatal(err)
 	}
-	dora := ext.Identity{Email: "Dora@example.test", Provider: "local"}
+	dora := ext.Identity{Issuer: "https://fixtures.test", ExternalSubject: "dora@example.test", EmailVerified: true, Email: "Dora@example.test", Provider: "local"}
 	if err := s.admitSignIn(ctx, store.DefaultWorkspace, dora); err == nil {
 		t.Fatal("not a console admin yet: the listed policy must refuse her")
 	}

@@ -8,7 +8,6 @@ import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-li
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
-import { Accounts } from "./accounts";
 import { Backups } from "./backups";
 import { Components } from "./components";
 import { ConsoleUsers } from "./console-users";
@@ -64,14 +63,6 @@ const pages: Page[] = [
     title: "Console users",
     icon: <ShieldCheck />,
     needs: "admin",
-  },
-  {
-    group: "Platform",
-    slug: "accounts",
-    title: "Accounts",
-    icon: <Users />,
-    needs: "admin",
-    extension: "auth-local",
   },
   {
     group: "Platform",
@@ -246,7 +237,6 @@ export function Pages() {
         <Route path="console-users" element={<ConsoleUsers />} />
         <Route path="costs" element={<Costs />} />
         <Route path="cost-drains" element={<CostDrains />} />
-        <Route path="accounts" element={<Accounts />} />
         <Route path="sign-in" element={<SignIn />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="sizes" element={<Sizes />} />
