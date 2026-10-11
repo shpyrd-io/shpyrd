@@ -171,7 +171,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		st.State, st.Message = shpyrdv1.ReleaseSucceeded, releaseSucceededMessage
 		app.Status.Release = st
 		return true, false, nil
-	case jobFailed(job) || failed:
+	case JobFailed(job) || failed:
 		// A redeploy asked after the failure runs the command again: the
 		// failed Job goes, the next pass creates a fresh one carrying the
 		// request, so the same request does not retry forever.
@@ -186,7 +186,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		}
 		// Stop a still-running attempt after an OOM event, including a child
 		// process killed while its parent waits. Keep the failure in App status.
-		if failed && !jobFailed(job) && !ptr.Deref(job.Spec.Suspend, false) {
+		if failed && !JobFailed(job) && !ptr.Deref(job.Spec.Suspend, false) {
 			base := job.DeepCopy()
 			job.Spec.Suspend = ptr.To(true)
 			job.Annotations = mergeMaps(job.Annotations, map[string]string{releaseFailureAnnotation: diagnostic})

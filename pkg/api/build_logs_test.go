@@ -7,6 +7,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,5 +45,31 @@ func TestFollowingARefusedBuildEnds(t *testing.T) {
 	rec := do(t, s, "GET", "/api/projects/shop/builds", "", true)
 	if !strings.Contains(rec.Body.String(), `"status":"Failed"`) || !strings.Contains(rec.Body.String(), "memory ceiling is 400Mi") {
 		t.Errorf("builds = %s", rec.Body.String())
+	}
+}
+
+func TestJobBuildInfoFailureWithoutPod(t *testing.T) {
+	finished := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	for _, tc := range []struct {
+		name, reason, message, annotation, want string
+		status                                  corev1.ConditionStatus
+	}{
+		{name: "deadline without pod", reason: "DeadlineExceeded", status: corev1.ConditionTrue, want: "The build did not finish within 30 minutes."},
+		{name: "other condition", reason: "BackoffLimitExceeded", message: "Job has reached the specified backoff limit", status: corev1.ConditionTrue, want: "Job has reached the specified backoff limit"},
+		{name: "annotation wins", reason: "DeadlineExceeded", annotation: "The source could not be fetched.", status: corev1.ConditionTrue, want: "The source could not be fetched."},
+		{name: "false condition", reason: "DeadlineExceeded", status: corev1.ConditionFalse},
+		{name: "unknown condition", reason: "DeadlineExceeded", status: corev1.ConditionUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := batchv1.Job{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{shpyrdv1.AnnotationBuildFailure: tc.annotation}}, Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: tc.status, Reason: tc.reason, Message: tc.message, LastTransitionTime: finished}}}}
+			got := jobBuildInfo(job)
+			if tc.want == "" {
+				if got.Status != "Building" || got.CompletedAt != nil {
+					t.Fatalf("nonterminal build = %+v", got)
+				}
+			} else if got.Status != "Failed" || got.Message != tc.want || got.CompletedAt == nil || !got.CompletedAt.Equal(finished.Time) {
+				t.Fatalf("failed build = %+v, want %q at %v", got, tc.want, finished)
+			}
+		})
 	}
 }
