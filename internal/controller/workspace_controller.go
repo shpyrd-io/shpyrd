@@ -132,10 +132,8 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		for j := range hosts {
 			if h := &hosts[j]; r.hostHasDoor(h) {
 				wanted[workspaceHostFrontDoorName(ws.Slug, h.Host)] = true
-				if h.Kind == store.HostCustom {
-					wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
-					wanted[archivesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
-				}
+				wanted[sourcesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
+				wanted[archivesFrontDoorName(workspaceHostFrontDoorName(ws.Slug, h.Host))] = true
 			}
 		}
 	}
@@ -408,12 +406,9 @@ func (r *WorkspaceReconciler) ensureHostFrontDoor(ctx context.Context, ws *store
 	if err != nil {
 		return fmt.Errorf("front door for %s: %w", h.Host, err)
 	}
-	// Deploys can target a custom domain (`shpyrd login --url`); a moved
-	// address only redirects, so it needs no upload path.
-	if h.Kind == store.HostCustom {
-		return r.ensureSourcesFrontDoor(ctx, name, labels, h.Host, networkingv1.IngressTLS{Hosts: hosts, SecretName: name + "-tls"}, class)
-	}
-	return nil
+	// Moved addresses still serve machine clients until they expire. Their
+	// uploads need the same limits before ingress forwards to the API.
+	return r.ensureSourcesFrontDoor(ctx, name, labels, h.Host, networkingv1.IngressTLS{Hosts: hosts, SecretName: name + "-tls"}, class)
 }
 
 // workspaceFrontDoorName names the Ingress and Certificate of a workspace.

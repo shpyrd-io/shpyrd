@@ -258,6 +258,10 @@ func serverRequestDirect(ctx context.Context, wsURL, token, method, path string,
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	migrateWorkspaceSession(wsURL, token, resp, os.Stderr)
+	if resp.StatusCode == http.StatusRequestEntityTooLarge && strings.TrimPrefix(path, "/") == "api/sources" {
+		return nil, sourceUploadRefused(ctx, wsURL, len(body), resp)
+	}
 	if resp.StatusCode >= 400 {
 		msg := strings.TrimSpace(string(raw))
 		if msg == "" {
