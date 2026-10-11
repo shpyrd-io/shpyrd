@@ -217,6 +217,8 @@ func jobBuildInfo(j batchv1.Job) BuildInfo {
 		b.Status = "Succeeded"
 	case j.Annotations[shpyrdv1.AnnotationBuildFailure] != "":
 		b.Status, b.Message = "Failed", j.Annotations[shpyrdv1.AnnotationBuildFailure]
+	case controller.JobFailed(&j):
+		b.Status, b.Message = "Failed", controller.JobFailureMessage(&j)
 	case j.Status.Failed > 0:
 		b.Status, b.Message = "Failed", "The Dockerfile build failed. The build's log has the full output."
 	}

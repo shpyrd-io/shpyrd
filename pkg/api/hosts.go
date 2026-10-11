@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (s *Server) movedHost(ctx context.Context, ws *store.Workspace, host string
 // the MCP endpoint and its OAuth server, the published keys. At a moved
 // dashboard host they are served as they are, since a client following a
 // redirect to another host drops its Authorization header (Go's, and most
-// others); the answers name the new address (GET /api/config).
+// others); the answers name the new address in X-Shpyrd-Workspace-URL.
 func machinePath(p string) bool {
 	if strings.HasPrefix(p, "/api/auth/") {
 		return false // people sign in at the new address
@@ -194,6 +195,9 @@ func (s *Server) redirectMoved() gin.HandlerFunc {
 		}
 		if target := s.movedTarget(c); target != "" {
 			if machinePath(c.Request.URL.Path) && s.isMovedDashboardHost(c) {
+				if u, err := url.Parse(target); err == nil {
+					c.Header("X-Shpyrd-Workspace-URL", u.Scheme+"://"+u.Host)
+				}
 				c.Next()
 				return
 			}

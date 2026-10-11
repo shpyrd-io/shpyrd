@@ -322,6 +322,10 @@ The same check runs three ways: at start (the grace period), for readiness (3 fa
 
 The deploy waits for each new instance to pass its readiness probe before the old one is removed, so traffic is always served. If a new instance never becomes healthy the rollout stalls, the Activity panel shows the reason (exit code, probe error) and a rollback button; the old instances keep serving.
 
+HTTP checks reach the process directly, without the edge's sign-in, cookies or identity headers. Keep the health path outside your app's authentication middleware and return `2xx` to a plain GET. A `401`, `403`, server error, timeout or failing redirect can leave the instance unready; repeated startup or liveness failures restart it even when its logs say it started successfully. Redirecting an unauthenticated check to `/.shpyrd/signin` cannot sign it in: that route belongs to the edge.
+
+If `/` requires sign-in, add an unauthenticated `/healthz` route and set `processes.web.healthCheck.path: /healthz`. Alternatively, use `processes.web.healthCheck.tcp: true` to check only that the port accepts connections; this does not check the HTTP response or application dependencies. See [Sign-in for your app](/docs/app-access#health-checks-and-sign-in).
+
 Override the default or disable checking in `shpyrd.yaml`:
 
 ```yaml

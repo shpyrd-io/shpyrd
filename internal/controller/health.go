@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -89,6 +90,16 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 			if why == "" && cs.State.Running != nil && !cs.Ready {
 				if unready := r.now().Sub(cs.State.Running.StartedAt.Time); unready > startupBudget(pod) {
 					why = probeFailureReason(pod, unready)
+					if detail := r.recentProbeFailure(ctx, pod, cs, false); detail != "" {
+						why = detail
+					}
+				}
+			}
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+				if ended := cs.LastTerminationState.Terminated; ended != nil && ended.ExitCode == 143 && ended.Reason != "OOMKilled" {
+					if detail := r.recentProbeFailure(ctx, pod, cs, true); detail != "" {
+						why = detail
+					}
 				}
 			}
 			if why != "" {
@@ -200,4 +211,103 @@ func probeFailureReason(pod corev1.Pod, unready time.Duration) string {
 		}
 	}
 	return why
+}
+
+// Recent events supplement container status; they are not proof that an
+// arbitrary exit was caused by a probe. Only SIGTERM crash loops use the
+// previous run, and readiness failures cannot explain a restart.
+func (r *AppReconciler) recentProbeFailure(ctx context.Context, pod corev1.Pod, cs corev1.ContainerStatus, restarting bool) string {
+	if r.Kube == nil || pod.UID == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	events, err := r.Kube.CoreV1().Events(pod.Namespace).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.name=" + pod.Name + ",reason=Unhealthy"})
+	if err != nil {
+		return ""
+	}
+	var latest time.Time
+	var message string
+	for _, event := range events.Items {
+		if event.Reason != "Unhealthy" || event.InvolvedObject.UID != pod.UID || event.InvolvedObject.Name != pod.Name || event.InvolvedObject.Kind != "Pod" || event.InvolvedObject.FieldPath != "spec.containers{app}" {
+			continue
+		}
+		kind := strings.SplitN(event.Message, " probe failed:", 2)
+		if len(kind) != 2 || (kind[0] != "Startup" && kind[0] != "Readiness" && kind[0] != "Liveness") {
+			continue
+		}
+		at := event.LastTimestamp.Time
+		if event.EventTime.Time.After(at) {
+			at = event.EventTime.Time
+		}
+		if event.Series != nil && event.Series.LastObservedTime.Time.After(at) {
+			at = event.Series.LastObservedTime.Time
+		}
+		if at.IsZero() || at.Before(r.now().Add(-5*time.Minute)) || at.After(r.now().Add(5*time.Second)) {
+			continue
+		}
+		if restarting {
+			ended := cs.LastTerminationState.Terminated
+			if kind[0] == "Readiness" || ended.FinishedAt.IsZero() || at.Before(ended.StartedAt.Time) || at.Before(ended.FinishedAt.Add(-2*time.Minute)) || at.After(ended.FinishedAt.Add(5*time.Second)) {
+				continue
+			}
+		} else if cs.State.Running == nil || at.Before(cs.State.Running.StartedAt.Time) {
+			continue
+		}
+		if at.After(latest) {
+			latest = at
+			message = describeProbeFailure(pod, kind[0], strings.TrimSpace(kind[1]))
+		}
+	}
+	return message
+}
+
+var probeHTTPStatus = regexp.MustCompile(`statuscode: (\d{3})`)
+
+func describeProbeFailure(pod corev1.Pod, kind, detail string) string {
+	var probe *corev1.Probe
+	for _, c := range pod.Spec.Containers {
+		if c.Name != "app" {
+			continue
+		}
+		switch kind {
+		case "Startup":
+			probe = c.StartupProbe
+		case "Readiness":
+			probe = c.ReadinessProbe
+		case "Liveness":
+			probe = c.LivenessProbe
+		}
+	}
+	why := strings.ToLower(kind) + " health check"
+	if probe != nil && probe.HTTPGet != nil {
+		why += fmt.Sprintf(" on %q", probe.HTTPGet.Path)
+	}
+	why += " is failing: "
+	lower := strings.ToLower(detail)
+	switch {
+	case strings.Contains(lower, "redirect") || (strings.Contains(lower, "/.shpyrd/signin") && strings.Contains(lower, "rd=")):
+		why += "the request could not complete after a redirect. "
+	case probeHTTPStatus.MatchString(detail):
+		code := probeHTTPStatus.FindStringSubmatch(detail)[1]
+		switch code {
+		case "401", "403":
+			why += "the process refused the request (HTTP " + code + "). "
+		default:
+			why += "the process answered HTTP " + code + ". "
+		}
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") || strings.Contains(lower, "deadline exceeded"):
+		why += "the process did not answer before the timeout. "
+	default:
+		why += shortMessage(detail) + ". "
+	}
+	if probe != nil && probe.HTTPGet != nil {
+		why += "The check reaches the process directly, without edge sign-in, cookies or identity headers. Make healthCheck.path answer a plain GET with 2xx outside the app's sign-in gate, or use healthCheck.tcp: true. "
+	}
+	// Keep the original observation for failures whose useful detail is not
+	// captured by the explanation above (connection errors, redirect targets).
+	if strings.Contains(lower, "redirect") || strings.Contains(lower, "signin") {
+		why += "Probe: " + shortMessage(detail)
+	}
+	return strings.TrimSpace(why)
 }

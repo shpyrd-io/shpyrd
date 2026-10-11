@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	ptr "k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -363,5 +367,147 @@ func TestCrashingReleaseOverReadyPrevious(t *testing.T) {
 	got = runReconcile(t, r, got)
 	if got.Status.Phase != shpyrdv1.PhaseFailed || !strings.Contains(got.Status.Message, "CrashLoopBackOff") {
 		t.Fatalf("v2 crash-looping beside a ready v1: phase=%q (%s), want Failed", got.Status.Phase, got.Status.Message)
+	}
+}
+
+// #86: a probe's own observation explains a SIGTERM crash loop better than
+// the termination-message log tail saying the application is ready.
+func TestHealthExplainsRecentProbeFailure(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ name, message, want string }{
+		{"redirect", `Startup probe failed: Get "/.shpyrd/signin?rd=%2F": stopped after 10 redirects`, "could not complete after a redirect"},
+		{"unauthorized", "Startup probe failed: HTTP probe failed with statuscode: 401", "refused the request (HTTP 401)"},
+		{"forbidden", "Startup probe failed: HTTP probe failed with statuscode: 403", "refused the request (HTTP 403)"},
+		{"server", "Liveness probe failed: HTTP probe failed with statuscode: 503", "answered HTTP 503"},
+		{"timeout", "Startup probe failed: context deadline exceeded", "did not answer before the timeout"},
+		{"connection", "Startup probe failed: dial tcp: connection refused", "dial tcp: connection refused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, d, rs, pod, event := probeFailureFixture(now)
+			event.Message = tc.message
+			r, _ := newTestReconciler(t, app, d, rs, pod)
+			r.Now = func() time.Time { return now }
+			r.Kube = k8sfake.NewSimpleClientset(event)
+			count, reason := r.processHealth(context.Background(), rs)
+			if count != 1 || !strings.Contains(reason, tc.want) || !strings.Contains(reason, `on "/healthz"`) || !strings.Contains(reason, "without edge sign-in") || strings.Contains(reason, "Ready in 313ms") {
+				t.Fatalf("count=%d reason=%q", count, reason)
+			}
+		})
+	}
+}
+
+func probeFailureFixture(now time.Time) (*shpyrdv1.App, *appsv1.Deployment, *appsv1.ReplicaSet, *corev1.Pod, *corev1.Event) {
+	app := sampleApp("probe-error")
+	d := rolledOut(app, "registry.test/probe-error:v1")
+	check := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz"}}}
+	d.Spec.Template.Spec.Containers[0].StartupProbe = check
+	d.Spec.Template.Spec.Containers[0].ReadinessProbe = check.DeepCopy()
+	d.Spec.Template.Spec.Containers[0].LivenessProbe = check.DeepCopy()
+	rs := replicaSetOf(d, "registry.test/probe-error:v1", "h1")
+	pod := podOf(rs, "probe-error-web", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}})
+	pod.UID = "current-pod"
+	pod.Status.ContainerStatuses[0].RestartCount = 2
+	pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+		ExitCode: 143, Message: "Ready in 313ms", StartedAt: metav1.NewTime(now.Add(-time.Minute)), FinishedAt: metav1.NewTime(now.Add(-10 * time.Second)),
+	}
+	event := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "unhealthy", Namespace: pod.Namespace},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod.Name, UID: pod.UID, FieldPath: "spec.containers{app}"},
+		Reason:         "Unhealthy", Message: "Startup probe failed: HTTP probe failed with statuscode: 401", LastTimestamp: metav1.NewTime(now.Add(-15 * time.Second)),
+	}
+	return app, d, rs, pod, event
+}
+
+func TestHealthIgnoresUnrelatedProbeFailures(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		change func(*corev1.Pod, *corev1.Event)
+	}{
+		{"previous pod", func(p *corev1.Pod, e *corev1.Event) { e.InvolvedObject.UID = "old-pod" }},
+		{"sidecar", func(p *corev1.Pod, e *corev1.Event) { e.InvolvedObject.FieldPath = "spec.containers{sidecar}" }},
+		{"readiness did not kill", func(p *corev1.Pod, e *corev1.Event) {
+			e.Message = "Readiness probe failed: HTTP probe failed with statuscode: 401"
+		}},
+		{"old run", func(p *corev1.Pod, e *corev1.Event) { e.LastTimestamp = metav1.NewTime(now.Add(-2 * time.Minute)) }},
+		{"after death", func(p *corev1.Pod, e *corev1.Event) { e.LastTimestamp = metav1.NewTime(now) }},
+		{"stale", func(p *corev1.Pod, e *corev1.Event) {
+			e.LastTimestamp = metav1.NewTime(now.Add(-10 * time.Minute))
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-11 * time.Minute))
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-9 * time.Minute))
+		}},
+		{"no timestamp", func(p *corev1.Pod, e *corev1.Event) { e.LastTimestamp = metav1.Time{} }},
+		{"application error", func(p *corev1.Pod, e *corev1.Event) {
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated.ExitCode = 1
+		}},
+		{"out of memory", func(p *corev1.Pod, e *corev1.Event) {
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated.Reason = "OOMKilled"
+		}},
+		{"unknown termination time", func(p *corev1.Pod, e *corev1.Event) {
+			p.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.Time{}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, d, rs, pod, event := probeFailureFixture(now)
+			tc.change(pod, event)
+			r, _ := newTestReconciler(t, app, d, rs, pod)
+			r.Now = func() time.Time { return now }
+			r.Kube = k8sfake.NewSimpleClientset(event)
+			count, reason := r.processHealth(context.Background(), rs)
+			if count != 1 || !strings.Contains(reason, "CrashLoopBackOff") {
+				t.Fatalf("count=%d reason=%q", count, reason)
+			}
+		})
+	}
+}
+
+func TestHealthProbeEventsLatestAndFallback(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"lastTimestamp", "eventTime", "series", "unavailable", "absent", "recovered", "current run"} {
+		t.Run(mode, func(t *testing.T) {
+			app, d, rs, pod, event := probeFailureFixture(now)
+			old := event.DeepCopy()
+			old.Name, old.Message = "old", "Startup probe failed: HTTP probe failed with statuscode: 503"
+			old.LastTimestamp = metav1.NewTime(now.Add(-20 * time.Second))
+			switch mode {
+			case "eventTime":
+				event.EventTime = metav1.NewMicroTime(event.LastTimestamp.Time)
+				event.LastTimestamp = metav1.Time{}
+			case "series":
+				event.Series = &corev1.EventSeries{LastObservedTime: metav1.NewMicroTime(event.LastTimestamp.Time)}
+				event.LastTimestamp = old.LastTimestamp
+			case "recovered", "current run":
+				pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-2 * time.Minute))}}
+				pod.Status.ContainerStatuses[0].Ready = mode == "recovered"
+				event.Message = "Readiness probe failed: HTTP probe failed with statuscode: 401"
+			}
+			r, _ := newTestReconciler(t, app, d, rs, pod)
+			r.Now = func() time.Time { return now }
+			kube := k8sfake.NewSimpleClientset(old, event)
+			if mode == "absent" {
+				kube = k8sfake.NewSimpleClientset()
+			}
+			if mode == "unavailable" {
+				kube.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, fmt.Errorf("events unavailable")
+				})
+			}
+			r.Kube = kube
+			count, reason := r.processHealth(context.Background(), rs)
+			switch mode {
+			case "recovered":
+				if count != 0 || reason != "" {
+					t.Fatalf("recovered: %d %s", count, reason)
+				}
+			case "absent", "unavailable":
+				if count != 1 || !strings.Contains(reason, "CrashLoopBackOff") {
+					t.Fatalf("fallback: %d %s", count, reason)
+				}
+			default:
+				if count != 1 || !strings.Contains(reason, "HTTP 401") {
+					t.Fatalf("latest: %d %s", count, reason)
+				}
+			}
+		})
 	}
 }
