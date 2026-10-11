@@ -6,8 +6,8 @@ import { Closing } from "./proposals";
 afterEach(cleanup);
 
 describe("the home page's closing", () => {
-  it("sends Get started to the sign-up, on the free plan", () => {
+  it("sends Get started to account signup", () => {
     render(<Closing />);
-    expect(screen.getByRole("link", { name: "Get started" }).getAttribute("href")).toBe("https://signup.shpyrd.io/?plan=free");
+    expect(screen.getByRole("link", { name: "Get started" }).getAttribute("href")).toBe("https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud");
   });
 });

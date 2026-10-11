@@ -93,7 +93,7 @@ export function Pricing({ region: id = "international" }: { region?: Region["id"
               actions={
                 <div className="flex flex-1 justify-center">
                   {plan.action.kind === "install" ? (
-                    <DeployButton plan={plan.id} />
+                    <DeployButton />
                   ) : (
                     <Button asChild variant="outline" icon={<MessageCircle />}>
                       <a href={contact.href}>{plan.action.label}</a>

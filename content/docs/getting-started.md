@@ -36,21 +36,17 @@ curl -fsSL https://shpyrd.io/install.sh | sh
 brew install shpyrd-io/tap/shpyrd
 ```
 
-**Sign in.** New to shpyrd? Create your account and your free workspace on shpyrd cloud:
+**Sign up.** New to shpyrd? [Create your account and workspace on shpyrd cloud](https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud).
 
-```shell
-shpyrd login --signup
-```
+Your workspace answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`.
 
-Your browser opens on the signup. Prove your email and name your workspace - it answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`. The CLI is signed in to it when it is ready.
-
-Already have a workspace? Sign in to it:
+**Sign in to the CLI.** Once your workspace is ready, or if you already have one, sign in using its address:
 
 ```shell
 shpyrd login --url https://acme.shpyrd.cloud
 ```
 
-Your browser opens on its sign-in. Approve the code your terminal shows. Plain `shpyrd login` asks which of the two you want. The CLI is signed in as you for 30 days, and never with more than your roles allow.
+Your browser opens on its sign-in. Approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
 
 ## 2. Talk to it
 

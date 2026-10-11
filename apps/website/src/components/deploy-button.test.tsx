@@ -12,15 +12,10 @@ afterEach(() => {
 });
 
 describe("DeployButton", () => {
-  it("says the first phrase, and goes to the free plan's sign-up", () => {
+  it("says the first phrase, and goes to account signup", () => {
     render(<DeployButton />);
     const link = screen.getByRole("link", { name: `${said(deploy[0])} on shpyrd` });
-    expect(link.getAttribute("href")).toBe("https://signup.shpyrd.io/?plan=free");
-  });
-
-  it("goes to the sign-up of the plan it is given", () => {
-    render(<DeployButton plan="pro" />);
-    expect(screen.getByRole("link").getAttribute("href")).toBe("https://signup.shpyrd.io/?plan=pro");
+    expect(link.getAttribute("href")).toBe("https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud");
   });
 
   it("rolls whole phrases, verb and all, showing one and hiding the others from assistive tech", () => {
