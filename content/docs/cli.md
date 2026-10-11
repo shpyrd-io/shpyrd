@@ -26,9 +26,10 @@ shpyrd login --url https://acme.shpyrd.cloud --token @token.txt
 
 ## Signing in
 
+New to shpyrd? [Create your account and workspace on shpyrd cloud](https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud), then run `shpyrd login --url <workspace>` with your workspace’s address.
+
 | Command | What it does |
 | --- | --- |
-| `shpyrd login --signup` | Create an account and your first workspace on shpyrd cloud from the terminal: the browser opens the signup with a code; you prove your email and name the workspace there, and when its door answers the CLI is signed in to it. `shpyrd login` with no URL at a terminal asks which of the two you want. `--signup-url` (or `SHPYRD_SIGNUP_URL`) points at another signup. |
 | `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.cloud`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd version` | The CLI's version (`shpyrd-ctl version` too). |

@@ -1,8 +1,7 @@
 "use client";
 
 // The site's main action: "Deploy your vibecoded app", "Publish your
-// site"…, whole phrases taking turns, and a click to the sign-up, with the
-// plan of where it was clicked (free, unless a plan's card says). The
+// site"…, whole phrases taking turns, and a click to account signup. The
 // phrases roll as the agents of AddToAgent do, on a clock every such button
 // on the page shares, so they change together.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -10,7 +9,7 @@ import { cn } from "cn";
 import { Button } from "@shpyrd/ui/components/button";
 import { placeIn, roll } from "@shpyrd/ui/lib/roll";
 import { deploy } from "@shpyrd/content/site/offer";
-import { signUpFor } from "@/lib/signup";
+import { signUp } from "@/lib/signup";
 
 // How long each phrase stays.
 const HOLD = 2600;
@@ -52,11 +51,8 @@ const clock = {
 
 export function DeployButton({
   size,
-  plan = "free",
 }: {
   size?: React.ComponentProps<typeof Button>["size"];
-  // The plan the sign-up starts on: a pricing card's own.
-  plan?: string;
 }) {
   const { index, leaving } = useSyncExternalStore(clock.subscribe, clock.now, clock.atStart);
   // Built without a browser: the reader's preference is read in an effect.
@@ -76,7 +72,7 @@ export function DeployButton({
     <Button asChild size={size}>
       <a
         ref={link}
-        href={signUpFor(plan)}
+        href={signUp}
         aria-label={`${deploy[index].verb} your ${deploy[index].thing} on shpyrd`}
       >
         {/* Every phrase in one cell, centred in the room the longest needs,
