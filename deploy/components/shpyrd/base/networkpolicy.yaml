@@ -42,3 +42,26 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - port: 8081
+    # Both selectors in each peer must match. No project can opt itself
+    # into access by setting a pod label in its own namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "${SHPYRD_INTERNAL_API_ACCOUNTS_NAMESPACE}"
+          podSelector:
+            matchLabels:
+              shpyrd.io/app: "${SHPYRD_INTERNAL_API_ACCOUNTS_APP}"
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "${SHPYRD_INTERNAL_API_BILLING_NAMESPACE}"
+          podSelector:
+            matchLabels:
+              shpyrd.io/app: "${SHPYRD_INTERNAL_API_BILLING_APP}"
+      ports:
+        - port: 8083
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8084

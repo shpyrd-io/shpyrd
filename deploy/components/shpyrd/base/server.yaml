@@ -91,6 +91,12 @@ spec:
               value: "${SHPYRD_URL_PORT}"
             - name: SHPYRD_DASHBOARD_URL
               value: "${SHPYRD_DASHBOARD_URL}"
+            - name: SHPYRD_PUBLIC_API_ENABLED
+              value: "${SHPYRD_PUBLIC_API_ENABLED}"
+            - name: SHPYRD_PUBLIC_API_HOST
+              value: "${SHPYRD_PUBLIC_API_HOST}"
+            - name: SHPYRD_PUBLIC_API_ISSUER
+              value: "${SHPYRD_PUBLIC_API_ISSUER}"
             - name: SHPYRD_AUTH_URL
               value: "${SHPYRD_AUTH_URL}"
             - name: SHPYRD_EXTENSIONS
@@ -227,6 +233,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: internal-api
+              containerPort: 8083
+            - name: public-api
+              containerPort: 8084
             - name: metrics
               containerPort: 8081
             - name: sources

@@ -29,6 +29,9 @@ import (
 
 // Config carries cluster-level settings the controller needs.
 type Config struct {
+	PublicAPIEnabled bool
+	PublicAPIHost    string
+	PublicAPIIssuer  string
 	// Domain is the wildcard domain apps of the implicit workspace are
 	// published under.
 	Domain string

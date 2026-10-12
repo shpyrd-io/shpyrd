@@ -278,20 +278,35 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 			defaultAddress = vars[VarDomain]
 		}
 	}
+	publicURL := vars["SHPYRD_PUBLIC_API_URL"]
+	if publicURL == "" {
+		publicURL = base("api")
+	}
+	publicHost := ""
+	if u, err := url.Parse(publicURL); err == nil {
+		publicHost = u.Hostname()
+	}
 	out := map[string]string{
-		VarProjectStorageClass:     vars[VarProjectStorageClass],
-		VarDatabaseStorageClass:    vars[VarDatabaseStorageClass],
-		VarDataPool:                vars[VarDataPool],
-		VarDashboardURL:            dashboardURL,
-		VarAuthURL:                 authURL,
-		VarAuthHost:                authHost,
-		VarConsoleHost:             consoleHost,
-		VarDefaultWorkspace:        defaultSlug,
-		VarDefaultWorkspaceAddress: defaultAddress,
-		VarDefaultWorkspaceName:    vars[VarDefaultWorkspaceName],
-		VarExtensions:              strings.Join(names, ","),
-		VarURLPort:                 URLPort(vars),
-		VarForwardedHeaders:        "false",
+		"SHPYRD_PUBLIC_API_URL":                  publicURL,
+		"SHPYRD_PUBLIC_API_HOST":                 publicHost,
+		"SHPYRD_PUBLIC_API_ENABLED":              "false",
+		"SHPYRD_INTERNAL_API_ACCOUNTS_NAMESPACE": "shpyrd-integration-disabled",
+		"SHPYRD_INTERNAL_API_BILLING_NAMESPACE":  "shpyrd-integration-disabled",
+		"SHPYRD_INTERNAL_API_ACCOUNTS_APP":       "accounts",
+		"SHPYRD_INTERNAL_API_BILLING_APP":        "billing",
+		VarProjectStorageClass:                   vars[VarProjectStorageClass],
+		VarDatabaseStorageClass:                  vars[VarDatabaseStorageClass],
+		VarDataPool:                              vars[VarDataPool],
+		VarDashboardURL:                          dashboardURL,
+		VarAuthURL:                               authURL,
+		VarAuthHost:                              authHost,
+		VarConsoleHost:                           consoleHost,
+		VarDefaultWorkspace:                      defaultSlug,
+		VarDefaultWorkspaceAddress:               defaultAddress,
+		VarDefaultWorkspaceName:                  vars[VarDefaultWorkspaceName],
+		VarExtensions:                            strings.Join(names, ","),
+		VarURLPort:                               URLPort(vars),
+		VarForwardedHeaders:                      "false",
 	}
 	if vars[VarFrontDoor] == FrontDoorCaddy {
 		out[VarForwardedHeaders] = "true"
@@ -330,6 +345,15 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	// the zone the platform's DNS user manages (SHPYRD_DOMAIN). An auth
 	// host outside it (auth.shpyrd.io, a manual record at the registrar)
 	// gets HTTP-01 through the public front door.
+	for _, key := range []string{"SHPYRD_PUBLIC_API_ENABLED", "SHPYRD_INTERNAL_API_ACCOUNTS_NAMESPACE", "SHPYRD_INTERNAL_API_BILLING_NAMESPACE", "SHPYRD_INTERNAL_API_ACCOUNTS_APP", "SHPYRD_INTERNAL_API_BILLING_APP"} {
+		if vars[key] != "" {
+			out[key] = vars[key]
+		}
+	}
+	out["SHPYRD_PUBLIC_API_ISSUER"] = out[VarPlatformIssuer]
+	if domain := vars[VarDomain]; publicHost != domain && !strings.HasSuffix(publicHost, "."+domain) {
+		out["SHPYRD_PUBLIC_API_ISSUER"] = vars[VarClusterIssuer]
+	}
 	out[VarAuthIssuer] = out[VarPlatformIssuer]
 	if domain := vars[VarDomain]; domain != "" && authHost != domain && !strings.HasSuffix(authHost, "."+domain) {
 		out[VarAuthIssuer] = vars[VarClusterIssuer]

@@ -80,12 +80,17 @@ type Shellable interface {
 // request's workspace, RFC-0033) and admin (the same action at the console
 // only: the operator's). Platform routes belong to no door: they answer at
 // any host, resolve no workspace and carry no session, so the extension
-// authenticates them itself (a key only its own caller holds).
+// authenticates them itself (a key only its own caller holds). New service
+// integrations should use Internal or External: Platform remains on the general
+// HTTP listener and is not an isolation boundary.
 type Router interface {
 	Public() gin.IRouter
 	Protected() gin.IRouter
 	WorkspaceAdmin() gin.IRouter
 	Admin() gin.IRouter
+	// Internal and External have isolated listeners. Extensions must authenticate callers.
+	Internal() gin.IRouter
+	External() gin.IRouter
 	Platform() gin.IRouter
 }
 
