@@ -497,4 +497,6 @@ func (r router) Public() gin.IRouter         { return r.e }
 func (r router) Protected() gin.IRouter      { return r.e }
 func (r router) WorkspaceAdmin() gin.IRouter { return r.e }
 func (r router) Admin() gin.IRouter          { return r.e }
+func (r router) Internal() gin.IRouter       { return r.e }
+func (r router) External() gin.IRouter       { return r.e }
 func (r router) Platform() gin.IRouter       { return r.e }

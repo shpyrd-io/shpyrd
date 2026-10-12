@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shpyrd-internal-api
+spec:
+  selector:
+    app.kubernetes.io/name: shpyrd-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shpyrd-public-api
+spec:
+  selector:
+    app.kubernetes.io/name: shpyrd-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8084

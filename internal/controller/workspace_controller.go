@@ -104,6 +104,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 	}
 	// The shared layout's two doors (shared_front_doors.go), whatever
 	// workspaces exist.
+	if err := r.ensurePublicAPI(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.ensureSharedFrontDoors(ctx); err != nil {
 		return ctrl.Result{}, err
 	}

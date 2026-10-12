@@ -154,6 +154,9 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 	}, profile.Vars)
 	vars = mergeVars(vars, opts.Vars)
 	vars = mergeVars(vars, derivedVars(vars, opts.Extensions))
+	if err := validateIntegrationVars(vars); err != nil {
+		return nil, err
+	}
 	for _, pair := range [][2]string{{VarGatewayBucket, VarGatewayRegion}, {VarRegistryBucket, VarRegistryRegion}, {VarSourcesBucket, VarSourcesRegion}} {
 		if vars[pair[0]] != "" && vars[pair[1]] == "" {
 			return nil, fmt.Errorf("%s requires %s", pair[0], pair[1])

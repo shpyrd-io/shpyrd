@@ -41,7 +41,9 @@ type Options struct {
 	// project namespaces, so the NetworkPolicy can keep everything else
 	// (the edge, the API) to the front doors (RFC-0033). Empty: sources
 	// are served on Addr only.
-	SourcesAddr string
+	SourcesAddr     string
+	InternalAPIAddr string
+	PublicAPIAddr   string
 	// TrustedProxies are the CIDRs whose X-Forwarded-For is believed (the
 	// ingress controllers' pod range): behind them every client would
 	// otherwise be the ingress pod, and per-IP throttles one bucket.
@@ -195,6 +197,8 @@ type Server struct {
 	opts             Options
 	log              *slog.Logger
 	engine           *gin.Engine
+	internalAPI      *gin.Engine
+	publicAPI        *gin.Engine
 	kube             *kube.Client
 	apps             client.Client
 	archiveDownloads *archiveDownloads
@@ -388,6 +392,8 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.rp = newRelyingParty(sessions, opts.Public.DashboardURL, opts.Public.Domain, opts.IngressService, opts.Logger)
 	s.rp.SetClusterCA(s.clusterCA(context.Background()))
 
+	s.internalAPI = s.integrationRouter("internal")
+	s.publicAPI = s.integrationRouter("public")
 	if err := s.routes(); err != nil {
 		return nil, err
 	}
@@ -426,6 +432,8 @@ type routeGroups struct {
 }
 
 func (r routeGroups) Public() gin.IRouter         { return r.pub }
+func (r routeGroups) Internal() gin.IRouter       { return r.s.internalAPI.Group("/api") }
+func (r routeGroups) External() gin.IRouter       { return r.s.publicAPI.Group("/api") }
 func (r routeGroups) Platform() gin.IRouter       { return r.platform }
 func (r routeGroups) Protected() gin.IRouter      { return r.api }
 func (r routeGroups) WorkspaceAdmin() gin.IRouter { return r.wsAdmin }
@@ -447,7 +455,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.edgeKeys.Run(ctx)
 	go s.keepOIDCClient(ctx) // the identity provider's redirect URIs (RFC-0080)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 4)
 	go func() {
 		s.log.Info("listening", "addr", s.opts.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -466,6 +474,31 @@ func (s *Server) Run(ctx context.Context) error {
 		}()
 	}
 
+	var integrations []*http.Server
+	for _, entry := range []struct {
+		addr    string
+		handler http.Handler
+	}{
+		{s.opts.InternalAPIAddr, s.internalAPI}, {s.opts.PublicAPIAddr, s.publicAPI},
+	} {
+		if entry.addr == "" {
+			continue
+		}
+		server := &http.Server{Addr: entry.addr, Handler: entry.handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+		integrations = append(integrations, server)
+		go func() {
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for _, server := range integrations {
+			_ = server.Shutdown(ctx)
+		}
+	}()
 	select {
 	case err := <-errCh:
 		return err
