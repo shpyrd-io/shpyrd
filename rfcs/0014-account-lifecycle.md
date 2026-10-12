@@ -1,6 +1,6 @@
 # RFC-0014 Account lifecycle
 
-**Status:** implemented (v0.9.45)
+**Status:** replaced by RFC-0082 (local credential lifecycle removed; workspace invitations retained)
 
 **Owner:** unassigned
 
@@ -8,7 +8,23 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-28 (implemented)
+**Last update:** 2026-10-12
+
+## Current decision (2026-10-12)
+
+The former local set-password, reset, verification and lockout implementation was
+removed, including its account APIs and email templates. Its old implementation
+table and missing features below are not a current backlog. Accounts/Clerk or the
+customer IdP owns credentials, verification, recovery and MFA.
+
+Workspace invitations remain implemented: they grant membership after sign-in
+through an allowed provider with a verified invited email; they do not create a
+password. The workspace sends the invitation email and serves its acceptance page.
+OSS static Dex users have no shpyrd self-service password recovery.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Summary
 

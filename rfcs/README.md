@@ -24,6 +24,19 @@ declare what they depend on.
 | `implemented` | Merged. Partial scope, if any, follows the word; "gaps" points at an Implementation status section in the RFC listing what its text still promises (audit of 2026-09-25, mirrored on the website's roadmap). |
 | `deferred`, `rejected`, `withdrawn`, `replaced` | Not going ahead (as is). |
 
+## Account and authentication audit (2026-10-12)
+
+RFC-0082 is implemented in production. RFCs 0012, 0014 and 0053 are replaced:
+local password lifecycle and Core MFA/passkeys are not pending work. Credentials
+belong to Accounts/Clerk or the customer IdP; OSS uses operator-managed Dex static
+credentials. Workspace invitations, authorization, CLI/MCP grants and revocation
+remain in Core. Historical proposals are retained with explicit current decisions.
+
+SCIM (0074), direct kubectl OIDC (0062), access zones (0063), signed-in hints (0068)
+and Grafana OIDC/role mapping (0015) are separate proposals, not completed by the
+account migration. Existing authentication of an app or an internal API does not
+implement those proposals.
+
 ## Index
 
 | RFC | Title | Status | Depends on |
@@ -34,14 +47,14 @@ declare what they depend on.
 | [0004](0004-dockerfile-builds.md) | Dockerfile builds (BuildKit) | implemented, gaps | |
 | [0005](0005-shell-and-one-off-commands.md) | Shell and one-off commands | implemented (CLI); browser terminal → 0026, gaps | |
 | [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041 | |
-| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (3.1 local users; 3.2 → 0014, 3.3 → 0012 + 0058; complete: `shpyrd login` with 0052, stored OIDC tokens not needed) | |
+| [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (OIDC/Dex; credentials and identity contract → 0082) | |
 | [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → 0043, supply chain → 0044, tokens → 0031, durable audit → 0025, gaps | |
 | [0009](0009-postgres-resource.md) | Postgres resource (CloudNativePG) | implemented; backups → 0038, pooling/rotation → 0039, gaps | |
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
-| [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | implemented | 0007 |
+| [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | replaced by 0082 (local password form/grant removed) | 0007 |
 | [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only — suppression and bounces are the relay's) | 0002 |
-| [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | implemented (v0.9.45) | 0012, 0013 |
+| [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | replaced by 0082 (local lifecycle removed; workspace invitations retained) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |
@@ -81,12 +94,12 @@ declare what they depend on.
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
 | [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API; v0.9.61 the browser sign-in, run, pg psql, redis cli and globals over the API; complete) | 0031, 0026 |
-| [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | implementable | 0012, 0014 |
+| [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | replaced by 0082 (Core proposal discarded; Accounts/IdP MFA and passkeys shipped) | 0012, 0014 |
 | [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
 | [0056](0056-tracing-backend.md) | Tracing backend (Jaeger) | implementable | 0029, 0015 |
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |
-| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (GitHub round trip pending an OAuth app); `auth-oidc` retired in favour of `oidc` connectors; enterprise, `ee/sso`, since 2026-10-04 | 0012 |
+| [0058](0058-external-identity-providers.md) | External identity providers (Okta and OIDC, GitHub, Google) | implemented (licensed Dex connectors; realm-scoped identities → 0082) | 0012 |
 | [0059](0059-in-cluster-registry-on-cloud.md) | In-cluster registry as the default on every profile | implemented, gaps | 0035, 0060 |
 | [0060](0060-volumes-on-cloud-profiles.md) | Volumes on cloud profiles: storage classes, provider minimums, snapshots | implemented | 0006, 0035, 0041 |
 | [0061](0061-dns-providers.md) | DNS providers: automatic records and wildcard certificates | implemented (OCI DNS), gaps | 0035, 0036 |
@@ -105,10 +118,11 @@ declare what they depend on.
 | [0074](0074-scim-provisioning.md) | SCIM provisioning: people and teams from the directory, immediate deprovisioning (licensed) | provisional | 0033, 0058 |
 | [0075](0075-usage-billing-and-sleep.md) | Usage, billing and sleep: the platform's economics end to end — usage ledger, customer billing at plan prices, operator COGS and margin via OpenCost, scale to zero for HTTP apps (KEDA HTTP add-on) and PostgreSQL (CNPG hibernation, wake-on-connect) | replaced (history, 2026-10-04): billing left the platform; usage stays; sleep → ee/autosleep, costs → ee/costs | 0002, 0003, 0009, 0033, 0038, 0042, 0047, 0048 |
 | [0076](0076-stable-identifiers.md) | Stable identifiers: IDs identify, names present — new projects named by UUID (short base36), legacy projects receive an id and are re-keyed without migration | implemented (v0.9.43–44) | 0033, 0059, 0075 |
-| [0080](0080-two-doors.md) | Two doors: the console (operator, its own host and sign-in realm, restrictable to one IdP) and workspaces (every one explicit with an address, the default one included) are separate applications on one identity provider; per-host OIDC callbacks, sessions per realm, no implicit workspace; two UI applications served by host; console users of its own (2026-10-04) | implemented (v0.9.52; the library split in `design/ui` and `apps/` on 2026-09-30); gaps: identity linking, two-host e2e, docs | 0033, 0058, 0076, 0078 |
+| [0080](0080-two-doors.md) | Two doors: the console (operator, its own host and sign-in realm, restrictable to one IdP) and workspaces (every one explicit with an address, the default one included) are separate applications on one identity provider; per-host OIDC callbacks, sessions per realm, no implicit workspace; two UI applications served by host; console users of its own (2026-10-04) | implemented (separate realms; explicit principal binding → 0082) | 0033, 0058, 0076, 0078 |
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting (fixed since 2026-10-04), OSS creates one workspace at init and shows no other, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
+| [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
 
 ## Phases
 
@@ -126,7 +140,7 @@ declare what they depend on.
 | I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime |
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
 | K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
-| L | 0047, 0048, 0052, 0053, 0054, 0056 | autoscaling, cost, API-first CLI, MFA and passkeys, GitHub App, tracing |
+| L | 0047, 0048, 0052, 0054, 0056 | autoscaling, cost, API-first CLI, GitHub App, tracing; Core MFA/passkeys (0053) replaced by 0082 |
 | M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep |
 
 | O | 0077 | node pools: fixed platform pool, autoscaled apps pool; the node side of scaling next to RFC-0047's pod side |

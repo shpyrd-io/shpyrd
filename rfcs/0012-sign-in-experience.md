@@ -1,6 +1,6 @@
 # RFC-0012 Sign-in experience: shpyrd's own sign-in page
 
-**Status:** implemented
+**Status:** replaced by RFC-0082 (local password form and password grant removed)
 
 **Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
@@ -8,7 +8,21 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-23
+**Last update:** 2026-10-12
+
+## Current decision (2026-10-12)
+
+The original local password form and `POST /api/auth/password` are removed.
+Workspace and console entry pages select permitted providers; a single provider
+redirects directly without showing an empty chooser. OSS credentials are entered
+on Dex's page; central credentials are entered at Accounts, and company credentials
+at the customer's IdP. Sign-out and separate realm sessions remain implemented.
+Core does not collect passwords or implement MFA. Improving the remaining Dex
+error/authentication page design is separate UI work, not a local-auth revival.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Summary
 

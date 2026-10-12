@@ -13,12 +13,12 @@
 ## Summary
 
 A `mail` extension that lets the platform send email over SMTP, to any relay,
-with a test command. Used by account lifecycle flows (RFC-0014) and notifications
-(RFC-0030).
+with a test command. Used by workspace invitations; notifications remain a
+separate proposal (RFC-0030).
 
 ## Motivation
 
-Invitations, password resets and alerts need a sender; every consumer configuring its own
+Invitations and alerts need a sender; every consumer configuring its own
 SMTP would be repetitive and error prone.
 
 ### Goals
@@ -61,8 +61,9 @@ SMTP would be repetitive and error prone.
 - Messages are `multipart/alternative` when HTML is given, quoted-printable, with
   `Message-ID`, `Date`, `Auto-Submitted: auto-generated`. The invitation email is text
   plus a small HTML wrapper with the wordmark; links use the workspace's dashboard URL.
-- Consumers so far: invitations (RFC-0033). Notifications (RFC-0030) and account
-  lifecycle (RFC-0014) plug into the same `Mailer`.
+- Current consumer: workspace invitations (RFC-0033). Notifications (RFC-0030)
+  remain a proposal. Password, verification and MFA messages belong to Accounts/Clerk
+  or the customer IdP (RFC-0082); the RFC-0014 local lifecycle templates are removed.
 
 ### Suppression and bounces
 

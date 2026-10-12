@@ -136,15 +136,11 @@ Everything you passed is recorded in the cluster: later runs (`brew upgrade shpy
 
 ## 6. First sign-in and first project
 
-The same as on Oracle Cloud: the admin token bootstraps, then accounts and a platform-admin team ([Oracle Cloud, steps 5 and 6](/docs/oracle-cloud#5-first-sign-in)):
-
-```shell
-shpyrd cluster dashboard --context eks-shpyrd-prod
-shpyrd-ctl users add you@example.com --name "You" --context eks-shpyrd-prod
-shpyrd teams create platform --platform-role platform-admin --member you@example.com --context eks-shpyrd-prod
-shpyrd projects create shop --context eks-shpyrd-prod
-shpyrd deploy --project shop --context eks-shpyrd-prod
-```
+Configure identities and authorize console and workspace access as described in
+[Oracle Cloud, first sign-in](/docs/oracle-cloud#5-first-sign-in). Credentials live
+in the configured IdP or Dex static configuration, not a Core users API. Use the
+`eks-shpyrd-prod` context for operator commands; the developer CLI uses workspace
+sign-in (`shpyrd login`).
 
 ## Costs
 

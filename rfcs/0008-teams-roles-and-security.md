@@ -4,7 +4,20 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-12
+
+## Current decision (2026-10-12)
+
+Authorization is implemented with workspace/console principals: email is contact
+information and may be an administrative lookup when unambiguous, not the identity
+key used to grant access at login. Memberships, teams and project roles remain in
+the workspace. The optional Kubernetes RBAC mirror uses
+`shpyrd:principal:<internal-id>` rather than email. Other security gaps in this RFC
+remain tracked; moving authentication to an IdP does not implement them.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Summary
 

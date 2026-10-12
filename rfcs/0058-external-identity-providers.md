@@ -1,6 +1,6 @@
 # RFC-0058 External identity providers (Okta and OIDC, GitHub, Google)
 
-**Status:** implemented (with gaps) — see Implementation status below
+**Status:** implemented (Dex federation; direct auth-oidc approach replaced)
 
 **Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
@@ -8,8 +8,26 @@
 
 **Creation date:** 2026-09-23
 
-**Last update:** 2026-09-23
+**Last update:** 2026-10-12
 
+
+## Current decision (2026-10-12)
+
+Enterprise connectors are implemented in `ee/sso`: Google, GitHub, Microsoft and
+generic OIDC all federate through Dex. Use `shpyrd sso` for workspace methods and
+`shpyrd-ctl auth connector` for operator-managed scopes. Core's `auth-local`
+extension installs the broker; it does not imply local credential management.
+Cloud's central Accounts connector uses the same broker and principal contract.
+
+Provider availability is scoped by realm and workspace policy. Company-only access
+can disable central Accounts. Direct launchers use
+`/api/auth/login/<provider-id>?next=/`. Provider-specific production credentials
+and end-to-end checks remain deployment responsibilities; “implemented” does not
+claim every external provider has been exercised in this installation.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Amendment (2026-10-04)
 

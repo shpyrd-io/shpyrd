@@ -1,6 +1,6 @@
 # RFC-0080 Two doors: the console and workspaces are separate applications
 
-**Status:** implemented (v0.9.52); gaps
+**Status:** implemented (separate console/workspace realms; identity contract completed by RFC-0082)
 
 **Owner:** Patrick Negri
 
@@ -17,10 +17,26 @@ UI is two applications served by host)
 
 **Creation date:** 2026-09-29
 
-**Last update:** 2026-09-29 (implemented)
+**Last update:** 2026-10-12
 
 ---
 
+
+## Current decision (2026-10-12)
+
+Console and workspace applications, callbacks, sessions and authorization are
+separate. Console access is an explicit console-principal allowlist; being a
+workspace owner or an Accounts customer does not grant console administration.
+
+Automatic cross-provider linking by email is discarded. Verified issuer/subject
+bindings and explicit legacy-principal migration replace that old open question.
+Local password forms and the console's local Accounts CRUD page are removed.
+The remaining CI two-host coverage and provider-group limitations below are
+validation or integration follow-ups, not unfinished realm separation.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Amendment (2026-10-04)
 
@@ -320,10 +336,10 @@ Known gaps (each stays here until done or dropped):
 
 | Gap | Where |
 | --- | --- |
-| Identity linking across connectors: a person is their email as each provider asserts it; `email_verified` is not checked and password accounts are not linked to provider accounts | open question 1 |
+| Automatic email-based identity linking | discarded; explicit principal binding shipped in RFC-0082 |
 | The CI end-to-end run (kind) exercises the one-door fallback, not two hosts | test matrix |
 | Google `hostedDomains` is set from one `--hosted-domain`; Dex's `groups` for Google are not mirrored | RFC-0058 |
-| The docs site does not describe the two doors yet | docs |
+| Console/workspace identity and account lifecycle documentation | done; site access docs and RFC-0082 |
 
 ## History
 

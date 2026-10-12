@@ -3,7 +3,7 @@ title: Roadmap
 description: What is coming - what is decided and what is still a proposal - with a link to the RFC behind every line.
 ---
 
-Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) that is not done yet: **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues). {% .lead %}
+Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work (completed or replaced account proposals are recorded separately below): **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues). {% .lead %}
 
 ## Platform
 
@@ -48,6 +48,19 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Notifications: webhook, Slack, email | [RFC-0030](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0030-notifications.md) | proposal |
 | Audit trail v2 (durable, cluster-wide, export) | [RFC-0025](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0025-audit-trail-v2.md) | proposal |
 
+## Accounts and authentication: delivered or replaced
+
+Credential features follow the selected IdP's configuration. Accounts supports
+TOTP, recovery codes and passkeys; OSS static Dex credentials do not provide those
+self-service features. Workspace permissions and CLI/MCP grants stay in the workspace.
+
+| Item | RFC | Status |
+| --- | --- | --- |
+| Account identity separation: Accounts/IdP credentials and workspace authorization | [RFC-0082](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0082-account-identity-separation.md) | done (production) |
+| Local password form and password grant | [RFC-0012](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0012-sign-in-experience.md) | replaced by RFC-0082; removed from Core |
+| Local account lifecycle: reset, set-password and credential management | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | replaced by RFC-0082; workspace invitations retained |
+| Core MFA/passkeys proposal | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | discarded in Core; supported in Accounts through Clerk and in customer IdPs |
+
 ## Access
 
 | Item | RFC | Status |
@@ -61,7 +74,6 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | App actions: endpoints an app declares that the platform runs for a person (assistants, launcher) | [RFC-0072](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0072-app-actions.md) | proposal |
 | Data in backups: database archives and volumes in the platform backup; workspace data export | [RFC-0073](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0073-data-in-backups.md) | proposal |
 | SCIM provisioning: people and teams from the company directory, immediate deprovisioning | [RFC-0074](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0074-scim-provisioning.md) | proposal |
-| MFA and passkeys | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | ready to implement |
 | Grafana behind shpyrd sign-in | [RFC-0015](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0015-grafana-sign-in.md) | proposal |
 | MCP connector for AI agents: every workspace is a remote MCP server with OAuth 2.1 and read tools | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | in progress (v0.9.16: remote server, OAuth 2.1, read tools; writing tools, stdio mode still missing) |
 | Supply chain and encryption at rest | [RFC-0044](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0044-supply-chain.md) | ready to implement |

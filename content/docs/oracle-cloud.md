@@ -158,14 +158,12 @@ shpyrd cluster dashboard --context oke-shpyrd-prod    # opens https://shpyrd.oci
 shpyrd cluster token --context oke-shpyrd-prod        # prints the token for the "Admin token" field
 ```
 
-The token is a shared, full-rights credential meant for bootstrap and automation. Give people their own accounts instead (`--enable auth-local` above installed the sign-in service), then put yourself in a platform-admin team - the moment the first team exists, roles are enforced and anyone without one sees nothing:
-
-```shell
-shpyrd-ctl users add you@example.com --name "You" --context oke-shpyrd-prod    # prompts for a password
-shpyrd teams create platform --platform-role platform-admin --member you@example.com --context oke-shpyrd-prod
-```
-
-Sign in at `https://shpyrd.oci.example.com` with that email and password. When every administrator has an account, switch the token off: `shpyrd cluster token --disable` (the CLI keeps working through your kubeconfig; `--enable` turns it back on). Company sign-in (Okta, any OpenID Connect issuer, GitHub, Google) and teams mapped to identity provider groups are in [Extensions and sign-in](/docs/extensions) and [Teams, roles and security](/docs/access).
+The token is a shared bootstrap credential. Configure Dex static credentials for
+OSS or a licensed customer IdP, then sign in and explicitly authorize the console
+principal and workspace roles separately. Core has no local password-management
+commands. Keep operator kubeconfig access during setup; verify each administrator's
+access before disabling the bootstrap token. See [Extensions and sign-in](/docs/extensions)
+and [People, teams and roles](/docs/access).
 
 ## 6. First project
 

@@ -144,15 +144,12 @@ shpyrd cluster dashboard     # opens the dashboard signed in, through a one-time
 shpyrd cluster token         # prints the token for the "Admin token" field of the sign-in page
 ```
 
-For one developer on a laptop that is all. For a team, enable accounts and make yourself the first platform admin - from the first team on, roles are enforced:
-
-```shell
-shpyrd cluster init --enable auth-local
-shpyrd-ctl users add you@example.com --name "You"                                   # prompts for a password
-shpyrd teams create platform --platform-role platform-admin --member you@example.com
-```
-
-Then sign in with the email and password, and switch the token off when nobody needs it (`shpyrd cluster token --disable`; `--rotate` replaces it). Details: [Extensions and sign-in](/docs/extensions), [Teams, roles and security](/docs/access).
+For a team, configure the identity provider before inviting people. OSS uses
+operator-managed Dex static credentials; enterprise installations can configure
+customer SSO. Sign in once, then grant access to the verified principal. Console
+access and workspace roles are separate; keep kubeconfig access while setting them
+up. Core does not create or reset passwords. See [Extensions and sign-in](/docs/extensions)
+and [People, teams and roles](/docs/access).
 
 ## Deploy the example
 

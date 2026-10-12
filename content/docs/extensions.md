@@ -15,7 +15,7 @@ shpyrd-ctl extensions disable auth-local --yes
 
 ```
 NAME            STATUS    COMPONENT                        DESCRIPTION
-auth-local      enabled   dex                              Sign in with email and password: a bundled Dex issuer stores local accounts (shpyrd users add)
+auth-local  enabled  dex  Bundled Dex identity broker; optional operator-managed static credentials
 logs-agent      enabled   logs-agent                       Vector log agent: collects container logs from all project pods, labels them project/process/instance, feeds drains (RFC-0022a)
 postgres        enabled   cnpg, barman-cloud, pg-gateway   PostgreSQL databases for projects (CloudNativePG), attached to apps as DATABASE_URL (shpyrd pg create)
 redis           enabled   -                                Redis-compatible caches and queues for projects (Valkey or Redis), attached to apps as REDIS_URL (shpyrd redis create)
@@ -62,27 +62,24 @@ Any SMTP relay works, and the two kinds differ in one thing. A commercial provid
 
 ## Signing in with an account
 
-Out of the box the dashboard is protected by the **admin token** (`shpyrd-ctl cluster token`), which is right for one developer and for automation (and can be switched off later, see [the admin token](/docs/access#the-admin-token)). With the `auth-local` extension, people get their own accounts:
+The `auth-local` extension installs the bundled Dex OIDC broker:
 
 ```shell
 shpyrd-ctl extensions enable auth-local
-shpyrd-ctl users add ada@example.com --name "Ada Lovelace"   # prompts for the password
-shpyrd-ctl users list
-shpyrd-ctl users passwd ada@example.com
-shpyrd-ctl users rm ada@example.com
 ```
 
-The sign-in page then asks for email and password directly (the admin token moves behind a small link, and disappears once you disable it). A wrong password is shown in place; ten wrong passwords in a minute for one account are refused before they reach the issuer, and every attempt is in the audit trail. Signed-in users see who they are in the header and can sign out; a **Users** page lets platform admins add, reset and remove accounts (the same operations as the CLI). What each account may do is decided by [teams and roles](/docs/access).
+For OSS, configure Dex `staticPasswords` with bcrypt hashes and stable `userID`
+values. Credentials are entered on Dex, not in a workspace password form. Core has
+no user/password CRUD commands or reset/set-password endpoints. Cloud uses Accounts
+or customer SSO; MFA, passkeys and recovery belong to that IdP. See
+[Accounts and authentication](/docs/access#accounts-and-authentication).
 
-### How it works
-
-- The extension installs [Dex](https://dexidp.io), an OpenID Connect issuer, at `https://auth.<domain>` with a certificate from the cluster issuer. Accounts are Dex objects in the cluster (bcrypt hashes), so they survive restarts, upgrades and even disabling the extension.
-- The shpyrd server is an OpenID Connect relying party. Email and password never leave shpyrd's own page: the server exchanges them with Dex server to server (the OAuth2 password grant) and verifies the resulting identity token exactly as it would after a redirect. External providers use the authorization code flow with PKCE. Either way: an HttpOnly session cookie, a CSRF token on every change, sessions that expire after 12 hours idle or 7 days, and sign-out that also ends the session at issuers that support it. A company identity provider is a Dex connector: configuration, not code (below).
-- The `shpyrd` CLI signs in with the same accounts (`shpyrd login`) and speaks the workspace API. `shpyrd-ctl` goes through your kubeconfig, so cluster operations do not depend on dashboard accounts.
+The CLI uses workspace sign-in (`shpyrd login`), with authorization and revocation
+owned by the workspace. `shpyrd-ctl` uses operator kubeconfig access.
 
 ## Company identity providers
 
-Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd as a connector of the bundled issuer of `auth-local`, and so do GitHub, Google and Microsoft. These are enterprise features: on with a license, always on shpyrd cloud. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-company-s-sign-in). Users are the same person across providers when the email matches, and roles are granted by email or by group, so an Okta group or a GitHub team can be a shpyrd [Team](/docs/access).
+Anyone with an identity provider that speaks OpenID Connect (Okta, Auth0, Keycloak, Microsoft Entra, Google Workspace...) connects it to shpyrd as a connector of the bundled issuer of `auth-local`, and so do GitHub, Google and Microsoft. These are enterprise features: on with a license, always on shpyrd cloud. Every provider becomes a button on the sign-in page. Since v0.9.15 each workspace can add methods of its own on its Sign-in tab (`shpyrd sso add`), shown on that workspace's login page only — see [Your company's sign-in](/docs/access#your-company-s-sign-in). Identities are bound by trusted issuer and subject, not merged by matching email. Provider groups can map to workspace teams; permissions reference stable principals.
 
 ### GitHub, Google, Microsoft and OpenID Connect through Dex
 
