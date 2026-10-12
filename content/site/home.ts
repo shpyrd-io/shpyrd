@@ -10,6 +10,14 @@ export const hero = {
     'sign-in, and give it everything it needs to run, from its database to its backups.',
 }
 
+// The Product Hunt badge under the hero's buttons: the launch, featured.
+export const productHunt = {
+  href: 'https://www.producthunt.com/products/shpyrd?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-shpyrd',
+  image: 'https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1277714&theme=light&t=1791805434791',
+  imageDark: 'https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1277714&theme=dark&t=1791805434791',
+  alt: 'shpyrd - A vibe-cloud for your vibe-apps and sites. | Product Hunt',
+}
+
 export const gap = {
   label: 'Easily deploy your project.',
   heading: 'Your app, database, and background processes. In one place',
