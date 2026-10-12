@@ -133,8 +133,12 @@ func (f *fixture) fakeOperator(ctx context.Context, knowsMark bool) {
 			if f.restart--; f.restart == 0 {
 				_ = unstructured.SetNestedField(cluster.Object, int64(len(names)), "status", "readyInstances")
 				_ = unstructured.SetNestedField(cluster.Object, phaseHealthy, "status", "phase")
-				_ = f.c.Status().Update(ctx, cluster)
+				// Publish readiness only after the fake SQL endpoint is available.
+				// Otherwise a concurrent poll observes healthy status while down
+				// is still true, adding a spurious refused query. downFor models
+				// deliberate SQL startup delays independently.
 				f.sql.set(f.restarting, false)
+				_ = f.c.Status().Update(ctx, cluster)
 			}
 		case ptr.Deref(pg.Spec.Instances, 1) == 2 && len(names) == 1:
 			_ = f.c.Create(ctx, claim(f.ns, f.name+"-2", class, "pv-new"))
