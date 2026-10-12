@@ -6,7 +6,7 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { glass } from "@shpyrd/ui/lib/glass";
-import { also, companies, gap, hero, route } from "@shpyrd/content/site/home";
+import { also, companies, gap, hero, productHunt, route } from "@shpyrd/content/site/home";
 import { enterpriseContact, secondaryCta } from "@shpyrd/content/site/offer";
 import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
@@ -71,14 +71,24 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         className="[&_[data-slot=hero-description]]:max-w-[44ch]"
         description={hero.description}
         actions={
-          <>
-            <DeployButton size="lg" />
-            {sectionsLive && (
-              <Button variant="outline" size="lg" asChild>
-                <a href={secondaryCta.href}>{secondaryCta.label}</a>
-              </Button>
-            )}
-          </>
+          // The buttons, and the Product Hunt badge centred under them.
+          <div className="flex flex-col items-center gap-8">
+            <div className="flex flex-wrap items-start justify-center gap-3">
+              <DeployButton size="lg" />
+              {sectionsLive && (
+                <Button variant="outline" size="lg" asChild>
+                  <a href={secondaryCta.href}>{secondaryCta.label}</a>
+                </Button>
+              )}
+            </div>
+            <a href={productHunt.href} target="_blank" rel="noopener noreferrer">
+              {/* The badge in the site's theme: Product Hunt draws a light one and a dark one. */}
+              {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
+              <img alt={productHunt.alt} width={250} height={54} src={productHunt.image} className="dark:hidden" />
+              {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
+              <img alt={productHunt.alt} width={250} height={54} src={productHunt.imageDark} className="hidden dark:block" />
+            </a>
+          </div>
         }
         image={picture}
         align="auto"
