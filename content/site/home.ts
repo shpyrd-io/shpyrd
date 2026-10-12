@@ -18,6 +18,12 @@ export const productHunt = {
   alt: 'shpyrd - A vibe-cloud for your vibe-apps and sites. | Product Hunt',
 }
 
+export const peerPush = {
+  href: 'https://peerpush.com/p/shpyrd',
+  image: 'https://peerpush.com/p/shpyrd/badge.png',
+  alt: 'shpyrd on PeerPush',
+}
+
 export const gap = {
   label: 'Easily deploy your project.',
   heading: 'Your app, database, and background processes. In one place',
