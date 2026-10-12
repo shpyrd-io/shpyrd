@@ -5,6 +5,26 @@ description: Who is in the workspace and what they may do, how roles map to Kube
 
 Identity says who you are; roles say what you may do. A person holds a **workspace role** (owner, admin or member), projects grant **project roles** to people and teams, the API enforces them and the dashboard hides what a role cannot do. On shpyrd cloud this is all there is to it; on a cluster you run yourself, a controller also mirrors the grants into Kubernetes RBAC. {% .lead %}
 
+## Accounts and authentication
+
+Credentials and workspace permissions are separate. On shpyrd cloud,
+[Accounts](https://accounts.shpyrd.io) manages the central account, email verification,
+password recovery, authenticator MFA, recovery codes and passkeys through Clerk.
+Methods depend on the application's configuration. Signing up does not create a
+workspace or grant access to one: workspace creation is a separate product flow.
+
+Enterprise workspaces can use a customer IdP; Cloud can offer Accounts, customer
+SSO, or both. Company-only workspaces reject central-account access. With one
+available provider, sign-in redirects directly; multiple providers show a choice.
+OSS uses operator-configured Dex `staticPasswords` with stable `userID` values,
+without shpyrd password recovery or local credential management.
+
+Permissions reference a workspace or console principal bound to a trusted
+issuer/subject. Matching email addresses do not merge identities or grant existing
+roles. Legacy users require explicit operator binding. Invitations still come from
+the workspace and require a verified invited email through an allowed provider.
+CLI/MCP authorization and revocation also remain in the workspace.
+
 ## Workspace roles
 
 | Role | May |
@@ -25,7 +45,7 @@ shpyrd invitations                                   # pending
 shpyrd invitations revoke bob@example.com
 ```
 
-An invitation is a link, shown once, that works for seven days — and, when the platform [sends email](#email), it is emailed too. Signing in with the invited address **accepts it, link or no link**: the person gets the role (and the team) the moment they sign in, through whatever sign-in method gives that address, whatever the workspace's join policy. Inviting someone who has signed in before applies the role at once; inviting the same address again makes a new link. The People page has the same **Invite** dialog and the pending **Invitations** below; `/invite/<token>` shows the holder what they were invited to.
+An invitation is a link, shown once, that works for seven days — and, when the platform [sends email](#email), it is emailed too. Signing in with the invited address **accepts it, link or no link**: the person gets the role (and the team) the moment they sign in, through an allowed sign-in method with a verified email, whatever the workspace's join policy. Inviting someone who has signed in before applies the role at once; inviting the same address again makes a new link. The People page has the same **Invite** dialog and the pending **Invitations** below; `/invite/<token>` shows the holder what they were invited to.
 
 ## Project roles
 
@@ -39,7 +59,7 @@ An invitation is a link, shown once, that works for seven days — and, when the
 | `platform-admin` | every project, teams, people | everything (what a workspace owner or admin holds) |
 | `platform-viewer` | everything, read-only | nothing |
 
-The first five are granted **per project**, to a user (by email) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
+The first five are granted **per project**, to a user (by principal ID; email can select an unambiguous user) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
 
 ## Your company's sign-in
 
@@ -56,7 +76,7 @@ On a self-hosted install the platform's own methods are managed by the operator 
 
 ## The console
 
-The console, the operator's application at its own address, has its own people: the console users, a list apart from every workspace's people (the console's **Console users** page, or `shpyrd-ctl console-users add <email>`). Each is an admin of the console. They sign in with email and password or, with a license, through a method of the console's login page; either way, the address must be on the list. The admin token (`shpyrd cluster dashboard`) always opens it. A new install's list starts with the owners and admins of its workspace.
+The console is the operator's application at its own address, with its own sign-in methods and an explicit console-principal allowlist. Use `shpyrd-ctl console-users add <principal-id>` after identifying the console principal. Workspace ownership and an Accounts product do not grant console administration. Operator kubeconfig/admin-token access remains available for bootstrap and recovery.
 
 ## Teams and members
 

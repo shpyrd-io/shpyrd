@@ -122,8 +122,10 @@ use its callback URL; customers paste `auth.shpyrd.io` into their identity provi
 is not at `auth.operator.shpyrd.io` for the same reason `auth.acme.com` would not read as
 the vendor's infrastructure. The address is chosen once and never moves.
 
-Password sign-in never shows this host (the server calls the Dex token endpoint server-
-to-server, RFC-0012 password grant). SSO sign-in hops through it briefly.
+All workspace browser sign-in now redirects through Dex (RFC-0082). Central
+credentials are entered at `accounts.shpyrd.io`, company credentials at the selected
+IdP, and optional OSS static credentials on Dex itself. The RFC-0012 server-side
+password grant was removed.
 
 ### Console name
 

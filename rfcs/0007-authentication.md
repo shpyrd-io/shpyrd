@@ -1,10 +1,23 @@
 # RFC-0007 Authentication
 
-**Status:** implemented (complete; the three steps live in RFC-0007, RFC-0014 and RFC-0058)
+**Status:** implemented (OIDC/Dex; account lifecycle replaced by RFC-0082)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-30
+**Last update:** 2026-10-12
+
+## Current decision (2026-10-12)
+
+The relying party and Dex broker are shipped. OSS may use operator-managed Dex
+`staticPasswords` with stable `userID` values. Core no longer provides password
+verification, credential CRUD, reset or signup endpoints. EE uses customer IdPs;
+Cloud uses Accounts (Clerk), customer SSO, or both, according to workspace policy.
+The old `auth-email` plan and direct `auth-oidc` extension are retired. Identity and
+permissions use stable principals and verified issuer/subject bindings, not email.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Summary
 

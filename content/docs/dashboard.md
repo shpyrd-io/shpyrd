@@ -10,7 +10,7 @@ The dashboard is your workspace's address: on shpyrd cloud, `https://<workspace>
 On shpyrd cloud you sign in at your workspace's address with your account, or with your company's sign-in once the workspace has one ([People, teams, roles and security](/docs/access)). The menu under your name says how you signed in and has **Sign out**.
 
 {% callout title="Self-hosted" %}
-`shpyrd cluster dashboard` opens the console signed in through a one-time ticket; the login pages also accept the admin token pasted by hand (`shpyrd cluster token`). With the `auth-local` extension enabled, the login page asks for the email and password of accounts created with `shpyrd-ctl users add` or on the console's **Accounts** page. See [Extensions and sign-in](/docs/extensions).
+`shpyrd cluster dashboard` opens the console signed in through a one-time ticket; the login pages also accept the admin token pasted by hand (`shpyrd cluster token`). Sign-in redirects to the allowed IdP, or to Dex for operator-configured OSS credentials. Account recovery, MFA and passkeys belong to Accounts or the customer IdP. See [Extensions and sign-in](/docs/extensions).
 {% /callout %}
 
 ## The launcher

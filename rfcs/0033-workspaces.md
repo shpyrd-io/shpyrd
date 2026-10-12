@@ -10,7 +10,21 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-27
+**Last update:** 2026-10-12
+
+## Current decision (2026-10-12)
+
+The identity and admission portion is shipped with RFC-0082: workspace membership
+is separate from credentials and from Accounts product ownership. Central-only,
+company-only and mixed login are supported. Invitations require an allowed
+provider and verified email; existing unbound legacy principals require explicit
+operator binding. Signup alone creates no workspace; Accounts provisions a Cloud
+workspace separately and binds its owner using the verified upstream identity.
+Unrelated workspace gaps below remain open.
+
+The proposal and dated implementation notes below are historical wherever they
+conflict with this decision. [RFC-0082](0082-account-identity-separation.md) is the
+current identity and account lifecycle contract.
 
 ## Summary
 

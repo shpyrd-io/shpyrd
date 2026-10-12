@@ -16,7 +16,7 @@ shpyrd releases --project shop --jq '.[-1].number'
 shpyrd deploy --json | jq .release
 ```
 
-Inputs can come from files too. `shpyrd secrets set` and `shpyrd globals set` take `--from-file <path>`: a dotenv file (one `KEY=VALUE` per line, `#` comments, optional `export`, single or double quotes) or, when it starts with `{`, a JSON object of strings; `-` reads stdin, and `KEY=VALUE` arguments on the same command line win over the file. Flags that carry a secret (`login --token`, `shpyrd-ctl users add --password`, `mail set --password`, `sso add --client-secret`) take `@path` to read the value from a file instead of the shell history.
+Inputs can come from files too. `shpyrd secrets set` and `shpyrd globals set` take `--from-file <path>`: a dotenv file (one `KEY=VALUE` per line, `#` comments, optional `export`, single or double quotes) or, when it starts with `{`, a JSON object of strings; `-` reads stdin, and `KEY=VALUE` arguments on the same command line win over the file. Flags that carry a secret (`login --token`, `mail set --password`, `sso add --client-secret`) take `@path` to read the value from a file instead of the shell history.
 
 ```sh
 shpyrd secrets set --from-file .env.production --project shop
@@ -86,8 +86,6 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd-ctl cluster unpin <project-id>` | Clear the node pins a move left on a project (its processes and databases); each restarts once, the scheduler places them by pool. |
 | `shpyrd-ctl storage migrate database <namespace>/<name>` | Move a database's data to the profile's storage class by switchover, without stopping it; the old volume is kept three days. When the data check fails both instances stay: `--back` returns to the old volume, `--no-checks` accepts the numbers and finishes. |
 | `shpyrd-ctl storage migrate volume <project-id> <volume> --yes` | Move a volume's data to the profile's storage class through the project move; the project pauses for the copy. |
-| `shpyrd-ctl users add <email>` | Create a local account (extension `auth-local`); `--name`, `--password <secret\|@file>` (prompted when omitted), or `--invite` for an account without a password, set later through the reset flow or a workspace invite. |
-| `shpyrd-ctl users list`, `passwd <email>`, `rm <email>` | Manage local accounts. |
 
 ## Log drains
 
@@ -124,7 +122,7 @@ Self-hosted: the operator's, in `shpyrd-ctl`.
 | `shpyrd-ctl workspace limits [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi \| --none]` | What the workspace may use; the flags given are set over the limits in force. A project, a deploy or a database beyond them is refused with the limit it would cross. |
 | `shpyrd-ctl workspace sleep [--apps 15m --resuming page\|wait] [--databases 30m] [--none]` | The sleep its apps and databases take when they set none of their own (enterprise: auto sleep). `off` for either turns it off. |
 | `shpyrd-ctl console-users list` | Who may open the console: its own list, apart from every workspace's people. Each is an admin of the console. |
-| `shpyrd-ctl console-users add <email> [--password <secret\|@file>]` / `remove <email>` | Add someone to the list, with an email and password account when `--password` is given; with sign-in through a provider, the email it gives must be on the list. Removing yourself is refused. |
+| `shpyrd-ctl console-users add <principal-id>` / `remove <principal-id>` | Authorize or remove a console principal after sign-in. This manages console access, not credentials. |
 | `shpyrd-ctl license set <file>` / `license status` | Install the enterprise license (a file from shpyrd): GitHub, Google, Microsoft and OIDC sign-in, auto sleep, costs and the MCP server switch on until it expires, and off on that day. |
 | `shpyrd-ctl license renew` / `license billing` | A license bought online renews by itself a week before it expires, sending the last 30 days of what the cluster used and cost; `renew` does it now. `billing` prints a link of one use to your account at shpyrd's billing (also the console's Settings › License › Open billing). |
 | `shpyrd-ctl costs [--from YYYY-MM-DD --to YYYY-MM-DD] [--kind estimated\|real\|usage] [--by project\|process\|resource\|service]` | What the cluster uses and costs (enterprise): OpenCost's estimate (extension `opencost`), the provider's bill (`costs oci set`) or the usage the platform measured. |

@@ -1,6 +1,11 @@
-# Account identity separation
+# RFC-0082 Account identity separation
 
-Status: implemented, deployed to local Kind, and interactive Accounts/Dex login verified on 2026-10-11.
+**Status:** implemented (production; audited 2026-10-12)
+
+**Last update:** 2026-10-12
+
+**Replaces:** RFC-0012 local password flow, RFC-0014 local credential lifecycle,
+RFC-0053 Core MFA/passkeys; amends RFC-0007, RFC-0008, RFC-0033, RFC-0058 and RFC-0080.
 
 ## Responsibilities
 
@@ -56,7 +61,34 @@ The workspace sends its invitation email. Password/MFA/recovery messages belong
 to the IdP. The old Cloud signup verification and workspace password/reset/signup
 ticket endpoints, local account CRUD and their email templates are removed.
 
-## Rollout
+## Production state (2026-10-12)
+
+Accounts, Core and Cloud are deployed with this separation. Central Accounts and
+customer SSO login have been exercised in production. Legacy users are bound
+explicitly as they return; this is not an automatic migration of every old user.
+
+Accounts provides email verification, password/passwordless login, recovery,
+TOTP with recovery codes, and passkey management through Clerk. Enabled methods
+follow the IdP configuration. Workspace invitations and CLI/MCP device consent
+and revocation stay in the workspace; trusting Accounts does not suppress those
+authorization screens. The remaining Dex auth/error-page visual work is separate.
+
+Accounts products have a random 12-digit integer ID, presented as `XXXX-XXXX-XXXX`.
+The Cloud workspace UUID is the external resource ID, not a slug or the product ID.
+Accounts calls Billing directly with product identity; workspace authorization
+remains independent of commercial records.
+
+Core/Cloud v0.9.92 isolates integrations on the internal API listener. Accounts
+uses `http://shpyrd-internal-api.shpyrd-system.svc` with its service credential;
+Billing uses that service with its own credential. NetworkPolicy admits the
+configured caller namespace and app label. Accounts provisioning/status/slug and
+Billing integration routes are not exposed on the general or public API router.
+`https://api.shpyrd.io` serves the separate public API listener; future provider
+webhooks are not implemented. See [Integration API](../docs/integration-api.md).
+Authenticated requests from Accounts and Billing pods were verified in production,
+and external requests to these integration routes returned 404.
+
+## Rollout and legacy-user runbook
 
 1. Back up the control-plane database and Accounts product database. Keep the
    previous images and deployment configuration. Retain operator kubeconfig or
@@ -126,4 +158,4 @@ checks passed. The browser round trip through Dex and Accounts preserved the
 explicitly bound owner's principal and permissions without creating a duplicate.
 Disabling consent on the trusted development OAuth application was independently
 verified and a fresh authorization completed without an approval screen.
-Workspace CLI/MCP consent remains independent. No production configuration changed.
+Workspace CLI/MCP consent remains independent. That local verification did not change production; the later production rollout is recorded above.
