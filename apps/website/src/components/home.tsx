@@ -6,7 +6,7 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { glass } from "@shpyrd/ui/lib/glass";
-import { also, companies, gap, hero, productHunt, route } from "@shpyrd/content/site/home";
+import { also, companies, gap, hero, peerPush, productHunt, route } from "@shpyrd/content/site/home";
 import { enterpriseContact, secondaryCta } from "@shpyrd/content/site/offer";
 import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
@@ -71,7 +71,7 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
         className="[&_[data-slot=hero-description]]:max-w-[44ch]"
         description={hero.description}
         actions={
-          // The buttons, and the Product Hunt badge centred under them.
+          // The buttons, and the launch badges centred under them.
           <div className="flex flex-col items-center gap-8">
             <div className="flex flex-wrap items-start justify-center gap-3">
               <DeployButton size="lg" />
@@ -81,13 +81,19 @@ export function Home({ picture, before }: { picture: React.ReactNode; before?: R
                 </Button>
               )}
             </div>
-            <a href={productHunt.href} target="_blank" rel="noopener noreferrer">
-              {/* The badge in the site's theme: Product Hunt draws a light one and a dark one. */}
-              {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
-              <img alt={productHunt.alt} width={250} height={54} src={productHunt.image} className="dark:hidden" />
-              {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
-              <img alt={productHunt.alt} width={250} height={54} src={productHunt.imageDark} className="hidden dark:block" />
-            </a>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <a href={productHunt.href} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                {/* The badge in the site's theme: Product Hunt draws a light one and a dark one. */}
+                {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
+                <img alt={productHunt.alt} width={250} height={54} src={productHunt.image} className="dark:hidden" />
+                {/* eslint-disable-next-line @next/next/no-img-element -- Product Hunt serves the badge */}
+                <img alt={productHunt.alt} width={250} height={54} src={productHunt.imageDark} className="hidden dark:block" />
+              </a>
+              <a href={peerPush.href} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element -- PeerPush serves the badge */}
+                <img src={peerPush.image} alt={peerPush.alt} width={230} className="h-auto w-[230px]" />
+              </a>
+            </div>
           </div>
         }
         image={picture}
