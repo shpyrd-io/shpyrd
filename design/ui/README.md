@@ -71,3 +71,25 @@ The steps, for a person or an agent: `design/DESIGN_FOR_AGENT.md`,
 
 A version with a suffix (`0.4.0-rc.1`) is published under the `next`
 dist-tag, never `latest`.
+
+### Charts
+
+The gallery groups charts under `/charts/<name>`. `TimeChart`, `EventStrip`,
+`Meter`, `ProgressBar` and `Stat` keep their existing component imports and APIs.
+Their old gallery addresses remain aliases.
+
+`MetricChart` adds the 30 Warehouse visualization kinds, with a gallery page for
+each. Import it from `@shpyrd/ui/components/metric-chart`; its `PlotData`,
+`ChartOptions` and `ChartKind` contracts are in `@shpyrd/ui/lib/metric-chart`.
+Pass prepared observations and options; querying and domain transformations stay
+in the application. Values remain decimal strings, with `null` for missing data.
+Use the existing `Stat` and `Sparkline` for number and trend displays.
+The component validates composition, scale, distribution and comparison
+requirements before drawing. `onDrill` optionally exposes calendar observations.
+The header uses the same icon-only table toggle as `TimeChart`; an optional
+`description` supplies supporting text without query metadata.
+Styles are included in `@shpyrd/ui/styles.css`.
+
+```tsx
+<MetricChart data={plotData} options={{ kind: "donut" }} />
+```

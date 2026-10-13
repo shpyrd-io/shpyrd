@@ -8,6 +8,13 @@ application has to change.
 
 ## Unreleased
 
+- Add `MetricChart` with 30 visualization kinds extracted from Warehouse, exact
+  decimal values, missing-data handling, accessible legends and an icon-only
+  table toggle. Chart styles ship with the library stylesheet.
+- Group chart gallery pages in an alphabetical Charts section, with separate
+  vertical and horizontal funnel examples. Preserve existing component APIs
+  and former gallery URLs; use the existing `Stat` and `Sparkline` for KPIs.
+
 ## 0.1.1-0
 
 A prerelease, under the `next` tag, with nothing changed in the library:

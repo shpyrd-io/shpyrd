@@ -9,7 +9,7 @@ import {
 import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { catalog, href } from "./catalog";
 
-// The way in: the four categories, and what each holds.
+// The way in: the categories, and what each holds.
 export default function Overview() {
   return (
     <>
