@@ -708,7 +708,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		container.Env = append(container.Env, corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(port)})
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port, Protocol: corev1.ProtocolTCP}}
 	}
-	applyProbes(&container, p, port)
+	applyProbes(&container, p, port, scaledExternally)
 	container.Env = append(container.Env, c.platformEnv(app, revision, p.Name, release)...)
 	container.Env = append(container.Env, app.Spec.Env...)
 
@@ -759,7 +759,11 @@ func rolloutStrategy(p namedProcess, mounts []resolvedMount) appsv1.DeploymentSt
 //   - web (port 8080): HTTP GET / on the port
 //   - explicit port (non-web): TCP on that port
 //   - no port (workers): no probe
-func applyProbes(c *corev1.Container, p namedProcess, port int32) {
+//
+// A process that wakes from sleep (KEDA scales it from zero) has at least
+// the wake window to start: its databases may be asleep too and wake only
+// when it connects, which takes longer than the 30 s default.
+func applyProbes(c *corev1.Container, p namedProcess, port int32, wakes bool) {
 	hc := p.HealthCheck
 	if hc != nil && hc.Disabled {
 		return
@@ -767,6 +771,9 @@ func applyProbes(c *corev1.Container, p namedProcess, port int32) {
 	interval := parseDurationSecs(hc.GetStr("Interval"), 10)
 	timeout := parseDurationSecs(hc.GetStr("Timeout"), 5)
 	grace := parseDurationSecs(hc.GetStr("GracePeriod"), 30)
+	if w := int32(sleepWakeWindow.Seconds()); wakes && grace < w {
+		grace = w
+	}
 	shutdown := parseDurationSecs(hc.GetStr("ShutdownDelay"), 5)
 
 	var handler corev1.ProbeHandler

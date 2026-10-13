@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -82,6 +83,17 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 		}
 		return ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name
 	}
+	// A waking process has the wake window to start (24 checks of 5 s),
+	// not the 30 s default: its database may be waking too.
+	startupBudget := func() int32 {
+		t.Helper()
+		d := &appsv1.Deployment{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: workloadName(app, "web")}, d); err != nil {
+			t.Fatal(err)
+		}
+		sp := d.Spec.Template.Spec.Containers[0].StartupProbe
+		return sp.PeriodSeconds * sp.FailureThreshold
+	}
 	setSleep := func(sp *shpyrdv1.SleepSpec) {
 		t.Helper()
 		cur := &shpyrdv1.App{}
@@ -104,6 +116,9 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 	if st := got.Status.Processes["web"].Sleep; st == nil || st.Message == "" {
 		t.Errorf("status must say the workspace's default applies, got %+v", st)
 	}
+	if b := startupBudget(); b != 120 {
+		t.Errorf("sleeping web startup budget = %ds, want 120s", b)
+	}
 
 	// An explicit off (what the API stores for "off") opts out: the sleep
 	// objects go, the Ingress routes to the app again.
@@ -117,6 +132,9 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 	}
 	if st := got.Status.Processes["web"].Sleep; st != nil {
 		t.Errorf("off must report no sleep state, got %+v", st)
+	}
+	if b := startupBudget(); b != 30 {
+		t.Errorf("awake web startup budget = %ds, want the 30s default", b)
 	}
 
 	// Cleared again (the API's "default"): the workspace's default is back.
