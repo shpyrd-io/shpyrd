@@ -996,6 +996,11 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// pod of the app is ready. (A per-Ingress default-backend cannot be
 		// an ExternalName.)
 		"nginx.ingress.kubernetes.io/custom-http-errors": "403,503",
+		// Only the errors nginx makes itself: the edge's 403 (auth_request)
+		// and the 503 of an app with no ready pod. What the app answers
+		// passes through as it is: its own 403 and 503, and the waking
+		// page a sleeping app's interceptor answers with a 503.
+		"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors": "true",
 	}
 	if mode == shpyrdv1.AccessAuthenticated {
 		// $http_host keeps the port (kind maps 8443); $host would drop it.
@@ -1008,6 +1013,7 @@ var edgeAnnotationKeys = []string{
 	"nginx.ingress.kubernetes.io/auth-url", "nginx.ingress.kubernetes.io/auth-signin",
 	"nginx.ingress.kubernetes.io/auth-response-headers", "nginx.ingress.kubernetes.io/auth-cache-key",
 	"nginx.ingress.kubernetes.io/auth-cache-duration", "nginx.ingress.kubernetes.io/custom-http-errors",
+	"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors",
 	"nginx.ingress.kubernetes.io/default-backend", // from earlier versions
 }
 
