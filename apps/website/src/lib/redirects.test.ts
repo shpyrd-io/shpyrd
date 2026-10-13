@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { discord } from "@shpyrd/content/site/offer";
+import { discord } from "@/content/offer";
 import config from "../../next.config";
 import { redirects } from "./redirects";
 

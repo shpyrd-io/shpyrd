@@ -8,7 +8,7 @@ import { ChevronLeft, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Button } from "@shpyrd/ui/components/button";
 import { Wordmark } from "@shpyrd/ui/components/brand";
-import { slides as names } from "@shpyrd/content/site/tour";
+import { slides as names } from "@/content/tour";
 import { BinaryOcean } from "@/components/binary-ocean";
 
 const pad = (n: number) => String(n).padStart(2, "0");

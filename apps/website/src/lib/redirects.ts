@@ -1,7 +1,9 @@
 // The site's redirects, which Next serves itself (next.config.ts): on
 // shpyrd, and anywhere else the site runs.
 import type { Redirect } from "next/dist/lib/load-custom-routes";
-import { discord } from "@shpyrd/content/site/offer";
+import { fileURLToPath } from "node:url";
+import { readCopyFile } from "../../../shared/src/editorial/read.mjs";
+const { discord } = readCopyFile(fileURLToPath(new URL("../../../../content/site/offer.mdx", import.meta.url))) as { discord: { href: string; invite: string } };
 
 export const redirects: Redirect[] = [
   // The bare domain is www's, path and all.

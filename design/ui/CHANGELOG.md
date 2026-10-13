@@ -8,6 +8,10 @@ application has to change.
 
 ## Unreleased
 
+- **Breaking:** `Changelog` no longer renders heading, description, or actions props. Compose the page heading and actions outside the timeline.
+- Changelog entries use rounded Tile markers; `ChangelogSummary` and `ChangelogArchive` provide linked summaries grouped by year with progressive reveal.
+- Mobile `SiteHeader` keeps columns inside expandable parent menus and standalone links independent; expanding a group no longer closes the menu.
+
 ## 0.1.1-0
 
 A prerelease, under the `next` tag, with nothing changed in the library:

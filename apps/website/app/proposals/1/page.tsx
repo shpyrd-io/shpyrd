@@ -7,7 +7,7 @@ import { Pillar } from "@shpyrd/ui/components/pillar";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
-import { secondaryCta } from "@shpyrd/content/site/offer";
+import { secondaryCta } from "@/content/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { Closing, ProposalNav, SignInScreen } from "@/components/proposals";
 

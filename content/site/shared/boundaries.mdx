@@ -1,0 +1,126 @@
+---
+layout: copy
+title: Product boundaries
+---
+
+# Boundaries
+
+<Record>
+
+## Id
+
+sign-in
+
+## Claim
+
+Sign-in controls who can open an app.
+
+## Limit
+
+It doesn't control what they can do inside it. “Can open the expense app” and “can approve expenses above $5,000” are different requirements — the second one is your app's job.
+
+## Step
+
+access
+
+</Record>
+
+<Record>
+
+## Id
+
+compatibility
+
+## Claim
+
+“Compatible” needs checking.
+
+## Limit
+
+Framework, runtime, data and external services all matter. Working code can still depend on services that need separate configuration.
+
+## Step
+
+publish
+
+</Record>
+
+<Record>
+
+## Id
+
+rollback
+
+## Claim
+
+Rolling back restores the release and its config.
+
+## Limit
+
+It doesn't reverse database migrations or undo external side effects.
+
+## Step
+
+operate
+
+</Record>
+
+<Record>
+
+## Id
+
+data
+
+## Claim
+
+Running on shpyrd cloud, or in your own cluster, isn't the same as your data never leaving.
+
+## Limit
+
+An app that calls an external API still calls it.
+
+## Step
+
+runs
+
+</Record>
+
+<Record>
+
+## Id
+
+audit
+
+## Claim
+
+Platform activity is recorded, but it isn't a compliance audit trail.
+
+## Limit
+
+Retention currently follows the cluster's event retention. And platform activity is a different thing from an audit of what people did inside an app.
+
+## Step
+
+operate
+
+</Record>
+
+<Record>
+
+## Id
+
+licence
+
+## Claim
+
+Open source: the core under MPL-2.0.
+
+## Limit
+
+The enterprise features (company sign-in, sleep, costs, the MCP server) are in the same repository under the shpyrd Enterprise License: always on in shpyrd cloud, on with a license on your own cluster. You can read it all, run it, and plan to operate it yourself. That isn’t the same as zero migration work.
+
+## Step
+
+null
+
+</Record>

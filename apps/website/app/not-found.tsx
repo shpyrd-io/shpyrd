@@ -4,7 +4,7 @@ import { Button } from "@shpyrd/ui/components/button";
 import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { StatePage } from "@shpyrd/ui/components/state-page";
-import { notFound } from "@shpyrd/content/site/not-found";
+import { notFound } from "@/content/not-found";
 
 // Any address the site does not have: the yard at work, and no container
 // for it, in the server's own state page (design/pages), between the site's
