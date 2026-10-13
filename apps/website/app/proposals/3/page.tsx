@@ -10,7 +10,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
-import { secondaryCta } from "@shpyrd/content/site/offer";
+import { secondaryCta } from "@/content/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { Closing, Launcher, launcherApps, ProposalNav } from "@/components/proposals";
 

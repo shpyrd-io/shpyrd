@@ -8,7 +8,7 @@ import { Button } from "@shpyrd/ui/components/button";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { Chat, Message } from "@/components/agent-choice";
 import { Boundaries } from "@/components/boundaries";
-import { buildExample, closing, intro, steps } from "@shpyrd/content/site/sharing";
+import { buildExample, closing, intro, steps } from "@/content/sharing";
 import { ContainerCircle } from "@/components/container-helix";
 import { VerticalRoute } from "@/components/vertical-route";
 import { pageSections } from "@/lib/page";

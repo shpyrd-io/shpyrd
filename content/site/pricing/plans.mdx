@@ -1,0 +1,393 @@
+---
+layout: copy
+title: Pricing plans
+---
+
+# Pricing
+
+## Title
+
+Pricing
+
+## Hero
+
+### Heading
+
+Start free. Pay for what runs.
+
+### Description
+
+Put your first app online for nothing. When you need more, you pay for what your apps actually use - and an app nobody is using sleeps, and costs nothing to run.
+
+## Plans
+
+<Record>
+
+### Id
+
+free
+
+### Name
+
+Free
+
+### Per
+
+a month
+
+### Summary
+
+To try the platform: apps that sleep when nobody uses them.
+
+### Features
+
+- 4 projects
+- 2 CPU and 256 MiB in all
+- Sleeps after 10 minutes idle
+- Community support
+
+### Action
+
+#### Label
+
+Add to
+
+#### Kind
+
+install
+
+### Footnote
+
+Ceilings: Projects 4 · CPU 2 cores · Memory 256 MiB.
+
+</Record>
+
+<Record>
+
+### Id
+
+starter
+
+### Name
+
+Starter
+
+### Per
+
+a month minimum, then usage
+
+### Summary
+
+Pay for what runs, from `{{starterMinimum}}` a month.
+
+### Features
+
+- Unlimited projects
+- Sleeps after 15 minutes idle
+- Custom domains
+- Email support
+
+### Action
+
+#### Label
+
+Add to
+
+#### Kind
+
+install
+
+### Footnote
+
+Ceilings: CPU 16 cores · Memory 32 GiB · Storage 2048 GiB.
+
+</Record>
+
+<Record>
+
+### Id
+
+pro
+
+### Name
+
+Pro
+
+### Per
+
+a month minimum, then usage
+
+### Summary
+
+For products in production.
+
+### Features
+
+- Custom sleep
+- Daily backups
+- Priority support
+- SSO and audit logs
+
+### Action
+
+#### Label
+
+Add to
+
+#### Kind
+
+install
+
+### Footnote
+
+Ceilings: CPU 32 cores · Memory 64 GiB · Storage 4096 GiB.
+
+</Record>
+
+<Record>
+
+### Id
+
+business
+
+### Name
+
+Business
+
+### Per
+
+a month minimum, then usage
+
+### Summary
+
+For teams that run their business on it.
+
+### Features
+
+- Hourly backups
+- Private network applications
+- Support with an SLA
+- VPC peering
+
+### Action
+
+#### Label
+
+Add to
+
+#### Kind
+
+install
+
+### Footnote
+
+No ceilings.
+
+</Record>
+
+## Enterprise
+
+### Name
+
+Enterprise
+
+### Summary
+
+For custom requirements: shpyrd in your own cloud, on your terms, with everything shpyrd cloud has. A license switches it on and renews itself.
+
+### Features
+
+- Sign-in through Google, Microsoft, GitHub or any OpenID Connect provider
+- Apps and databases that sleep by themselves
+- Costs per project, and drains to send them on
+- The MCP server for AI assistants
+
+### Action
+
+#### Label
+
+Contact us
+
+#### Kind
+
+contact
+
+## Usage
+
+| Id | Name | Note |
+| --- | --- | --- |
+| cpu | CPU | per core-hour, used |
+| memory | Memory | per GiB-hour, reserved, while awake |
+| storage | Storage | per GiB-month, volume capacity, awake or asleep |
+| egress | Egress | per GiB, traffic out of the front door |
+
+## Counts
+
+### Heading
+
+What counts
+
+### Items
+
+<Record>
+
+#### Id
+
+use
+
+#### Title
+
+Compute by use, memory by size
+
+#### Body
+
+Compute is measured from what your apps actually use: a bigger size costs nothing more until the app works harder. Memory is what each app reserves - the memory of its size - while it is awake.
+
+</Record>
+
+<Record>
+
+#### Id
+
+sleep
+
+#### Title
+
+A sleeping app costs nothing to run
+
+#### Body
+
+An app nobody visits sleeps and wakes on the next visit, in a few seconds. While it sleeps it uses no compute and no memory. Its stored data still counts.
+
+</Record>
+
+<Record>
+
+#### Id
+
+minimum
+
+#### Title
+
+A minimum, not a fee
+
+#### Body
+
+On Starter the month costs at least `{{starterMinimum}}`, on Pro `{{proMinimum}}`, on Business `{{businessMinimum}}`. Usage up to the minimum is covered by it; above that, you pay the usage.
+
+</Record>
+
+## Example
+
+### Heading
+
+An example
+
+### Description
+
+A tracker your team uses during working hours, with a database. The figures are an estimate: yours come from what your apps actually do.
+
+### Lines
+
+| What | Cpu Cores | Memory Gib | Hours | Storage Gib | Egress Gib |
+| --- | --- | --- | --- | --- | --- |
+| The app, awake about 200 hours a month: a twentieth of a CPU core in use, 256 MiB reserved | 0.05 | 0.25 | 200 |  |  |
+| Its database, awake all month: a hundredth of a CPU core in use, 256 MiB reserved | 0.01 | 0.25 | 730 |  |  |
+| 5 GiB of data |  |  |  | 5 |  |
+| 2 GiB sent to visitors |  |  |  |  | 2 |
+
+### Sense
+
+For a sense of it, on Starter: one CPU core busy all month is `{{cpuMonth}}`, 1 GiB of memory reserved all month `{{memoryMonth}}`, a 5 GiB database `{{databaseMonth}}` a month, and 10 GiB sent to visitors `{{egressExample}}`.
+
+## Faq
+
+<Record>
+
+### Q
+
+What happens when my app outgrows Free?
+
+### A
+
+Free stops at its limits - a fifth project, or more memory or compute than it allows, is refused with a message saying so. Nothing you already run is touched. Move to Starter to go past them.
+
+</Record>
+
+<Record>
+
+### Q
+
+Does a sleeping app lose anything?
+
+### A
+
+No. Its code, settings and data stay as they are; the next visit wakes it in a few seconds, with a page that says it is waking.
+
+</Record>
+
+<Record>
+
+### Q
+
+Can I run shpyrd myself instead?
+
+### A
+
+Yes. shpyrd is open source under MPL-2.0 and runs on a Kubernetes cluster of your own, on your laptop, on AWS or on Oracle Cloud. There is nothing to pay us for that.
+
+</Record>
+
+<Record>
+
+### Q
+
+How am I billed?
+
+### A
+
+Monthly, in `{{currencyName}}`, for the calendar month. Your workspace shows the month so far, project by project.
+
+</Record>
+
+## Footnotes
+
+### International
+
+#### Text
+
+Prices in USD.
+
+#### Other
+
+##### Label
+
+Prices in BRL, for Brazil
+
+##### Href
+
+/pricing/br
+
+### Br
+
+#### Text
+
+Prices in BRL, for Brazil.
+
+#### Other
+
+##### Label
+
+Prices in USD
+
+##### Href
+
+/pricing?currency=usd
+
+## Included
+
+Included
+
+## Early Invoice
+
+Invoiced early past `{{amount}}` owed at first.

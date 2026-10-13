@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "cn";
 import { Button } from "@shpyrd/ui/components/button";
 import { placeIn, roll } from "@shpyrd/ui/lib/roll";
-import { deploy } from "@shpyrd/content/site/offer";
+import { deploy } from "@/content/offer";
 import { signUp } from "@/lib/signup";
 
 // How long each phrase stays.

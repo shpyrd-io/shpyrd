@@ -1,6 +1,8 @@
 import * as React from "react";
 import { cn } from "cn";
+import { GitCommitHorizontal } from "lucide-react";
 import { Prose } from "./prose";
+import { Tile } from "./tile";
 
 // The kinds of change an entry can be, and how each is drawn: a new feature
 // in the brand orange, the rest in grey.
@@ -11,44 +13,18 @@ const tags = {
 } as const;
 
 // What changed, newest first, down a thin rail with a small square for each
-// entry. It can open with a head: the page's title, a line under it and,
-// at the right, the actions that go with it (an RSS link, a copy as Markdown).
-//
-// Its parts are props rather than children it looks for, so a page rendered
-// when the application is built draws the same thing as the browser does.
+// entry. The containing page composes its own heading and actions.
 function Changelog({
   className,
-  title,
-  description,
-  actions,
   children,
   ...props
-}: Omit<React.ComponentProps<"div">, "title"> & {
-  title?: React.ReactNode;
-  description?: React.ReactNode;
-  // At the right of the head: buttons or links.
-  actions?: React.ReactNode;
-}) {
-  const hasHead = title || description || actions;
+}: React.ComponentProps<"div">) {
   return (
-    <div data-slot="changelog" className={cn("@container grid gap-12", className)} {...props}>
-      {hasHead && (
-        <header data-slot="changelog-head" className="flex flex-wrap items-end justify-between gap-6">
-          <div className="grid gap-2">
-            {title && <h2 className="font-heading text-3xl font-semibold tracking-tight">{title}</h2>}
-            {description && <p className="text-muted-foreground">{description}</p>}
-          </div>
-          {actions && (
-            <div data-slot="changelog-actions" className="flex flex-wrap items-center gap-2">
-              {actions}
-            </div>
-          )}
-        </header>
-      )}
-      <ol data-slot="changelog-list" className="relative grid gap-14 pl-6 @3xl:pl-8">
+    <div data-slot="changelog" className={cn("@container", className)} {...props}>
+      <ol data-slot="changelog-list" className="relative grid gap-14 pl-12 @3xl:pl-14">
         <span
           aria-hidden
-          className="absolute top-2 bottom-2 left-[3px] w-px bg-foreground/8 dark:bg-foreground/15"
+          className="absolute top-4 bottom-2 left-4 w-px -translate-x-1/2 bg-border"
         />
         {children}
       </ol>
@@ -79,10 +55,14 @@ function ChangelogEntry({
       className={cn("relative grid gap-5 @3xl:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] @3xl:gap-12", className)}
       {...props}
     >
-      <span
+      <Tile
         aria-hidden
-        className="absolute top-2 -left-6 size-[7px] bg-foreground @3xl:-left-8"
-      />
+        size="sm"
+        variant="muted"
+        className="absolute top-0 -left-12 border @3xl:-left-14"
+      >
+        <GitCommitHorizontal />
+      </Tile>
       <div data-slot="changelog-meta" className="grid content-start gap-2 @3xl:sticky @3xl:top-6 @3xl:self-start">
         <h3 className="font-heading text-xl font-semibold">{title}</h3>
         <p className="font-mono text-xs text-muted-foreground">{date}</p>
@@ -106,4 +86,21 @@ function ChangelogEntry({
   );
 }
 
-export { Changelog, ChangelogEntry };
+// A compact archive row. The caller supplies the title link and short date.
+function ChangelogSummary({ title, date, tag, children }: {
+  title: React.ReactNode; date: React.ReactNode; tag?: keyof typeof tags; children: React.ReactNode;
+}) {
+  const kind = tag ? tags[tag] : undefined;
+  return (
+    <li className="grid gap-3 border-b py-6 first:pt-0 last:border-b-0 @3xl:grid-cols-[8rem_minmax(0,1fr)] @3xl:gap-5">
+      <div>{kind && <span className={cn("inline-flex rounded-full border px-2.5 py-0.5 text-[0.68rem] font-medium tracking-wider uppercase", kind.style)}>{kind.label}</span>}</div>
+      <div className="grid min-w-0 gap-2">
+        <h3 className="font-heading text-xl font-semibold [&_a]:decoration-foreground/30 [&_a]:underline-offset-4 [&_a:hover]:underline">{title}</h3>
+        <p className="text-muted-foreground">{children}</p>
+        <div className="font-mono text-xs text-muted-foreground">{date}</div>
+      </div>
+    </li>
+  );
+}
+
+export { Changelog, ChangelogEntry, ChangelogSummary };

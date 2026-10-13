@@ -12,7 +12,7 @@ import {
   NavigationMenuList,
   NavigationMenuTrigger,
 } from "./navigation-menu";
-import { NavList, NavListGroup, NavListItem } from "./nav-list";
+import { NavList, NavListGroup, NavListItem, NavListSubNav } from "./nav-list";
 import { glass, glassHolding } from "../lib/glass";
 
 // How wide what is in the bar may be: the same sizes as the content of a page
@@ -253,23 +253,23 @@ cn(glassHolding, "h-15 @3xl/site-header:pr-3 @3xl/site-header:pl-6"),
         )}
       </div>
       {many && <MobileNavigationContent className={cn(folded, floating && "mx-auto mt-2 rounded-2xl bg-background/95 ring-1 ring-foreground/8 backdrop-blur-xl dark:bg-card/95", floating && widths[width])}>
-            <NavList aria-label={menuLabel} onClick={() => setOpen(false)}>
+            <NavList aria-label={menuLabel}>
               {links.map((item, i) =>
                 isGroup(item) ? (
-                  columnsOf(item).map((column, c) => (
-                    <NavListGroup key={`${i}-${c}`} title={column.label ?? item.label}>
-                      {column.links.map((entry, j) => {
-                        const { link } = entryOf(entry);
-                        return (
-                          <NavListItem key={j} asChild aria-current={current(link)}>
-                            {link}
-                          </NavListItem>
-                        );
-                      })}
-                    </NavListGroup>
-                  ))
+                  <NavListSubNav key={i} title={item.label}
+                    defaultOpen={columnsOf(item).some((column) => column.links.some((entry) => current(entryOf(entry).link) === "page"))}
+                    className="min-h-11 font-medium">
+                    {columnsOf(item).map((column, c) => (
+                      <NavListGroup key={c} title={column.label === item.label ? undefined : column.label}>
+                        {column.links.map((entry, j) => {
+                          const { link } = entryOf(entry);
+                          return <NavListItem key={j} asChild aria-current={current(link)} className="min-h-11">{link}</NavListItem>;
+                        })}
+                      </NavListGroup>
+                    ))}
+                  </NavListSubNav>
                 ) : (
-                  <NavListItem key={i} asChild aria-current={current(item)}>
+                  <NavListItem key={i} asChild aria-current={current(item)} className="min-h-11 font-medium">
                     {item}
                   </NavListItem>
                 ),

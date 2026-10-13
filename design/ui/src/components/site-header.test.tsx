@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { SiteHeader } from "./site-header";
 
 const docs = <a href="/docs">Docs</a>;
@@ -64,7 +64,10 @@ describe("SiteHeader", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Menu" }));
-    expect(screen.getAllByText("For").length).toBeGreaterThan(0);
+    const mobile = screen.getByRole("navigation", { name: "Menu" });
+    fireEvent.click(within(mobile).getByRole("button", { name: "Solutions" }));
+    expect(screen.getByRole("button", { name: "Close menu" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(mobile).getByText("For")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "For IT teams" }).length).toBeGreaterThan(0);
   });
 
@@ -82,4 +85,17 @@ describe("SiteHeader", () => {
     expect(trigger.className).toContain("h-10");
     expect(trigger.className).toContain("data-[state=open]:text-primary");
   });
+});
+
+it("keeps standalone links outside nested mobile groups and closes only on navigation", () => {
+  render(<SiteHeader links={[
+    { label: "Solutions", columns: [{ label: "Deliver for Clients", links: [<a key="client" href="/clients">Client projects</a>] }] },
+    <a key="docs" href="/docs">Docs</a>, <a key="pricing" href="/pricing">Pricing</a>,
+  ]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+  const mobile = screen.getByRole("navigation", { name: "Menu" });
+  fireEvent.click(within(mobile).getByRole("button", { name: "Solutions" }));
+  expect(within(mobile).getByRole("link", { name: "Docs" }).closest("[data-slot=nav-list-sub-nav]")).toBeNull();
+  fireEvent.click(within(mobile).getByRole("link", { name: "Pricing" }));
+  expect(screen.getByRole("button", { name: "Menu" }).getAttribute("aria-expanded")).toBe("false");
 });

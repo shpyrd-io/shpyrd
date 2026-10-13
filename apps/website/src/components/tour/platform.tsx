@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { Activity, Database, DoorOpen, Layers, Network, Server, User, UsersRound } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
-import { platform } from "@shpyrd/content/site/tour";
+import { platform } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 const icons: Record<string, React.ReactElement> = {

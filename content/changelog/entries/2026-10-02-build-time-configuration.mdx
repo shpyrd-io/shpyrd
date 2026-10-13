@@ -1,0 +1,9 @@
+---
+title: "App configuration is available during builds"
+description: "Buildpack builds can use app variables and attached resource configuration."
+date: "2026-10-02"
+type: fix
+draft: false
+---
+
+Buildpack builds now receive app configuration and variables from attached resources. This supports build steps such as Prisma generation and Next.js page-data collection that need configuration before the app starts.

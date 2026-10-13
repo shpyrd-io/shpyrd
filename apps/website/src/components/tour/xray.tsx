@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Check, RotateCcw, ScanSearch, Sparkles, X } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Button } from "@shpyrd/ui/components/button";
-import { xray } from "@shpyrd/content/site/tour";
+import { xray } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 const cells = xray.rows.length * xray.columns.length;
