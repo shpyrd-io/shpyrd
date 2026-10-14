@@ -1,16 +1,16 @@
 package install
 
 import (
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sort"
-	"slices"
 	"context"
 	"fmt"
 	"io/fs"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
