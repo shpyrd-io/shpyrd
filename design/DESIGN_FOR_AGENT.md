@@ -158,13 +158,14 @@ dist-tag, never `latest`.
 ## The gallery
 
 The gallery is made of the library itself: a `PageLayout` with a `NavList`
-at its side. Each component has a page of its own, in one of four
-categories.
+at its side. Each component has a page of its own, grouped by category.
 
 | Category | Folder in `app/` | What it holds |
 |---|---|---|
 | Foundations | `foundations/` | the smallest building blocks: colours, typography, icons, a button |
 | Structures | `structures/` | reusable combinations, like forms and cards |
+| Charts | `charts/` | time series, composition, comparisons, distributions and state |
+| Content | `content/` | blocks used to compose site content |
 | Blueprints | `blueprints/` | complex interactive components, like a navigation |
 | Layouts & Pages | `layouts/` | the placement of a page, and whole views |
 

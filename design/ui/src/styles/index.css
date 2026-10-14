@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "./prose.css";
+@import "./metric-chart.css";
 
 /* The classes the components use are found here, whoever imports this file. */
 @source "../";
