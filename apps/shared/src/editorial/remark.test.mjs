@@ -39,7 +39,7 @@ describe("editorial MDX", () => {
     expect(text).toContain("post_id=");
     expect(text).not.toContain("post\\\\_id");
     const offer = readCopyFile(path.join(root, "site/offer.mdx"));
-    expect(offer.signIn.href).toBe("https://accounts.shpyrd.io/signin?redirect_url=%2Fproducts");
+    expect(offer.signIn.href).toBe("https://accounts.shpyrd.io/signin");
   });
   it("keeps setup defaults and message steps in the compiled document", async () => {
     const result = String(await compile(header + '<AddToAgent />\n\n<Chat>\n<Message from="agent">\n<MessageSteps>\n- Deploy\n- Share\n</MessageSteps>\nDone.\n</Message>\n</Chat>', options));
