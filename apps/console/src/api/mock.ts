@@ -1,3 +1,4 @@
+import { exploreMockCosts, createMockCostExport, mockCostExport, mockCostExportURL } from "./costs-mock";
 import { ApiError } from "@shpyrd/shared/api/error";
 import { mockProjectArchives } from "@shpyrd/shared/api/project-archives-mock";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
@@ -10,7 +11,6 @@ import type {
   ClusterSummary,
   ConsoleUser,
   CostDrain,
-  CostSummary,
   HelmRelease,
   Identity,
   LicenseStatus,
@@ -47,7 +47,6 @@ type Things = {
   storage: ObjectStorageSummary;
   backups: BackupInfo;
   license: LicenseStatus;
-  costs: Record<string, CostSummary>;
   costDrains: CostDrain[];
   oci: OCIStatus;
   workspaceSettings: WorkspaceSettings;
@@ -221,14 +220,10 @@ export const mock: Api = {
     if (!l?.issuer) throw new ApiError(502, "this license was issued by hand: it names no billing app");
     return { url: `${l.issuer}/c/session?t=mock` };
   },
-  costs: async (q) => {
-    await wait();
-    const all = await thingsOf.get();
-    const kind = q.kind ?? "estimated";
-    const group = q.group ?? "project";
-    const found = all.costs[`${kind}/${group}`] ?? { ...all.costs["estimated/project"], rows: [], total: {} };
-    return { ...found, kind, group };
-  },
+  costs: async (q) => { await wait(); return exploreMockCosts(q); },
+  createCostExport: createMockCostExport,
+  costExport: mockCostExport,
+  costExportURL: mockCostExportURL,
   costDrains: async () => (await thingsOf.get()).costDrains,
   addCostDrain: async (body) => {
     await wait();

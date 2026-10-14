@@ -728,6 +728,13 @@ type Costs interface {
 	// changed.
 	UpsertCostLines(ctx context.Context, lines []CostLine) (int, error)
 	QueryCostLines(ctx context.Context, q CostQuery) ([]CostLine, error)
+	ExploreCosts(ctx context.Context, q CostExploreQuery) (CostPage, error)
+	CreateCostExport(ctx context.Context, q CostExploreQuery) (CostExport, error)
+	CostExport(ctx context.Context, id string) (CostExport, error)
+	CostExportChunk(ctx context.Context, id string, sequence int) ([]byte, error)
+	BuildCostExport(ctx context.Context) (bool, error)
+	RecordCostCollection(ctx context.Context, kind string, through, at time.Time) error
+	CostCollection(ctx context.Context, kind string) (CostCollectionStatus, error)
 	// CostLinesChangedSince lists lines changed after the cursor (at, then
 	// id), oldest first, at most limit.
 	CostLinesChangedSince(ctx context.Context, at time.Time, id string, limit int) ([]CostLine, error)

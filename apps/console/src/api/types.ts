@@ -61,9 +61,11 @@ export type WorkspaceSettings = {
 
 // Costs (enterprise): lines summed by a group, cost by currency.
 export type CostKind = "estimated" | "real" | "usage";
-export type CostGroup = "project" | "process" | "resource" | "service";
-export type CostRow = { key: string; workspace?: string; project?: string; slug?: string; process?: string; resource?: string; service?: string; cost: Record<string, number>; lines: number };
-export type CostSummary = { from: string; to: string; kind: CostKind; group: CostGroup; rows: CostRow[]; total: Record<string, number> };
+export type CostGroup = "workspace" | "project" | "workload" | "process" | "resourceType" | "resource" | "service";
+export type CostQuery = { from?: string; to?: string; kind?: CostKind; group?: CostGroup; workspace?: string; project?: string; category?: string; workload?: string; process?: string; resourceType?: string; resource?: string; service?: string; search?: string; currency?: string; sort?: string; limit?: number; offset?: number };
+export type CostRow = { key: string; name?: string; workspace?: string; workspaceName?: string; project?: string; slug?: string; category?: string; workload?: string; process?: string; resourceType?: string; resource?: string; service?: string; cost: Record<string, number>; lines: number };
+export type CostSummary = { from: string; to: string; kind: CostKind; group: CostGroup; rows: CostRow[]; total: Record<string, number>; categories: Record<string, Record<string, number>>; count: number; limit: number; offset: number; currency: string; currencies: string[]; collection: { through?: string; collectedAt?: string }; incomplete: boolean; workspaces: { id: string; name: string }[] };
+export type CostExport = { id: string; status: "queued" | "preparing" | "ready" | "failed"; expiresAt: string };
 export type CostDrain = { id: string; name: string; url: string; headers?: string[]; lastDeliveryAt?: string; sent: number; errors: number; message?: string; createdAt: string };
 export type OCIStatus = { configured: boolean; tenancy?: string; region?: string };
 

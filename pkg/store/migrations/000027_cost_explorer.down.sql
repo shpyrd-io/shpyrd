@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS cost_export_chunks;
+DROP TABLE IF EXISTS cost_exports;
+DROP TRIGGER IF EXISTS cost_daily_change ON cost_lines;
+DROP FUNCTION IF EXISTS update_cost_daily();
+DROP TABLE IF EXISTS cost_daily;
+DROP TABLE IF EXISTS cost_collections;
+DROP FUNCTION IF EXISTS cost_category(text,text,text,jsonb);
+DROP FUNCTION IF EXISTS cost_workload(text,text,text);
+DROP INDEX IF EXISTS projects_cost_short;
+DROP FUNCTION IF EXISTS cost_project_short(uuid);

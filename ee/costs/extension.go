@@ -47,6 +47,9 @@ func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	if err := mgr.Add(c); err != nil {
 		return err
 	}
+	if err := mgr.Add(&exportWorker{store: deps.Store}); err != nil {
+		return err
+	}
 	return mgr.Add(s)
 }
 
@@ -61,6 +64,9 @@ func (extension) Routes(r ext.Router, deps ext.Deps) error {
 	}
 	g := r.Admin().Group("/cluster", licensing.Require())
 	g.GET("/costs", h.summary)
+	g.POST("/costs/exports", h.createExport)
+	g.GET("/costs/exports/:id", h.exportStatus)
+	g.GET("/costs/exports/:id/download", h.downloadExport)
 	g.GET("/costs/oci", h.ociStatus)
 	g.PUT("/costs/oci", h.putOCI)
 	g.DELETE("/costs/oci", h.deleteOCI)

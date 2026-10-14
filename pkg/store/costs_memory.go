@@ -10,9 +10,11 @@ import (
 // ---- costs (ee/costs) --------------------------------------------------------
 
 type costsMemory struct {
-	lines  map[string]CostLine
-	drains []CostDrain
-	clock  time.Time // changed_at only moves forward, as in Postgres
+	exports     map[string]*memoryCostExport
+	collections map[string]CostCollectionStatus
+	lines       map[string]CostLine
+	drains      []CostDrain
+	clock       time.Time // changed_at only moves forward, as in Postgres
 }
 
 func (m *Memory) costs() *costsMemory {

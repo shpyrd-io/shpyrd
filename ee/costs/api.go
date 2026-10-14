@@ -39,123 +39,16 @@ type handlers struct {
 	namespace string
 }
 
-// Row is one group of lines: their cost by currency and how many.
-type Row struct {
-	Key       string             `json:"key"`
-	Workspace string             `json:"workspace,omitempty"`
-	Project   string             `json:"project,omitempty"`
-	Slug      string             `json:"slug,omitempty"`
-	Process   string             `json:"process,omitempty"`
-	Resource  string             `json:"resource,omitempty"`
-	Service   string             `json:"service,omitempty"`
-	Cost      map[string]float64 `json:"cost"`
-	Lines     int                `json:"lines"`
-}
+type Row = store.CostGroupRow
+type Summary = explorerSummary
 
-// Summary is GET /api/cluster/costs.
-type Summary struct {
-	From  time.Time          `json:"from"`
-	To    time.Time          `json:"to"`
-	Kind  string             `json:"kind"`
-	Group string             `json:"group"`
-	Rows  []Row              `json:"rows"`
-	Total map[string]float64 `json:"total"`
-}
-
-var groups = map[string]bool{"project": true, "process": true, "resource": true, "service": true}
-
-// Summarize sums lines by the group asked for, the biggest first.
-func Summarize(lines []store.CostLine, group string, slugs map[string]string) ([]Row, map[string]float64) {
-	byKey := map[string]*Row{}
-	total := map[string]float64{}
-	for _, l := range lines {
-		r := Row{}
-		switch group {
-		case "process":
-			r = Row{Key: l.Project + "/" + l.Process, Workspace: l.Workspace, Project: l.Project, Process: l.Process}
-		case "resource":
-			r = Row{Key: l.Resource, Resource: l.Resource}
-		case "service":
-			r = Row{Key: l.Service, Service: l.Service}
-		default:
-			r = Row{Key: l.Workspace + "/" + l.Project, Workspace: l.Workspace, Project: l.Project}
-		}
-		if r.Project != "" {
-			r.Slug = slugs[r.Project]
-		}
-		cur := byKey[r.Key]
-		if cur == nil {
-			r.Cost = map[string]float64{}
-			cur = &r
-			byKey[r.Key] = cur
-		}
-		cur.Lines++
-		if l.Cost != nil {
-			cur.Cost[l.Currency] += *l.Cost
-			total[l.Currency] += *l.Cost
-		}
-	}
-	rows := make([]Row, 0, len(byKey))
-	for _, r := range byKey {
-		rows = append(rows, *r)
-	}
-	sum := func(m map[string]float64) (s float64) {
-		for _, v := range m {
-			s += v
-		}
-		return
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if a, b := sum(rows[i].Cost), sum(rows[j].Cost); a != b {
-			return a > b
-		}
-		return rows[i].Key < rows[j].Key
-	})
-	return rows, total
-}
+var groups = map[string]bool{"workspace": true, "project": true, "workload": true, "process": true, "resourceType": true, "resource": true, "service": true}
 
 func day(s string, def time.Time) (time.Time, error) {
 	if s == "" {
 		return def, nil
 	}
 	return time.Parse("2006-01-02", s)
-}
-
-func (h *handlers) summary(c *gin.Context) {
-	today := time.Now().UTC().Truncate(24 * time.Hour)
-	from, err1 := day(c.Query("from"), time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC))
-	to, err2 := day(c.Query("to"), today.Add(24*time.Hour))
-	if err1 != nil || err2 != nil || !to.After(from) {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "from and to are days (YYYY-MM-DD), to after from"})
-		return
-	}
-	kind := firstNonEmpty(c.Query("kind"), store.CostEstimated)
-	if kind != store.CostEstimated && kind != store.CostReal && kind != store.CostUsage {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "kind is estimated, real or usage"})
-		return
-	}
-	group := firstNonEmpty(c.Query("group"), "project")
-	if !groups[group] {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "group is project, process, resource or service"})
-		return
-	}
-	ctx := c.Request.Context()
-	lines, err := h.store.QueryCostLines(ctx, store.CostQuery{From: from, To: to, Kind: kind})
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	rows, total := Summarize(lines, group, h.slugs(ctx))
-	c.JSON(http.StatusOK, Summary{From: from, To: to, Kind: kind, Group: group, Rows: rows, Total: total})
-}
-
-// slugs names projects by the short ids the lines carry.
-func (h *handlers) slugs(ctx context.Context) map[string]string {
-	out := map[string]string{}
-	for short, p := range projectsByShortID(ctx, h.store) {
-		out[short] = p.Slug
-	}
-	return out
 }
 
 // projectsByShortID is every project, deleted ones too, by the short id
