@@ -401,6 +401,17 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				return outcome{}, err
 			}
 			build = readBuildState(img)
+			if build.Ready == "Unknown" {
+				// kpack names the Build it starts in latestBuildRef, but a
+				// status update lost at that moment (a conflict) is not made
+				// again while that Build runs: latestBuildRef stays empty, or
+				// names the build before, until it ends, and a deploy waiting
+				// for its build sees none start. The newest Build of the
+				// Image is the one in progress.
+				if b := r.newestKpackBuild(ctx, img, build.LatestBuild); b != "" {
+					build.LatestBuild = b
+				}
+			}
 			if build.LatestBuild != "" {
 				kpackBuild = r.getBuild(ctx, app.Namespace, build.LatestBuild)
 			}
@@ -408,7 +419,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			// reads what failed, in words, instead (#52).
 			if build.Ready == "False" {
 				switch {
-				case kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild):
+				case kpackBuild != nil && buildFailed(kpackBuild):
 					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
 				case composesBuild(app) && build.builderNotReady():
 					// A builder of the project's own is made on its first
@@ -417,7 +428,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 						build.Message = msg
 					} else {
 						build.Ready = "Unknown"
-						build.Message = "preparing the project's builder"
+						build.Reason = "PreparingBuilder"
+						build.Message = "Preparing this project's builder (usually about a minute); wait for the build to start."
 					}
 				default:
 					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
@@ -434,7 +446,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "False":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
 		default:
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, "Building", firstNonEmpty(build.Message, "build in progress"))
+			reason := "Building"
+			if build.Reason == "PreparingBuilder" {
+				reason = build.Reason
+			}
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
 		}
 	} else {
 		app.Status.LatestBuild = ""
@@ -814,6 +830,33 @@ func (r *AppReconciler) getBuild(ctx context.Context, namespace, name string) *u
 		return nil
 	}
 	return b
+}
+
+// newestKpackBuild is the Build of the kpack Image img numbered above the
+// one named current, the highest of them; "" when there is none.
+func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.Unstructured, current string) string {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(KpackBuildGVK.GroupVersion().WithKind(KpackBuildGVK.Kind + "List"))
+	if err := r.APIReader.List(ctx, list, client.InNamespace(img.GetNamespace()), client.MatchingLabels{"image.kpack.io/image": img.GetName()}); err != nil {
+		return ""
+	}
+	newest, top, cur := "", -1, -1
+	for _, b := range list.Items {
+		n, err := strconv.Atoi(b.GetLabels()["image.kpack.io/buildNumber"])
+		if err != nil {
+			continue
+		}
+		if b.GetName() == current {
+			cur = n
+		}
+		if n > top {
+			newest, top = b.GetName(), n
+		}
+	}
+	if top <= cur {
+		return ""
+	}
+	return newest
 }
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the

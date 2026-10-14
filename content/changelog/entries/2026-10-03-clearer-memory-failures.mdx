@@ -1,0 +1,9 @@
+---
+title: "Clearer memory failures and runtime-aware sizing"
+description: "Deployments explain memory failures, and default sizing accounts for the app runtime."
+date: "2026-10-03"
+type: improvement
+draft: false
+---
+
+Release tasks that run out of memory now report the limit and sizing guidance instead of ending with an unexplained failure. Apps without an explicit size can use a default suited to their detected runtime, while sizes you choose remain in place.

@@ -1,0 +1,9 @@
+---
+title: "Dockerfile builds work with workspace limits"
+description: "Builds start correctly in workspaces with CPU and memory limits."
+date: "2026-10-08"
+type: fix
+draft: false
+---
+
+Dockerfile builds now declare the resources needed by their setup step, fixing a failure that prevented them from starting in workspaces with resource limits. When a build is refused, the failure is reported promptly instead of leaving the project marked as building.

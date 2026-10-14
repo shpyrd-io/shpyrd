@@ -5,7 +5,7 @@ import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
 import { IDE } from "@shpyrd/ui/components/ide";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
-import { addToAgent, agents } from "@shpyrd/content/site/agents";
+import { addToAgent, agents } from "@/content/agents";
 import { AgentMark } from "@/components/add-to-agent";
 
 // The agent the reader said they use. Picking one in the setup tabs makes it
@@ -55,7 +55,7 @@ const languageOf = (file?: string) =>
 
 // How to add shpyrd to each agent, one tab each: pick yours, and the panel
 // says what to paste and where. The snippets are the ones the "Add to" button
-// shows (content/site/agents.ts), so the two never disagree.
+// shows (content/site/agents.mdx), so the two never disagree.
 export function AgentSetup() {
   const agent = useAgent();
   return (

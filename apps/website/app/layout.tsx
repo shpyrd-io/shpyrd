@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GoogleTagManager } from "@next/third-parties/google";
 import "@/styles/global.css";
+import { menus } from "@/lib/mdx/catalog";
 import { Shell } from "@/components/shell";
 import { shared } from "@/lib/metadata";
 
@@ -17,7 +18,7 @@ export const metadata: Metadata = {
   ...shared("shpyrd"),
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -33,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       {gtm && <GoogleTagManager gtmId={gtm} />}
       <body className="bg-background text-foreground">
-        <Shell>{children}</Shell>
+        <Shell {...await menus()}>{children}</Shell>
       </body>
     </html>
   );

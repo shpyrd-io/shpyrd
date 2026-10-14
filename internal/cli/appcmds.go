@@ -301,8 +301,9 @@ what a tool reading the output wants.`,
 				return err
 			}
 			if build {
-				if app.Status.LatestBuild == "" {
-					return errors.New("no build yet")
+				app, err = ac.waitForFirstBuild(ctx, name, app, follow, cmd.ErrOrStderr())
+				if err != nil || app == nil {
+					return err
 				}
 				if ac.session {
 					stream, err := ac.serverStream(ctx, "api/projects/"+name+"/builds/latest/logs?follow="+strconv.FormatBool(follow))

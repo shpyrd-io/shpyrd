@@ -1,0 +1,192 @@
+---
+layout: copy
+title: Agents
+---
+
+# Server Url
+
+https://mcp.shpyrd.io/mcp
+
+# Agents
+
+<Record>
+
+## Id
+
+claude-code
+
+## Name
+
+Claude Code
+
+## Kind
+
+command
+
+## Snippet
+
+claude mcp add --transport http shpyrd https://mcp.shpyrd.io/mcp
+
+</Record>
+
+<Record>
+
+## Id
+
+claude
+
+## Name
+
+Claude
+
+## Kind
+
+steps
+
+## Snippet
+
+```text
+Settings › Connectors › Add custom connector
+https://mcp.shpyrd.io/mcp
+```
+
+</Record>
+
+<Record>
+
+## Id
+
+codex
+
+## Name
+
+Codex
+
+## Kind
+
+file
+
+## File
+
+~/.codex/config.toml
+
+## Snippet
+
+```text
+[mcp_servers.shpyrd]
+url = "https://mcp.shpyrd.io/mcp"
+```
+
+</Record>
+
+<Record>
+
+## Id
+
+cursor
+
+## Name
+
+Cursor
+
+## Kind
+
+file
+
+## File
+
+~/.cursor/mcp.json
+
+## Snippet
+
+```text
+{
+  "mcpServers": {
+    "shpyrd": { "url": "https://mcp.shpyrd.io/mcp" }
+  }
+}
+```
+
+</Record>
+
+<Record>
+
+## Id
+
+vscode
+
+## Name
+
+VS Code
+
+## Kind
+
+file
+
+## File
+
+.vscode/mcp.json
+
+## Snippet
+
+```text
+{
+  "servers": {
+    "shpyrd": { "type": "http", "url": "https://mcp.shpyrd.io/mcp" }
+  }
+}
+```
+
+</Record>
+
+# Add To Agent
+
+## Label
+
+Add to
+
+## Note
+
+It needs no account: it tells your agent how to build apps that run on shpyrd, and where the documentation is.
+
+## Installers
+
+### Mac
+
+#### Name
+
+macOS
+
+#### Href
+
+https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.dmg
+
+### Windows
+
+#### Name
+
+Windows
+
+#### Href
+
+https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer.exe
+
+### Linux
+
+#### Name
+
+Linux
+
+#### Href
+
+https://github.com/shpyrd-io/shpyrd/releases/download/installer-latest/Shpyrd-Installer-linux-amd64.tar.gz
+
+## Manual
+
+### Label
+
+or install manually
+
+### Href
+
+/docs/getting-started\#manually

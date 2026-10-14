@@ -740,12 +740,18 @@ func (s *Server) edgePage(c *gin.Context, status int, title, text string, links 
 	if hash := pages.ScriptHash(kind); hash != "" {
 		c.Header("Content-Security-Policy", basePolicy+"; script-src "+hash)
 	}
-	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(kind, pages.Page{Title: title, Text: text, Links: pages.Links(links)})))
+	page := pages.Page{Title: title, Text: text, Links: pages.Links(links)}
+	if status == http.StatusServiceUnavailable {
+		// The app is starting or being replaced: the page opens it again
+		// by itself instead of leaving the person to retry.
+		page.Refresh = 5
+	}
+	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(kind, page)))
 }
 
 // customError handles what ingress-nginx sends to its default backend:
 // custom-http-errors of an app's Ingress (the edge's 403 and nginx's 503
-// become our pages),
+// become our pages; the app's own 403 and 503 never come here),
 // and requests for hosts no Ingress serves (a "no app here" page instead of
 // the dashboard, which lives on its own host only).
 func (s *Server) customError(c *gin.Context) bool {

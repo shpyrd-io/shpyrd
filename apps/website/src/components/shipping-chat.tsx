@@ -6,7 +6,7 @@ import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { glass } from "@shpyrd/ui/lib/glass";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Conversation, ConversationMessage, type ConversationStep } from "@shpyrd/ui/components/conversation";
-import { agents } from "@shpyrd/content/site/agents";
+import { agents } from "@/content/agents";
 import { AgentMark, clock, useCurrentAgent } from "@/components/add-to-agent";
 
 // The homepage's picture in proposal 5: the agent's own app, where someone asks

@@ -10,7 +10,7 @@ import { glass } from "@shpyrd/ui/lib/glass";
 import { AppWindow } from "@shpyrd/ui/components/app-window";
 import { Button } from "@shpyrd/ui/components/button";
 import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
-import { flow } from "@shpyrd/content/site/tour";
+import { flow } from "@/content/tour";
 import { AgentMark, useCurrentAgent } from "@/components/add-to-agent";
 import { Composer, Typing, Url } from "@/components/shipping-chat";
 import { Intro, Label, panel } from "./parts";
