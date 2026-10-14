@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shpyrd-io/shpyrd/internal/scheduling"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -61,18 +63,18 @@ func (r *AppReconciler) podWaiting(ctx context.Context, pod *corev1.Pod) (messag
 		}
 		return r.waitingMessage(text, since)
 	}
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type != corev1.PodScheduled || condition.Status != corev1.ConditionFalse {
-			continue
-		}
+	if condition := scheduling.Blocked(pod); condition != nil {
 		e := latest("TriggeredScaleUp", "NotTriggerScaleUp")
 		if e != nil && e.Reason == "TriggeredScaleUp" {
-			return waiting("Waiting for room: a new machine is being added to the cluster (usually 2–4 minutes).", e), false
+			return waiting("Waiting for cluster resources: a new machine is being added to the cluster (usually 2–4 minutes).", e), false
 		}
 		if e != nil && e.Reason == "NotTriggerScaleUp" && (strings.Contains(strings.ToLower(e.Message), "max node group size") || strings.Contains(strings.ToLower(e.Message), "maximum")) {
-			return waiting("Waiting for room: the cluster is at its size limit. Ask the operator for more capacity.", e), false
+			return waiting("Waiting for cluster resources: the cluster is at its size limit. Ask the operator for more capacity.", e), false
 		}
-		return waiting("Waiting for room: no available machine can run this instance yet.", latest("FailedScheduling")), false
+		if scheduling.Capacity(condition.Message) {
+			return waiting("Waiting for cluster resources: not enough capacity to place this instance. Ask the operator to add capacity or review its resource requests.", latest("FailedScheduling")), false
+		}
+		return waiting("Waiting for scheduling: no available machine can run this instance yet.", latest("FailedScheduling")), false
 	}
 	newMachine := func() bool {
 		if r.Kube == nil || pod.Spec.NodeName == "" {

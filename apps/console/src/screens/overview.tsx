@@ -16,7 +16,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { TimeChart } from "@shpyrd/ui/components/time-chart";
 import { api } from "@/api/api";
-import type { MisplacedPod, Node } from "@/api/types";
+import type { MisplacedPod, Node, SchedulingSummary } from "@/api/types";
 import { ago, bytes, Failed, Loading } from "./shared";
 
 // What the environment was built for, and so how load balancing, DNS,
@@ -88,6 +88,7 @@ export function Overview() {
           .join(", ")}.`}
         iconEnd={failing ? <StatusBadge type="error">{`${failing} ${failing === 1 ? "node" : "nodes"} not ready`}</StatusBadge> : <StatusBadge type="success">Every node ready</StatusBadge>}
       />
+      <SchedulingAlert scheduling={c.scheduling} />
       <Card>
         <CardHeader>
           <CardTitle>Installed</CardTitle>
@@ -250,3 +251,35 @@ export function Overview() {
 }
 
 const gib = (b: number) => Math.round((b / (1 << 30)) * 10) / 10;
+
+
+export function SchedulingAlert({ scheduling }: { scheduling?: SchedulingSummary }) {
+  if (!scheduling) return null;
+  if (scheduling.error) return (
+    <Alert variant="warning">
+      <AlertTitle>Scheduling status unavailable</AlertTitle>
+      <AlertDescription>{scheduling.error}</AlertDescription>
+    </Alert>
+  );
+  if (!scheduling.pending.length) return null;
+  const capacity = scheduling.pending.filter((p) => p.capacity).length;
+  return (
+    <Alert variant="warning">
+      <AlertTitle>{capacity ? "Instances waiting for cluster resources" : "Instances waiting for scheduling"}</AlertTitle>
+      <AlertDescription>
+        <p>{scheduling.pending.length} pending {scheduling.pending.length === 1 ? "instance cannot" : "instances cannot"} be placed on a node.</p>
+        {capacity > 0 && <p>The scheduler reports a resource shortage for {capacity} {capacity === 1 ? "instance" : "instances"}. Add or free capacity in the required pool, or review resource requests. Other placement constraints may also need attention.</p>}
+        {!capacity && <p>Review the placement constraints below; adding capacity alone may not resolve them.</p>}
+        <ul className="grid gap-2">
+          {scheduling.pending.map((p) => (
+            <li key={p.namespace + "/" + p.name}>
+              <span className="font-mono text-foreground">{p.namespace}/{p.name}</span>
+              {p.pool && <span> ({p.pool} pool)</span>}
+              <p className="break-words">{p.message || "The scheduler has not reported a reason yet."}</p>
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}

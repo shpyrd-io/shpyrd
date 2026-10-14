@@ -11,6 +11,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/internal/scheduling"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
@@ -27,12 +28,27 @@ type ClusterSummary struct {
 	// Extensions known to this build, with their state on the cluster.
 	Extensions []ExtensionInfo `json:"extensions"`
 	// Front doors (RFC-0036).
-	ExternalLBAddress string `json:"externalLBAddress,omitempty"`
-	InternalLBAddress string `json:"internalLBAddress,omitempty"`
+	ExternalLBAddress string             `json:"externalLBAddress,omitempty"`
+	InternalLBAddress string             `json:"internalLBAddress,omitempty"`
+	Scheduling        *SchedulingSummary `json:"scheduling,omitempty"`
 	// Misplaced are the platform's pods running outside the platform pool
 	// (RFC-0077), a warning on the page; empty when every one is in place
 	// or the cluster has no pools.
 	Misplaced []install.MisplacedPod `json:"misplaced"`
+}
+
+// SchedulingSummary is independent of Prometheus and only exposed to operators.
+type SchedulingSummary struct {
+	Pending []SchedulingPod `json:"pending"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type SchedulingPod struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Pool      string `json:"pool,omitempty"`
+	Message   string `json:"message"`
+	Capacity  bool   `json:"capacity"`
 }
 
 // ExtensionInfo is one optional capability (RFC-0002).
@@ -114,6 +130,29 @@ func (s *Server) clusterSummary(c *gin.Context) {
 	}
 	for _, n := range nodes.Items {
 		out.Nodes = append(out.Nodes, nodeInfo(n))
+	}
+
+	out.Scheduling = &SchedulingSummary{Pending: []SchedulingPod{}}
+	pods, err := s.kube.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "status.phase=Pending"})
+	if err != nil {
+		out.Scheduling.Error = "Could not check pending instances. Scheduling status is unavailable."
+	} else {
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			if condition := scheduling.Blocked(pod); condition != nil {
+				out.Scheduling.Pending = append(out.Scheduling.Pending, SchedulingPod{
+					Namespace: pod.Namespace, Name: pod.Name, Pool: pod.Spec.NodeSelector[controller.PoolLabel],
+					Message: condition.Message, Capacity: scheduling.Capacity(condition.Message),
+				})
+			}
+		}
+		sort.Slice(out.Scheduling.Pending, func(i, j int) bool {
+			a, b := out.Scheduling.Pending[i], out.Scheduling.Pending[j]
+			if a.Namespace != b.Namespace {
+				return a.Namespace < b.Namespace
+			}
+			return a.Name < b.Name
+		})
 	}
 
 	var apps shpyrdv1.AppList
