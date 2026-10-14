@@ -100,7 +100,13 @@ export type MisplacedPod = {
   cpu?: string;
 };
 
+export type SchedulingSummary = {
+  pending: { namespace: string; name: string; pool?: string; message: string; capacity: boolean }[];
+  error?: string;
+};
+
 export type ClusterSummary = {
+  scheduling?: SchedulingSummary;
   install?: { profile: string; version: string; domain: string; updatedAt: string };
   components: { name: string; version?: string; appliedAt: string }[];
   extensions: ExtensionInfo[];

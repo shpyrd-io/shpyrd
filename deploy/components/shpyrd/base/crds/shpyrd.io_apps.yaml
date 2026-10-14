@@ -717,6 +717,11 @@ spec:
                   Processes maps process types (web, worker, ...) to their settings.
                   Defaults to a single "web" process.
                 type: object
+              redirectTo:
+                description: |-
+                  RedirectTo redirects the platform hostname to this verified project domain.
+                  Empty inherits the workspace redirect setting, or serves both addresses.
+                type: string
               slug:
                 description: |-
                   Slug is the project's short name: the hostname label
@@ -871,6 +876,29 @@ spec:
               image:
                 description: Image currently deployed (digest reference).
                 type: string
+              imageUsers:
+                description: ImageUsers contains identities for the deployed and pending
+                  images.
+                items:
+                  description: ImageUser records a resolved non-root identity for
+                    an immutable image.
+                  properties:
+                    gid:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    image:
+                      type: string
+                    uid:
+                      format: int64
+                      minimum: 1
+                      type: integer
+                  required:
+                  - gid
+                  - image
+                  - uid
+                  type: object
+                type: array
               latestBuild:
                 description: LatestBuild is the kpack Build producing (or having produced)
                   Image.

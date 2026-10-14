@@ -39,6 +39,7 @@ import type {
   Team,
   VolumeInfo,
   WorkspaceDomain,
+  DomainsAnswer,
   WorkspaceInfo,
   WorkspaceRole,
 } from "./types";
@@ -90,6 +91,7 @@ export type Api = {
   workspaceDomains: () => Promise<WorkspaceDomain[]>;
   addWorkspaceDomain: (host: string) => Promise<WorkspaceDomain>;
   verifyWorkspaceDomain: (host: string) => Promise<WorkspaceDomain>;
+  setWorkspaceDomainRedirect: (host: string, redirectApps: boolean) => Promise<WorkspaceDomain>;
   setWorkspaceDomainPrimary: (host: string) => Promise<WorkspaceDomain>;
   removeWorkspaceDomain: (host: string) => Promise<void>;
   loginMethods: () => Promise<LoginMethods>;
@@ -147,7 +149,8 @@ export type Api = {
   createSnapshot: (slug: string, volume: string, name?: string) => Promise<SnapshotInfo>;
   removeSnapshot: (slug: string, volume: string, snapshot: string) => Promise<void>;
   restoreVolume: (slug: string, volume: string, body: { snapshot: string; to?: string }) => Promise<RestoreVolumeResult>;
-  domains: (slug: string) => Promise<{ target: string; address?: string; domains: DomainStatus[] }>;
+  domains: (slug: string) => Promise<DomainsAnswer>;
+  setDomainRedirect: (slug: string, redirectTo: string) => Promise<DomainsAnswer>;
   addDomain: (slug: string, host: string) => Promise<DomainStatus>;
   removeDomain: (slug: string, host: string) => Promise<void>;
   // The drains of the workspace: every project's lines, labelled with it.

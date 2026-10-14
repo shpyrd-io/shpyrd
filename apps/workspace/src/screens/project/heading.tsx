@@ -200,17 +200,16 @@ function Building({ project }: { project: Project }) {
 function ReleaseCommand({ project, perms, onRetry, retrying }: { project: Project; perms: Perms; onRetry: () => void; retrying: boolean }) {
   const release = project.status.release!;
   const running = release.state === "Running";
-  const command = release.message?.replace(/^running /, "") ?? "the release command";
   const output = useStream<string>(
     (signal, push) => api.streamLogs(project.slug, { process: "release", tail: 60, follow: running }, signal, (l) => push(l.message)),
-    [project.slug, running],
+    [project.slug, running, release.target, release.message],
   );
   return (
     <Alert variant={running ? "warning" : "destructive"}>
       <AlertTitle>
-        {running ? "Release command running" : "The release command failed"} {running && <InlineCode>{command}</InlineCode>}
+        {running ? "Release step" : "The release command failed"}
       </AlertTitle>
-      <AlertDescription>{running ? "It runs before the new release rolls out; the current one keeps answering meanwhile." : release.message}</AlertDescription>
+      <AlertDescription>{release.message ?? (running ? "Waiting for the release step." : "The release command failed.")}{running && <span className="mt-1 block">The current release keeps answering meanwhile.</span>}</AlertDescription>
       <TextLogView lines={output.lines} height={200} empty={running ? "Waiting for output…" : "No output was kept."} className="mt-3" />
       {!running && perms.deploy && (
         <AlertActions>

@@ -54,6 +54,8 @@ type Config struct {
 	// for an unknown workspace: one label under WorkspaceDomain and each of
 	// WorkspaceExtraDomains, as before the layout.
 	WorkspaceAppHosts func(slug, app string) []string
+	// WorkspaceRedirectDomain is the verified primary domain when redirects are enabled.
+	WorkspaceRedirectDomain func(slug string) string
 	// Layout says where workspaces and their apps answer (RFC-0033 names):
 	// hosts one label under its AppsDomain are covered by the apps'
 	// wildcard certificate and the wildcard record of the shared front door.
@@ -401,7 +403,14 @@ func selectorLabels(app *shpyrdv1.App, process string) map[string]string {
 // domains returns the hosts served by the web process.
 // url is the public URL of the web process.
 func (c Config) url(app *shpyrdv1.App) string {
-	u := "https://" + c.domains(app)[0]
+	host := c.defaultHost(app)
+	if c.requestedRedirect(app) != "" {
+		host = c.platformHost(app)
+	}
+	if target := c.redirectTarget(app); target != "" {
+		host = target
+	}
+	u := "https://" + host
 	if c.HTTPSPort != "" && c.HTTPSPort != "443" {
 		u += ":" + c.HTTPSPort
 	}
@@ -691,7 +700,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		Command:         p.Command,
 		Args:            p.Args,
 		Resources:       res,
-		SecurityContext: hardenedSecurityContext(),
+		SecurityContext: imageSecurityContext(app, image),
 		// Global vars, then the project's config vars, then the vars of
 		// attached resources: with envFrom the last source wins, so project
 		// vars override globals and bound vars win over both (RFC-0003,
@@ -856,7 +865,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
 		"nginx.ingress.kubernetes.io/proxy-body-size": "50m",
 	})
-	hosts := c.domains(app)
+	hosts := c.servingDomains(app)
 	// Pick the ingress class and ExternalDNS target based on exposure.
 	class := c.IngressClass // already set to IngressClassExternal by Defaults
 	if app.Spec.Exposure == "internal" {
@@ -1132,4 +1141,16 @@ func EnvSources(app *shpyrdv1.App) []corev1.EnvFromSource {
 		out = append(out, optional(shpyrdv1.GlobalEnvSecretName))
 	}
 	return append(out, optional(app.EnvSecretName()), optional(app.BindingsSecretName()))
+}
+
+// imageSecurityContext never applies an identity resolved from another image.
+func imageSecurityContext(app *shpyrdv1.App, image string) *corev1.SecurityContext {
+	sc := hardenedSecurityContext()
+	for _, u := range app.Status.ImageUsers {
+		if u.Image == image && u.UID > 0 && u.GID >= 0 {
+			sc.RunAsUser, sc.RunAsGroup = ptr.To(u.UID), ptr.To(u.GID)
+			break
+		}
+	}
+	return sc
 }

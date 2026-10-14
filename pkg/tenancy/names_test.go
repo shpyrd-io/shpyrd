@@ -151,3 +151,40 @@ func TestAddressesAppHosts(t *testing.T) {
 		t.Errorf("unknown workspace: %v", got)
 	}
 }
+
+func TestWorkspaceRedirectPreferenceRequiresVerifiedPrimary(t *testing.T) {
+	ctx := t.Context()
+	st := store.NewMemory()
+	_, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "acme", Name: "Acme", Address: "acme.shpyrd.cloud", Settings: store.WorkspaceSettings{RedirectApps: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Addresses{Store: st, Layout: cloud}
+	check := func(want string) {
+		t.Helper()
+		a.Forget()
+		if got := a.AppRedirectDomain("acme"); got != want {
+			t.Fatalf("got %q want %q", got, want)
+		}
+	}
+	check("")
+	now := time.Now()
+	for _, h := range []store.WorkspaceHost{
+		{Host: "acme.com", Kind: store.HostCustom},
+		{Host: "acme.com", Kind: store.HostCustom, VerifiedAt: &now},
+		{Host: "acme.com", Kind: store.HostCustom, VerifiedAt: &now, Primary: true},
+	} {
+		if _, err := st.PutWorkspaceHost(ctx, "acme", h); err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if h.Primary {
+			want = h.Host
+		}
+		check(want)
+	}
+	if err := st.DeleteWorkspaceHost(ctx, "acme", "acme.com"); err != nil {
+		t.Fatal(err)
+	}
+	check("")
+}

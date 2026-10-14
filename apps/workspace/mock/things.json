@@ -117,6 +117,7 @@
             "dns": "ok",
             "target": "acme-hello-world.shpyrd.app",
             "certificate": "ready",
+            "redirectEligible": true,
             "record": {
               "type": "CNAME",
               "name": "hello.acme.com",

@@ -140,6 +140,16 @@ func TestAuthorization(t *testing.T) {
 		t.Errorf("developer me: %s", rec.Body.String())
 	}
 
+	// Variables are readable by viewers; both kinds still require config permission to edit.
+	if rec := doCookie(t, s, "PUT", "/api/projects/shop/secrets", `{"kind":"variable","set":{"APP_URL":"https://public.example.test"}}`, devSID, devCSRF); rec.Code != http.StatusOK {
+		t.Fatalf("developer variable: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doCookie(t, s, "GET", "/api/projects/shop/secrets", "", viewSID, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://public.example.test") {
+		t.Fatalf("viewer variable: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doCookie(t, s, "PUT", "/api/projects/shop/secrets", `{"kind":"variable","set":{"APP_URL":"other"}}`, viewSID, viewCSRF); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer changed variable: %d", rec.Code)
+	}
 	// Viewer (through the team): read only.
 	if rec := doCookie(t, s, "GET", "/api/projects/shop", "", viewSID, ""); rec.Code != http.StatusOK {
 		t.Errorf("viewer read: %d %s", rec.Code, rec.Body.String())

@@ -391,6 +391,11 @@ export function WorkspaceDomains() {
     },
     onError: failed,
   });
+  const redirect = useMutation({
+    mutationFn: ({ host, enabled }: { host: string; enabled: boolean }) => api.setWorkspaceDomainRedirect(host, enabled),
+    onSuccess: () => { toast.success("App redirect setting saved"); refresh(); },
+    onError: failed,
+  });
   const primary = useMutation({
     mutationFn: (host: string) => api.setWorkspaceDomainPrimary(host),
     onSuccess: (d) => {
@@ -426,7 +431,7 @@ export function WorkspaceDomains() {
         <CardTitle>Domains</CardTitle>
         <CardDescription>
           Names of your own the workspace answers at, such as intranet.acme.com;
-          its apps become one label under it. The primary one is its address.
+          its apps become one label under it. On the primary domain, you can redirect platform app addresses here once each app’s DNS and certificate are ready.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -476,6 +481,11 @@ export function WorkspaceDomains() {
                             justify="end"
                             align="center"
                           >
+                            {d.primary && d.verified && (
+                              <Button size="xs" variant="outline" disabled={redirect.isPending} onClick={() => redirect.mutate({ host: d.host, enabled: !d.redirectApps })}>
+                                {d.redirectApps ? "Stop app redirects" : "Redirect app addresses"}
+                              </Button>
+                            )}
                             {!d.verified && (
                               <Button
                                 size="xs"

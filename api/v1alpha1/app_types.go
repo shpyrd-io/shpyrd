@@ -184,6 +184,9 @@ type AppSpec struct {
 	// reports DNS and certificate state per host.
 	// +optional
 	Domains []string `json:"domains,omitempty"`
+	// RedirectTo redirects the platform hostname to this verified project domain.
+	// Empty inherits the workspace redirect setting, or serves both addresses.
+	RedirectTo string `json:"redirectTo,omitempty"`
 
 	// Bindings attach project resources (Postgres, Redis, ...) to the app:
 	// their connection details become config vars of every process.
@@ -486,8 +489,20 @@ type HealthCheck struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+// ImageUser records a resolved non-root identity for an immutable image.
+type ImageUser struct {
+	Image string `json:"image"`
+	// +kubebuilder:validation:Minimum=1
+	UID int64 `json:"uid"`
+	// +kubebuilder:validation:Minimum=0
+	GID int64 `json:"gid"`
+}
+
 // AppStatus is the observed state of an App.
 type AppStatus struct {
+	// ImageUsers contains identities for the deployed and pending images.
+	// +optional
+	ImageUsers []ImageUser `json:"imageUsers,omitempty"`
 	// Runtime is the runtime detected in the current image's buildpack metadata.
 	// +optional
 	Runtime string `json:"runtime,omitempty"`

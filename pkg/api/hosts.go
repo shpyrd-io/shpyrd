@@ -317,10 +317,11 @@ func (e *apiError) Error() string { return e.msg }
 // DomainView is one custom domain of the workspace, with the DNS records
 // to publish.
 type DomainView struct {
-	Host       string     `json:"host"`
-	Verified   bool       `json:"verified"`
-	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
-	Primary    bool       `json:"primary"`
+	RedirectApps bool       `json:"redirectApps"`
+	Host         string     `json:"host"`
+	Verified     bool       `json:"verified"`
+	VerifiedAt   *time.Time `json:"verifiedAt,omitempty"`
+	Primary      bool       `json:"primary"`
 	// Records are what the company publishes in its DNS: the host and its
 	// apps pointing at the workspace address, and the proof.
 	Records []DNSRecord `json:"records"`
@@ -341,7 +342,8 @@ func (s *Server) domainView(ctx context.Context, ws *store.Workspace, h store.Wo
 	// wildcard under it is never an apex.
 	typ, value := controller.RecordFor(h.Host, ws.Address, s.frontDoor(ctx, false))
 	return DomainView{
-		Host: h.Host, Verified: h.VerifiedAt != nil, VerifiedAt: h.VerifiedAt, Primary: h.Primary,
+		RedirectApps: ws.Settings.RedirectApps,
+		Host:         h.Host, Verified: h.VerifiedAt != nil, VerifiedAt: h.VerifiedAt, Primary: h.Primary,
 		Records: []DNSRecord{
 			{Type: typ, Name: h.Host, Value: value},
 			{Type: "CNAME", Name: "*." + h.Host, Value: ws.Address},
@@ -472,10 +474,11 @@ func (s *Server) verifyWorkspaceDomain(c *gin.Context) {
 // being it.
 func (s *Server) updateWorkspaceDomain(c *gin.Context) {
 	var req struct {
-		Primary *bool `json:"primary"`
+		Primary      *bool `json:"primary"`
+		RedirectApps *bool `json:"redirectApps"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Primary == nil {
-		abort(c, http.StatusBadRequest, errors.New("give primary: true or false"))
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Primary == nil && req.RedirectApps == nil) {
+		abort(c, http.StatusBadRequest, errors.New("give primary or redirectApps: true or false"))
 		return
 	}
 	ws, h, ok := s.customDomainOf(c)
@@ -487,20 +490,40 @@ func (s *Server) updateWorkspaceDomain(c *gin.Context) {
 		abort(c, http.StatusForbidden, denial(roles, authz.WorkspaceOwner, ""))
 		return
 	}
-	if *req.Primary && h.VerifiedAt == nil {
+	if req.Primary != nil && *req.Primary && h.VerifiedAt == nil {
 		abort(c, http.StatusBadRequest, errors.New("verify the domain first"))
 		return
 	}
-	h.Primary = *req.Primary
+	if req.Primary != nil {
+		h.Primary = *req.Primary
+	}
+	if req.RedirectApps != nil && *req.RedirectApps && (!h.Primary || h.VerifiedAt == nil) {
+		abort(c, http.StatusBadRequest, errors.New("choose a verified primary domain before redirecting app addresses"))
+		return
+	}
 	updated, err := s.store.PutWorkspaceHost(c.Request.Context(), ws.Slug, *h)
 	if err != nil {
 		storeErr(c, err, "domain")
 		return
 	}
+	if req.RedirectApps != nil {
+		settings := ws.Settings
+		settings.RedirectApps = *req.RedirectApps
+		ws, err = s.store.UpdateWorkspaceSettings(c.Request.Context(), ws.Slug, settings)
+		if err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+	}
 	s.forgetHosts()
 	s.forgetTenants()
 	s.workspacesChanged()
-	s.audit(c, "", "workspace.domain.primary", h.Host, fmt.Sprintf("%v", h.Primary))
+	if req.Primary != nil {
+		s.audit(c, "", "workspace.domain.primary", h.Host, fmt.Sprintf("%v", h.Primary))
+	}
+	if req.RedirectApps != nil {
+		s.audit(c, "", "workspace.domain.redirect", h.Host, fmt.Sprintf("%v", *req.RedirectApps))
+	}
 	c.JSON(http.StatusOK, s.domainView(c.Request.Context(), ws, *updated))
 }
 

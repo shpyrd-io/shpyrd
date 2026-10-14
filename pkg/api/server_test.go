@@ -284,7 +284,7 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 		t.Errorf("vars = %+v", resp.Vars)
 	}
 	sec := &corev1.Secret{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1-env"}, sec); err != nil {
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1-env-pending"}, sec); err != nil {
 		t.Fatal(err)
 	}
 	if string(sec.Data["C"]) != "three" || string(sec.Data["B"]) != "two" {

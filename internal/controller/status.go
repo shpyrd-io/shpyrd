@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 )
 
 // maxReleases bounds the history kept in status.
@@ -83,6 +84,9 @@ func configHash(app *shpyrdv1.App, secret *corev1.Secret, sizes map[string]strin
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if configvars.Plain(secret, k) {
+				h.Write([]byte("plain:"))
+			}
 			h.Write([]byte(k))
 			h.Write([]byte{'='})
 			h.Write(secret.Data[k])
@@ -361,6 +365,9 @@ func summarizeProcesses(procs map[string]shpyrdv1.ProcessStatus) (ready bool, ms
 			parts = append(parts, fmt.Sprintf("%s %d/%d ready", n, p.Ready, p.Desired))
 		default:
 			parts = append(parts, fmt.Sprintf("%s %d/%d", n, p.Ready, p.Desired))
+		}
+		if p.Failing == 0 && p.Reason != "" && (p.Updated < p.Desired || p.Ready < p.Desired) {
+			parts[len(parts)-1] += ": " + p.Reason
 		}
 	}
 	return ready, strings.Join(parts, " · ")

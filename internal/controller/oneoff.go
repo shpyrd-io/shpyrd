@@ -77,12 +77,7 @@ func OneOffPod(app *shpyrdv1.App, image string, command []string, res corev1.Res
 				// order as the deployed processes (RFC-0016).
 				EnvFrom: EnvSources(app),
 				// Same hardening as deployed processes (RFC-0008).
-				SecurityContext: &corev1.SecurityContext{
-					AllowPrivilegeEscalation: ptr.To(false),
-					RunAsNonRoot:             ptr.To(true),
-					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
+				SecurityContext: imageSecurityContext(app, image),
 			}},
 		},
 	}
