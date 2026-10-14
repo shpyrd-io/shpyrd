@@ -401,6 +401,17 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				return outcome{}, err
 			}
 			build = readBuildState(img)
+			if build.Ready == "Unknown" {
+				// kpack names the Build it starts in latestBuildRef, but a
+				// status update lost at that moment (a conflict) is not made
+				// again while that Build runs: latestBuildRef stays empty, or
+				// names the build before, until it ends, and a deploy waiting
+				// for its build sees none start. The newest Build of the
+				// Image is the one in progress.
+				if b := r.newestKpackBuild(ctx, img, build.LatestBuild); b != "" {
+					build.LatestBuild = b
+				}
+			}
 			if build.LatestBuild != "" {
 				kpackBuild = r.getBuild(ctx, app.Namespace, build.LatestBuild)
 			}
@@ -814,6 +825,33 @@ func (r *AppReconciler) getBuild(ctx context.Context, namespace, name string) *u
 		return nil
 	}
 	return b
+}
+
+// newestKpackBuild is the Build of the kpack Image img numbered above the
+// one named current, the highest of them; "" when there is none.
+func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.Unstructured, current string) string {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(KpackBuildGVK.GroupVersion().WithKind(KpackBuildGVK.Kind + "List"))
+	if err := r.APIReader.List(ctx, list, client.InNamespace(img.GetNamespace()), client.MatchingLabels{"image.kpack.io/image": img.GetName()}); err != nil {
+		return ""
+	}
+	newest, top, cur := "", -1, -1
+	for _, b := range list.Items {
+		n, err := strconv.Atoi(b.GetLabels()["image.kpack.io/buildNumber"])
+		if err != nil {
+			continue
+		}
+		if b.GetName() == current {
+			cur = n
+		}
+		if n > top {
+			newest, top = b.GetName(), n
+		}
+	}
+	if top <= cur {
+		return ""
+	}
+	return newest
 }
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the

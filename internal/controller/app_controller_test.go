@@ -271,6 +271,72 @@ func TestReconcileSourceBuild(t *testing.T) {
 	}
 }
 
+// kpack can run a Build its Image does not name: the status update that
+// sets latestBuildRef lost to a conflict is not made again until the Build
+// ends. The App names the Build in progress anyway, so a deploy waiting for
+// its build sees it start (the end-to-end "no build started within 3m").
+func TestRunningKpackBuildIsTheLatest(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "app-src", Generation: 1},
+		Spec: shpyrdv1.AppSpec{
+			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/example/repo", Revision: "main"}},
+		},
+	}
+	r, c := newTestReconciler(t, app)
+	runReconcile(t, r, app)
+	img := &unstructured.Unstructured{}
+	img.SetGroupVersionKind(KpackImageGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-src", Name: "src"}, img); err != nil {
+		t.Fatal(err)
+	}
+	build := func(n int) {
+		t.Helper()
+		b := &unstructured.Unstructured{}
+		b.SetGroupVersionKind(KpackBuildGVK)
+		b.SetNamespace("app-src")
+		b.SetName(fmt.Sprintf("src-build-%d", n))
+		b.SetLabels(map[string]string{"image.kpack.io/image": "src", "image.kpack.io/buildNumber": fmt.Sprint(n)})
+		if err := c.Create(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := func(ref string) {
+		t.Helper()
+		if err := c.Get(ctx, client.ObjectKeyFromObject(img), img); err != nil {
+			t.Fatal(err)
+		}
+		if ref == "" {
+			unstructured.RemoveNestedField(img.Object, "status", "latestBuildRef")
+		} else {
+			_ = unstructured.SetNestedField(img.Object, ref, "status", "latestBuildRef")
+		}
+		_ = unstructured.SetNestedField(img.Object, int64(img.GetGeneration()), "status", "observedGeneration")
+		_ = unstructured.SetNestedSlice(img.Object, []interface{}{map[string]interface{}{"type": "Ready", "status": "Unknown", "reason": "BuildRunning", "message": "Container export waiting"}}, "status", "conditions")
+		if err := c.Update(ctx, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The first build runs and the Image names none.
+	build(1)
+	running("")
+	if got := runReconcile(t, r, app); got.Status.LatestBuild != "src-build-1" {
+		t.Errorf("first build: latestBuild = %q, want src-build-1", got.Status.LatestBuild)
+	}
+	// A second build runs and the Image still names the first.
+	build(2)
+	running("src-build-1")
+	if got := runReconcile(t, r, app); got.Status.LatestBuild != "src-build-2" {
+		t.Errorf("second build: latestBuild = %q, want src-build-2", got.Status.LatestBuild)
+	}
+	// The Image catches up: nothing newer than what it names.
+	running("src-build-2")
+	if got := runReconcile(t, r, app); got.Status.LatestBuild != "src-build-2" {
+		t.Errorf("caught up: latestBuild = %q, want src-build-2", got.Status.LatestBuild)
+	}
+}
+
 func TestConfigHashStable(t *testing.T) {
 	app := &shpyrdv1.App{Spec: shpyrdv1.AppSpec{Env: []corev1.EnvVar{{Name: "B", Value: "2"}, {Name: "A", Value: "1"}}}}
 	sec := &corev1.Secret{Data: map[string][]byte{"Y": []byte("y"), "X": []byte("x")}}
