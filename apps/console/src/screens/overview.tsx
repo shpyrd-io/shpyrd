@@ -110,7 +110,11 @@ function PoolInspection({ pool, snapshot, range, mixed, onInspect }: { pool: Ove
   const [sort, setSort] = useState("cpuRequestedPct");
   const [page, setPage] = useState({ snapshot, offset: 0 });
   const [compare, setCompare] = useState<string[]>([]);
-  useEffect(() => { const timer = setTimeout(() => { setQuery(search); setPage(p => ({ ...p, offset: 0 })); }, 300); return () => clearTimeout(timer); }, [search]);
+  useEffect(() => {
+    if (search === query) return;
+    const timer = setTimeout(() => { setQuery(search); setPage(p => ({ ...p, offset: 0 })); }, 300);
+    return () => clearTimeout(timer);
+  }, [search, query]);
   // Freeze later pages at their original snapshot; new snapshots only refresh page one.
   const activeSnapshot = page.offset === 0 ? snapshot : page.snapshot;
   const nodes = useQuery({ queryKey: ["overview-nodes", activeSnapshot, pool.name, view, query, zone, status, issues, sort, page.offset], queryFn: ({ signal }) => api.overviewNodes({ snapshot: activeSnapshot, pool: pool.name, view, search: query, zone, status: status === "all" ? undefined : status, issues: String(issues), sort, offset: page.offset }, signal), staleTime: Infinity, retry: 1 });
