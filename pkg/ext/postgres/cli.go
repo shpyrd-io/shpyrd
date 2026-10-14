@@ -161,6 +161,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 		backups   bool
 		retention string
 		schedule  string
+		dbType    string
 	)
 	cmd := &cobra.Command{
 		Use:   "create <name>",
@@ -168,13 +169,29 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
-			qty, err := resource.ParseQuantity(storage)
-			if err != nil || qty.Sign() <= 0 {
-				return fmt.Errorf("invalid --storage %q (use e.g. 10Gi)", storage)
-			}
 			// Through the API (RFC-0052): the same for a login session and a
-			// kubeconfig; the server validates the spec against the CRD.
-			spec := shpyrdv1.PostgresSpec{Version: version, Size: size, Storage: &qty, Instances: ptr.To(instances)}
+			// kubeconfig; the server validates the spec against the CRD. Only
+			// what was given is sent: the server settles the type within the
+			// workspace's plan and fills the rest (a shared database has no
+			// instance settings and takes the plan's cap).
+			spec := shpyrdv1.PostgresSpec{Type: dbType}
+			flagsGiven := cmd.Flags()
+			if flagsGiven.Changed("storage") {
+				qty, err := resource.ParseQuantity(storage)
+				if err != nil || qty.Sign() <= 0 {
+					return fmt.Errorf("invalid --storage %q (use e.g. 10Gi)", storage)
+				}
+				spec.Storage = &qty
+			}
+			if flagsGiven.Changed("version") {
+				spec.Version = version
+			}
+			if flagsGiven.Changed("size") {
+				spec.Size = size
+			}
+			if flagsGiven.Changed("instances") {
+				spec.Instances = ptr.To(instances)
+			}
 			if backups || retention != "" || schedule != "" {
 				spec.Backups = &shpyrdv1.PostgresBackups{Retention: retention, Schedule: schedule}
 			}
@@ -183,7 +200,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 				return err
 			}
 			out := ext.Progress(g, cmd)
-			fmt.Fprintf(out, "Creating PostgreSQL %s database %s (%s, %d instance(s))...\n", version, args[0], qty.String(), instances)
+			fmt.Fprintf(out, "Creating database %s...\n", args[0])
 			if created.Note != "" {
 				fmt.Fprintln(out, created.Note)
 			}
@@ -209,10 +226,11 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 		},
 	}
 	ext.ProjectFlag(g, cmd, &project)
-	cmd.Flags().StringVar(&version, "version", "17", "PostgreSQL major version")
-	cmd.Flags().StringVar(&size, "size", "", "a Postgres size (shpyrd sizes list; default: the smallest, shared-s)")
-	cmd.Flags().StringVar(&storage, "storage", "5Gi", "data volume size")
-	cmd.Flags().Int32Var(&instances, "instances", 1, "number of instances (2-3 for high availability)")
+	cmd.Flags().StringVar(&dbType, "type", "", "kind of database: shared (a database on a platform server, always on, with a size cap) or dedicated (a cluster of its own with a disk); default: the workspace's")
+	cmd.Flags().StringVar(&version, "version", "17", "PostgreSQL major version (dedicated)")
+	cmd.Flags().StringVar(&size, "size", "", "a Postgres size (shpyrd sizes list; default: the smallest, shared-s) (dedicated)")
+	cmd.Flags().StringVar(&storage, "storage", "5Gi", "data volume size (dedicated), or the size cap (shared)")
+	cmd.Flags().Int32Var(&instances, "instances", 1, "number of instances (2-3 for high availability) (dedicated)")
 	cmd.Flags().BoolVar(&backups, "backups", false, "back up to the platform's object store: continuous WAL archiving and a daily base backup (needs the object-storage extension)")
 	cmd.Flags().StringVar(&retention, "retention", "", "how long backups are kept, e.g. 14d (default 14d; implies --backups)")
 	cmd.Flags().StringVar(&schedule, "backup-schedule", "", "cron of the base backup in UTC, e.g. \"0 2 * * *\" (default daily at 02:00; implies --backups)")

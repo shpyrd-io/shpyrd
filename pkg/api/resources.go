@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // ResourceView is any resource of a project in the shared shape the
@@ -267,7 +269,20 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		"spec": spec,
 	}}
 	note := ""
-	if t.Kind == "Postgres" || t.Kind == "Redis" {
+	shared := false
+	if t.Kind == "Postgres" {
+		cap, err := s.applyPostgresType(ctx, s.workspace(c), spec)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		if shared = spec["type"] == shpyrdv1.PostgresTypeShared; shared {
+			// No instance, no disk: nothing against the workspace's CPU,
+			// memory or storage ceilings; the cap is the database's own.
+			note = fmt.Sprintf("Your database can hold up to %s.", cap)
+		}
+	}
+	if (t.Kind == "Postgres" && !shared) || t.Kind == "Redis" {
 		n, err := s.storeSize(ctx, s.workspace(c), t.Kind, spec)
 		if err != nil {
 			abort(c, http.StatusBadRequest, err)
@@ -302,6 +317,63 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	view := resourceViewOf(t, *u)
 	view.Note = note
 	c.JSON(http.StatusCreated, view)
+}
+
+// applyPostgresType settles a new database's kind within the workspace's
+// plan: the type asked for, else the plan's default, else dedicated; a
+// kind the plan does not allow is refused in words. A shared database
+// gets the plan's cap as its storage when none was asked and must carry
+// no instance settings (the CRD refuses them too); a dedicated one keeps
+// today's 5Gi disk default. It returns the cap of a shared database.
+func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[string]interface{}) (string, error) {
+	limits := s.limitsOf(ctx, ws)
+	var rules store.PostgresLimits
+	if limits != nil && limits.Postgres != nil {
+		rules = *limits.Postgres
+	}
+	allowed := rules.Types
+	if len(allowed) == 0 {
+		allowed = []string{shpyrdv1.PostgresTypeShared, shpyrdv1.PostgresTypeDedicated}
+	}
+	typ, _ := spec["type"].(string)
+	if typ == "" {
+		typ = rules.DefaultType
+	}
+	if typ == "" {
+		typ = shpyrdv1.PostgresTypeDedicated
+	}
+	if typ != shpyrdv1.PostgresTypeShared && typ != shpyrdv1.PostgresTypeDedicated {
+		return "", fmt.Errorf("type %q is not one of shared, dedicated", typ)
+	}
+	if !slices.Contains(allowed, typ) {
+		return "", fmt.Errorf("this workspace's plan allows only %s databases", strings.Join(allowed, " and "))
+	}
+	spec["type"] = typ
+	if typ == shpyrdv1.PostgresTypeDedicated {
+		if _, has := spec["storage"]; !has {
+			spec["storage"] = "5Gi"
+		}
+		return "", nil
+	}
+	for _, key := range []string{"instances", "size", "version", "sleep"} {
+		if _, has := spec[key]; has {
+			return "", errors.New("Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database.")
+		}
+	}
+	if rec, ok := spec["recovery"].(map[string]interface{}); ok {
+		if _, has := rec["targetTime"]; has {
+			return "", errors.New("Point-in-time restore is a dedicated database feature.")
+		}
+	}
+	cap, _ := spec["storage"].(string)
+	if cap == "" {
+		cap = rules.SharedCap
+	}
+	if cap == "" {
+		cap = "1Gi"
+	}
+	spec["storage"] = cap
+	return cap, nil
 }
 
 // storeSize records the size of a new database or store (#57): the one

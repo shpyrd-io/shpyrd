@@ -281,6 +281,11 @@ func sizeLike(list *sizes.List, cpu, mem string) string {
 func postgresSizeRecord(name string) string { return sizes.ForPostgres + ":" + name }
 
 func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		// The shared server comes in a later release: until then a shared
+		// database waits, provisioning, with no cluster of its own.
+		return ctrl.Result{}, &pendingError{msg: "a shared database is placed on a platform shared server; this platform has none yet"}
+	}
 	catalog := loadCatalog(ctx, r.Client, r.SystemNamespace)
 	size, err := catalog.Postgres.Pick(sizes.ForPostgres, pg.Spec.Size)
 	if err != nil {

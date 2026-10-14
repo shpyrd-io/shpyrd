@@ -188,6 +188,19 @@ type Limits struct {
 	CPU       string `json:"cpu,omitempty"`
 	Memory    string `json:"memory,omitempty"`
 	Storage   string `json:"storage,omitempty"`
+	// Postgres bounds the kinds of database the plan allows; nil means
+	// both, dedicated by default.
+	Postgres *PostgresLimits `json:"postgres,omitempty"`
+}
+
+// PostgresLimits are a plan's rules for databases: the kinds allowed
+// ("shared", "dedicated"; empty means both), the kind a creation without
+// a type gets (empty means dedicated), and the logical cap of a shared
+// database (a quantity; empty means 1Gi).
+type PostgresLimits struct {
+	Types       []string `json:"types,omitempty"`
+	DefaultType string   `json:"defaultType,omitempty"`
+	SharedCap   string   `json:"sharedCap,omitempty"`
 }
 
 // APIToken is a scoped, named credential (RFC-0031): shp_<id>_<random>.
