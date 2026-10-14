@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -9,8 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/internal/scheduling"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
@@ -21,18 +22,33 @@ type ClusterSummary struct {
 	Install    *InstallInfo      `json:"install,omitempty"`
 	Components []ComponentInfo   `json:"components"`
 	Nodes      []NodeInfo        `json:"nodes"`
-	Apps       int               `json:"apps"`
-	Phases     map[string]int    `json:"phases"`
+	Apps       int               `json:"apps,omitempty"`
+	Phases     map[string]int    `json:"phases,omitempty"`
 	Vars       map[string]string `json:"vars,omitempty"`
 	// Extensions known to this build, with their state on the cluster.
 	Extensions []ExtensionInfo `json:"extensions"`
 	// Front doors (RFC-0036).
-	ExternalLBAddress string `json:"externalLBAddress,omitempty"`
-	InternalLBAddress string `json:"internalLBAddress,omitempty"`
+	ExternalLBAddress string             `json:"externalLBAddress,omitempty"`
+	InternalLBAddress string             `json:"internalLBAddress,omitempty"`
+	Scheduling        *SchedulingSummary `json:"scheduling,omitempty"`
 	// Misplaced are the platform's pods running outside the platform pool
 	// (RFC-0077), a warning on the page; empty when every one is in place
 	// or the cluster has no pools.
 	Misplaced []install.MisplacedPod `json:"misplaced"`
+}
+
+// SchedulingSummary is independent of Prometheus and only exposed to operators.
+type SchedulingSummary struct {
+	Pending []SchedulingPod `json:"pending"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type SchedulingPod struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Pool      string `json:"pool,omitempty"`
+	Message   string `json:"message"`
+	Capacity  bool   `json:"capacity"`
 }
 
 // ExtensionInfo is one optional capability (RFC-0002).
@@ -86,9 +102,6 @@ func (s *Server) clusterSummary(c *gin.Context) {
 	if info, err := install.ReadInstallInfo(ctx, s.kube, ""); err == nil {
 		out.Install = &InstallInfo{Profile: info.Profile, Version: info.Version, Domain: info.Vars[install.VarDomain], UpdatedAt: info.UpdatedAt}
 		out.Vars = info.Vars
-		if pods, err := install.MisplacedPods(ctx, s.kube, info.Vars); err == nil && pods != nil {
-			out.Misplaced = pods
-		}
 	}
 	out.Extensions = []ExtensionInfo{}
 	for _, x := range all.All() {
@@ -116,17 +129,8 @@ func (s *Server) clusterSummary(c *gin.Context) {
 		out.Nodes = append(out.Nodes, nodeInfo(n))
 	}
 
-	var apps shpyrdv1.AppList
-	if err := s.apps.List(ctx, &apps); err == nil {
-		out.Apps = len(apps.Items)
-		for _, a := range apps.Items {
-			phase := a.Status.Phase
-			if phase == "" {
-				phase = shpyrdv1.PhasePending
-			}
-			out.Phases[phase]++
-		}
-	}
+	out.Scheduling = s.schedulingSummary(ctx)
+
 	// Load balancer addresses for the cluster page's front-door summary.
 	if svc, err := s.kube.Kube.CoreV1().Services("ingress-nginx").Get(ctx, "ingress-nginx-controller", metav1.GetOptions{}); err == nil {
 		out.ExternalLBAddress = lbAddress(svc)
@@ -200,4 +204,35 @@ func lbAddress(svc *corev1.Service) string {
 		}
 	}
 	return ""
+}
+
+func (s *Server) schedulingSummary(ctx context.Context) *SchedulingSummary {
+	out := &SchedulingSummary{Pending: []SchedulingPod{}}
+	pods, err := s.kube.Kube.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "status.phase=Pending"})
+	if err != nil {
+		out.Error = "Could not check pending instances. Scheduling status is unavailable."
+	} else {
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			if condition := scheduling.Blocked(pod); condition != nil {
+				out.Pending = append(out.Pending, SchedulingPod{
+					Namespace: pod.Namespace, Name: pod.Name, Pool: pod.Spec.NodeSelector[controller.PoolLabel],
+					Message: condition.Message, Capacity: scheduling.Capacity(condition.Message),
+				})
+			}
+		}
+		sort.Slice(out.Pending, func(i, j int) bool {
+			a, b := out.Pending[i], out.Pending[j]
+			if a.Namespace != b.Namespace {
+				return a.Namespace < b.Namespace
+			}
+			return a.Name < b.Name
+		})
+	}
+
+	return out
+}
+
+func (s *Server) clusterScheduling(c *gin.Context) {
+	c.JSON(http.StatusOK, s.schedulingSummary(c.Request.Context()))
 }

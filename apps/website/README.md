@@ -29,20 +29,41 @@ app/getting-started/         the builder-to-colleague journey
 app/bring-an-app/            the assisted-beta offer
 app/docs/[slug]/             every documentation page
 src/components/shell.tsx     the chrome; it branches on document or marketing page
-src/components/markdoc.tsx   which component of design/ui draws each tag
-src/lib/content.ts           reads content/docs and returns front matter, tree and headings
+src/components/mdx.tsx       which component draws each editorial MDX block
+src/lib/mdx/catalog.ts       discovers MDX articles, metadata and menu entries
 public/install.sh            served at shpyrd.io/install.sh, the documented install path
 public/screenshots/          screenshots used by the docs and the root README
 ```
 
-The texts are not here. Documentation is `content/docs/*.md` and the marketing
-copy is `content/site/*.ts`; see [`content/README.md`](../../content/README.md).
+Editorial content is MDX in `content/`; see [`content/README.md`](../../content/README.md)
+for the editing guide. The Small Software manifesto is a one-off composition:
+its data is `src/content/tour.ts` and its slides are `src/components/tour/`.
+
+## Content and layouts
+
+- `src/lib/mdx/catalog.ts` discovers all feature, solution and documentation
+  pages, loads their compiled MDX and supplies menu summaries to the shell.
+- `EditorialLanding` adapts semantic MDX sections into the named props of
+  `LandingPage`. The latter owns the actual visual composition.
+- `src/lib/landing-designs.ts` selects landing variants and illustrations;
+  `src/lib/mdx/designs.ts` selects icons. New visual treatments belong here.
+- `DocumentText` frames documentation, including its heading navigation.
+- Home, pricing, forms and Getting Started retain their own page components.
+  Their copy comes from MDX records through typed adapters in `src/content`.
+  Calculations, form rules and text substitution remain application code.
+- `apps/shared/src/editorial` compiles editorial MDX for this app and
+  `apps/example`. The global MDX provider is empty: routes supply renderers
+  explicitly, so importing copy into a client component only brings data.
+
+Designers edit the layout component and view a representative route at
+`http://localhost:4324`. Writers edit its MDX file with the same preview open.
+Both refresh on save. A new layout is a website component; a visual variation
+of the same structure is a variant of that component.
 
 ## Adding a documentation page
 
-Add `content/docs/<slug>.md` with `title` and `description` front matter, then
-add it to the navigation in `content/navigation.ts`. A test fails if the two
-disagree, and the route and the metadata follow automatically.
+Add `content/docs/<slug>.mdx` with `title` and `description` front matter,
+then list it in `content/docs/index.mdx`. The route follows the filename.
 
 ## What this must not break
 
@@ -79,7 +100,7 @@ The redirects (`src/lib/redirects.ts`) are Next's own: `/discord`, `/docs`,
 
 `/contact/sales` and `/contact/enterprise` post to `app/api/contact`, the
 one route that runs on request. It checks the answers by the forms' rules
-(`src/lib/contact.ts`, from `content/site/contact.ts`) and mails them to the
+(`src/lib/contact.ts` and `src/content/contact.ts`, with copy from `content/site/contact/`) and mails them to the
 team through Mailgun's SMTP. Its settings are the `website` project's config
 vars on shpyrd (`shpyrd secrets set --project website …`):
 

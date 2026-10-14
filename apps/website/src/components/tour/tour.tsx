@@ -1,6 +1,6 @@
 "use client";
 
-// The tour's slides, in order (content/site/tour.ts names them).
+// The tour's slides, in order (src/content/tour.ts names them).
 import { Access } from "./access";
 import { Audiences } from "./audiences";
 import { Closing } from "./closing";

@@ -14,6 +14,9 @@ application has to change.
 - Group chart gallery pages in an alphabetical Charts section, with separate
   vertical and horizontal funnel examples. Preserve existing component APIs
   and former gallery URLs; use the existing `Stat` and `Sparkline` for KPIs.
+- **Breaking:** `Changelog` no longer renders heading, description, or actions props. Compose the page heading and actions outside the timeline.
+- Changelog entries use rounded Tile markers; `ChangelogSummary` and `ChangelogArchive` provide linked summaries grouped by year with progressive reveal.
+- Mobile `SiteHeader` keeps columns inside expandable parent menus and standalone links independent; expanding a group no longer closes the menu.
 
 ## 0.1.1-0
 

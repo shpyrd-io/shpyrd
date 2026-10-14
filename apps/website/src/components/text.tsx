@@ -1,23 +1,23 @@
 import React from "react";
-import Markdoc from "@markdoc/markdoc";
 import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { PageLayoutContent, PageLayoutPane } from "@shpyrd/ui/components/page-layout";
 import { Prose } from "@shpyrd/ui/components/prose";
-import type { Text as TextOf } from "@/lib/content";
-import { components } from "./markdoc";
+import type { Heading } from "@/lib/content";
 import { OnThisPage } from "./on-this-page";
 
 // A text of the site as a page: its heading, the text itself, and beside
 // it the list of its parts. Rendered when the application is built.
-export function Text({ text }: { text: TextOf }) {
+export function DocumentText({ title, description, headings, children }: {
+  title: string; description?: string; headings: Heading[]; children: React.ReactNode;
+}) {
   // The parts, and the sections of a part under it, a step in. Deeper headings
   // are too small a piece to go to from the side.
-  const parts = text.headings.filter((h) => h.level === 2 || h.level === 3);
+  const parts = headings.filter((h) => h.level === 2 || h.level === 3);
   return (
     <>
       <PageLayoutContent width="xlarge" padding="normal" className="grid grid-cols-1 content-start gap-8">
-        <PageHeading title={text.title} description={text.description} variant="large" border />
-        <Prose>{Markdoc.renderers.react(text.content, React, { components })}</Prose>
+        <PageHeading title={title} description={description} variant="large" border />
+        <Prose>{children}</Prose>
       </PageLayoutContent>
       {parts.filter((h) => h.level === 2).length > 1 && (
         <PageLayoutPane

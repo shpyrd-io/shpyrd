@@ -14,7 +14,7 @@ import { cn } from "@shpyrd/ui/lib/cn";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { BrowserFrame } from "@shpyrd/ui/components/browser-frame";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
-import { access } from "@shpyrd/content/site/tour";
+import { access } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 // What the app shows Marina: the claims waiting for her.

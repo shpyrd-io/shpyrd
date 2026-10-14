@@ -549,3 +549,17 @@ func (a *Addresses) Forget() {
 	a.cache, a.hosts = nil, nil
 	a.mu.Unlock()
 }
+
+// AppRedirectDomain is the verified primary domain when app redirects are enabled.
+func (a *Addresses) AppRedirectDomain(slug string) string {
+	ws := a.Workspace(slug)
+	if ws == nil || !ws.Settings.RedirectApps {
+		return ""
+	}
+	for _, h := range a.Hosts(slug) {
+		if h.Kind == store.HostCustom && h.Primary && h.VerifiedAt != nil {
+			return h.Host
+		}
+	}
+	return ""
+}

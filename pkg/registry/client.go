@@ -201,10 +201,15 @@ func nextLink(h string) string {
 	return ""
 }
 
-// BuildMetadata describes the launch processes and runtime detected by buildpacks.
+// BuildMetadata describes an image identity and its buildpack launch metadata.
 type BuildMetadata struct {
+	// ImageSize is the compressed image size from the manifest, in bytes.
+	ImageSize    int64
 	ProcessTypes []string
 	Runtime      string
+	User         *ImageUser
+	// UserError preserves launch metadata when account lookup fails.
+	UserError error
 }
 
 // ProcessTypes reads the process types a Cloud Native Buildpacks image declares.
@@ -233,7 +238,9 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 		MediaType string `json:"mediaType"`
 		Config    struct {
 			Digest string `json:"digest"`
+			Size   int64  `json:"size"`
 		} `json:"config"`
+		Layers    []imageLayer `json:"layers"`
 		Manifests []struct {
 			Digest   string `json:"digest"`
 			Platform struct {
@@ -271,14 +278,22 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 	var cfg struct {
 		Config struct {
 			Labels map[string]string `json:"Labels"`
+			User   string            `json:"User"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(cfgBody, &cfg); err != nil {
 		return nil, fmt.Errorf("image config: %w", err)
 	}
+	imageSize := manifest.Config.Size
+	for _, layer := range manifest.Layers {
+		if layer.Size > 0 {
+			imageSize += layer.Size
+		}
+	}
+	user, userErr := c.resolveUser(ctx, repo, cfg.Config.User, manifest.Layers)
 	raw := cfg.Config.Labels["io.buildpacks.build.metadata"]
 	if raw == "" {
-		return &BuildMetadata{}, nil
+		return &BuildMetadata{ImageSize: imageSize, User: user, UserError: userErr}, nil
 	}
 	var meta struct {
 		Buildpacks []struct {
@@ -301,5 +316,5 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 	for _, bp := range meta.Buildpacks {
 		ids = append(ids, bp.ID)
 	}
-	return &BuildMetadata{ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
+	return &BuildMetadata{ImageSize: imageSize, User: user, UserError: userErr, ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
 }

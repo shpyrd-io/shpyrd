@@ -284,7 +284,7 @@ func TestSecretsAndCreateDeploy(t *testing.T) {
 		t.Errorf("vars = %+v", resp.Vars)
 	}
 	sec := &corev1.Secret{}
-	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1-env"}, sec); err != nil {
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web1", Name: "web1-env-pending"}, sec); err != nil {
 		t.Fatal(err)
 	}
 	if string(sec.Data["C"]) != "three" || string(sec.Data["B"]) != "two" {
@@ -449,7 +449,7 @@ func TestClusterSummaryAndLogs(t *testing.T) {
 	if sum.Install == nil || sum.Install.Domain != "example.test" || len(sum.Components) != 1 || sum.Components[0].Version != "v1.21.2" {
 		t.Errorf("install/components: %+v", sum)
 	}
-	if len(sum.Nodes) != 1 || !sum.Nodes[0].Ready || sum.Nodes[0].Roles != "control-plane" || sum.Apps != 1 || sum.Phases["Running"] != 1 {
+	if len(sum.Nodes) != 1 || !sum.Nodes[0].Ready || sum.Nodes[0].Roles != "control-plane" {
 		t.Errorf("nodes/apps: %+v", sum)
 	}
 	if n := sum.Nodes[0]; n.InstanceType != "VM.Standard.E5.Flex" || n.Zone != "SA-SAOPAULO-1-AD-1" {

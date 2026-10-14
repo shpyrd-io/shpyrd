@@ -50,11 +50,13 @@ func releaseFixture(t *testing.T) (*AppReconciler, *shpyrdv1.App, *batchv1.Job, 
 }
 
 func TestReleaseFailsBeforeJobCondition(t *testing.T) {
-	for _, reason := range []string{"OOMKilled", "Evicted", "OOM event"} {
+	for _, reason := range []string{"OOMKilled", "Evicted", "OOM event", "named USER"} {
 		t.Run(reason, func(t *testing.T) {
 			ctx := context.Background()
 			r, app, job, pod := releaseFixture(t)
 			switch reason {
+			case "named USER":
+				pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CreateContainerConfigError", Message: "container has runAsNonRoot and image has non-numeric user (node)"}}}}
 			case "OOMKilled":
 				pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}}}}
 			case "Evicted":
@@ -67,6 +69,9 @@ func TestReleaseFailsBeforeJobCondition(t *testing.T) {
 			}
 			got := runReconcile(t, r, app)
 			want := "ran out of memory at 128Mi, the size of the web process"
+			if reason == "named USER" {
+				want = "USER 1000"
+			}
 			if reason == "Evicted" {
 				want = "machine ran short of resources"
 			}
@@ -185,11 +190,12 @@ func TestRuntimeSizeUsedForReleaseAndWeb(t *testing.T) {
 	r.ProcessTypes = nil
 	r.Config.RegistryHost = "registry.test"
 	imageProcessTypes.mu.Lock()
-	imageProcessTypes.types["sha256:abc"] = &registry.BuildMetadata{Runtime: "Node.js", ProcessTypes: []string{"web", "release"}}
+	imageProcessTypes.types["sha256:abc"] = &registry.BuildMetadata{Runtime: "Node.js", User: &registry.ImageUser{UID: 1000, GID: 1000}, ProcessTypes: []string{"web", "release"}}
 	imageProcessTypes.mu.Unlock()
 	t.Cleanup(func() {
 		imageProcessTypes.mu.Lock()
 		delete(imageProcessTypes.types, "sha256:abc")
+		delete(imageProcessTypes.failed, "sha256:abc")
 		imageProcessTypes.mu.Unlock()
 	})
 	app.Spec.Processes["web"] = shpyrdv1.Process{}
@@ -209,6 +215,10 @@ func TestRuntimeSizeUsedForReleaseAndWeb(t *testing.T) {
 	if got := job.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String(); got != "256Mi" {
 		t.Fatalf("release memory = %q", got)
 	}
+	assertNonRootIdentity(t, job.Spec.Template.Spec.Containers[0].SecurityContext, 1000)
+	if len(got.Status.ImageUsers) != 1 || got.Status.ImageUsers[0].Image != app.Spec.Image {
+		t.Fatalf("image users = %+v", got.Status.ImageUsers)
+	}
 	// An unchanged reconcile must not replace the migration with a new target.
 	target := got.Status.Release.Target
 	got = runReconcile(t, r, got)
@@ -224,9 +234,19 @@ func TestRuntimeSizeUsedForReleaseAndWeb(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "web-web", Namespace: app.Namespace}, &deployment); err != nil {
 		t.Fatal(err)
 	}
+	assertNonRootIdentity(t, deployment.Spec.Template.Spec.Containers[0].SecurityContext, 1000)
 	if got := deployment.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String(); got != "256Mi" {
 		t.Fatalf("web memory = %q", got)
 	}
+	// A temporary registry failure must not strip a known identity from an
+	// already deployed image and make the next rollout refuse to start.
+	imageProcessTypes.mu.Lock()
+	imageProcessTypes.types["sha256:abc"].User = nil
+	imageProcessTypes.types["sha256:abc"].UserError = io.ErrUnexpectedEOF
+	imageProcessTypes.failed["sha256:abc"] = time.Now()
+	imageProcessTypes.mu.Unlock()
+	got = runReconcile(t, r, got)
+	assertNonRootIdentity(t, imageSecurityContext(got, app.Spec.Image), 1000)
 }
 
 func TestReleaseAllocationOverrides(t *testing.T) {
@@ -277,5 +297,38 @@ func TestReleaseReportsFailedCreateAndIgnoresStaleEvents(t *testing.T) {
 				t.Fatalf("message names %q", bad)
 			}
 		})
+	}
+}
+
+func TestReleaseImagePullGrace(t *testing.T) {
+	r, app, job, pod := releaseFixture(t)
+	now := time.Now()
+	r.Now = func() time.Time { return now }
+	pod.CreationTimestamp = metav1.NewTime(now.Add(-10 * time.Second))
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ErrImagePull", Message: "registry unavailable"}}}}
+	if err := r.Create(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+	message, failed, err := r.releaseDiagnostic(context.Background(), app, job)
+	if err != nil || failed || !strings.Contains(message, "Retrying") {
+		t.Fatalf("during grace: %q %v %v", message, failed, err)
+	}
+	now = now.Add(time.Minute)
+	message, failed, err = r.releaseDiagnostic(context.Background(), app, job)
+	if err != nil || !failed || !strings.Contains(message, "registry unavailable") {
+		t.Fatalf("after grace: %q %v %v", message, failed, err)
+	}
+}
+
+func TestReleaseDeadlineDoesNotClaimCommandRan(t *testing.T) {
+	r, app, job, _ := releaseFixture(t)
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonDeadlineExceeded}}
+	if err := r.Status().Update(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	got := runReconcile(t, r, app)
+	if got.Status.Release.State != shpyrdv1.ReleaseFailed || !strings.Contains(got.Status.Message, "did not finish within 30 minutes") || strings.Contains(got.Status.Message, "ran longer") {
+		t.Fatalf("status = %+v", got.Status.Release)
 	}
 }

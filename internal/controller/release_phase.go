@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,7 +62,7 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 		return nil
 	}
 	imageProcessTypes.mu.Lock()
-	if t, ok := imageProcessTypes.types[digest]; ok {
+	if t, ok := imageProcessTypes.types[digest]; ok && (t.UserError == nil || time.Since(imageProcessTypes.failed[digest]) < time.Minute) {
 		imageProcessTypes.mu.Unlock()
 		return t
 	}
@@ -74,7 +75,7 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 	if err != nil {
 		return nil
 	}
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	types, err := cl.BuildMetadata(cctx, repo, digest)
 	imageProcessTypes.mu.Lock()
@@ -84,6 +85,9 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 		return nil
 	}
 	imageProcessTypes.types[digest] = types
+	if types.UserError != nil {
+		imageProcessTypes.failed[digest] = time.Now()
+	}
 	return types
 }
 
@@ -146,7 +150,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 			return false, false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
-		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: releaseRunningMessage, Job: job.Name}
+		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: r.waitingMessage("Waiting for the release step's instance to be created.", job.CreationTimestamp.Time), Job: job.Name}
 		return false, false, nil
 	case err != nil:
 		return false, false, fmt.Errorf("release job: %w", err)
@@ -180,7 +184,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 				return false, false, fmt.Errorf("remove failed release job: %w", err)
 			}
 			r.Recorder.Event(app, corev1.EventTypeNormal, "ReleasePhase", "running the release command again")
-			st.State, st.Message = shpyrdv1.ReleaseRunning, "Running the release step again before the new release starts."
+			st.State, st.Message = shpyrdv1.ReleaseRunning, "Waiting for a new release instance to run the command again."
 			app.Status.Release = st
 			return false, false, nil
 		}
@@ -204,20 +208,20 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		case refusal != "":
 			st.Message = refusal
 		case jobDeadlineExceeded(job):
-			st.Message = "The release step ran longer than 30 minutes and was stopped. Its log has its output. Make it shorter and deploy again; the previous release keeps running."
+			st.Message = "The release step did not finish within 30 minutes and was stopped. Check its startup status and any available logs, then deploy again; the previous release keeps running."
 		default:
 			st.Message = "The release step failed. Its log has its output. Fix it and deploy again, or deploy the same source again to run it again; the previous release keeps running."
 		}
 		app.Status.Release = st
 		return false, false, nil
 	default:
-		st.State, st.Message = shpyrdv1.ReleaseRunning, releaseRunningMessage
+		st.State, st.Message = shpyrdv1.ReleaseRunning, "Running "+strings.Join(command, " ")+" before the new release starts."
 		if diagnostic != "" {
 			st.Message = diagnostic
 		}
 		if job.Status.Active == 0 {
 			if msg, quota := r.releaseJobRefusal(ctx, job); msg != "" {
-				st.Message = msg
+				st.Message = r.waitingMessage(msg, job.CreationTimestamp.Time)
 				app.Status.Release = st
 				return false, quota, nil
 			}
@@ -250,7 +254,7 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 		Image:           image,
 		Command:         command,
 		Resources:       res,
-		SecurityContext: hardenedSecurityContext(),
+		SecurityContext: imageSecurityContext(app, image),
 		EnvFrom:         EnvSources(app),
 		Env:             append(r.Config.platformEnv(app, revision, releaseProcessType, release), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
 	}

@@ -45,7 +45,7 @@ export function toProject(d: DetailAnswer): Project {
 }
 
 // What the server answers for the domains of a project.
-type DomainsAnswer = { host?: string; target: string; address?: string; domains: DomainStatus[] };
+type DomainsAnswer = { host?: string; redirectTo?: string; target: string; address?: string; domains: DomainStatus[] };
 
 // `17:04:12` from the time a record carries, or nothing.
 function clock(t?: string): string | undefined {
@@ -130,6 +130,7 @@ export const backend: Api = {
   workspaceDomains: () => request("/api/workspace/domains"),
   addWorkspaceDomain: (host) => request("/api/workspace/domains", json("POST", { host })),
   verifyWorkspaceDomain: (host) => request(`/api/workspace/domains/${encodeURIComponent(host)}/verify`, { method: "POST" }),
+  setWorkspaceDomainRedirect: (host, redirectApps) => request(`/api/workspace/domains/${encodeURIComponent(host)}`, json("PATCH", { redirectApps })),
   setWorkspaceDomainPrimary: (host) => request(`/api/workspace/domains/${encodeURIComponent(host)}`, json("PATCH", { primary: true })),
   removeWorkspaceDomain: (host) => request(`/api/workspace/domains/${encodeURIComponent(host)}`, gone),
   loginMethods: () => request("/api/workspace/login-methods"),
@@ -200,8 +201,9 @@ export const backend: Api = {
   restoreVolume: (slug, volume, body) => request(`${project(slug)}/volumes/${encodeURIComponent(volume)}/restore`, json("POST", body)),
   domains: async (slug) => {
     const r = await request<DomainsAnswer>(`${project(slug)}/domains`);
-    return { target: r.target, address: r.address, domains: r.domains };
+    return { target: r.target, address: r.address, domains: r.domains, redirectTo: r.redirectTo };
   },
+  setDomainRedirect: (slug, redirectTo) => request(`${project(slug)}/domains`, json("PATCH", { redirectTo })),
   addDomain: async (slug, host) => {
     const r = await request<DomainsAnswer>(`${project(slug)}/domains`, json("POST", { host }));
     return r.domains.find((d) => d.host === host) ?? { host, dns: "unknown", certificate: "issuing" };

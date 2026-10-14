@@ -6,10 +6,10 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { PricingOption, PricingOptions } from "@shpyrd/ui/components/pricing-options";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { contact, enterpriseContact } from "@shpyrd/content/site/offer";
+import { contact, enterpriseContact } from "@/content/offer";
 import { Faq } from "@/components/faq";
 import { cn } from "@shpyrd/ui/lib/cn";
-import { lineCost, money, pricingFor, type Region } from "@shpyrd/content/site/pricing";
+import { lineCost, money, pricingFor, type Region } from "@/content/pricing";
 import { glass } from "@shpyrd/ui/lib/glass";
 import { DeployButton } from "@/components/deploy-button";
 import { BinaryOcean } from "@/components/binary-ocean";
@@ -17,7 +17,7 @@ import { BinaryOcean } from "@/components/binary-ocean";
 // The pricing page: the plans of shpyrd cloud with the usage prices of the
 // paid ones, each with the "Add to" button of the home page, Enterprise as a
 // conversation in a row of its own under them,
-// what is counted, a worked example and the usual questions. Every figure comes from content/site/pricing.ts.
+// what is counted, a worked example and the usual questions. Every figure comes from content/site/pricing/*.mdx.
 
 const countIcons: Record<string, React.ReactElement> = {
   use: <Gauge />,

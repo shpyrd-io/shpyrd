@@ -9,7 +9,7 @@ import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
 import { Stat } from "@shpyrd/ui/components/stat";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
-import { governance } from "@shpyrd/content/site/tour";
+import { governance } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 // The trail's clock: 14:02:10, then a few seconds between lines.

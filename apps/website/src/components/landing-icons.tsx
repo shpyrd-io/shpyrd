@@ -4,9 +4,9 @@ import {
   Package, PencilLine, RefreshCw, Rocket, ScrollText, Server, ShieldCheck, Sparkles, SquareTerminal, Tag,
   UsersRound, Wrench,
 } from "lucide-react";
-import type { Icon } from "@shpyrd/content/site/landings";
+import type { Icon } from "@/content/landings";
 
-// The icons the feature and solution pages name (content/site/landings.ts),
+// The icons the feature and solution pages name (src/content/landings.ts),
 // drawn: on their pages and in the header's menus.
 export const icons: Record<Icon, React.ReactElement> = {
   rocket: <Rocket />,

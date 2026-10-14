@@ -3,7 +3,7 @@ import { Code2, HandCoins, Hammer, ShieldCheck, Users } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Checklist } from "@shpyrd/ui/components/checklist";
 import { Tile } from "@shpyrd/ui/components/tile";
-import { audiences } from "@shpyrd/content/site/tour";
+import { audiences } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 const icons = [<Hammer key="h" />, <ShieldCheck key="s" />, <Code2 key="c" />, <HandCoins key="f" />];

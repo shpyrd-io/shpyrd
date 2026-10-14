@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import createMDX from "@next/mdx";
 import type { NextConfig } from "next";
 import { redirects } from "./src/lib/redirects";
 
@@ -12,6 +13,7 @@ const config: NextConfig = {
   // repository's root so the workspace's packages (design/ui, content) come.
   output: "standalone",
   outputFileTracingRoot: fileURLToPath(new URL("../..", import.meta.url)),
+  outputFileTracingIncludes: { "/*": ["../../content/**/*.mdx"] },
   redirects: async () => redirects,
   // The pictures are converted once and shipped as they are, never resized
   // on request.
@@ -26,4 +28,14 @@ const config: NextConfig = {
   allowedDevOrigins: ["*.trycloudflare.com", "*.ngrok-free.app", "*.ngrok-free.dev"],
 };
 
-export default config;
+const withMDX = createMDX({
+  options: {
+    remarkPlugins: [
+      "remark-frontmatter",
+      "remark-gfm",
+      fileURLToPath(new URL("../shared/src/editorial/remark.mjs", import.meta.url)),
+    ],
+  },
+});
+
+export default withMDX(config);

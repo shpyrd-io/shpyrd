@@ -10,7 +10,7 @@ import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
 import { Footer } from "@shpyrd/ui/components/footer";
 import { MinimalFooter } from "@shpyrd/ui/components/minimal-footer";
-import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
+import { NavList, NavListGroup, NavListItem, NavListSubNav } from "@shpyrd/ui/components/nav-list";
 import {
   PageLayout,
   PageLayoutFooter,
@@ -22,13 +22,14 @@ import { glass } from "@shpyrd/ui/lib/glass";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { useTheme } from "@shpyrd/ui/lib/theme";
-import { find, navigation } from "@shpyrd/content/navigation";
-import * as site from "@shpyrd/content/site/offer";
-import { features } from "@shpyrd/content/site/features";
-import { solutionGroups } from "@shpyrd/content/site/solutions";
+import { find, navigation } from "@/content/navigation";
+import * as site from "@/content/offer";
+import { resources } from "@/content/resources";
+import type { FeatureEntry } from "@/lib/mdx/types";
+import type { SolutionGroup } from "@/lib/mdx/catalog";
 import { DeployButton } from "@/components/deploy-button";
 import { icons } from "@/components/landing-icons";
-import { sectionsLive, signInLive } from "@/lib/sections";
+import { sectionsLive } from "@/lib/sections";
 import { DiscordMark, GitHubMark } from "@/components/marks";
 
 // Where the code is, and where the community talks; the header and the foot
@@ -85,9 +86,10 @@ const marketing = [
   ...(sectionsLive ? [{ title: "Getting Started", href: "/getting-started" }] : []),
   { title: "Pricing", href: "/pricing" },
   { title: "Docs", href: "/docs/getting-started" },
+  { title: "Changelog", href: "/changelog" },
 ];
 
-export function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({ children, features, solutionGroups }: { children: React.ReactNode; features: FeatureEntry[]; solutionGroups: SolutionGroup[] }) {
   const path = usePathname();
   const here = find(path);
   const isDocument = path.startsWith("/docs");
@@ -128,33 +130,38 @@ export function Shell({ children }: { children: React.ReactNode }) {
     label: "Solutions",
     columns: solutionGroups.map((g) => ({ label: g.name, links: g.items.map(entry("/solutions")) })),
   };
-  const links = [featuresMenu, newSolutionsMenu, ...marketing.map(link)];
+  const primary = [
+    { title: "Docs", href: "/docs/getting-started" },
+    { title: "Pricing", href: "/pricing" },
+  ];
+  const resourcesMenu = {
+    label: resources.label,
+    columns: resources.groups.map((group) => ({
+      label: group.title,
+      links: group.links.map((item) => ({ link: link(item), description: item.description })),
+    })),
+  };
+  const links = [featuresMenu, newSolutionsMenu, ...primary.map(link), resourcesMenu];
 
   const siteNav = (
     <NavList aria-label="Site">
-      <NavListGroup title="Features">
-        {features.map((f) => (
-          <NavListItem key={f.slug} asChild>
-            <Link href={`/features/${f.slug}`}>{f.name}</Link>
-          </NavListItem>
-        ))}
-      </NavListGroup>
-      {solutionGroups.map((g) => (
-        <NavListGroup key={g.name} title={`Solutions · ${g.name}`}>
-          {g.items.map((p) => (
-            <NavListItem key={p.slug} asChild>
-              <Link href={`/solutions/${p.slug}`}>{p.name}</Link>
-            </NavListItem>
+      {[featuresMenu, newSolutionsMenu].map((group) => (
+        <NavListSubNav key={group.label} title={group.label} className="min-h-11 font-medium">
+          {group.columns.map((column) => (
+            <NavListGroup key={column.label} title={column.label === group.label ? undefined : column.label}>
+              {column.links.map((item, i) => <NavListItem key={i} asChild className="min-h-11">{item.link}</NavListItem>)}
+            </NavListGroup>
           ))}
-        </NavListGroup>
+        </NavListSubNav>
       ))}
-      <NavListGroup title="shpyrd">
-        {marketing.map((link) => (
-          <NavListItem key={link.href} asChild>
-            <Link href={link.href}>{link.title}</Link>
-          </NavListItem>
+      {primary.map((item) => <NavListItem key={item.href} asChild className="min-h-11 font-medium">{link(item)}</NavListItem>)}
+      <NavListSubNav title={resources.label} className="min-h-11 font-medium">
+        {resources.groups.map((group) => (
+          <NavListGroup key={group.title} title={group.title}>
+            {group.links.map((item) => <NavListItem key={item.href} asChild className="min-h-11">{link(item)}</NavListItem>)}
+          </NavListGroup>
         ))}
-      </NavListGroup>
+      </NavListSubNav>
     </NavList>
   );
 
@@ -221,7 +228,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           // A document has its own floating panel at the side; its bar is
           // left loose over the page, with only a faint line under it.
           variant={isDocument ? "bar" : "floating"}
-          // Six words in the bar now (Features, Solutions, ...): they fold
+          // The top-level links and groups fold
           // into the menu below a wide bar.
           fold="wide"
           // The line runs as far as what is in the bar: from the breadcrumbs to
@@ -287,7 +294,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 size={stars === null ? "icon" : "default"}
                 asChild
                 aria-label={stars === null ? "shpyrd on GitHub" : `shpyrd on GitHub, ${stars} stars`}
-                className={cn(iconHover, stars !== null && "gap-1 px-2")}
+                className={cn(iconHover, "hidden @xl/site-header:inline-flex", stars !== null && "gap-1 px-2")}
               >
                 <a href={github}>
                   <GitHubMark />
@@ -298,7 +305,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   )}
                 </a>
               </Button>
-              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord" className={iconHover}>
+              <Button variant="ghost" size="icon" asChild aria-label="shpyrd on Discord" className={cn(iconHover, "hidden @xl/site-header:inline-flex")}>
                 <a href={discord}>
                   <DiscordMark />
                 </a>
@@ -312,15 +319,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 icon={theme === "dark" ? <Moon /> : theme === "light" ? <Sun /> : <SunMoon />}
                 onClick={() => setTheme(next[theme])}
               />
-              {/* Back to the dashboard, for whoever has a workspace already.
-                  Hidden until it has somewhere to go (src/lib/sections.ts). */}
-              {signInLive && (
-                <Button variant="outline" asChild className="ml-2">
-                  <a href="#" onClick={(event) => event.preventDefault()}>
-                    Sign in
-                  </a>
-                </Button>
-              )}
+              <Button variant="outline" asChild className="ml-2">
+                <a href={site.signIn.href}>{site.signIn.label}</a>
+              </Button>
               {/* The way in, where a phone has room for it. Under that it is
                   the hero's to offer. */}
               <div className="ml-2 hidden @xl/site-header:block">

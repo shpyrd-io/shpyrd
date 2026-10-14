@@ -54,6 +54,8 @@ type Config struct {
 	// for an unknown workspace: one label under WorkspaceDomain and each of
 	// WorkspaceExtraDomains, as before the layout.
 	WorkspaceAppHosts func(slug, app string) []string
+	// WorkspaceRedirectDomain is the verified primary domain when redirects are enabled.
+	WorkspaceRedirectDomain func(slug string) string
 	// Layout says where workspaces and their apps answer (RFC-0033 names):
 	// hosts one label under its AppsDomain are covered by the apps'
 	// wildcard certificate and the wildcard record of the shared front door.
@@ -401,7 +403,14 @@ func selectorLabels(app *shpyrdv1.App, process string) map[string]string {
 // domains returns the hosts served by the web process.
 // url is the public URL of the web process.
 func (c Config) url(app *shpyrdv1.App) string {
-	u := "https://" + c.domains(app)[0]
+	host := c.defaultHost(app)
+	if c.requestedRedirect(app) != "" {
+		host = c.platformHost(app)
+	}
+	if target := c.redirectTarget(app); target != "" {
+		host = target
+	}
+	u := "https://" + host
 	if c.HTTPSPort != "" && c.HTTPSPort != "443" {
 		u += ":" + c.HTTPSPort
 	}
@@ -691,7 +700,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		Command:         p.Command,
 		Args:            p.Args,
 		Resources:       res,
-		SecurityContext: hardenedSecurityContext(),
+		SecurityContext: imageSecurityContext(app, image),
 		// Global vars, then the project's config vars, then the vars of
 		// attached resources: with envFrom the last source wins, so project
 		// vars override globals and bound vars win over both (RFC-0003,
@@ -708,7 +717,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		container.Env = append(container.Env, corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(port)})
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port, Protocol: corev1.ProtocolTCP}}
 	}
-	applyProbes(&container, p, port)
+	applyProbes(&container, p, port, scaledExternally)
 	container.Env = append(container.Env, c.platformEnv(app, revision, p.Name, release)...)
 	container.Env = append(container.Env, app.Spec.Env...)
 
@@ -759,7 +768,11 @@ func rolloutStrategy(p namedProcess, mounts []resolvedMount) appsv1.DeploymentSt
 //   - web (port 8080): HTTP GET / on the port
 //   - explicit port (non-web): TCP on that port
 //   - no port (workers): no probe
-func applyProbes(c *corev1.Container, p namedProcess, port int32) {
+//
+// A process that wakes from sleep (KEDA scales it from zero) has at least
+// the wake window to start: its databases may be asleep too and wake only
+// when it connects, which takes longer than the 30 s default.
+func applyProbes(c *corev1.Container, p namedProcess, port int32, wakes bool) {
 	hc := p.HealthCheck
 	if hc != nil && hc.Disabled {
 		return
@@ -767,6 +780,9 @@ func applyProbes(c *corev1.Container, p namedProcess, port int32) {
 	interval := parseDurationSecs(hc.GetStr("Interval"), 10)
 	timeout := parseDurationSecs(hc.GetStr("Timeout"), 5)
 	grace := parseDurationSecs(hc.GetStr("GracePeriod"), 30)
+	if w := int32(sleepWakeWindow.Seconds()); wakes && grace < w {
+		grace = w
+	}
 	shutdown := parseDurationSecs(hc.GetStr("ShutdownDelay"), 5)
 
 	var handler corev1.ProbeHandler
@@ -849,7 +865,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
 		"nginx.ingress.kubernetes.io/proxy-body-size": "50m",
 	})
-	hosts := c.domains(app)
+	hosts := c.servingDomains(app)
 	// Pick the ingress class and ExternalDNS target based on exposure.
 	class := c.IngressClass // already set to IngressClassExternal by Defaults
 	if app.Spec.Exposure == "internal" {
@@ -989,6 +1005,11 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// pod of the app is ready. (A per-Ingress default-backend cannot be
 		// an ExternalName.)
 		"nginx.ingress.kubernetes.io/custom-http-errors": "403,503",
+		// Only the errors nginx makes itself: the edge's 403 (auth_request)
+		// and the 503 of an app with no ready pod. What the app answers
+		// passes through as it is: its own 403 and 503, and the waking
+		// page a sleeping app's interceptor answers with a 503.
+		"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors": "true",
 	}
 	if mode == shpyrdv1.AccessAuthenticated {
 		// $http_host keeps the port (kind maps 8443); $host would drop it.
@@ -1001,6 +1022,7 @@ var edgeAnnotationKeys = []string{
 	"nginx.ingress.kubernetes.io/auth-url", "nginx.ingress.kubernetes.io/auth-signin",
 	"nginx.ingress.kubernetes.io/auth-response-headers", "nginx.ingress.kubernetes.io/auth-cache-key",
 	"nginx.ingress.kubernetes.io/auth-cache-duration", "nginx.ingress.kubernetes.io/custom-http-errors",
+	"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors",
 	"nginx.ingress.kubernetes.io/default-backend", // from earlier versions
 }
 
@@ -1119,4 +1141,16 @@ func EnvSources(app *shpyrdv1.App) []corev1.EnvFromSource {
 		out = append(out, optional(shpyrdv1.GlobalEnvSecretName))
 	}
 	return append(out, optional(app.EnvSecretName()), optional(app.BindingsSecretName()))
+}
+
+// imageSecurityContext never applies an identity resolved from another image.
+func imageSecurityContext(app *shpyrdv1.App, image string) *corev1.SecurityContext {
+	sc := hardenedSecurityContext()
+	for _, u := range app.Status.ImageUsers {
+		if u.Image == image && u.UID > 0 && u.GID >= 0 {
+			sc.RunAsUser, sc.RunAsGroup = ptr.To(u.UID), ptr.To(u.GID)
+			break
+		}
+	}
+	return sc
 }
