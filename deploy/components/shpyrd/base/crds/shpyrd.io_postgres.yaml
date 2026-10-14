@@ -122,14 +122,33 @@ spec:
                 anyOf:
                 - type: integer
                 - type: string
-                description: Storage is the data volume size (default 5Gi); it can
-                  grow.
+                description: |-
+                  Storage is the data volume size (default 5Gi); it can grow. On a
+                  shared database it is the logical cap instead.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              type:
+                description: |-
+                  Type is the kind of database: "shared" (a database and a role on a
+                  platform-owned server, always on, storage as a logical cap) or
+                  "dedicated" (a cluster of its own with a disk; the default). Set at
+                  creation within what the workspace's plan allows; changed only by
+                  `shpyrd pg convert`.
+                enum:
+                - shared
+                - dedicated
+                type: string
               version:
                 description: Version is the PostgreSQL major version (default "17").
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: Shared databases have no instance size, number of instances,
+                version or sleep setting; they are always on. Those belong to a dedicated
+                database.
+              rule: '!has(self.type) || self.type != ''shared'' || (!has(self.instances)
+                && !has(self.size) && !has(self.version) && !has(self.sleep) && !(has(self.recovery)
+                && has(self.recovery.targetTime)))'
           status:
             description: |-
               ResourceStatus is the status shape every project resource shares so the

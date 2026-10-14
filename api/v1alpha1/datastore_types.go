@@ -85,14 +85,34 @@ type PostgresSleepStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
+// The two kinds of database (PostgresSpec.Type).
+const (
+	// PostgresTypeShared is a database and a role on a platform-owned
+	// shared server: always on, no instance settings, a logical cap.
+	PostgresTypeShared = "shared"
+	// PostgresTypeDedicated is a CloudNativePG cluster of its own with a
+	// disk, instances, a version and sleep settings.
+	PostgresTypeDedicated = "dedicated"
+)
+
+// +kubebuilder:validation:XValidation:rule="!has(self.type) || self.type != 'shared' || (!has(self.instances) && !has(self.size) && !has(self.version) && !has(self.sleep) && !(has(self.recovery) && has(self.recovery.targetTime)))",message="Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
 type PostgresSpec struct {
+	// Type is the kind of database: "shared" (a database and a role on a
+	// platform-owned server, always on, storage as a logical cap) or
+	// "dedicated" (a cluster of its own with a disk; the default). Set at
+	// creation within what the workspace's plan allows; changed only by
+	// `shpyrd pg convert`.
+	// +optional
+	// +kubebuilder:validation:Enum=shared;dedicated
+	Type string `json:"type,omitempty"`
 	// Version is the PostgreSQL major version (default "17").
 	// +optional
 	Version string `json:"version,omitempty"`
 	// Size is an instance size from the cluster catalog (default: catalog default).
 	// +optional
 	Size string `json:"size,omitempty"`
-	// Storage is the data volume size (default 5Gi); it can grow.
+	// Storage is the data volume size (default 5Gi); it can grow. On a
+	// shared database it is the logical cap instead.
 	// +optional
 	Storage *resource.Quantity `json:"storage,omitempty"`
 	// Instances is the number of PostgreSQL instances (1, or 2-3 for HA).

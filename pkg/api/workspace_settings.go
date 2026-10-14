@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,13 @@ func NormalizeWorkspaceSettings(in WorkspaceSettings) (WorkspaceSettings, error)
 			}
 			*q = v.String()
 		}
+		if pgl := n.Postgres; pgl != nil {
+			np, err := normalizePostgresLimits(*pgl)
+			if err != nil {
+				return out, err
+			}
+			n.Postgres = np
+		}
 		if n != (store.Limits{}) {
 			out.Limits = &n
 		}
@@ -76,6 +84,44 @@ func NormalizeWorkspaceSettings(in WorkspaceSettings) (WorkspaceSettings, error)
 		}
 	}
 	return out, nil
+}
+
+// normalizePostgresLimits checks a plan's database rules; nil when they
+// say nothing.
+func normalizePostgresLimits(in store.PostgresLimits) (*store.PostgresLimits, error) {
+	out := store.PostgresLimits{}
+	for _, t := range in.Types {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		if t != shpyrdv1.PostgresTypeShared && t != shpyrdv1.PostgresTypeDedicated {
+			return nil, fmt.Errorf("limits: postgres type %q is not one of shared, dedicated", t)
+		}
+		if !slices.Contains(out.Types, t) {
+			out.Types = append(out.Types, t)
+		}
+	}
+	if d := strings.ToLower(strings.TrimSpace(in.DefaultType)); d != "" {
+		if d != shpyrdv1.PostgresTypeShared && d != shpyrdv1.PostgresTypeDedicated {
+			return nil, fmt.Errorf("limits: postgres defaultType %q is not one of shared, dedicated", d)
+		}
+		if len(out.Types) > 0 && !slices.Contains(out.Types, d) {
+			return nil, fmt.Errorf("limits: postgres defaultType %q is not among the allowed types %v", d, out.Types)
+		}
+		out.DefaultType = d
+	}
+	if cap := strings.TrimSpace(in.SharedCap); cap != "" {
+		v, err := resource.ParseQuantity(cap)
+		if err != nil || v.Sign() <= 0 {
+			return nil, fmt.Errorf("limits: postgres sharedCap %q is not a positive quantity (try 1Gi, 5Gi)", cap)
+		}
+		out.SharedCap = v.String()
+	}
+	if len(out.Types) == 0 && out.DefaultType == "" && out.SharedCap == "" {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 // shortDuration is a duration as people write it: 10m, 1h, 1h30m.
