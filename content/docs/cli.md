@@ -160,8 +160,11 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd sizes list` | The instance sizes to choose from, in three lists with the same names: processes, Postgres and Redis (with their connections), each with its default (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |
 | `shpyrd-ctl sizes set <name> --kind shared\|dedicated --cpu <cores> --memory <bytes> [--default] [--description]` | Operator: add or change a size; processes using it are resized. `--for postgres\|redis` edits those lists instead, with `--connections <n>` (max_connections, maxclients). |
 | `shpyrd-ctl sizes delete <name>`, `shpyrd-ctl sizes default <name>` | Operator: remove a size (not the default; processes naming it fall back to the default), choose the default. Both take `--for postgres\|redis`. |
-| `shpyrd secrets set K=V ...` | Set config vars (new release, rolling restart). |
-| `shpyrd secrets unset K ...` | Remove config vars. |
+| `shpyrd secrets set K=V ...` | Save secrets; deploy or redeploy to apply them. |
+| `shpyrd secrets unset K ...` | Save secret removals for the next deployment. |
+| `shpyrd env set K=V ...` | Save visible variables for the next deployment. Supports `--from-file`; `--confirm-plain` confirms exposure of existing secrets or credential-looking names. |
+| `shpyrd env unset K ...` | Save variable removals for the next deployment. |
+| `shpyrd env list` | Show plain variable names and values. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |
 | `shpyrd shell [-- cmd...]` | Interactive shell in a running instance (`--process`, `--instance web.2`); with a command, runs it and returns its exit code. |
 | `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. Signed in, the server starts the instance and attaches the terminal through the web terminal's bridge; piped input reaches the command and ends when the pipe does. |

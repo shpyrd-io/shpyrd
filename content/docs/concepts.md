@@ -76,7 +76,7 @@ Config vars are environment variables for every process. Four sources, in increa
 
 1. **Global vars** — set once by a workspace admin, on the workspace's Config vars page or with `shpyrd globals set`; every project of the workspace receives them.
 2. **`env:` in `shpyrd.yaml`** — plain, non-secret vars committed with the code (`RACK_ENV`, `NODE_ENV`). Travels with the deploy; wins over globals.
-3. **Secrets** — written with `shpyrd secrets set`, stored in Secret `<app>-env`. Write-only: names and timestamps are shown, values never. Wins over `env:`.
+3. **Project variables and secrets** — saved with `shpyrd env set` (visible values) or `shpyrd secrets set` (hidden values). Edits stay pending until deploy or redeploy; the active environment is stored in Secret `<app>-env`. Existing values remain secrets on upgrade.
 4. **Bound vars** — injected by attached resources (`DATABASE_URL`, `REDIS_URL`); win over secrets of the same name.
 
 Changing any of these creates a release and rolls the processes. The platform also injects read-only variables (`PORT`, `REVISION`, `RUNNING_IN_SHPYRD`, `SHPYRD_PROJECT`, `SHPYRD_PROJECT_ID`, `SHPYRD_PROJECT_NAME`, `SHPYRD_WORKSPACE`, `SHPYRD_PROCESS`, `SHPYRD_RELEASE`, `SHPYRD_RELEASE_VERSION`, `SHPYRD_REVISION`, `SHPYRD_PROJECT_REVISION`, `SHPYRD_ISSUER`; `SHPYRD_RELEASE_PHASE` in the release phase) that cannot be overridden from `shpyrd.yaml`.

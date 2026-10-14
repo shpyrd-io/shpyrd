@@ -322,6 +322,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			secret = nil
 		}
 	}
+	pending, err := r.pendingConfig(ctx, app)
+	if err != nil {
+		return outcome{}, err
+	}
 	// Attached resources contribute config vars through <app>-bindings. A
 	// resource that is still provisioning is not a failure: the app keeps
 	// its current release until the binding can be rendered.
@@ -386,7 +390,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				}
 			}
 		} else {
-			vars := buildVars(app, globals, secret, bindings)
+			buildSecret := secret
+			if pending != nil {
+				buildSecret = pending
+			}
+			vars := buildVars(app, globals, buildSecret, bindings)
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
@@ -461,6 +469,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = firstNonEmpty(build.Message, "waiting for the first build")
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
 		return requeue(30 * time.Second), nil
+	}
+
+	if pending != nil && (!app.HasSource() || build.Ready == "True") {
+		secret, err = r.applyPendingConfig(ctx, app, pending)
+		if err != nil {
+			return outcome{}, err
+		}
 	}
 
 	// The code the image was built from: the release history records it

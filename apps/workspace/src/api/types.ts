@@ -189,11 +189,12 @@ export type AuditEntry = {
   realm?: string;
 };
 
-export type ConfigVar = { name: string; updatedAt?: string };
+export type ConfigVar = { name: string; updatedAt?: string; value?: string };
+export type ConfigKind = "secret" | "variable";
 // The config vars of a project: its own, the ones its resources provide
 // (read-only, over its own), and the cluster's (under its own).
-export type ConfigVars = { vars: ConfigVar[]; bound?: { name: string; provider: string }[]; global?: ConfigVar[] };
-export type ConfigChange = { set?: Record<string, string>; unset?: string[]; dotenv?: string };
+export type ConfigVars = { vars: ConfigVar[]; variables?: ConfigVar[]; pending?: boolean; bound?: { name: string; provider: string }[]; global?: ConfigVar[] };
+export type ConfigChange = { kind?: ConfigKind; convert?: string[]; confirmPlain?: boolean; set?: Record<string, string>; unset?: string[]; dotenv?: string };
 // The config vars every project of the workspace receives: names and when
 // each was set, never values, and how many projects receive them.
 export type Globals = { vars: { name: string; updatedAt?: string }[]; projects: number };

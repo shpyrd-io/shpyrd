@@ -20,9 +20,11 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 )
 
-// ConfigVarsResponse lists config var names; values are never returned.
+// ConfigVarsResponse exposes only explicitly plain values. Secrets remain names only.
 type ConfigVarsResponse struct {
-	Vars []configvars.Var `json:"vars"`
+	Vars      []configvars.Var `json:"vars"`
+	Variables []configvars.Var `json:"variables"`
+	Pending   bool             `json:"pending"`
 	// Bound are read-only variables provided by attached resources
 	// (RFC-0003); they win over Vars with the same name.
 	Bound []BoundVar `json:"bound,omitempty"`
@@ -34,9 +36,12 @@ type ConfigVarsResponse struct {
 // ConfigVarsUpdate sets and/or unsets config vars. Dotenv is parsed as
 // KEY=VALUE lines and merged into Set (bulk paste).
 type ConfigVarsUpdate struct {
-	Set    map[string]string `json:"set,omitempty"`
-	Unset  []string          `json:"unset,omitempty"`
-	Dotenv string            `json:"dotenv,omitempty"`
+	Kind         string            `json:"kind,omitempty"`
+	Convert      []string          `json:"convert,omitempty"`
+	ConfirmPlain bool              `json:"confirmPlain,omitempty"`
+	Set          map[string]string `json:"set,omitempty"`
+	Unset        []string          `json:"unset,omitempty"`
+	Dotenv       string            `json:"dotenv,omitempty"`
 }
 
 // BoundVar is a config var injected by an attached resource.
@@ -50,16 +55,12 @@ func (s *Server) appSecretKeys(c *gin.Context) {
 	if !ok {
 		return
 	}
-	resp := ConfigVarsResponse{Vars: []configvars.Var{}}
-	sec := &corev1.Secret{}
-	err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}, sec)
-	if err != nil && !apierrors.IsNotFound(err) {
+	sec, pending, err := configvars.Read(c.Request.Context(), s.apps, app)
+	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	if err == nil {
-		resp.Vars = configvars.List(sec)
-	}
+	resp := configResponse(sec, pending)
 	resp.Bound = s.boundVars(c.Request.Context(), app)
 	resp.Global = s.globalVars(c.Request.Context(), app)
 	c.JSON(http.StatusOK, resp)
@@ -100,7 +101,11 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 			req.Set[k] = v
 		}
 	}
-	if len(req.Set) == 0 && len(req.Unset) == 0 {
+	if req.Kind != "" && req.Kind != "secret" && req.Kind != "variable" {
+		abort(c, http.StatusBadRequest, errors.New("kind must be secret or variable"))
+		return
+	}
+	if len(req.Set) == 0 && len(req.Unset) == 0 && len(req.Convert) == 0 {
 		abort(c, http.StatusBadRequest, errors.New("nothing to change"))
 		return
 	}
@@ -109,26 +114,26 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	key := types.NamespacedName{Namespace: app.Namespace, Name: app.EnvSecretName()}
+	key := types.NamespacedName{Namespace: app.Namespace, Name: configvars.PendingName(app)}
 	for attempt := 0; attempt < 5; attempt++ {
-		sec := &corev1.Secret{}
-		create := false
-		if err := s.apps.Get(ctx, key, sec); err != nil {
-			if !apierrors.IsNotFound(err) {
-				abort(c, http.StatusBadGateway, err)
-				return
-			}
-			create = true
-			sec = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{shpyrdv1.LabelApp: app.Name}},
-				Type:       corev1.SecretTypeOpaque,
-			}
+		sec, pending, err := configvars.Read(ctx, s.apps, app)
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
 		}
-		if err := configvars.Apply(sec, req.Set, req.Unset, time.Now()); err != nil {
+		create := !pending
+		if create {
+			data, annotations := sec.Data, sec.Annotations
+			sec = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{shpyrdv1.LabelApp: app.Name}, Annotations: annotations}, Type: corev1.SecretTypeOpaque, Data: data}
+		}
+		if err := configvars.ApplyKind(sec, req.Set, req.Unset, req.Convert, req.Kind == "variable", req.ConfirmPlain, time.Now()); err != nil {
 			abort(c, http.StatusBadRequest, err)
 			return
 		}
-		var err error
+		if sec.Annotations == nil {
+			sec.Annotations = map[string]string{}
+		}
+		sec.Annotations[configvars.AnnotationPendingBase] = configvars.DeployToken(app)
 		if create {
 			err = s.apps.Create(ctx, sec)
 		} else {
@@ -136,10 +141,10 @@ func (s *Server) updateAppSecrets(c *gin.Context) {
 		}
 		if err == nil {
 			s.audit(c, project.SlugOf(app), "config.set", project.SlugOf(app), configChangeDetail(req))
-			c.JSON(http.StatusOK, ConfigVarsResponse{Vars: configvars.List(sec)})
+			c.JSON(http.StatusOK, configResponse(sec, true))
 			return
 		}
-		if !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) {
+		if !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) && !apierrors.IsNotFound(err) {
 			abort(c, http.StatusBadGateway, err)
 			return
 		}
@@ -161,8 +166,15 @@ func configChangeDetail(req ConfigVarsUpdate) string {
 	if len(req.Unset) > 0 {
 		parts = append(parts, "unset "+strings.Join(req.Unset, ", "))
 	}
+	if len(req.Convert) > 0 {
+		parts = append(parts, "convert to "+req.Kind+" "+strings.Join(req.Convert, ", "))
+	}
 	if req.Dotenv != "" {
 		parts = append(parts, "bulk update")
 	}
 	return strings.Join(parts, "; ")
+}
+
+func configResponse(sec *corev1.Secret, pending bool) ConfigVarsResponse {
+	return ConfigVarsResponse{Vars: configvars.Secrets(sec), Variables: configvars.Public(sec), Pending: pending}
 }

@@ -24,6 +24,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
@@ -759,6 +760,10 @@ func (s *Server) deployApp(c *gin.Context) {
 			}
 			a.Annotations[shpyrdv1.AnnotationReleaseNote] = req.Note
 		}
+		if a.Annotations == nil {
+			a.Annotations = map[string]string{}
+		}
+		a.Annotations[configvars.AnnotationDeployRequested] = time.Now().UTC().Format(time.RFC3339Nano)
 		// Who asked, for the release's outcome to be audited in their
 		// name once the controller knows it (release.succeeded/failed).
 		if id, ok := ext.IdentityFrom(c); ok {

@@ -10,13 +10,29 @@ describe("the api picks the Mock when asked to", () => {
     expect(projects.map((p) => p.slug)).toContain("hello-world");
   });
 
-  it("keeps a change: a config var set is a release, and is listed after", async () => {
+  it("saves config changes without a release until redeploy", async () => {
     const before = (await api.project("hello-world")).release;
     await api.changeConfigVars("hello-world", { set: { API_KEY: "x" } });
     const vars = await api.configVars("hello-world");
     expect(vars.vars.map((v) => v.name)).toContain("API_KEY");
+    expect(vars.pending).toBe(true);
+    expect((await api.project("hello-world")).release).toBe(before);
+    await api.redeploy("hello-world");
     expect((await api.project("hello-world")).release).toBe(before + 1);
-  });
+    expect((await api.configVars("hello-world")).pending).toBe(false);
+  }, 15_000);
+
+  it("shows plain variables and requires consent to expose a secret", async () => {
+    await api.changeConfigVars("hello-world", { kind: "variable", set: { APP_URL: "https://example.test" } });
+    expect((await api.configVars("hello-world")).variables).toContainEqual(expect.objectContaining({ name: "APP_URL", value: "https://example.test" }));
+    await api.changeConfigVars("hello-world", { set: { AUTH_TOKEN: "private" } });
+    await expect(api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"] })).rejects.toThrow(/Confirm/);
+    expect(JSON.stringify(await api.configVars("hello-world"))).not.toContain("private");
+    await api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"], confirmPlain: true });
+    expect((await api.configVars("hello-world")).variables).toContainEqual(expect.objectContaining({ name: "AUTH_TOKEN", value: "private" }));
+    await api.changeConfigVars("hello-world", { kind: "secret", convert: ["AUTH_TOKEN"] });
+    expect(JSON.stringify(await api.configVars("hello-world"))).not.toContain("private");
+  }, 15_000);
 
   it("lists each project with the teams that have access to it and the domain of its own that answers", async () => {
     const projects = await api.projects();
