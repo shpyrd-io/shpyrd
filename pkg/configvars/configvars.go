@@ -153,7 +153,7 @@ func Secrets(sec *corev1.Secret) []Var {
 }
 
 // SensitiveName asks for deliberate confirmation before publishing common
-// credential names. Existing secrets require confirmation regardless of name.
+// credential names. Existing secrets cannot be made visible.
 func SensitiveName(name string) bool {
 	name = strings.ToUpper(name)
 	return strings.HasSuffix(name, "_KEY") || strings.HasSuffix(name, "_SECRET") || strings.HasSuffix(name, "_TOKEN") || strings.Contains(name, "PASSWORD") || name == "SECRET" || name == "TOKEN"
@@ -165,7 +165,10 @@ func ApplyKind(sec *corev1.Secret, set map[string]string, unset, convert []strin
 			return err
 		}
 		_, exists := sec.Data[name]
-		if plain && !confirm && (SensitiveName(name) || (exists && !Plain(sec, name))) {
+		if plain && exists && !Plain(sec, name) {
+			return fmt.Errorf("%s is a secret: replace it as a secret; saved secrets cannot be made visible", name)
+		}
+		if plain && !confirm && SensitiveName(name) {
 			return fmt.Errorf("%s may contain a secret: confirm that its value can be visible to everyone who can view the project", name)
 		}
 	}
@@ -173,8 +176,8 @@ func ApplyKind(sec *corev1.Secret, set map[string]string, unset, convert []strin
 		if _, exists := sec.Data[name]; !exists {
 			return fmt.Errorf("config var %s does not exist", name)
 		}
-		if plain && !confirm {
-			return fmt.Errorf("confirm that %s can be visible to everyone who can view the project", name)
+		if plain && !Plain(sec, name) {
+			return fmt.Errorf("%s is a secret: saved secrets cannot be made visible", name)
 		}
 	}
 	filtered := []string{}

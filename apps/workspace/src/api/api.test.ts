@@ -22,14 +22,15 @@ describe("the api picks the Mock when asked to", () => {
     expect((await api.configVars("hello-world")).pending).toBe(false);
   }, 15_000);
 
-  it("shows plain variables and requires consent to expose a secret", async () => {
+  it("shows plain variables but never exposes saved secrets", async () => {
     await api.changeConfigVars("hello-world", { kind: "variable", set: { APP_URL: "https://example.test" } });
     expect((await api.configVars("hello-world")).variables).toContainEqual(expect.objectContaining({ name: "APP_URL", value: "https://example.test" }));
     await api.changeConfigVars("hello-world", { set: { AUTH_TOKEN: "private" } });
-    await expect(api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"] })).rejects.toThrow(/Confirm/);
+    await expect(api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"] })).rejects.toThrow(/cannot be made visible/);
     expect(JSON.stringify(await api.configVars("hello-world"))).not.toContain("private");
-    await api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"], confirmPlain: true });
-    expect((await api.configVars("hello-world")).variables).toContainEqual(expect.objectContaining({ name: "AUTH_TOKEN", value: "private" }));
+    await expect(api.changeConfigVars("hello-world", { kind: "variable", convert: ["AUTH_TOKEN"], confirmPlain: true })).rejects.toThrow(/cannot be made visible/);
+    await expect(api.changeConfigVars("hello-world", { kind: "variable", set: { AUTH_TOKEN: "replacement" }, confirmPlain: true })).rejects.toThrow(/cannot be made visible/);
+    expect(JSON.stringify(await api.configVars("hello-world"))).not.toContain("private");
     await api.changeConfigVars("hello-world", { kind: "secret", convert: ["AUTH_TOKEN"] });
     expect(JSON.stringify(await api.configVars("hello-world"))).not.toContain("private");
   }, 15_000);

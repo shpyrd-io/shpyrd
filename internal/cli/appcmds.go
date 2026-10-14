@@ -72,7 +72,7 @@ both, the arguments winning.
 	}
 	set.Flags().StringVar(&fromFile, "from-file", "", "read KEY=VALUE lines (dotenv) or a JSON object from this file; - is stdin")
 	if plain {
-		set.Flags().BoolVar(&confirmPlain, "confirm-plain", false, "confirm that credential-looking names or existing secrets may be visible to project viewers")
+		set.Flags().BoolVar(&confirmPlain, "confirm-plain", false, "confirm that new values with credential-looking names may be visible to project viewers")
 	}
 	unset := &cobra.Command{
 		Use:   "unset KEY [KEY...]",

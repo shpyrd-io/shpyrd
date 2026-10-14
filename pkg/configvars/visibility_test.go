@@ -33,22 +33,33 @@ func TestVisibilityRequiresExplicitConsent(t *testing.T) {
 	if err := ApplyKind(sec, nil, nil, []string{"OLD"}, true, false, time.Now()); err == nil {
 		t.Fatal("converted without consent")
 	}
-	if err := ApplyKind(sec, nil, nil, []string{"OLD"}, true, true, time.Now()); err != nil {
+	for _, set := range []map[string]string{nil, {"OLD": "replacement"}} {
+		if err := ApplyKind(sec, set, nil, []string{"OLD"}, true, true, time.Now()); err == nil {
+			t.Fatal("published a saved secret with confirmation")
+		}
+	}
+	if err := ApplyKind(sec, map[string]string{"OLD": "replacement"}, nil, nil, true, true, time.Now()); err == nil {
+		t.Fatal("changed a secret to a variable via set")
+	}
+	if Plain(sec, "OLD") || string(sec.Data["OLD"]) != "private" || len(Public(sec)) != 1 {
+		t.Fatal("rejected conversion modified the secret")
+	}
+	if err := ApplyKind(sec, nil, nil, []string{"APP_URL"}, false, false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if len(Public(sec)) != 2 {
-		t.Fatal("confirmed conversion missing")
+	if Plain(sec, "APP_URL") || len(Public(sec)) != 0 {
+		t.Fatal("make secret kept the value visible")
 	}
-	if err := ApplyKind(sec, nil, nil, []string{"OLD"}, false, false, time.Now()); err != nil {
+	if err := ApplyKind(sec, nil, nil, []string{"APP_URL"}, true, true, time.Now()); err == nil {
+		t.Fatal("revealed variable after making it secret")
+	}
+	if err := ApplyKind(sec, map[string]string{"VISIBLE": "value"}, nil, nil, true, false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if Plain(sec, "OLD") || string(sec.Data["OLD"]) != "private" {
-		t.Fatal("make secret changed value or kept it visible")
-	}
-	if err := ApplyKind(sec, nil, []string{"APP_URL"}, nil, false, false, time.Now()); err != nil {
+	if err := ApplyKind(sec, nil, []string{"VISIBLE"}, nil, false, false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := sec.Data["APP_URL"]; !ok {
+	if _, ok := sec.Data["VISIBLE"]; !ok {
 		t.Fatal("secret unset removed a variable")
 	}
 }

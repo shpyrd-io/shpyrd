@@ -43,11 +43,25 @@ func TestConfigEditsArePendingAndOnlyVariablesAreVisible(t *testing.T) {
 	}
 	rec = do(t, s, "PUT", "/api/projects/web1/secrets", `{"kind":"variable","convert":["PASSWORD"]}`, true)
 	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "new-private") {
-		t.Fatalf("unconfirmed conversion: %d %s", rec.Code, rec.Body)
+		t.Fatalf("unforbidden conversion: %d %s", rec.Code, rec.Body)
 	}
 	rec = do(t, s, "PUT", "/api/projects/web1/secrets", `{"kind":"variable","convert":["PASSWORD"],"confirmPlain":true}`, true)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "new-private") {
-		t.Fatalf("confirmed conversion: %d %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "new-private") {
+		t.Fatalf("forbidden conversion: %d %s", rec.Code, rec.Body)
+	}
+	for _, body := range []string{
+		`{"kind":"variable","set":{"PASSWORD":"replacement"},"confirmPlain":true}`,
+		`{"kind":"variable","dotenv":"PASSWORD=replacement","confirmPlain":true}`,
+		`{"kind":"variable","unset":["PASSWORD"],"convert":["PASSWORD"],"confirmPlain":true}`,
+	} {
+		rec = do(t, s, "PUT", "/api/projects/web1/secrets", body, true)
+		if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "new-private") {
+			t.Fatalf("secret conversion bypass: %d %s", rec.Code, rec.Body)
+		}
+	}
+	rec = do(t, s, "GET", "/api/projects/web1/secrets", "", true)
+	if strings.Contains(rec.Body.String(), "new-private") {
+		t.Fatal("secret exposed by GET after rejected conversion")
 	}
 	rec = do(t, s, "PUT", "/api/projects/web1/secrets", `{"kind":"secret","convert":["PASSWORD"]}`, true)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "new-private") {

@@ -166,7 +166,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd-ctl sizes delete <name>`, `shpyrd-ctl sizes default <name>` | Operator: remove a size (not the default; processes naming it fall back to the default), choose the default. Both take `--for postgres\|redis`. |
 | `shpyrd secrets set K=V ...` | Save secrets; deploy or redeploy to apply them. |
 | `shpyrd secrets unset K ...` | Save secret removals for the next deployment. |
-| `shpyrd env set K=V ...` | Save visible variables for the next deployment. Supports `--from-file`; `--confirm-plain` confirms exposure of existing secrets or credential-looking names. |
+| `shpyrd env set K=V ...` | Save visible variables for the next deployment. Supports `--from-file`; `--confirm-plain` confirms visible values with credential-looking names; existing secrets cannot be made visible. |
 | `shpyrd env unset K ...` | Save variable removals for the next deployment. |
 | `shpyrd env list` | Show plain variable names and values. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |

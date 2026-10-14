@@ -505,6 +505,7 @@ export const mock: Api = {
     const plain = change.kind === "variable";
     for (const name of [...Object.keys(set), ...(change.convert ?? [])]) {
       const existing = t.configVars.find((v) => v.name === name);
+      if (plain && existing && existing.value === undefined) throw new ApiError(400, `${name} is a secret: saved secrets cannot be made visible`);
       if (plain && !change.confirmPlain && (change.convert?.includes(name) || /(_KEY|_SECRET|_TOKEN)$|PASSWORD|^(SECRET|TOKEN)$/i.test(name) || (existing && existing.value === undefined))) throw new ApiError(400, `Confirm that ${name} can be visible to project viewers`);
     }
     t.configValues ??= {};

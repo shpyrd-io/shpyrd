@@ -130,7 +130,7 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
           if (!open) setConfirmation(null);
         }}
         title="Make these values visible?"
-        description="Variables can be read by everyone who can view this project. These names may contain credentials or currently hold secrets. Only continue if the values are safe to share."
+        description="Variables can be read by everyone who can view this project. These names may contain credentials. Only continue if the values are safe to share."
         action="Save as variables"
         onConfirm={() => {
           if (confirmation)
@@ -150,7 +150,7 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
         <CardHeader>
           <CardTitle>Variables and secrets</CardTitle>
           <CardDescription>
-            Variables are visible to project viewers; secret values stay hidden.
+            Variables are visible to project viewers. Saved secrets cannot be viewed or made visible; you can replace or remove them.
             Save your edits, then redeploy to apply them to every process.
           </CardDescription>
           {perms.config && (
@@ -261,22 +261,12 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
                             >
                               {v.kind === "variable" ? "Edit" : "Replace"}
                             </Button>
-                            <Button
-                              size="xs"
-                              variant="ghost"
-                              disabled={change.isPending}
-                              onClick={() =>
-                                submit({
-                                  kind:
-                                    v.kind === "secret" ? "variable" : "secret",
-                                  convert: [v.name],
-                                })
-                              }
-                            >
-                              {v.kind === "secret"
-                                ? "Make variable"
-                                : "Make secret"}
-                            </Button>
+                            {v.kind === "variable" && (
+                              <Button size="xs" variant="ghost" disabled={change.isPending}
+                                onClick={() => submit({ kind: "secret", convert: [v.name] })}>
+                                Make secret
+                              </Button>
+                            )}
                             <ConfirmDialog
                               trigger={
                                 <Button
