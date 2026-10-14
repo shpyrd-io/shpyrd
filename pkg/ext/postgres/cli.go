@@ -92,7 +92,7 @@ moves to the platform's wake-capable address).
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' keeps the database awake, 'default' follows the workspace")
 	_ = cmd.MarkFlagRequired("after")
 	return cmd
@@ -115,7 +115,7 @@ func newPgSuspendCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -136,7 +136,7 @@ func newPgResumeCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -149,11 +149,6 @@ func cliContext() context.Context {
 		cancel()
 	}()
 	return ctx
-}
-
-func projectFlag(cmd *cobra.Command, dst *string) {
-	cmd.Flags().StringVar(dst, "project", "", "project name (required)")
-	_ = cmd.MarkFlagRequired("project")
 }
 
 func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
@@ -213,7 +208,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().StringVar(&version, "version", "17", "PostgreSQL major version")
 	cmd.Flags().StringVar(&size, "size", "", "a Postgres size (shpyrd sizes list; default: the smallest, shared-s)")
 	cmd.Flags().StringVar(&storage, "storage", "5Gi", "data volume size")
@@ -244,7 +239,7 @@ unavailable for a moment.`,
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -277,7 +272,7 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -319,7 +314,7 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -353,7 +348,7 @@ func newPsqlCmd(g ext.CLIGlobals) *cobra.Command {
 			return kexec.RemoteExit(kexec.Exec(ctx, k, pg.Namespace, pod, "postgres", psqlCommand(args[1:]), kexec.StdinIsTerminal()))
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -388,7 +383,7 @@ func newDeleteCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm")
 	cmd.Flags().BoolVar(&force, "force", false, "delete even while attached to an app")
 	return cmd

@@ -1,4 +1,4 @@
-import type { Boundary } from "@shpyrd/content/site/boundaries";
+import type { Boundary } from "@/content/boundaries";
 
 // The limits, typeset as content rather than hidden in a footnote. A claim and
 // the thing it does not cover are read together, which is the whole point.

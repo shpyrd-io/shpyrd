@@ -10,7 +10,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChartNoAxesColumnIncreasing } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Switch } from "@shpyrd/ui/components/switch";
-import { sleep } from "@shpyrd/content/site/tour";
+import { sleep } from "@/content/tour";
 import { Heading, Label, Lead, panel } from "./parts";
 
 // People online at an hour of the day (8.5 is half past eight).

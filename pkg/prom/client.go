@@ -33,8 +33,9 @@ type RawSeries struct {
 // Sample is one result from an instant vector query: its metric labels and
 // the numeric value.
 type Sample struct {
-	Labels map[string]string
-	Value  float64
+	Timestamp float64 // Unix seconds of the sample; allows consumers to reject stale recordings.
+	Labels    map[string]string
+	Value     float64
 }
 
 // QueryRangeSeries evaluates query over [start, end] at step and returns
@@ -154,7 +155,8 @@ func (p *Client) instant(ctx context.Context, query string) ([]Sample, error) {
 		if err != nil || f != f || f > 1e300 || f < -1e300 {
 			continue
 		}
-		out = append(out, Sample{Labels: r.Metric, Value: f})
+		ts, _ := r.Value[0].(float64)
+		out = append(out, Sample{Labels: r.Metric, Value: f, Timestamp: ts})
 	}
 	return out, nil
 }
@@ -206,7 +208,8 @@ func (p *Client) QueryInstantSeriesAt(ctx context.Context, query string, at time
 		if err != nil || f != f {
 			continue
 		}
-		out = append(out, Sample{Labels: r.Metric, Value: f})
+		ts, _ := r.Value[0].(float64)
+		out = append(out, Sample{Labels: r.Metric, Value: f, Timestamp: ts})
 	}
 	return out, nil
 }

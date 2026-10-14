@@ -1,0 +1,147 @@
+import Link from "next/link";
+import { BookOpen, Bot, LayoutDashboard, Rocket, Workflow } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
+import { Card, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { AppWindow } from "@shpyrd/ui/components/app-window";
+import { Conversation, ConversationMessage } from "@shpyrd/ui/components/conversation";
+import { IDE } from "@shpyrd/ui/components/ide";
+import { copy } from "@shpyrd/content/site/agents.mdx";
+const { addToAgent, agents } = copy as { addToAgent: { note: string; label: string; manual: { label: string; href: string } }; agents: { id: string; name: string; file?: string; snippet: string }[] };
+
+// What draws each tag and node of a text. A text names what it wants
+// ("callout", a fenced block of code); which component of design/ui draws
+// it is decided here, in one place.
+
+function Callout({
+  title,
+  type = "note",
+  children,
+}: {
+  title?: string;
+  type?: "note" | "warning";
+  children: React.ReactNode;
+}) {
+  return (
+    <Alert variant={type === "warning" ? "warning" : "info"}>
+      {title && <AlertTitle>{title}</AlertTitle>}
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
+  );
+}
+
+function QuickLinks({ children }: { children: React.ReactNode }) {
+  return <div className="grid gap-4 sm:grid-cols-2">{children}</div>;
+}
+
+// The icons the texts name, and the ones of the library that stand for them.
+const icons: Record<string, React.ReactElement> = {
+  installation: <Rocket />,
+  presets: <Workflow />,
+  theming: <LayoutDashboard />,
+  plugins: <BookOpen />,
+};
+
+function QuickLink({
+  title,
+  description,
+  href,
+  icon,
+}: {
+  title: string;
+  description: string;
+  href: string;
+  icon?: string;
+}) {
+  return (
+    <Link href={href} className="group rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+      <Card className="h-full transition-colors group-hover:border-primary/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-primary">
+            {icon && icons[icon]}
+            {title}
+          </CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </CardHeader>
+      </Card>
+    </Link>
+  );
+}
+
+function Fence({ content, language }: { content: string; language?: string }) {
+  return <IDE code={content.replace(/\n$/, "")} language={language} showLineNumbers={false} />;
+}
+
+// A conversation with an agent, in the agent's window: what was asked, what
+// it did, what it answered.
+function Chat({
+  title = "Your agent",
+  detail,
+  children,
+}: {
+  title?: string;
+  detail?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <AppWindow
+      title={
+        <>
+          <Bot />
+          {title}
+        </>
+      }
+      detail={detail}
+      className="not-prose my-6"
+    >
+      <div className="px-5 py-5">
+        <Conversation>{children}</Conversation>
+      </div>
+    </AppWindow>
+  );
+}
+
+function Message({
+  from,
+  author,
+  steps,
+  children,
+}: {
+  from: "person" | "agent";
+  author?: string;
+  steps?: string[];
+  children: React.ReactNode;
+}) {
+  return (
+    <ConversationMessage
+      from={from}
+      author={author ?? (from === "person" ? "You" : "Your agent")}
+      steps={steps?.map((label) => ({ label }))}
+      className="[&_p]:m-0"
+    >
+      {children}
+    </ConversationMessage>
+  );
+}
+
+// How to add shpyrd to each agent. The site shows them as tabs; here each is
+// listed with what to paste.
+function AgentSetup() {
+  return (
+    <div className="not-prose my-6 grid gap-4">
+      {agents.map((agent) => (
+        <div key={agent.id} className="grid gap-2">
+          <p className="text-sm font-medium">
+            {agent.name}
+            {agent.file && <span className="text-muted-foreground"> · {agent.file}</span>}
+          </p>
+          <IDE code={agent.snippet} language="txt" showLineNumbers={false} />
+        </div>
+      ))}
+      <p className="text-sm text-muted-foreground">{addToAgent.note}</p>
+    </div>
+  );
+}
+
+function AddToAgent() { return <Link href={`https://www.shpyrd.io${addToAgent.manual.href}`}>{addToAgent.manual.label}</Link>; }
+
+export const components = { img: ({ src, ...props }: React.ComponentProps<"img">) => <img {...props} src={typeof src === "string" && src.startsWith("/") ? `https://shpyrd.io${src}` : src} />, Callout, QuickLinks, QuickLink, Fence, Chat, Message, AgentSetup, AddToAgent };

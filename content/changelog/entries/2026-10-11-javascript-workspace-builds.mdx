@@ -1,0 +1,11 @@
+---
+title: "Deploy apps from JavaScript workspaces"
+description: "Deploy packages from npm, pnpm, and Yarn workspaces with buildpacks."
+date: "2026-10-11"
+type: feature
+draft: false
+---
+
+You can deploy an app from its package directory inside an npm, pnpm, or Yarn workspace. shpyrd detects the workspace, includes its shared dependencies, and builds the selected package.
+
+The first deployment also waits for its project builder to become ready, with a clear preparation status instead of failing while the builder is still starting.

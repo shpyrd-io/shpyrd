@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
-import { hero } from "@shpyrd/content/site/home";
+import { hero } from "@/content/home";
 
 // The picture every page of the site shows where it is shared (Open Graph,
 // X): 1200 by 630, in the brand's colours, with the full logo and what the

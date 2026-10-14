@@ -1,4 +1,4 @@
-import { pricing } from "@shpyrd/content/site/pricing";
+import { pricing } from "@/content/pricing";
 import { Pricing } from "@/components/pricing";
 import { shared } from "@/lib/metadata";
 

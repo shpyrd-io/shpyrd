@@ -3,7 +3,7 @@ import { ClipboardList, FileText, Gauge, Receipt, UserPlus } from "lucide-react"
 import { LogoMark } from "@shpyrd/ui/components/brand";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card } from "@shpyrd/ui/components/card";
-import { developerCta } from "@shpyrd/content/site/offer";
+import { developerCta } from "@/content/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { ShipyardCta } from "@/components/shipyard-cta";
 import { SimpleCta } from "@/components/simple-cta";

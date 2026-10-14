@@ -194,6 +194,8 @@ type BrandingView struct {
 }
 
 type Server struct {
+	overview         overviewCache
+	overviewQueries  overviewQueryCache
 	opts             Options
 	log              *slog.Logger
 	engine           *gin.Engine
@@ -592,6 +594,12 @@ func (s *Server) routes() error {
 	api.GET("/namespaces", console, s.require(authz.ClusterView), s.listNamespaces)
 	api.GET("/helm/releases", console, s.require(authz.ClusterView), s.listHelmReleases)
 	api.GET("/cluster", console, s.require(authz.ClusterView), s.clusterSummary)
+	api.GET("/cluster/scheduling", console, s.require(authz.ClusterView), s.clusterScheduling)
+	api.GET("/cluster/overview", console, s.require(authz.ClusterView), s.clusterOverview)
+	api.GET("/cluster/overview/nodes", console, s.require(authz.ClusterView), s.overviewNodes)
+	api.GET("/cluster/overview/charts", console, s.require(authz.ClusterView), s.overviewCharts)
+	api.GET("/cluster/overview/node", console, s.require(authz.ClusterView), s.overviewNodeDetail)
+	api.GET("/cluster/overview/pods", console, s.require(authz.ClusterView), s.overviewNodePods)
 	api.GET("/cluster/metrics", console, s.require(authz.ClusterView), s.clusterMetrics)
 	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo) // RFC-0059
 	api.POST("/cluster/registry/gc", console, s.require(authz.ClusterAdmin), s.registryGC)
