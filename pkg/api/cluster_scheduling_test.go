@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/shpyrd-io/shpyrd/internal/controller"
@@ -47,6 +48,17 @@ func TestClusterScheduling(t *testing.T) {
 		}
 		if sum.Scheduling == nil {
 			t.Fatal("missing scheduling status")
+		}
+		rec = do(t, s, "GET", "/api/cluster/scheduling", "", true)
+		var scheduling SchedulingSummary
+		if rec.Code != http.StatusOK {
+			t.Fatalf("scheduling endpoint: %d: %s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &scheduling); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(&scheduling, sum.Scheduling) {
+			t.Fatalf("scheduling endpoint differs: %+v vs %+v", scheduling, sum.Scheduling)
 		}
 		return sum.Scheduling
 	}
