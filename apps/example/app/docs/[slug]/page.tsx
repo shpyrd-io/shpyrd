@@ -7,10 +7,10 @@ export function generateStaticParams() {
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
-  const text = read(`docs/${(await params).slug}`);
+  const text = await read(`docs/${(await params).slug}`);
   return { title: text.title, description: text.description };
 }
 
 export default async function Document({ params }: { params: Promise<{ slug: string }> }) {
-  return <Text text={read(`docs/${(await params).slug}`)} />;
+  return <Text text={await read(`docs/${(await params).slug}`)} />;
 }

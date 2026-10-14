@@ -43,6 +43,10 @@ var (
 const (
 	interceptorProxySvc = "keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local"
 	webSleepServiceName = "web-sleep"
+	// sleepWakeWindow is how long a wake may take: the interceptor holds a
+	// request that long for the app to be ready, and a waking process has
+	// at least that long to start before its startup probe gives up.
+	sleepWakeWindow = 120 * time.Second
 )
 
 // sleepEnabled reports whether the web process has a valid sleep policy,
@@ -258,7 +262,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 				},
 			},
 			"coldStart": coldStart,
-			"timeouts":  map[string]interface{}{"readiness": "120s"},
+			"timeouts":  map[string]interface{}{"readiness": fmt.Sprintf("%.0fs", sleepWakeWindow.Seconds())},
 		}
 		return controllerutil.SetControllerReference(app, ir, r.Scheme)
 	}); err != nil {

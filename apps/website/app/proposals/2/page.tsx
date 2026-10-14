@@ -7,7 +7,7 @@ import { PageLayoutContent } from "@shpyrd/ui/components/page-layout";
 import { Pillar } from "@shpyrd/ui/components/pillar";
 import { SectionIntro } from "@shpyrd/ui/components/section-intro";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { secondaryCta } from "@shpyrd/content/site/offer";
+import { secondaryCta } from "@/content/offer";
 import { AddToAgent } from "@/components/add-to-agent";
 import { Closing, ProposalNav } from "@/components/proposals";
 
@@ -16,7 +16,7 @@ import { Closing, ProposalNav } from "@/components/proposals";
 // the app in; the page shows that conversation going one turn further.
 //
 // AHEAD OF THE PRODUCT: the agent deploying and sharing is the maintainer's bet
-// (content/site/agents.ts). Today's MCP tools only read.
+// (content/site/agents.mdx). Today's MCP tools only read.
 
 export const metadata = { title: "Proposal 2 · Ask your agent" };
 

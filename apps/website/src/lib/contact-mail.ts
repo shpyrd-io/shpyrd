@@ -4,7 +4,7 @@
 // and where and when it was sent. Only the form's own fields are read;
 // nothing typed reaches a header but the subject, kept to one line, and the
 // HTML shows typed markup as text.
-import type { ContactField } from "@shpyrd/content/site/contact";
+import type { ContactField } from "@/content/contact";
 import { formOf, type Answers, type Kind } from "./contact";
 
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, " ").trim();

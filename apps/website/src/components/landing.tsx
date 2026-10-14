@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+import type { RichLanding as Landing } from "@/lib/mdx/types";
 import { ChevronRight, FileCode } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
 import { Checklist } from "@shpyrd/ui/components/checklist";
@@ -10,8 +12,8 @@ import { Skeleton } from "@shpyrd/ui/components/skeleton";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { cn } from "@shpyrd/ui/lib/cn";
 import { glass } from "@shpyrd/ui/lib/glass";
-import { contact } from "@shpyrd/content/site/offer";
-import type { Landing, Link } from "@shpyrd/content/site/landings";
+import { contact } from "@/content/offer";
+import type { Link } from "@/content/landings";
 import { AgentWindow } from "@/components/agent-window";
 import { BinaryMark } from "@/components/binary-mark";
 import { CodeWindow } from "@/components/code-window";
@@ -30,7 +32,7 @@ import { designs, plain, type Design } from "@/lib/landing-designs";
 import { signUp } from "@/lib/signup";
 import { pageSections } from "@/lib/page";
 
-// A feature or solution page (content/site/features.ts, solutions.ts). The
+// A feature or solution page (content/site/features/*.mdx, solutions.ts). The
 // words are the content's; how each page is drawn is its design
 // (src/lib/landing-designs.ts), chosen from the site's and design/ui's own
 // blocks so that each page shows its message: the binary ship or the circle of
@@ -178,7 +180,7 @@ function Chat({ steps }: { steps: Step[] }) {
           {ask.body}
         </ConversationMessage>
         <ConversationMessage from="agent" author="Your agent" steps={rest.map((r) => ({ label: r.heading, status: "done" as const }))}>
-          {rest.map((r) => r.body).join(" ")}
+          {rest.map((r, index) => <Fragment key={r.heading}>{index > 0 && " "}{r.body}</Fragment>)}
         </ConversationMessage>
       </Conversation>
     </AgentWindow>

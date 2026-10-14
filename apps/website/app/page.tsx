@@ -1,4 +1,4 @@
-import { hero } from "@shpyrd/content/site/home";
+import { hero } from "@/content/home";
 import { Home } from "@/components/home";
 import { ShippingChat } from "@/components/shipping-chat";
 import { shared } from "@/lib/metadata";

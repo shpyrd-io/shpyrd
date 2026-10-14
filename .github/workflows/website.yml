@@ -29,6 +29,7 @@ on:
     # anchors, so the two lists have to be kept in sync by hand.
     paths:
       - 'apps/website/**'
+      - 'apps/shared/**'
       - 'design/ui/**'
       - 'content/**'
       - 'package.json'
@@ -38,6 +39,7 @@ on:
   pull_request:
     paths:
       - 'apps/website/**'
+      - 'apps/shared/**'
       - 'design/ui/**'
       - 'content/**'
       - 'package.json'
@@ -67,12 +69,13 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci --no-audit --no-fund
-      - run: npm --prefix content run test
-      - run: npm --prefix content run typecheck
       - run: npm --prefix design/ui run lint
       - run: npm --prefix design/ui run typecheck
       - run: npm --prefix design/ui run test
       - run: npm --prefix design/ui run build
+      - run: npm --prefix apps/shared run lint
+      - run: npm --prefix apps/shared run typecheck
+      - run: npm --prefix apps/shared run test
       - run: npm --prefix apps/website run lint
       - run: npm --prefix apps/website run typecheck
       - run: npm --prefix apps/website run test

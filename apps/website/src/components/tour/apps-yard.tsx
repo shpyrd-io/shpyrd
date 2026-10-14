@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Tile } from "@shpyrd/ui/components/tile";
 import { cn } from "@shpyrd/ui/lib/cn";
-import { apps, opening } from "@shpyrd/content/site/tour";
+import { apps, opening } from "@/content/tour";
 import { panel } from "./parts";
 
 // Each app's symbol and colour on its card.

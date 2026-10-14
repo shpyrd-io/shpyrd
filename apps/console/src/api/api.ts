@@ -1,3 +1,4 @@
+import type { OverviewAPI } from "./cluster-overview";
 import type { Link } from "@shpyrd/shared/links";
 import type { ArchiveProject, ProjectArchiveStatus, ProjectPlacement, PlacementMeasurement } from "@shpyrd/shared/api/project-archives";
 import type {
@@ -31,7 +32,7 @@ import type {
 // server at its console door; the Mock, JSON files. NEXT_PUBLIC_API_MODE
 // picks one, and the build drops the other.
 
-export type Api = {
+export type Api = OverviewAPI & {
   archiveProjects: () => Promise<ArchiveProject[]>;
   projectPlacement: (id: string) => Promise<ProjectPlacement>;
   measureProjectPlacement: (id: string, group: string) => Promise<PlacementMeasurement>;

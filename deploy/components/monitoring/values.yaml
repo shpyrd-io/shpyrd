@@ -14,6 +14,152 @@ alertmanager:
 # operator console reads them from there. Every annotation says what
 # happened and what to do in words (#52): no command, tool or object name.
 additionalPrometheusRulesMap:
+  shpyrd-cluster-overview:
+    groups:
+      - name: shpyrd-cluster-nodes
+        interval: 30s
+        rules:
+          - record: shpyrd_node:cpuCapacity
+            expr: |
+              (count by (node) (max by (node,cpu) (node_cpu_seconds_total{mode="idle",node!=""}))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:cpuUsed
+            expr: |
+              (sum by (node) (1 - max by (node,cpu) (rate(node_cpu_seconds_total{mode="idle",node!=""}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:memoryCapacity
+            expr: |
+              (max by (node) (node_memory_MemTotal_bytes{node!=""})) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:memoryUsed
+            expr: |
+              (max by (node) (node_memory_MemTotal_bytes{node!=""}) - max by (node) (node_memory_MemAvailable_bytes{node!=""})) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:cpuAllocatable
+            expr: |
+              (max by (node) (kube_node_status_allocatable{resource="cpu"})) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:memoryAllocatable
+            expr: |
+              (max by (node) (kube_node_status_allocatable{resource="memory"})) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:podCapacity
+            expr: |
+              (max by (node) (kube_node_status_allocatable{resource="pods"})) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:pods
+            expr: |
+              (count by (node) (max by (node,namespace,pod) (kube_pod_info{node!=""}) and on(namespace,pod) (max by (namespace,pod) (kube_pod_status_phase{phase=~"Running|Pending"}) == 1)) or on(node) (0 * max by(node) (kube_node_status_allocatable{resource="pods"}))) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:diskAvailablePct
+            expr: |
+              (min by (node) (100 * max by(node,device,mountpoint) (node_filesystem_avail_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) / max by(node,device,mountpoint) (node_filesystem_size_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:inodesAvailablePct
+            expr: |
+              (min by (node) (100 * max by(node,device,mountpoint) (node_filesystem_files_free{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) / max by(node,device,mountpoint) (node_filesystem_files{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:readIOPS
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_disk_reads_completed_total{node!="",device=~"(sd|vd|xvd)[a-z]+|nvme[0-9]+n[0-9]+"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:writeIOPS
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_disk_writes_completed_total{node!="",device=~"(sd|vd|xvd)[a-z]+|nvme[0-9]+n[0-9]+"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:readBytes
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_disk_read_bytes_total{node!="",device=~"(sd|vd|xvd)[a-z]+|nvme[0-9]+n[0-9]+"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:writeBytes
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_disk_written_bytes_total{node!="",device=~"(sd|vd|xvd)[a-z]+|nvme[0-9]+n[0-9]+"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:receiveBytes
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_receive_bytes_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:transmitBytes
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_transmit_bytes_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:receiveErrors
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_receive_errs_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:transmitErrors
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_transmit_errs_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:receiveDrops
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_receive_drop_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:transmitDrops
+            expr: |
+              (sum by(node) (max by(node,device) (rate(node_network_transmit_drop_total{node!="",device=~"(eth[0-9]+|en[a-zA-Z0-9]+)"}[2m])))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:cpuRequested
+            expr: |
+              (sum by(node)(max by(node,namespace,pod)(kube_pod_resource_request{resource="cpu",node!=""})) or on(node) sum by(node)((max by(node,namespace,pod)(label_replace(sum by(node,namespace,pod)(max by(node,namespace,pod,container)(kube_pod_container_resource_requests{resource="cpu",node!=""})),"request_source","containers","node",".*") or label_replace(max by(node,namespace,pod)(kube_pod_init_container_resource_requests{resource="cpu",node!=""}),"request_source","init","node",".*")) + on(node,namespace,pod) ((max by(namespace,pod)(kube_pod_overhead_cpu_cores) * on(namespace,pod) group_left(node) max by(node,namespace,pod)(kube_pod_info{node!=""})) or on(node,namespace,pod) (0 * max by(node,namespace,pod)(label_replace(sum by(node,namespace,pod)(max by(node,namespace,pod,container)(kube_pod_container_resource_requests{resource="cpu",node!=""})),"request_source","containers","node",".*") or label_replace(max by(node,namespace,pod)(kube_pod_init_container_resource_requests{resource="cpu",node!=""}),"request_source","init","node",".*"))))) and on(namespace,pod) (max by(namespace,pod)(kube_pod_status_phase{phase=~"Running|Pending"}) == 1)) or on(node) (0 * max by(node)(kube_node_status_allocatable{resource="cpu"}))) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:memoryRequested
+            expr: |
+              (sum by(node)(max by(node,namespace,pod)(kube_pod_resource_request{resource="memory",node!=""})) or on(node) sum by(node)((max by(node,namespace,pod)(label_replace(sum by(node,namespace,pod)(max by(node,namespace,pod,container)(kube_pod_container_resource_requests{resource="memory",node!=""})),"request_source","containers","node",".*") or label_replace(max by(node,namespace,pod)(kube_pod_init_container_resource_requests{resource="memory",node!=""}),"request_source","init","node",".*")) + on(node,namespace,pod) ((max by(namespace,pod)(kube_pod_overhead_memory_bytes) * on(namespace,pod) group_left(node) max by(node,namespace,pod)(kube_pod_info{node!=""})) or on(node,namespace,pod) (0 * max by(node,namespace,pod)(label_replace(sum by(node,namespace,pod)(max by(node,namespace,pod,container)(kube_pod_container_resource_requests{resource="memory",node!=""})),"request_source","containers","node",".*") or label_replace(max by(node,namespace,pod)(kube_pod_init_container_resource_requests{resource="memory",node!=""}),"request_source","init","node",".*"))))) and on(namespace,pod) (max by(namespace,pod)(kube_pod_status_phase{phase=~"Running|Pending"}) == 1)) or on(node) (0 * max by(node)(kube_node_status_allocatable{resource="memory"}))) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:diskSize
+            expr: |
+              (max by(node,device,mountpoint)(node_filesystem_size_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) and on(node,device,mountpoint) (bottomk by(node)(1,max by(node,device,mountpoint)(node_filesystem_avail_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) / max by(node,device,mountpoint)(node_filesystem_size_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"})))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:diskFree
+            expr: |
+              (max by(node,device,mountpoint)(node_filesystem_free_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) and on(node,device,mountpoint) (bottomk by(node)(1,max by(node,device,mountpoint)(node_filesystem_avail_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) / max by(node,device,mountpoint)(node_filesystem_size_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"})))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:diskAvailable
+            expr: |
+              (max by(node,device,mountpoint)(node_filesystem_avail_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) and on(node,device,mountpoint) (bottomk by(node)(1,max by(node,device,mountpoint)(node_filesystem_avail_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"}) / max by(node,device,mountpoint)(node_filesystem_size_bytes{node!="",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|proc|sysfs|cgroup2?",mountpoint!~"/var/lib/kubelet/pods/.*|/run/.*|/etc/(hostname|hosts|resolv[.]conf)"})))) and on(node) (max by(node)(up{job=~".*node-exporter.*",node!=""}) == 1)
+          - record: shpyrd_node:pool
+            expr: |
+              (max by(node,pool) (label_replace(kube_node_labels, "pool", "$1", "label_shpyrd_io_pool", "(.*)"))) and on() (max(up{job=~".*kube-state-metrics.*"}) == 1)
+          - record: shpyrd_node:cpuBusyPct
+            expr: |
+              100 * shpyrd_node:cpuUsed / shpyrd_node:cpuCapacity
+          - record: shpyrd_node:memoryUsedPct
+            expr: |
+              100 * shpyrd_node:memoryUsed / shpyrd_node:memoryCapacity
+      - name: shpyrd-cluster-pools
+        interval: 30s
+        rules:
+          - record: shpyrd_pool:cpuUsed
+            expr: |
+              sum by(pool) (shpyrd_node:cpuUsed * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:cpuCapacity
+            expr: |
+              sum by(pool) (shpyrd_node:cpuCapacity * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:memoryUsed
+            expr: |
+              sum by(pool) (shpyrd_node:memoryUsed * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:memoryCapacity
+            expr: |
+              sum by(pool) (shpyrd_node:memoryCapacity * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:cpuRequested
+            expr: |
+              sum by(pool) (shpyrd_node:cpuRequested * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:cpuAllocatable
+            expr: |
+              sum by(pool) (shpyrd_node:cpuAllocatable * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:memoryRequested
+            expr: |
+              sum by(pool) (shpyrd_node:memoryRequested * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:memoryAllocatable
+            expr: |
+              sum by(pool) (shpyrd_node:memoryAllocatable * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:pods
+            expr: |
+              sum by(pool) (shpyrd_node:pods * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:podCapacity
+            expr: |
+              sum by(pool) (shpyrd_node:podCapacity * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:readIOPS
+            expr: |
+              sum by(pool) (shpyrd_node:readIOPS * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:writeIOPS
+            expr: |
+              sum by(pool) (shpyrd_node:writeIOPS * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:readBytes
+            expr: |
+              sum by(pool) (shpyrd_node:readBytes * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:writeBytes
+            expr: |
+              sum by(pool) (shpyrd_node:writeBytes * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:receiveBytes
+            expr: |
+              sum by(pool) (shpyrd_node:receiveBytes * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:transmitBytes
+            expr: |
+              sum by(pool) (shpyrd_node:transmitBytes * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:cpuBusyPct
+            expr: |
+              100 * sum by(pool)(shpyrd_node:cpuUsed * on(node) group_left(pool) shpyrd_node:pool) / sum by(pool)((shpyrd_node:cpuCapacity and on(node) shpyrd_node:cpuUsed) * on(node) group_left(pool) shpyrd_node:pool)
+          - record: shpyrd_pool:memoryUsedPct
+            expr: |
+              100 * sum by(pool)(shpyrd_node:memoryUsed * on(node) group_left(pool) shpyrd_node:pool) / sum by(pool)((shpyrd_node:memoryCapacity and on(node) shpyrd_node:memoryUsed) * on(node) group_left(pool) shpyrd_node:pool)
   shpyrd-platform-backup:
     groups:
       - name: shpyrd-platform-backup
@@ -297,6 +443,7 @@ kube-state-metrics:
   # database (CNPG), store (Redis), build pod (kpack), volume. KSM exports
   # kube_*_labels only for the resources and labels listed here.
   metricLabelsAllowlist:
+    - nodes=[shpyrd.io/pool]
     - pods=[shpyrd.io/app,shpyrd.io/process,shpyrd.io/redis,cnpg.io/cluster,kpack.io/build]
     - persistentvolumeclaims=[shpyrd.io/app,shpyrd.io/volume,shpyrd.io/redis,cnpg.io/cluster]
     - namespaces=[shpyrd.io/workspace,shpyrd.io/project,shpyrd.io/workspace-id,shpyrd.io/project-id]
