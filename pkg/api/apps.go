@@ -157,6 +157,8 @@ type AppDetailSpec struct {
 }
 
 type AppDetailStatus struct {
+	// Transient means the platform is preparing a builder; wait rather than redeploy.
+	Transient   bool   `json:"transient,omitempty"`
 	Runtime     string `json:"runtime,omitempty"`
 	DefaultSize string `json:"defaultSize,omitempty"`
 	Phase       string `json:"phase"`
@@ -243,6 +245,11 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Domains:    a.Status.Domains,
 		},
 		Processes: a.Status.Processes,
+	}
+	for _, condition := range a.Status.Conditions {
+		if condition.Type == shpyrdv1.ConditionBuilt && condition.Status == metav1.ConditionUnknown && condition.Reason == "PreparingBuilder" && condition.ObservedGeneration == a.Generation && a.Status.Phase != shpyrdv1.PhaseFailed {
+			d.Status.Transient = true
+		}
 	}
 	d.IconURL, d.IconType = iconURL(a)
 	if a.Spec.Source != nil && a.Spec.Source.Blob != nil {

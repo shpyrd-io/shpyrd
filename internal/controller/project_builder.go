@@ -40,7 +40,12 @@ func (r *AppReconciler) projectBuilderFailure(ctx context.Context, app *shpyrdv1
 			continue
 		}
 		if m["status"] == "True" {
-			return ""
+			// The Image can still be waiting for the ready Builder to be
+			// picked up. Bound that wait too, using the Image's clock.
+			if waiting.IsZero() || time.Since(waiting) < builderGrace {
+				return ""
+			}
+			return "The build could not start: kpack has not picked up the ready builder. A fault of the platform, not of the app; deploying again later usually passes."
 		}
 		if msg, _ := m["message"].(string); msg != "" {
 			reason = msg
