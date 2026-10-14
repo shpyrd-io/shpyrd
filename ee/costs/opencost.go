@@ -132,7 +132,7 @@ func estimateLines(data map[string]allocation, start, end time.Time, res resourc
 	var out []store.CostLine
 	for key, a := range data {
 		p := a.Properties
-		base := store.CostLine{Kind: store.CostEstimated, Source: "opencost", Start: start, End: end, Currency: estimateCurrency}
+		base := store.CostLine{Kind: store.CostEstimated, Source: "opencost", Start: start, End: end, Currency: estimateCurrency, Workspace: p.NamespaceLabels["shpyrd_io_workspace_id"], Tags: map[string]string{"cost.resourceName": p.Node}}
 		switch {
 		case strings.Contains(key, "__idle__"):
 			base.Process = "idle"
@@ -182,6 +182,7 @@ func estimateLines(data map[string]allocation, start, end time.Time, res resourc
 			l := base
 			l.Metric, l.Unit = "storage", "GiB-hours"
 			l.Resource, l.ResourceType = res.volume(pvName(name), pv.ProviderID), "volume"
+			l.Tags = map[string]string{"cost.resourceName": pvName(name)}
 			q, c := pv.ByteHours/(1<<30), pv.Cost
 			l.Quantity, l.Cost = &q, &c
 			out = append(out, l)

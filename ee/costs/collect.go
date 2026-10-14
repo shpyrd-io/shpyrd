@@ -97,6 +97,7 @@ func (c *Collector) Collect(ctx context.Context) {
 		hours = 3
 	}
 	wsIDs := c.workspaceIDs(ctx)
+	usageOK, estimateOK := true, c.OpenCostURL != ""
 	// The closed hours, oldest first, then the hour under way, read up to
 	// now (in whole minutes; under a minute of it, nothing yet).
 	for i := hours; i >= 0; i-- {
@@ -110,10 +111,19 @@ func (c *Collector) Collect(ctx context.Context) {
 			continue
 		}
 		if err := c.collectUsage(ctx, start, end, until); err != nil {
+			usageOK = false
 			log.Warn("costs: usage", "hour", start, "error", err)
 		}
 		if err := c.collectEstimate(ctx, start, end, until, wsIDs); err != nil {
+			estimateOK = false
 			log.Warn("costs: estimate", "hour", start, "error", err)
+		}
+	}
+	for kind, ok := range map[string]bool{store.CostUsage: usageOK, store.CostEstimated: estimateOK} {
+		if ok {
+			if err := c.Store.RecordCostCollection(ctx, kind, now.Truncate(time.Minute), now); err != nil {
+				log.Warn("costs: collection status", "error", err)
+			}
 		}
 	}
 	day := now.Truncate(24 * time.Hour)
@@ -124,6 +134,9 @@ func (c *Collector) Collect(ctx context.Context) {
 			log.Warn("costs: the provider's bill", "error", err)
 		default:
 			c.lastBillDay = day
+			if err := c.Store.RecordCostCollection(ctx, store.CostReal, day, now); err != nil {
+				log.Warn("costs: collection status", "error", err)
+			}
 		}
 	}
 }
@@ -196,6 +209,9 @@ func (c *Collector) collectEstimate(ctx context.Context, start, end, until time.
 	}
 	lines := estimateLines(data, start, end, c.resources(ctx))
 	for i := range lines {
+		if lines[i].Project == "" && lines[i].Process == c.Namespace && c.Namespace != "" {
+			lines[i].Tags["cost.category"] = "system"
+		}
 		if id := wsIDs[lines[i].Workspace]; id != "" {
 			lines[i].Workspace = id
 		}

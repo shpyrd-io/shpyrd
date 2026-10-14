@@ -178,6 +178,7 @@ type usageItem struct {
 
 // searchItem is one resource the Search API answers.
 type searchItem struct {
+	DisplayName  string                    `json:"displayName"`
 	Identifier   string                    `json:"identifier"`
 	ResourceType string                    `json:"resourceType"`
 	FreeformTags map[string]string         `json:"freeformTags"`
@@ -276,6 +277,7 @@ func billLines(items []usageItem, tags map[string]searchItem) []store.CostLine {
 		}
 		if s, ok := tags[it.ResourceID]; ok {
 			l.Tags = s.tags()
+			l.Tags["cost.resourceName"] = s.DisplayName
 			if s.ResourceType != "" {
 				l.ResourceType = s.ResourceType
 			}

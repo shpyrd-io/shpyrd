@@ -92,23 +92,6 @@ func TestTheEstimateIsLinesByProjectProcessAndResource(t *testing.T) {
 	}
 }
 
-func TestSummarizeSumsByGroupBiggestFirst(t *testing.T) {
-	f := func(v float64) *float64 { return &v }
-	lines := []store.CostLine{
-		{Project: "a", Process: "web", Cost: f(1), Currency: "USD"},
-		{Project: "a", Process: "worker", Cost: f(2), Currency: "USD"},
-		{Project: "b", Process: "web", Cost: f(5), Currency: "USD"},
-		{Project: "", Process: "kube-system", Cost: f(0.5), Currency: "USD"},
-	}
-	rows, total := Summarize(lines, "project", map[string]string{"a": "shop", "b": "blog"})
-	if len(rows) != 3 || rows[0].Slug != "blog" || rows[0].Cost["USD"] != 5 || rows[1].Slug != "shop" || rows[1].Cost["USD"] != 3 || rows[1].Lines != 2 || total["USD"] != 8.5 {
-		t.Errorf("by project = %+v %v", rows, total)
-	}
-	if rows, _ := Summarize(lines, "process", nil); len(rows) != 4 {
-		t.Errorf("by process = %+v", rows)
-	}
-}
-
 func withLicense(t *testing.T) {
 	t.Helper()
 	licensing.Unlock()

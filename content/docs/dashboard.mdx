@@ -111,3 +111,40 @@ Cluster-wide log drains have no page: the operator adds them with `shpyrd drains
 - Config var values are write-only through the API and the UI.
 - Image references and internal addresses are not exposed on project pages; builds and releases are identified by number and digest. The registry's address appears in the console only.
 - On the local profile the dashboard is only reachable from your machine.
+
+## Cluster costs
+
+With the enterprise `costs` extension, **Console → Costs** explores a UTC date
+range of up to 366 days. Project rows show their workspace. Expand a workspace
+into projects, then applications, databases, builds or storage, then processes
+and resources. Resource type, resource and provider service are separate grouping
+choices. Resource details show the complete provider identifier and a copy action.
+
+Project-less costs are classified as **System services** only when the collector
+recognizes the system namespace, **Idle capacity** when OpenCost reports unused
+capacity, or **Unattributed costs** when ownership is unknown. Known workspace
+ownership is retained. Historical records without enough classification evidence
+remain unattributed.
+
+Filter by workspace and category, or search workspace names, project names and
+resource identifiers. The table loads 50 groups per page and fetches expanded
+children on demand. Summary totals cover all matching groups, including other
+pages. Currencies remain separate; the currency selector controls sorting and
+percentages without currency conversion. Cost records, shown inside expanded
+rows, count collection records rather than resources.
+
+**Estimated (OpenCost)** and **Provider-reported cost** are independent sources.
+Data-through and last-successful-collection timestamps show their freshness;
+missing timestamps stay unknown until a successful collection. Open periods are
+marked incomplete, and source corrections may arrive after a period ends.
+Configure the read-only OCI connection under **Cost settings**.
+
+**Export CSV** prepares all groups matching the current filters in the background,
+including groups outside the current page. Download the result when ready. Each
+currency has a separate CSV row. Exports use a consistent database snapshot, are
+available for 24 hours, and are accessible only through the licensed console cost
+routes. At most five exports can be queued; a failed export can be requested again.
+
+Daily database aggregates speed up longer periods without discarding the raw
+records. The cost explorer migration backfills existing records once; subsequent
+inserts, corrections and deletions update the aggregates transactionally.

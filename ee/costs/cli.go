@@ -19,7 +19,8 @@ import (
 )
 
 func newCostsCmd(g ext.CLIGlobals) *cobra.Command {
-	var from, to, kind, by string
+	var from, to, kind, by, workspace, search, currency, order string
+	var limit, offset int
 	cmd := &cobra.Command{
 		Use:   "costs",
 		Short: "What the cluster uses and costs (enterprise)",
@@ -35,7 +36,7 @@ service, for a period (this month by default). Three kinds: estimated
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
-			for k, v := range map[string]string{"from": from, "to": to, "kind": kind, "group": by} {
+			for k, v := range map[string]string{"from": from, "to": to, "kind": kind, "group": by, "workspace": workspace, "search": search, "currency": currency, "sort": order, "limit": fmt.Sprint(limit), "offset": fmt.Sprint(offset)} {
 				if v != "" {
 					q.Set(k, v)
 				}
@@ -54,7 +55,13 @@ service, for a period (this month by default). Three kinds: estimated
 	cmd.Flags().StringVar(&from, "from", "", "first day (YYYY-MM-DD); the month's first by default")
 	cmd.Flags().StringVar(&to, "to", "", "the day after the last (YYYY-MM-DD); tomorrow by default")
 	cmd.Flags().StringVar(&kind, "kind", "", "estimated (default), real or usage")
-	cmd.Flags().StringVar(&by, "by", "", "project (default), process, resource or service")
+	cmd.Flags().StringVar(&by, "by", "", "project (default), workspace, workload, process, resourceType, resource or service")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "filter by workspace ID or slug")
+	cmd.Flags().StringVar(&search, "search", "", "search workspace, project or resource")
+	cmd.Flags().StringVar(&currency, "currency", "", "currency for sorting (no conversion)")
+	cmd.Flags().StringVar(&order, "sort", "cost_desc", "cost_desc, cost_asc or name")
+	cmd.Flags().IntVar(&limit, "limit", 50, "groups per page (1–200)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "groups to skip")
 	cmd.AddCommand(newDrainsCmd(g), newOCICmd(g))
 	return cmd
 }
@@ -72,7 +79,7 @@ func money(m map[string]float64) string {
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%.2f %s", m[k], k))
 	}
-	return strings.Join(parts, " + ")
+	return strings.Join(parts, " · ")
 }
 
 func printSummary(out io.Writer, s Summary) {
@@ -84,17 +91,11 @@ func printSummary(out io.Writer, s Summary) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, strings.ToUpper(s.Group)+"\tCOST\tLINES")
 	for _, r := range s.Rows {
-		name := r.Key
-		switch s.Group {
-		case "project":
-			name = firstNonEmpty(r.Slug, r.Project, "(platform)")
-		case "process":
-			name = firstNonEmpty(r.Slug, r.Project, "(platform)") + " " + r.Process
-		}
-		fmt.Fprintf(w, "%s\t%s\t%d\n", name, money(r.Cost), r.Lines)
+		fmt.Fprintf(w, "%s · %s\t%s\t%d\n", r.Name, r.WorkspaceName, money(r.Cost), r.Lines)
 	}
 	fmt.Fprintf(w, "TOTAL\t%s\t\n", money(s.Total))
 	w.Flush()
+	fmt.Fprintf(out, "Showing %d–%d of %d groups; total covers all matching groups.\n", s.Offset+1, s.Offset+len(s.Rows), s.Count)
 }
 
 func newDrainsCmd(g ext.CLIGlobals) *cobra.Command {

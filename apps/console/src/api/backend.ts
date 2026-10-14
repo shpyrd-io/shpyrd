@@ -2,7 +2,7 @@ import { queryString } from "./cluster-overview";
 import { json, request } from "@shpyrd/shared/api/http";
 import type { Api } from "./api";
 import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
-import type { ClusterMetrics, NodeUsage, Series } from "./types";
+import type { CostQuery, ClusterMetrics, NodeUsage, Series } from "./types";
 
 // The paths of the server at the console door. Where the server's shape
 // is not the one the screens read, it is turned into it here.
@@ -29,6 +29,8 @@ export function toClusterMetrics(answer: MetricsAnswer): ClusterMetrics {
 // platform's defaults at the platform one.
 const overviewPath = (path: string, query: object = {}) => `/api/cluster/overview${path}?${queryString(query)}`;
 const methods = (scope: "console" | "platform") => (scope === "console" ? "/api/workspace/login-methods" : "/api/auth/connectors");
+
+const costParams = (q: CostQuery) => new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])).toString();
 
 export const backend: Api = {
   overview: (signal) => request(overviewPath(""), { signal }),
@@ -64,7 +66,10 @@ export const backend: Api = {
   license: () => request("/api/cluster/license"),
   renewLicense: () => request("/api/cluster/license/renew", { method: "POST" }),
   billingLink: () => request("/api/cluster/license/billing", { method: "POST" }),
-  costs: (q) => request(`/api/cluster/costs?${new URLSearchParams(Object.entries(q).filter(([, v]) => !!v) as [string, string][]).toString()}`),
+  costs: (q) => request(`/api/cluster/costs?${costParams(q)}`),
+  createCostExport: (q) => request(`/api/cluster/costs/exports?${costParams(q)}`, { method: "POST" }),
+  costExport: (id) => request(`/api/cluster/costs/exports/${encodeURIComponent(id)}`),
+  costExportURL: async (id) => `/api/cluster/costs/exports/${encodeURIComponent(id)}/download`,
   costDrains: () => request("/api/cluster/cost-drains"),
   addCostDrain: (body) => request("/api/cluster/cost-drains", json("POST", body)),
   removeCostDrain: async (name) => { await request(`/api/cluster/cost-drains/${encodeURIComponent(name)}`, { method: "DELETE" }); },

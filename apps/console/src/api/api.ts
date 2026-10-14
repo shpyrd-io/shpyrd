@@ -9,8 +9,8 @@ import type {
   SchedulingSummary,
   ConsoleUser,
   CostDrain,
-  CostGroup,
-  CostKind,
+  CostQuery,
+  CostExport,
   CostSummary,
   HelmRelease,
   Identity,
@@ -68,7 +68,10 @@ export type Api = OverviewAPI & {
   // use to the customer's account there.
   renewLicense: () => Promise<LicenseStatus>;
   billingLink: () => Promise<{ url: string }>;
-  costs: (q: { from?: string; to?: string; kind?: CostKind; group?: CostGroup }) => Promise<CostSummary>;
+  costs: (q: CostQuery) => Promise<CostSummary>;
+  createCostExport: (q: CostQuery) => Promise<CostExport>;
+  costExport: (id: string) => Promise<CostExport>;
+  costExportURL: (id: string) => Promise<string>;
   costDrains: () => Promise<CostDrain[]>;
   addCostDrain: (body: { name: string; url: string; headers?: Record<string, string> }) => Promise<CostDrain>;
   removeCostDrain: (name: string) => Promise<void>;
