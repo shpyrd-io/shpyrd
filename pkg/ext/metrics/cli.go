@@ -91,8 +91,7 @@ func ResourceCommand(g ext.CLIGlobals, kind string) *cobra.Command {
 			return Print(g, cmd, "api/projects/"+url.PathEscape(project)+"/resources/"+kind+"/"+url.PathEscape(args[0])+"/metrics?"+q.Encode())
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "project name (required)")
-	_ = cmd.MarkFlagRequired("project")
+	ext.ProjectFlag(g, cmd, &project)
 	opts.Flags(cmd)
 	return cmd
 }
