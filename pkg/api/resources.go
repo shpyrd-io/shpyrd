@@ -319,6 +319,18 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	c.JSON(http.StatusCreated, view)
 }
 
+// What a shared database refuses, in the plan's words.
+const (
+	errSharedAlwaysOn           = "Shared databases are always on."
+	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
+	errSharedBackupsLater       = "A shared database is backed up by the platform's nightly dumps; backups and restores of one are not available yet."
+)
+
+// sharedRefusal is a refusal raised inside a retried mutation.
+type sharedRefusal struct{ msg string }
+
+func (e *sharedRefusal) Error() string { return e.msg }
+
 // applyPostgresType settles a new database's kind within the workspace's
 // plan: the type asked for, else the plan's default, else dedicated; a
 // kind the plan does not allow is refused in words. A shared database
@@ -357,7 +369,7 @@ func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[stri
 	}
 	for _, key := range []string{"instances", "size", "version", "sleep"} {
 		if _, has := spec[key]; has {
-			return "", errors.New("Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database.")
+			return "", errors.New(errSharedNoInstanceSettings)
 		}
 	}
 	if rec, ok := spec["recovery"].(map[string]interface{}); ok {
@@ -464,6 +476,9 @@ func (s *Server) resizeResource(c *gin.Context) {
 		if err := s.apps.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, u); err != nil {
 			return err
 		}
+		if typ, _, _ := unstructured.NestedString(u.Object, "spec", "type"); typ == shpyrdv1.PostgresTypeShared {
+			return &sharedRefusal{errSharedNoInstanceSettings}
+		}
 		was, _, _ = unstructured.NestedString(u.Object, "spec", "size")
 		if was == size.Name {
 			return nil
@@ -480,6 +495,11 @@ func (s *Server) resizeResource(c *gin.Context) {
 		_ = unstructured.SetNestedField(u.Object, size.Name, "spec", "size")
 		return s.apps.Update(ctx, u)
 	})
+	var refused *sharedRefusal
+	if errors.As(err, &refused) {
+		abort(c, http.StatusBadRequest, errors.New(refused.msg))
+		return
+	}
 	if err != nil {
 		var ue *userError
 		switch {
@@ -685,6 +705,9 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 		}
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return errors.New(errSharedAlwaysOn)
+		}
 		if after != "" && after != sleepOff && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
 			return fmt.Errorf("%s runs %d instances (high availability) and never sleeps", pg.Name, *pg.Spec.Instances)
 		}
@@ -726,6 +749,9 @@ func (s *Server) resumePostgres(c *gin.Context)  { s.setPostgresSuspended(c, fal
 
 func (s *Server) setPostgresSuspended(c *gin.Context, suspended bool) {
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return errors.New(errSharedAlwaysOn)
+		}
 		if suspended && pg.Spec.Instances != nil && *pg.Spec.Instances > 1 {
 			return fmt.Errorf("%s runs %d instances (high availability); scale it to 1 before suspending", pg.Name, *pg.Spec.Instances)
 		}

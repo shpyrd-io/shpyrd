@@ -177,6 +177,10 @@ func (s *Server) takePostgresBackup(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		abort(c, http.StatusConflict, errors.New(errSharedBackupsLater))
+		return
+	}
 	if pg.Spec.Backups == nil {
 		abort(c, http.StatusConflict, fmt.Errorf("backups of %q are off: turn them on first (shpyrd pg backups enable %s)", pg.Name, pg.Name))
 		return
@@ -226,6 +230,10 @@ func (s *Server) restorePostgres(c *gin.Context) {
 	}
 	source, ok := s.postgresOf(c)
 	if !ok {
+		return
+	}
+	if source.Spec.Type == shpyrdv1.PostgresTypeShared {
+		abort(c, http.StatusConflict, errors.New(errSharedBackupsLater))
 		return
 	}
 	t, ok := s.resourceType("Postgres")
