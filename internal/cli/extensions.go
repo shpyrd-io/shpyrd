@@ -20,6 +20,9 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 )
 
+// ResolveProject shares the core CLI project selection with extensions.
+func (g *globalFlags) ResolveProject(name string) (string, error) { return resolveAppName(name) }
+
 // Kubeconfig implements ext.CLIGlobals.
 func (g *globalFlags) Kubeconfig() string { return g.kubeconfig }
 

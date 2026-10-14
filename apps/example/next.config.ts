@@ -1,3 +1,5 @@
+import createMDX from "@next/mdx";
+import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 
 // Everything is compiled to static files (out/): no Node at run time.
@@ -7,4 +9,4 @@ const config: NextConfig = {
   agentRules: false,
 };
 
-export default config;
+export default createMDX({ options: { remarkPlugins: ["remark-frontmatter", "remark-gfm", fileURLToPath(new URL("../shared/src/editorial/remark.mjs", import.meta.url))] } })(config);

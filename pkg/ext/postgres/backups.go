@@ -123,7 +123,7 @@ inside that window into a new database.`,
 			})
 		},
 	}
-	projectFlag(enable, &project)
+	ext.ProjectFlag(g, enable, &project)
 	enable.Flags().StringVar(&retention, "retention", "", "how long backups are kept, e.g. 14d")
 	enable.Flags().StringVar(&schedule, "schedule", "", "cron of the base backup in UTC, e.g. \"0 2 * * *\"")
 
@@ -145,7 +145,7 @@ inside that window into a new database.`,
 			})
 		},
 	}
-	projectFlag(disable, &project)
+	ext.ProjectFlag(g, disable, &project)
 	disable.Flags().BoolVar(&yes, "yes", false, "confirm")
 
 	list := &cobra.Command{
@@ -180,7 +180,7 @@ inside that window into a new database.`,
 			})
 		},
 	}
-	projectFlag(list, &project)
+	ext.ProjectFlag(g, list, &project)
 	cmd.AddCommand(enable, disable, list)
 	return cmd
 }
@@ -231,7 +231,7 @@ func newBackupCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -293,7 +293,7 @@ source keeps running; attach the app to the new database with
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().StringVar(&as, "as", "", "name of the new database (required)")
 	cmd.Flags().StringVar(&to, "to", "", "point in time to recover to, RFC 3339 (default: latest)")
 	cmd.Flags().StringVar(&size, "size", "", "a Postgres size for the new database (default: the source's)")

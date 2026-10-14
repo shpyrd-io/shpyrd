@@ -9,8 +9,8 @@ import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Textarea } from "@shpyrd/ui/components/textarea";
-import { failed, privacy, technical, thanks, type ContactField } from "@shpyrd/content/site/contact";
-import { discord } from "@shpyrd/content/site/offer";
+import { failed, privacy, technical, thanks, type ContactField } from "@/content/contact";
+import { discord } from "@/content/offer";
 import { check, formOf, trap, type Answers, type Kind } from "@/lib/contact";
 
 type Status = "idle" | "sending" | "sent" | "failed";

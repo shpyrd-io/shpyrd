@@ -104,10 +104,12 @@ type buildState struct {
 	Ready   string
 	Message string
 	// Reason is kpack's reason for Ready; BuilderReady mirrors the Image's
-	// BuilderReady condition ("" when kpack has not set it).
-	Reason       string
-	BuilderReady string
-	// ReadySince is when Ready last changed, when kpack says.
+	// BuilderReady condition, and BuilderUpToDate mirrors its matching
+	// condition ("" when kpack has not set them).
+	Reason          string
+	BuilderReady    string
+	BuilderUpToDate string
+	// ReadySince is when Ready last changed, falling back to Image creation.
 	ReadySince time.Time
 	// Revision is the git commit the build resolved, when known.
 	Revision string
@@ -118,12 +120,17 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 	if img == nil {
 		return st
 	}
+	st.ReadySince = img.GetCreationTimestamp().Time
 	st.LatestImage, _, _ = unstructured.NestedString(img.Object, "status", "latestImage")
 	st.LatestBuild, _, _ = unstructured.NestedString(img.Object, "status", "latestBuildRef")
 	conds, _, _ := unstructured.NestedSlice(img.Object, "status", "conditions")
 	for _, raw := range conds {
 		m, ok := raw.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		if m["type"] == "BuilderUpToDate" {
+			st.BuilderUpToDate, _ = m["status"].(string)
 			continue
 		}
 		if m["type"] == "BuilderReady" {
@@ -141,7 +148,9 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 		}
 		st.Reason, _ = m["reason"].(string)
 		if at, _ := m["lastTransitionTime"].(string); at != "" {
-			st.ReadySince, _ = time.Parse(time.RFC3339, at)
+			if parsed, err := time.Parse(time.RFC3339, at); err == nil {
+				st.ReadySince = parsed
+			}
 		}
 	}
 	// A new generation not yet observed means a build is about to start.
@@ -155,7 +164,7 @@ func readBuildState(img *unstructured.Unstructured) buildState {
 // builderNotReady says kpack has not started the build because the
 // Image's builder is not ready yet.
 func (s buildState) builderNotReady() bool {
-	return s.Reason == "BuilderNotReady" || s.BuilderReady == "False"
+	return s.Reason == "BuilderNotReady" || s.BuilderReady == "False" || s.BuilderUpToDate == "False"
 }
 
 // sourceID describes the source of a release for humans: git commit, blob

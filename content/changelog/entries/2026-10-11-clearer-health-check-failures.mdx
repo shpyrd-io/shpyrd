@@ -1,0 +1,9 @@
+---
+title: "Clearer health check failures"
+description: "Understand why an app fails its startup or liveness checks."
+date: "2026-10-11"
+type: improvement
+draft: false
+---
+
+When health checks cause an app to restart, the status now explains recent probe failures instead of showing only a generic crash-loop message. Diagnostics distinguish HTTP errors, authentication refusals, redirects, and timeouts, helping you find the check that needs attention.

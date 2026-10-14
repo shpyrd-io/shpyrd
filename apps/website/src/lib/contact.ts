@@ -1,7 +1,8 @@
+import { interpolate } from "@/content/interpolate";
 // The rules of the two contact forms, derived from their fields
 // (@shpyrd/content/site/contact): the page shows them as the person types,
 // the server holds every submission to them (app/api/contact/route.ts).
-import { enterprise, sales, type ContactField, type ContactPage } from "@shpyrd/content/site/contact";
+import { enterprise, sales, errors, type ContactField, type ContactPage } from "@/content/contact";
 
 export type Kind = "sales" | "enterprise";
 export type Answers = Record<string, string | string[]>;
@@ -15,12 +16,12 @@ const limit = (f: ContactField) => (f.type === "textarea" ? 500 : 100);
 // A submission comes from anywhere: a value is checked for what it is, not
 // for what the page would have sent.
 function fault(f: ContactField, value: unknown): string | undefined {
-  if (value !== undefined && value !== null && typeof value !== "string") return "Write it as text.";
+  if (value !== undefined && value !== null && typeof value !== "string") return errors.text;
   const v = (value ?? "").trim();
-  if (!v) return f.required ? "Fill this in." : undefined;
-  if (v.length > limit(f)) return `Keep it under ${limit(f)} characters.`;
-  if (f.type === "email" && !email.test(v)) return "Enter an address like you@company.com.";
-  if (f.type === "select" && !f.choices?.some((c) => c.value === v)) return "Choose one of the options.";
+  if (!v) return f.required ? errors.required : undefined;
+  if (v.length > limit(f)) return interpolate(errors.length, { limit: limit(f) });
+  if (f.type === "email" && !email.test(v)) return errors.email;
+  if (f.type === "select" && !f.choices?.some((c) => c.value === v)) return errors.choice;
   return undefined;
 }
 

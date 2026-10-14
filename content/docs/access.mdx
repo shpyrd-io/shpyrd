@@ -1,0 +1,161 @@
+---
+title: People, teams, roles and security
+description: Who is in the workspace and what they may do, how roles map to Kubernetes RBAC, and the isolation and audit that come with every project.
+---
+
+<Lead>
+
+Identity says who you are; roles say what you may do. A person holds a **workspace role** (owner, admin or member), projects grant **project roles** to people and teams, the API enforces them and the dashboard hides what a role cannot do. On shpyrd cloud this is all there is to it; on a cluster you run yourself, a controller also mirrors the grants into Kubernetes RBAC.
+
+</Lead>
+
+## Accounts and authentication
+
+Credentials and workspace permissions are separate. On shpyrd cloud,
+[Accounts](https://accounts.shpyrd.io) manages the central account, email verification,
+password recovery, authenticator MFA, recovery codes and passkeys through Clerk.
+Methods depend on the application's configuration. Signing up does not create a
+workspace or grant access to one: workspace creation is a separate product flow.
+
+Enterprise workspaces can use a customer IdP; Cloud can offer Accounts, customer
+SSO, or both. Company-only workspaces reject central-account access. With one
+available provider, sign-in redirects directly; multiple providers show a choice.
+OSS uses operator-configured Dex `staticPasswords` with stable `userID` values,
+without shpyrd password recovery or local credential management.
+
+Permissions reference a workspace or console principal bound to a trusted
+issuer/subject. Matching email addresses do not merge identities or grant existing
+roles. Legacy users require explicit operator binding. Invitations still come from
+the workspace and require a verified invited email through an allowed provider.
+CLI/MCP authorization and revocation also remain in the workspace.
+
+## Workspace roles
+
+| Role | May |
+| --- | --- |
+| `owner` | everything an admin may, and name or demote owners |
+| `admin` | administer the workspace — people, invitations, teams, sign-in settings, every project |
+| `member` | create projects, and administer the ones they create; on other projects, what grants give them |
+| *(none)* | what grants give them |
+
+Roles are set on the **People** page of the workspace (Workspace › People) or with `shpyrd people role <email> <role>`; the person need not have signed in yet, the role waits for them. The last owner cannot step down: name another owner first. Owners and admins are the workspace's *platform admins*; the older way of making someone a platform admin — a team with a `platformRole` — still works for people without a workspace role, and the People page marks them with a `platform-admin` badge. A workspace role, once set, decides.
+
+## Inviting people
+
+```shell
+shpyrd invite ada@example.com                        # a member
+shpyrd invite bob@example.com --role admin --team web
+shpyrd invitations                                   # pending
+shpyrd invitations revoke bob@example.com
+```
+
+An invitation is a link, shown once, that works for seven days — and, when the platform [sends email](#email), it is emailed too. Signing in with the invited address **accepts it, link or no link**: the person gets the role (and the team) the moment they sign in, through an allowed sign-in method with a verified email, whatever the workspace's join policy. Inviting someone who has signed in before applies the role at once; inviting the same address again makes a new link. The People page has the same **Invite** dialog and the pending **Invitations** below; `/invite/<token>` shows the holder what they were invited to.
+
+## Project roles
+
+| Role | Sees | Does |
+| --- | --- | --- |
+| `reader` | the app itself (through the edge), read-only; the launcher | opens the app; the edge refuses every request that changes things (anything but GET, HEAD, OPTIONS) and the app receives `X-Shpyrd-Roles: reader`, so apps have viewers without permission code of their own |
+| `user` | the app itself (through the edge), the launcher | opens the app; nothing in the builder dashboard — see [Sign-in for your app](/docs/app-access) |
+| `viewer` | overview, releases, builds, logs, metrics, config var **names**; opens the app | nothing |
+| `developer` | everything a viewer sees | deploy, roll back, scale, resize, set and unset config vars, shell and one-off commands |
+| `admin` | + members, resources | attach and detach resources, create volumes, manage members, destroy the project |
+| `platform-admin` | every project, teams, people | everything (what a workspace owner or admin holds) |
+| `platform-viewer` | everything, read-only | nothing |
+
+The first five are granted **per project**, to a user (by principal ID; email can select an unambiguous user) or to a **team**; every operating role opens the app too. A refusal is a plain sentence: *your role on project shop is developer: it cannot destroy the project*.
+
+## Your company's sign-in
+
+Every workspace can bring its own sign-in (an enterprise feature: always on shpyrd cloud; on a self-hosted install it takes a license, and the operator enables the `auth-local` extension first): on **Workspace › Sign-in**, owners and admins add Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider (Okta, Keycloak, Auth0…) with the callback URL the page shows. The method appears on **this workspace's** login page only; groups of the provider map to teams. The platform's methods stay offered until you switch them off — do that once your company's method works, and only it can sign in here. Claim your email domain (same page, **Company domains**) and route it to the method: the login page then asks for the work email first and sends people straight to your company's sign-in, no chooser.
+
+```shell
+shpyrd sso add google --client-id ... --client-secret @secret.txt --hosted-domain acme.com
+shpyrd sso add oidc --issuer https://acme.okta.com --client-id ... --client-secret @secret.txt --label Okta
+shpyrd sso list
+shpyrd sso platform-methods off
+```
+
+On a self-hosted install the platform's own methods are managed by the operator at the console (`shpyrd-ctl auth connector add`), and offered to every workspace.
+
+## The console
+
+The console is the operator's application at its own address, with its own sign-in methods and an explicit console-principal allowlist. Use `shpyrd-ctl console-users add <principal-id>` after identifying the console principal. Workspace ownership and an Accounts product do not grant console administration. Operator kubeconfig/admin-token access remains available for bootstrap and recovery.
+
+## Teams and members
+
+```shell
+shpyrd teams create platform --platform-role platform-admin --member you@example.com
+shpyrd teams create web --member ada@example.com --group engineering
+shpyrd teams add web bob@example.com
+shpyrd teams list
+
+shpyrd members add shop --team web --role developer
+shpyrd members add shop --user guest@example.com --role viewer
+shpyrd members list shop
+shpyrd members remove shop --user guest@example.com
+```
+
+Team `groups` are names from your identity provider's groups claim: a company directory group maps to a team without listing people twice. The built-in team **everyone** holds every person who has signed in — grant it the `user` role and the whole company can open an app (`shpyrd members add intranet --team everyone --role user`); it cannot be edited or deleted, and kubectl bindings skip it. The dashboard has the same operations: **Workspace › Teams** for owners and admins, and the **Roles** page of every project for its admins.
+
+Teams and grants live in the platform's **control-plane database** (a small PostgreSQL the base stack runs as `control-plane-db`, or the managed database named by `SHPYRD_DATABASE_URL`), together with the workspace's record of who has signed in (Workspace › People). Installs made before v0.4 kept them as Kubernetes objects (`Team`, `ProjectMember`); the first server start after the upgrade copies them into the database and marks the objects migrated — nothing to do by hand. The platform backup carries the database's content (`shpyrd cluster backups`).
+
+<Callout title="Before the first role">
+
+A workspace enforces roles from the start: someone who signs in with no role and no grant gets nothing. Only the console of a fresh self-hosted install is open at first: until its list of console users exists, whoever signs in there is its admin. The admin token is always a platform admin and holds the owner's actions.
+</Callout>
+
+
+## Suspending someone
+
+**Suspend** on Workspace › People (or `shpyrd people suspend <email>`) switches a person off at once: no role anywhere, no app opens, sign-in refused — until **Let back in** (`shpyrd people reactivate`). Removing them from the identity provider does the same at the session's end; suspension is for right now. `shpyrd people forget` removes the sign-in record; the role and grants stay.
+
+## Email
+
+Invitations carry their link by email once the platform has a sender. Self-hosted: on a cluster you run yourself, enable the `mail` extension and point it at your SMTP server (STARTTLS by default; `--tls` for port 465):
+
+```shell
+shpyrd-ctl extensions enable mail
+shpyrd-ctl mail set --host smtp.example.com --user postmaster@example.com \
+    --password @/path/to/password --from "shpyrd <noreply@example.com>"
+shpyrd-ctl mail test you@example.com
+```
+
+The password stays in the cluster (Secret `shpyrd-mail`) and is never printed; the test message is sent by the server, from inside the cluster, so it proves the settings, the network path and the sender address at once. The console's **Email** page shows the status and the same test. Without a sender, invitations show their link to whoever invites, to pass along. A commercial relay refuses addresses that bounced or complained on its own; with a relay of your own, an unreachable address is yours to notice (see [Email](/docs/extensions#email)).
+
+## Kubernetes RBAC mirror
+
+Self-hosted: this matters on a cluster you run yourself, where people may also use `kubectl`. For every project namespace the controller keeps `RoleBinding`s (`shpyrd-viewer`, `shpyrd-developer`, `shpyrd-admin`) bound to the fixed ClusterRoles `shpyrd-project-*`, with the users (by email) and groups holding each role; platform roles become `ClusterRoleBinding`s. The Kubernetes roles grant the same verbs the dashboard allows (developers can update the App and open shells in its instances; config var Secrets stay write-only), never more than shpyrd itself has.
+
+Configure your API server with the same OIDC issuer (`--oidc-issuer-url`, `--oidc-username-claim=email`, `--oidc-groups-claim=groups`) and `kubectl` users get exactly the dashboard's view. The local kind cluster is not configured this way out of the box; the bindings are still created and visible with `kubectl get rolebindings -n p-<id>` (the project's namespace; older projects use `app-<slug>`).
+
+## Isolation and hardening
+
+Every project namespace gets:
+
+- **A network policy.** Ingress only from the project's own instances, the ingress controller (your URL) and the monitoring namespace (metrics). Egress to the project, to platform namespaces (DNS, the registry, bound services) and to the internet, never to other projects. Projects talk to each other only through what a binding exposes.
+- **Pod security.** The `restricted` Pod Security Standard is applied in warn and audit mode, and shpyrd runs every process (and every `shpyrd run` instance) as a non-root user with all capabilities dropped and the runtime's default seccomp profile. Buildpack images comply already; a Dockerfile needs a numeric `USER` (`USER 1000`): a named user cannot be verified by Kubernetes and is refused with an explanation, as is an image running as root.
+- **Hardened dashboard.** HttpOnly session cookies with CSRF tokens, security headers with a strict Content Security Policy, and a rate limit on sign-in.
+
+## The admin token
+
+Self-hosted: the token created when you install shpyrd yourself is a shared credential with full platform-admin rights, meant for bootstrap and automation. Obtaining it requires reading Secrets in `shpyrd-system` (`shpyrd cluster token`), which is cluster-admin access; the risk is in the copies you hand out. Keep it in check:
+
+- `shpyrd cluster dashboard` does **not** put the token in the browser: it mints a one-time login ticket (a hashed Secret valid for 60 seconds) that the browser redeems for a normal session, attributed to you as `user@host` in the audit trail.
+- `shpyrd cluster token --rotate` replaces it and restarts the server; update automation that used the old value.
+- `shpyrd cluster token --disable` switches it off once accounts exist and a `platform-admin` team has members: the API then refuses the token and everyone signs in with an account. `--enable` turns it back on.
+- Wrong tokens are audited and throttled per client (20 attempts a minute, after which even the right token waits).
+
+## API tokens
+
+For CI, scripts and other machines, people create their own **API tokens** instead of sharing the admin token: Workspace › **API tokens** in the dashboard, or `shpyrd tokens create ci --project shop --role developer --expires 90d`. A token is `shp_<id>_<random>`, shown once and stored hashed. It carries a platform role or a role on one project, never above what its owner holds - a workspace owner or admin holds `admin` on every project, so they may scope a token to any of them without a grant there: the check runs when the token is *used*, so a demoted owner's token is demoted with them and a suspended owner's tokens stop working at once. A token from the CLI expires in 90 days unless `--expires` says otherwise; revocation (`shpyrd tokens revoke <id>`, or the trash icon) is immediate. A token cannot create tokens.
+
+Use it with `shpyrd login --url https://shpyrd.example.com --token shp_...` on another machine, or `SHPYRD_URL` and `SHPYRD_TOKEN` in CI. The audit trail names both the person and the token (`ana@example.com (token ci)`). On your own laptop, `shpyrd login --url https://shpyrd.example.com` without a token signs in from the browser instead: the approval mints a **session token** (listed with your API tokens as `CLI on <host>`, 30 days, revocable) that acts as you, with your roles as they change, and can create tokens like you can. Two kinds, then: an API token carries roles you chose, for a machine that is not you; a session token is you on one machine, as powerful as you, so it belongs on your laptop and never in CI.
+
+## Audit trail
+
+Every mutation is recorded as `{who, what, target, detail, when, from, via}`: deploys, rollbacks, scaling and resizing, config var changes (names, never values), shells and one-off commands, volume and membership changes, project creation and destruction, from the dashboard and API (`via: api`, with the signed-in user) and from the CLI (`via: cli`, with the local user and host). The project's **Activity** page shows the recent actions; `GET /api/projects/{slug}/audit` returns them. Entries are Kubernetes Events, kept for the API server's event TTL (an hour by default) until durable storage arrives.
+
+## Not yet
+
+Resource quotas per project, image signing and CVE reporting, and an enforcing Pod Security mode are on the roadmap.

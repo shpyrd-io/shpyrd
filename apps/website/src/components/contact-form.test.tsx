@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { ContactForm, wideFields } from "./contact-form";
-import { enterprise, sales } from "@shpyrd/content/site/contact";
+import { enterprise, sales } from "@/content/contact";
 import { trap } from "@/lib/contact";
 
 afterEach(() => {

@@ -11,7 +11,7 @@ import {
   OpenAIIcon,
   VSCodeIcon,
 } from "@shpyrd/ui/components/brand-icons";
-import { addToAgent, agents } from "@shpyrd/content/site/agents";
+import { addToAgent, agents } from "@/content/agents";
 import { type Platform, platformOf } from "@/lib/platform";
 
 // An agent's mark, from design/ui's brand icons. "color" is the brand's own
