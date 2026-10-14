@@ -6,7 +6,7 @@ import { api } from "@/api/api";
 import type { Overview as Snapshot, OverviewNode } from "@/api/cluster-overview";
 
 vi.mock("@/api/api", () => ({ api: { clusterScheduling: vi.fn(), overview: vi.fn(), overviewNodes: vi.fn(), overviewCharts: vi.fn(), overviewNode: vi.fn(), overviewPods: vi.fn() } }));
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); });
 const node: OverviewNode = { name: "apps-1", pool: "apps", ready: true, roles: "worker", arch: "arm64", os: "linux", kubeletVersion: "v1", cpu: "4", memory: "8Gi", pods: "110", values: {}, conditions: [], issues: [], unschedulable: false, misplaced: 0 };
 const snapshot: Snapshot = { snapshot: "first", updatedAt: new Date().toISOString(), errors: [], pools: [{ name: "apps", nodes: 100000, ready: 100000, issues: 0, missing: 1, values: {}, coverage: {}, distribution: {} }] };
 function setup() {
@@ -29,11 +29,18 @@ describe("bounded cluster browsing", () => {
     expect(api.overviewPods).not.toHaveBeenCalled();
   });
   it("keeps later pages on their original snapshot when the overview refreshes", async () => {
+    vi.useFakeTimers();
     const client = setup();
-    await screen.findByRole("button", { name: "apps-1" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     fireEvent.click(screen.getByRole("button", { name: "Next 50" }));
-    await waitFor(() => expect(api.overviewNodes).toHaveBeenCalledWith(expect.objectContaining({ snapshot: "first", offset: 50 }), expect.anything()));
-    await act(async () => { client.setQueryData(["cluster-overview"], { ...snapshot, snapshot: "second" }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(api.overviewNodes).toHaveBeenCalledWith(expect.objectContaining({ snapshot: "first", offset: 50 }), expect.anything());
+    // Let the initial search debounce expire after navigating to page two.
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    await act(async () => {
+      client.setQueryData(["cluster-overview"], { ...snapshot, snapshot: "second" });
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(vi.mocked(api.overviewNodes).mock.calls.filter(([q]) => q.pool === "apps").at(-1)?.[0]).toMatchObject({ snapshot: "first", offset: 50 });
     expect(api.overviewPods).not.toHaveBeenCalled();
   });
