@@ -27,6 +27,11 @@ type Profile struct {
 	Description string            `json:"description,omitempty"`
 	Vars        map[string]string `json:"vars,omitempty"`
 	Runlevels   []Runlevel        `json:"runlevels"`
+	// Retired names components this profile used to install and installs
+	// no more: a full `cluster init` removes them from a cluster whose
+	// install record still has them (storage-local on the cloud profiles
+	// once nothing node-local remains).
+	Retired []string `json:"retired,omitempty"`
 }
 
 // Runlevel groups components that can be applied together. Levels are
