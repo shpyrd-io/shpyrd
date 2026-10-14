@@ -54,6 +54,8 @@ type Config struct {
 	// for an unknown workspace: one label under WorkspaceDomain and each of
 	// WorkspaceExtraDomains, as before the layout.
 	WorkspaceAppHosts func(slug, app string) []string
+	// WorkspaceRedirectDomain is the verified primary domain when redirects are enabled.
+	WorkspaceRedirectDomain func(slug string) string
 	// Layout says where workspaces and their apps answer (RFC-0033 names):
 	// hosts one label under its AppsDomain are covered by the apps'
 	// wildcard certificate and the wildcard record of the shared front door.
@@ -401,7 +403,14 @@ func selectorLabels(app *shpyrdv1.App, process string) map[string]string {
 // domains returns the hosts served by the web process.
 // url is the public URL of the web process.
 func (c Config) url(app *shpyrdv1.App) string {
-	u := "https://" + c.domains(app)[0]
+	host := c.defaultHost(app)
+	if c.requestedRedirect(app) != "" {
+		host = c.platformHost(app)
+	}
+	if target := c.redirectTarget(app); target != "" {
+		host = target
+	}
+	u := "https://" + host
 	if c.HTTPSPort != "" && c.HTTPSPort != "443" {
 		u += ":" + c.HTTPSPort
 	}
@@ -856,7 +865,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
 		"nginx.ingress.kubernetes.io/proxy-body-size": "50m",
 	})
-	hosts := c.domains(app)
+	hosts := c.servingDomains(app)
 	// Pick the ingress class and ExternalDNS target based on exposure.
 	class := c.IngressClass // already set to IngressClassExternal by Defaults
 	if app.Spec.Exposure == "internal" {

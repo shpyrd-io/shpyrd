@@ -25,6 +25,9 @@
     { "name": "10.0.10.24", "ready": true, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "data" },
     { "name": "10.0.10.23", "ready": false, "roles": "worker", "arch": "arm64", "os": "linux", "kubeletVersion": "v1.33.1", "cpu": "4", "memory": "24Gi", "pods": "110", "instanceType": "VM.Standard.A1.Flex", "zone": "sa-saopaulo-1-AD-1", "pool": "apps" }
   ],
+  "scheduling": { "pending": [
+    { "namespace": "app-shop", "name": "shop-web-pending", "pool": "apps", "capacity": true, "message": "0/4 nodes are available: 1 Insufficient memory, 3 node(s) didn't match Pod's node affinity/selector." }
+  ] },
   "apps": 14,
   "phases": { "Running": 12, "Building": 1, "Failed": 1 },
   "externalLBAddress": "129.153.44.10",

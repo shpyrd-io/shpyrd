@@ -26,10 +26,13 @@ func newDomainsCmd(g *globalFlags) *cobra.Command {
 		Long: `A project is always served at <slug>.<cluster domain>. Custom domains are
 served alongside: point them at that hostname with a CNAME (or at the front
 door's address with an A record when the domain is a zone apex) and the
-certificate is issued as soon as DNS resolves here.
+certificate is issued as soon as DNS resolves here. Once ready, redirect sends
+visitors from the platform address to that custom domain (308). Use redirect off
+to return to the workspace default.
 
   shpyrd domains add www.myprod.com --project shop
   shpyrd domains list --project shop
+  shpyrd domains redirect www.myprod.com --project shop
   shpyrd domains rm www.myprod.com --project shop`,
 	}
 	list := &cobra.Command{
@@ -158,15 +161,45 @@ certificate is issued as soon as DNS resolves here.
 			})
 		},
 	}
-	for _, c := range []*cobra.Command{list, add, rm} {
+	redirect := &cobra.Command{
+		Use: "redirect HOST|off", Short: "Redirect the platform address to a verified custom domain", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := resolveAppName(appName)
+			if err != nil {
+				return err
+			}
+			ac, err := newAppClient(g, g.progress(cmd))
+			if err != nil {
+				return err
+			}
+			host := args[0]
+			if host == "off" {
+				host = ""
+			}
+			body, _ := json.Marshal(map[string]string{"redirectTo": host})
+			raw, err := ac.serverRequest(signalContext(), "PATCH", "api/projects/"+name+"/domains", body, "application/json")
+			if err != nil {
+				return err
+			}
+			var res api.DomainsResult
+			if err := json.Unmarshal(raw, &res); err != nil {
+				return err
+			}
+			return g.print(cmd, res, func(w io.Writer) { printDomains(w, &res) })
+		},
+	}
+	for _, c := range []*cobra.Command{list, add, rm, redirect} {
 		appFlag(c, &appName)
 	}
-	cmd.AddCommand(list, add, rm)
+	cmd.AddCommand(list, add, rm, redirect)
 	return cmd
 }
 
 func printDomains(out io.Writer, res *api.DomainsResult) {
-	fmt.Fprintf(out, "Project hostname: %s (always served; the CNAME target)\n", res.Target)
+	fmt.Fprintf(out, "Project hostname: %s (the CNAME target)\n", res.Target)
+	if res.RedirectTo != "" {
+		fmt.Fprintf(out, "Redirect to:      https://%s (308, once DNS and certificate are ready)\n", res.RedirectTo)
+	}
 	if res.Address != "" {
 		fmt.Fprintf(out, "Front door:       %s (the %s record target for a zone apex)\n", strings.ReplaceAll(res.Address, ",", " and "), api.ApexRecordType(res.Address))
 	}

@@ -12,9 +12,10 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Field } from "@shpyrd/ui/components/field";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Input } from "@shpyrd/ui/components/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
-import type { DnsRecord, DomainStatus } from "@/api/types";
+import type { DnsRecord, DomainStatus, DomainsAnswer } from "@/api/types";
 import { Failed, Loading } from "./shared";
 
 // Addresses of your own that reach something: a project, or the
@@ -28,18 +29,25 @@ export function DomainsCard({
   add,
   remove,
   canEdit,
+  redirect,
 }: {
   title: string;
   description: string;
   queryKey: unknown[];
-  list: () => Promise<{ target: string; address?: string; domains: DomainStatus[] }>;
+  list: () => Promise<DomainsAnswer>;
   add: (host: string) => Promise<unknown>;
   remove: (host: string) => Promise<unknown>;
   canEdit: boolean;
+  redirect: (host: string) => Promise<unknown>;
 }) {
   const queries = useQueryClient();
   const domains = useQuery({ queryKey, queryFn: list, refetchInterval: 15_000 });
   const refresh = () => queries.invalidateQueries({ queryKey });
+  const redirectIt = useMutation({
+    mutationFn: redirect,
+    onSuccess: () => { refresh(); queries.invalidateQueries({ queryKey: ["project"] }); toast.success("Redirect setting saved"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const removeIt = useMutation({
     mutationFn: remove,
     onSuccess: () => {
@@ -60,6 +68,18 @@ export function DomainsCard({
         )}
       </CardHeader>
       <CardContent>
+        {domains.data && <div className="mb-6"><Field label="Redirect the platform address" hint="Send visitors to a verified custom domain, keeping the path and query string. The platform address stays in DNS. Workspace defaults apply when no project redirect is selected.">
+          <Select value={domains.data.redirectTo || "default"} disabled={!canEdit || redirectIt.isPending} onValueChange={(value) => redirectIt.mutate(value === "default" ? "" : value)}>
+            <SelectTrigger aria-label="Redirect the platform address"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">Use workspace default</SelectItem>
+              {domains.data.domains.filter((d) => d.redirectEligible || d.host === domains.data?.redirectTo).map((d) => <SelectItem key={d.host} value={d.host}>{d.host}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Field>
+          {domains.data.redirectTo && <p className="text-sm text-muted-foreground">Redirects activate only while the destination DNS and certificate are ready.</p>}
+        </div>}
+
         {domains.isLoading ? (
           <Loading />
         ) : domains.error ? (
