@@ -408,7 +408,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			// reads what failed, in words, instead (#52).
 			if build.Ready == "False" {
 				switch {
-				case kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild):
+				case kpackBuild != nil && buildFailed(kpackBuild):
 					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
 				case composesBuild(app) && build.builderNotReady():
 					// A builder of the project's own is made on its first
@@ -417,7 +417,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 						build.Message = msg
 					} else {
 						build.Ready = "Unknown"
-						build.Message = "preparing the project's builder"
+						build.Reason = "PreparingBuilder"
+						build.Message = "Preparing this project's builder (usually about a minute); wait for the build to start."
 					}
 				default:
 					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
@@ -434,7 +435,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "False":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
 		default:
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, "Building", firstNonEmpty(build.Message, "build in progress"))
+			reason := "Building"
+			if build.Reason == "PreparingBuilder" {
+				reason = build.Reason
+			}
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
 		}
 	} else {
 		app.Status.LatestBuild = ""
