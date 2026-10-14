@@ -286,14 +286,12 @@ func (a *appClient) waitPodRunningOrDone(ctx context.Context, namespace, name st
 		if err != nil {
 			return err
 		}
+		if why := controller.StartupFailure(p, time.Now()); why != "" {
+			return fmt.Errorf("instance cannot start: %s", why)
+		}
 		switch p.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 			return nil
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if w := cs.State.Waiting; w != nil && (w.Reason == "ErrImagePull" || w.Reason == "ImagePullBackOff" || w.Reason == "CreateContainerError") {
-				return fmt.Errorf("instance cannot start: %s: %s", w.Reason, w.Message)
-			}
 		}
 		if time.Now().After(deadline) {
 			return errors.New("timed out waiting for the one-off instance to start")

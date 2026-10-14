@@ -87,7 +87,7 @@ func TestBuildMetadataRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(r.URL.Path, "/manifests/") {
-					_, _ = w.Write([]byte(`{"config":{"digest":"sha256:config"}}`))
+					_, _ = w.Write([]byte(`{"config":{"digest":"sha256:config","size":100},"layers":[{"size":900000000},{"size":1000000000}]}`))
 					return
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"config": map[string]any{"Labels": map[string]string{"io.buildpacks.build.metadata": tc.metadata}}})
@@ -97,6 +97,9 @@ func TestBuildMetadataRuntime(t *testing.T) {
 			meta, err := c.BuildMetadata(context.Background(), "apps/shop", "sha256:image")
 			if err != nil {
 				t.Fatal(err)
+			}
+			if meta.ImageSize != 1900000100 {
+				t.Fatalf("image size = %d", meta.ImageSize)
 			}
 			if meta.Runtime != tc.runtime {
 				t.Fatalf("metadata = %+v", meta)

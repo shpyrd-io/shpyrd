@@ -266,7 +266,7 @@ func TestProcessHealthFollowsTheCurrentRelease(t *testing.T) {
 		}
 		return r.processHealth(context.Background(), current)
 	}
-	if failing, reason := health(cur, podOf(old, "rollout-web-v1", crashing), podOf(cur, "rollout-web-v2", creating)); failing != 0 || reason != "" {
+	if failing, reason := health(cur, podOf(old, "rollout-web-v1", crashing), podOf(cur, "rollout-web-v2", creating)); failing != 0 || reason != "Starting the instance." {
 		t.Errorf("v1 crash-looping, v2 starting: failing=%d reason=%q, want v2's health alone", failing, reason)
 	}
 	if failing, reason := health(cur, podOf(old, "rollout-web-v1", crashing), podOf(cur, "rollout-web-v2", crashing)); failing != 1 || reason != "CrashLoopBackOff" {

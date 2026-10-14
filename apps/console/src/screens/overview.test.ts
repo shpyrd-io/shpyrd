@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { misplacedByNode } from "./overview";
+import { number, percent, poolName } from "./overview";
+import { queryString } from "../api/cluster-overview";
 
-describe("the platform's pods outside the platform pool", () => {
-  it("are told by node, with what made them once and the CPU they reserve there", () => {
-    const nodes = misplacedByNode([
-      { namespace: "keda", name: "keda-add-ons-http-interceptor-57cb-a", owner: "Deployment/keda-add-ons-http-interceptor", node: "10.0.1.10", pool: "apps", cpu: "50m" },
-      { namespace: "keda", name: "keda-add-ons-http-interceptor-57cb-b", owner: "Deployment/keda-add-ons-http-interceptor", node: "10.0.1.10", pool: "apps", cpu: "50m" },
-      { namespace: "kube-system", name: "calico-typha-64bd-c", owner: "Deployment/calico-typha", node: "10.0.1.10", pool: "apps" },
-      { namespace: "shpyrd-system", name: "shpyrd-server-7485-d", owner: "Deployment/shpyrd-server", node: "10.0.1.228", pool: "data", cpu: "20m" },
-      { namespace: "default", name: "stray", node: "10.0.1.228", pool: "data" },
-    ]);
-    expect(nodes).toEqual([
-      { node: "10.0.1.10", pool: "apps", owners: ["keda/keda-add-ons-http-interceptor", "kube-system/calico-typha"], millicores: 100 },
-      { node: "10.0.1.228", pool: "data", owners: ["shpyrd-system/shpyrd-server", "default/stray"], millicores: 20 },
-    ]);
+describe("the operational overview", () => {
+  it("distinguishes absent telemetry from measured zero", () => {
+    expect(number(undefined)).toBe("Unavailable");
+    expect(percent(undefined)).toBe("Unavailable");
+    expect(number(0)).toBe("0");
+    expect(percent(0)).toBe("0%");
+  });
+  it("does not imply unlabeled nodes belong to a labeled pool", () => {
+    expect(poolName("")).toBe("Default");
+    expect(poolName("", true)).toBe("Unassigned");
+    expect(poolName("builds", true)).toBe("builds");
+  });
+  it("preserves empty pool selection and encodes cursors and node filters", () => {
+    const q = new URLSearchParams(queryString({ pool: "", continue: "a+b/==", search: "a&b", offset: 50, zone: undefined }));
+    expect(q.get("pool")).toBe("");
+    expect(q.get("continue")).toBe("a+b/==");
+    expect(q.get("search")).toBe("a&b");
+    expect(q.has("zone")).toBe(false);
   });
 });

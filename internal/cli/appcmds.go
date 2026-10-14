@@ -33,14 +33,22 @@ func appFlag(cmd *cobra.Command, dst *string) {
 
 // ---- secrets ---------------------------------------------------------------
 
-func newSecretsCmd(g *globalFlags) *cobra.Command {
+func newSecretsCmd(g *globalFlags) *cobra.Command { return newConfigCmd(g, false) }
+func newEnvCmd(g *globalFlags) *cobra.Command     { return newConfigCmd(g, true) }
+
+func newConfigCmd(g *globalFlags, plain bool) *cobra.Command {
+	kind, command := "secret", "secrets"
+	if plain {
+		kind, command = "variable", "env"
+	}
+	var confirmPlain bool
 	var appName string
 	cmd := &cobra.Command{
-		Use:   "secrets",
+		Use:   command,
 		Short: "Manage the project's config vars",
 		Long: `Config vars are injected into every process as environment variables.
-Changing them creates a new release and restarts the processes. Values are
-write-only: they are never printed back.`,
+Changes are saved until you deploy or redeploy. Secret values are never
+printed back; ` + "`shpyrd env list`" + ` shows plain variables.`,
 	}
 	var fromFile string
 	set := &cobra.Command{
@@ -59,16 +67,19 @@ both, the arguments winning.
 			if err != nil {
 				return err
 			}
-			return mutateEnvSecret(g, cmd, appName, set, nil)
+			return mutateConfig(g, cmd, appName, api.ConfigVarsUpdate{Kind: kind, Set: set, ConfirmPlain: confirmPlain})
 		},
 	}
 	set.Flags().StringVar(&fromFile, "from-file", "", "read KEY=VALUE lines (dotenv) or a JSON object from this file; - is stdin")
+	if plain {
+		set.Flags().BoolVar(&confirmPlain, "confirm-plain", false, "confirm that new values with credential-looking names may be visible to project viewers")
+	}
 	unset := &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove config vars",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateEnvSecret(g, cmd, appName, nil, args)
+			return mutateConfig(g, cmd, appName, api.ConfigVarsUpdate{Kind: kind, Unset: args})
 		},
 	}
 	list := &cobra.Command{
@@ -93,6 +104,19 @@ both, the arguments winning.
 			if err2 := json.Unmarshal(raw, &resp); err2 != nil {
 				return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 			}
+			if plain {
+				return g.print(cmd, resp.Variables, func(w io.Writer) {
+					for _, v := range resp.Variables {
+						if v.Value != nil {
+							fmt.Fprintf(w, "%s=%s\n", v.Name, *v.Value)
+						}
+					}
+					if resp.Pending {
+						fmt.Fprintln(g.progress(cmd), "Saved changes are pending. Redeploy to apply them.")
+					}
+				})
+			}
+			resp.Variables = nil // secrets list never prints values, including JSON output.
 			return g.print(cmd, resp, func(w io.Writer) {
 				if len(resp.Vars) == 0 && len(resp.Bound) == 0 && len(resp.Global) == 0 {
 					fmt.Fprintln(w, "no config vars set")
@@ -121,6 +145,11 @@ both, the arguments winning.
 			})
 		},
 	}
+	if plain {
+		cmd.Short = "Manage visible environment variables"
+		list.Short = "List plain variable names and values"
+		set.Long = strings.ReplaceAll(set.Long, "shpyrd secrets", "shpyrd env")
+	}
 	for _, c := range []*cobra.Command{set, unset, list} {
 		appFlag(c, &appName)
 	}
@@ -132,6 +161,10 @@ both, the arguments winning.
 // /api/projects/:slug/secrets), which validates the names, writes the
 // <app>-env Secret and records the audit entry.
 func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map[string]string, unset []string) error {
+	return mutateConfig(g, cmd, appName, api.ConfigVarsUpdate{Set: set, Unset: unset})
+}
+
+func mutateConfig(g *globalFlags, cmd *cobra.Command, appName string, req api.ConfigVarsUpdate) error {
 	ctx := signalContext()
 	name, err := resolveAppName(appName)
 	if err != nil {
@@ -145,7 +178,7 @@ func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(api.ConfigVarsUpdate{Set: set, Unset: unset})
+	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
@@ -157,14 +190,23 @@ func mutateEnvSecret(g *globalFlags, cmd *cobra.Command, appName string, set map
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return fmt.Errorf("unexpected response: %s", truncate(string(raw), 200))
 	}
-	names := make([]string, 0, len(resp.Vars))
-	for _, v := range resp.Vars {
+	if req.Kind != "variable" {
+		resp.Variables = nil
+	}
+	listed := resp.Vars
+	if req.Kind == "variable" {
+		listed = resp.Variables
+	}
+	names := make([]string, 0, len(listed))
+	for _, v := range listed {
 		names = append(names, v.Name)
 	}
 	return g.print(cmd, resp, func(w io.Writer) {
 		fmt.Fprintf(w, "Config vars for %s: %s\n", name, strings.Join(names, ", "))
 		if app.Status.Image != "" {
-			fmt.Fprintln(w, "Restarting processes with the new configuration...")
+			fmt.Fprintf(w, "Saved. Run shpyrd redeploy --project %s to apply the changes.\n", name)
+		} else {
+			fmt.Fprintln(w, "Saved. Deploy the project to apply the changes.")
 		}
 	})
 }
@@ -301,8 +343,9 @@ what a tool reading the output wants.`,
 				return err
 			}
 			if build {
-				if app.Status.LatestBuild == "" {
-					return errors.New("no build yet")
+				app, err = ac.waitForFirstBuild(ctx, name, app, follow, cmd.ErrOrStderr())
+				if err != nil || app == nil {
+					return err
 				}
 				if ac.session {
 					stream, err := ac.serverStream(ctx, "api/projects/"+name+"/builds/latest/logs?follow="+strconv.FormatBool(follow))

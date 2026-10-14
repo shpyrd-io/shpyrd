@@ -1,7 +1,6 @@
 // Package configvars manages an app's config vars: the keys of Secret
 // <app>-env plus per-key metadata (when each was last set). Values are
-// write-only from the product's point of view: nothing here ever returns
-// them.
+// write-only unless explicitly marked as plain variables.
 package configvars
 
 import (
@@ -23,11 +22,13 @@ var keyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Var is one config var without its value.
 type Var struct {
-	Name      string `json:"name"`
-	UpdatedAt string `json:"updatedAt,omitempty"`
+	Name      string  `json:"name"`
+	UpdatedAt string  `json:"updatedAt,omitempty"`
+	Value     *string `json:"value,omitempty"`
 }
 
 type meta struct {
+	Plain     bool   `json:"plain,omitempty"`
 	UpdatedAt string `json:"updatedAt"`
 }
 
@@ -123,4 +124,85 @@ func writeMeta(sec *corev1.Secret, m map[string]meta) {
 	}
 	b, _ := json.Marshal(m)
 	sec.Annotations[AnnotationMeta] = string(b)
+}
+
+// Plain reports explicit visibility; legacy keys always remain secrets.
+func Plain(sec *corev1.Secret, name string) bool { return readMeta(sec)[name].Plain }
+
+// Public lists only explicitly public values. List continues to omit values.
+func Public(sec *corev1.Secret) []Var {
+	out := []Var{}
+	for _, v := range List(sec) {
+		if Plain(sec, v.Name) {
+			value := string(sec.Data[v.Name])
+			v.Value = &value
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func Secrets(sec *corev1.Secret) []Var {
+	out := []Var{}
+	for _, v := range List(sec) {
+		if !Plain(sec, v.Name) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// SensitiveName asks for deliberate confirmation before publishing common
+// credential names. Existing secrets cannot be made visible.
+func SensitiveName(name string) bool {
+	name = strings.ToUpper(name)
+	return strings.HasSuffix(name, "_KEY") || strings.HasSuffix(name, "_SECRET") || strings.HasSuffix(name, "_TOKEN") || strings.Contains(name, "PASSWORD") || name == "SECRET" || name == "TOKEN"
+}
+
+func ApplyKind(sec *corev1.Secret, set map[string]string, unset, convert []string, plain, confirm bool, now time.Time) error {
+	for name := range set {
+		if err := ValidateKey(name); err != nil {
+			return err
+		}
+		_, exists := sec.Data[name]
+		if plain && exists && !Plain(sec, name) {
+			return fmt.Errorf("%s is a secret: replace it as a secret; saved secrets cannot be made visible", name)
+		}
+		if plain && !confirm && SensitiveName(name) {
+			return fmt.Errorf("%s may contain a secret: confirm that its value can be visible to everyone who can view the project", name)
+		}
+	}
+	for _, name := range convert {
+		if _, exists := sec.Data[name]; !exists {
+			return fmt.Errorf("config var %s does not exist", name)
+		}
+		if plain && !Plain(sec, name) {
+			return fmt.Errorf("%s is a secret: saved secrets cannot be made visible", name)
+		}
+	}
+	filtered := []string{}
+	for _, name := range unset {
+		if Plain(sec, name) == plain {
+			filtered = append(filtered, name)
+		}
+	}
+	if len(set)+len(filtered) > 0 {
+		if err := Apply(sec, set, filtered, now); err != nil {
+			return err
+		}
+	}
+	m := readMeta(sec)
+	for name := range set {
+		entry := m[name]
+		entry.Plain = plain
+		m[name] = entry
+	}
+	for _, name := range convert {
+		entry := m[name]
+		entry.Plain = plain
+		entry.UpdatedAt = now.UTC().Format(time.RFC3339)
+		m[name] = entry
+	}
+	writeMeta(sec, m)
+	return nil
 }

@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -772,6 +775,8 @@ type InstallInfo struct {
 	// so a re-run does not need every flag again.
 	Overrides map[string]string
 	UpdatedAt string
+	// Components the record lists as installed.
+	Components []string
 }
 
 // overrides are the explicitly given variables worth carrying over: the
@@ -815,7 +820,49 @@ func ReadInstallInfo(ctx context.Context, k *kube.Client, systemNS string) (*Ins
 	info := &InstallInfo{Profile: cm.Data["profile"], Version: cm.Data["version"], UpdatedAt: cm.Data["updatedAt"]}
 	_ = yaml.Unmarshal([]byte(cm.Data["vars"]), &info.Vars)
 	_ = yaml.Unmarshal([]byte(cm.Data["overrides"]), &info.Overrides)
+	for key := range cm.Data {
+		if name, ok := strings.CutPrefix(key, "component."); ok {
+			info.Components = append(info.Components, name)
+		}
+	}
+	sort.Strings(info.Components)
 	return info, nil
+}
+
+// RemoveRetired removes the components the profile retired from a cluster
+// whose install record still has them, after a full apply; a run limited
+// with --only leaves them alone. It returns the names removed.
+func (e *Engine) RemoveRetired(ctx context.Context) ([]string, error) {
+	if len(e.opts.Only) > 0 || len(e.profile.Retired) == 0 {
+		return nil, nil
+	}
+	info, err := ReadInstallInfo(ctx, e.kube, e.SystemNamespace())
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var removed []string
+	for _, name := range retiredToRemove(e.profile.Retired, info.Components) {
+		e.rep.Step(name, "retired on the "+e.profile.Name+" profile: removing")
+		if err := e.Remove(ctx, name); err != nil {
+			return removed, fmt.Errorf("remove retired %s: %w", name, err)
+		}
+		removed = append(removed, name)
+	}
+	return removed, nil
+}
+
+// retiredToRemove is the retired components the record still lists.
+func retiredToRemove(retired, recorded []string) []string {
+	var out []string
+	for _, name := range retired {
+		if slices.Contains(recorded, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // logReporter is the default Reporter.

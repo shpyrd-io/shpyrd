@@ -46,6 +46,9 @@ func maintenanceIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
 }
 
 func (r *AppReconciler) reconcileMaintenance(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	if err := r.reconcileDomainRedirect(ctx, app, false); err != nil {
+		return outcome{}, err
+	}
 	// Preparing changes HTTP first. The API confirms the maintenance response
 	// before advancing to paused and draining the writers.
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}

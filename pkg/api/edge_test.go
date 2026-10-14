@@ -39,7 +39,7 @@ func edgeRequest(t *testing.T, s *Server, project, mode, cookie, bearer string) 
 
 func TestEdgeAuthDecisions(t *testing.T) {
 	expenses := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "expenses", Namespace: "app-expenses"}, Spec: shpyrdv1.AppSpec{Access: shpyrdv1.AccessAuthenticated}}
-	s, _ := newTestServer(t, nil, []client.Object{expenses})
+	s, cr := newTestServer(t, nil, []client.Object{expenses})
 	s.authz.TTL = 1
 	ctx := context.Background()
 	if _, _, err := s.store.PutTeam(ctx, store.DefaultWorkspace, store.Team{Name: "finance", Members: []string{"joao@acme.test"}}); err != nil {
@@ -194,6 +194,22 @@ func TestEdgeAuthDecisions(t *testing.T) {
 		t.Errorf("preview no access = %d", rec.Code)
 	}
 
+	// A project redirect must mint the preview on the custom host, or the
+	// cookie would be lost as soon as the platform URL redirects.
+	current := &shpyrdv1.App{}
+	if err := cr.Get(ctx, client.ObjectKeyFromObject(expenses), current); err != nil {
+		t.Fatal(err)
+	}
+	current.Spec.Domains = []string{"expenses.acme.com"}
+	current.Spec.RedirectTo = "expenses.acme.com"
+	if err := cr.Update(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	current.Status.URL = "https://expenses.acme.com"
+	if err := cr.Status().Update(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	s.forgetHosts()
 	// The preview API mints a callback link for the app host.
 	req := httptest.NewRequest("POST", "/api/projects/expenses/preview", strings.NewReader(`{"teams":["finance"]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -202,13 +218,13 @@ func TestEdgeAuthDecisions(t *testing.T) {
 	prec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(prec, req)
 	var out struct{ URL string }
-	if err := json.Unmarshal(prec.Body.Bytes(), &out); err != nil || prec.Code != http.StatusOK || !strings.HasPrefix(out.URL, "https://expenses.example.test/.shpyrd/callback?code=") {
+	if err := json.Unmarshal(prec.Body.Bytes(), &out); err != nil || prec.Code != http.StatusOK || !strings.HasPrefix(out.URL, "https://expenses.acme.com/.shpyrd/callback?code=") {
 		t.Fatalf("preview api = %d %s", prec.Code, prec.Body.String())
 	}
 	// Redeeming it on the app host sets the app's cookie and lands on rd.
 	u, _ := url.Parse(out.URL)
 	creq := httptest.NewRequest("GET", u.RequestURI(), nil)
-	creq.Host = "expenses.example.test"
+	creq.Host = "expenses.acme.com"
 	crec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(crec, creq)
 	if crec.Code != http.StatusFound || crec.Header().Get("Location") != "/" {
@@ -406,6 +422,9 @@ func TestEdgeSigninAndStart(t *testing.T) {
 	}
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'sha256-") {
 		t.Errorf("unavailable page policy = %q: its script would not run", csp)
+	}
+	if !strings.Contains(rec.Body.String(), `<meta http-equiv="refresh" content="5">`) {
+		t.Error("unavailable page must open the app again by itself")
 	}
 	// The launcher lists what the caller may open: in bootstrap mode Maria
 	// is a platform admin, so everything.

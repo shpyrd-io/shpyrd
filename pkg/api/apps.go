@@ -24,6 +24,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
@@ -145,6 +146,7 @@ type AppDetail struct {
 }
 
 type AppDetailSpec struct {
+	RedirectTo  string                      `json:"redirectTo,omitempty"`
 	Source      *shpyrdv1.Source            `json:"source,omitempty"`
 	PinnedImage string                      `json:"pinnedDigest,omitempty"`
 	Processes   map[string]shpyrdv1.Process `json:"processes,omitempty"`
@@ -157,13 +159,16 @@ type AppDetailSpec struct {
 }
 
 type AppDetailStatus struct {
-	Runtime     string `json:"runtime,omitempty"`
-	DefaultSize string `json:"defaultSize,omitempty"`
-	Phase       string `json:"phase"`
-	Message     string `json:"message,omitempty"`
-	Digest      string `json:"digest,omitempty"`
-	URL         string `json:"url,omitempty"`
-	LatestBuild string `json:"latestBuild,omitempty"`
+	// Transient means the platform is preparing a builder; wait rather than redeploy.
+	Transient   bool                 `json:"transient,omitempty"`
+	ImageUsers  []shpyrdv1.ImageUser `json:"imageUsers,omitempty"`
+	Runtime     string               `json:"runtime,omitempty"`
+	DefaultSize string               `json:"defaultSize,omitempty"`
+	Phase       string               `json:"phase"`
+	Message     string               `json:"message,omitempty"`
+	Digest      string               `json:"digest,omitempty"`
+	URL         string               `json:"url,omitempty"`
+	LatestBuild string               `json:"latestBuild,omitempty"`
 	// Generation is the spec's, ObservedGeneration the last one the
 	// controller acted on: equal means the status describes this spec.
 	Generation         int64              `json:"generation"`
@@ -224,6 +229,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Processes:   a.Spec.Processes,
 			Env:         a.Spec.Env,
 			Domains:     a.Spec.Domains,
+			RedirectTo:  a.Spec.RedirectTo,
 			Build:       a.Spec.Build,
 			Bindings:    a.Spec.Bindings,
 			Exposure:    a.Spec.Exposure,
@@ -237,12 +243,17 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			LatestBuild: a.Status.LatestBuild,
 			Generation:  a.Generation, ObservedGeneration: a.Status.ObservedGeneration,
 			ProcessTypes: a.Status.ProcessTypes, Release: a.Status.Release,
-			Runtime: a.Status.Runtime, DefaultSize: a.Status.DefaultSize,
+			ImageUsers: a.Status.ImageUsers, Runtime: a.Status.Runtime, DefaultSize: a.Status.DefaultSize,
 			Releases:   []ReleaseView{},
 			Conditions: a.Status.Conditions,
 			Domains:    a.Status.Domains,
 		},
 		Processes: a.Status.Processes,
+	}
+	for _, condition := range a.Status.Conditions {
+		if condition.Type == shpyrdv1.ConditionBuilt && condition.Status == metav1.ConditionUnknown && condition.Reason == "PreparingBuilder" && condition.ObservedGeneration == a.Generation && a.Status.Phase != shpyrdv1.PhaseFailed {
+			d.Status.Transient = true
+		}
 	}
 	d.IconURL, d.IconType = iconURL(a)
 	if a.Spec.Source != nil && a.Spec.Source.Blob != nil {
@@ -758,6 +769,10 @@ func (s *Server) deployApp(c *gin.Context) {
 			}
 			a.Annotations[shpyrdv1.AnnotationReleaseNote] = req.Note
 		}
+		if a.Annotations == nil {
+			a.Annotations = map[string]string{}
+		}
+		a.Annotations[configvars.AnnotationDeployRequested] = time.Now().UTC().Format(time.RFC3339Nano)
 		// Who asked, for the release's outcome to be audited in their
 		// name once the controller knows it (release.succeeded/failed).
 		if id, ok := ext.IdentityFrom(c); ok {

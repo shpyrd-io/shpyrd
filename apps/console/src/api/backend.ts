@@ -1,3 +1,4 @@
+import { queryString } from "./cluster-overview";
 import { json, request } from "@shpyrd/shared/api/http";
 import type { Api } from "./api";
 import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
@@ -26,11 +27,17 @@ export function toClusterMetrics(answer: MetricsAnswer): ClusterMetrics {
 
 // The console's own methods answer at the door-scoped route; the
 // platform's defaults at the platform one.
+const overviewPath = (path: string, query: object = {}) => `/api/cluster/overview${path}?${queryString(query)}`;
 const methods = (scope: "console" | "platform") => (scope === "console" ? "/api/workspace/login-methods" : "/api/auth/connectors");
 
 const costParams = (q: CostQuery) => new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])).toString();
 
 export const backend: Api = {
+  overview: (signal) => request(overviewPath(""), { signal }),
+  overviewNodes: (query, signal) => request(overviewPath("/nodes", query), { signal }),
+  overviewCharts: (query, signal) => request(overviewPath("/charts", query), { signal }),
+  overviewNode: (query, signal) => request(overviewPath("/node", query), { signal }),
+  overviewPods: (query, signal) => request(overviewPath("/pods", query), { signal }),
   archiveProjects: () => request("/api/cluster/project-archives"),
   measureProjectPlacement: (id, group) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement/measure`, { method: "POST", body: JSON.stringify({ group }) }),
   projectPlacement: (id) => request(`/api/cluster/project-archives/${encodeURIComponent(id)}/placement`),
@@ -48,6 +55,7 @@ export const backend: Api = {
   links: () => request("/api/links"),
   patchSettings: (body) => request("/api/cluster/settings", json("PATCH", body)),
   cluster: () => request("/api/cluster"),
+  clusterScheduling: () => request("/api/cluster/scheduling"),
   clusterMetrics: async (range) => toClusterMetrics(await request<MetricsAnswer>(`/api/cluster/metrics?range=${encodeURIComponent(range)}`)),
   helmReleases: () => request("/api/helm/releases"),
   registry: () => request("/api/cluster/registry"),

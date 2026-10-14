@@ -433,7 +433,11 @@ The controller renders per sleeping-enabled web process, in the app's namespace:
 
 **App's Ingress**: backend switches from the web Service to the ExternalName `web-sleep`.
 Everything else stays: TLS, the edge's `auth-url` subrequest (runs before the interceptor,
-identity headers forwarded through), `custom-http-errors`.
+identity headers forwarded through), `custom-http-errors`. The Ingress also sets
+`disable-proxy-intercept-errors: "true"`, so `custom-http-errors` replaces only the errors nginx
+makes itself (the edge's 403, the 503 of an app with no ready pod). The interceptor's waking
+page is a 503 too, and without this nginx replaced it with the server's static "Service
+unavailable" page (v0.9.70 to the fix).
 
 **Auth-cache duration**: reduced from 20 s to 5 s for sleeping-enabled Ingresses
 (`"200 5s, 401 5s, 403 5s"`). A woken pod appears to nginx within 5 s of ready.

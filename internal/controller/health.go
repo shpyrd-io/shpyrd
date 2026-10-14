@@ -40,6 +40,7 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 	if err := r.List(ctx, &pods, client.InNamespace(current.Namespace), client.MatchingLabels(current.Spec.Selector.MatchLabels)); err != nil {
 		return 0, ""
 	}
+	waiting := ""
 	for _, pod := range pods.Items {
 		if pod.DeletionTimestamp != nil || !metav1.IsControlledBy(&pod, current) {
 			continue
@@ -51,33 +52,18 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 			// not the release's (#94: ten of them read as ten failing).
 			continue
 		}
+		pending, transientPull := r.podWaiting(ctx, &pod)
+		if waiting == "" {
+			waiting = pending
+		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != "app" {
 				continue
 			}
 			var why string
 			switch {
-			case cs.State.Waiting != nil && failingReasons[cs.State.Waiting.Reason]:
-				why = cs.State.Waiting.Reason
-				if m := cs.State.Waiting.Message; strings.Contains(m, "runAsNonRoot") {
-					// Pod security: processes run as non-root (RFC-0008), and
-					// the kubelet can only verify a numeric user.
-					switch {
-					case strings.Contains(m, "non-numeric user"):
-						why = "the image sets a named USER, which Kubernetes cannot verify as non-root: use a numeric USER in the Dockerfile (for example USER 1000)"
-					default:
-						why = "the image runs as root: shpyrd runs processes as a non-root user (add USER 1000 to the Dockerfile)"
-					}
-					break
-				}
-				if t := cs.LastTerminationState.Terminated; t != nil {
-					why += fmt.Sprintf(" (exit %d)", t.ExitCode)
-					if m := shortMessage(t.Message); m != "" {
-						why += ": " + m
-					}
-				} else if m := shortMessage(cs.State.Waiting.Message); m != "" && !strings.HasPrefix(m, "back-off") {
-					why += ": " + m
-				}
+			case cs.State.Waiting != nil && failingReasons[cs.State.Waiting.Reason] && !transientPull:
+				why = waitingFailure(cs)
 			case cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 && pod.Status.Phase == corev1.PodFailed:
 				why = fmt.Sprintf("exited with code %d", cs.State.Terminated.ExitCode)
 				if m := shortMessage(cs.State.Terminated.Message); m != "" {
@@ -109,6 +95,9 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 				}
 			}
 		}
+	}
+	if failing == 0 {
+		return 0, waiting
 	}
 	return failing, reason
 }
@@ -310,4 +299,28 @@ func describeProbeFailure(pod corev1.Pod, kind, detail string) string {
 		why += "Probe: " + shortMessage(detail)
 	}
 	return strings.TrimSpace(why)
+}
+
+func waitingFailure(cs corev1.ContainerStatus) string {
+	why := cs.State.Waiting.Reason
+	if m := cs.State.Waiting.Message; strings.Contains(m, "runAsNonRoot") {
+		// Pod security: processes run as non-root (RFC-0008), and
+		// the kubelet can only verify a numeric user.
+		switch {
+		case strings.Contains(m, "non-numeric user"):
+			why = "the image sets a named USER, which Kubernetes cannot verify as non-root: use a numeric USER in the Dockerfile (for example USER 1000)"
+		default:
+			why = "the image runs as root: shpyrd runs processes as a non-root user (add USER 1000 to the Dockerfile)"
+		}
+		return why
+	}
+	if t := cs.LastTerminationState.Terminated; t != nil {
+		why += fmt.Sprintf(" (exit %d)", t.ExitCode)
+		if m := shortMessage(t.Message); m != "" {
+			why += ": " + m
+		}
+	} else if m := shortMessage(cs.State.Waiting.Message); m != "" && !strings.HasPrefix(m, "back-off") {
+		why += ": " + m
+	}
+	return why
 }

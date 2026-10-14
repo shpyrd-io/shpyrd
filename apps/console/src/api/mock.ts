@@ -1,4 +1,5 @@
 import { exploreMockCosts, createMockCostExport, mockCostExport, mockCostExportURL } from "./costs-mock";
+import { overviewMock } from "./cluster-overview-mock";
 import { ApiError } from "@shpyrd/shared/api/error";
 import { mockProjectArchives } from "@shpyrd/shared/api/project-archives-mock";
 import { collection, single, wait } from "@shpyrd/shared/api/mock-store";
@@ -80,6 +81,7 @@ const now = () => new Date().toISOString();
 const id = () => Math.random().toString(36).slice(2, 10);
 
 export const mock: Api = {
+  ...overviewMock,
   archiveProjects: async () => {
     const projects = await archiveProjectsOf.list();
     const placements = await placementOf.list();
@@ -156,6 +158,7 @@ export const mock: Api = {
     return all.settings;
   },
 
+  clusterScheduling: async () => (cluster as ClusterSummary).scheduling ?? { pending: [] },
   cluster: async () => {
     await wait();
     return cluster as ClusterSummary;

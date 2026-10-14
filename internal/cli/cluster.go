@@ -801,6 +801,12 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 	if err := eng.Apply(ctx); err != nil {
 		return err
 	}
+	// Components the profile retired go once everything else is in place.
+	if removed, err := eng.RemoveRetired(ctx); err != nil {
+		return err
+	} else if len(removed) > 0 {
+		fmt.Fprintf(out, "Removed %s: retired on the %s profile.\n", strings.Join(removed, ", "), flags.profile)
+	}
 
 	if flags.frontDoor == install.FrontDoorCaddy {
 		if err := setupFrontDoor(ctx, cmd, flags); err != nil {

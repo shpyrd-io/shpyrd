@@ -322,6 +322,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			secret = nil
 		}
 	}
+	pending, err := r.pendingConfig(ctx, app)
+	if err != nil {
+		return outcome{}, err
+	}
 	// Attached resources contribute config vars through <app>-bindings. A
 	// resource that is still provisioning is not a failure: the app keeps
 	// its current release until the binding can be rendered.
@@ -386,7 +390,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				}
 			}
 		} else {
-			vars := buildVars(app, globals, secret, bindings)
+			buildSecret := secret
+			if pending != nil {
+				buildSecret = pending
+			}
+			vars := buildVars(app, globals, buildSecret, bindings)
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
@@ -401,6 +409,17 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 				return outcome{}, err
 			}
 			build = readBuildState(img)
+			if build.Ready == "Unknown" {
+				// kpack names the Build it starts in latestBuildRef, but a
+				// status update lost at that moment (a conflict) is not made
+				// again while that Build runs: latestBuildRef stays empty, or
+				// names the build before, until it ends, and a deploy waiting
+				// for its build sees none start. The newest Build of the
+				// Image is the one in progress.
+				if b := r.newestKpackBuild(ctx, img, build.LatestBuild); b != "" {
+					build.LatestBuild = b
+				}
+			}
 			if build.LatestBuild != "" {
 				kpackBuild = r.getBuild(ctx, app.Namespace, build.LatestBuild)
 			}
@@ -408,7 +427,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			// reads what failed, in words, instead (#52).
 			if build.Ready == "False" {
 				switch {
-				case kpackBuild != nil && kpackMessage(kpackBuild) != "" && buildFailed(kpackBuild):
+				case kpackBuild != nil && buildFailed(kpackBuild):
 					build.Message = r.kpackBuildFailure(ctx, kpackBuild)
 				case composesBuild(app) && build.builderNotReady():
 					// A builder of the project's own is made on its first
@@ -417,7 +436,8 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 						build.Message = msg
 					} else {
 						build.Ready = "Unknown"
-						build.Message = "preparing the project's builder"
+						build.Reason = "PreparingBuilder"
+						build.Message = "Preparing this project's builder (usually about a minute); wait for the build to start."
 					}
 				default:
 					build.Message = "The build could not start: a fault of the platform, not of the app. Deploying again later usually passes."
@@ -434,7 +454,11 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "False":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
 		default:
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, "Building", firstNonEmpty(build.Message, "build in progress"))
+			reason := "Building"
+			if build.Reason == "PreparingBuilder" {
+				reason = build.Reason
+			}
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
 		}
 	} else {
 		app.Status.LatestBuild = ""
@@ -463,6 +487,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return requeue(30 * time.Second), nil
 	}
 
+	if pending != nil && (!app.HasSource() || build.Ready == "True") {
+		secret, err = r.applyPendingConfig(ctx, app, pending)
+		if err != nil {
+			return outcome{}, err
+		}
+	}
+
 	// The code the image was built from: the release history records it
 	// and every process learns it through REVISION.
 	source := sourceID(app, kpackBuild)
@@ -479,6 +510,16 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if meta := r.metadataOf(ctx, image); meta != nil {
 		app.Status.ProcessTypes = meta.ProcessTypes
 		app.Status.Runtime = meta.Runtime
+		users := []shpyrdv1.ImageUser{}
+		for _, u := range app.Status.ImageUsers {
+			if (u.Image == app.Status.Image && u.Image != image) || (u.Image == image && meta.UserError != nil) {
+				users = append(users, u)
+			}
+		}
+		if meta.User != nil {
+			users = append(users, shpyrdv1.ImageUser{Image: image, UID: meta.User.UID, GID: meta.User.GID})
+		}
+		app.Status.ImageUsers = users
 	}
 	app.Status.DefaultSize = r.catalog(ctx).DefaultForRuntime(app.Status.Runtime)
 	// Fingerprint the effective sizes only after reading the image runtime:
@@ -513,6 +554,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		}
 	}
 
+	// Refresh domain readiness before choosing whether to redirect traffic.
+	var domainsPending bool
+	app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
+
 	// 4. Workloads.
 	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
 	if err != nil {
@@ -525,14 +570,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	} else {
 		app.Status.URL = ""
 	}
-	// Custom domains (RFC-0034): DNS and certificate state per host; poll
-	// while any is pending so the owner sees it flip without a redeploy.
-	var domainsPending bool
-	app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
-
 	// 5. Release history and phase.
 	var out outcome
-	out.domainsPending = domainsPending
+	// Redirects also poll after becoming ready so invalid destinations fall back.
+	out.domainsPending = domainsPending || r.Config.requestedRedirect(app) != ""
 	configDesc := ""
 	if cur := app.CurrentRelease(); cur != nil && cur.Image == image && cur.ConfigHash != hash {
 		configDesc = r.describeConfigChangeSince(ctx, app, cur.Number, secret)
@@ -816,6 +857,33 @@ func (r *AppReconciler) getBuild(ctx context.Context, namespace, name string) *u
 	return b
 }
 
+// newestKpackBuild is the Build of the kpack Image img numbered above the
+// one named current, the highest of them; "" when there is none.
+func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.Unstructured, current string) string {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(KpackBuildGVK.GroupVersion().WithKind(KpackBuildGVK.Kind + "List"))
+	if err := r.APIReader.List(ctx, list, client.InNamespace(img.GetNamespace()), client.MatchingLabels{"image.kpack.io/image": img.GetName()}); err != nil {
+		return ""
+	}
+	newest, top, cur := "", -1, -1
+	for _, b := range list.Items {
+		n, err := strconv.Atoi(b.GetLabels()["image.kpack.io/buildNumber"])
+		if err != nil {
+			continue
+		}
+		if b.GetName() == current {
+			cur = n
+		}
+		if n > top {
+			newest, top = b.GetName(), n
+		}
+	}
+	if top <= cur {
+		return ""
+	}
+	return newest
+}
+
 // reconcileWorkloads makes Deployments, Services and the Ingress match the
 // process map and removes workloads of dropped process types.
 func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
@@ -930,6 +998,12 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// suspended workspace's apps are not served: no Ingress, so the front
 	// door's default backend answers for the host with the suspension page.
 	serving := hasWeb(app) && !r.Config.suspended(app)
+	// Remove the redirect before restoring the same host/path on the app ingress.
+	if !serving || r.Config.redirectTarget(app) == "" {
+		if err := r.reconcileDomainRedirect(ctx, app, false); err != nil {
+			return nil, err
+		}
+	}
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app), Namespace: app.Namespace}}
 	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
@@ -940,6 +1014,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		}
 	} else if err := r.deleteIfExists(ctx, ing); err != nil {
 		return nil, err
+	}
+	if serving && r.Config.redirectTarget(app) != "" {
+		if err := r.reconcileDomainRedirect(ctx, app, true); err != nil {
+			return nil, err
+		}
 	}
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
