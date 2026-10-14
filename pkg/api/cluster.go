@@ -9,7 +9,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
@@ -21,8 +20,8 @@ type ClusterSummary struct {
 	Install    *InstallInfo      `json:"install,omitempty"`
 	Components []ComponentInfo   `json:"components"`
 	Nodes      []NodeInfo        `json:"nodes"`
-	Apps       int               `json:"apps"`
-	Phases     map[string]int    `json:"phases"`
+	Apps       int               `json:"apps,omitempty"`
+	Phases     map[string]int    `json:"phases,omitempty"`
 	Vars       map[string]string `json:"vars,omitempty"`
 	// Extensions known to this build, with their state on the cluster.
 	Extensions []ExtensionInfo `json:"extensions"`
@@ -86,9 +85,6 @@ func (s *Server) clusterSummary(c *gin.Context) {
 	if info, err := install.ReadInstallInfo(ctx, s.kube, ""); err == nil {
 		out.Install = &InstallInfo{Profile: info.Profile, Version: info.Version, Domain: info.Vars[install.VarDomain], UpdatedAt: info.UpdatedAt}
 		out.Vars = info.Vars
-		if pods, err := install.MisplacedPods(ctx, s.kube, info.Vars); err == nil && pods != nil {
-			out.Misplaced = pods
-		}
 	}
 	out.Extensions = []ExtensionInfo{}
 	for _, x := range all.All() {
@@ -116,17 +112,6 @@ func (s *Server) clusterSummary(c *gin.Context) {
 		out.Nodes = append(out.Nodes, nodeInfo(n))
 	}
 
-	var apps shpyrdv1.AppList
-	if err := s.apps.List(ctx, &apps); err == nil {
-		out.Apps = len(apps.Items)
-		for _, a := range apps.Items {
-			phase := a.Status.Phase
-			if phase == "" {
-				phase = shpyrdv1.PhasePending
-			}
-			out.Phases[phase]++
-		}
-	}
 	// Load balancer addresses for the cluster page's front-door summary.
 	if svc, err := s.kube.Kube.CoreV1().Services("ingress-nginx").Get(ctx, "ingress-nginx-controller", metav1.GetOptions{}); err == nil {
 		out.ExternalLBAddress = lbAddress(svc)
