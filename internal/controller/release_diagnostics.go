@@ -24,11 +24,14 @@ func (r *AppReconciler) releaseDiagnostic(ctx context.Context, app *shpyrdv1.App
 	if err := r.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
 		return "", false, fmt.Errorf("read release instances: %w", err)
 	}
+	message = r.waitingMessage("Waiting for the release step's instance to be created.", job.CreationTimestamp.Time)
 	for _, pod := range pods.Items {
 		owner := metav1.GetControllerOf(&pod)
-		if owner == nil || owner.UID != job.UID {
+		if owner == nil || owner.UID != job.UID || pod.DeletionTimestamp != nil {
 			continue
 		}
+		message = ""
+		waiting, transientPull := r.podWaiting(ctx, &pod)
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != "app" {
 				continue
@@ -36,6 +39,9 @@ func (r *AppReconciler) releaseDiagnostic(ctx context.Context, app *shpyrdv1.App
 			if (cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled") ||
 				(cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled") {
 				return releaseOOMMessage(app, job), true, nil
+			}
+			if cs.State.Waiting != nil && failingReasons[cs.State.Waiting.Reason] && !transientPull {
+				return "The release step cannot start: " + waitingFailure(cs), true, nil
 			}
 		}
 		if pod.Status.Reason == "Evicted" {
@@ -56,6 +62,10 @@ func (r *AppReconciler) releaseDiagnostic(ctx context.Context, app *shpyrdv1.App
 					}
 				}
 			}
+		}
+		if waiting != "" {
+			message = waiting
+			continue
 		}
 		// Silence is a warning, not proof of failure: some migrations are quiet.
 		// Read only the last five minutes, with a bounded response and timeout.

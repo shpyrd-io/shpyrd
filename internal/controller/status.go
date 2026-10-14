@@ -353,6 +353,9 @@ func summarizeProcesses(procs map[string]shpyrdv1.ProcessStatus) (ready bool, ms
 		default:
 			parts = append(parts, fmt.Sprintf("%s %d/%d", n, p.Ready, p.Desired))
 		}
+		if p.Failing == 0 && p.Reason != "" && (p.Updated < p.Desired || p.Ready < p.Desired) {
+			parts[len(parts)-1] += ": " + p.Reason
+		}
 	}
 	return ready, strings.Join(parts, " · ")
 }

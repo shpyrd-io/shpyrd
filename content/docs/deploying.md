@@ -186,6 +186,14 @@ Released v2: Deploy abc123def456
 
 The command's output streams into the deploy (`release | ...`) and stays in `shpyrd logs --process release`. `shpyrd projects info <project>` lists the process types, including `release`, and a pending or failed release phase; the project page shows the phase while it runs and, when it fails, the reason, the output and a **Run it again** button (`shpyrd redeploy` does the same: with a failed release command, a redeploy runs the command again rather than restarting instances that never rolled out).
 
+Before the command starts, the CLI and project page show what it is waiting for:
+room on a machine, a new machine being added, network setup, or the image download.
+The message includes elapsed waiting time and, when known, the download size for
+large images. The same diagnostics appear for new instances during a rollout.
+Adding a machine usually takes a few minutes; keeping the app's image small also
+reduces the download time on a new machine. Once the container starts, the status
+shows the command running and its output follows.
+
 The release command runs at the `web` process's size unless `processes.release` sets its own. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
 
 ```yaml

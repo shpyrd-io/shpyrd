@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -146,7 +147,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 			return false, false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
-		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: releaseRunningMessage, Job: job.Name}
+		app.Status.Release = &shpyrdv1.ReleasePhaseStatus{Target: target, State: shpyrdv1.ReleaseRunning, Message: r.waitingMessage("Waiting for the release step's instance to be created.", job.CreationTimestamp.Time), Job: job.Name}
 		return false, false, nil
 	case err != nil:
 		return false, false, fmt.Errorf("release job: %w", err)
@@ -180,7 +181,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 				return false, false, fmt.Errorf("remove failed release job: %w", err)
 			}
 			r.Recorder.Event(app, corev1.EventTypeNormal, "ReleasePhase", "running the release command again")
-			st.State, st.Message = shpyrdv1.ReleaseRunning, "Running the release step again before the new release starts."
+			st.State, st.Message = shpyrdv1.ReleaseRunning, "Waiting for a new release instance to run the command again."
 			app.Status.Release = st
 			return false, false, nil
 		}
@@ -211,13 +212,13 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		app.Status.Release = st
 		return false, false, nil
 	default:
-		st.State, st.Message = shpyrdv1.ReleaseRunning, releaseRunningMessage
+		st.State, st.Message = shpyrdv1.ReleaseRunning, "Running "+strings.Join(command, " ")+" before the new release starts."
 		if diagnostic != "" {
 			st.Message = diagnostic
 		}
 		if job.Status.Active == 0 {
 			if msg, quota := r.releaseJobRefusal(ctx, job); msg != "" {
-				st.Message = msg
+				st.Message = r.waitingMessage(msg, job.CreationTimestamp.Time)
 				app.Status.Release = st
 				return false, quota, nil
 			}

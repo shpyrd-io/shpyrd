@@ -203,6 +203,8 @@ func nextLink(h string) string {
 
 // BuildMetadata describes the launch processes and runtime detected by buildpacks.
 type BuildMetadata struct {
+	// ImageSize is the compressed image size from the manifest, in bytes.
+	ImageSize    int64
 	ProcessTypes []string
 	Runtime      string
 }
@@ -233,7 +235,11 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 		MediaType string `json:"mediaType"`
 		Config    struct {
 			Digest string `json:"digest"`
+			Size   int64  `json:"size"`
 		} `json:"config"`
+		Layers []struct {
+			Size int64 `json:"size"`
+		} `json:"layers"`
 		Manifests []struct {
 			Digest   string `json:"digest"`
 			Platform struct {
@@ -276,9 +282,15 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 	if err := json.Unmarshal(cfgBody, &cfg); err != nil {
 		return nil, fmt.Errorf("image config: %w", err)
 	}
+	imageSize := manifest.Config.Size
+	for _, layer := range manifest.Layers {
+		if layer.Size > 0 {
+			imageSize += layer.Size
+		}
+	}
 	raw := cfg.Config.Labels["io.buildpacks.build.metadata"]
 	if raw == "" {
-		return &BuildMetadata{}, nil
+		return &BuildMetadata{ImageSize: imageSize}, nil
 	}
 	var meta struct {
 		Buildpacks []struct {
@@ -301,5 +313,5 @@ func (c *Client) BuildMetadata(ctx context.Context, repo, ref string) (*BuildMet
 	for _, bp := range meta.Buildpacks {
 		ids = append(ids, bp.ID)
 	}
-	return &BuildMetadata{ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
+	return &BuildMetadata{ImageSize: imageSize, ProcessTypes: out, Runtime: sizes.RuntimeFromBuildpacks(ids)}, nil
 }
