@@ -39,14 +39,13 @@ and installs the base stack in dependency-ordered runlevels:
 | rc0 | Prometheus Operator CRDs |
 | rc1 | cert-manager |
 | rc2 | development CA `ClusterIssuer`, trust-manager, ingress-nginx (host ports 80/443), in-cluster registry |
-| rc3 | kpack (Paketo buildpacks builder), kube-prometheus-stack + Grafana, the control-plane database (PostgreSQL: teams, grants, the workspace) |
+| rc3 | kpack (Paketo buildpacks builder), kube-prometheus-stack, the control-plane database (PostgreSQL: teams, grants, the workspace) |
 | rc4 | shpyrd server (API, controller, dashboard) |
 
 Everything is reachable under a wildcard domain that resolves to your machine
 (`127.0.0.1.nip.io` by default, `--domain` to change it):
 
 - `https://shpyrd.127.0.0.1.nip.io` dashboard
-- `https://grafana.127.0.0.1.nip.io` Grafana (admin / shpyrd on the local profile)
 - `localhost:30050` registry (in-cluster address `10.96.0.50:5000`)
 
 Names and ports adapt to the machine (RFC-0057). When a Caddy already serves

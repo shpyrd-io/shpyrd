@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, LogOut, Moon, Sun } from "lucide-react";
+import { ChevronDown, LogOut, Moon, Sun } from "lucide-react";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { Button } from "@shpyrd/ui/components/button";
 import {
@@ -44,9 +44,7 @@ export function PersonMenu() {
     }
   };
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 60_000 });
-  const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const name = me.data?.name || me.data?.email || "…";
-  const grafana = config.data?.grafanaUrl;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -62,13 +60,6 @@ export function PersonMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {grafana && (
-          <DropdownMenuItem asChild>
-            <a href={grafana} target="_blank" rel="noreferrer">
-              <ExternalLink /> Grafana
-            </a>
-          </DropdownMenuItem>
-        )}
         <DropdownMenuItem onClick={signOut}>
           <LogOut /> Sign out
         </DropdownMenuItem>

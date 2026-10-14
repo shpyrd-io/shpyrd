@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-14
 
 ## Summary
 
@@ -20,8 +20,7 @@ volumes from kubelet volume stats.
 
 ## Motivation
 
-Resources are a row in a table today; their health and load are invisible except
-through Grafana, which developers may not have.
+Resources are a row in a table today; their health and load are invisible.
 
 ### Goals
 
@@ -39,8 +38,7 @@ through Grafana, which developers may not have.
   provided var names) and `.../metrics?range=`.
 - **Postgres**: `spec.monitoring.enablePodMonitor: true` on the CNPG Cluster (the operator
   creates the PodMonitor); panels: connections vs `max_connections`, transactions/s,
-  cache hit ratio, replication lag (HA), database size vs storage, WAL rate. CNPG's
-  official Grafana dashboard linked for platform roles.
+  cache hit ratio, replication lag (HA), database size vs storage, WAL rate.
 - **Redis/Valkey**: `oliver006/redis_exporter` sidecar on the StatefulSet (metrics port,
   PodMonitor); panels: memory used vs `maxmemory`, hit rate, evictions, connected clients,
   ops/s.
@@ -57,8 +55,9 @@ through Grafana, which developers may not have.
 ## Open questions
 
 1. Same look as the app Metrics tab (charts, range picker)? Default: yes.
-2. Link to the raw Grafana dashboards for platform roles? Default: yes.
 
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-14: Grafana links removed: shpyrd no longer installs Grafana (RFC-0015
+  withdrawn).

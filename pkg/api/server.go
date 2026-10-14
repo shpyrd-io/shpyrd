@@ -129,7 +129,6 @@ type PublicConfig struct {
 	Version      string `json:"version"`
 	Domain       string `json:"domain"`
 	HTTPSPort    string `json:"httpsPort"`
-	GrafanaURL   string `json:"grafanaUrl"`
 	DashboardURL string `json:"dashboardUrl,omitempty"`
 	AuthRequired bool   `json:"authRequired"`
 	Metrics      bool   `json:"metrics"`

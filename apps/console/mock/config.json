@@ -3,7 +3,6 @@
   "domain": "shpyrd.app",
   "authRequired": true,
   "metrics": true,
-  "grafanaUrl": "https://grafana.shpyrd.app",
   "auth": {
     "token": true,
     "providers": [
