@@ -423,6 +423,9 @@ func TestEdgeSigninAndStart(t *testing.T) {
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'sha256-") {
 		t.Errorf("unavailable page policy = %q: its script would not run", csp)
 	}
+	if !strings.Contains(rec.Body.String(), `<meta http-equiv="refresh" content="5">`) {
+		t.Error("unavailable page must open the app again by itself")
+	}
 	// The launcher lists what the caller may open: in bootstrap mode Maria
 	// is a platform admin, so everything.
 	rec = doCookie(t, s, "GET", "/api/launcher", "", sid, "")

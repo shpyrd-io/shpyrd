@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { cn } from "@shpyrd/ui/lib/cn";
-import { problem } from "@shpyrd/content/site/tour";
+import { problem } from "@/content/tour";
 import { Heading, Label, Lead, panel } from "./parts";
 
 // When the apps start dropping in, and the gap between two of them, in ms.

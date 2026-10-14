@@ -1,4 +1,4 @@
-import { enterprise } from "@shpyrd/content/site/contact";
+import { enterprise } from "@/content/contact";
 import { Contact } from "@/components/contact";
 import { shared } from "@/lib/metadata";
 

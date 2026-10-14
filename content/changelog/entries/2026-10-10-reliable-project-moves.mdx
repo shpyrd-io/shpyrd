@@ -1,0 +1,9 @@
+---
+title: "Project moves survive a lost connection"
+description: "A temporary client disconnect no longer cancels an ongoing project move."
+date: "2026-10-10"
+type: fix
+draft: false
+---
+
+Project moves continue when the client connection drops. The CLI checks the operation status after losing the connection so you can learn whether the move completed. Maintenance checks also use the correct route for internal apps and stop with an explanation when the check cannot complete.

@@ -5,7 +5,7 @@
 import { ArrowRight, KeyRound, Moon, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@shpyrd/ui/components/button";
 import { KeybindingHint } from "@shpyrd/ui/components/keybinding-hint";
-import { opening } from "@shpyrd/content/site/tour";
+import { opening } from "@/content/tour";
 import { Label, Lead } from "./parts";
 import { AppsYard } from "./apps-yard";
 

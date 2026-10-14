@@ -8,7 +8,8 @@
     "./project-backups": "./src/project-backups.tsx",
     "./logs": "./src/logs/logs.ts",
     "./links": "./src/links/links.ts",
-    "./auth/login": "./src/auth/login.ts"
+    "./auth/login": "./src/auth/login.ts",
+    "./editorial/*": "./src/editorial/*.mjs"
   },
   "scripts": {
     "lint": "oxlint src",
@@ -19,7 +20,13 @@
     "@shpyrd/ui": "*",
     "@tanstack/react-query": "^5.103.2",
     "lucide-react": "^1.47.0",
-    "react": "^19.2.8"
+    "react": "^19.2.8",
+    "@mdx-js/mdx": "^3.1.1",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "yaml": "^2.8.3",
+    "estree-util-value-to-estree": "^3.4.0",
+    "vfile": "^6.0.3"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

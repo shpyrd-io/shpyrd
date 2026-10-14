@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { contact, enterpriseContact } from "@shpyrd/content/site/offer";
-import { pricing } from "@shpyrd/content/site/pricing";
+import { contact, enterpriseContact } from "@/content/offer";
+import { pricing } from "@/content/pricing";
 
 const app = fileURLToPath(new URL("../../app", import.meta.url));
 const pricingSource = fileURLToPath(new URL("../components/pricing.tsx", import.meta.url));

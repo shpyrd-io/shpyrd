@@ -5,8 +5,8 @@ import { cn } from "@shpyrd/ui/lib/cn";
 import { Button } from "@shpyrd/ui/components/button";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { Timeline, TimelineItem } from "@shpyrd/ui/components/timeline";
-import { closing } from "@shpyrd/content/site/tour";
-import { enterpriseContact } from "@shpyrd/content/site/offer";
+import { closing } from "@/content/tour";
+import { enterpriseContact } from "@/content/offer";
 import { DeployButton } from "@/components/deploy-button";
 import { Lead, panel } from "./parts";
 

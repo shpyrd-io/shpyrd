@@ -305,6 +305,8 @@ func Audience(c *cobra.Command) string {
 }
 
 type CLIGlobals interface {
+	// ResolveProject picks an explicit project or the local shpyrd.yaml default.
+	ResolveProject(string) (string, error)
 	Kubeconfig() string
 	Context() string
 	// API is the workspace API through whatever the CLI has: a login

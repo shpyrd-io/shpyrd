@@ -11,7 +11,7 @@ import { Building2, Cloud, Database, KeyRound, Server, Waypoints } from "lucide-
 import { cn } from "@shpyrd/ui/lib/cn";
 import { Tabs, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { Tile } from "@shpyrd/ui/components/tile";
-import { delivery } from "@shpyrd/content/site/tour";
+import { delivery } from "@/content/tour";
 import { Intro, Label, panel } from "./parts";
 
 function Box({ icon, children, ours }: { icon: React.ReactElement; children: React.ReactNode; ours?: boolean }) {

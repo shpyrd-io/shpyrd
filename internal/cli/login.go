@@ -206,7 +206,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				if token != "" || wsURL != "" {
 					return errors.New("--signup creates an account and a workspace: it takes neither --url nor --token")
 				}
-				return signupLogin(ctx, cmd, g, signupURL, out, noBrowser)
+				return signupLogin(cmd, g, signupURL, out, noBrowser)
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -261,13 +261,13 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
-	cmd.Flags().BoolVar(&signup, "signup", false, "create an account and a first workspace on shpyrd cloud, in the browser; the CLI is signed in to it when it is ready")
+	cmd.Flags().BoolVar(&signup, "signup", false, "open shpyrd cloud signup in the browser, then sign in with the new workspace URL")
 	cmd.Flags().StringVar(&signupURL, "signup-url", firstNonEmpty(os.Getenv("SHPYRD_SIGNUP_URL"), defaultSignupURL), "where the signup lives (or SHPYRD_SIGNUP_URL)")
 	return cmd
 }
 
 // defaultSignupURL is shpyrd cloud's signup.
-const defaultSignupURL = "https://signup.shpyrd.io"
+const defaultSignupURL = "https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud"
 
 // loginChoiceSignup is what askLoginChoice answers for a new account.
 const loginChoiceSignup = "signup"
@@ -307,41 +307,25 @@ func askLoginChoice(in io.Reader, out io.Writer) (string, error) {
 	}
 }
 
-// signupLogin creates an account and a workspace from the terminal: the
-// signup gives the CLI a code, the browser opens the signup with it, the
-// person proves their email and names the workspace there, and when the
-// workspace's door answers the signup signs the CLI in to it. One signup,
-// two entrances.
-func signupLogin(ctx context.Context, cmd *cobra.Command, g *globalFlags, signupURL string, out io.Writer, noBrowser bool) error {
-	base := strings.TrimSuffix(strings.TrimSpace(signupURL), "/")
-	if base == "" {
+// signupLogin opens Cloud onboarding. Once the workspace is ready, its own
+// browser sign-in issues the CLI session.
+func signupLogin(cmd *cobra.Command, g *globalFlags, signupURL string, out io.Writer, noBrowser bool) error {
+	link := strings.TrimSpace(signupURL)
+	if link == "" {
 		return errors.New("--signup-url is empty")
 	}
-	fmt.Fprintf(out, "Creating an account at %s.\n", base)
-	approved, err := deviceFlow(ctx, base+"/api/signup/cli/device", base+"/api/signup/cli/device/token", out, noBrowser,
-		"Finish the signup in the browser: your email, a code we send it, your workspace's name. The CLI waits for the workspace's door to answer.")
-	if err != nil {
-		return err
+	u, err := url.Parse(link)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("--signup-url must be an http or https URL")
 	}
-	if approved.WorkspaceURL == "" {
-		return errors.New("the signup approved the sign-in but named no workspace")
+	if !noBrowser {
+		if err := openBrowser(link); err != nil {
+			fmt.Fprintf(out, "Could not open the browser. Open %s to create your account and workspace.\n", link)
+		}
 	}
-	norm, err := normaliseURL(approved.WorkspaceURL)
-	if err != nil {
-		return err
-	}
-	if err := verifyToken(ctx, norm, approved.Token); err != nil {
-		return fmt.Errorf("the new workspace refused the credential: %w", err)
-	}
-	s := loadSessions()
-	s.Sessions[norm] = &loginSession{URL: norm, Token: approved.Token, SavedAt: time.Now(), WhoAmI: approved.Email, ExpiresAt: approved.ExpiresAt}
-	s.Current = norm
-	if err := s.save(); err != nil {
-		return fmt.Errorf("save session: %w", err)
-	}
-	return g.print(cmd, map[string]any{"url": norm, "user": approved.Email, "signedIn": true, "created": true}, func(w io.Writer) {
-		fmt.Fprintf(w, "Your workspace %s is ready, and the CLI is signed in as %s.\n", norm, approved.Email)
-		fmt.Fprintln(w, "Deploy your first project: `shpyrd deploy` in its folder. Your email has the way into the dashboard.")
+	return g.print(cmd, map[string]any{"signupUrl": link, "signedIn": false}, func(w io.Writer) {
+		fmt.Fprintf(w, "Create your account and workspace at %s\n", link)
+		fmt.Fprintln(w, "When your workspace is ready, run: shpyrd login --url <workspace URL>")
 	})
 }
 
@@ -356,13 +340,11 @@ type deviceStart struct {
 	Interval                int    `json:"interval"`
 }
 
-// deviceApproval is the credential the approval minted. WorkspaceURL is
-// set by the signup, which makes the workspace the credential is for.
+// deviceApproval is the credential the workspace approval minted.
 type deviceApproval struct {
-	Token        string    `json:"token"`
-	Email        string    `json:"email"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	WorkspaceURL string    `json:"workspaceUrl,omitempty"`
+	Token     string    `json:"token"`
+	Email     string    `json:"email"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 // browserLogin runs the browser sign-in against a workspace: asks it for
@@ -377,7 +359,7 @@ func browserLogin(ctx context.Context, wsURL string, out io.Writer, noBrowser bo
 }
 
 // deviceFlow is the device flow (RFC 8628) against any pair of endpoints:
-// a workspace's own sign-in, or the signup's. `note` is said once the
+// a workspace's own sign-in. `note` is said once the
 // browser opened, when there is more to do there than approve.
 func deviceFlow(ctx context.Context, startURL, pollURL string, out io.Writer, noBrowser bool, note string) (*deviceApproval, error) {
 	host, _ := os.Hostname()

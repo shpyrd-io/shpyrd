@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { slides } from "@shpyrd/content/site/tour";
+import { slides } from "@/content/tour";
 import { Deck } from "./deck";
 
 afterEach(() => {

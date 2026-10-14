@@ -1,11 +1,10 @@
 import React from "react";
-import Markdoc from "@markdoc/markdoc";
 import { NavList, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { PageHeading } from "@shpyrd/ui/components/page-heading";
 import { PageLayoutContent, PageLayoutPane } from "@shpyrd/ui/components/page-layout";
 import { Prose } from "@shpyrd/ui/components/prose";
 import type { Text as TextOf } from "@/lib/content";
-import { components } from "./markdoc";
+import { components } from "./mdx";
 
 // A text of the site as a page: its heading, the text itself, and beside
 // it the list of its parts. Rendered when the application is built.
@@ -15,7 +14,7 @@ export function Text({ text }: { text: TextOf }) {
     <>
       <PageLayoutContent width="large" padding="normal" className="grid content-start gap-8">
         <PageHeading title={text.title} description={text.description} variant="large" border />
-        <Prose>{Markdoc.renderers.react(text.content, React, { components })}</Prose>
+        <Prose><text.Content components={components} /></Prose>
       </PageLayoutContent>
       {parts.length > 1 && (
         <PageLayoutPane

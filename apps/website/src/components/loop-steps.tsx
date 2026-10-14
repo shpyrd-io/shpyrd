@@ -3,7 +3,7 @@
 import * as React from "react";
 import { cn } from "@shpyrd/ui/lib/cn";
 
-type Step = { icon: React.ReactElement; heading: string; body: string };
+type Step = { icon: React.ReactElement; heading: string; body: React.ReactNode };
 
 // Steps that come round again: a loop, drawn as one. The steps stand on a
 // track in the shape of a stadium, numbered, the way forward along its top

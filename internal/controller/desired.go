@@ -717,7 +717,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		container.Env = append(container.Env, corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(port)})
 		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port, Protocol: corev1.ProtocolTCP}}
 	}
-	applyProbes(&container, p, port)
+	applyProbes(&container, p, port, scaledExternally)
 	container.Env = append(container.Env, c.platformEnv(app, revision, p.Name, release)...)
 	container.Env = append(container.Env, app.Spec.Env...)
 
@@ -768,7 +768,11 @@ func rolloutStrategy(p namedProcess, mounts []resolvedMount) appsv1.DeploymentSt
 //   - web (port 8080): HTTP GET / on the port
 //   - explicit port (non-web): TCP on that port
 //   - no port (workers): no probe
-func applyProbes(c *corev1.Container, p namedProcess, port int32) {
+//
+// A process that wakes from sleep (KEDA scales it from zero) has at least
+// the wake window to start: its databases may be asleep too and wake only
+// when it connects, which takes longer than the 30 s default.
+func applyProbes(c *corev1.Container, p namedProcess, port int32, wakes bool) {
 	hc := p.HealthCheck
 	if hc != nil && hc.Disabled {
 		return
@@ -776,6 +780,9 @@ func applyProbes(c *corev1.Container, p namedProcess, port int32) {
 	interval := parseDurationSecs(hc.GetStr("Interval"), 10)
 	timeout := parseDurationSecs(hc.GetStr("Timeout"), 5)
 	grace := parseDurationSecs(hc.GetStr("GracePeriod"), 30)
+	if w := int32(sleepWakeWindow.Seconds()); wakes && grace < w {
+		grace = w
+	}
 	shutdown := parseDurationSecs(hc.GetStr("ShutdownDelay"), 5)
 
 	var handler corev1.ProbeHandler
@@ -998,6 +1005,11 @@ func (c Config) edgeAnnotations(app *shpyrdv1.App) map[string]string {
 		// pod of the app is ready. (A per-Ingress default-backend cannot be
 		// an ExternalName.)
 		"nginx.ingress.kubernetes.io/custom-http-errors": "403,503",
+		// Only the errors nginx makes itself: the edge's 403 (auth_request)
+		// and the 503 of an app with no ready pod. What the app answers
+		// passes through as it is: its own 403 and 503, and the waking
+		// page a sleeping app's interceptor answers with a 503.
+		"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors": "true",
 	}
 	if mode == shpyrdv1.AccessAuthenticated {
 		// $http_host keeps the port (kind maps 8443); $host would drop it.
@@ -1010,6 +1022,7 @@ var edgeAnnotationKeys = []string{
 	"nginx.ingress.kubernetes.io/auth-url", "nginx.ingress.kubernetes.io/auth-signin",
 	"nginx.ingress.kubernetes.io/auth-response-headers", "nginx.ingress.kubernetes.io/auth-cache-key",
 	"nginx.ingress.kubernetes.io/auth-cache-duration", "nginx.ingress.kubernetes.io/custom-http-errors",
+	"nginx.ingress.kubernetes.io/disable-proxy-intercept-errors",
 	"nginx.ingress.kubernetes.io/default-backend", // from earlier versions
 }
 

@@ -1,0 +1,9 @@
+---
+title: "More reliable build status"
+description: "Failed and replaced Dockerfile builds no longer stay stuck as building."
+date: "2026-10-11"
+type: fix
+draft: false
+---
+
+Dockerfile builds that fail before starting now report their failure and its reason. When a newer build replaces an unfinished one, the older job is stopped while its history is preserved, so the build list reflects what is actually happening.
