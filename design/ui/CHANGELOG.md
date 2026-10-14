@@ -8,6 +8,8 @@ application has to change.
 
 ## Unreleased
 
+## 0.1.2
+
 - Add `MetricChart` with 30 visualization kinds extracted from Warehouse, exact
   decimal values, missing-data handling, accessible legends and an icon-only
   table toggle. Chart styles ship with the library stylesheet.
