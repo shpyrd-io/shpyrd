@@ -129,6 +129,9 @@ const (
 
 // WorkspaceSettings are the knobs of the workspace.
 type WorkspaceSettings struct {
+	// RedirectApps redirects platform app addresses to the verified primary domain,
+	// once each app's destination certificate and DNS are ready.
+	RedirectApps bool `json:"redirectApps,omitempty"`
 	// InternalExposure is an operator override; nil inherits the hosting policy.
 	// Changed only through SetWorkspaceInternalExposure, never ordinary settings.
 	InternalExposure *bool  `json:"internalExposure,omitempty"`

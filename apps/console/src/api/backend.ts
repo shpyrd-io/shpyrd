@@ -53,6 +53,7 @@ export const backend: Api = {
   links: () => request("/api/links"),
   patchSettings: (body) => request("/api/cluster/settings", json("PATCH", body)),
   cluster: () => request("/api/cluster"),
+  clusterScheduling: () => request("/api/cluster/scheduling"),
   clusterMetrics: async (range) => toClusterMetrics(await request<MetricsAnswer>(`/api/cluster/metrics?range=${encodeURIComponent(range)}`)),
   helmReleases: () => request("/api/helm/releases"),
   registry: () => request("/api/cluster/registry"),

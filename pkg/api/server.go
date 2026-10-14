@@ -594,6 +594,7 @@ func (s *Server) routes() error {
 	api.GET("/namespaces", console, s.require(authz.ClusterView), s.listNamespaces)
 	api.GET("/helm/releases", console, s.require(authz.ClusterView), s.listHelmReleases)
 	api.GET("/cluster", console, s.require(authz.ClusterView), s.clusterSummary)
+	api.GET("/cluster/scheduling", console, s.require(authz.ClusterView), s.clusterScheduling)
 	api.GET("/cluster/overview", console, s.require(authz.ClusterView), s.clusterOverview)
 	api.GET("/cluster/overview/nodes", console, s.require(authz.ClusterView), s.overviewNodes)
 	api.GET("/cluster/overview/charts", console, s.require(authz.ClusterView), s.overviewCharts)
@@ -713,6 +714,7 @@ func (s *Server) routes() error {
 	api.POST("/tokens", s.createToken)
 	api.DELETE("/tokens/:id", s.deleteToken)
 	api.GET("/projects/:slug/domains", s.require(authz.ProjectView), s.listDomains) // RFC-0034
+	api.PATCH("/projects/:slug/domains", s.require(authz.ProjectConfig), s.setDomainRedirect)
 	api.POST("/projects/:slug/domains", s.require(authz.ProjectConfig), s.addDomain)
 	api.DELETE("/projects/:slug/domains/:host", s.require(authz.ProjectConfig), s.removeDomain)
 	api.GET("/projects/:slug/audit", s.require(authz.ProjectView), s.appAudit)

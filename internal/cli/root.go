@@ -125,6 +125,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newAppsCmd(g))
 	root.AddCommand(newDeployCmd(g))
 	root.AddCommand(newSecretsCmd(g))
+	root.AddCommand(newEnvCmd(g))
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newDrainsCmd(g))
 	root.AddCommand(newScaleCmd(g))

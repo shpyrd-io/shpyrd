@@ -104,6 +104,8 @@ answering.`,
 		newWorkspaceDomainActionCmd(g, "verify", "Check the DNS records; a verified domain is served"),
 		newWorkspaceDomainActionCmd(g, "primary", "Make a verified domain the one the workspace's URLs use (owners)"),
 		newWorkspaceDomainActionCmd(g, "alias", "Make the primary domain an alias again (owners)"),
+		newWorkspaceDomainActionCmd(g, "redirect", "Redirect platform app addresses to this verified primary domain"),
+		newWorkspaceDomainActionCmd(g, "serve", "Stop workspace app redirects and serve platform addresses"),
 		newWorkspaceDomainActionCmd(g, "remove", "Remove a domain; its hosts stop answering"),
 	)
 	return cmd
@@ -128,13 +130,13 @@ func workspaceDomainsList(cmd *cobra.Command, g *globalFlags) error {
 			return
 		}
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "HOST\tSTATUS\tPRIMARY")
+		fmt.Fprintln(tw, "HOST\tSTATUS\tPRIMARY\tAPP REDIRECTS")
 		for _, d := range list {
 			status := "waiting for DNS (shpyrd workspace domains verify " + d.Host + ")"
 			if d.Verified {
 				status = "verified"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%v\n", d.Host, status, d.Primary)
+			fmt.Fprintf(tw, "%s\t%s\t%v\t%v\n", d.Host, status, d.Primary, d.Primary && d.RedirectApps)
 		}
 		_ = tw.Flush()
 	})
@@ -147,6 +149,9 @@ func printDomain(out io.Writer, d api.DomainView) {
 	}
 	if d.Primary {
 		state += ", primary"
+	}
+	if d.Primary && d.RedirectApps {
+		state += ", app addresses redirect here when ready"
 	}
 	fmt.Fprintf(out, "%s: %s\n", d.Host, state)
 	if !d.Verified {
@@ -181,6 +186,10 @@ func newWorkspaceDomainActionCmd(g *globalFlags, action, short string) *cobra.Co
 				}
 			case "verify":
 				if err := t.call(ctx, "POST", path+"/verify", nil, &d); err != nil {
+					return err
+				}
+			case "redirect", "serve":
+				if err := t.call(ctx, "PATCH", path, map[string]bool{"redirectApps": action == "redirect"}, &d); err != nil {
 					return err
 				}
 			case "primary", "alias":

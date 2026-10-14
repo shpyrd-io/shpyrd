@@ -16,7 +16,6 @@ import (
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Custom domains (RFC-0034): POST adds a hostname the owner points at the
@@ -33,16 +32,18 @@ type domainRequest struct {
 // DomainsResult is the answer to a domain change: the records to create and
 // the state of every custom domain.
 type DomainsResult struct {
-	Host    string          `json:"host,omitempty"`
-	Target  string          `json:"target"`
-	Address string          `json:"address,omitempty"`
-	Domains []ProjectDomain `json:"domains"`
-	App     AppSummary      `json:"app"`
+	RedirectTo string          `json:"redirectTo,omitempty"`
+	Host       string          `json:"host,omitempty"`
+	Target     string          `json:"target"`
+	Address    string          `json:"address,omitempty"`
+	Domains    []ProjectDomain `json:"domains"`
+	App        AppSummary      `json:"app"`
 }
 
 // ProjectDomain is one custom domain of a project: its state, and the record
 // that points it here (controller.RecordFor).
 type ProjectDomain struct {
+	RedirectEligible bool `json:"redirectEligible,omitempty"`
 	shpyrdv1.DomainStatus
 	Record DNSRecord `json:"record"`
 }
@@ -141,6 +142,9 @@ func (s *Server) removeDomain(c *gin.Context) {
 			return fmt.Errorf("%s is not a domain of this project", host)
 		}
 		a.Spec.Domains = kept
+		if a.Spec.RedirectTo == host {
+			a.Spec.RedirectTo = ""
+		}
 		return nil
 	})
 	if err != nil {
@@ -162,18 +166,17 @@ func (s *Server) listDomains(c *gin.Context) {
 // hostname, the A target the front door's address.
 func (s *Server) domainsResult(ctx context.Context, app *shpyrdv1.App, host string) DomainsResult {
 	target := project.SlugOf(app) + "." + s.opts.Public.Domain
-	if slug := workspaceOf(app); slug != store.DefaultWorkspace {
-		if ws, err := s.store.Workspace(ctx, slug); err == nil {
-			target = s.appHostsIn(ctx, ws, project.SlugOf(app))[0]
-		}
+	if ws, err := s.store.Workspace(ctx, workspaceOf(app)); err == nil {
+		target = s.opts.Layout.AppHosts(ws.Address, nil, s.opts.Public.Domain, project.SlugOf(app))[0]
 	}
 	address := s.frontDoorAddress(ctx, app)
 	res := DomainsResult{
-		Host:    host,
-		Target:  target,
-		Address: address,
-		Domains: s.domainsOf(ctx, app, target, address),
-		App:     summarize(app),
+		RedirectTo: app.Spec.RedirectTo,
+		Host:       host,
+		Target:     target,
+		Address:    address,
+		Domains:    s.domainsOf(ctx, app, target, address),
+		App:        summarize(app),
 	}
 	return res
 }
@@ -220,6 +223,13 @@ func (s *Server) domainsOf(ctx context.Context, app *shpyrdv1.App, target, addre
 			},
 			Record: r,
 		})
+	}
+	for i := range out {
+		for _, h := range app.Spec.Domains {
+			if h == out[i].Host && out[i].DNS == controller.DNSOK && (out[i].Certificate == controller.CertReady || out[i].Certificate == controller.CertWildcard) {
+				out[i].RedirectEligible = true
+			}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out
@@ -279,4 +289,49 @@ func (s *Server) hostOwner(ctx context.Context, host string) string {
 		}
 	}
 	return ""
+}
+
+// setDomainRedirect only accepts a ready domain belonging to this project.
+// Empty disables the project's override (a workspace redirect may still apply).
+func (s *Server) setDomainRedirect(c *gin.Context) {
+	var req struct {
+		RedirectTo *string `json:"redirectTo"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.RedirectTo == nil {
+		abort(c, http.StatusBadRequest, fmt.Errorf("give redirectTo: a verified domain, or an empty string"))
+		return
+	}
+	host := ""
+	if *req.RedirectTo != "" {
+		var err error
+		host, err = normalizeHost(*req.RedirectTo)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+	}
+	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
+		if host != "" {
+			owned := false
+			for _, d := range a.Spec.Domains {
+				owned = owned || d == host
+			}
+			ready := false
+			for _, d := range a.Status.Domains {
+				if d.Host == host && d.DNS == controller.DNSOK && (d.Certificate == controller.CertReady || d.Certificate == controller.CertWildcard) {
+					ready = true
+				}
+			}
+			if !owned || !ready {
+				return fmt.Errorf("choose a project domain whose DNS and certificate are ready")
+			}
+		}
+		a.Spec.RedirectTo = host
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	s.audit(c, project.SlugOf(app), "domain.redirect", project.SlugOf(app), host)
+	c.JSON(http.StatusOK, s.domainsResult(c.Request.Context(), app, ""))
 }

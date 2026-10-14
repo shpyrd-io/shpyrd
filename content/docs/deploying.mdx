@@ -284,12 +284,18 @@ Without a size, a process gets `shared-m` for Node.js, Ruby, Python and Java, an
 ## Config vars
 
 ```shell
-shpyrd secrets set DATABASE_URL=postgres://... LOG_LEVEL=debug
-shpyrd secrets unset LOG_LEVEL
+shpyrd secrets set DATABASE_URL=postgres://...
+shpyrd env set APP_URL=https://example.com LOG_LEVEL=debug
+shpyrd env list                # names and values of plain variables
+shpyrd env unset LOG_LEVEL
 shpyrd secrets list            # names and when each was last set; values are never shown
 ```
 
-Every change is a release (`Set DATABASE_URL config var`) and restarts the processes with the new environment. The project's **Config** page does the same, including pasting `.env` files.
+Changes are saved without restarting the app. Run `shpyrd redeploy` (or deploy new source) when ready to apply them. Until then, running processes, replacement instances and one-off commands keep using the deployed configuration. The project's **Config** page shows a pending-changes notice and a save toast; it supports editing visible variables, replacing hidden secrets, and pasting `.env` files with a choice of kind.
+
+Variables are readable by everyone who can view the project. New entries default to secrets, and existing secrets stay hidden on upgrade. Making a secret a variable requires confirmation; credential-looking names such as `API_KEY` or `AUTH_TOKEN` also require confirmation (`shpyrd env set --confirm-plain` in the CLI). Making a variable a secret hides its value without changing it. A name has one project-owned value: saving it as a secret takes precedence, while existing secrets cannot be converted back to visible variables. Attached-resource variables still override project configuration.
+
+Rollback restores the selected release's deployed values and their visibility. Pending edits remain saved for a later deployment.
 
 Plain, non-secret variables can also live in `shpyrd.yaml` under `env:` and travel with the code — useful for things like `RACK_ENV`, `RAILS_ENV` or `NODE_ENV` that belong in the repository rather than in the cluster's secret store:
 
@@ -305,7 +311,7 @@ env:
 
 A buildpack build sees the same variables the app will run with: global config vars, the project's config vars, the variables of attached resources (`DATABASE_URL`, `DATABASE_HOST`, …) and `env:`, in that order (the later wins), with `build.env` from `shpyrd.yaml` above them all. That is what `prisma generate`, a Next.js page that reads the database while the build collects page data, `NEXT_PUBLIC_*` variables inlined into the assets and Rails' `assets:precompile` rely on. Attach the database before the first deploy and the first build already has `DATABASE_URL`.
 
-A build reads the values current when it starts. Setting or changing a config var does not start a build: it restarts the processes, and the next deploy builds with the new values (`shpyrd redeploy --rebuild`, or **Redeploy** in the dashboard, builds the same source again).
+A build reads the values current when it starts. Setting or changing a project config var does not start a build or restart processes. The next deploy builds with the saved values (`shpyrd redeploy --rebuild`, or **Redeploy** in the dashboard, builds the same source again).
 
 The values stay secret on the way. They reach the build in a Kubernetes Secret mounted into the build alone, and shpyrd's buildpack, first in every builder, hands them to the buildpacks after it for the build only: they are not written into the image nor into the build cache. What the app's build does with them is its own: a variable it inlines on purpose, such as `NEXT_PUBLIC_*`, ends up in the image, as on Heroku. A secret value the build prints shows as `***` in the build's log, in the dashboard and the CLI alike: the value whole, each line of a value of several lines, and the password of a URL on its own. A value shorter than 8 characters, or one printed in another form (base64, a part of it), shows as it is; and only the values current when the log is read are recognised. Two names cannot reach a build, `type` and `provider`; a project that names its own builder (`build.builder`) gets the variables only if that builder starts with shpyrd's buildpack.
 

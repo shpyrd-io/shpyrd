@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 )
 
 // maxReleases bounds the history kept in status.
@@ -83,6 +84,9 @@ func configHash(app *shpyrdv1.App, secret *corev1.Secret, sizes map[string]strin
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if configvars.Plain(secret, k) {
+				h.Write([]byte("plain:"))
+			}
 			h.Write([]byte(k))
 			h.Write([]byte{'='})
 			h.Write(secret.Data[k])

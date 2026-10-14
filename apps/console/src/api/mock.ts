@@ -159,6 +159,7 @@ export const mock: Api = {
     return all.settings;
   },
 
+  clusterScheduling: async () => (cluster as ClusterSummary).scheduling ?? { pending: [] },
   cluster: async () => {
     await wait();
     return cluster as ClusterSummary;
