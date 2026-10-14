@@ -582,6 +582,11 @@ func TestEdgeObjects(t *testing.T) {
 	if ing.Annotations["nginx.ingress.kubernetes.io/auth-signin"] == "" || ing.Annotations["nginx.ingress.kubernetes.io/custom-http-errors"] != "403,503" {
 		t.Errorf("edge annotations = %v", ing.Annotations)
 	}
+	// Only nginx's own errors become the server's pages: the app's 403
+	// and 503, and a sleeping app's waking page, pass through.
+	if got := ing.Annotations["nginx.ingress.kubernetes.io/disable-proxy-intercept-errors"]; got != "true" {
+		t.Errorf("disable-proxy-intercept-errors = %q, want true", got)
+	}
 	// Every header the edge can answer is overwritten or dropped by nginx,
 	// so a client cannot send the gates' X-Shpyrd-Workspace or
 	// X-Shpyrd-Operator to an app (RFC-0083).
