@@ -8,6 +8,8 @@ vars:
   # disk) stays installed for them until the last one is migrated.
   SHPYRD_PROJECT_STORAGE_CLASS: ""
   SHPYRD_DATABASE_STORAGE_CLASS: ""
+  SHPYRD_SHARED_POSTGRES_INSTANCES: "2"
+  SHPYRD_SHARED_POSTGRES_PER_SERVER: "200"
   # Pass --domain (the Route 53 zone) and the ACME e-mail; contrib/aws/terraform
   # creates the cluster and prints the command:
   #   --set SHPYRD_ACME_EMAIL=you@example.com --dns aws --dns-zone-id <id> --dns-region <region>

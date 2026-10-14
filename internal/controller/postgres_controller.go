@@ -51,6 +51,9 @@ type PostgresReconciler struct {
 	// enterprise's auto sleep). Nil: never; one put to sleep by hand
 	// (suspended) still is.
 	SleepAllowed func() bool
+	// Shared is the profile's shape for shared servers (step 3 of the
+	// storage plan).
+	Shared SharedPostgres
 }
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile
@@ -175,6 +178,9 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !pg.DeletionTimestamp.IsZero() {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return r.finalizeShared(ctx, pg)
+		}
 		return ctrl.Result{}, nil
 	}
 	if pg.Annotations[AnnotationDataMove] != "" {
@@ -185,6 +191,16 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: moved}, err
+	}
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		// Its finalizer and its placement are metadata written once, before
+		// the status-tracked part, so the status write below never races them.
+		if changed, err := r.prepareShared(ctx, pg); err != nil || changed {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{Requeue: changed}, err
+		}
 	}
 	orig := pg.DeepCopy()
 	res, err := r.reconcile(ctx, pg)
@@ -282,9 +298,7 @@ func postgresSizeRecord(name string) string { return sizes.ForPostgres + ":" + n
 
 func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
 	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
-		// The shared server comes in a later release: until then a shared
-		// database waits, provisioning, with no cluster of its own.
-		return ctrl.Result{}, &pendingError{msg: "a shared database is placed on a platform shared server; this platform has none yet"}
+		return r.reconcileShared(ctx, pg)
 	}
 	catalog := loadCatalog(ctx, r.Client, r.SystemNamespace)
 	size, err := catalog.Postgres.Pick(sizes.ForPostgres, pg.Spec.Size)
@@ -789,6 +803,9 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 	url := get("uri")
 	if sleeps || url == "" {
 		url = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, pass, host, port, db)
+		if mode := get("sslmode"); mode != "" { // a shared database: encrypted to the server
+			url += "?sslmode=" + mode
+		}
 	}
 	return map[string]string{
 		prefix + "_URL":      url,
@@ -799,3 +816,5 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 		prefix + "_NAME":     db,
 	}, nil
 }
+
+func resourceMustParse(q string) resource.Quantity { return resource.MustParse(q) }

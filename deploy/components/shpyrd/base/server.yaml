@@ -163,6 +163,10 @@ spec:
               value: "${SHPYRD_PROJECT_STORAGE_CLASS}"
             - name: SHPYRD_DATABASE_STORAGE_CLASS
               value: "${SHPYRD_DATABASE_STORAGE_CLASS}"
+            - name: SHPYRD_SHARED_POSTGRES_INSTANCES
+              value: "${SHPYRD_SHARED_POSTGRES_INSTANCES}"
+            - name: SHPYRD_SHARED_POSTGRES_PER_SERVER
+              value: "${SHPYRD_SHARED_POSTGRES_PER_SERVER}"
             - name: SHPYRD_STORAGE_CLASS
               value: "${SHPYRD_STORAGE_CLASS}"
             - name: SHPYRD_STORAGE_CLASS_SHARED

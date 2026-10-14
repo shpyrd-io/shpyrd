@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -106,14 +107,16 @@ const (
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
-	VarProjectStorageClass  = "SHPYRD_PROJECT_STORAGE_CLASS"  // project disks: "" = SHPYRD_STORAGE_CLASS with its minimum and snapshots (the cloud profiles); shpyrd-local = the node's disk (the local profile)
-	VarDatabaseStorageClass = "SHPYRD_DATABASE_STORAGE_CLASS" // Postgres and Redis data volumes: "" = SHPYRD_STORAGE_CLASS; shpyrd-local = the node's disk
-	VarStorageClass         = "SHPYRD_STORAGE_CLASS"          // class for single-instance volumes ("" = the cluster default)
-	VarStorageClassShared   = "SHPYRD_STORAGE_CLASS_SHARED"   // class for shared (ReadWriteMany) volumes
-	VarVolumeMinSize        = "SHPYRD_VOLUME_MIN_SIZE"        // provider minimum a request is rounded up to ("" = none)
-	VarSnapshotClass        = "SHPYRD_SNAPSHOT_CLASS"         // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
-	VarObjectStorageSize    = "SHPYRD_OBJECT_STORAGE_SIZE"    // volume of the object-storage extension (RFC-0046)
-	VarMonitoringSize       = "SHPYRD_MONITORING_SIZE"        // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
+	VarProjectStorageClass     = "SHPYRD_PROJECT_STORAGE_CLASS"      // project disks: "" = SHPYRD_STORAGE_CLASS with its minimum and snapshots (the cloud profiles); shpyrd-local = the node's disk (the local profile)
+	VarSharedPostgresInstances = "SHPYRD_SHARED_POSTGRES_INSTANCES"  // instances of a shared Postgres server: 2 on the cloud profiles, 1 on kind
+	VarSharedPostgresPerServer = "SHPYRD_SHARED_POSTGRES_PER_SERVER" // tenants a shared server takes before the next one is created
+	VarDatabaseStorageClass    = "SHPYRD_DATABASE_STORAGE_CLASS"     // Postgres and Redis data volumes: "" = SHPYRD_STORAGE_CLASS; shpyrd-local = the node's disk
+	VarStorageClass            = "SHPYRD_STORAGE_CLASS"              // class for single-instance volumes ("" = the cluster default)
+	VarStorageClassShared      = "SHPYRD_STORAGE_CLASS_SHARED"       // class for shared (ReadWriteMany) volumes
+	VarVolumeMinSize           = "SHPYRD_VOLUME_MIN_SIZE"            // provider minimum a request is rounded up to ("" = none)
+	VarSnapshotClass           = "SHPYRD_SNAPSHOT_CLASS"             // VolumeSnapshotClass for `shpyrd volumes snapshot` ("" = snapshots unavailable)
+	VarObjectStorageSize       = "SHPYRD_OBJECT_STORAGE_SIZE"        // volume of the object-storage extension (RFC-0046)
+	VarMonitoringSize          = "SHPYRD_MONITORING_SIZE"            // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
 	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume
@@ -631,4 +634,23 @@ func DatabaseVolumeMinSize(vars func(string) string) string {
 // existing platform pool. It is separate from application process placement.
 func ProjectDataPool(vars func(string) string) string {
 	return DataPool(vars)
+}
+
+// SharedPostgresInstances is the instances of a shared Postgres server
+// (SHPYRD_SHARED_POSTGRES_INSTANCES), 1 when unset.
+func SharedPostgresInstances(vars func(string) string) int32 {
+	if n, err := strconv.Atoi(strings.TrimSpace(vars(VarSharedPostgresInstances))); err == nil && n > 0 {
+		return int32(n)
+	}
+	return 1
+}
+
+// SharedPostgresPerServer is how many tenants a shared server takes
+// before the next is created (SHPYRD_SHARED_POSTGRES_PER_SERVER), 200
+// when unset.
+func SharedPostgresPerServer(vars func(string) string) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(vars(VarSharedPostgresPerServer))); err == nil && n > 0 {
+		return n
+	}
+	return 200
 }
