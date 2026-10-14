@@ -52,11 +52,6 @@ func cliContext() context.Context {
 	return ctx
 }
 
-func projectFlag(cmd *cobra.Command, dst *string) {
-	cmd.Flags().StringVar(dst, "project", "", "project name (required)")
-	_ = cmd.MarkFlagRequired("project")
-}
-
 func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 	var (
 		project    string
@@ -110,7 +105,7 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().StringVar(&engine, "engine", "valkey", "valkey or redis")
 	cmd.Flags().StringVar(&version, "version", "", "engine major version (default: valkey 8, redis 7)")
 	cmd.Flags().StringVar(&size, "size", "", "a Redis size (shpyrd sizes list; default: the smallest, shared-s)")
@@ -186,7 +181,7 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -213,7 +208,7 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -236,7 +231,7 @@ persistent store reloads its file.`,
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -266,7 +261,7 @@ func newCliCmd(g ext.CLIGlobals) *cobra.Command {
 			return kexec.RemoteExit(kexec.Exec(ctx, k, rd.Namespace, rd.Name+"-0", "redis", cliCommand(rd, args[1:]), kexec.StdinIsTerminal()))
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	return cmd
 }
 
@@ -309,7 +304,7 @@ func newDeleteCmd(g ext.CLIGlobals) *cobra.Command {
 			})
 		},
 	}
-	projectFlag(cmd, &project)
+	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm")
 	cmd.Flags().BoolVar(&force, "force", false, "delete even while attached to an app")
 	return cmd
