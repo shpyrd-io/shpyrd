@@ -11,7 +11,7 @@ Every project is served at its own hostname with a trusted certificate: on shpyr
 
 ## The project hostname
 
-`acme-shop.shpyrd.app` on shpyrd cloud; on a cluster you run, `shop.oci.example.com` on a cloud profile or `shop.shpyrd.test` / `shop.127.0.0.1.nip.io` locally: the slug plus the domain. A new slug (`shpyrd projects rename shop "Shop" --slug store`) moves the hostname; the old one redirects for 30 days. It is always served, it is what `shpyrd open` opens, and it is the target a custom domain's DNS record points at. On cloud profiles with a DNS provider, one wildcard certificate covers every project hostname, so a new project is trusted from its first request; without one, each project gets its own certificate from Let's Encrypt (cloud) or the platform CA (local).
+`acme-shop.shpyrd.app` on shpyrd cloud; on a cluster you run, `shop.oci.example.com` on a cloud profile or `shop.shpyrd.test` / `shop.127.0.0.1.nip.io` locally: the slug plus the domain. A new slug (`shpyrd projects rename shop "Shop" --slug store`) moves the hostname; the old one redirects for 30 days. It stays in DNS as the target of custom domain records. By default it serves the project; when a custom-domain redirect is enabled, it redirects visitors and `shpyrd open` uses the ready custom domain. On cloud profiles with a DNS provider, one wildcard certificate covers every project hostname, so a new project is trusted from its first request; without one, each project gets its own certificate from Let's Encrypt (cloud) or the platform CA (local).
 
 ## Custom domains
 
@@ -54,12 +54,61 @@ Rules: a hostname is served by one project only - adding one another project has
 
 Let's Encrypt allows 50 certificates per registered domain per week and five failed validations per hostname per hour; cert-manager retries on its own, so a domain whose record arrives an hour late still comes up.
 
+## Redirect the platform address
+
+Once a project domain shows DNS **ok** and a ready certificate, select it under
+**Project › Domains › Redirect the platform address**, or run:
+
+```shell
+shpyrd domains redirect www.myprod.com --project shop
+shpyrd domains list --project shop
+shpyrd projects info shop
+```
+
+The platform hostname sends an HTTPS **308** redirect to the chosen domain,
+preserving the path and query string (and the HTTP method and body). For example,
+`acme-shop.shpyrd.app/orders?sort=new` redirects to
+`www.myprod.com/orders?sort=new`. Other custom domains continue serving the app.
+DNS and TLS at the platform hostname remain in place, so existing CNAME records
+keep working. Certificate issuance and renewal remain on the custom domain.
+
+This changes routing without redeploying the app. Private apps still require
+sign-in at the destination; platform sign-in and callback routes remain available.
+Sleeping apps wake through the destination as usual. Project links and previews
+use the active custom domain.
+
+If DNS or the certificate stops being ready, the controller resumes serving the
+platform hostname and retries readiness. Removing the selected domain clears the
+project setting. To clear it explicitly:
+
+```shell
+shpyrd domains redirect off --project shop
+```
+
+With no project redirect, the workspace default applies. Otherwise both addresses
+serve the app. A 308 can be cached by browsers, so a browser that cached an earlier
+redirect may keep using it after the setting is changed.
+
 ## The workspace's own names
 
 On shpyrd cloud a workspace answers at an address under the workspaces domain — `demo.shpyrd.cloud` — and its apps under the apps domain, the workspace's name first — `demo-<app>.shpyrd.app`. A workspace can bring names of its own (**Workspace › Domains**, owners):
 
 - **Address.** Owners change the label: `demo.shpyrd.cloud` becomes `acme.shpyrd.cloud` and every app moves with it (`demo-shop.shpyrd.app` becomes `acme-shop.shpyrd.app`). The label is lowercase letters and digits, no dashes, and cannot be another workspace's name, address or domain, or a reserved word (`login`, `api`, …). The old address — dashboard and app hosts alike — redirects permanently for thirty days, and nobody can take it meanwhile. People signed in sign in again at the new address. `shpyrd workspace address acme`.
 - **Custom domains.** A name the company owns, `intranet.acme.com`, in CNAME mode: two CNAME records (`intranet.acme.com` and `*.intranet.acme.com`, both to the workspace address) and one TXT record to prove the domain — the page and `shpyrd workspace domains add intranet.acme.com` print them. After `verify`, the platform issues a certificate for the domain and one per app host, and the dashboard and every app answer there too (`expenses.intranet.acme.com`). Make it **primary** (owners) and the dashboard, the app links and the identity tokens' issuer use it; the address keeps answering. Its dashboard pages then live at the domain, but the address still serves the workspace's sign-in, for the internal apps people enter from the workspace: they are entered through the address, and people sign in there on the way. Delegated (NS) mode, where the platform runs the zone and issues a wildcard, comes later.
+
+On a verified primary domain, **Redirect app addresses** makes the platform
+address of every app redirect to its name under that domain. Each app waits for
+its own DNS and certificate before redirecting. A project's selected redirect
+domain takes precedence. The workspace dashboard and sign-in addresses keep their
+existing behavior.
+
+```shell
+shpyrd workspace domains redirect intranet.acme.com
+shpyrd workspace domains serve intranet.acme.com  # stop workspace app redirects
+```
+
+Removing or demoting the primary domain suspends workspace redirects. The saved
+preference applies again when a verified primary domain exists.
 
 ## Exposure: external or internal
 

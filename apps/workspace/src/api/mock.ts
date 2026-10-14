@@ -57,7 +57,7 @@ type ProjectThings = {
   resources: ResourceInfo[];
   volumes: VolumeInfo[];
   snapshots: SnapshotInfo[];
-  domains: { target: string; domains: DomainStatus[] };
+  domains: { target: string; domains: DomainStatus[]; redirectTo?: string };
   drains: Drain[];
   members: Member[];
   allow: AllowEntry[];
@@ -276,6 +276,14 @@ export const mock: Api = {
     if (!d) throw new ApiError(404, "no such domain");
     d.verified = true;
     d.verifiedAt = now();
+    await thingsOf.set(all);
+    return d;
+  },
+  setWorkspaceDomainRedirect: async (host, redirectApps) => {
+    const all = await thingsOf.get();
+    const d = all.workspaceDomains.find((x) => x.host === host);
+    if (!d || (redirectApps && (!d.verified || !d.primary))) throw new ApiError(400, "Choose a verified primary domain first.");
+    for (const x of all.workspaceDomains) x.redirectApps = redirectApps;
     await thingsOf.set(all);
     return d;
   },
@@ -638,7 +646,19 @@ export const mock: Api = {
     await thingsOf.set(all);
     return { volume: v, inPlace: true, message: `${volume} was restored from ${body.snapshot}` };
   },
-  domains: async (slug) => (await ofProject(slug))[1].domains,
+  domains: async (slug) => {
+    const data = (await ofProject(slug))[1].domains;
+    // Older localStorage fixtures predate redirect eligibility.
+    for (const d of data.domains) d.redirectEligible ??= d.dns === "ok" && d.certificate === "ready";
+    return data;
+  },
+  setDomainRedirect: async (slug, redirectTo) => {
+    const [all, p] = await ofProject(slug);
+    if (redirectTo && !p.domains.domains.some((d) => d.host === redirectTo && (d.redirectEligible ?? (d.dns === "ok" && d.certificate === "ready")))) throw new ApiError(400, "Choose a project domain whose DNS and certificate are ready.");
+    p.domains.redirectTo = redirectTo;
+    await thingsOf.set(all);
+    return p.domains;
+  },
   addDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     const record = recordFor(host, p.domains.target);
@@ -650,6 +670,7 @@ export const mock: Api = {
   removeDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     p.domains.domains = p.domains.domains.filter((d) => d.host !== host);
+    if (p.domains.redirectTo === host) p.domains.redirectTo = "";
     await thingsOf.set(all);
   },
   workspaceDrains: async () => (await thingsOf.get()).workspaceDrains,

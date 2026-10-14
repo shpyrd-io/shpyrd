@@ -714,6 +714,7 @@ func (s *Server) routes() error {
 	api.POST("/tokens", s.createToken)
 	api.DELETE("/tokens/:id", s.deleteToken)
 	api.GET("/projects/:slug/domains", s.require(authz.ProjectView), s.listDomains) // RFC-0034
+	api.PATCH("/projects/:slug/domains", s.require(authz.ProjectConfig), s.setDomainRedirect)
 	api.POST("/projects/:slug/domains", s.require(authz.ProjectConfig), s.addDomain)
 	api.DELETE("/projects/:slug/domains/:host", s.require(authz.ProjectConfig), s.removeDomain)
 	api.GET("/projects/:slug/audit", s.require(authz.ProjectView), s.appAudit)

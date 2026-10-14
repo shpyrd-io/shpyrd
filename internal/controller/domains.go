@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -212,11 +213,23 @@ func (r *AppReconciler) reconcileCertificates(ctx context.Context, app *shpyrdv1
 // requeued.
 func (r *AppReconciler) domainStatuses(ctx context.Context, app *shpyrdv1.App) ([]shpyrdv1.DomainStatus, bool) {
 	hosts := r.Config.customDomains(app)
+	if target := r.Config.requestedRedirect(app); target != "" {
+		found := false
+		for _, h := range hosts {
+			found = found || h == target
+		}
+		if !found {
+			hosts = append(hosts, target)
+		}
+	}
 	if len(hosts) == 0 || !hasWeb(app) {
 		return nil, false
 	}
 	address := r.frontDoorAddress(ctx, app)
 	target := r.Config.defaultHost(app)
+	if r.Config.requestedRedirect(app) != "" {
+		target = r.Config.platformHost(app)
+	}
 	pending := false
 	var out []shpyrdv1.DomainStatus
 	for _, h := range hosts {
@@ -317,18 +330,20 @@ func (r *AppReconciler) dnsState(ctx context.Context, host, target, address stri
 		}
 		return DNSUnknown
 	}
-	if address == "" {
-		// Without a known address, resolving at all is the best we can say.
-		return DNSOK
-	}
+
 	targetIPs := map[string]bool{}
 	for _, a := range strings.Split(address, ",") {
-		targetIPs[strings.TrimSpace(a)] = true
+		if ip := net.ParseIP(strings.TrimSpace(a)); ip != nil {
+			targetIPs[ip.String()] = true
+		}
 	}
 	if tips, err := resolver.LookupIPAddr(lctx, target); err == nil {
 		for _, ip := range tips {
 			targetIPs[ip.IP.String()] = true
 		}
+	}
+	if len(targetIPs) == 0 {
+		return DNSUnknown
 	}
 	for _, ip := range ips {
 		if targetIPs[ip.IP.String()] {
@@ -446,6 +461,9 @@ func redirectIngressName(app *shpyrdv1.App, host string) string {
 // old host to the app's current default host.
 func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1.App, oldHost string) error {
 	newHost := r.Config.defaultHost(app)
+	if target := r.Config.redirectTarget(app); target != "" {
+		newHost = target
+	}
 	if newHost == "" || newHost == oldHost {
 		return nil
 	}
@@ -462,7 +480,7 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 			shpyrdv1.LabelApp:       app.Name,
 		})
 		ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
-			"nginx.ingress.kubernetes.io/permanent-redirect": "https://" + newHost + "/$request_uri",
+			"nginx.ingress.kubernetes.io/permanent-redirect": "https://" + newHost + "$request_uri",
 			"nginx.ingress.kubernetes.io/ssl-redirect":       "true",
 		})
 		ing.Spec.IngressClassName = &class
@@ -482,6 +500,106 @@ func (r *AppReconciler) ensureRedirectIngress(ctx context.Context, app *shpyrdv1
 					}}}},
 			}},
 		}}
+		return controllerutil.SetControllerReference(app, ing, r.Scheme)
+	})
+	return err
+}
+
+// platformHost remains the DNS target even when content redirects.
+func (c Config) platformHost(app *shpyrdv1.App) string {
+	hosts := c.Layout.AppHosts(c.workspaceAddress(workspaceOf(app)), nil, c.Domain, projectSlug(app))
+	return hosts[0]
+}
+
+func (c Config) requestedRedirect(app *shpyrdv1.App) string {
+	if app.Spec.RedirectTo != "" {
+		for _, h := range app.Spec.Domains {
+			if h == app.Spec.RedirectTo {
+				return h
+			}
+		}
+		return ""
+	}
+	if c.WorkspaceRedirectDomain != nil {
+		if domain := c.WorkspaceRedirectDomain(workspaceOf(app)); domain != "" {
+			return projectSlug(app) + "." + domain
+		}
+	}
+	return ""
+}
+
+func (c Config) redirectTarget(app *shpyrdv1.App) string {
+	if maintenance(app) {
+		return ""
+	}
+	target := c.requestedRedirect(app)
+	if target == "" || len(validation.IsDNS1123Subdomain(target)) != 0 || target == c.platformHost(app) {
+		return ""
+	}
+	served := false
+	for _, h := range c.domains(app) {
+		served = served || h == target
+	}
+	if !served {
+		return ""
+	}
+	for _, d := range app.Status.Domains {
+		if d.Host == target && d.DNS == DNSOK && (d.Certificate == CertReady || d.Certificate == CertWildcard) {
+			return target
+		}
+	}
+	return ""
+}
+
+func (c Config) servingDomains(app *shpyrdv1.App) []string {
+	hosts := c.domains(app)
+	if c.redirectTarget(app) == "" {
+		return hosts
+	}
+	source := c.platformHost(app)
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h != source {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// reconcileDomainRedirect keeps the platform DNS/TLS while redirecting only /.
+// The separate /.shpyrd/ ingress retains sign-in and callback endpoints.
+func (r *AppReconciler) reconcileDomainRedirect(ctx context.Context, app *shpyrdv1.App, enabled bool) error {
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app) + "-domain-redirect", Namespace: app.Namespace}}
+	target := r.Config.redirectTarget(app)
+	if !enabled || target == "" {
+		return r.deleteIfExists(ctx, ing)
+	}
+	source := r.Config.platformHost(app)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
+		r.Config.mutateIngress(app, ing, false)
+		for _, key := range edgeAnnotationKeys {
+			delete(ing.Annotations, key)
+		}
+		host := target
+		if r.Config.HTTPSPort != "" && r.Config.HTTPSPort != "443" {
+			host += ":" + r.Config.HTTPSPort
+		}
+		ing.Annotations["nginx.ingress.kubernetes.io/permanent-redirect"] = "https://" + host + "$request_uri"
+		ing.Annotations["nginx.ingress.kubernetes.io/permanent-redirect-code"] = "308"
+		// Reuse the app's backend/class, but only the platform host.
+		rule := ing.Spec.Rules[0]
+		rule.Host = source
+		ing.Spec.Rules = []networkingv1.IngressRule{rule}
+		tls := ing.Spec.TLS[:0:0]
+		for _, entry := range ing.Spec.TLS {
+			for _, h := range entry.Hosts {
+				if h == source {
+					tls = append(tls, entry)
+				}
+			}
+		}
+		ing.Spec.TLS = tls
+		r.Config.dnsAnnotations(app, ing, []string{source})
 		return controllerutil.SetControllerReference(app, ing, r.Scheme)
 	})
 	return err

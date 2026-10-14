@@ -424,6 +424,9 @@ func printResources(out io.Writer, app *shpyrdv1.App, vols []shpyrdv1.Volume) {
 }
 
 func printAppInfo(out io.Writer, app *shpyrdv1.App) {
+	if app.Spec.RedirectTo != "" {
+		fmt.Fprintf(out, "Redirect:   https://%s (when ready)\n", app.Spec.RedirectTo)
+	}
 	fmt.Fprintf(out, "Project:    %s\n", project.Label(app))
 	fmt.Fprintf(out, "Phase:      %s\n", firstNonEmpty(app.Status.Phase, "Pending"))
 	if app.Status.Message != "" {

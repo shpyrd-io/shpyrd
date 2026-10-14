@@ -184,6 +184,9 @@ type AppSpec struct {
 	// reports DNS and certificate state per host.
 	// +optional
 	Domains []string `json:"domains,omitempty"`
+	// RedirectTo redirects the platform hostname to this verified project domain.
+	// Empty inherits the workspace redirect setting, or serves both addresses.
+	RedirectTo string `json:"redirectTo,omitempty"`
 
 	// Bindings attach project resources (Postgres, Redis, ...) to the app:
 	// their connection details become config vars of every process.
