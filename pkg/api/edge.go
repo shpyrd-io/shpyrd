@@ -819,6 +819,18 @@ func (s *Server) previewApp(c *gin.Context) {
 	}
 	ws, _ := s.tenant(c)
 	host := s.appPublicHostIn(ws, project.SlugOf(app))
+	// Use the controller's active project redirect target so the preview cookie
+	// is minted for the host that will actually serve the app.
+	if app.Spec.RedirectTo != "" {
+		if u, err := url.Parse(app.Status.URL); err == nil && u.Scheme == "https" && u.Hostname() == app.Spec.RedirectTo {
+			for _, d := range app.Spec.Domains {
+				if d == u.Hostname() {
+					host = s.withPort(d)
+					break
+				}
+			}
+		}
+	}
 	code, err := s.edgeCodes.Mint(c.Request.Context(), host, edge.CookieClaims{SessionID: sid, Project: project.SlugOf(app), Preview: &edge.Preview{Teams: teams, Anonymous: req.Anonymous}})
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)

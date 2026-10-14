@@ -257,7 +257,10 @@ export type Instance = { name: string; process: string; pod: string; ready: bool
 // A record to publish at the DNS provider.
 export type DnsRecord = { type: string; name: string; value: string };
 
+export type DomainsAnswer = { target: string; address?: string; domains: DomainStatus[]; redirectTo?: string };
+
 export type DomainStatus = {
+  redirectEligible?: boolean;
   host: string;
   dns: "ok" | "missing" | "wrong" | "unknown";
   target?: string;
@@ -271,6 +274,7 @@ export type DomainStatus = {
 // A name of the workspace's own: proved by records, and one of them the
 // address the workspace answers at first.
 export type WorkspaceDomain = {
+  redirectApps?: boolean;
   host: string;
   verified: boolean;
   verifiedAt?: string;

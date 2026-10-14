@@ -146,6 +146,7 @@ type AppDetail struct {
 }
 
 type AppDetailSpec struct {
+	RedirectTo  string                      `json:"redirectTo,omitempty"`
 	Source      *shpyrdv1.Source            `json:"source,omitempty"`
 	PinnedImage string                      `json:"pinnedDigest,omitempty"`
 	Processes   map[string]shpyrdv1.Process `json:"processes,omitempty"`
@@ -226,6 +227,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Processes:   a.Spec.Processes,
 			Env:         a.Spec.Env,
 			Domains:     a.Spec.Domains,
+			RedirectTo:  a.Spec.RedirectTo,
 			Build:       a.Spec.Build,
 			Bindings:    a.Spec.Bindings,
 			Exposure:    a.Spec.Exposure,
