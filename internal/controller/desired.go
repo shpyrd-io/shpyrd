@@ -691,7 +691,7 @@ func (c Config) mutateDeployment(app *shpyrdv1.App, p namedProcess, image, confi
 		Command:         p.Command,
 		Args:            p.Args,
 		Resources:       res,
-		SecurityContext: hardenedSecurityContext(),
+		SecurityContext: imageSecurityContext(app, image),
 		// Global vars, then the project's config vars, then the vars of
 		// attached resources: with envFrom the last source wins, so project
 		// vars override globals and bound vars win over both (RFC-0003,
@@ -1119,4 +1119,16 @@ func EnvSources(app *shpyrdv1.App) []corev1.EnvFromSource {
 		out = append(out, optional(shpyrdv1.GlobalEnvSecretName))
 	}
 	return append(out, optional(app.EnvSecretName()), optional(app.BindingsSecretName()))
+}
+
+// imageSecurityContext never applies an identity resolved from another image.
+func imageSecurityContext(app *shpyrdv1.App, image string) *corev1.SecurityContext {
+	sc := hardenedSecurityContext()
+	for _, u := range app.Status.ImageUsers {
+		if u.Image == image && u.UID > 0 && u.GID >= 0 {
+			sc.RunAsUser, sc.RunAsGroup = ptr.To(u.UID), ptr.To(u.GID)
+			break
+		}
+	}
+	return sc
 }

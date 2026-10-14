@@ -223,6 +223,8 @@ Released v2: Deploy c26f84642501
 
 The build runs as a rootless [BuildKit](https://github.com/moby/buildkit) Job in the project namespace: a first step fetches your archive (or clones the Git revision), the second builds the context and pushes the image. Multi-stage builds, build arguments, `.dockerignore` and a layer cache between builds all work as with `docker build`.
 
+Processes, release steps, and one-off commands run as non-root. Prefer a numeric `USER 1000` in the final Dockerfile stage, and give that user access to the files the app needs. For images built by shpyrd, named users such as `USER node` are resolved from the image’s `/etc/passwd` and run with that numeric uid/gid. If the name cannot be resolved, startup fails with a suggestion to use a numeric `USER`; root users remain disallowed.
+
 Pin or tune it in [`shpyrd.yaml`](/docs/shpyrd-yaml):
 
 ```yaml

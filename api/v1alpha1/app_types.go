@@ -486,8 +486,20 @@ type HealthCheck struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+// ImageUser records a resolved non-root identity for an immutable image.
+type ImageUser struct {
+	Image string `json:"image"`
+	// +kubebuilder:validation:Minimum=1
+	UID int64 `json:"uid"`
+	// +kubebuilder:validation:Minimum=0
+	GID int64 `json:"gid"`
+}
+
 // AppStatus is the observed state of an App.
 type AppStatus struct {
+	// ImageUsers contains identities for the deployed and pending images.
+	// +optional
+	ImageUsers []ImageUser `json:"imageUsers,omitempty"`
 	// Runtime is the runtime detected in the current image's buildpack metadata.
 	// +optional
 	Runtime string `json:"runtime,omitempty"`

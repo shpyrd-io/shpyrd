@@ -479,6 +479,16 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if meta := r.metadataOf(ctx, image); meta != nil {
 		app.Status.ProcessTypes = meta.ProcessTypes
 		app.Status.Runtime = meta.Runtime
+		users := []shpyrdv1.ImageUser{}
+		for _, u := range app.Status.ImageUsers {
+			if (u.Image == app.Status.Image && u.Image != image) || (u.Image == image && meta.UserError != nil) {
+				users = append(users, u)
+			}
+		}
+		if meta.User != nil {
+			users = append(users, shpyrdv1.ImageUser{Image: image, UID: meta.User.UID, GID: meta.User.GID})
+		}
+		app.Status.ImageUsers = users
 	}
 	app.Status.DefaultSize = r.catalog(ctx).DefaultForRuntime(app.Status.Runtime)
 	// Fingerprint the effective sizes only after reading the image runtime:

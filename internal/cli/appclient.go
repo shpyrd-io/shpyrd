@@ -1070,7 +1070,7 @@ func detailToApp(d *api.AppDetail) *shpyrdv1.App {
 		Phase: d.Status.Phase, Message: d.Status.Message, Image: d.Status.Digest, URL: d.Status.URL,
 		LatestBuild: d.Status.LatestBuild, ObservedGeneration: d.Status.ObservedGeneration,
 		Conditions: d.Status.Conditions, Domains: d.Status.Domains, Processes: d.Processes,
-		ProcessTypes: d.Status.ProcessTypes, Release: d.Status.Release,
+		ProcessTypes: d.Status.ProcessTypes, Release: d.Status.Release, ImageUsers: d.Status.ImageUsers,
 	}
 	for _, r := range d.Status.Releases {
 		app.Status.Releases = append(app.Status.Releases, shpyrdv1.Release{
