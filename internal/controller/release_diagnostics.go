@@ -40,7 +40,10 @@ func (r *AppReconciler) releaseDiagnostic(ctx context.Context, app *shpyrdv1.App
 				(cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled") {
 				return releaseOOMMessage(app, job), true, nil
 			}
-			if cs.State.Waiting != nil && failingReasons[cs.State.Waiting.Reason] && !transientPull {
+			if imagePullGrace(&pod, cs, r.now()) && waiting == "" {
+				waiting = "Retrying the image download before the release step can start."
+			}
+			if cs.State.Waiting != nil && failingReasons[cs.State.Waiting.Reason] && !transientPull && !imagePullGrace(&pod, cs, r.now()) {
 				return "The release step cannot start: " + waitingFailure(cs), true, nil
 			}
 		}

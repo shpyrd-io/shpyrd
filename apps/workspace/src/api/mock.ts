@@ -51,11 +51,13 @@ function recordFor(host: string, target: string): DnsRecord {
 // beyond itself: one kept object, changed in place.
 type ProjectThings = {
   configVars: ConfigVar[];
+  configValues?: Record<string, string>;
+  configPending?: boolean;
   builds: BuildInfo[];
   resources: ResourceInfo[];
   volumes: VolumeInfo[];
   snapshots: SnapshotInfo[];
-  domains: { target: string; domains: DomainStatus[] };
+  domains: { target: string; domains: DomainStatus[]; redirectTo?: string };
   drains: Drain[];
   members: Member[];
   allow: AllowEntry[];
@@ -277,6 +279,14 @@ export const mock: Api = {
     await thingsOf.set(all);
     return d;
   },
+  setWorkspaceDomainRedirect: async (host, redirectApps) => {
+    const all = await thingsOf.get();
+    const d = all.workspaceDomains.find((x) => x.host === host);
+    if (!d || (redirectApps && (!d.verified || !d.primary))) throw new ApiError(400, "Choose a verified primary domain first.");
+    for (const x of all.workspaceDomains) x.redirectApps = redirectApps;
+    await thingsOf.set(all);
+    return d;
+  },
   setWorkspaceDomainPrimary: async (host) => {
     const all = await thingsOf.get();
     const d = all.workspaceDomains.find((x) => x.host === host);
@@ -422,6 +432,13 @@ export const mock: Api = {
   redeploy: async (slug, action) => {
     await wait();
     const p = await projectsOf.find(slug);
+    const [all, t] = await ofProject(slug);
+    if (t.configPending) {
+      t.configPending = false;
+      await thingsOf.set(all);
+      release(p, "config", "Apply saved configuration", p.status.releases.at(-1)?.build);
+      await projectsOf.set(p);
+    }
     if (action === "restart") return { action: "restart", message: "Running the release command again" };
     if (buildFailed({ phase: p.phase, conditions: p.status.conditions })) return { action: "rebuild", message: "Building the same source again" };
     return { action: "redeploy", message: "Starting new instances of the current release" };
@@ -476,7 +493,7 @@ export const mock: Api = {
     const [, t] = await ofProject(slug);
     const p = await projectsOf.find(slug);
     const bound = (p.spec.bindings ?? []).flatMap((b) => (b.kind === "Postgres" ? [{ name: "DATABASE_URL", provider: `${b.kind} ${b.name}` }] : b.kind === "Redis" ? [{ name: "REDIS_URL", provider: `${b.kind} ${b.name}` }] : []));
-    return { vars: t.configVars, bound, global: [{ name: "SENTRY_DSN", updatedAt: "2026-08-01T10:00:00Z" }] };
+    return { vars: t.configVars.filter((v) => v.value === undefined), variables: t.configVars.filter((v) => v.value !== undefined), pending: t.configPending, bound, global: [{ name: "SENTRY_DSN", updatedAt: "2026-08-01T10:00:00Z" }] };
   },
   changeConfigVars: async (slug, change) => {
     const [all, t] = await ofProject(slug);
@@ -485,16 +502,28 @@ export const mock: Api = {
       const at = line.indexOf("=");
       if (at > 0 && !line.trim().startsWith("#")) set[line.slice(0, at).trim()] = line.slice(at + 1).trim();
     }
-    for (const name of Object.keys(set)) {
-      const v = t.configVars.find((x) => x.name === name);
-      if (v) v.updatedAt = now();
-      else t.configVars.push({ name, updatedAt: now() });
+    const plain = change.kind === "variable";
+    for (const name of [...Object.keys(set), ...(change.convert ?? [])]) {
+      const existing = t.configVars.find((v) => v.name === name);
+      if (plain && existing && existing.value === undefined) throw new ApiError(400, `${name} is a secret: saved secrets cannot be made visible`);
+      if (plain && !change.confirmPlain && (change.convert?.includes(name) || /(_KEY|_SECRET|_TOKEN)$|PASSWORD|^(SECRET|TOKEN)$/i.test(name) || (existing && existing.value === undefined))) throw new ApiError(400, `Confirm that ${name} can be visible to project viewers`);
     }
-    for (const name of change.unset ?? []) t.configVars = t.configVars.filter((v) => v.name !== name);
+    t.configValues ??= {};
+    for (const name of change.convert ?? []) {
+      const existing = t.configVars.find((v) => v.name === name);
+      if (!existing) throw new ApiError(400, `${name} does not exist`);
+      set[name] = t.configValues[name] ?? existing.value ?? "mock value";
+    }
+    for (const [name, value] of Object.entries(set)) {
+      t.configValues[name] = value;
+      t.configVars = t.configVars.filter((v) => v.name !== name);
+      t.configVars.push({ name, updatedAt: now(), ...(plain ? { value } : {}) });
+    }
+    for (const name of change.unset ?? []) {
+      t.configVars = t.configVars.filter((v) => v.name !== name || (v.value !== undefined) !== plain);
+    }
+    t.configPending = true;
     await thingsOf.set(all);
-    const p = await projectsOf.find(slug);
-    release(p, "config", change.unset?.length ? `${change.unset.join(", ")} removed` : `${Object.keys(set).join(", ")} set`, p.status.releases.at(-1)?.build);
-    await projectsOf.set(p);
   },
   resources: async (slug) => (await ofProject(slug))[1].resources,
   createResource: async (slug, body) => {
@@ -618,7 +647,19 @@ export const mock: Api = {
     await thingsOf.set(all);
     return { volume: v, inPlace: true, message: `${volume} was restored from ${body.snapshot}` };
   },
-  domains: async (slug) => (await ofProject(slug))[1].domains,
+  domains: async (slug) => {
+    const data = (await ofProject(slug))[1].domains;
+    // Older localStorage fixtures predate redirect eligibility.
+    for (const d of data.domains) d.redirectEligible ??= d.dns === "ok" && d.certificate === "ready";
+    return data;
+  },
+  setDomainRedirect: async (slug, redirectTo) => {
+    const [all, p] = await ofProject(slug);
+    if (redirectTo && !p.domains.domains.some((d) => d.host === redirectTo && (d.redirectEligible ?? (d.dns === "ok" && d.certificate === "ready")))) throw new ApiError(400, "Choose a project domain whose DNS and certificate are ready.");
+    p.domains.redirectTo = redirectTo;
+    await thingsOf.set(all);
+    return p.domains;
+  },
   addDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     const record = recordFor(host, p.domains.target);
@@ -630,6 +671,7 @@ export const mock: Api = {
   removeDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     p.domains.domains = p.domains.domains.filter((d) => d.host !== host);
+    if (p.domains.redirectTo === host) p.domains.redirectTo = "";
     await thingsOf.set(all);
   },
   workspaceDrains: async () => (await thingsOf.get()).workspaceDrains,

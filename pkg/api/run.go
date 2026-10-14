@@ -146,14 +146,12 @@ func (s *Server) waitRunPod(ctx context.Context, namespace, name string) error {
 		if err != nil {
 			return err
 		}
+		if why := controller.StartupFailure(p, time.Now()); why != "" {
+			return fmt.Errorf("instance cannot start: %s", why)
+		}
 		switch p.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 			return nil
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if w := cs.State.Waiting; w != nil && (w.Reason == "ErrImagePull" || w.Reason == "ImagePullBackOff" || w.Reason == "CreateContainerError") {
-				return fmt.Errorf("instance cannot start: %s: %s", w.Reason, w.Message)
-			}
 		}
 		select {
 		case <-ctx.Done():

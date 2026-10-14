@@ -6,6 +6,7 @@ import type {
   ClusterMetrics,
   ClusterSettings,
   ClusterSummary,
+  SchedulingSummary,
   ConsoleUser,
   CostDrain,
   CostGroup,
@@ -54,6 +55,7 @@ export type Api = OverviewAPI & {
   patchSettings: (body: Partial<ClusterSettings>) => Promise<ClusterSettings>;
   // The cluster.
   cluster: () => Promise<ClusterSummary>;
+  clusterScheduling: () => Promise<SchedulingSummary>;
   clusterMetrics: (range: string) => Promise<ClusterMetrics>;
   helmReleases: () => Promise<HelmRelease[]>;
   registry: () => Promise<RegistryInfo>;

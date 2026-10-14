@@ -342,6 +342,7 @@ func (s *Server) applyArchiveConfiguration(ctx context.Context, app *shpyrdv1.Ap
 	spec.Slug = current.Spec.Slug
 	// Routing and access grants belong to the authenticated destination.
 	spec.Domains = current.Spec.Domains
+	spec.RedirectTo = current.Spec.RedirectTo
 	spec.Allow = current.Spec.Allow
 	spec.Access = current.Spec.Access
 	config := map[string][]byte{}

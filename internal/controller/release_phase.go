@@ -62,7 +62,7 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 		return nil
 	}
 	imageProcessTypes.mu.Lock()
-	if t, ok := imageProcessTypes.types[digest]; ok {
+	if t, ok := imageProcessTypes.types[digest]; ok && (t.UserError == nil || time.Since(imageProcessTypes.failed[digest]) < time.Minute) {
 		imageProcessTypes.mu.Unlock()
 		return t
 	}
@@ -75,7 +75,7 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 	if err != nil {
 		return nil
 	}
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	types, err := cl.BuildMetadata(cctx, repo, digest)
 	imageProcessTypes.mu.Lock()
@@ -85,6 +85,9 @@ func (r *AppReconciler) metadataOf(ctx context.Context, image string) *registry.
 		return nil
 	}
 	imageProcessTypes.types[digest] = types
+	if types.UserError != nil {
+		imageProcessTypes.failed[digest] = time.Now()
+	}
 	return types
 }
 
@@ -205,7 +208,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 		case refusal != "":
 			st.Message = refusal
 		case jobDeadlineExceeded(job):
-			st.Message = "The release step ran longer than 30 minutes and was stopped. Its log has its output. Make it shorter and deploy again; the previous release keeps running."
+			st.Message = "The release step did not finish within 30 minutes and was stopped. Check its startup status and any available logs, then deploy again; the previous release keeps running."
 		default:
 			st.Message = "The release step failed. Its log has its output. Fix it and deploy again, or deploy the same source again to run it again; the previous release keeps running."
 		}
@@ -251,7 +254,7 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 		Image:           image,
 		Command:         command,
 		Resources:       res,
-		SecurityContext: hardenedSecurityContext(),
+		SecurityContext: imageSecurityContext(app, image),
 		EnvFrom:         EnvSources(app),
 		Env:             append(r.Config.platformEnv(app, revision, releaseProcessType, release), corev1.EnvVar{Name: "SHPYRD_RELEASE_PHASE", Value: "1"}),
 	}

@@ -16,12 +16,16 @@ import (
 
 func TestReleaseAndRolloutExplainWaiting(t *testing.T) {
 	for _, tc := range []struct {
-		name, event, eventMessage, container, containerMessage, want string
-		unscheduled, oldNode, staleEvent, failed                     bool
+		name, event, eventMessage, container, containerMessage, schedulingMessage, want string
+		unscheduled, oldNode, staleEvent, failed                                        bool
 	}{
 		{name: "scale up", event: "TriggeredScaleUp", unscheduled: true, want: "new machine is being added"},
 		{name: "size limit", event: "NotTriggerScaleUp", eventMessage: "max node group size reached", unscheduled: true, want: "cluster is at its size limit"},
 		{name: "unschedulable", event: "NotTriggerScaleUp", eventMessage: "untolerated taint", unscheduled: true, want: "no available machine"},
+		{name: "cpu capacity", unscheduled: true, schedulingMessage: "0/2 nodes are available: 1 Insufficient cpu, 1 untolerated taint", want: "Waiting for cluster resources: not enough capacity"},
+		{name: "memory capacity", unscheduled: true, schedulingMessage: "Insufficient memory", want: "Waiting for cluster resources: not enough capacity"},
+		{name: "pod slots", unscheduled: true, schedulingMessage: "Too many pods", want: "Waiting for cluster resources: not enough capacity"},
+		{name: "volume placement", unscheduled: true, schedulingMessage: "pod has unbound immediate PersistentVolumeClaims", want: "Waiting for scheduling:"},
 		{name: "new network", event: "FailedCreatePodSandBox", want: "Starting on a new machine"},
 		{name: "old network", event: "FailedCreatePodSandBox", oldNode: true, want: "instance's network"},
 		{name: "registry trust", event: "Failed", eventMessage: "x509: certificate signed by unknown authority", container: "ImagePullBackOff", want: "trust the platform's registry"},
@@ -55,7 +59,7 @@ func TestReleaseAndRolloutExplainWaiting(t *testing.T) {
 			pod.Spec.NodeName = "machine"
 			if tc.unscheduled {
 				pod.Spec.NodeName = ""
-				pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}
+				pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Message: tc.schedulingMessage}}
 			}
 			reason := tc.container
 			if reason == "" {

@@ -15,6 +15,7 @@ import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { Tabs, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { TimeChart } from "@shpyrd/ui/components/time-chart";
+import type { SchedulingSummary } from "@/api/types";
 import { api } from "@/api/api";
 import type { NodeDevice, OverviewNode, OverviewPool, OverviewView, Values } from "@/api/cluster-overview";
 import { ago, bytes, Failed, Loading } from "./shared";
@@ -54,6 +55,7 @@ export function Overview() {
   const [pool, setPool] = useState<string | null>(null);
   const [range, setRange] = useState("1h");
   const [node, setNode] = useState<string | null>(null);
+  const scheduling = useQuery({ queryKey: ["cluster-scheduling"], queryFn: api.clusterScheduling, ...polling });
   const overview = useQuery({ queryKey: ["cluster-overview"], queryFn: ({ signal }) => api.overview(signal), ...polling });
   const data = overview.data;
   const attention = useQuery({ queryKey: ["overview-attention", data?.snapshot], queryFn: ({ signal }) => api.overviewNodes({ snapshot: data!.snapshot, pool: "*", view: "compute", issues: "true", sort: "severity", limit: 10 }, signal), enabled: !!data, staleTime: Infinity, retry: 1 });
@@ -67,6 +69,7 @@ export function Overview() {
   return <>
     {process.env.NEXT_PUBLIC_API_MODE === "mock" && <Badge variant="secondary">Mock preview · illustrative metrics</Badge>}
     <PageHeading title="Cluster" description={`${number(total)} nodes · ${data.pools.length} pools · Updated ${ago(data.updatedAt)}`} iconEnd={<StatusBadge type={ready === total && total > 0 ? "success" : "warning"}>{ready}/{total} nodes ready</StatusBadge>} />
+    <SchedulingAlert scheduling={scheduling.error ? { pending: [], error: "Could not check pending instances. Scheduling status is unavailable." } : scheduling.data} />
     <div className="flex flex-wrap items-center justify-end gap-3">
       <Choice label="Time range" value={range} onChange={setRange} options={[["1h", "Last hour"], ["6h", "Last 6 hours"], ["24h", "Last 24 hours"], ["7d", "Last 7 days"]]} />
       <Button variant="secondary" onClick={() => { void overview.refetch(); }} disabled={overview.isFetching}><RefreshCw />Refresh</Button>
@@ -107,7 +110,11 @@ function PoolInspection({ pool, snapshot, range, mixed, onInspect }: { pool: Ove
   const [sort, setSort] = useState("cpuRequestedPct");
   const [page, setPage] = useState({ snapshot, offset: 0 });
   const [compare, setCompare] = useState<string[]>([]);
-  useEffect(() => { const timer = setTimeout(() => { setQuery(search); setPage(p => ({ ...p, offset: 0 })); }, 300); return () => clearTimeout(timer); }, [search]);
+  useEffect(() => {
+    if (search === query) return;
+    const timer = setTimeout(() => { setQuery(search); setPage(p => ({ ...p, offset: 0 })); }, 300);
+    return () => clearTimeout(timer);
+  }, [search, query]);
   // Freeze later pages at their original snapshot; new snapshots only refresh page one.
   const activeSnapshot = page.offset === 0 ? snapshot : page.snapshot;
   const nodes = useQuery({ queryKey: ["overview-nodes", activeSnapshot, pool.name, view, query, zone, status, issues, sort, page.offset], queryFn: ({ signal }) => api.overviewNodes({ snapshot: activeSnapshot, pool: pool.name, view, search: query, zone, status: status === "all" ? undefined : status, issues: String(issues), sort, offset: page.offset }, signal), staleTime: Infinity, retry: 1 });
@@ -189,4 +196,35 @@ function Pods({ node }: { node: string }) {
     {pods.isLoading && <Loading rows={3} />}{pods.error && <Failed what="the node pods" error={pods.error} />}
     {pods.data && <><Table><TableHeader><TableRow><TableHead>Namespace</TableHead><TableHead>Pod</TableHead><TableHead>Phase</TableHead></TableRow></TableHeader><TableBody>{pods.data.pods.map(p => <TableRow key={`${p.namespace}/${p.name}`}><TableCell>{p.namespace}</TableCell><TableCell className="font-mono text-xs">{p.name}</TableCell><TableCell>{p.phase}</TableCell></TableRow>)}</TableBody></Table>{!pods.data.pods.length && <p className="text-sm text-muted-foreground">No pods match these filters.</p>}<div className="flex gap-2"><Button variant="secondary" disabled={!cursor} onClick={() => setCursor("")}>First page</Button><Button variant="secondary" disabled={!pods.data.continue} onClick={() => setCursor(pods.data!.continue)}>Next 50</Button></div></>}
   </>;
+}
+
+export function SchedulingAlert({ scheduling }: { scheduling?: SchedulingSummary }) {
+  if (!scheduling) return null;
+  if (scheduling.error) return (
+    <Alert variant="warning">
+      <AlertTitle>Scheduling status unavailable</AlertTitle>
+      <AlertDescription>{scheduling.error}</AlertDescription>
+    </Alert>
+  );
+  if (!scheduling.pending.length) return null;
+  const capacity = scheduling.pending.filter((p) => p.capacity).length;
+  return (
+    <Alert variant="warning">
+      <AlertTitle>{capacity ? "Instances waiting for cluster resources" : "Instances waiting for scheduling"}</AlertTitle>
+      <AlertDescription>
+        <p>{scheduling.pending.length} pending {scheduling.pending.length === 1 ? "instance cannot" : "instances cannot"} be placed on a node.</p>
+        {capacity > 0 && <p>The scheduler reports a resource shortage for {capacity} {capacity === 1 ? "instance" : "instances"}. Add or free capacity in the required pool, or review resource requests. Other placement constraints may also need attention.</p>}
+        {!capacity && <p>Review the placement constraints below; adding capacity alone may not resolve them.</p>}
+        <ul className="grid gap-2">
+          {scheduling.pending.map((p) => (
+            <li key={p.namespace + "/" + p.name}>
+              <span className="font-mono text-foreground">{p.namespace}/{p.name}</span>
+              {p.pool && <span> ({p.pool} pool)</span>}
+              <p className="break-words">{p.message || "The scheduler has not reported a reason yet."}</p>
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
 }
