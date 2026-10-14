@@ -149,6 +149,19 @@ func New(k *kube.Client, opts Options) (*Engine, error) {
 		}
 	}
 
+	// Retired components are no longer in the runlevels, but RemoveRetired
+	// still needs their manifests to remove the recorded installation.
+	for _, name := range profile.Retired {
+		if _, ok := byName[name]; ok {
+			continue
+		}
+		c, err := LoadComponent(opts.Tree, name)
+		if err != nil {
+			return nil, fmt.Errorf("load retired component %s: %w", name, err)
+		}
+		byName[name] = c
+	}
+
 	vars := mergeVars(map[string]string{
 		VarProfile:  profile.Name,
 		VarVersion:  opts.Version,

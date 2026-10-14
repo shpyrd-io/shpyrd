@@ -37,3 +37,28 @@ func TestRetiredToRemove(t *testing.T) {
 		t.Errorf("a cluster that never had it: %v", got)
 	}
 }
+
+func TestEngineLoadsRetiredComponentsWithoutSelectingThem(t *testing.T) {
+	for _, profile := range []string{"oci", "aws"} {
+		t.Run(profile, func(t *testing.T) {
+			e, err := New(nil, Options{Profile: profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := e.components["storage-local"]
+			if c == nil || c.Kustomize == nil {
+				t.Fatal("retired component manifests must be available for removal")
+			}
+			for _, rl := range e.profile.Runlevels {
+				for _, selected := range e.selected(rl) {
+					if selected.Name == "storage-local" {
+						t.Fatal("retired component must not be installed")
+					}
+				}
+			}
+			if _, err := e.renderComponent(c); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
