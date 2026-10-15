@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -331,6 +332,101 @@ func TestSharedServerGetsTheDumpRoleAndThePullSecret(t *testing.T) {
 		if got := sharedDumpsSchedule(name); got != want {
 			t.Errorf("schedule of %s = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// A shared server's pooler: switched on by a stamp on the server, rendered
+// in transaction mode, and once its Deployment answers the tenants'
+// Services turn to it; "<name>-direct" and direct_uri keep the primary all
+// along, and the binder hands DATABASE_DIRECT_URL.
+func TestSharedServerPoolerTurnsTheTenants(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	target := func(name string) string {
+		t.Helper()
+		svc := &corev1.Service{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: name}, svc); err != nil {
+			t.Fatalf("service %s: %v", name, err)
+		}
+		return svc.Spec.ExternalName
+	}
+	primary := "pg-shared-1-rw." + SharedPostgresNamespace + ".svc.cluster.local"
+	if target("db") != primary || target("db-direct") != primary {
+		t.Errorf("before the pooler: db -> %s, db-direct -> %s", target("db"), target("db-direct"))
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db-app"}, sec); err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["direct_host"]) != "db-direct" || !strings.Contains(string(sec.Data["direct_uri"]), "@db-direct:5432/") || !strings.HasSuffix(string(sec.Data["direct_uri"]), "?sslmode=require&connect_timeout=10") {
+		t.Errorf("direct credentials = %s %s", sec.Data["direct_host"], sec.Data["direct_uri"])
+	}
+	pooler := &unstructured.Unstructured{}
+	pooler.SetGroupVersionKind(CNPGPoolerGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-pooler"}, pooler); err == nil {
+		t.Error("no pooler before the server asks for one")
+	}
+
+	// The switch: the server stamped (by the metering loop or by hand).
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	server.SetAnnotations(map[string]string{AnnotationPooler: "2026-10-15T09:00:00Z"})
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := r.sharedServerTenants(ctx, server); len(reqs) != 1 || reqs[0].NamespacedName != key {
+		t.Errorf("the server's tenants = %v", reqs)
+	}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil || res.RequeueAfter <= 0 {
+		t.Errorf("while the pooler comes up, the tenant comes back: %+v %v", res, err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-pooler"}, pooler); err != nil {
+		t.Fatal(err)
+	}
+	cluster, _, _ := unstructured.NestedString(pooler.Object, "spec", "cluster", "name")
+	kind, _, _ := unstructured.NestedString(pooler.Object, "spec", "type")
+	mode, _, _ := unstructured.NestedString(pooler.Object, "spec", "pgbouncer", "poolMode")
+	instances, _, _ := unstructured.NestedInt64(pooler.Object, "spec", "instances")
+	poolSize, _, _ := unstructured.NestedString(pooler.Object, "spec", "pgbouncer", "parameters", "default_pool_size")
+	pool, _, _ := unstructured.NestedString(pooler.Object, "spec", "template", "spec", "nodeSelector", PoolLabel)
+	if cluster != "pg-shared-1" || kind != "rw" || mode != "transaction" || instances != 2 || poolSize != "5" || pool != "data" || pooler.GetLabels()[sharedServerLabel] != "pooler" {
+		t.Errorf("pooler = %s %s %s x%d pool_size=%s on %s labels %v", cluster, kind, mode, instances, poolSize, pool, pooler.GetLabels())
+	}
+	if target("db") != primary {
+		t.Errorf("the Service waits for the pooler: %s", target("db"))
+	}
+	// The pooler answers: the tenant's Service turns to it, the direct one stays.
+	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "pg-shared-1-pooler", Namespace: SharedPostgresNamespace}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}
+	if err := c.Create(ctx, deploy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	if target("db") != "pg-shared-1-pooler."+SharedPostgresNamespace+".svc.cluster.local" || target("db-direct") != primary {
+		t.Errorf("with the pooler: db -> %s, db-direct -> %s", target("db"), target("db-direct"))
+	}
+	for _, c := range []struct {
+		p95  float64
+		max  int
+		want bool
+	}{{241, 400, true}, {240, 400, false}, {300, 0, false}, {0, 400, false}} {
+		if got := sharedPoolerWanted(c.p95, c.max); got != c.want {
+			t.Errorf("sharedPoolerWanted(%v, %d) = %v", c.p95, c.max, got)
+		}
+	}
+	other := sharedPostgres("x", "p-other", "uid-other")
+	if reqs := r.sharedServerTenants(ctx, other); reqs != nil {
+		t.Errorf("not a server: %v", reqs)
 	}
 }
 

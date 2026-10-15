@@ -182,6 +182,10 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if err := r.ensureSharedDumps(ctx, server); err != nil {
 		return ctrl.Result{}, err
 	}
+	pooled, poolerWaiting, err := r.ensureSharedPooler(ctx, server)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	ready, _, _ := unstructured.NestedInt64(server.Object, "status", "readyInstances")
 	if ready < 1 {
 		phase, _, _ := unstructured.NestedString(server.Object, "status", "phase")
@@ -204,7 +208,7 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if err := r.ensureSharedAppSecret(ctx, pg, hash, password); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureSharedService(ctx, pg, server.GetName()); err != nil {
+	if err := r.ensureSharedServices(ctx, pg, server.GetName(), pooled); err != nil {
 		return ctrl.Result{}, err
 	}
 	pg.Status.CredentialsSecret = PostgresSecretName(pg.Name)
@@ -252,6 +256,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	}
 	pg.Status.Phase = shpyrdv1.ResourceReady
 	pg.Status.Message = fmt.Sprintf("PostgreSQL %s, shared, on %s", defaultPostgresVersion, server.GetName())
+	if pooled {
+		pg.Status.Message += " through its connection pooler"
+	}
 	switch {
 	case fenced && suspendedWithWorkspace(pg):
 		pg.Status.Message = "Connections are paused: your workspace is suspended. They return when it is active again."
@@ -261,6 +268,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		pg.Status.Message = fmt.Sprintf("Writes are paused because the database is over its %s limit. Free space, or raise the limit.", capText(pg))
 	}
 	setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Ready", pg.Status.Message)
+	if poolerWaiting { // the server's pooler is coming up: the Service turns to it then
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -699,26 +709,35 @@ func (r *PostgresReconciler) ensureSharedAppSecret(ctx context.Context, pg *shpy
 			"sslmode":         []byte("require"),
 			"connect_timeout": []byte(sharedConnectTimeout),
 			"uri":             []byte(fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=require&connect_timeout=%s", user, password, pg.Name, PostgresPort, db, sharedConnectTimeout)),
+			// The server itself, for what a transaction pool cannot carry;
+			// the same place as "uri" until the server's pooler is on.
+			"direct_host": []byte(sharedDirectService(pg)),
+			"direct_uri":  []byte(fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=require&connect_timeout=%s", user, password, sharedDirectService(pg), PostgresPort, db, sharedConnectTimeout)),
 		}
 		return controllerutil.SetControllerReference(pg, sec, r.Scheme)
 	})
 	return err
 }
 
-// ensureSharedService is the database's Service in the project: a name
-// apps keep, pointing at the server's primary.
-func (r *PostgresReconciler) ensureSharedService(ctx context.Context, pg *shpyrdv1.Postgres, server string) error {
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: pg.Name, Namespace: pg.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		svc.Labels = mergeMaps(svc.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
-		svc.Spec.Type = corev1.ServiceTypeExternalName
-		svc.Spec.ExternalName = fmt.Sprintf("%s-rw.%s.svc.cluster.local", server, SharedPostgresNamespace)
-		svc.Spec.Selector = nil
-		svc.Spec.ClusterIP, svc.Spec.ClusterIPs = "", nil
-		svc.Spec.Ports = []corev1.ServicePort{{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(PostgresPort)}}
-		return controllerutil.SetControllerReference(pg, svc, r.Scheme)
-	})
-	return err
+// ensureSharedServices are the database's Services in the project: its
+// own name, which apps keep, at the server's primary or at its pooler once
+// the tenants go through it; and "<name>-direct", always at the primary.
+func (r *PostgresReconciler) ensureSharedServices(ctx context.Context, pg *shpyrdv1.Postgres, server string, pooled bool) error {
+	for name, target := range map[string]string{pg.Name: sharedServiceTarget(server, pooled), sharedDirectService(pg): sharedDirectTarget(server)} {
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pg.Namespace}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+			svc.Labels = mergeMaps(svc.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
+			svc.Spec.Type = corev1.ServiceTypeExternalName
+			svc.Spec.ExternalName = target
+			svc.Spec.Selector = nil
+			svc.Spec.ClusterIP, svc.Spec.ClusterIPs = "", nil
+			svc.Spec.Ports = []corev1.ServicePort{{Name: "postgres", Port: PostgresPort, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(PostgresPort)}}
+			return controllerutil.SetControllerReference(pg, svc, r.Scheme)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sharedTenantApplied reports whether CloudNativePG applied the tenant's

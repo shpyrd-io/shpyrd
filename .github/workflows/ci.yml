@@ -290,6 +290,26 @@ jobs:
           ./bin/shpyrd pg restore shared --as shared2 --project hello-world --context kind-ci
           ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep -q 'from shared'
           kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep -q restore-
+          # The server's pooler, switched on by the platform when connections
+          # run high (here: by hand): the tenants turn to it once it answers,
+          # "<name>-direct" keeps the primary, and the tenant's credentials
+          # open the database through it.
+          kubectl --context kind-ci -n shpyrd-shared-postgres annotate cluster pg-shared-1 shpyrd.io/pooler=now
+          for i in $(seq 1 60); do
+            if kubectl --context kind-ci -n shpyrd-shared-postgres get deploy pg-shared-1-pooler >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=condition=Available deploy/pg-shared-1-pooler --timeout=300s
+          POOLER=pg-shared-1-pooler.shpyrd-shared-postgres.svc.cluster.local
+          for i in $(seq 1 30); do
+            TARGET=$(kubectl --context kind-ci -n "$NS" get svc shared -o jsonpath='{.spec.externalName}')
+            [ "$TARGET" = "$POOLER" ] && break
+            sleep 2
+          done
+          [ "$TARGET" = "$POOLER" ]
+          kubectl --context kind-ci -n "$NS" get svc shared-direct -o jsonpath='{.spec.externalName}' | grep -q '^pg-shared-1-rw\.'
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${URI/@shared:5432/@pg-shared-1-pooler:5432}" -At -c "select current_user like 'u_%'" | grep -q '^t$'
+          ./bin/shpyrd pg info shared --project hello-world --context kind-ci | grep -q 'through its connection pooler'
           # Deleting fences the role at once, takes a last copy, and keeps the
           # data seven days behind a drop date.
           ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci

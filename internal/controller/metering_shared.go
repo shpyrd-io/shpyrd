@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -260,4 +261,56 @@ func humanBytes(n int64) string {
 		return unit(1<<10, "Ki")
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+// sharedServerPoolers switches a server's pooler on when the seven-day p95
+// of its client connections passes 60 % of max_connections: the server is
+// stamped, and the Postgres reconciler renders the Pooler and turns the
+// tenants to it. Once on, it stays on.
+func (m *MeteringLoop) sharedServerPoolers(ctx context.Context, at time.Time) error {
+	if m.Client == nil {
+		return nil
+	}
+	servers := &unstructured.UnstructuredList{}
+	servers.SetGroupVersionKind(CNPGClusterGVK.GroupVersion().WithKind("ClusterList"))
+	if err := m.Client.List(ctx, servers, client.InNamespace(SharedPostgresNamespace), client.MatchingLabels{sharedServerLabel: "server"}); err != nil {
+		return err
+	}
+	var pending []*unstructured.Unstructured
+	for i := range servers.Items {
+		if servers.Items[i].GetAnnotations()[AnnotationPooler] == "" {
+			pending = append(pending, &servers.Items[i])
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	// CNPG's PodMonitor labels a server's series job="<namespace>/<name>";
+	// the clients are everything but CNPG's own sessions and the pooler's.
+	series, err := m.Prom.QueryInstantSeriesAt(ctx, fmt.Sprintf(
+		`quantile_over_time(0.95, sum by (job) (cnpg_backends_total{namespace=%q,usename!~"postgres|streaming_replica|cnpg_metrics_exporter|cnpg_pooler_pgbouncer"})[%s:5m])`,
+		SharedPostgresNamespace, sharedPoolerWindow), at)
+	if err != nil {
+		return fmt.Errorf("shared server connections: %w", err)
+	}
+	p95 := map[string]float64{}
+	for _, s := range series {
+		p95[s.Labels["job"]] = s.Value
+	}
+	for _, server := range pending {
+		maxText, _, _ := unstructured.NestedString(server.Object, "spec", "postgresql", "parameters", "max_connections")
+		maxConnections, _ := strconv.Atoi(maxText)
+		seen := p95[SharedPostgresNamespace+"/"+server.GetName()]
+		if !sharedPoolerWanted(seen, maxConnections) {
+			continue
+		}
+		before := server.DeepCopy()
+		server.SetAnnotations(mergeMaps(server.GetAnnotations(), map[string]string{AnnotationPooler: at.UTC().Format(time.RFC3339)}))
+		if err := m.Client.Patch(ctx, server, client.MergeFrom(before)); err != nil {
+			log.FromContext(ctx).Error(err, "shared server pooler switch failed", "server", server.GetName())
+			continue
+		}
+		log.FromContext(ctx).Info("shared server pooler switched on", "server", server.GetName(), "connections_p95", seen, "max_connections", maxConnections)
+	}
+	return nil
 }

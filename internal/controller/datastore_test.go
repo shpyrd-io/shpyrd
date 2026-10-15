@@ -104,6 +104,9 @@ func TestPostgresReconcile(t *testing.T) {
 	if vars["DATABASE_URL"] != "postgresql://app:s3cret@db-rw:5432/app" || vars["DATABASE_HOST"] != "db-rw" || vars["DATABASE_NAME"] != "app" || vars["DATABASE_PASSWORD"] != "s3cret" {
 		t.Errorf("vars = %v", vars)
 	}
+	if _, ok := vars["DATABASE_DIRECT_URL"]; ok {
+		t.Errorf("a dedicated database has no direct URL beside its own: %v", vars)
+	}
 
 	// With a sleep policy both the host and the URL name the shpyrd-owned
 	// Service "db" (the one that follows the database to the wake proxy);

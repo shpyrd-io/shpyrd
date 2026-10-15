@@ -17,10 +17,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -167,6 +169,9 @@ func (r *PostgresReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// database Ready (step 3 of the storage plan).
 		Watches(database, handler.EnqueueRequestsFromMapFunc(sharedTenantToPostgres)).
 		Watches(role, handler.EnqueueRequestsFromMapFunc(sharedTenantToPostgres)).
+		// A shared server's pooler switch, an annotation, turns its tenants
+		// to the pooler.
+		Watches(cluster, handler.EnqueueRequestsFromMapFunc(r.sharedServerTenants), builder.WithPredicates(predicate.AnnotationChangedPredicate{})).
 		// A finished backup updates the database's status (RFC-0038).
 		Watches(backup, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 			u, ok := obj.(*unstructured.Unstructured)
@@ -824,14 +829,20 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 			}
 		}
 	}
-	return map[string]string{
+	vars := map[string]string{
 		prefix + "_URL":      url,
 		prefix + "_HOST":     host,
 		prefix + "_PORT":     port,
 		prefix + "_USER":     user,
 		prefix + "_PASSWORD": pass,
 		prefix + "_NAME":     db,
-	}, nil
+	}
+	// A shared database: the server itself, beside the URL that its pooler
+	// may answer one day.
+	if direct := get("direct_uri"); direct != "" {
+		vars[prefix+"_DIRECT_URL"] = direct
+	}
+	return vars, nil
 }
 
 func resourceMustParse(q string) resource.Quantity { return resource.MustParse(q) }

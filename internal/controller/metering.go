@@ -122,6 +122,9 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 			if err := m.sharedServerDisks(ctx, end); err != nil {
 				logger.Error(err, "shared server disks")
 			}
+			if err := m.sharedServerPoolers(ctx, end); err != nil {
+				logger.Error(err, "shared server poolers")
+			}
 			next = next.Add(bucketInterval)
 		}
 	}
