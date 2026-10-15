@@ -57,11 +57,15 @@ locals {
   node_image_id = length(local.node_images) > 0 ? local.node_images[0] : null
 }
 
-# Every node pool boots with node-cloud-init.sh: grow the root filesystem to
-# the boot volume, then OKE's bootstrap (#45). A change to it applies to
-# nodes created afterwards; existing nodes keep their first boot.
+# Every node pool boots with node-cloud-init.sh.tftpl: grow the root
+# filesystem to the boot volume, then OKE's bootstrap (#45). The apps pool's
+# copy also hands the kubelet the registry-trust taint (#44, below). A change
+# applies to nodes created afterwards; existing nodes keep their first boot.
 locals {
-  node_user_data = base64encode(file("${path.module}/node-cloud-init.sh"))
+  node_user_data = base64encode(templatefile("${path.module}/node-cloud-init.sh.tftpl", { kubelet_args = "" }))
+  apps_user_data = base64encode(templatefile("${path.module}/node-cloud-init.sh.tftpl", {
+    kubelet_args = var.registry_trust_taint ? "--kubelet-extra-args \"--register-with-taints=shpyrd.io/registry-trust=pending:NoSchedule\"" : ""
+  }))
 }
 
 resource "oci_containerengine_node_pool" "workers" {
@@ -127,15 +131,8 @@ resource "oci_containerengine_node_pool" "workers" {
 # the platform CA, and project pods scheduled in that gap fail to pull from
 # the in-cluster registry (shpyrd-io/shpyrd#44). OKE node pools have no
 # taint field, so the kubelet registers the node with the taint itself,
-# through the pool's cloud-init; the DaemonSet removes it after the CA.
-locals {
-  apps_cloud_init = <<-EOT
-    #!/bin/bash
-    curl --fail -H "Authorization: Bearer Oracle" -L0 http://169.254.169.254/opc/v2/instance/metadata/oke_init_script | base64 --decode >/var/run/oke-init.sh
-    bash /var/run/oke-init.sh --kubelet-extra-args "--register-with-taints=shpyrd.io/registry-trust=pending:NoSchedule"
-  EOT
-}
-
+# through the pool's cloud-init (local.apps_user_data); the DaemonSet
+# removes it after the CA.
 resource "oci_containerengine_node_pool" "apps" {
   count = var.apps_max_count > 0 ? 1 : 0
 
@@ -145,7 +142,7 @@ resource "oci_containerengine_node_pool" "apps" {
   kubernetes_version = var.kubernetes_version
   node_shape         = var.node_shape
   ssh_public_key     = local.ssh_public_key
-  node_metadata      = { user_data = local.node_user_data }
+  node_metadata      = { user_data = local.apps_user_data }
 
   node_shape_config {
     ocpus         = var.apps_node_ocpus
@@ -162,8 +159,6 @@ resource "oci_containerengine_node_pool" "apps" {
     key   = "shpyrd.io/pool"
     value = "apps"
   }
-
-  node_metadata = var.registry_trust_taint ? { user_data = base64encode(local.apps_cloud_init) } : null
 
   node_config_details {
     size    = max(var.apps_min_count, 1)
