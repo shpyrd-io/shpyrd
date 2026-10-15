@@ -608,11 +608,25 @@ func (r *PostgresReconciler) ensureSharedRole(ctx context.Context, pg *shpyrdv1.
 	return err
 }
 
+// sharedExtensions are installed in every shared database by the platform
+// (the operator creates them, as the Database object says): the ones the
+// owner cannot create alone because PostgreSQL does not mark them trusted,
+// and the plan calls essential. pgvector weighs 184 KB per database. The
+// trusted extensions (pgcrypto, uuid-ossp, citext, hstore, pg_trgm,
+// unaccent, btree_gin, btree_gist, ltree, intarray and the rest PostgreSQL
+// marks so) are the owner's own CREATE EXTENSION; anything else the image
+// does not carry or PostgreSQL does not trust is a dedicated database's.
+var sharedExtensions = []string{"vector"}
+
 func (r *PostgresReconciler) ensureSharedDatabase(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) error {
 	db := &unstructured.Unstructured{}
 	db.SetGroupVersionKind(CNPGDatabaseGVK)
 	db.SetNamespace(SharedPostgresNamespace)
 	db.SetName(sharedDBObject(hash))
+	extensions := make([]interface{}, 0, len(sharedExtensions))
+	for _, name := range sharedExtensions {
+		extensions = append(extensions, map[string]interface{}{"name": name, "ensure": "present"})
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, db, func() error {
 		db.SetLabels(mergeMaps(db.GetLabels(), sharedTenantLabels(pg, server)))
 		return unstructured.SetNestedMap(db.Object, map[string]interface{}{
@@ -621,6 +635,7 @@ func (r *PostgresReconciler) ensureSharedDatabase(ctx context.Context, pg *shpyr
 			"owner":                 sharedRoleName(hash),
 			"databaseReclaimPolicy": "retain",
 			"ensure":                "present",
+			"extensions":            extensions,
 		}, "spec")
 	})
 	return err

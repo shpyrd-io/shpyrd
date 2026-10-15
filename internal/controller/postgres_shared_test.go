@@ -180,6 +180,10 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	dbName, _, _ := unstructured.NestedString(db.Object, "spec", "name")
 	owner, _, _ := unstructured.NestedString(db.Object, "spec", "owner")
 	onServer, _, _ := unstructured.NestedString(db.Object, "spec", "cluster", "name")
+	extensions, _, _ := unstructured.NestedSlice(db.Object, "spec", "extensions")
+	if len(extensions) != 1 || extensions[0].(map[string]interface{})["name"] != "vector" {
+		t.Errorf("the database's extensions = %v", extensions)
+	}
 	roleReclaim, _, _ := unstructured.NestedString(role.Object, "spec", "databaseRoleReclaimPolicy")
 	if roleReclaim != "delete" || roleName != "u_"+hash || limit != 20 || secretRef != "u-"+hash || dbName != "db_"+hash || owner != roleName || onServer != "pg-shared-1" || db.GetLabels()[sharedOfServerLabel] != "pg-shared-1" {
 		t.Errorf("tenant objects: role %s limit %d secret %s; database %s owner %s on %s labels %v", roleName, limit, secretRef, dbName, owner, onServer, db.GetLabels())
