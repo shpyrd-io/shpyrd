@@ -8,6 +8,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -98,6 +99,24 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	maxConn, _, _ := unstructured.NestedString(server.Object, "spec", "postgresql", "parameters", "max_connections")
 	if instances != 2 || class != "oci-bv" || size != "50Gi" || !superuser || pool != "data" || anti != "required" || maxConn != "400" {
 		t.Errorf("server = %d instances on %s/%s superuser=%v pool=%s anti=%s max_connections=%s", instances, class, size, superuser, pool, anti, maxConn)
+	}
+	// The namespace admits its own pods, the projects, the operator,
+	// monitoring and the platform; nothing else.
+	np := &networkingv1.NetworkPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "shared-postgres"}, np); err != nil {
+		t.Fatal(err)
+	}
+	from := np.Spec.Ingress[0].From
+	names := []string{}
+	for _, peer := range from {
+		if peer.NamespaceSelector != nil {
+			if n := peer.NamespaceSelector.MatchLabels[corev1.LabelMetadataName]; n != "" {
+				names = append(names, n)
+			}
+		}
+	}
+	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress || len(from) != 5 || from[0].PodSelector == nil || from[1].NamespaceSelector == nil || from[1].NamespaceSelector.MatchExpressions[0].Key != shpyrdv1.LabelProject || strings.Join(names, ",") != "cnpg-system,monitoring,shpyrd-system" {
+		t.Errorf("network policy = types %v from %+v (namespaces %v)", np.Spec.PolicyTypes, from, names)
 	}
 	// The server's dump role, its bucket and its nightly run come with it.
 	roles, _, _ := unstructured.NestedSlice(server.Object, "spec", "managed", "roles")

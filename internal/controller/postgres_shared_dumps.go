@@ -9,6 +9,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -306,5 +307,43 @@ func (r *PostgresReconciler) desiredSharedDumpsCronJob(server string, pull []cor
 				},
 			},
 		},
+	}
+}
+
+// The servers' NetworkPolicy (storage plan, step 3): hygiene, not a new
+// boundary, since isolation rests on PostgreSQL roles. The namespace admits
+// its own pods (the dump and restore Jobs), the projects' namespaces (the
+// tenants), the operator, monitoring (the PodMonitor scrape) and the
+// platform's namespace; nothing else reaches a server.
+const (
+	sharedNetworkPolicyName = "shared-postgres"
+	cnpgOperatorNamespace   = "cnpg-system"
+	monitoringNamespace     = "monitoring"
+)
+
+func (r *PostgresReconciler) ensureSharedNetworkPolicy(ctx context.Context) error {
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: sharedNetworkPolicyName, Namespace: SharedPostgresNamespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np.Labels = mergeMaps(np.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"})
+		np.Spec = r.sharedNetworkPolicySpec()
+		return nil
+	})
+	return err
+}
+
+func (r *PostgresReconciler) sharedNetworkPolicySpec() networkingv1.NetworkPolicySpec {
+	namespace := func(name string) networkingv1.NetworkPolicyPeer {
+		return networkingv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: name}}}
+	}
+	projects := networkingv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: shpyrdv1.LabelProject, Operator: metav1.LabelSelectorOpExists}},
+	}}
+	samePods := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{}}
+	return networkingv1.NetworkPolicySpec{
+		PodSelector: metav1.LabelSelector{},
+		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+		Ingress: []networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{
+			samePods, projects, namespace(cnpgOperatorNamespace), namespace(monitoringNamespace), namespace(r.SystemNamespace),
+		}}},
 	}
 }

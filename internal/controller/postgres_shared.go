@@ -150,6 +150,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.ensureSharedNetworkPolicy(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 	server, err := r.sharedServerFor(ctx, pg)
 	if err != nil {
 		return ctrl.Result{}, err
