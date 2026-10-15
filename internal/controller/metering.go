@@ -234,6 +234,7 @@ func (m *MeteringLoop) writeBuckets(ctx context.Context, start, end time.Time) (
 	buckets = append(buckets, m.cpuBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.memoryBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.storageBuckets(ctx, start, end, nsMap)...)
+	buckets = append(buckets, m.sharedBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.egressBuckets(ctx, start, end, nsMap)...)
 	if len(buckets) == 0 {
 		return 0, nil

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // The cap of a shared database (storage plan, step 3): its size is read
@@ -120,4 +121,34 @@ func applyCap(st *shpyrdv1.ResourceStatus, generation int64, used int64, cap *re
 		}
 	}
 	st.Conditions = append(st.Conditions, cond)
+}
+
+// sharedBuckets meters every shared database's cap for the window (storage
+// plan, step 3): cap GiB times seconds, one bucket per database, from the
+// objects themselves, not from a scrape. A database with no cap yet is
+// not metered.
+func (m *MeteringLoop) sharedBuckets(ctx context.Context, start, end time.Time, nsMap map[string][2]string) []store.UsageBucket {
+	if m.Client == nil {
+		return nil
+	}
+	var list shpyrdv1.PostgresList
+	if err := m.Client.List(ctx, &list); err != nil {
+		log.FromContext(ctx).Error(err, "shared databases for metering")
+		return nil
+	}
+	dur := end.Sub(start).Seconds()
+	var out []store.UsageBucket
+	for _, pg := range list.Items {
+		meta, ok := nsMap[pg.Namespace]
+		if !ok || pg.Spec.Type != shpyrdv1.PostgresTypeShared || pg.Spec.Storage == nil || pg.DeletionTimestamp != nil {
+			continue
+		}
+		gib := float64(pg.Spec.Storage.Value()) / (1024 * 1024 * 1024)
+		out = append(out, store.UsageBucket{
+			WorkspaceID: meta[0], Project: meta[1], Component: "postgres/" + pg.Name,
+			Metric: store.MetricPostgresShared, PeriodStart: start, PeriodEnd: end,
+			Quantity: ptr.To(gib * dur), Unit: store.UnitGiBSeconds, Quality: store.QualityComplete, Revision: 1, Source: "cap_v1",
+		})
+	}
+	return out
 }

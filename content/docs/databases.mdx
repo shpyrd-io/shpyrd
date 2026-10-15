@@ -51,7 +51,7 @@ The workspace's plan says which types it allows and which one a creation without
 
 What a shared database does differently:
 
-- **The cap.** Its size is measured every five minutes. At 80 % the status warns; at 150 % connections are paused (the role's connection limit goes to zero and its sessions end) until the database is back below 95 %. Free space, or raise the limit.
+- **The cap.** It is what the database is metered by, as a disk is metered by its size. Its size is measured every five minutes. At 80 % the status warns; at 150 % connections are paused (the role's connection limit goes to zero and its sessions end) until the database is back below 95 %. Free space, or raise the limit.
 - **Neighbours.** Nobody but the owner may connect to the database. `pg_database` and `pg_roles` are world-readable in PostgreSQL, so other tenants' hashed names are visible, never their project names; `pg_stat_activity` shows other sessions' presence, not their queries.
 - **psql.** `shpyrd pg psql` runs in a helper pod of your project with your credentials, never inside the shared server.
 - **Archives and moves.** A project archive carries a shared database's definition, not its data, which lives on the platform's server: a restore recreates it empty (its copies come back with `shpyrd pg restore`), and a move of the project's disks leaves it where it is. The operation's report says so.

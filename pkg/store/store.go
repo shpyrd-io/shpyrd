@@ -521,8 +521,12 @@ const (
 	// MetricMemoryReserved is the memory an awake instance reserves,
 	// request equals limit, so it is also what the instance takes from the
 	// node: the memory the customer is billed for (RFC-0075).
-	MetricMemoryReserved = "memory_reserved"  // GiB-seconds
-	MetricStorage        = "storage"          // GiB-seconds (provisioned)
+	MetricMemoryReserved = "memory_reserved" // GiB-seconds
+	MetricStorage        = "storage"         // GiB-seconds (provisioned)
+	// MetricPostgresShared is a shared database's cap over time (storage
+	// plan, step 3): the GiB it may hold, whatever it holds, as a disk is
+	// billed for its size.
+	MetricPostgresShared = "postgres_shared"  // GiB-seconds (the cap)
 	MetricEgressHTTP     = "egress_http"      // bytes
 	MetricInstanceSec    = "instance_seconds" // process-seconds
 	MetricStateSec       = "state_seconds"    // seconds in each state

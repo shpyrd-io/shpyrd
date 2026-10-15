@@ -581,3 +581,35 @@ func TestSharedCapsAreMeasuredAgainstTheCap(t *testing.T) {
 		t.Errorf("a dedicated database is not measured here: %q %+v", d.Status.Storage, capOf(d))
 	}
 }
+
+// A shared database is metered by its cap, from the object: cap GiB times
+// the window, one bucket per database; a dedicated one is not.
+func TestSharedDatabasesAreMeteredByTheirCap(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: store.DefaultWorkspace, shpyrdv1.LabelProject: "shop"}}}
+	cap := resource.MustParse("5Gi")
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "own", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &cap}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, shared, dedicated).Build()
+	srv := fakeProm(t, nil)
+	defer srv.Close()
+	st := store.NewMemory()
+	m := &MeteringLoop{Store: st, Prom: prom.NewClient(srv.URL), Client: c}
+	end := time.Now().UTC().Truncate(bucketInterval)
+	if _, err := m.writeBuckets(context.Background(), end.Add(-bucketInterval), end); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "shop", end.Add(-bucketInterval-time.Second), end.Add(time.Second))
+	var buckets []store.UsageBucket
+	for _, b := range got {
+		if b.Metric == store.MetricPostgresShared {
+			buckets = append(buckets, b)
+		}
+	}
+	if len(buckets) != 1 || buckets[0].Component != "postgres/db" || buckets[0].Quantity == nil || *buckets[0].Quantity != 5*bucketInterval.Seconds() || buckets[0].Unit != store.UnitGiBSeconds || buckets[0].Quality != store.QualityComplete {
+		t.Fatalf("shared buckets = %+v", buckets)
+	}
+}
