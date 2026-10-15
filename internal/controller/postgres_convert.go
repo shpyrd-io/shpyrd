@@ -146,14 +146,15 @@ func (r *PostgresReconciler) reconcileConvert(ctx context.Context, pg *shpyrdv1.
 }
 
 // patchMeta changes the object's metadata or spec (not its status) and
-// asks to come back at once.
+// asks to come back in a second: a timed requeue, not Requeue, which
+// controller-runtime counts as a failure and backs off from exponentially.
 func (r *PostgresReconciler) patchMeta(ctx context.Context, pg *shpyrdv1.Postgres, mutate func(*shpyrdv1.Postgres)) (ctrl.Result, error) {
 	before := pg.DeepCopy()
 	if pg.Annotations == nil {
 		pg.Annotations = map[string]string{}
 	}
 	mutate(pg)
-	return ctrl.Result{Requeue: true}, r.Patch(ctx, pg, client.MergeFrom(before))
+	return ctrl.Result{RequeueAfter: time.Second}, r.Patch(ctx, pg, client.MergeFrom(before))
 }
 
 func (r *PostgresReconciler) setConvertStep(ctx context.Context, pg *shpyrdv1.Postgres, step string) (ctrl.Result, error) {

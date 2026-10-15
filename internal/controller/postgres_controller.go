@@ -19,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -162,6 +163,10 @@ func (r *PostgresReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	role := &unstructured.Unstructured{}
 	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
 	return ctrl.NewControllerManagedBy(mgr).
+		// Hundreds of shared databases answer to one event on their server
+		// (a pooler switched on, a server rolled): one worker took two
+		// seconds each on dev, a 200-tenant server seven minutes.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 8}).
 		For(&shpyrdv1.Postgres{}).
 		Owns(cluster).
 		Owns(&shpyrdv1.ObjectBucket{}).
