@@ -325,6 +325,137 @@ func TestSharedDumpJobIsCutFromTheCronJob(t *testing.T) {
 	}
 }
 
+// driveShared takes a shared database up to its grants: the server up,
+// the tenant objects applied by the fake operator, the grants Job done.
+func driveShared(t *testing.T, r *PostgresReconciler, c client.Client, pg *shpyrdv1.Postgres) {
+	t.Helper()
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, pg.Annotations[AnnotationSharedServer])
+	if ready, _, _ := unstructured.NestedInt64(server.Object, "status", "readyInstances"); ready < 1 {
+		_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+		if err := c.Update(ctx, server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle(t, r, key)
+	hash := tenantHash(pg.UID)
+	markApplied(t, c, getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash))
+	markApplied(t, c, getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash))
+	settle(t, r, key)
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, job); err != nil {
+		t.Fatal(err)
+	}
+	job.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, job); err != nil {
+		if err := c.Update(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A new shared database restoring another's copy gets it loaded by a Job
+// as its own owner, from the source server's bucket, and is Ready only
+// then; a source already deleted is found through the Database object
+// kept behind its drop date.
+func TestSharedPostgresRestoreLoadsTheCopy(t *testing.T) {
+	ctx := context.Background()
+	src := sharedPostgres("db", "p-shop", "uid-shop-db")
+	tgt := sharedPostgres("db2", "p-shop", "uid-shop-db2")
+	tgt.Spec.Recovery = &shpyrdv1.PostgresRecovery{From: "db", Backup: "20261014T030700Z"}
+	r, c := sharedReconciler(t, 200, src, tgt)
+	driveShared(t, r, c, src)
+	if src.Status.Phase != shpyrdv1.ResourceReady {
+		t.Fatalf("source = %s %q", src.Status.Phase, src.Status.Message)
+	}
+	driveShared(t, r, c, tgt)
+	if tgt.Status.Phase != shpyrdv1.ResourceProvisioning || !strings.Contains(tgt.Status.Message, "loading the copy 20261014T030700Z of db") {
+		t.Errorf("while restoring = %s %q", tgt.Status.Phase, tgt.Status.Message)
+	}
+	hash, srcHash := tenantHash(tgt.UID), tenantHash(src.UID)
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "restore-" + hash}, job); err != nil {
+		t.Fatal(err)
+	}
+	pod := job.Spec.Template.Spec
+	env := map[string]string{}
+	for _, e := range pod.Containers[0].Env {
+		if e.Value != "" {
+			env[e.Name] = e.Value
+		}
+	}
+	user := pod.Containers[0].Env[4]
+	if strings.Join(pod.Containers[0].Command, " ") != "/tools/shpyrd-server restore-dump" || env["PGDATABASE"] != "db_"+hash || env["PGHOST"] != "pg-shared-1-rw" || env["SHPYRD_RESTORE_KEY"] != "db_"+srcHash+"/20261014T030700Z.dump" || user.ValueFrom.SecretKeyRef.Name != "u-"+hash || pod.Containers[0].EnvFrom[0].SecretRef.Name != "pg-shared-1-dumps" || pod.InitContainers[0].Image != r.ServerImage {
+		t.Errorf("restore job env %v user %+v envFrom %+v", env, user.ValueFrom.SecretKeyRef, pod.Containers[0].EnvFrom)
+	}
+	job.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, job); err != nil {
+		if err := c.Update(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := client.ObjectKeyFromObject(tgt)
+	settle(t, r, key)
+	if err := c.Get(ctx, key, tgt); err != nil {
+		t.Fatal(err)
+	}
+	db := getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash)
+	if tgt.Status.Phase != shpyrdv1.ResourceReady || db.GetAnnotations()[annotationSharedRestored] != "done" {
+		t.Errorf("after the job = %s %q, database annotations %v", tgt.Status.Phase, tgt.Status.Message, db.GetAnnotations())
+	}
+
+	// The source gone: its kept Database object says where its copies are.
+	if err := c.Get(ctx, client.ObjectKeyFromObject(src), src); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, client.ObjectKeyFromObject(src))
+	late := sharedPostgres("db3", "p-shop", "uid-shop-db3")
+	late.Spec.Recovery = &shpyrdv1.PostgresRecovery{From: "db", Backup: "20261013T030700Z"}
+	if err := c.Create(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	driveShared(t, r, c, late)
+	lateJob := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "restore-" + tenantHash(late.UID)}, lateJob); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range lateJob.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "SHPYRD_RESTORE_KEY" && e.Value != "db_"+srcHash+"/20261013T030700Z.dump" {
+			t.Errorf("key after the source's deletion = %s", e.Value)
+		}
+	}
+
+	// A failed Job is said in words, as a failure.
+	lateJob.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}
+	if err := c.Status().Update(ctx, lateJob); err != nil {
+		if err := c.Update(ctx, lateJob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lateKey := client.ObjectKeyFromObject(late)
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: lateKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, lateKey, late); err != nil {
+		t.Fatal(err)
+	}
+	if late.Status.Phase != shpyrdv1.ResourceFailed || !strings.Contains(late.Status.Message, "restoring the copy 20261013T030700Z of db failed") {
+		t.Errorf("failed restore = %s %q", late.Status.Phase, late.Status.Message)
+	}
+}
+
 // Deleting a shared database removes its role and secrets now and keeps
 // the data seven days behind a drop date.
 func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {

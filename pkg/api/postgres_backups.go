@@ -225,10 +225,12 @@ func (s *Server) takePostgresBackup(c *gin.Context) {
 
 // RestoreRequest is POST .../postgres/:name/restore: a new database As,
 // from the backups of :name, at To (RFC 3339; the latest when empty). Size
-// and Storage default to the source's.
+// and Storage default to the source's. A shared source restores one of
+// its copies, Backup (the newest when empty), never a point in time.
 type RestoreRequest struct {
 	As      string `json:"as" binding:"required"`
 	To      string `json:"to,omitempty"`
+	Backup  string `json:"backup,omitempty"`
 	Size    string `json:"size,omitempty"`
 	Storage string `json:"storage,omitempty"`
 }
@@ -246,7 +248,7 @@ func (s *Server) restorePostgres(c *gin.Context) {
 		return
 	}
 	if source.Spec.Type == shpyrdv1.PostgresTypeShared {
-		abort(c, http.StatusConflict, errors.New(errSharedBackupsLater))
+		s.restoreSharedPostgres(c, source, req)
 		return
 	}
 	t, ok := s.resourceType("Postgres")
@@ -306,6 +308,10 @@ func (s *Server) checkRecovery(ctx context.Context, ns, name, from string, to *t
 		return err
 	}
 	switch {
+	case source.Spec.Type == shpyrdv1.PostgresTypeShared && to != nil:
+		return errors.New(errSharedPointInTime)
+	case source.Spec.Type == shpyrdv1.PostgresTypeShared:
+		return nil // one of its copies, checked where the restore is asked
 	case source.Spec.Backups == nil:
 		return fmt.Errorf("the database %q has no backups to restore from: turn its backups on first", from)
 	case source.Status.LastBackup == nil:

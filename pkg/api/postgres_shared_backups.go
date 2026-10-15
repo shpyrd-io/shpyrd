@@ -29,6 +29,7 @@ import (
 const (
 	errSharedDumpsNotASetting = "A shared database is backed up by the platform's nightly dumps; there is nothing to turn on or off."
 	errSharedDumpsNotReady    = "The platform's nightly dumps are not set up for this database's server yet; try again in a few minutes."
+	errSharedPointInTime      = "Point-in-time restore is a dedicated database feature. A shared database restores one of its copies: shpyrd pg restore <name> --as <new> [--backup <copy>]."
 	sharedDumpsKeep           = 7
 )
 
@@ -180,4 +181,58 @@ func jobFailed(job batchv1.Job) bool {
 		}
 	}
 	return false
+}
+
+// restoreSharedPostgres makes a new shared database from one copy of
+// another's: the one named, else the newest. The controller loads it
+// once the new database exists; the source keeps running.
+func (s *Server) restoreSharedPostgres(c *gin.Context, source *shpyrdv1.Postgres, req RestoreRequest) {
+	if req.To != "" {
+		abort(c, http.StatusConflict, errors.New(errSharedPointInTime))
+		return
+	}
+	if req.Size != "" {
+		abort(c, http.StatusConflict, errors.New(errSharedNoInstanceSettings))
+		return
+	}
+	t, ok := s.resourceType("Postgres")
+	if !ok {
+		abort(c, http.StatusBadRequest, errors.New("databases are not available on this cluster (enable the postgres extension)"))
+		return
+	}
+	copies, _, err := s.sharedBackupsOf(c.Request.Context(), source)
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	chosen := ""
+	for _, b := range copies {
+		if b.Phase != "completed" {
+			continue
+		}
+		if req.Backup == "" || b.Name == req.Backup {
+			chosen = b.Name
+			break
+		}
+	}
+	switch {
+	case chosen == "" && req.Backup != "":
+		abort(c, http.StatusConflict, fmt.Errorf("no copy %q of %q: shpyrd pg backups list %s shows them", req.Backup, source.Name, source.Name))
+		return
+	case chosen == "":
+		abort(c, http.StatusConflict, fmt.Errorf("the database %q has no copy from the platform's nightly dumps yet; shpyrd pg backup %s takes one now", source.Name, source.Name))
+		return
+	}
+	spec := map[string]interface{}{
+		"type":     shpyrdv1.PostgresTypeShared,
+		"recovery": map[string]interface{}{"from": source.Name, "backup": chosen},
+	}
+	storage := req.Storage
+	if storage == "" && source.Spec.Storage != nil {
+		storage = source.Spec.Storage.String()
+	}
+	if storage != "" {
+		spec["storage"] = storage
+	}
+	s.createResourceOf(c, t, req.As, spec, "postgres.restore")
 }

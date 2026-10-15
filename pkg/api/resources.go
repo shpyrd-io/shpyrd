@@ -323,7 +323,6 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 const (
 	errSharedAlwaysOn           = "Shared databases are always on."
 	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
-	errSharedBackupsLater       = "A shared database is backed up by the platform's nightly dumps; restoring one is not available yet."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.

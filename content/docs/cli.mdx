@@ -186,7 +186,7 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd pg backup <name>` | Take a base backup now. |
 | `shpyrd pg sleep <name> --after 30m` | Stop the database after 30 min without client connections and wake it on the first one (about 30–40 s on a cloud block volume; volume and data kept; single-instance databases only). `--after off` disables — also when the workspace has a default for databases; `--after default` follows the workspace again. Sleep is an enterprise feature (auto sleep). Attached apps are re-released once. See [Databases](/docs/databases#sleep). |
 | `shpyrd pg suspend <name>`, `shpyrd pg resume <name>` | Stop a database now and refuse connections until resumed (data kept), and bring it back. |
-| `shpyrd pg restore <name> --as <new> [--to <RFC 3339>]` | Restore into a new database at a point in time (latest when omitted); `--size` and `--storage` default to the source's. Attach the app to it when ready. |
+| `shpyrd pg restore <name> --as <new> [--to <RFC 3339> \| --backup <copy>]` | Restore into a new database: a dedicated one at a point in time (latest when omitted), a shared one from a copy (the newest when omitted); `--size` and `--storage` default to the source's. Attach the app to it when ready. |
 | `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size` (a Redis size; the smallest when omitted), `--persistent`, `--storage`. |
 | `shpyrd redis resize <name> <size> --project <p>` | Give a store another Redis size; it restarts (a cache comes back empty). |
 | `shpyrd redis list\|info\|cli\|delete` | Manage stores; `cli <name> -- <args>` runs valkey-cli or redis-cli. |

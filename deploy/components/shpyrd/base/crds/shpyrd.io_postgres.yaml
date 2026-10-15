@@ -84,6 +84,11 @@ spec:
                   Recovery bootstraps this database from another one's backups, at a
                   point in time (RFC-0038); the source keeps running.
                 properties:
+                  backup:
+                    description: |-
+                      Backup is the copy to restore when From is a shared database, named
+                      as its backups are listed; the newest when unset.
+                    type: string
                   from:
                     description: |-
                       From is the Postgres resource in the same project whose backups are
@@ -92,7 +97,7 @@ spec:
                   targetTime:
                     description: |-
                       TargetTime is the point in time to recover to; the latest possible
-                      when unset.
+                      when unset. Dedicated databases only.
                     format: date-time
                     type: string
                 required:

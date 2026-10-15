@@ -268,7 +268,12 @@ jobs:
           ./bin/shpyrd pg backup shared --project hello-world --context kind-ci
           ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | tee /tmp/shared-backups.txt
           grep -q 'nightly' /tmp/shared-backups.txt && grep -q 'on demand' /tmp/shared-backups.txt
+          # The newest copy restored into a new shared database, as its owner.
+          ./bin/shpyrd pg restore shared --as shared2 --project hello-world --context kind-ci
+          ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep -q 'from shared'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep -q restore-
           # Deleting keeps the data seven days behind a drop date.
+          ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci
           ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
           kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
       - name: The projects answer on their URLs

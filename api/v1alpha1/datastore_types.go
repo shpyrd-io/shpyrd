@@ -163,9 +163,13 @@ type PostgresRecovery struct {
 	// restored.
 	From string `json:"from"`
 	// TargetTime is the point in time to recover to; the latest possible
-	// when unset.
+	// when unset. Dedicated databases only.
 	// +optional
 	TargetTime *metav1.Time `json:"targetTime,omitempty"`
+	// Backup is the copy to restore when From is a shared database, named
+	// as its backups are listed; the newest when unset.
+	// +optional
+	Backup string `json:"backup,omitempty"`
 }
 
 // +kubebuilder:object:root=true

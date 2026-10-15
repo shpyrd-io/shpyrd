@@ -51,6 +51,28 @@ func runDumps(logger *slog.Logger) error {
 	return err
 }
 
+// runRestoreDump is `shpyrd-server restore-dump`: one copy from a shared
+// server's bucket (SHPYRD_RESTORE_KEY, the bucket's Secret in the
+// environment) loaded into the database PG* names, as the role PG* names.
+// The controller's restore Job runs it inside the CloudNativePG image.
+func runRestoreDump(logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+	defer cancel()
+	key := os.Getenv("SHPYRD_RESTORE_KEY")
+	if key == "" {
+		return fmt.Errorf("SHPYRD_RESTORE_KEY names the copy to restore")
+	}
+	s3, err := objectstore.NewS3(os.Getenv("AWS_ENDPOINT_URL"), os.Getenv("AWS_REGION"), os.Getenv("BUCKET"), "", os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"))
+	if err != nil {
+		return fmt.Errorf("the dumps bucket: %w", err)
+	}
+	if err := pgdump.Restore(ctx, pgdump.Bucket{Client: s3.Client, Name: s3.Bucket}, key, pgdump.Postgres{}); err != nil {
+		return err
+	}
+	logger.Info("restored", "key", key, "database", os.Getenv("PGDATABASE"))
+	return nil
+}
+
 // copySelf is `shpyrd-server copy-self DIR`: this binary, as shpyrd-server
 // in DIR. An init container runs it to put the platform's static binary
 // into a pod of another image (the dumps pod is the CloudNativePG image,

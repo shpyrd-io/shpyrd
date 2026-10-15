@@ -136,10 +136,42 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 	for _, c := range []struct{ method, path, body, want string }{
 		{"PUT", base + "/backups", `{"retention":"30d"}`, "nothing to turn on or off"},
 		{"DELETE", base + "/backups", "", "nothing to turn on or off"},
-		{"POST", base + "/restore", `{"as":"copy"}`, "not available yet"},
+		{"POST", base + "/restore", `{"as":"copy","to":"2026-10-14T00:00:00Z"}`, "Point-in-time restore is a dedicated database feature"},
+		{"POST", base + "/restore", `{"as":"copy","size":"shared-m"}`, "no instance size"},
+		{"POST", base + "/restore", `{"as":"copy","backup":"20260101T000000Z"}`, "shpyrd pg backups list db shows them"},
 	} {
 		if body := call(c.method, c.path, c.body, http.StatusConflict); !strings.Contains(body, c.want) {
 			t.Errorf("%s %s = %s", c.method, c.path, body)
 		}
+	}
+
+	// A restore makes a new shared database from the newest copy, or the
+	// one named, with the source's cap.
+	call("POST", base+"/restore", `{"as":"copy"}`, http.StatusCreated)
+	restored := &shpyrdv1.Postgres{}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "copy"}, restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Spec.Type != shpyrdv1.PostgresTypeShared || restored.Spec.Recovery == nil || restored.Spec.Recovery.From != "db" || restored.Spec.Recovery.Backup != started.Name || restored.Spec.Recovery.TargetTime != nil {
+		t.Errorf("restored spec = %+v", restored.Spec)
+	}
+	call("POST", base+"/restore", `{"as":"copy2","backup":"20261013T030700Z"}`, http.StatusCreated)
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "copy2"}, restored); err != nil || restored.Spec.Recovery.Backup != "20261013T030700Z" {
+		t.Errorf("named copy = %v %+v", err, restored.Spec.Recovery)
+	}
+}
+
+// A shared database with no copy yet cannot be restored, said in words
+// that name the way to take one.
+func TestSharedPostgresRestoreNeedsACopy(t *testing.T) {
+	s, cr, _ := newTenantServer(t)
+	s.opts.Extensions = all.All()
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-acme-shop", UID: types.UID("uid-new"), Annotations: map[string]string{controller.AnnotationSharedServer: "pg-shared-1"}}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}}
+	if err := cr.Create(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources/postgres/db/restore", `{"as":"copy"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no copy from the platform's nightly dumps yet; shpyrd pg backup db takes one now") {
+		t.Errorf("restore without a copy = %d %s", rec.Code, rec.Body.String())
 	}
 }

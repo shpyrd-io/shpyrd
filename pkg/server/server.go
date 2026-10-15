@@ -121,6 +121,16 @@ func Main(opts Options) {
 		}
 		return
 	}
+	// `shpyrd-server restore-dump`: one copy of a shared database loaded
+	// into another, then exit.
+	if len(os.Args) > 1 && os.Args[1] == "restore-dump" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runRestoreDump(logger); err != nil {
+			logger.Error("restore failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server copy-self DIR`: this binary into DIR, for a pod of
 	// another image.
 	if len(os.Args) > 2 && os.Args[1] == "copy-self" {

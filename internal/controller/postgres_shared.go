@@ -196,6 +196,18 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+	if pg.Spec.Recovery != nil {
+		restored, err := r.reconcileSharedRestore(ctx, pg, hash, server.GetName())
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !restored {
+			pg.Status.Phase = shpyrdv1.ResourceProvisioning
+			pg.Status.Message = fmt.Sprintf("loading the copy %s of %s into your database", pg.Spec.Recovery.Backup, pg.Spec.Recovery.From)
+			setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
 	fenced, err := r.reconcileSharedFence(ctx, pg, hash, server.GetName())
 	if err != nil {
 		return ctrl.Result{}, err
