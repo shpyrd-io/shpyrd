@@ -32,12 +32,15 @@ func runConvertDB(logger *slog.Logger) error {
 		"PGHOST": os.Getenv("SOURCE_HOST"), "PGPORT": firstNonEmptyStr(os.Getenv("SOURCE_PORT"), "5432"), "PGUSER": os.Getenv("SOURCE_USER"),
 		"PGPASSWORD": os.Getenv("SOURCE_PASSWORD"), "PGDATABASE": os.Getenv("SOURCE_DATABASE"), "PGSSLMODE": firstNonEmptyStr(os.Getenv("SOURCE_SSLMODE"), "require"),
 	}
-	sourceConn, err := pgx.Connect(ctx, connString(sourceEnv))
+	sourceConn, err := connectWithPatience(ctx, connString(sourceEnv), logger, "source")
 	if err != nil {
 		return fmt.Errorf("connect to the source: %w", err)
 	}
 	defer sourceConn.Close(ctx)
-	targetConn, err := pgx.Connect(ctx, "")
+	// A cluster just up may refuse its owner for a few seconds: initdb made
+	// the role and the operator applies the Secret's password a moment
+	// later. The target is given two minutes to take the credentials.
+	targetConn, err := connectWithPatience(ctx, "", logger, "target")
 	if err != nil {
 		return fmt.Errorf("connect to the target: %w", err)
 	}
@@ -68,6 +71,31 @@ func runConvertDB(logger *slog.Logger) error {
 	}
 	logger.Info("converted", "tables", moved.Tables, "rows", moved.Rows, "bytes", moved.Bytes, "copy", c.Key)
 	return nil
+}
+
+// connectPatience is how long a server is given to take the credentials,
+// and how often it is asked.
+var connectPatience, connectRetry = 2 * time.Minute, 5 * time.Second
+
+// connectWithPatience connects to a server, trying again for a while when
+// it refuses the credentials or is not there yet.
+func connectWithPatience(ctx context.Context, conn string, logger *slog.Logger, what string) (*pgx.Conn, error) {
+	deadline := time.Now().Add(connectPatience)
+	for {
+		c, err := pgx.Connect(ctx, conn)
+		if err == nil {
+			return c, nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return nil, err
+		}
+		logger.Info("not accepting the connection yet; trying again", "which", what, "err", err.Error())
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(connectRetry):
+		}
+	}
 }
 
 // fenceRole sets a role's connection limit (0 closes it, -1 opens it) and,
