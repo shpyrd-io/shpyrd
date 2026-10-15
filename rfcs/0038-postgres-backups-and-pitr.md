@@ -67,6 +67,23 @@ A database without backups is not production; it is the first question users ask
   continuous archiving healthy; rows written, on-demand backup, table dropped, restore to
   the second before the drop returned the rows in the new database.
 
+## Amendment 2026-10-15: shared databases
+
+A shared database (RFC-0009, amendment) is not archived per database. Its server is:
+WAL archiving and a daily base backup to a platform bucket (`<server>-backups`,
+seven days), for the day a server is lost with everyone on it, an operator's tool.
+For the tenant, the platform takes a `pg_dump` of every shared database each night
+(a CronJob per server at 03:07 UTC plus seven minutes per server, as a read-only
+dump role of the server's, into the server's bucket `<server>-dumps`, keys
+`db_<hash>/<time>[.now|.last|.converted].dump`); the newest seven stay, or 14 or 30
+when the database asks (`shpyrd pg backups enable <name> --retention 14d`, the one
+setting; the hour is the platform's and there is nothing to turn off). `shpyrd pg
+backup` takes one now, `shpyrd pg backups list` shows the copies, and `shpyrd pg
+restore <name> --as <new> [--backup <copy>]` loads a copy into a new shared database
+as its owner (through pg_restore's item list without the comments on extensions,
+which only an extension's owner may set); `--to` stays a dedicated feature. The
+copies of a dropped database go with it.
+
 ## Implementation History
 
 - 2026-09-22: RFC written.

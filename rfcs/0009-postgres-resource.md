@@ -92,6 +92,31 @@ endpoint, size, storage used, backups, "Attach".
   platform namespace so the operator can reach its instances. Not done: backups to object
   storage, PITR, `Pooler`, `shpyrd pg rotate`, RDS variant.
 
+## Amendment 2026-10-15: two kinds of database
+
+`spec.type: shared | dedicated` (storage plan, step 3). **Dedicated** is the
+cluster per resource described above. **Shared** is a database and a role on a
+platform-owned CloudNativePG server (`pg-shared-<n>` in `shpyrd-shared-postgres`,
+two instances on the data pool, PostgreSQL 17, 200 databases per server, the next
+server opened when one fills): always on, no `size`, `instances`, `version` or
+`sleep` (the CRD refuses them), `spec.storage` a logical cap metered every five
+minutes (status at 80 %, connections paused at 150 % until under 95 %, sessions
+read-only after seven days over). The tenant's names are hashed
+(`db_<hash>`, `u_<hash>`, the hash of the Postgres UID recorded on the object so a
+platform restore finds them again); the project keeps a Service and a Secret named
+after the database, so `DATABASE_URL` keeps its shape with `sslmode=require` and
+`connect_timeout=10`; a second Service `<name>-direct` and `DATABASE_DIRECT_URL`
+reach the server itself. The workspace's plan says which types it allows and the
+default (`settings.limits.postgres`); the type changes only by `shpyrd pg convert
+<name> --to dedicated|shared`, which moves the rows under the database's name
+(to dedicated: the cluster takes the shared names and credentials; to shared: new
+names, one config release), connections paused while a Job copies and counts them,
+a copy of the source kept seven days, and puts the database back as it was when it
+cannot land. Nobody but the owner connects to a shared database; pgvector is
+installed in every one, PostgreSQL's trusted extensions are the owner's to create,
+the rest are a dedicated database's. Deletion closes the role, takes a last copy and
+drops the data seven days later. Docs: `content/docs/databases.mdx`.
+
 ## Implementation status
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
