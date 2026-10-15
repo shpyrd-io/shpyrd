@@ -456,14 +456,33 @@ func (r *PostgresReconciler) sharedServerFor(ctx context.Context, pg *shpyrdv1.P
 	server.SetGroupVersionKind(CNPGClusterGVK)
 	err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: name}, server)
 	if apierrors.IsNotFound(err) {
+		backed, err := r.ensureSharedServerBackups(ctx, name)
+		if err != nil {
+			return nil, err
+		}
 		server = r.desiredSharedServer(name, r.sharedConfig())
+		if backed {
+			_ = unstructured.SetNestedSlice(server.Object, []interface{}{sharedServerBackupPlugin(name)}, "spec", "plugins")
+		}
 		if err := r.Create(ctx, server); err != nil && !apierrors.IsAlreadyExists(err) {
 			return nil, err
 		}
 		r.Recorder.Event(pg, corev1.EventTypeNormal, "SharedServer", "created shared server "+name)
 		return server, nil
 	}
-	return server, err
+	if err != nil {
+		return nil, err
+	}
+	backed, err := r.ensureSharedServerBackups(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if backed {
+		if err := r.ensureSharedServerPlugin(ctx, server); err != nil {
+			return nil, err
+		}
+	}
+	return server, nil
 }
 
 // desiredSharedServer renders a shared server (the plan's shape): the

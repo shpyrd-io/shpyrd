@@ -327,6 +327,69 @@ func TestSharedServerGetsTheDumpRoleAndThePullSecret(t *testing.T) {
 	}
 }
 
+// A shared server gets its own backups once the platform's bucket answers:
+// the plugin's ObjectStore, a daily schedule, and the plugin on the
+// Cluster, put on a server rendered before the bucket was ready.
+func TestSharedServerGetsItsOwnBackups(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	bucket := &shpyrdv1.ObjectBucket{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-backups"}, bucket); err != nil || bucket.Spec.DeletionPolicy != "Retain" || bucket.Spec.SecretName != "pg-shared-1-backups" {
+		t.Fatalf("server backups bucket = %v %+v", err, bucket.Spec)
+	}
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 0 {
+		t.Errorf("no plugin before the bucket answers: %v", plugins)
+	}
+	bucket.Status = shpyrdv1.ObjectBucketStatus{Phase: shpyrdv1.BucketReady, Bucket: "shpyrd-abc", Endpoint: "https://objects.example.test", SecretName: "pg-shared-1-backups"}
+	if err := c.Status().Update(ctx, bucket); err != nil {
+		if err := c.Update(ctx, bucket); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle(t, r, key)
+	store := &unstructured.Unstructured{}
+	store.SetGroupVersionKind(BarmanObjectStoreGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-backups"}, store); err != nil {
+		t.Fatal(err)
+	}
+	path, _, _ := unstructured.NestedString(store.Object, "spec", "configuration", "destinationPath")
+	retention, _, _ := unstructured.NestedString(store.Object, "spec", "retentionPolicy")
+	keyRef, _, _ := unstructured.NestedString(store.Object, "spec", "configuration", "s3Credentials", "accessKeyId", "name")
+	if path != "s3://shpyrd-abc/" || retention != "7d" || keyRef != "pg-shared-1-backups" {
+		t.Errorf("object store = path %s retention %s key %s", path, retention, keyRef)
+	}
+	schedule := &unstructured.Unstructured{}
+	schedule.SetGroupVersionKind(CNPGScheduledBackupGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-scheduled"}, schedule); err != nil {
+		t.Fatal(err)
+	}
+	cron, _, _ := unstructured.NestedString(schedule.Object, "spec", "schedule")
+	target, _, _ := unstructured.NestedString(schedule.Object, "spec", "cluster", "name")
+	if cron != "0 2 * * *" || target != "pg-shared-1" {
+		t.Errorf("schedule = %s for %s", cron, target)
+	}
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins")
+	if len(plugins) != 1 {
+		t.Fatalf("plugins = %v", plugins)
+	}
+	plugin, _ := plugins[0].(map[string]interface{})
+	object, _, _ := unstructured.NestedString(plugin, "parameters", "barmanObjectName")
+	if plugin["name"] != BarmanPluginName || plugin["isWALArchiver"] != true || object != "pg-shared-1-backups" {
+		t.Errorf("plugin = %v", plugin)
+	}
+	// Idempotent: the same plugin once.
+	settle(t, r, key)
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 1 {
+		t.Errorf("plugins after another pass = %v", plugins)
+	}
+}
+
 // A dump asked for now is a Job cut from the server's CronJob, for one
 // database, named by its moment.
 func TestSharedDumpJobIsCutFromTheCronJob(t *testing.T) {
