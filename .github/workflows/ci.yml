@@ -258,6 +258,12 @@ jobs:
           # Nobody else: the superuser-granted REVOKE keeps PUBLIC out.
           DB=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.dbname}' | base64 -d)
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep -q '^f$'
+          # The nightly dump, run now: pg_dump as the platform's dump role,
+          # into the server's bucket.
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=jsonpath='{.status.phase}'=Ready objectbucket/pg-shared-1-dumps --timeout=180s
+          kubectl --context kind-ci -n shpyrd-shared-postgres create job dumps-now --from=cronjob/pg-shared-1-dumps
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=condition=complete job/dumps-now --timeout=300s || { kubectl --context kind-ci -n shpyrd-shared-postgres describe job/dumps-now; kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now --all-containers; exit 1; }
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now -c dump | grep -q 'dumped=1 failed=0'
           # Deleting keeps the data seven days behind a drop date.
           ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
           kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'

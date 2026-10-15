@@ -55,7 +55,7 @@ What a shared database does differently:
 - **Neighbours.** Nobody but the owner may connect to the database. `pg_database` and `pg_roles` are world-readable in PostgreSQL, so other tenants' hashed names are visible, never their project names; `pg_stat_activity` shows other sessions' presence, not their queries.
 - **psql.** `shpyrd pg psql` runs in a helper pod of your project with your credentials, never inside the shared server.
 - **Deletion.** The role and credentials go at once; the data stays seven days and is then dropped.
-- **Backups and restores** of a shared database come with the platform's nightly dumps, not available yet.
+- **Backups.** Every night the platform takes a `pg_dump` of each shared database, as a read-only role of its own, into a bucket of the server's; the newest seven are kept. `shpyrd pg backups`, `pg backup` and `pg restore --as` for shared databases are not available yet.
 
 ### Sizes
 

@@ -111,6 +111,25 @@ func Main(opts Options) {
 		}
 		return
 	}
+	// `shpyrd-server dumps`: one night of a shared Postgres server's dumps,
+	// then exit (storage plan, step 3).
+	if len(os.Args) > 1 && os.Args[1] == "dumps" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runDumps(logger); err != nil {
+			logger.Error("dumps failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server copy-self DIR`: this binary into DIR, for a pod of
+	// another image.
+	if len(os.Args) > 2 && os.Args[1] == "copy-self" {
+		if err := copySelf(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server backup`: one platform backup, then exit (RFC-0037).
 	if len(os.Args) > 1 && os.Args[1] == "backup" {
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

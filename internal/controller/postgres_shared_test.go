@@ -22,7 +22,8 @@ import (
 func sharedReconciler(t *testing.T, perServer int, objs ...client.Object) (*PostgresReconciler, client.Client) {
 	base, c := newTestReconciler(t, objs...)
 	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(50), SystemNamespace: "shpyrd-system",
-		Storage: StorageProfile{Class: "oci-bv", MinSize: "50Gi"}, DataPool: "data", Shared: SharedPostgres{Instances: 2, DatabasesPerServer: perServer}}
+		Storage: StorageProfile{Class: "oci-bv", MinSize: "50Gi"}, DataPool: "data", Shared: SharedPostgres{Instances: 2, DatabasesPerServer: perServer},
+		ServerImage: "ghcr.io/shpyrd-io/shpyrd-server:test"}
 	return r, c
 }
 
@@ -98,6 +99,37 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	if instances != 2 || class != "oci-bv" || size != "50Gi" || !superuser || pool != "data" || anti != "required" || maxConn != "400" {
 		t.Errorf("server = %d instances on %s/%s superuser=%v pool=%s anti=%s max_connections=%s", instances, class, size, superuser, pool, anti, maxConn)
 	}
+	// The server's dump role, its bucket and its nightly run come with it.
+	roles, _, _ := unstructured.NestedSlice(server.Object, "spec", "managed", "roles")
+	if len(roles) != 1 {
+		t.Fatalf("managed roles = %v", roles)
+	}
+	dumpRole, _ := roles[0].(map[string]interface{})
+	inRoles, _, _ := unstructured.NestedStringSlice(dumpRole, "inRoles")
+	dumpSecretRef, _, _ := unstructured.NestedString(dumpRole, "passwordSecret", "name")
+	if dumpRole["name"] != "shpyrd_dump" || dumpRole["login"] != true || dumpRole["bypassrls"] != true || dumpRole["superuser"] != nil || len(inRoles) != 1 || inRoles[0] != "pg_read_all_data" || dumpSecretRef != "pg-shared-1-dump" {
+		t.Errorf("dump role = %v", dumpRole)
+	}
+	dumpSecret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dump"}, dumpSecret); err != nil || dumpSecret.Type != corev1.SecretTypeBasicAuth || string(dumpSecret.Data["username"]) != "shpyrd_dump" || len(dumpSecret.Data["password"]) == 0 {
+		t.Errorf("dump role secret = %v %+v", err, dumpSecret.Data)
+	}
+	bucket := &shpyrdv1.ObjectBucket{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dumps"}, bucket); err != nil || bucket.Spec.SecretName != "pg-shared-1-dumps" || bucket.Spec.DeletionPolicy != "Retain" {
+		t.Errorf("dumps bucket = %v %+v", err, bucket.Spec)
+	}
+	cron := &batchv1.CronJob{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dumps"}, cron); err != nil {
+		t.Fatal(err)
+	}
+	pod := cron.Spec.JobTemplate.Spec.Template.Spec
+	if cron.Spec.Schedule != "7 3 * * *" || cron.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent || len(pod.InitContainers) != 1 || pod.InitContainers[0].Image != r.ServerImage || strings.Join(pod.InitContainers[0].Args, " ") != "copy-self /tools" {
+		t.Errorf("dumps cronjob = %s init %+v", cron.Spec.Schedule, pod.InitContainers)
+	}
+	dump := pod.Containers[0]
+	if strings.Join(dump.Command, " ") != "/tools/shpyrd-server dumps" || dump.Env[0].Value != "pg-shared-1-rw" || dump.Env[4].ValueFrom.SecretKeyRef.Name != "pg-shared-1-dump" || dump.EnvFrom[0].SecretRef.Name != "pg-shared-1-dumps" || pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken || len(pod.ImagePullSecrets) != 0 {
+		t.Errorf("dump container = %+v pull %v", dump, pod.ImagePullSecrets)
+	}
 
 	// The server comes up: the tenant's objects follow.
 	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
@@ -163,7 +195,7 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	}
 	sql := strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")
 	user := job.Spec.Template.Spec.Containers[0].Env[4]
-	if !strings.Contains(sql, "REVOKE CONNECT ON DATABASE "+dbName+" FROM PUBLIC") || !strings.Contains(sql, "ALTER ROLE "+roleName+" SET temp_file_limit") || user.ValueFrom.SecretKeyRef.Name != "pg-shared-1-superuser" || job.Spec.Template.Spec.SecurityContext.RunAsNonRoot == nil {
+	if !strings.Contains(sql, "REVOKE CONNECT ON DATABASE "+dbName+" FROM PUBLIC") || !strings.Contains(sql, "GRANT CONNECT ON DATABASE "+dbName+" TO shpyrd_dump") || !strings.Contains(sql, "ALTER ROLE "+roleName+" SET temp_file_limit") || user.ValueFrom.SecretKeyRef.Name != "pg-shared-1-superuser" || job.Spec.Template.Spec.SecurityContext.RunAsNonRoot == nil {
 		t.Errorf("grants job = %s env %+v", sql, user)
 	}
 	job.Status.Succeeded = 1
@@ -219,6 +251,46 @@ func TestSharedPostgresFillsAServerThenOpensTheNext(t *testing.T) {
 		t.Errorf("the third tenant opens the next server: %s (%v)", d.Annotations[AnnotationSharedServer], err)
 	}
 	getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-2")
+}
+
+// A server rendered before the dumps existed gets the dump role; on a
+// platform whose server image is in a private registry, the dumps pod
+// pulls with the platform's pull secret, mirrored into the server's
+// namespace. Each server has its own minute of the dumps hour.
+func TestSharedServerGetsTheDumpRoleAndThePullSecret(t *testing.T) {
+	ctx := context.Background()
+	pull := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ocir-pull", Namespace: "shpyrd-system"}, Type: corev1.SecretTypeDockerConfigJson, Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)}}
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg, pull)
+	server := &unstructured.Unstructured{}
+	server.SetGroupVersionKind(CNPGClusterGVK)
+	server.SetNamespace(SharedPostgresNamespace)
+	server.SetName("pg-shared-1")
+	server.SetLabels(map[string]string{sharedServerLabel: "server"})
+	_ = unstructured.SetNestedField(server.Object, int64(2), "spec", "instances")
+	if err := c.Create(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, client.ObjectKeyFromObject(pg))
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	roles, _, _ := unstructured.NestedSlice(server.Object, "spec", "managed", "roles")
+	instances, _, _ := unstructured.NestedInt64(server.Object, "spec", "instances")
+	if len(roles) != 1 || instances != 2 {
+		t.Errorf("server = %d instances, managed roles %v", instances, roles)
+	}
+	mirror := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "ocir-pull"}, mirror); err != nil || mirror.Type != corev1.SecretTypeDockerConfigJson || string(mirror.Data[corev1.DockerConfigJsonKey]) != `{"auths":{}}` {
+		t.Errorf("mirrored pull secret = %v %+v", err, mirror)
+	}
+	cron := &batchv1.CronJob{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dumps"}, cron); err != nil || len(cron.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets) != 1 || cron.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets[0].Name != "ocir-pull" {
+		t.Errorf("dumps cronjob = %v pull %v", err, cron.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets)
+	}
+	for name, want := range map[string]string{"pg-shared-1": "7 3 * * *", "pg-shared-2": "14 3 * * *", "pg-shared-9": "3 3 * * *"} {
+		if got := sharedDumpsSchedule(name); got != want {
+			t.Errorf("schedule of %s = %q, want %q", name, got, want)
+		}
+	}
 }
 
 // Deleting a shared database removes its role and secrets now and keeps

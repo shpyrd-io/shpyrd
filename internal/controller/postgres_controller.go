@@ -54,6 +54,9 @@ type PostgresReconciler struct {
 	// Shared is the profile's shape for shared servers (step 3 of the
 	// storage plan).
 	Shared SharedPostgres
+	// ServerImage is the platform's own image (SHPYRD_SERVER_IMAGE): the
+	// shared servers' nightly dumps run its binary. Empty: no dumps.
+	ServerImage string
 }
 
 // cnpgStorage is the CNPG storage section: the size and, when the profile

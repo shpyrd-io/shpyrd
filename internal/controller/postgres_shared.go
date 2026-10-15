@@ -148,6 +148,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.ensureSharedDumps(ctx, server); err != nil {
+		return ctrl.Result{}, err
+	}
 	ready, _, _ := unstructured.NestedInt64(server.Object, "status", "readyInstances")
 	if ready < 1 {
 		phase, _, _ := unstructured.NestedString(server.Object, "status", "phase")
@@ -409,6 +412,7 @@ func (r *PostgresReconciler) desiredSharedServer(name string, cfg SharedPostgres
 		"storage":               cnpgStorage(resourceMustParse(firstNonEmpty(r.Storage.MinSize, "1Gi")), r.Storage.Class),
 		"resources":             map[string]interface{}{"requests": map[string]interface{}{"cpu": "500m", "memory": "2Gi"}, "limits": map[string]interface{}{"memory": "4Gi"}},
 		"enableSuperuserAccess": true,
+		"managed":               map[string]interface{}{"roles": []interface{}{sharedDumpManagedRole(name)}},
 		"monitoring":            map[string]interface{}{"enablePodMonitor": true},
 		"enablePDB":             cfg.Instances > 1,
 		"postgresql": map[string]interface{}{"parameters": map[string]interface{}{
@@ -635,11 +639,12 @@ func (r *PostgresReconciler) ensureSharedGrants(ctx context.Context, pg *shpyrdv
 	return true, nil
 }
 
-// desiredSharedGrantsJob is the tenant's one-time grants.
+// desiredSharedGrantsJob is the tenant's one-time grants: nobody but the
+// owner and the platform's dump role may open the database.
 func (r *PostgresReconciler) desiredSharedGrantsJob(pg *shpyrdv1.Postgres, hash, server string) *batchv1.Job {
 	dbName, roleName := sharedDatabaseName(hash), sharedRoleName(hash)
 	return r.desiredSharedSQLJob(pg, hash, server, sharedGrantsJob(hash),
-		fmt.Sprintf("REVOKE CONNECT ON DATABASE %s FROM PUBLIC; ALTER ROLE %s SET temp_file_limit = '1GB';", dbName, roleName))
+		fmt.Sprintf("REVOKE CONNECT ON DATABASE %s FROM PUBLIC; GRANT CONNECT ON DATABASE %s TO %s; ALTER ROLE %s SET temp_file_limit = '1GB';", dbName, dbName, sharedDumpRole, roleName))
 }
 
 // desiredSharedSQLJob is one psql run against the server's primary with
