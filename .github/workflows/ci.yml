@@ -461,7 +461,10 @@ jobs:
           kubectl --context kind-ci get apps.shpyrd.io -A -o yaml || true
           kubectl --context kind-ci get events -A --sort-by=.lastTimestamp | tail -60 || true
           kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,pooler,database,databaserole,job,cronjob,objectbucket -o wide 2>/dev/null || true
-          kubectl --context kind-ci get postgres -A -o yaml 2>/dev/null | grep -E "name:|type:|phase:|message:" || true
+          kubectl --context kind-ci get postgres -A -o yaml 2>/dev/null | grep -E "name:|type:|phase:|message:|convert" || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=convert --all-containers --tail=60 2>/dev/null || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=dump --all-containers --tail=20 2>/dev/null || true
+          kubectl --context kind-ci -n cnpg-system logs deployment/cnpg-cloudnative-pg --tail=80 2>/dev/null | grep -v "level=debug" || true
 
   ci:
     name: CI

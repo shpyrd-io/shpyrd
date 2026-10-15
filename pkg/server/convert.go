@@ -67,9 +67,12 @@ func runConvertDB(logger *slog.Logger) error {
 	}
 	moved, err := c.Do(ctx)
 	if err != nil {
+		// The pod's last words, which the database's status repeats.
+		_ = os.WriteFile("/dev/termination-log", []byte(err.Error()), 0o644)
 		return err
 	}
 	logger.Info("converted", "tables", moved.Tables, "rows", moved.Rows, "bytes", moved.Bytes, "copy", c.Key)
+	_ = os.WriteFile("/dev/termination-log", []byte(fmt.Sprintf("converted tables=%d rows=%d bytes=%d copy=%s", moved.Tables, moved.Rows, moved.Bytes, c.Key)), 0o644)
 	return nil
 }
 
