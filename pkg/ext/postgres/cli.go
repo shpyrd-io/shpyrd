@@ -48,7 +48,7 @@ settings for them.
 Databases run on CloudNativePG; one cluster per database, 1 instance by
 default (2-3 for high availability with --instances).`,
 	}
-	cmd.AddCommand(metrics.ResourceCommand(g, "postgres"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
+	cmd.AddCommand(metrics.ResourceCommand(g, "postgres"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newRotateCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
 	return cmd
 }
 
@@ -256,6 +256,33 @@ unavailable for a moment.`,
 			}
 			return ext.Print(g, cmd, v, func(w io.Writer) {
 				fmt.Fprintln(w, v.Note)
+			})
+		},
+	}
+	ext.ProjectFlag(g, cmd, &project)
+	return cmd
+}
+
+func newRotateCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "rotate <name>",
+		Short: "Give a database new credentials (the apps bound to it restart)",
+		Long: `Writes a new password for the database's role and into the project's
+credentials; the apps bound to the database are re-rendered and restart
+with it within a minute. Shared databases today.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var out struct {
+				Name   string `json:"name"`
+				Rotate string `json:"rotate"`
+				Note   string `json:"note"`
+			}
+			if err := backupsCall(cliContext(), g, "POST", backupsPath(project, args[0])+"/rotate", nil, &out); err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": out.Name, "rotate": out.Rotate}, func(w io.Writer) {
+				fmt.Fprintln(w, out.Note)
 			})
 		},
 	}

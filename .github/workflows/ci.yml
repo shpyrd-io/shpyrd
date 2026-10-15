@@ -255,6 +255,21 @@ jobs:
           # server, at the primary (the URL names the database's own Service).
           INPOD=${URI/@shared:5432/@localhost:5432}
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select current_database() like 'db_%', current_user like 'u_%'" | grep -q 't|t'
+          # New credentials on request: the role's password changes and the
+          # new URL opens the database.
+          ./bin/shpyrd pg rotate shared --project hello-world --context kind-ci
+          for i in $(seq 1 30); do
+            NEW=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+            [ "$NEW" != "$URI" ] && break
+            sleep 2
+          done
+          [ "$NEW" != "$URI" ]
+          for i in $(seq 1 30); do
+            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then break; fi
+            sleep 2
+          done
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" | grep -q '^1$'
+          URI=$NEW
           # Nobody else: the superuser-granted REVOKE keeps PUBLIC out.
           DB=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.dbname}' | base64 -d)
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep -q '^f$'

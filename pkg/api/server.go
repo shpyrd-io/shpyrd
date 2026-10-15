@@ -739,6 +739,7 @@ func (s *Server) routes() error {
 	// Postgres sleep (RFC-0075): policy, suspend and resume.
 	api.PATCH("/projects/:slug/resources/postgres/:name/sleep", s.require(authz.ProjectResource), s.patchPostgresSleep)
 	api.POST("/projects/:slug/resources/postgres/:name/suspend", s.require(authz.ProjectResource), s.suspendPostgres)
+	api.POST("/projects/:slug/resources/postgres/:name/rotate", s.require(authz.ProjectResource), s.rotatePostgres)
 	api.POST("/projects/:slug/resources/postgres/:name/resume", s.require(authz.ProjectResource), s.resumePostgres)
 	// Backups and restore (RFC-0038) with the account alone (#74).
 	api.GET("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectView), s.listPostgresBackups)

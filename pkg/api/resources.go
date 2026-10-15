@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
@@ -323,6 +324,7 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 const (
 	errSharedAlwaysOn           = "Shared databases are always on."
 	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
+	errRotateDedicatedLater     = "Rotating the credentials of a dedicated database is not available yet; a shared database's are rotated by the platform."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.
@@ -743,6 +745,29 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 
 // suspendPostgres hibernates a database now with no wake on connect;
 // resumePostgres brings it back. Both are POSTs without a body.
+// rotatePostgres is POST .../postgres/:name/rotate: new credentials for a
+// database. On a shared one the controller writes a new password to the
+// role's Secret and the project's, and the apps bound to it restart with
+// it. A dedicated database's credentials are CloudNativePG's; not yet.
+func (s *Server) rotatePostgres(c *gin.Context) {
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type != shpyrdv1.PostgresTypeShared {
+			return &sharedRefusal{errRotateDedicatedLater}
+		}
+		if pg.Annotations == nil {
+			pg.Annotations = map[string]string{}
+		}
+		pg.Annotations[controller.AnnotationRotate] = stamp
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	s.audit(c, c.Param("slug"), "postgres.rotate", pg.Name, stamp)
+	c.JSON(http.StatusAccepted, gin.H{"name": pg.Name, "rotate": stamp, "note": fmt.Sprintf("New credentials for %s are being written; the apps bound to it restart with them within a minute.", pg.Name)})
+}
+
 func (s *Server) suspendPostgres(c *gin.Context) { s.setPostgresSuspended(c, true) }
 func (s *Server) resumePostgres(c *gin.Context)  { s.setPostgresSuspended(c, false) }
 

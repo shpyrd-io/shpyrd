@@ -12,6 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
@@ -173,5 +175,26 @@ func TestSharedPostgresRestoreNeedsACopy(t *testing.T) {
 	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources/postgres/db/restore", `{"as":"copy"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no copy from the platform's nightly dumps yet; shpyrd pg backup db takes one now") {
 		t.Errorf("restore without a copy = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Rotating a shared database's credentials asks the controller with a
+// stamp; a dedicated one is refused in words.
+func TestRotatePostgresAsksTheController(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {}}}}
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "big", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
+	s, cr := newTestServer(t, nil, []client.Object{app, shared, dedicated})
+	s.opts.Extensions = all.All()
+	rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/rotate", "", true)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "restart with them within a minute") {
+		t.Fatalf("rotate shared = %d %s", rec.Code, rec.Body.String())
+	}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "db"}, shared); err != nil || shared.Annotations[controller.AnnotationRotate] == "" {
+		t.Errorf("the stamp: %v %v", err, shared.Annotations)
+	}
+	rec = do(t, s, "POST", "/api/projects/shop/resources/postgres/big/rotate", "", true)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not available yet") {
+		t.Errorf("rotate dedicated = %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -50,9 +50,14 @@ const (
 	// AnnotationDropAfter on a tenant's Database object once its Postgres
 	// is gone: the data stays until then, a platform sweep drops it.
 	AnnotationDropAfter = "shpyrd.io/drop-after"
-	sharedFinalizer     = "shpyrd.io/shared-postgres"
-	sharedKeep          = 7 * 24 * time.Hour
-	sharedServerPrefix  = "pg-shared-"
+	// AnnotationRotate on a Postgres asks for new credentials: its value is
+	// the moment asked, which the role's Secret and the DatabaseRole record
+	// as shpyrd.io/rotated once they carry the new password.
+	AnnotationRotate   = "shpyrd.io/rotate"
+	annotationRotated  = "shpyrd.io/rotated"
+	sharedFinalizer    = "shpyrd.io/shared-postgres"
+	sharedKeep         = 7 * 24 * time.Hour
+	sharedServerPrefix = "pg-shared-"
 )
 
 // CNPGDatabaseGVK and CNPGDatabaseRoleGVK are CloudNativePG's declarative
@@ -496,8 +501,9 @@ func (r *PostgresReconciler) desiredSharedServer(name string, cfg SharedPostgres
 	return u
 }
 
-// ensureSharedRoleSecret is the role's password, generated once: the
-// basic-auth Secret CloudNativePG reads, in the server's namespace.
+// ensureSharedRoleSecret is the role's password, generated once and again
+// at each rotation asked for: the basic-auth Secret CloudNativePG reads,
+// in the server's namespace.
 func (r *PostgresReconciler) ensureSharedRoleSecret(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) (string, error) {
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedRoleObject(hash), Namespace: SharedPostgresNamespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
@@ -507,8 +513,12 @@ func (r *PostgresReconciler) ensureSharedRoleSecret(ctx context.Context, pg *shp
 			sec.Data = map[string][]byte{}
 		}
 		sec.Data["username"] = []byte(sharedRoleName(hash))
-		if len(sec.Data["password"]) == 0 {
+		rotate := pg.Annotations[AnnotationRotate]
+		if len(sec.Data["password"]) == 0 || (rotate != "" && sec.Annotations[annotationRotated] != rotate) {
 			sec.Data["password"] = []byte(randomPassword())
+		}
+		if rotate != "" {
+			sec.Annotations = mergeMaps(sec.Annotations, map[string]string{annotationRotated: rotate})
 		}
 		return nil
 	})
@@ -546,6 +556,11 @@ func (r *PostgresReconciler) ensureSharedRole(ctx context.Context, pg *shpyrdv1.
 	role.SetName(sharedRoleObject(hash))
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 		role.SetLabels(mergeMaps(role.GetLabels(), sharedTenantLabels(pg, server)))
+		// A rotation stamps the object, so the operator reconciles the role
+		// and applies the password its Secret now holds.
+		if rotate := pg.Annotations[AnnotationRotate]; rotate != "" {
+			role.SetAnnotations(mergeMaps(role.GetAnnotations(), map[string]string{annotationRotated: rotate}))
+		}
 		// The fence owns the connection limit while it is on (0); the tier's
 		// limit otherwise, and again when the fence lifts.
 		limit := sharedConnectionLimit(pg)

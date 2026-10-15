@@ -457,6 +457,61 @@ func TestSharedPostgresRestoreLoadsTheCopy(t *testing.T) {
 	}
 }
 
+// A rotation asked for (the annotation's stamp) gives the role a new
+// password, in its Secret and the project's, and stamps the DatabaseRole
+// so the operator applies it; the same stamp again changes nothing.
+func TestSharedPostgresRotateWritesANewPassword(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	driveShared(t, r, c, pg)
+	hash := tenantHash(pg.UID)
+	roleSecretKey := types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}
+	appKey := types.NamespacedName{Namespace: "p-shop", Name: PostgresSecretName("db")}
+	password := func(key types.NamespacedName) (string, map[string]string) {
+		sec := &corev1.Secret{}
+		if err := c.Get(ctx, key, sec); err != nil {
+			t.Fatal(err)
+		}
+		return string(sec.Data["password"]), sec.Annotations
+	}
+	first, _ := password(roleSecretKey)
+	pg.Annotations[AnnotationRotate] = "2026-10-14T20:00:00Z"
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	second, ann := password(roleSecretKey)
+	if second == first || len(second) == 0 || ann[annotationRotated] != "2026-10-14T20:00:00Z" {
+		t.Errorf("after the rotation: password changed=%v annotations %v", second != first, ann)
+	}
+	appPassword, _ := password(appKey)
+	app := &corev1.Secret{}
+	if err := c.Get(ctx, appKey, app); err != nil || appPassword != second || !strings.Contains(string(app.Data["uri"]), second) {
+		t.Errorf("the project's credentials: %v password follows=%v", err, appPassword == second)
+	}
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	if role.GetAnnotations()[annotationRotated] != "2026-10-14T20:00:00Z" {
+		t.Errorf("the role object is stamped so the operator reconciles it: %v", role.GetAnnotations())
+	}
+	settle(t, r, key)
+	if again, _ := password(roleSecretKey); again != second {
+		t.Error("the same stamp rotated again")
+	}
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	pg.Annotations[AnnotationRotate] = "2026-10-15T08:00:00Z"
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	if third, _ := password(roleSecretKey); third == second {
+		t.Error("a new stamp rotates again")
+	}
+}
+
 // Deleting a shared database removes its role and secrets now and keeps
 // the data seven days behind a drop date.
 func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {
