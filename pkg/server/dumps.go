@@ -41,6 +41,11 @@ func runDumps(logger *slog.Logger) error {
 	}
 	run := pgdump.Run{Source: pgdump.Postgres{Conn: conn}, Objects: pgdump.Bucket{Client: s3.Client, Name: s3.Bucket}, Keep: keep, Log: logger,
 		Only: os.Getenv("SHPYRD_DUMPS_DATABASE"), Kind: os.Getenv("SHPYRD_DUMPS_KIND")}
+	// A database's own count, from the ConfigMap the controller keeps for
+	// the server, mounted at SHPYRD_DUMPS_KEEP_DIR.
+	if dir := os.Getenv("SHPYRD_DUMPS_KEEP_DIR"); dir != "" {
+		run.KeepFor = pgdump.KeepFromDir(dir)
+	}
 	// A dump asked for is named by the moment it was asked, so the one who
 	// asked can follow it by name.
 	if at, err := time.Parse(time.RFC3339, os.Getenv("SHPYRD_DUMPS_AT")); err == nil {

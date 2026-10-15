@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -123,6 +125,35 @@ func TestDoKeepsTheNewestCopies(t *testing.T) {
 	}
 	if _, ok := objects.objects["db_b/20261001T030700Z.dump"]; !ok {
 		t.Error("another database's copy was removed")
+	}
+}
+
+// A database's own count, a file named after it in the directory, wins
+// over the run's; a database without one, or with nonsense, has the run's.
+func TestKeepFromDirReadsADatabasesOwnCount(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"db_a": "14\n", "db_c": "many"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := KeepFromDir(dir)
+	if keep("db_a") != 14 || keep("db_b") != 0 || keep("db_c") != 0 {
+		t.Errorf("counts = %d %d %d", keep("db_a"), keep("db_b"), keep("db_c"))
+	}
+	objects := &fakeObjects{objects: map[string]string{}}
+	for day := 1; day <= 9; day++ {
+		objects.objects[Key("db_a", tonight.AddDate(0, 0, -day), "")] = "old"
+		objects.objects[Key("db_b", tonight.AddDate(0, 0, -day), "")] = "old"
+	}
+	run := Run{Source: fakeSource{dbs: []string{"db_a", "db_b"}}, Objects: objects, Keep: 3, KeepFor: keep, Now: func() time.Time { return tonight }}
+	if _, err := run.Do(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := objects.List(context.Background(), "db_a/")
+	b, _ := objects.List(context.Background(), "db_b/")
+	if len(a) != 10 || len(b) != 3 {
+		t.Errorf("db_a keeps %d (its own 14), db_b keeps %d (the run's 3)", len(a), len(b))
 	}
 }
 

@@ -45,6 +45,59 @@ const (
 
 func sharedDumpRoleSecret(server string) string { return server + "-dump" }
 
+// sharedDumpsKeepMap names the ConfigMap of a server's per-database copy
+// counts: one key per database that keeps other than the default, mounted
+// into the dumps pod.
+func sharedDumpsKeepMap(server string) string { return server + "-dumps-keep" }
+
+const sharedDumpsKeepDir = "/etc/dumps/keep"
+
+// SharedDumpsKeeps are the copy counts a shared database may ask for
+// (shpyrd pg backups enable --retention 7d|14d|30d).
+var SharedDumpsKeeps = []int{7, 14, 30}
+
+// SharedDumpsKeep is how many copies a shared database keeps: its
+// backups' retention in days, else seven.
+func SharedDumpsKeep(pg *shpyrdv1.Postgres) int {
+	if pg.Spec.Backups != nil && pg.Spec.Backups.Retention != "" {
+		if n, err := strconv.Atoi(strings.TrimSuffix(pg.Spec.Backups.Retention, "d")); err == nil && n > 0 {
+			return n
+		}
+	}
+	return sharedDumpsKeep
+}
+
+// ensureSharedDumpsKeep records the database's own copy count on its
+// server's ConfigMap, or removes it when the default is back: one key
+// touched, so hundreds of tenants never write over each other.
+func (r *PostgresReconciler) ensureSharedDumpsKeep(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) error {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: sharedDumpsKeepMap(server), Namespace: SharedPostgresNamespace}}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		cm.Labels = sharedServerLabels(server, "dumps")
+		if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+	keep := SharedDumpsKeep(pg)
+	key := sharedDatabaseName(hash)
+	current, has := cm.Data[key]
+	switch {
+	case keep == sharedDumpsKeep && !has:
+		return nil
+	case keep != sharedDumpsKeep && current == fmt.Sprint(keep):
+		return nil
+	}
+	value := "null"
+	if keep != sharedDumpsKeep {
+		value = fmt.Sprintf("%q", fmt.Sprint(keep))
+	}
+	patch := []byte(fmt.Sprintf(`{"data":{%q:%s}}`, key, value))
+	return r.Patch(ctx, cm, client.RawPatch(types.MergePatchType, patch))
+}
+
 // SharedDumpsName names a server's dumps bucket, its credential Secret and
 // its CronJob.
 func SharedDumpsName(server string) string { return server + "-dumps" }
@@ -296,13 +349,18 @@ func (r *PostgresReconciler) desiredSharedDumpsCronJob(server string, pull []cor
 									env("PGUSER", "username"),
 									env("PGPASSWORD", "password"),
 									{Name: "SHPYRD_DUMPS_KEEP", Value: fmt.Sprint(sharedDumpsKeep)},
+									{Name: "SHPYRD_DUMPS_KEEP_DIR", Value: sharedDumpsKeepDir},
 								},
 								EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: SharedDumpsName(server)}}}},
-								VolumeMounts:    []corev1.VolumeMount{tools},
+								VolumeMounts:    []corev1.VolumeMount{tools, {Name: "keep", MountPath: sharedDumpsKeepDir, ReadOnly: true}},
 								Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resourceMustParse("50m"), corev1.ResourceMemory: resourceMustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resourceMustParse("512Mi")}},
 								SecurityContext: locked,
 							}},
-							Volumes: []corev1.Volume{{Name: "tools", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resourceMustParse("512Mi"))}}}},
+							Volumes: []corev1.Volume{
+								{Name: "tools", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resourceMustParse("512Mi"))}}},
+								// The per-database copy counts; a server without any has no map yet.
+								{Name: "keep", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: sharedDumpsKeepMap(server)}, Optional: ptr.To(true)}}},
+							},
 						},
 					},
 				},

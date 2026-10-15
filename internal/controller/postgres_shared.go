@@ -198,6 +198,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if err := r.ensureSharedDatabase(ctx, pg, hash, server.GetName()); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.ensureSharedDumpsKeep(ctx, pg, hash, server.GetName()); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.ensureSharedAppSecret(ctx, pg, hash, password); err != nil {
 		return ctrl.Result{}, err
 	}

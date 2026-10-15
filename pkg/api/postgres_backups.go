@@ -141,7 +141,7 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
 		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
-			return &sharedRefusal{errSharedDumpsNotASetting}
+			return setSharedDumpsRetention(pg, req)
 		}
 		next := shpyrdv1.PostgresBackups{}
 		if pg.Spec.Backups != nil {
@@ -160,6 +160,11 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		return
+	}
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.audit(c, c.Param("slug"), "postgres.backups", pg.Name, fmt.Sprintf("%d copies kept", controller.SharedDumpsKeep(pg)))
+		s.backupsView(c, pg)
 		return
 	}
 	s.audit(c, c.Param("slug"), "postgres.backups", pg.Name, fmt.Sprintf("on, kept %s, cron %s", firstNonEmpty(pg.Spec.Backups.Retention, "14d"), firstNonEmpty(pg.Spec.Backups.Schedule, "0 2 * * *")))

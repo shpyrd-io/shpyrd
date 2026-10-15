@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +30,8 @@ import (
 // listing shows as running or failed until its copy is in the bucket.
 
 const (
-	errSharedDumpsNotASetting = "A shared database is backed up by the platform's nightly dumps; there is nothing to turn on or off."
+	errSharedDumpsNotASetting = "A shared database is backed up by the platform's nightly dumps; there is nothing to turn off. How many copies stay is the one setting: shpyrd pg backups enable <name> --retention 7d|14d|30d."
+	errSharedDumpsNoSchedule  = "The platform's nightly dumps keep their hour; a shared database's one setting is how many copies stay (--retention 7d, 14d or 30d)."
 	errSharedDumpsNotReady    = "The platform's nightly dumps are not set up for this database's server yet; try again in a few minutes."
 	errSharedPointInTime      = "Point-in-time restore is a dedicated database feature. A shared database restores one of its copies: shpyrd pg restore <name> --as <new> [--backup <copy>]."
 	sharedDumpsKeep           = 7
@@ -130,7 +134,7 @@ func (s *Server) sharedBackupsView(c *gin.Context, pg *shpyrdv1.Postgres) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	c.JSON(http.StatusOK, BackupsView{Name: pg.Name, Dumps: &DumpsView{Keep: sharedDumpsKeep}, LastBackup: last, Backups: backups})
+	c.JSON(http.StatusOK, BackupsView{Name: pg.Name, Dumps: &DumpsView{Keep: controller.SharedDumpsKeep(pg)}, LastBackup: last, Backups: backups})
 }
 
 // takeSharedDump starts a dump of a shared database now and answers with
@@ -238,4 +242,26 @@ func (s *Server) restoreSharedPostgres(c *gin.Context, source *shpyrdv1.Postgres
 		spec["storage"] = storage
 	}
 	s.createResourceOf(c, t, req.As, spec, "postgres.restore")
+}
+
+// setSharedDumpsRetention is the one backup setting of a shared database:
+// how many nightly copies stay, 7, 14 or 30 (7d means the default and
+// clears the setting). The hour is the platform's.
+func setSharedDumpsRetention(pg *shpyrdv1.Postgres, req shpyrdv1.PostgresBackups) error {
+	if req.Schedule != "" {
+		return &sharedRefusal{errSharedDumpsNoSchedule}
+	}
+	if req.Retention == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(req.Retention, "d"))
+	if err != nil || !strings.HasSuffix(req.Retention, "d") || !slices.Contains(controller.SharedDumpsKeeps, n) {
+		return &sharedRefusal{fmt.Sprintf("A shared database keeps 7, 14 or 30 nightly copies: --retention 7d, 14d or 30d, not %q.", req.Retention)}
+	}
+	if n == sharedDumpsKeep {
+		pg.Spec.Backups = nil
+		return nil
+	}
+	pg.Spec.Backups = &shpyrdv1.PostgresBackups{Retention: req.Retention}
+	return nil
 }

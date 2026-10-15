@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +43,8 @@ type Run struct {
 	Objects Objects
 	// Keep is how many dumps of each database stay; 0 keeps them all.
 	Keep int
+	// KeepFor says a database's own count, when it has one (0: Keep).
+	KeepFor func(database string) int
 	// Only names one database to dump instead of every one.
 	Only string
 	// Kind marks the copies ("" is the nightly run, "now" one asked for).
@@ -129,7 +134,7 @@ func (r Run) Do(ctx context.Context) (Report, error) {
 		}
 		rep.Dumped = append(rep.Dumped, db)
 		logger.Info("dumped", "database", db, "key", key)
-		n, err := r.prune(ctx, db)
+		n, err := r.prune(ctx, db, r.keepOf(db))
 		if err != nil {
 			logger.Warn("old dumps kept", "database", db, "err", err.Error())
 		}
@@ -171,9 +176,36 @@ func (r Run) dump(ctx context.Context, db, key string) error {
 	return nil
 }
 
-// prune removes a database's copies past the newest Keep.
-func (r Run) prune(ctx context.Context, db string) (int, error) {
-	if r.Keep <= 0 {
+// keepOf is how many copies of the database stay: its own count, else Keep.
+func (r Run) keepOf(db string) int {
+	if r.KeepFor != nil {
+		if n := r.KeepFor(db); n > 0 {
+			return n
+		}
+	}
+	return r.Keep
+}
+
+// KeepFromDir reads each database's count from a directory of files named
+// after the databases (a ConfigMap mounted in the pod): absent or unreadable
+// means no count of its own.
+func KeepFromDir(dir string) func(string) int {
+	return func(db string) int {
+		b, err := os.ReadFile(filepath.Join(dir, db))
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+}
+
+// prune removes a database's copies past the newest keep.
+func (r Run) prune(ctx context.Context, db string, keep int) (int, error) {
+	if keep <= 0 {
 		return 0, nil
 	}
 	keys, err := r.Objects.List(ctx, db+"/")
@@ -181,7 +213,7 @@ func (r Run) prune(ctx context.Context, db string) (int, error) {
 		return 0, err
 	}
 	removed := 0
-	for _, key := range Older(keys, r.Keep) {
+	for _, key := range Older(keys, keep) {
 		if err := r.Objects.Remove(ctx, key); err != nil {
 			return removed, err
 		}

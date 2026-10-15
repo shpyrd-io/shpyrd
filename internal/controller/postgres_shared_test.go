@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"io"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/pgdump"
 )
 
 func sharedReconciler(t *testing.T, perServer int, objs ...client.Object) (*PostgresReconciler, client.Client) {
@@ -328,6 +331,61 @@ func TestSharedServerGetsTheDumpRoleAndThePullSecret(t *testing.T) {
 		if got := sharedDumpsSchedule(name); got != want {
 			t.Errorf("schedule of %s = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// A shared database that asks for more copies has its count on the
+// server's ConfigMap, which the dumps pod reads; back at the default, the
+// entry goes.
+func TestSharedPostgresKeepsMoreCopiesWhenAsked(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	pg.Spec.Backups = &shpyrdv1.PostgresBackups{Retention: "14d"}
+	r, c := sharedReconciler(t, 200, pg)
+	settle(t, r, client.ObjectKeyFromObject(pg))
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, client.ObjectKeyFromObject(pg))
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pg), pg); err != nil {
+		t.Fatal(err)
+	}
+	key := types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dumps-keep"}
+	keep := &corev1.ConfigMap{}
+	if err := c.Get(ctx, key, keep); err != nil || keep.Data[SharedDatabaseName(pg)] != "14" || len(keep.Data) != 1 {
+		t.Errorf("keep map = %v %v", err, keep.Data)
+	}
+	cron := &batchv1.CronJob{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-dumps"}, cron); err != nil {
+		t.Fatal(err)
+	}
+	spec := cron.Spec.JobTemplate.Spec.Template.Spec
+	var mounted, env, volume bool
+	for _, m := range spec.Containers[0].VolumeMounts {
+		mounted = mounted || (m.Name == "keep" && m.MountPath == "/etc/dumps/keep" && m.ReadOnly)
+	}
+	for _, e := range spec.Containers[0].Env {
+		env = env || (e.Name == "SHPYRD_DUMPS_KEEP_DIR" && e.Value == "/etc/dumps/keep")
+	}
+	for _, v := range spec.Volumes {
+		volume = volume || (v.Name == "keep" && v.ConfigMap != nil && v.ConfigMap.Name == "pg-shared-1-dumps-keep" && v.ConfigMap.Optional != nil && *v.ConfigMap.Optional)
+	}
+	if !mounted || !env || !volume {
+		t.Errorf("dumps pod: mounted=%v env=%v volume=%v", mounted, env, volume)
+	}
+	if SharedDumpsKeep(pg) != 14 || SharedDumpsKeep(sharedPostgres("x", "p", "u")) != 7 {
+		t.Errorf("keep counts = %d %d", SharedDumpsKeep(pg), SharedDumpsKeep(sharedPostgres("x", "p", "u")))
+	}
+
+	pg.Spec.Backups = nil
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, client.ObjectKeyFromObject(pg))
+	if err := c.Get(ctx, key, keep); err != nil || len(keep.Data) != 0 {
+		t.Errorf("back at the default: %v %v", err, keep.Data)
 	}
 }
 
@@ -756,13 +814,22 @@ func TestSharedTenantSweepDropsOnTheDate(t *testing.T) {
 		u.SetNamespace(SharedPostgresNamespace)
 		u.SetName("db-deadbeef")
 		u.SetAnnotations(map[string]string{AnnotationDropAfter: at.UTC().Format(time.RFC3339)})
-		_ = unstructured.SetNestedMap(u.Object, map[string]interface{}{"name": "db_deadbeef", "ensure": "present", "databaseReclaimPolicy": "retain"}, "spec")
+		_ = unstructured.SetNestedMap(u.Object, map[string]interface{}{"name": "db_deadbeef", "ensure": "present", "databaseReclaimPolicy": "retain", "cluster": map[string]interface{}{"name": "pg-shared-1"}}, "spec")
 		return u
 	}
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	key := types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "db-deadbeef"}
 
-	_, c := newTestReconciler(t)
+	// The server's dumps bucket holds the tenant's copies and another's;
+	// the server's copy counts name both.
+	copies := &fakeDumpObjects{keys: map[string]bool{"db_deadbeef/20261014T030700Z.dump": true, "db_deadbeef/20261014T120000Z.last.dump": true, "db_other/20261014T030700Z.dump": true}}
+	previous := sharedDumpsObjects
+	sharedDumpsObjects = func(*corev1.Secret) (pgdump.Objects, error) { return copies, nil }
+	t.Cleanup(func() { sharedDumpsObjects = previous })
+	dumps := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "pg-shared-1-dumps", Namespace: SharedPostgresNamespace}, Data: map[string][]byte{"BUCKET": []byte("b")}}
+	keep := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "pg-shared-1-dumps-keep", Namespace: SharedPostgresNamespace}, Data: map[string]string{"db_deadbeef": "14", "db_other": "30"}}
+
+	_, c := newTestReconciler(t, dumps, keep)
 	if err := c.Create(ctx, stamp(now.Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
@@ -817,9 +884,40 @@ func TestSharedTenantSweepDropsOnTheDate(t *testing.T) {
 	if err := c.Get(ctx, key, u); err == nil {
 		t.Error("the Database object goes last")
 	}
+	if len(copies.keys) != 1 || !copies.keys["db_other/20261014T030700Z.dump"] {
+		t.Errorf("the copies go with the data, another database's stay: %v", copies.keys)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(keep), keep); err != nil || len(keep.Data) != 1 || keep.Data["db_other"] != "30" {
+		t.Errorf("the copy count goes with it: %v %v", err, keep.Data)
+	}
 	if res, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil || res.RequeueAfter != 0 {
 		t.Errorf("gone is gone: %+v %v", res, err)
 	}
+}
+
+// fakeDumpObjects is a dumps bucket in memory.
+type fakeDumpObjects struct{ keys map[string]bool }
+
+func (o *fakeDumpObjects) List(_ context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for k := range o.keys {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+func (o *fakeDumpObjects) Put(_ context.Context, key string, r io.Reader) error {
+	_, err := io.Copy(io.Discard, r)
+	o.keys[key] = true
+	return err
+}
+
+func (o *fakeDumpObjects) Remove(_ context.Context, key string) error {
+	delete(o.keys, key)
+	return nil
 }
 
 // A tenant object's change reconciles its Postgres.

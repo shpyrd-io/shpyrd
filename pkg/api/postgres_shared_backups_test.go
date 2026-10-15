@@ -135,9 +135,24 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 		t.Errorf("landed = %+v", v.Backups)
 	}
 
+	// How many copies stay is the one setting: 7, 14 or 30; the hour is
+	// the platform's and there is nothing to turn off.
+	v = view(call("PUT", base+"/backups", `{"retention":"14d"}`, http.StatusOK))
+	if v.Dumps == nil || v.Dumps.Keep != 14 {
+		t.Errorf("after asking for 14: %+v", v.Dumps)
+	}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, db); err != nil || db.Spec.Backups == nil || db.Spec.Backups.Retention != "14d" {
+		t.Errorf("spec = %v %+v", err, db.Spec.Backups)
+	}
+	v = view(call("PUT", base+"/backups", `{"retention":"7d"}`, http.StatusOK))
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, db); err != nil || db.Spec.Backups != nil || v.Dumps.Keep != 7 {
+		t.Errorf("back at the default: %v %+v keep %d", err, db.Spec.Backups, v.Dumps.Keep)
+	}
 	for _, c := range []struct{ method, path, body, want string }{
-		{"PUT", base + "/backups", `{"retention":"30d"}`, "nothing to turn on or off"},
-		{"DELETE", base + "/backups", "", "nothing to turn on or off"},
+		{"PUT", base + "/backups", `{"retention":"10d"}`, "7, 14 or 30"},
+		{"PUT", base + "/backups", `{"retention":"14"}`, "7, 14 or 30"},
+		{"PUT", base + "/backups", `{"schedule":"0 4 * * *"}`, "keep their hour"},
+		{"DELETE", base + "/backups", "", "nothing to turn off"},
 		{"POST", base + "/restore", `{"as":"copy","to":"2026-10-14T00:00:00Z"}`, "Point-in-time restore is a dedicated database feature"},
 		{"POST", base + "/restore", `{"as":"copy","size":"shared-m"}`, "no instance size"},
 		{"POST", base + "/restore", `{"as":"copy","backup":"20260101T000000Z"}`, "shpyrd pg backups list db shows them"},
