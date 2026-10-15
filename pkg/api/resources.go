@@ -9,13 +9,16 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -119,6 +122,9 @@ func (s *Server) listProjectResources(c *gin.Context) {
 		}
 		for _, u := range list.Items {
 			v := resourceViewOf(t, u)
+			if t.Kind == "Postgres" {
+				s.postgresDetails(ctx, u, v.Details)
+			}
 			v.AttachedTo = attached[t.Kind+"/"+u.GetName()]
 			if v.AttachedTo == nil {
 				v.AttachedTo = []string{}
@@ -200,6 +206,57 @@ func resourceViewOf(t ext.ResourceType, u unstructured.Unstructured) ResourceVie
 		}
 	}
 	return v
+}
+
+// sharedPostgresVersion is the PostgreSQL the shared servers run, the
+// controller's defaultPostgresVersion: a shared database has no version
+// of its own.
+const sharedPostgresVersion = "17"
+
+// postgresDetails say which kind a database is. A cluster of its own (a
+// Postgres without a type) is "dedicated", and the generic view carries
+// its size, instances, version, disk and backup window already. A
+// database on the platform's server is "shared" and shows instead the
+// server's version, its cap and how much of it is used, whether it is
+// reached through the server's pooler, and its nightly copies.
+func (s *Server) postgresDetails(ctx context.Context, u unstructured.Unstructured, d map[string]string) {
+	if typ, _, _ := unstructured.NestedString(u.Object, "spec", "type"); typ != shpyrdv1.PostgresTypeShared {
+		d["type"] = shpyrdv1.PostgresTypeDedicated
+		return
+	}
+	d["type"] = shpyrdv1.PostgresTypeShared
+	var pg shpyrdv1.Postgres
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &pg); err != nil {
+		return
+	}
+	d["version"] = sharedPostgresVersion
+	// The cap as written. The metering loop writes "used of cap" on the
+	// status' storage, which the generic view took for a disk's size.
+	cap, _, _ := unstructured.NestedString(u.Object, "spec", "storage")
+	if cap == "" {
+		cap = "1Gi"
+	}
+	d["storage"] = cap
+	capBytes := int64(1 << 30)
+	if q, err := resource.ParseQuantity(cap); err == nil && q.Value() > 0 {
+		capBytes = q.Value()
+	}
+	d["capBytes"] = strconv.FormatInt(capBytes, 10)
+	// What the database holds is derived from the percentage of the cap
+	// the metering loop records on the status; nothing before the first
+	// measurement.
+	var used int64
+	if pg.Status.CapPercent != nil {
+		used = capBytes * int64(*pg.Status.CapPercent) / 100
+	}
+	d["usedBytes"] = strconv.FormatInt(used, 10)
+	// The database's Service in the project points at the server's pooler
+	// once the tenants go through it, at the primary before.
+	d["pooler"] = "off"
+	if svc, err := s.kube.Kube.CoreV1().Services(u.GetNamespace()).Get(ctx, u.GetName(), metav1.GetOptions{}); err == nil && svc.Spec.Type == corev1.ServiceTypeExternalName && strings.Contains(svc.Spec.ExternalName, "-pooler.") {
+		d["pooler"] = "on"
+	}
+	d["backups"] = fmt.Sprintf("nightly, kept %d", controller.SharedDumpsKeep(&pg))
 }
 
 // CreateResourceRequest creates a resource of an extension kind.
@@ -331,6 +388,27 @@ type sharedRefusal struct{ msg string }
 
 func (e *sharedRefusal) Error() string { return e.msg }
 
+// postgresRules are the workspace's plan rules for databases with the
+// defaults filled in: both kinds allowed, dedicated when no kind is
+// asked, a 1Gi cap on a shared database. A creation and the public
+// config read the same rules.
+func (s *Server) postgresRules(ctx context.Context, ws string) store.PostgresLimits {
+	var rules store.PostgresLimits
+	if limits := s.limitsOf(ctx, ws); limits != nil && limits.Postgres != nil {
+		rules = *limits.Postgres
+	}
+	if len(rules.Types) == 0 {
+		rules.Types = []string{shpyrdv1.PostgresTypeShared, shpyrdv1.PostgresTypeDedicated}
+	}
+	if rules.DefaultType == "" {
+		rules.DefaultType = shpyrdv1.PostgresTypeDedicated
+	}
+	if rules.SharedCap == "" {
+		rules.SharedCap = "1Gi"
+	}
+	return rules
+}
+
 // applyPostgresType settles a new database's kind within the workspace's
 // plan: the type asked for, else the plan's default, else dedicated; a
 // kind the plan does not allow is refused in words. A shared database
@@ -338,27 +416,16 @@ func (e *sharedRefusal) Error() string { return e.msg }
 // no instance settings (the CRD refuses them too); a dedicated one keeps
 // today's 5Gi disk default. It returns the cap of a shared database.
 func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[string]interface{}) (string, error) {
-	limits := s.limitsOf(ctx, ws)
-	var rules store.PostgresLimits
-	if limits != nil && limits.Postgres != nil {
-		rules = *limits.Postgres
-	}
-	allowed := rules.Types
-	if len(allowed) == 0 {
-		allowed = []string{shpyrdv1.PostgresTypeShared, shpyrdv1.PostgresTypeDedicated}
-	}
+	rules := s.postgresRules(ctx, ws)
 	typ, _ := spec["type"].(string)
 	if typ == "" {
 		typ = rules.DefaultType
 	}
-	if typ == "" {
-		typ = shpyrdv1.PostgresTypeDedicated
-	}
 	if typ != shpyrdv1.PostgresTypeShared && typ != shpyrdv1.PostgresTypeDedicated {
 		return "", fmt.Errorf("type %q is not one of shared, dedicated", typ)
 	}
-	if !slices.Contains(allowed, typ) {
-		return "", fmt.Errorf("this workspace's plan allows only %s databases", strings.Join(allowed, " and "))
+	if !slices.Contains(rules.Types, typ) {
+		return "", fmt.Errorf("this workspace's plan allows only %s databases", strings.Join(rules.Types, " and "))
 	}
 	spec["type"] = typ
 	if typ == shpyrdv1.PostgresTypeDedicated {
@@ -380,9 +447,6 @@ func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[stri
 	cap, _ := spec["storage"].(string)
 	if cap == "" {
 		cap = rules.SharedCap
-	}
-	if cap == "" {
-		cap = "1Gi"
 	}
 	spec["storage"] = cap
 	return cap, nil

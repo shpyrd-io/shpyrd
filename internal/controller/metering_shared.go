@@ -263,8 +263,14 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// sharedServerPoolers switches a server's pooler on when the seven-day p95
-// of its client connections passes 60 % of max_connections: the server is
+// AnnotationConnectionsP95 on a shared server is the seven-day p95 of its
+// client connections, a whole number as a string, written by the metering
+// loop each cycle. The console reads it beside max_connections.
+const AnnotationConnectionsP95 = "shpyrd.io/connections-p95"
+
+// sharedServerPoolers measures every shared server's client connections
+// (the seven-day p95, recorded on the server) and switches a server's
+// pooler on when that p95 passes 60 % of max_connections: the server is
 // stamped, and the Postgres reconciler renders the Pooler and turns the
 // tenants to it. Once on, it stays on.
 func (m *MeteringLoop) sharedServerPoolers(ctx context.Context, at time.Time) error {
@@ -276,13 +282,7 @@ func (m *MeteringLoop) sharedServerPoolers(ctx context.Context, at time.Time) er
 	if err := m.Client.List(ctx, servers, client.InNamespace(SharedPostgresNamespace), client.MatchingLabels{sharedServerLabel: "server"}); err != nil {
 		return err
 	}
-	var pending []*unstructured.Unstructured
-	for i := range servers.Items {
-		if servers.Items[i].GetAnnotations()[AnnotationPooler] == "" {
-			pending = append(pending, &servers.Items[i])
-		}
-	}
-	if len(pending) == 0 {
+	if len(servers.Items) == 0 {
 		return nil
 	}
 	// CNPG's PodMonitor labels a server's series job="<namespace>/<name>";
@@ -297,20 +297,28 @@ func (m *MeteringLoop) sharedServerPoolers(ctx context.Context, at time.Time) er
 	for _, s := range series {
 		p95[s.Labels["job"]] = s.Value
 	}
-	for _, server := range pending {
+	for i := range servers.Items {
+		server := &servers.Items[i]
 		maxText, _, _ := unstructured.NestedString(server.Object, "spec", "postgresql", "parameters", "max_connections")
 		maxConnections, _ := strconv.Atoi(maxText)
 		seen := p95[SharedPostgresNamespace+"/"+server.GetName()]
-		if !sharedPoolerWanted(seen, maxConnections) {
-			continue
+		stamp := map[string]string{AnnotationConnectionsP95: strconv.Itoa(int(math.Round(seen)))}
+		switched := server.GetAnnotations()[AnnotationPooler] == "" && sharedPoolerWanted(seen, maxConnections)
+		if switched {
+			stamp[AnnotationPooler] = at.UTC().Format(time.RFC3339)
+		}
+		if !switched && server.GetAnnotations()[AnnotationConnectionsP95] == stamp[AnnotationConnectionsP95] {
+			continue // the same number as last cycle
 		}
 		before := server.DeepCopy()
-		server.SetAnnotations(mergeMaps(server.GetAnnotations(), map[string]string{AnnotationPooler: at.UTC().Format(time.RFC3339)}))
+		server.SetAnnotations(mergeMaps(server.GetAnnotations(), stamp))
 		if err := m.Client.Patch(ctx, server, client.MergeFrom(before)); err != nil {
-			log.FromContext(ctx).Error(err, "shared server pooler switch failed", "server", server.GetName())
+			log.FromContext(ctx).Error(err, "shared server connections stamp failed", "server", server.GetName())
 			continue
 		}
-		log.FromContext(ctx).Info("shared server pooler switched on", "server", server.GetName(), "connections_p95", seen, "max_connections", maxConnections)
+		if switched {
+			log.FromContext(ctx).Info("shared server pooler switched on", "server", server.GetName(), "connections_p95", seen, "max_connections", maxConnections)
+		}
 	}
 	return nil
 }

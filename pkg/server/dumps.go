@@ -24,6 +24,7 @@ import (
 // target, SHPYRD_DUMPS_KEEP how many copies of each database stay. A Job
 // cut from it for one database adds SHPYRD_DUMPS_DATABASE, _KIND and _AT.
 func runDumps(logger *slog.Logger) error {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, "")
@@ -53,6 +54,9 @@ func runDumps(logger *slog.Logger) error {
 	}
 	rep, err := run.Do(ctx)
 	logger.Info("dumps done", "dumped", len(rep.Dumped), "failed", len(rep.Failed), "removed", rep.Removed)
+	// The same numbers as the pod's termination message, which the console
+	// reads off the Job's pod. Outside a pod there is no such file.
+	_ = os.WriteFile("/dev/termination-log", []byte(fmt.Sprintf("dumped=%d failed=%d removed=%d took=%ds", len(rep.Dumped), len(rep.Failed), rep.Removed, int(time.Since(started).Seconds()))), 0o644)
 	return err
 }
 
