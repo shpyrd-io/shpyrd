@@ -19,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 )
@@ -363,8 +364,25 @@ func (r *PostgresReconciler) ensureSharedRoleSecret(ctx context.Context, pg *shp
 	return string(sec.Data["password"]), nil
 }
 
+// sharedTenantLabels mark a tenant's objects with the Postgres they belong
+// to, so a change to them reconciles that Postgres.
 func sharedTenantLabels(pg *shpyrdv1.Postgres, server string) map[string]string {
-	return map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", sharedTenantLabel: string(pg.UID), sharedOfServerLabel: server}
+	return map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", sharedTenantLabel: string(pg.UID), sharedOfServerLabel: server,
+		sharedTenantNamespaceLabel: pg.Namespace, sharedTenantNameLabel: pg.Name}
+}
+
+const (
+	sharedTenantNamespaceLabel = "shpyrd.io/postgres-namespace"
+	sharedTenantNameLabel      = "shpyrd.io/postgres-name"
+)
+
+// sharedTenantToPostgres maps a tenant object to its Postgres.
+func sharedTenantToPostgres(_ context.Context, obj client.Object) []reconcile.Request {
+	l := obj.GetLabels()
+	if l[sharedTenantNamespaceLabel] == "" || l[sharedTenantNameLabel] == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: l[sharedTenantNamespaceLabel], Name: l[sharedTenantNameLabel]}}}
 }
 
 func (r *PostgresReconciler) ensureSharedRole(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) error {

@@ -152,10 +152,18 @@ func (r *PostgresReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	cluster.SetGroupVersionKind(CNPGClusterGVK)
 	backup := &unstructured.Unstructured{}
 	backup.SetGroupVersionKind(CNPGBackupGVK)
+	database := &unstructured.Unstructured{}
+	database.SetGroupVersionKind(CNPGDatabaseGVK)
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&shpyrdv1.Postgres{}).
 		Owns(cluster).
 		Owns(&shpyrdv1.ObjectBucket{}).
+		// A shared tenant's objects, applied by CloudNativePG, make its
+		// database Ready (step 3 of the storage plan).
+		Watches(database, handler.EnqueueRequestsFromMapFunc(sharedTenantToPostgres)).
+		Watches(role, handler.EnqueueRequestsFromMapFunc(sharedTenantToPostgres)).
 		// A finished backup updates the database's status (RFC-0038).
 		Watches(backup, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 			u, ok := obj.(*unstructured.Unstructured)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -233,5 +234,65 @@ func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {
 	}
 	if err := c.Get(ctx, key, pg); err == nil {
 		t.Error("the Postgres must be released once its finalizer is done")
+	}
+}
+
+// The sweep drops a deleted tenant's data on its date, not before, once.
+func TestSharedTenantSweepDropsOnTheDate(t *testing.T) {
+	ctx := context.Background()
+	stamp := func(at time.Time) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(CNPGDatabaseGVK)
+		u.SetNamespace(SharedPostgresNamespace)
+		u.SetName("db-deadbeef")
+		u.SetAnnotations(map[string]string{AnnotationDropAfter: at.UTC().Format(time.RFC3339)})
+		_ = unstructured.SetNestedMap(u.Object, map[string]interface{}{"name": "db_deadbeef", "ensure": "present", "databaseReclaimPolicy": "retain"}, "spec")
+		return u
+	}
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	key := types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "db-deadbeef"}
+
+	_, c := newTestReconciler(t)
+	if err := c.Create(ctx, stamp(now.Add(time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	sweep := &SharedTenantSweep{Client: c, Now: func() time.Time { return now }}
+	res, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil || res.RequeueAfter <= 0 {
+		t.Errorf("a date ahead is waited for: %+v %v", res, err)
+	}
+	u := getU(t, c, "Database", SharedPostgresNamespace, "db-deadbeef")
+	if ensure, _, _ := unstructured.NestedString(u.Object, "spec", "ensure"); ensure != "present" {
+		t.Errorf("not before the date: ensure=%s", ensure)
+	}
+
+	sweep.Now = func() time.Time { return now.Add(2 * time.Hour) }
+	if _, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	u = getU(t, c, "Database", SharedPostgresNamespace, "db-deadbeef")
+	ensure, _, _ := unstructured.NestedString(u.Object, "spec", "ensure")
+	policy, _, _ := unstructured.NestedString(u.Object, "spec", "databaseReclaimPolicy")
+	if ensure != "absent" || policy != "delete" {
+		t.Errorf("on the date: ensure=%s policy=%s", ensure, policy)
+	}
+	if res, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil || res.RequeueAfter != 0 {
+		t.Errorf("done is done: %+v %v", res, err)
+	}
+}
+
+// A tenant object's change reconciles its Postgres.
+func TestSharedTenantObjectsMapToTheirPostgres(t *testing.T) {
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(CNPGDatabaseGVK)
+	u.SetLabels(sharedTenantLabels(pg, "pg-shared-1"))
+	reqs := sharedTenantToPostgres(context.Background(), u)
+	if len(reqs) != 1 || reqs[0].Namespace != "p-shop" || reqs[0].Name != "db" {
+		t.Errorf("mapped to %v", reqs)
+	}
+	u.SetLabels(nil)
+	if reqs := sharedTenantToPostgres(context.Background(), u); reqs != nil {
+		t.Errorf("an unlabelled object maps to nothing: %v", reqs)
 	}
 }

@@ -45,6 +45,9 @@ func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}
+	if err := (&controller.SharedTenantSweep{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return err
+	}
 	controller.RegisterBinder("Postgres", controller.PostgresBinder{})
 	return nil
 }
