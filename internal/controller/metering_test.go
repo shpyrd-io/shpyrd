@@ -676,3 +676,11 @@ func TestSharedServerDisksGrowAtSeventyPercent(t *testing.T) {
 		t.Errorf("under the threshold: %s", sizeOf("pg-shared-1"))
 	}
 }
+
+func TestHumanBytesReadsLikeAPerson(t *testing.T) {
+	for n, want := range map[int64]string{7829171: "7.5Mi", 900 * 1024 * 1024: "900Mi", 1700 * 1024 * 1024: "1.7Gi", 1 << 30: "1Gi", 512: "512", 4 * 1024: "4Ki"} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

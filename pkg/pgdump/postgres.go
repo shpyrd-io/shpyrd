@@ -62,10 +62,21 @@ type Bucket struct {
 	Name   string
 }
 
+// uploadPartSize bounds the memory an upload of unknown length takes:
+// the client buffers one part at a time, and without a part size it sizes
+// parts for a 5 TiB object (about 537 MiB each), which is the dump pod's
+// whole memory limit and more (seen on dev: every dump pod OOM-killed after
+// two databases). 16 MiB parts hold a dump of up to 160 GiB.
+const uploadPartSize = 16 << 20
+
+func putOptions() minio.PutObjectOptions {
+	return minio.PutObjectOptions{ContentType: "application/octet-stream", PartSize: uploadPartSize}
+}
+
 // Put streams an object of unknown length: a multipart upload that is
 // abandoned, not completed, when the reader fails.
 func (b Bucket) Put(ctx context.Context, key string, r io.Reader) error {
-	_, err := b.Client.PutObject(ctx, b.Name, key, r, -1, minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	_, err := b.Client.PutObject(ctx, b.Name, key, r, -1, putOptions())
 	return err
 }
 

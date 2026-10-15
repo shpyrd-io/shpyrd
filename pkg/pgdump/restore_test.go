@@ -36,3 +36,11 @@ func TestRestoreLoadsTheNamedCopy(t *testing.T) {
 		t.Errorf("a missing copy: %v", err)
 	}
 }
+
+// An upload of unknown length must say its part size, or the client
+// buffers parts sized for a 5 TiB object and the pod is OOM-killed.
+func TestUploadsUseSmallParts(t *testing.T) {
+	if o := putOptions(); o.PartSize != 16<<20 {
+		t.Errorf("part size = %d", o.PartSize)
+	}
+}

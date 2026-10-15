@@ -88,8 +88,7 @@ func applyCap(st *shpyrdv1.ResourceStatus, generation int64, used int64, cap *re
 	if cap != nil && cap.Value() > 0 {
 		capBytes, capText = cap.Value(), cap.String()
 	}
-	usedQ := resource.NewQuantity(used, resource.BinarySI)
-	st.Storage = fmt.Sprintf("%s of %s", usedQ.String(), capText)
+	st.Storage = fmt.Sprintf("%s of %s", humanBytes(used), capText)
 	ratio := float64(used) / float64(capBytes)
 	percent := int(ratio*100 + 0.5)
 	st.CapPercent = ptr.To(int32(percent))
@@ -112,7 +111,7 @@ func applyCap(st *shpyrdv1.ResourceStatus, generation int64, used int64, cap *re
 		cond.Message = fmt.Sprintf("Your database is at %d%% of its %s cap.", percent, capText)
 	default:
 		cond.Status, cond.Reason = metav1.ConditionTrue, CapWithin
-		cond.Message = fmt.Sprintf("%s of %s used.", usedQ.String(), capText)
+		cond.Message = fmt.Sprintf("%s of %s used.", humanBytes(used), capText)
 	}
 	for i, c := range st.Conditions {
 		if c.Type == ConditionCap {
@@ -244,4 +243,21 @@ func sharedDiskStep(server string, size resource.Quantity, used, capacity map[st
 	}
 	gib := math.Ceil(float64(size.Value()) * sharedDiskGrowBy / (1 << 30))
 	return *resource.NewQuantity(int64(gib)*(1<<30), resource.BinarySI), true
+}
+
+// humanBytes says a size the way a person reads it: whole or one decimal
+// in Gi, Mi or Ki (a Quantity's String prints 7829171 bytes as such).
+func humanBytes(n int64) string {
+	unit := func(div float64, suffix string) string {
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/div), ".0") + suffix
+	}
+	switch {
+	case n >= 1<<30:
+		return unit(1<<30, "Gi")
+	case n >= 1<<20:
+		return unit(1<<20, "Mi")
+	case n >= 1<<10:
+		return unit(1<<10, "Ki")
+	}
+	return fmt.Sprintf("%d", n)
 }
