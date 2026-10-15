@@ -394,6 +394,46 @@ func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 	}
 }
 
+// A suspended workspace fences its shared databases' roles (no connections,
+// sessions ended) and says so; the fence lifts when the workspace is back.
+func TestSharedPostgresSuspendedWorkspaceFencesTheRole(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	driveShared(t, r, c, pg)
+	hash := tenantHash(pg.UID)
+	key := client.ObjectKeyFromObject(pg)
+	pg.Annotations[AnnotationWorkspaceSuspended] = "true"
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if limit != 0 || !strings.Contains(pg.Status.Message, "your workspace is suspended") {
+		t.Errorf("suspended: limit %d, %q", limit, pg.Status.Message)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "fence-" + hash}, &batchv1.Job{}); err != nil {
+		t.Errorf("the sessions are ended by the fence job: %v", err)
+	}
+	delete(pg.Annotations, AnnotationWorkspaceSuspended)
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role = getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	limit, _, _ = unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if limit != 20 || pg.Status.Phase != shpyrdv1.ResourceReady || strings.Contains(pg.Status.Message, "paused") {
+		t.Errorf("back: limit %d, %s %q", limit, pg.Status.Phase, pg.Status.Message)
+	}
+}
+
 // A dump asked for now is a Job cut from the server's CronJob, for one
 // database, named by its moment.
 func TestSharedDumpJobIsCutFromTheCronJob(t *testing.T) {

@@ -231,6 +231,8 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	pg.Status.Phase = shpyrdv1.ResourceReady
 	pg.Status.Message = fmt.Sprintf("PostgreSQL %s, shared, on %s", defaultPostgresVersion, server.GetName())
 	switch {
+	case fenced && suspendedWithWorkspace(pg):
+		pg.Status.Message = "Connections are paused: your workspace is suspended. They return when it is active again."
 	case fenced:
 		pg.Status.Message = fmt.Sprintf("Connections are paused: your database is at %d%% of its %s cap. Free space, or raise the limit; connections return below 95%%.", ptr.Deref(pg.Status.CapPercent, 0), capText(pg))
 	case nudged:
@@ -269,8 +271,12 @@ func (r *PostgresReconciler) reconcileSharedFence(ctx context.Context, pg *shpyr
 	}
 	limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
 	fenced := limit == 0
+	// The fence is wanted over the cap, and while the workspace is
+	// suspended (the suspension marks every database of it).
+	suspended := suspendedWithWorkspace(pg)
+	wanted := reason == CapFar || suspended
 	switch {
-	case reason == CapFar && !fenced:
+	case wanted && !fenced:
 		before := role.DeepCopy()
 		_ = unstructured.SetNestedField(role.Object, int64(0), "spec", "connectionLimit")
 		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
@@ -281,9 +287,13 @@ func (r *PostgresReconciler) reconcileSharedFence(ctx context.Context, pg *shpyr
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return true, err
 		}
-		r.Recorder.Event(pg, corev1.EventTypeWarning, "CapFenced", fmt.Sprintf("at %d%% of its %s cap: connections paused", percent, capText(pg)))
+		if suspended {
+			r.Recorder.Event(pg, corev1.EventTypeWarning, "WorkspaceSuspended", "the workspace is suspended: connections paused")
+		} else {
+			r.Recorder.Event(pg, corev1.EventTypeWarning, "CapFenced", fmt.Sprintf("at %d%% of its %s cap: connections paused", percent, capText(pg)))
+		}
 		return true, nil
-	case fenced && reason != CapFar && percent > 0 && percent < 95:
+	case fenced && !wanted && percent < 95:
 		before := role.DeepCopy()
 		_ = unstructured.SetNestedField(role.Object, sharedConnectionLimit(pg), "spec", "connectionLimit")
 		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
