@@ -3,10 +3,13 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -151,4 +154,94 @@ func (m *MeteringLoop) sharedBuckets(ctx context.Context, start, end time.Time, 
 		})
 	}
 	return out
+}
+
+// The servers' disks (storage plan, step 3) are the hard protection behind
+// caps that are oversubscribed on purpose: at 70 % used a server's storage
+// grows by half, online (the database class expands a volume in use). The
+// next step waits until the last one has landed, which the capacity the
+// kubelet reports says.
+const (
+	sharedDiskGrowAt = 0.70
+	sharedDiskGrowBy = 1.5
+)
+
+func (m *MeteringLoop) sharedServerDisks(ctx context.Context, at time.Time) error {
+	if m.Client == nil {
+		return nil
+	}
+	servers := &unstructured.UnstructuredList{}
+	servers.SetGroupVersionKind(CNPGClusterGVK.GroupVersion().WithKind("ClusterList"))
+	if err := m.Client.List(ctx, servers, client.InNamespace(SharedPostgresNamespace), client.MatchingLabels{sharedServerLabel: "server"}); err != nil {
+		return err
+	}
+	if len(servers.Items) == 0 {
+		return nil
+	}
+	byClaim := func(metric string) (map[string]float64, error) {
+		series, err := m.Prom.QueryInstantSeriesAt(ctx, fmt.Sprintf(`max by (persistentvolumeclaim) (%s{namespace=%q})`, metric, SharedPostgresNamespace), at)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", metric, err)
+		}
+		out := map[string]float64{}
+		for _, s := range series {
+			out[s.Labels["persistentvolumeclaim"]] = s.Value
+		}
+		return out, nil
+	}
+	used, err := byClaim("kubelet_volume_stats_used_bytes")
+	if err != nil {
+		return err
+	}
+	capacity, err := byClaim("kubelet_volume_stats_capacity_bytes")
+	if err != nil {
+		return err
+	}
+	for i := range servers.Items {
+		server := &servers.Items[i]
+		sizeText, _, _ := unstructured.NestedString(server.Object, "spec", "storage", "size")
+		size, err := resource.ParseQuantity(sizeText)
+		if err != nil || size.Value() <= 0 {
+			continue
+		}
+		next, grow := sharedDiskStep(server.GetName(), size, used, capacity)
+		if !grow {
+			continue
+		}
+		before := server.DeepCopy()
+		if err := unstructured.SetNestedField(server.Object, next.String(), "spec", "storage", "size"); err != nil {
+			return err
+		}
+		if err := m.Client.Patch(ctx, server, client.MergeFrom(before)); err != nil {
+			log.FromContext(ctx).Error(err, "shared server disk expansion failed", "server", server.GetName())
+			continue
+		}
+		log.FromContext(ctx).Info("shared server disk grows", "server", server.GetName(), "from", size.String(), "to", next.String())
+	}
+	return nil
+}
+
+// sharedDiskStep says whether a server's storage grows now and to what:
+// when its fullest instance is at the threshold and every instance's
+// reported capacity has caught up with the size asked (no expansion in
+// flight). The step is half again, rounded up to whole GiB.
+func sharedDiskStep(server string, size resource.Quantity, used, capacity map[string]float64) (resource.Quantity, bool) {
+	fullest, landed, seen := 0.0, true, false
+	for claim, cap := range capacity {
+		if !strings.HasPrefix(claim, server+"-") || cap <= 0 {
+			continue
+		}
+		seen = true
+		if ratio := used[claim] / cap; ratio > fullest {
+			fullest = ratio
+		}
+		if cap < 0.9*float64(size.Value()) {
+			landed = false
+		}
+	}
+	if !seen || !landed || fullest < sharedDiskGrowAt {
+		return size, false
+	}
+	gib := math.Ceil(float64(size.Value()) * sharedDiskGrowBy / (1 << 30))
+	return *resource.NewQuantity(int64(gib)*(1<<30), resource.BinarySI), true
 }

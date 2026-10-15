@@ -613,3 +613,66 @@ func TestSharedDatabasesAreMeteredByTheirCap(t *testing.T) {
 		t.Fatalf("shared buckets = %+v", buckets)
 	}
 }
+
+// A shared server's disk grows by half when its fullest instance passes
+// 70 %, once the previous step has landed; below that, or while a step is
+// in flight, nothing moves.
+func TestSharedServerDisksGrowAtSeventyPercent(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := func(name, size string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(CNPGClusterGVK)
+		u.SetNamespace(SharedPostgresNamespace)
+		u.SetName(name)
+		u.SetLabels(map[string]string{sharedServerLabel: "server"})
+		_ = unstructured.SetNestedField(u.Object, size, "spec", "storage", "size")
+		return u
+	}
+	gi := func(n float64) string { return fmt.Sprint(int64(n * (1 << 30))) }
+	answers := map[string][]map[string]any{
+		"kubelet_volume_stats_used_bytes": {
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(38)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(20)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-10-1"}, gi(10)),
+		},
+		"kubelet_volume_stats_capacity_bytes": {
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(50)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(50)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-10-1"}, gi(50)),
+		},
+	}
+	srv := fakeProm(t, answers)
+	defer srv.Close()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(server("pg-shared-1", "50Gi"), server("pg-shared-10", "50Gi")).Build()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	sizeOf := func(name string) string {
+		u := getU(t, c, "Cluster", SharedPostgresNamespace, name)
+		size, _, _ := unstructured.NestedString(u.Object, "spec", "storage", "size")
+		return size
+	}
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" || sizeOf("pg-shared-10") != "50Gi" {
+		t.Errorf("after 76%% on one instance: %s and %s", sizeOf("pg-shared-1"), sizeOf("pg-shared-10"))
+	}
+	// The capacity still says 50Gi: the step is in flight, no second step.
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" {
+		t.Errorf("a step in flight is waited for: %s", sizeOf("pg-shared-1"))
+	}
+	// Landed at 75Gi with 38Gi used (51 %): nothing more.
+	answers["kubelet_volume_stats_capacity_bytes"][0] = sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(75))
+	answers["kubelet_volume_stats_capacity_bytes"][1] = sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(75))
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" {
+		t.Errorf("under the threshold: %s", sizeOf("pg-shared-1"))
+	}
+}

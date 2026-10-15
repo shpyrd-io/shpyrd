@@ -119,6 +119,9 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 			if err := m.sharedCaps(ctx, end); err != nil {
 				logger.Error(err, "shared database caps")
 			}
+			if err := m.sharedServerDisks(ctx, end); err != nil {
+				logger.Error(err, "shared server disks")
+			}
 			next = next.Add(bucketInterval)
 		}
 	}
