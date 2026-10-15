@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -181,6 +183,16 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+	secured, err := r.ensureSharedGrants(ctx, pg, hash, server.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !secured {
+		pg.Status.Phase = shpyrdv1.ResourceProvisioning
+		pg.Status.Message = "securing your database on shared server " + server.GetName()
+		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 	pg.Status.Phase = shpyrdv1.ResourceReady
 	pg.Status.Message = fmt.Sprintf("PostgreSQL %s, shared, on %s", defaultPostgresVersion, server.GetName())
 	setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Ready", pg.Status.Message)
@@ -203,6 +215,10 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 		return ctrl.Result{}, err
 	}
 	if err := r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedRoleObject(hash), Namespace: SharedPostgresNamespace}}); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, err
+	}
+	policy := metav1.DeletePropagationBackground
+	if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: sharedGrantsJob(hash), Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, err
 	}
 	db := &unstructured.Unstructured{}
@@ -488,4 +504,92 @@ func randomPassword() string {
 		panic(err)
 	}
 	return hex.EncodeToString(b)
+}
+
+// The tenant's one-time grants, run as the server's superuser once the
+// operator created the database and the role: nobody but the owner (and
+// later the platform's dump role) may connect to the database, and the
+// role's temp files are bounded. Recorded on the Database object, so a
+// re-run of the Job is never needed and the Postgres status write is
+// never raced.
+const annotationSharedGrants = "shpyrd.io/grants"
+
+func sharedGrantsJob(hash string) string { return "grant-" + hash }
+
+// ensureSharedGrants runs the grants Job and reports whether it succeeded.
+func (r *PostgresReconciler) ensureSharedGrants(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) (bool, error) {
+	db := &unstructured.Unstructured{}
+	db.SetGroupVersionKind(CNPGDatabaseGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedDBObject(hash)}, db); err != nil {
+		return false, err
+	}
+	if db.GetAnnotations()[annotationSharedGrants] == "done" {
+		return true, nil
+	}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: sharedGrantsJob(hash), Namespace: SharedPostgresNamespace}}
+	err := r.Get(ctx, client.ObjectKeyFromObject(job), job)
+	if apierrors.IsNotFound(err) {
+		job = r.desiredSharedGrantsJob(pg, hash, server)
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if job.Status.Succeeded < 1 {
+		return false, nil
+	}
+	before := db.DeepCopy()
+	ann := db.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[annotationSharedGrants] = "done"
+	db.SetAnnotations(ann)
+	if err := r.Patch(ctx, db, client.MergeFrom(before)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// desiredSharedGrantsJob is one psql run against the server's primary with
+// the superuser credentials CloudNativePG keeps in <server>-superuser.
+func (r *PostgresReconciler) desiredSharedGrantsJob(pg *shpyrdv1.Postgres, hash, server string) *batchv1.Job {
+	dbName, roleName := sharedDatabaseName(hash), sharedRoleName(hash)
+	sql := fmt.Sprintf("REVOKE CONNECT ON DATABASE %s FROM PUBLIC; ALTER ROLE %s SET temp_file_limit = '1GB';", dbName, roleName)
+	env := func(name, key string) corev1.EnvVar {
+		return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: server + "-superuser"}, Key: key}}}
+	}
+	labels := sharedTenantLabels(pg, server)
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: sharedGrantsJob(hash), Namespace: SharedPostgresNamespace, Labels: labels},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            ptr.To[int32](6),
+			TTLSecondsAfterFinished: ptr.To[int32](3600),
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					RestartPolicy:   corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To[int64](26), RunAsGroup: ptr.To[int64](26), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+					Containers: []corev1.Container{{
+						Name:    "psql",
+						Image:   "ghcr.io/cloudnative-pg/postgresql:" + defaultPostgresVersion,
+						Command: []string{"psql", "-v", "ON_ERROR_STOP=1", "-c", sql},
+						Env: []corev1.EnvVar{
+							{Name: "PGHOST", Value: server + "-rw"},
+							{Name: "PGPORT", Value: fmt.Sprint(PostgresPort)},
+							{Name: "PGDATABASE", Value: "postgres"},
+							{Name: "PGSSLMODE", Value: "require"},
+							env("PGUSER", "username"),
+							env("PGPASSWORD", "password"),
+						},
+						Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resourceMustParse("10m"), corev1.ResourceMemory: resourceMustParse("32Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resourceMustParse("128Mi")}},
+						SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+					}},
+				},
+			},
+		},
+	}
 }

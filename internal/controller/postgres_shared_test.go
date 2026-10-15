@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -145,9 +146,32 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 		t.Errorf("not ready yet must be said: %v", vars)
 	}
 
-	// CloudNativePG applies both: Ready, at the database's own address.
+	// CloudNativePG applies both: the one-time grants run as the server's
+	// superuser before the database is Ready.
 	markApplied(t, c, role)
 	markApplied(t, c, db)
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Status.Phase != shpyrdv1.ResourceProvisioning || !strings.Contains(pg.Status.Message, "securing") {
+		t.Errorf("before the grants: %s %q", pg.Status.Phase, pg.Status.Message)
+	}
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, job); err != nil {
+		t.Fatal(err)
+	}
+	sql := strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")
+	user := job.Spec.Template.Spec.Containers[0].Env[4]
+	if !strings.Contains(sql, "REVOKE CONNECT ON DATABASE "+dbName+" FROM PUBLIC") || !strings.Contains(sql, "ALTER ROLE "+roleName+" SET temp_file_limit") || user.ValueFrom.SecretKeyRef.Name != "pg-shared-1-superuser" || job.Spec.Template.Spec.SecurityContext.RunAsNonRoot == nil {
+		t.Errorf("grants job = %s env %+v", sql, user)
+	}
+	job.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, job); err != nil {
+		if err := c.Update(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
 	settle(t, r, key)
 	if err := c.Get(ctx, key, pg); err != nil {
 		t.Fatal(err)
@@ -226,6 +250,9 @@ func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}, &corev1.Secret{}); err == nil {
 		t.Error("the role's secret must be gone")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, &batchv1.Job{}); err == nil {
+		t.Error("the grants job must be gone")
 	}
 	db := getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash)
 	policy, _, _ := unstructured.NestedString(db.Object, "spec", "databaseReclaimPolicy")
