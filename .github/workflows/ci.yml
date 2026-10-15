@@ -300,6 +300,7 @@ jobs:
           [ "$opened" = 1 ]
           ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select 1" 2>/dev/null | grep -q '^1$'
           URI=$NEW
+          INPOD=${URI/@shared:5432/@localhost:5432}
           # Extensions: a trusted one is the owner's to create, pgvector is there already, the rest are a dedicated database's.
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension if not exists pgcrypto; select count(*) from pg_extension where extname in ('pgcrypto','vector')" | grep -q '^2$'
           ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension pg_stat_statements" 2>/dev/null
