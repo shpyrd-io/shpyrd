@@ -323,3 +323,92 @@ func TestSharedTenantObjectsMapToTheirPostgres(t *testing.T) {
 		t.Errorf("an unlabelled object maps to nothing: %v", reqs)
 	}
 }
+
+// At 150 % of its cap a shared database is fenced: connection limit 0 and
+// its sessions ended as the superuser; below 95 % the limit returns.
+func TestSharedPostgresFenceFollowsTheCap(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	hash := tenantHash(pg.UID)
+	markApplied(t, c, getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash))
+	markApplied(t, c, getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash))
+	settle(t, r, key)
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, job); err != nil {
+		t.Fatal(err)
+	}
+	job.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, job); err != nil {
+		if err := c.Update(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle(t, r, key)
+
+	// The metering found 160 %.
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	cap := resource.MustParse("1Gi")
+	applyCap(&pg.Status, pg.Generation, int64(float64(cap.Value())*1.6), &cap, time.Now())
+	if err := c.Status().Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	fence := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "fence-" + hash}, fence); err != nil || limit != 0 || !strings.Contains(strings.Join(fence.Spec.Template.Spec.Containers[0].Command, " "), "pg_terminate_backend") {
+		t.Errorf("fenced: limit %d job %v", limit, err)
+	}
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pg.Status.Message, "Connections are paused") || !strings.Contains(pg.Status.Message, "160%") {
+		t.Errorf("fenced message = %q", pg.Status.Message)
+	}
+
+	// Still over, at 120 %: fenced stays (the release is below 95 %).
+	applyCap(&pg.Status, pg.Generation, int64(float64(cap.Value())*1.2), &cap, time.Now())
+	if err := c.Status().Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role = getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	if limit, _, _ = unstructured.NestedInt64(role.Object, "spec", "connectionLimit"); limit != 0 {
+		t.Errorf("at 120%% the fence stays: limit %d", limit)
+	}
+
+	// Freed space to 40 %: the limit returns, the job goes.
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	applyCap(&pg.Status, pg.Generation, int64(float64(cap.Value())*0.4), &cap, time.Now())
+	if err := c.Status().Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role = getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	limit, _, _ = unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	if limit != 20 {
+		t.Errorf("released: limit %d", limit)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "fence-" + hash}, fence); err == nil {
+		t.Error("the fence job goes with the release")
+	}
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(pg.Status.Message, "paused") {
+		t.Errorf("released message = %q", pg.Status.Message)
+	}
+}

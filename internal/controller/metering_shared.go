@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -87,6 +88,7 @@ func applyCap(st *shpyrdv1.ResourceStatus, generation int64, used int64, cap *re
 	st.Storage = fmt.Sprintf("%s of %s", usedQ.String(), capText)
 	ratio := float64(used) / float64(capBytes)
 	percent := int(ratio*100 + 0.5)
+	st.CapPercent = ptr.To(int32(percent))
 	cond := metav1.Condition{Type: ConditionCap, ObservedGeneration: generation, LastTransitionTime: metav1.NewTime(at)}
 	switch {
 	case ratio >= 1.5:

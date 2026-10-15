@@ -193,10 +193,76 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+	fenced, err := r.reconcileSharedFence(ctx, pg, hash, server.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	pg.Status.Phase = shpyrdv1.ResourceReady
 	pg.Status.Message = fmt.Sprintf("PostgreSQL %s, shared, on %s", defaultPostgresVersion, server.GetName())
+	if fenced {
+		pg.Status.Message = fmt.Sprintf("Connections are paused: your database is at %d%% of its %s cap. Free space, or raise the limit; connections return below 95%%.", ptr.Deref(pg.Status.CapPercent, 0), capText(pg))
+	}
 	setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Ready", pg.Status.Message)
 	return ctrl.Result{}, nil
+}
+
+// The fence (storage plan, step 3): at 150 % of its cap a shared database's
+// role takes connection limit 0, which the tenant cannot undo, and its
+// sessions are ended by the server's superuser; both reverse below 95 %.
+func sharedFenceJob(hash string) string { return "fence-" + hash }
+
+func capText(pg *shpyrdv1.Postgres) string {
+	if pg.Spec.Storage != nil && pg.Spec.Storage.Value() > 0 {
+		return pg.Spec.Storage.String()
+	}
+	return "1Gi"
+}
+
+// reconcileSharedFence applies or lifts the fence by the last measurement
+// and reports whether the database is fenced.
+func (r *PostgresReconciler) reconcileSharedFence(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) (bool, error) {
+	var reason string
+	for _, c := range pg.Status.Conditions {
+		if c.Type == ConditionCap {
+			reason = c.Reason
+		}
+	}
+	percent := ptr.Deref(pg.Status.CapPercent, 0)
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedRoleObject(hash)}, role); err != nil {
+		return false, err
+	}
+	limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	fenced := limit == 0
+	switch {
+	case reason == CapFar && !fenced:
+		before := role.DeepCopy()
+		_ = unstructured.SetNestedField(role.Object, int64(0), "spec", "connectionLimit")
+		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
+			return false, err
+		}
+		job := r.desiredSharedSQLJob(pg, hash, server, sharedFenceJob(hash),
+			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '%s';", sharedRoleName(hash)))
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return true, err
+		}
+		r.Recorder.Event(pg, corev1.EventTypeWarning, "CapFenced", fmt.Sprintf("at %d%% of its %s cap: connections paused", percent, capText(pg)))
+		return true, nil
+	case fenced && reason != CapFar && percent > 0 && percent < 95:
+		before := role.DeepCopy()
+		_ = unstructured.SetNestedField(role.Object, sharedConnectionLimit(pg), "spec", "connectionLimit")
+		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
+			return true, err
+		}
+		policy := metav1.DeletePropagationBackground
+		if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: sharedFenceJob(hash), Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
+			return true, err
+		}
+		r.Recorder.Event(pg, corev1.EventTypeNormal, "CapReleased", fmt.Sprintf("back at %d%% of its cap: connections return", percent))
+		return false, nil
+	}
+	return fenced, nil
 }
 
 // finalizeShared is a shared database's deletion: the role and its
@@ -218,8 +284,10 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 		return ctrl.Result{}, err
 	}
 	policy := metav1.DeletePropagationBackground
-	if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: sharedGrantsJob(hash), Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, err
+	for _, job := range []string{sharedGrantsJob(hash), sharedFenceJob(hash)} {
+		if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: job, Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	db := &unstructured.Unstructured{}
 	db.SetGroupVersionKind(CNPGDatabaseGVK)
@@ -408,12 +476,18 @@ func (r *PostgresReconciler) ensureSharedRole(ctx context.Context, pg *shpyrdv1.
 	role.SetName(sharedRoleObject(hash))
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 		role.SetLabels(mergeMaps(role.GetLabels(), sharedTenantLabels(pg, server)))
+		// The fence owns the connection limit while it is on (0); the tier's
+		// limit otherwise, and again when the fence lifts.
+		limit := sharedConnectionLimit(pg)
+		if current, found, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit"); found && current == 0 {
+			limit = 0
+		}
 		return unstructured.SetNestedMap(role.Object, map[string]interface{}{
 			"cluster":         map[string]interface{}{"name": server},
 			"name":            sharedRoleName(hash),
 			"login":           true,
 			"inherit":         true,
-			"connectionLimit": sharedConnectionLimit(pg),
+			"connectionLimit": limit,
 			"passwordSecret":  map[string]interface{}{"name": sharedRoleObject(hash)},
 			"ensure":          "present",
 		}, "spec")
@@ -554,17 +628,22 @@ func (r *PostgresReconciler) ensureSharedGrants(ctx context.Context, pg *shpyrdv
 	return true, nil
 }
 
-// desiredSharedGrantsJob is one psql run against the server's primary with
-// the superuser credentials CloudNativePG keeps in <server>-superuser.
+// desiredSharedGrantsJob is the tenant's one-time grants.
 func (r *PostgresReconciler) desiredSharedGrantsJob(pg *shpyrdv1.Postgres, hash, server string) *batchv1.Job {
 	dbName, roleName := sharedDatabaseName(hash), sharedRoleName(hash)
-	sql := fmt.Sprintf("REVOKE CONNECT ON DATABASE %s FROM PUBLIC; ALTER ROLE %s SET temp_file_limit = '1GB';", dbName, roleName)
+	return r.desiredSharedSQLJob(pg, hash, server, sharedGrantsJob(hash),
+		fmt.Sprintf("REVOKE CONNECT ON DATABASE %s FROM PUBLIC; ALTER ROLE %s SET temp_file_limit = '1GB';", dbName, roleName))
+}
+
+// desiredSharedSQLJob is one psql run against the server's primary with
+// the superuser credentials CloudNativePG keeps in <server>-superuser.
+func (r *PostgresReconciler) desiredSharedSQLJob(pg *shpyrdv1.Postgres, hash, server, name, sql string) *batchv1.Job {
 	env := func(name, key string) corev1.EnvVar {
 		return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: server + "-superuser"}, Key: key}}}
 	}
 	labels := sharedTenantLabels(pg, server)
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: sharedGrantsJob(hash), Namespace: SharedPostgresNamespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: SharedPostgresNamespace, Labels: labels},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr.To[int32](6),
 			TTLSecondsAfterFinished: ptr.To[int32](3600),

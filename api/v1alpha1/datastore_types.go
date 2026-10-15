@@ -22,6 +22,11 @@ type ResourceStatus struct {
 	// Phase is Pending, Provisioning, Ready or Failed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
+	// CapPercent is how full a shared database is against its cap, from the
+	// last measurement (storage plan, step 3); the Cap condition says the
+	// step of the ladder.
+	// +optional
+	CapPercent *int32 `json:"capPercent,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 	// Endpoint is host:port inside the project.
