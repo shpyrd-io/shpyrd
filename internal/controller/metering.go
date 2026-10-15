@@ -116,6 +116,9 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 			if err := m.postgresActivity(ctx, end); err != nil {
 				logger.Error(err, "postgres activity check failed")
 			}
+			if err := m.sharedCaps(ctx, end); err != nil {
+				logger.Error(err, "shared database caps")
+			}
 			next = next.Add(bucketInterval)
 		}
 	}

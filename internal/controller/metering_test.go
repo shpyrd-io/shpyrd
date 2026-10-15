@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -523,5 +524,60 @@ func TestNodePools(t *testing.T) {
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep)
 	if dep.Spec.Template.Spec.NodeSelector != nil {
 		t.Errorf("single pool web nodeSelector = %v", dep.Spec.Template.Spec.NodeSelector)
+	}
+}
+
+// A shared database's size, read from its server's exporter, becomes its
+// storage line and a Cap condition on the plan's ladder.
+func TestSharedCapsAreMeasuredAgainstTheCap(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := resource.MustParse("1Gi")
+	near := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "near", Namespace: "p-shop", UID: "uid-near", Generation: 2}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	over := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "over", Namespace: "p-shop", UID: "uid-over"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	quiet := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "quiet", Namespace: "p-shop", UID: "uid-quiet"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "own", Namespace: "p-shop", UID: "uid-own"}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	srv := fakeProm(t, map[string][]map[string]any{
+		"cnpg_pg_database_size_bytes": {
+			sample(map[string]string{"datname": sharedDatabaseName(tenantHash(near.UID))}, fmt.Sprint(900*1024*1024)),
+			sample(map[string]string{"datname": sharedDatabaseName(tenantHash(over.UID))}, fmt.Sprint(1700*1024*1024)),
+		},
+	})
+	defer srv.Close()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(near, over, quiet, dedicated).WithStatusSubresource(near, over, quiet, dedicated).Build()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	if err := m.sharedCaps(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	get := func(name string) *shpyrdv1.Postgres {
+		pg := &shpyrdv1.Postgres{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "p-shop", Name: name}, pg); err != nil {
+			t.Fatal(err)
+		}
+		return pg
+	}
+	capOf := func(pg *shpyrdv1.Postgres) *metav1.Condition {
+		for i := range pg.Status.Conditions {
+			if pg.Status.Conditions[i].Type == ConditionCap {
+				return &pg.Status.Conditions[i]
+			}
+		}
+		return nil
+	}
+	n := get("near")
+	if n.Status.Storage != "900Mi of 1Gi" || capOf(n) == nil || capOf(n).Reason != CapNear || !strings.Contains(capOf(n).Message, "88%") {
+		t.Errorf("near = %q %+v", n.Status.Storage, capOf(n))
+	}
+	o := get("over")
+	if capOf(o) == nil || capOf(o).Reason != CapFar || capOf(o).Status != metav1.ConditionFalse {
+		t.Errorf("over 150%% = %+v", capOf(o))
+	}
+	if q := get("quiet"); q.Status.Storage != "" || capOf(q) != nil {
+		t.Errorf("a tenant not scraped yet keeps its status: %q %+v", q.Status.Storage, capOf(q))
+	}
+	if d := get("own"); d.Status.Storage != "" || capOf(d) != nil {
+		t.Errorf("a dedicated database is not measured here: %q %+v", d.Status.Storage, capOf(d))
 	}
 }
