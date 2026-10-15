@@ -607,22 +607,32 @@ func (r *PostgresReconciler) ensureSharedDatabase(ctx context.Context, pg *shpyr
 	return err
 }
 
+// sharedConnectTimeout, in seconds, is what a client waits for a connection
+// to the server: a client that connects while the server fails over (five
+// seconds on dev, the primary deleted) would otherwise hang on the old
+// address until TCP gives up, two minutes measured; libpq waits forever by
+// default. Ten seconds is twice the failover and well under a request's
+// patience. A libpq URI parameter; drivers that do not know it ignore it.
+const sharedConnectTimeout = "10"
+
 // ensureSharedAppSecret is the Secret the Binder reads, in the project:
 // the host is the database's own Service, the URL carries sslmode=require
-// (encrypted; the server's certificate names the server, not the tenant).
+// (encrypted; the server's certificate names the server, not the tenant)
+// and connect_timeout.
 func (r *PostgresReconciler) ensureSharedAppSecret(ctx context.Context, pg *shpyrdv1.Postgres, hash, password string) error {
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: PostgresSecretName(pg.Name), Namespace: pg.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = mergeMaps(sec.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
 		user, db := sharedRoleName(hash), sharedDatabaseName(hash)
 		sec.Data = map[string][]byte{
-			"host":     []byte(pg.Name),
-			"port":     []byte(fmt.Sprint(PostgresPort)),
-			"dbname":   []byte(db),
-			"username": []byte(user),
-			"password": []byte(password),
-			"sslmode":  []byte("require"),
-			"uri":      []byte(fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=require", user, password, pg.Name, PostgresPort, db)),
+			"host":            []byte(pg.Name),
+			"port":            []byte(fmt.Sprint(PostgresPort)),
+			"dbname":          []byte(db),
+			"username":        []byte(user),
+			"password":        []byte(password),
+			"sslmode":         []byte("require"),
+			"connect_timeout": []byte(sharedConnectTimeout),
+			"uri":             []byte(fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=require&connect_timeout=%s", user, password, pg.Name, PostgresPort, db, sharedConnectTimeout)),
 		}
 		return controllerutil.SetControllerReference(pg, sec, r.Scheme)
 	})

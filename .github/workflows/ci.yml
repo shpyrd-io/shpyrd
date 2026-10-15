@@ -250,7 +250,7 @@ jobs:
           kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,database,databaserole,job
           NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
           URI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
-          echo "$URI" | grep -q 'sslmode=require'
+          echo "$URI" | grep -q 'sslmode=require&connect_timeout=10'
           # The tenant's own credentials open its database; from inside the
           # server, at the primary (the URL names the database's own Service).
           INPOD=${URI/@shared:5432/@localhost:5432}

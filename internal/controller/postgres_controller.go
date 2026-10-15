@@ -816,6 +816,9 @@ func (PostgresBinder) ConfigVars(ctx context.Context, c client.Client, namespace
 		url = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, pass, host, port, db)
 		if mode := get("sslmode"); mode != "" { // a shared database: encrypted to the server
 			url += "?sslmode=" + mode
+			if timeout := get("connect_timeout"); timeout != "" { // and bounded on a failover
+				url += "&connect_timeout=" + timeout
+			}
 		}
 	}
 	return map[string]string{

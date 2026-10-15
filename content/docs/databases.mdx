@@ -47,7 +47,7 @@ shpyrd pg create db --project shop --type shared              # the plan's cap, 
 shpyrd pg create db --project shop --type shared --storage 5Gi
 ```
 
-The workspace's plan says which types it allows and which one a creation without `--type` gets. Apps see no difference: `DATABASE_URL` keeps its shape, the host is the database's own name, and the connection is encrypted to the server (`sslmode=require`; the server's certificate names the server, so `verify-full` is a dedicated feature). The database and user inside the URL are hashed names (`db_…`, `u_…`): an app that hard-codes `app` must read them from the config vars.
+The workspace's plan says which types it allows and which one a creation without `--type` gets. Apps see no difference: `DATABASE_URL` keeps its shape, the host is the database's own name, and the connection is encrypted to the server (`sslmode=require`; the server's certificate names the server, so `verify-full` is a dedicated feature). The URL also carries `connect_timeout=10`: a client that connects while the server fails over (about five seconds) waits ten seconds and tries again rather than hanging on the old address until TCP gives up, which takes two minutes. The database and user inside the URL are hashed names (`db_…`, `u_…`): an app that hard-codes `app` must read them from the config vars.
 
 What a shared database does differently:
 

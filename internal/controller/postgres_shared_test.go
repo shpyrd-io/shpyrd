@@ -193,7 +193,7 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	uri := string(app.Data["uri"])
-	if string(app.Data["host"]) != "db" || string(app.Data["dbname"]) != dbName || string(app.Data["username"]) != roleName || string(app.Data["password"]) != string(roleSecret.Data["password"]) || !strings.HasSuffix(uri, "?sslmode=require") || !strings.Contains(uri, "@db:5432/"+dbName) {
+	if string(app.Data["host"]) != "db" || string(app.Data["dbname"]) != dbName || string(app.Data["username"]) != roleName || string(app.Data["password"]) != string(roleSecret.Data["password"]) || !strings.HasSuffix(uri, "?sslmode=require&connect_timeout=10") || !strings.Contains(uri, "@db:5432/"+dbName) {
 		t.Errorf("app secret = %v", app.Data)
 	}
 	svc := &corev1.Service{}
@@ -246,7 +246,7 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 		t.Errorf("ready = %s %s %s %q", pg.Status.Phase, pg.Status.Endpoint, pg.Status.CredentialsSecret, pg.Status.Message)
 	}
 	vars, err = PostgresBinder{}.ConfigVars(ctx, c, "p-shop", "db", "DATABASE")
-	if err != nil || vars["DATABASE_HOST"] != "db" || vars["DATABASE_NAME"] != dbName || !strings.HasSuffix(vars["DATABASE_URL"], "?sslmode=require") {
+	if err != nil || vars["DATABASE_HOST"] != "db" || vars["DATABASE_NAME"] != dbName || !strings.HasSuffix(vars["DATABASE_URL"], "?sslmode=require&connect_timeout=10") {
 		t.Errorf("binder = %v %v", vars, err)
 	}
 	// No cluster of its own in the project.
