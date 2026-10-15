@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -461,7 +462,16 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// control plane that answers slowly for half a minute must not cost the
 	// lease, since losing it stops every controller.
 	lease, renew, retry := 60*time.Second, 40*time.Second, 5*time.Second
-	mgr, err := ctrl.NewManager(k.Config, ctrl.Options{
+	// The controllers' request budget. client-go's default (20 a second,
+	// 30 in a burst) throttled the Postgres controller on dev with 400
+	// shared databases: the metering loop's status writes every five
+	// minutes bring 400 reconciles of ten calls each, and every reconcile
+	// waited ten seconds at the client ("Waited before sending request")
+	// while the API server idled. The server's priority and fairness is
+	// what protects it, not this client.
+	mgrConfig := rest.CopyConfig(k.Config)
+	mgrConfig.QPS, mgrConfig.Burst = 200, 400
+	mgr, err := ctrl.NewManager(mgrConfig, ctrl.Options{
 		Scheme:                        scheme,
 		Metrics:                       metricsserver.Options{BindAddress: o.metricsAddr},
 		HealthProbeBindAddress:        "0",
