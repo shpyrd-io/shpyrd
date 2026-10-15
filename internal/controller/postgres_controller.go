@@ -227,8 +227,10 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	orig := pg.DeepCopy()
 	res, err := r.reconcile(ctx, pg)
-	if apierrors.IsConflict(err) {
-		return ctrl.Result{Requeue: true}, nil
+	// A conflict, or a server-level object another tenant's reconcile made
+	// first (eight run at once): come back, nothing is wrong.
+	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	var pending *pendingError
 	if errors.As(err, &pending) {
