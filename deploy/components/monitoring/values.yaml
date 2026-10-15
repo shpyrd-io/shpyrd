@@ -266,6 +266,27 @@ additionalPrometheusRulesMap:
                 is not ready. Its disk may be attaching to another node after a
                 drain (a few minutes after a node loss), or its pod was refused.
                 The database's page in the console shows the instance's state.
+          # A shared Postgres server not healthy for ten minutes: hundreds of
+          # databases wait on it. A new server that never comes up has no
+          # room on the data pool: add a data node (storage plan, step 3).
+          - alert: SharedServerNotReady
+            expr: |
+              max by (cluster) (cnpg_collector_up{namespace="shpyrd-shared-postgres"}) == 0
+              or
+              count by (cluster) (kube_pod_status_ready{namespace="shpyrd-shared-postgres", condition="true"} == 0
+                and on (namespace, pod) kube_pod_labels{namespace="shpyrd-shared-postgres", label_cnpg_io_cluster!=""}) > 0
+            for: 10m
+            labels:
+              severity: critical
+              shpyrd_component: postgres
+            annotations:
+              summary: A shared database server has not been ready for 10 minutes
+              description: >-
+                An instance of shared server {{ $labels.cluster }} is not ready.
+                Every database on it waits. If this is a new server that never
+                came up, the data pool has no room for it: add a data node
+                (data_min_count in the cluster's Terraform) and the pending
+                databases are placed within minutes.
           # A shared Postgres server's disk grows by half at 70 % used, online,
           # by the platform (storage plan, step 3). Past 85 % that step did not
           # land, and hundreds of databases share this disk.
