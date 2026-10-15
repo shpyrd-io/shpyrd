@@ -61,7 +61,7 @@ locals {
 # the boot volume, then OKE's bootstrap (#45). A change to it applies to
 # nodes created afterwards; existing nodes keep their first boot.
 locals {
-  node_user_data = base64encode(file("${path.module}/node-cloud-init.sh"))
+  node_user_data = base64encode(templatefile("${path.module}/node-cloud-init.sh", { kubelet_args = "" }))
 }
 
 resource "oci_containerengine_node_pool" "workers" {
@@ -128,12 +128,12 @@ resource "oci_containerengine_node_pool" "workers" {
 # the in-cluster registry (shpyrd-io/shpyrd#44). OKE node pools have no
 # taint field, so the kubelet registers the node with the taint itself,
 # through the pool's cloud-init; the DaemonSet removes it after the CA.
+# The same first boot as every pool (node-cloud-init.sh grows the root
+# filesystem, then runs OKE's bootstrap), with the kubelet told the taint.
 locals {
-  apps_cloud_init = <<-EOT
-    #!/bin/bash
-    curl --fail -H "Authorization: Bearer Oracle" -L0 http://169.254.169.254/opc/v2/instance/metadata/oke_init_script | base64 --decode >/var/run/oke-init.sh
-    bash /var/run/oke-init.sh --kubelet-extra-args "--register-with-taints=shpyrd.io/registry-trust=pending:NoSchedule"
-  EOT
+  apps_node_user_data = base64encode(templatefile("${path.module}/node-cloud-init.sh", {
+    kubelet_args = var.registry_trust_taint ? "--kubelet-extra-args \"--register-with-taints=shpyrd.io/registry-trust=pending:NoSchedule\"" : ""
+  }))
 }
 
 resource "oci_containerengine_node_pool" "apps" {
@@ -145,7 +145,7 @@ resource "oci_containerengine_node_pool" "apps" {
   kubernetes_version = var.kubernetes_version
   node_shape         = var.node_shape
   ssh_public_key     = local.ssh_public_key
-  node_metadata      = { user_data = local.node_user_data }
+  node_metadata      = { user_data = local.apps_node_user_data }
 
   node_shape_config {
     ocpus         = var.apps_node_ocpus
@@ -162,8 +162,6 @@ resource "oci_containerengine_node_pool" "apps" {
     key   = "shpyrd.io/pool"
     value = "apps"
   }
-
-  node_metadata = var.registry_trust_taint ? { user_data = base64encode(local.apps_cloud_init) } : null
 
   node_config_details {
     size    = max(var.apps_min_count, 1)

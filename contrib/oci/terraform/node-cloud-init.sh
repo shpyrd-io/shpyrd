@@ -10,11 +10,13 @@
 # replaces and must therefore call itself.
 #
 # A failure to grow never keeps the node out of the cluster: the bootstrap
-# runs whatever happens before it.
+# runs whatever happens before it. A pool may hand the kubelet extra
+# arguments (kubelet_args, a Terraform template value): the apps pool
+# registers its nodes with the registry-trust taint this way (shpyrd#44).
 
 /usr/libexec/oci-growfs -y || echo "oci-growfs failed; the node joins with its factory-sized root filesystem" >&2
 
 curl --fail -H "Authorization: Bearer Oracle" -L0 \
   http://169.254.169.254/opc/v2/instance/metadata/oke_init_script \
   | base64 --decode > /var/run/oke-init.sh
-bash /var/run/oke-init.sh
+bash /var/run/oke-init.sh ${kubelet_args}
