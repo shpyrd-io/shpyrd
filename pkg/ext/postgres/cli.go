@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os"
 	"os/signal"
 	"strings"
@@ -284,7 +286,11 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tVERSION\tSIZE\tSTORAGE\tINSTANCES\tSTATUS\tATTACHED TO")
 				for _, v := range list {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), firstNonEmpty(v.Details["size"], "-"), firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
+					size, instances := firstNonEmpty(v.Details["size"], "-"), firstNonEmpty(v.Details["instances"], "1")
+					if v.Details["type"] == shpyrdv1.PostgresTypeShared {
+						size, instances = "shared", "-" // a database on a platform server; storage is its cap
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), size, firstNonEmpty(v.Details["storage"], "5Gi"), instances, firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 				}
 				_ = tw.Flush()
 			})
@@ -311,8 +317,14 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 				fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
 				fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
 				fmt.Fprintf(out, "Version:    PostgreSQL %s\n", firstNonEmpty(v.Details["version"], "17"))
-				fmt.Fprintf(out, "Size:       %s (shpyrd pg resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
-				fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
+				if v.Details["type"] == shpyrdv1.PostgresTypeShared {
+					fmt.Fprintf(out, "Type:       shared (a database on a platform server, always on)\n")
+					fmt.Fprintf(out, "Cap:        %s\n", firstNonEmpty(v.Details["storage"], "1Gi"))
+				} else {
+					fmt.Fprintf(out, "Type:       dedicated (a cluster of its own)\n")
+					fmt.Fprintf(out, "Size:       %s (shpyrd pg resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
+					fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
+				}
 				fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
 				backups := "off (create with --backups, or restore from another database's backup)"
 				if b := v.Details["backups"]; b != "" {
@@ -356,6 +368,18 @@ func newPsqlCmd(g ext.CLIGlobals) *cobra.Command {
 			}
 			pg, err := get(ctx, c, project, args[0])
 			if err != nil {
+				return err
+			}
+			if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+				// Through a helper pod of the project with the tenant's
+				// credentials, removed when psql ends.
+				pod, err := sharedPsqlHelper(ctx, c, pg, 2*time.Minute)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s (shared)...\n", pg.Name)
+				err = kexec.RemoteExit(kexec.Exec(ctx, k, pg.Namespace, pod, "psql", append([]string{"psql"}, args[1:]...), kexec.StdinIsTerminal()))
+				_ = c.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: pod, Namespace: pg.Namespace}})
 				return err
 			}
 			pod, err := primaryPod(ctx, c, pg)
