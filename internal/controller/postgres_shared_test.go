@@ -1277,6 +1277,22 @@ func TestConvertSharedToDedicated(t *testing.T) {
 		t.Fatalf("shared database not ready: %+v", pg.Status)
 	}
 	hash := tenantHash(pg.UID)
+	// Rotated once as a shared database: the password the conversion
+	// carries over is the rotated one, and the dedicated path must not
+	// rotate it again for the same stamp.
+	pg.Annotations[AnnotationRotate] = "2026-10-15T12:00:00Z"
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	rotated := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db-app"}, rotated); err != nil || rotated.Annotations[annotationRotated] != "2026-10-15T12:00:00Z" {
+		t.Fatalf("the shared credentials carry the rotation's stamp: %v %v", err, rotated.Annotations)
+	}
+	password := string(rotated.Data["password"])
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
 	pg.Annotations[AnnotationConvert] = shpyrdv1.PostgresTypeDedicated
 	pg.Annotations[AnnotationConvertOptions] = `{"storage":"10Gi"}`
 	if err := c.Update(ctx, pg); err != nil {
@@ -1349,6 +1365,13 @@ func TestConvertSharedToDedicated(t *testing.T) {
 	}
 	if string(sec.Data["host"]) != "db-rw" || !strings.Contains(string(sec.Data["uri"]), "@db-rw:5432/db_"+hash) || !strings.Contains(string(sec.Data["direct_uri"]), "@db-rw:5432/") || string(sec.Data["username"]) != "u_"+hash {
 		t.Errorf("credentials = host %s uri %s direct %s", sec.Data["host"], sec.Data["uri"], sec.Data["direct_uri"])
+	}
+	roleSecret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}, roleSecret); err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["password"]) != password || string(roleSecret.Data["password"]) != password || !strings.Contains(string(sec.Data["uri"]), ":"+password+"@") {
+		t.Errorf("the password went through the conversion unchanged: app %s role %s rotated %s", sec.Data["password"][:6], roleSecret.Data["password"][:6], password[:6])
 	}
 	role = getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
 	login, _, _ := unstructured.NestedBool(role.Object, "spec", "login")

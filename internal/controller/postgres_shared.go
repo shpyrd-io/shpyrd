@@ -757,6 +757,13 @@ func (r *PostgresReconciler) ensureSharedAppSecret(ctx context.Context, pg *shpy
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: PostgresSecretName(pg.Name), Namespace: pg.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = mergeMaps(sec.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name})
+		// The rotation's stamp, as the dedicated path records it: a database
+		// converted to dedicated keeps this Secret as the cluster's own, and
+		// the dedicated path must not rotate it again for a rotation the
+		// shared path already did.
+		if rotate := pg.Annotations[AnnotationRotate]; rotate != "" {
+			sec.Annotations = mergeMaps(sec.Annotations, map[string]string{annotationRotated: rotate})
+		}
 		user, db := sharedRoleName(hash), sharedDatabaseName(hash)
 		sec.Data = map[string][]byte{
 			"host":            []byte(pg.Name),
