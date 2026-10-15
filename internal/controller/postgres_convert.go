@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,10 @@ const (
 	// the next one clears it.
 	AnnotationConvertFailed = "shpyrd.io/convert-failed"
 	annotationConvertStep   = "shpyrd.io/convert-step"
+	// annotationConvertJob names this conversion's Job, decided before the
+	// Job is made: a conversion back within a day must not read the
+	// finished Job of the one before.
+	annotationConvertJob = "shpyrd.io/convert-job"
 
 	convertStepTarget = "target" // the new home is coming up
 	convertStepLoad   = "load"   // the rows are being copied
@@ -81,8 +86,23 @@ func convertOptions(pg *shpyrdv1.Postgres) ConvertOptions {
 	return o
 }
 
-func sharedConvertJob(hash string) string    { return "convert-" + hash }
 func sharedConvertSecret(hash string) string { return "convert-" + hash }
+
+// convertJobName is this conversion's Job: recorded on the object once,
+// before the Job exists; empty until then.
+func convertJobName(pg *shpyrdv1.Postgres) string { return pg.Annotations[annotationConvertJob] }
+
+// newConvertJobName names a conversion's Job after the tenant and the
+// moment, so no two conversions of one database share a Job.
+func newConvertJobName(hash string, now time.Time) string {
+	return fmt.Sprintf("convert-%s-%s", hash, strconv.FormatInt(now.Unix(), 36))
+}
+
+// nameConvertJob records the Job's name and comes back to make it.
+func (r *PostgresReconciler) nameConvertJob(ctx context.Context, pg *shpyrdv1.Postgres, hash string) (ctrl.Result, error) {
+	name := newConvertJobName(hash, time.Now())
+	return r.patchMeta(ctx, pg, func(pg *shpyrdv1.Postgres) { pg.Annotations[annotationConvertJob] = name })
+}
 
 // sharedAllowedExtensions are what a shared database can hold: the
 // extensions PostgreSQL 17 marks trusted, which the owner creates alone,
@@ -173,6 +193,7 @@ func (r *PostgresReconciler) convertFailed(ctx context.Context, pg *shpyrdv1.Pos
 		delete(pg.Annotations, AnnotationConvert)
 		delete(pg.Annotations, AnnotationConvertOptions)
 		delete(pg.Annotations, annotationConvertStep)
+		delete(pg.Annotations, annotationConvertJob)
 		pg.Annotations[AnnotationConvertFailed] = reason
 	})
 }
@@ -185,6 +206,7 @@ func (r *PostgresReconciler) convertDone(ctx context.Context, pg *shpyrdv1.Postg
 		delete(pg.Annotations, AnnotationConvert)
 		delete(pg.Annotations, AnnotationConvertOptions)
 		delete(pg.Annotations, annotationConvertStep)
+		delete(pg.Annotations, annotationConvertJob)
 		delete(pg.Annotations, AnnotationConvertFailed)
 		pg.Annotations[AnnotationConverted] = fmt.Sprintf("from %s to %s at %s", from, to, time.Now().UTC().Format(time.RFC3339))
 	})
@@ -193,9 +215,9 @@ func (r *PostgresReconciler) convertDone(ctx context.Context, pg *shpyrdv1.Postg
 // convertJobState reads the conversion Job: done, failed with its reason,
 // or neither yet. The Job's log carries the words of a refusal; the Job
 // condition carries the reason Kubernetes saw.
-func (r *PostgresReconciler) convertJobState(ctx context.Context, hash string) (done bool, failure string, err error) {
+func (r *PostgresReconciler) convertJobState(ctx context.Context, pg *shpyrdv1.Postgres) (done bool, failure string, err error) {
 	job := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedConvertJob(hash)}, job); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: convertJobName(pg)}, job); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, "the copy's Job is gone before it finished", nil
 		}
@@ -262,7 +284,7 @@ func (r *PostgresReconciler) desiredConvertJob(pg *shpyrdv1.Postgres, hash, serv
 		env = append(env, corev1.EnvVar{Name: "SHPYRD_CONVERT_CAP", Value: fmt.Sprint(cap)})
 	}
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: sharedConvertJob(hash), Namespace: SharedPostgresNamespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: convertJobName(pg), Namespace: SharedPostgresNamespace, Labels: labels},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr.To[int32](0),
 			ActiveDeadlineSeconds:   ptr.To[int64](6 * 3600),
@@ -357,6 +379,9 @@ func (r *PostgresReconciler) convertToDedicated(ctx context.Context, pg *shpyrdv
 		if !applied {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
+		if convertJobName(pg) == "" {
+			return r.nameConvertJob(ctx, pg, hash)
+		}
 		pull, err := r.ensureSharedPullSecret(ctx)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -370,7 +395,7 @@ func (r *PostgresReconciler) convertToDedicated(ctx context.Context, pg *shpyrdv
 		}
 		return r.setConvertStep(ctx, pg, convertStepLoad)
 	case convertStepLoad:
-		done, failure, err := r.convertJobState(ctx, hash)
+		done, failure, err := r.convertJobState(ctx, pg)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -522,6 +547,15 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 	hash := sharedHash(pg)
 	switch step {
 	case "":
+		// A shared side of this database kept behind a drop date (it was
+		// converted to dedicated less than seven days ago) keeps its hash:
+		// the new tenant takes another, or it would be rendered over it.
+		if kept, err := r.sharedSideKept(ctx, hash); err != nil {
+			return ctrl.Result{}, err
+		} else if kept {
+			next := tenantHash(types.UID(string(pg.UID) + "/" + strconv.FormatInt(time.Now().Unix(), 36)))
+			return r.patchMeta(ctx, pg, func(pg *shpyrdv1.Postgres) { pg.Annotations[AnnotationSharedTenant] = next })
+		}
 		// The cluster opens superuser access for the operation while the
 		// tenant comes up on a shared server.
 		if _, err := r.reconcileDedicated(ctx, pg); err != nil {
@@ -555,6 +589,9 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 		}); err != nil {
 			return ctrl.Result{}, err
 		}
+		if convertJobName(pg) == "" {
+			return r.nameConvertJob(ctx, pg, hash)
+		}
 		pull, err := r.ensureSharedPullSecret(ctx)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -572,7 +609,7 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 		}
 		return r.setConvertStep(ctx, pg, convertStepLoad)
 	case convertStepLoad:
-		done, failure, err := r.convertJobState(ctx, hash)
+		done, failure, err := r.convertJobState(ctx, pg)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -634,6 +671,18 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 		})
 	}
 	return ctrl.Result{}, fmt.Errorf("conversion step %q is not one the controller knows", step)
+}
+
+// sharedSideKept says whether a Database object of this hash is kept
+// behind a drop date: the shared side of a database converted to
+// dedicated, waiting for the sweep.
+func (r *PostgresReconciler) sharedSideKept(ctx context.Context, hash string) (bool, error) {
+	db := &unstructured.Unstructured{}
+	db.SetGroupVersionKind(CNPGDatabaseGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedDBObject(hash)}, db); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return db.GetAnnotations()[AnnotationDropAfter] != "", nil
 }
 
 // dropSharedTenant removes a tenant made for a conversion that was not

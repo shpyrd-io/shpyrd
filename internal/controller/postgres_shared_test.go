@@ -1214,12 +1214,27 @@ func spin(t *testing.T, r *PostgresReconciler, key types.NamespacedName, n int) 
 	}
 }
 
-func convertJobEnv(t *testing.T, c client.Client, hash string) (map[string]string, map[string]string) {
+// convertJob is the conversion's Job, by the name recorded on the Postgres.
+func convertJob(t *testing.T, c client.Client, key types.NamespacedName) *batchv1.Job {
 	t.Helper()
-	job := &batchv1.Job{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, job); err != nil {
-		t.Fatalf("convert job: %v", err)
+	pg := &shpyrdv1.Postgres{}
+	if err := c.Get(context.Background(), key, pg); err != nil {
+		t.Fatal(err)
 	}
+	name := pg.Annotations[annotationConvertJob]
+	if name == "" {
+		t.Fatalf("no convert job recorded on the Postgres: %v", pg.Annotations)
+	}
+	job := &batchv1.Job{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: SharedPostgresNamespace, Name: name}, job); err != nil {
+		t.Fatalf("convert job %s: %v", name, err)
+	}
+	return job
+}
+
+func convertJobEnv(t *testing.T, c client.Client, key types.NamespacedName) (map[string]string, map[string]string) {
+	t.Helper()
+	job := convertJob(t, c, key)
 	values, secrets := map[string]string{}, map[string]string{}
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
@@ -1231,13 +1246,10 @@ func convertJobEnv(t *testing.T, c client.Client, hash string) (map[string]strin
 	return values, secrets
 }
 
-func finishJob(t *testing.T, c client.Client, hash string, ok bool) {
+func finishJob(t *testing.T, c client.Client, key types.NamespacedName, ok bool) {
 	t.Helper()
 	ctx := context.Background()
-	job := &batchv1.Job{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, job); err != nil {
-		t.Fatal(err)
-	}
+	job := convertJob(t, c, key)
 	if ok {
 		job.Status.Succeeded = 1
 	} else {
@@ -1301,12 +1313,12 @@ func TestConvertSharedToDedicated(t *testing.T) {
 	if name, _, _ := unstructured.NestedString(ext.Object, "spec", "name"); name != "db_"+hash || len(extensions) != 1 {
 		t.Errorf("extensions on the new cluster = %s %v", name, extensions)
 	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, &batchv1.Job{}); err == nil {
-		t.Error("no copy before the extensions are applied")
+	if jobs := convertJobs(t, c); len(jobs) != 0 {
+		t.Errorf("no copy before the extensions are applied: %v", jobs)
 	}
 	markApplied(t, c, ext)
-	spin(t, r, key, 2)
-	values, secrets := convertJobEnv(t, c, hash)
+	spin(t, r, key, 3)
+	values, secrets := convertJobEnv(t, c, key)
 	if values["SOURCE_HOST"] != "pg-shared-1-rw" || values["SOURCE_DATABASE"] != "db_"+hash || secrets["SOURCE_USER"] != "pg-shared-1-dump" ||
 		values["PGHOST"] != "db-rw.p-shop.svc.cluster.local" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
 		!strings.HasPrefix(values["SHPYRD_CONVERT_KEY"], "db_"+hash+"/") || !strings.HasSuffix(values["SHPYRD_CONVERT_KEY"], ".converted.dump") ||
@@ -1317,7 +1329,7 @@ func TestConvertSharedToDedicated(t *testing.T) {
 		t.Errorf("loading: %v step=%s %q", err, pg.Annotations[annotationConvertStep], pg.Status.Message)
 	}
 	// The rows are in: the credentials turn to the cluster.
-	finishJob(t, c, hash, true)
+	finishJob(t, c, key, true)
 	spin(t, r, key, 4)
 	if err := c.Get(ctx, key, pg); err != nil {
 		t.Fatal(err)
@@ -1374,8 +1386,8 @@ func TestConvertToDedicatedFailsBack(t *testing.T) {
 	}
 	spin(t, r, key, 2)
 	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
-	spin(t, r, key, 2)
-	finishJob(t, c, hash, false)
+	spin(t, r, key, 3)
+	finishJob(t, c, key, false)
 	spin(t, r, key, 4)
 	if err := c.Get(ctx, key, pg); err != nil {
 		t.Fatal(err)
@@ -1456,18 +1468,18 @@ func TestConvertDedicatedToShared(t *testing.T) {
 		}
 	}
 	spin(t, r, key, 2)
-	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, &batchv1.Job{}); err == nil {
-		t.Error("no copy before the superuser's credentials are there")
+	if jobs := convertJobs(t, c); len(jobs) != 0 {
+		t.Errorf("no copy before the superuser's credentials are there: %v", jobs)
 	}
 	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "app-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
 		t.Fatal(err)
 	}
-	spin(t, r, key, 2)
+	spin(t, r, key, 3)
 	copied := &corev1.Secret{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, copied); err != nil || string(copied.Data["username"]) != "postgres" || string(copied.Data["password"]) != "sup3r" {
 		t.Errorf("the superuser's credentials where the Job reads them: %v %v", err, copied.Data)
 	}
-	values, secrets := convertJobEnv(t, c, hash)
+	values, secrets := convertJobEnv(t, c, key)
 	if values["SOURCE_HOST"] != "db-rw.app-shop.svc.cluster.local" || values["SOURCE_DATABASE"] != "app" || secrets["SOURCE_USER"] != "convert-"+hash ||
 		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
 		!strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "vector") || !strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "pgcrypto") ||
@@ -1475,7 +1487,7 @@ func TestConvertDedicatedToShared(t *testing.T) {
 		t.Errorf("job env = %v secrets %v", values, secrets)
 	}
 	// The rows are in: the cluster goes, the shared credentials take its place.
-	finishJob(t, c, hash, true)
+	finishJob(t, c, key, true)
 	spin(t, r, key, 8)
 	if err := c.Get(ctx, key, pg); err != nil {
 		t.Fatal(err)
@@ -1499,5 +1511,99 @@ func TestConvertDedicatedToShared(t *testing.T) {
 	}
 	if pg.Status.Phase != shpyrdv1.ResourceReady || !strings.Contains(pg.Status.Message, "shared, on pg-shared-1") {
 		t.Errorf("a shared database now: %s %q", pg.Status.Phase, pg.Status.Message)
+	}
+}
+
+// convertJobs lists the conversion Jobs there are.
+func convertJobs(t *testing.T, c client.Client) []string {
+	t.Helper()
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace(SharedPostgresNamespace), client.MatchingLabels{sharedServerLabel: "convert"}); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, j := range jobs.Items {
+		names = append(names, j.Name)
+	}
+	return names
+}
+
+// A database converted to dedicated and back within seven days: its kept
+// shared side still has the hash, so the new tenant takes another, and
+// the new conversion's Job is not the finished one of the first.
+func TestConvertBackTakesANewHashAndJob(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	driveShared(t, r, c, pg)
+	first := tenantHash(pg.UID)
+	pg.Annotations[AnnotationConvert] = shpyrdv1.PostgresTypeDedicated
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	cluster := getU(t, c, "Cluster", "p-shop", "db")
+	_ = unstructured.SetNestedField(cluster.Object, int64(1), "status", "readyInstances")
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 2)
+	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	spin(t, r, key, 3)
+	firstJob := convertJob(t, c, key).Name
+	if !strings.HasPrefix(firstJob, "convert-"+first+"-") {
+		t.Errorf("first job = %s", firstJob)
+	}
+	finishJob(t, c, key, true)
+	spin(t, r, key, 4)
+	if err := c.Get(ctx, key, pg); err != nil || pg.Spec.Type != shpyrdv1.PostgresTypeDedicated || pg.Annotations[annotationConvertJob] != "" {
+		t.Fatalf("after the first conversion: %v %+v", err, pg.Annotations)
+	}
+	// Back to shared, the first Job still there (its TTL is a day).
+	pg.Annotations[AnnotationConvert] = shpyrdv1.PostgresTypeShared
+	pg.Annotations[AnnotationConvertOptions] = `{"cap":"1Gi"}`
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 4)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	second := pg.Annotations[AnnotationSharedTenant]
+	if second == "" || second == first || pg.Annotations[AnnotationSharedServer] == "" {
+		t.Fatalf("a new hash for the new tenant: %q (first %s), annotations %v", second, first, pg.Annotations)
+	}
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, pg.Annotations[AnnotationSharedServer])
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	markApplied(t, c, getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+second))
+	markApplied(t, c, getU(t, c, "Database", SharedPostgresNamespace, "db-"+second))
+	spin(t, r, key, 2)
+	grants := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + second}, grants); err != nil {
+		t.Fatal(err)
+	}
+	grants.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, grants); err != nil {
+		if err := c.Update(ctx, grants); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 4)
+	secondJob := convertJob(t, c, key)
+	if secondJob.Name == firstJob || !strings.HasPrefix(secondJob.Name, "convert-"+second+"-") || secondJob.Status.Succeeded != 0 {
+		t.Errorf("second job = %s (first %s) succeeded=%d", secondJob.Name, firstJob, secondJob.Status.Succeeded)
+	}
+	// The kept side of the first hash is untouched.
+	kept := getU(t, c, "Database", SharedPostgresNamespace, "db-"+first)
+	if cluster, _, _ := unstructured.NestedString(kept.Object, "spec", "cluster", "name"); cluster != "pg-shared-1" || kept.GetAnnotations()[AnnotationDropAfter] == "" {
+		t.Errorf("the kept side: cluster %s drop-after %q", cluster, kept.GetAnnotations()[AnnotationDropAfter])
 	}
 }
