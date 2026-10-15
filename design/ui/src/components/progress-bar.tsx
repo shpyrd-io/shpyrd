@@ -21,7 +21,8 @@ function ProgressBar({
   format = (value) => value.toLocaleString("en"),
   ...props
 }: React.ComponentProps<"div"> & {
-  // Read aloud, and written over the bar when the bar is not inline.
+  // Read aloud; written over the bar, or before it when the bar is
+  // inline (a number with a thin bar beside it, as a table cell holds).
   label?: string;
   // One part, or several: each with its ink. One of the two is given.
   value?: number;
@@ -79,9 +80,10 @@ function ProgressBar({
       <span
         data-slot="progress-bar"
         data-inline
-        className={cn("inline-flex w-24 align-middle", className)}
+        className={cn("inline-flex w-24 items-center gap-2 align-middle", className)}
         {...(props as React.ComponentProps<"span">)}
       >
+        {label && <span className="shrink-0 font-mono text-xs whitespace-nowrap">{label}</span>}
         {bar}
       </span>
     );

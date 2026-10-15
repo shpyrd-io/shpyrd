@@ -61,6 +61,52 @@
         },
         {
           "kind": "Postgres",
+          "name": "analytics",
+          "phase": "Ready",
+          "message": "PostgreSQL 17, shared, on pg-shared-1 through its connection pooler",
+          "endpoint": "analytics.p-hello-world:5432",
+          "attachedTo": [],
+          "data": true,
+          "createdAt": "2026-10-11T09:30:00Z",
+          "details": {
+            "type": "shared",
+            "version": "17",
+            "storage": "1Gi",
+            "used": "312Mi",
+            "usedBytes": "327155712",
+            "capBytes": "1073741824",
+            "pooler": "on",
+            "backups": "nightly, kept 7",
+            "lastBackup": "2026-10-15T03:07:00Z"
+          },
+          "bindable": true
+        },
+        {
+          "kind": "Postgres",
+          "name": "events",
+          "phase": "Ready",
+          "message": "Connections are paused: your database is at 152% of its 1Gi cap. Free space, or raise the limit; connections return below 95%.",
+          "endpoint": "events.p-hello-world:5432",
+          "attachedTo": [
+            "hello-world"
+          ],
+          "data": true,
+          "createdAt": "2026-09-02T09:30:00Z",
+          "details": {
+            "type": "shared",
+            "version": "17",
+            "storage": "1Gi",
+            "used": "1.5Gi",
+            "usedBytes": "1632000000",
+            "capBytes": "1073741824",
+            "pooler": "on",
+            "backups": "nightly, kept 14",
+            "lastBackup": "2026-10-15T03:07:00Z"
+          },
+          "bindable": true
+        },
+        {
+          "kind": "Postgres",
           "name": "db",
           "phase": "Ready",
           "endpoint": "db.p-hello-world:5432",
@@ -73,9 +119,13 @@
             "version": "16",
             "size": "shared-m",
             "storage": "10Gi",
-            "instances": "1"
+            "instances": "1",
+            "type": "dedicated",
+            "backups": "daily, kept 14d",
+            "lastBackup": "2026-10-15T02:00:00Z"
           },
-          "bindable": true
+          "bindable": true,
+          "message": "PostgreSQL 16, 1/1 instance(s) ready"
         },
         {
           "kind": "Redis",

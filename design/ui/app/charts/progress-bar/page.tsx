@@ -48,6 +48,16 @@ export default function Page() {
           the tests <ProgressBar inline aria-label="Tests" value={91} tone="success" /> almost.
         </p>
       </Section>
+      <Section title="A number with its bar">
+        <p className="text-sm text-muted-foreground">
+          With a label, an inline bar writes it before itself: what a table cell holds for a count over a limit.
+        </p>
+        <Stack gap="tight">
+          <ProgressBar inline size="sm" label="187/200" value={94} className="w-auto [&>span:last-child]:w-16" />
+          <ProgressBar inline size="sm" label="41/50 GiB" value={82} tone="warning" className="w-auto [&>span:last-child]:w-16" />
+          <ProgressBar inline size="sm" label="262/400" value={66} tone="blue" className="w-auto [&>span:last-child]:w-16" />
+        </Stack>
+      </Section>
       <Section title="With another ink">
         <Stack gap="cozy" className="max-w-sm">
           <ProgressBar label="Blue" value={55} tone="blue" />

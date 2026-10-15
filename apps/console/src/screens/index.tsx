@@ -2,7 +2,7 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, Building2, CreditCard, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Receipt, Send, Settings, ShieldCheck, Users } from "lucide-react";
+import { Archive, Boxes, Building2, CreditCard, Cpu, ExternalLink, Database, HardDrive, LayoutDashboard, LogIn, Mail, Package, Receipt, Send, Settings, ShieldCheck } from "lucide-react";
 import { placeLinks, shown as visibleIn } from "@shpyrd/shared/links";
 import { NavList, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
@@ -21,6 +21,7 @@ import { Settings as SettingsPage } from "./settings";
 import { SignIn } from "./sign-in";
 import { Sizes } from "./sizes";
 import { Storage } from "./storage";
+import { Databases } from "./databases";
 
 // The console, in pages down a list at the side. Overview is the
 // cluster as it is; Platform is what the operator runs for others;
@@ -117,9 +118,17 @@ const pages: Page[] = [
   },
   {
     group: "Cluster",
+    slug: "databases",
+    title: "Databases",
+    icon: <Database />,
+    needs: "admin",
+    extension: "postgres",
+  },
+  {
+    group: "Cluster",
     slug: "storage",
     title: "Storage",
-    icon: <Database />,
+    icon: <HardDrive />,
     needs: "admin",
     extension: "object-storage",
   },
@@ -127,7 +136,7 @@ const pages: Page[] = [
     group: "Cluster",
     slug: "backups",
     title: "Backups",
-    icon: <HardDrive />,
+    icon: <Archive />,
     needs: "admin",
   },
   {
@@ -242,6 +251,7 @@ export function Pages() {
         <Route path="sizes" element={<Sizes />} />
         <Route path="registry" element={<Registry />} />
         <Route path="storage" element={<Storage />} />
+        <Route path="databases" element={<Databases />} />
         <Route path="backups" element={<Backups />} />
         <Route path="placement" element={<Placement />} />
         <Route path="mail" element={<MailPage />} />

@@ -22,6 +22,10 @@ import type {
   NewLoginMethod,
   OCIStatus,
   ObjectStorageSummary,
+  PostgresServers,
+  PostgresTenant,
+  PostgresTenantPage,
+  PostgresTenantQuery,
   PublicConfig,
   RegistryInfo,
   SizeCatalog,
@@ -34,6 +38,11 @@ import type {
 // picks one, and the build drops the other.
 
 export type Api = OverviewAPI & {
+  // The shared Postgres servers, a page of one server's databases, and
+  // a database found across every server. The console only reads here.
+  postgresServers: () => Promise<PostgresServers>;
+  postgresTenants: (server: string, query: PostgresTenantQuery) => Promise<PostgresTenantPage>;
+  findPostgresTenants: (q: string) => Promise<PostgresTenant[]>;
   archiveProjects: () => Promise<ArchiveProject[]>;
   projectPlacement: (id: string) => Promise<ProjectPlacement>;
   measureProjectPlacement: (id: string, group: string) => Promise<PlacementMeasurement>;

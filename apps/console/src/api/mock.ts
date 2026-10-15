@@ -21,6 +21,9 @@ import type {
   NodeUsage,
   OCIStatus,
   ObjectStorageSummary,
+  PostgresServer,
+  PostgresServers,
+  PostgresTenant,
   PublicConfig,
   RegistryInfo,
   SizeCatalog,
@@ -34,11 +37,78 @@ import me from "../../mock/me.json";
 import things from "../../mock/things.json";
 import placement from "../../mock/project-placement.json";
 import archiveProjects from "../../mock/archive-projects.json";
+import postgresServers from "../../mock/postgres-servers.json";
+import postgresTenants from "../../mock/postgres-tenants.json";
 
 const placementOf = collection<ProjectPlacement & { id: string }>("console-project-placement-v3", placement, (item) => item.id);
 const archiveActions = mockProjectArchives("console");
 
 const archiveProjectsOf = collection<ArchiveProject>("console-archive-projects", archiveProjects, (project) => project.id);
+// The shared Postgres fleet: the three servers of the file, then twenty
+// more made up the same way every time, so the page is drawn for the
+// thousands of databases it is for. Every database on every server is
+// made up from its server's number, so a search finds the same ones.
+function seeded(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const workspaces = ["acme", "fluxyr", "northwind", "igormorales", "contoso", "umbrella", "initech", "globex", "hooli", "vandelay", "wonka", "stark"];
+const projects = ["shop", "api", "worker", "site", "crm", "billing", "reports", "warehouse", "agent", "docs"];
+let fleetMemo: PostgresServers | undefined;
+function fleet(): PostgresServers {
+  if (fleetMemo) return fleetMemo;
+  const seed = postgresServers as unknown as PostgresServers;
+  const servers: PostgresServer[] = [...seed.servers];
+  for (let i = 4; i <= 23; i++) {
+    const r = seeded(i * 7919);
+    const full = r() < 0.75;
+    const tenants = full ? 200 : 120 + Math.floor(r() * 70);
+    const sizeBytes = (r() < 0.5 ? 50 : 100) * (1 << 30) * 1.074;
+    const used = Math.floor(sizeBytes * (0.2 + r() * 0.65));
+    const p95 = Math.floor(r() * 320);
+    const degraded = i === 17;
+    const dumpsFailed = i % 9 === 0 ? 1 + Math.floor(r() * 3) : 0;
+    servers.push({
+      name: `pg-shared-${i}`, version: "17", ready: degraded ? 1 : 2, instances: 2, phase: degraded ? "Failing over" : "Cluster in healthy state",
+      tenants, limit: 200, open: !full && !degraded,
+      disk: { usedBytes: used, sizeBytes: Math.floor(sizeBytes) },
+      connections: { p95, max: 400 }, pooler: p95 >= 240 ? { on: true, since: "2026-10-0" + (1 + (i % 9)) + "T10:00:00Z", ready: 2 } : { on: false },
+      archiving: "ok", lastBaseBackup: "2026-10-15T02:00:00Z",
+      lastDumps: { at: `2026-10-15T03:${String(7 + ((i * 7) % 53)).padStart(2, "0")}:00Z`, dumped: tenants - dumpsFailed, failed: dumpsFailed, took: `${40 + Math.floor(r() * 30)}s` },
+      kept: Math.floor(r() * 4), converting: r() < 0.2 ? 1 : 0, createdAt: `2026-0${1 + (i % 9)}-1${i % 9}T12:00:00Z`,
+    });
+  }
+  const attention = { paused: 0, over: 0, near: 0, degraded: servers.filter((s) => !/healthy/i.test(s.phase)).length, dumpsFailed: servers.filter((s) => (s.lastDumps?.failed ?? 0) > 0).length };
+  for (const s of servers) for (const t of tenantsOf(s.name)) if (t.state) attention[t.state]++;
+  fleetMemo = { servers, dedicated: seed.dedicated, attention, measuredAt: seed.measuredAt };
+  return fleetMemo;
+}
+const tenantsMemo = new Map<string, PostgresTenant[]>();
+function tenantsOf(server: string): PostgresTenant[] {
+  const kept = tenantsMemo.get(server);
+  if (kept) return kept;
+  const seed = postgresServers as unknown as PostgresServers;
+  const s = [...seed.servers, ...(fleetMemo?.servers ?? [])].find((x) => x.name === server);
+  const n = Number(server.replace(/\D/g, "")) || 0;
+  const named = (postgresTenants as { tenants: PostgresTenant[] }).tenants.filter((t) => t.server === server);
+  const r = seeded(n * 104729);
+  const made: PostgresTenant[] = [];
+  const count = s?.tenants ?? (n > 3 ? 200 : 0);
+  for (let i = named.length; i < count; i++) {
+    const used = Math.floor(r() * (r() < 0.08 ? 1700 : 900) * 1_000_000);
+    const pct = used / (1 << 30);
+    made.push({ workspace: workspaces[Math.floor(r() * workspaces.length)], project: projects[Math.floor(r() * projects.length)], name: i % 3 ? "db" : "main", database: `db_${((n * 2654435761 + i * 40503) >>> 0).toString(16).padStart(8, "0").slice(-8)}`, server, phase: "Ready", capBytes: 1 << 30, usedBytes: used, state: pct >= 1.5 ? "paused" : pct >= 1 ? "over" : pct >= 0.8 ? "near" : "", keep: r() < 0.1 ? 14 : r() < 0.05 ? 30 : 7, lastDump: "2026-10-15T03:07:00Z" });
+  }
+  const all = [...named, ...made];
+  tenantsMemo.set(server, all);
+  return all;
+}
 
 // Everything the console reads, in one kept object, changed in place.
 type Things = {
@@ -189,6 +259,31 @@ export const mock: Api = {
     return { status: "started" };
   },
   objectStorage: async () => (await thingsOf.get()).storage,
+  postgresServers: async () => {
+    await wait();
+    return fleet();
+  },
+  postgresTenants: async (server, query) => {
+    await wait();
+    const size = query.size ?? 50;
+    const page = Math.max(1, query.page ?? 1);
+    const q = (query.q ?? "").trim().toLowerCase();
+    const all = tenantsOf(server).filter((t) => (!query.state || t.state === query.state) && (!q || `${t.workspace} ${t.project} ${t.name} ${t.database}`.toLowerCase().includes(q)));
+    return { items: all.slice((page - 1) * size, page * size), total: all.length, page, size };
+  },
+  findPostgresTenants: async (q) => {
+    await wait();
+    const needle = q.trim().toLowerCase();
+    if (needle.length < 2) return [];
+    const found: PostgresTenant[] = [];
+    for (const s of fleet().servers) {
+      for (const t of tenantsOf(s.name)) {
+        if (`${t.workspace} ${t.project} ${t.name} ${t.database}`.toLowerCase().includes(needle)) found.push(t);
+        if (found.length >= 50) return found;
+      }
+    }
+    return found;
+  },
   backups: async () => (await thingsOf.get()).backups,
   runBackup: async () => {
     const all = await thingsOf.get();

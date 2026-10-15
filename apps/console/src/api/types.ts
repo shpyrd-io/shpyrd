@@ -162,6 +162,62 @@ export type ObjectStorageSummary = {
   buckets: { namespace: string; name: string; bucket: string; phase: string; message?: string; usedBytes: number; objects: number; retentionDays?: number }[];
 };
 
+// The shared Postgres servers (storage plan, step 3): one row per
+// platform-owned server, what fills it, what protects it.
+export type PostgresServer = {
+  name: string;
+  version: string;
+  ready: number;
+  instances: number;
+  phase: string;
+  tenants: number;
+  limit: number;
+  // Open to new databases: under the limit and healthy.
+  open: boolean;
+  disk: { usedBytes: number; sizeBytes: number };
+  // Client connections: the seven-day p95 against max_connections; the
+  // pooler comes on at 60 %.
+  connections: { p95: number; max: number };
+  pooler: { on: boolean; since?: string; ready?: number };
+  archiving: "ok" | "failing" | "starting";
+  lastBaseBackup?: string;
+  lastDumps?: { at: string; dumped: number; failed: number; took: string } | null;
+  // Databases kept behind a drop date, and conversions under way.
+  kept: number;
+  converting: number;
+  createdAt: string;
+};
+export type PostgresServers = {
+  servers: PostgresServer[];
+  dedicated: { clusters: number; ready: number; diskBytes: number; backedUp: number };
+  // What an operator should look at across the fleet: databases with
+  // their connections paused or over their cap, servers not healthy,
+  // servers whose last dumps failed.
+  attention: { paused: number; over: number; near: number; degraded: number; dumpsFailed: number };
+  measuredAt?: string;
+};
+// A page of a server's databases: those asked for, and how many there are.
+export type PostgresTenantPage = { items: PostgresTenant[]; total: number; page: number; size: number };
+// What a page of databases is narrowed by.
+export type PostgresTenantQuery = { page?: number; size?: number; state?: "" | "near" | "over" | "paused"; q?: string };
+// A database on a shared server, as the operator sees it: whose it is,
+// its hashed name, how full it is and what its state is.
+export type PostgresTenant = {
+  workspace: string;
+  project: string;
+  name: string;
+  database: string;
+  server: string;
+  phase: string;
+  capBytes: number;
+  usedBytes: number;
+  // "" within its cap; "near" at 80 %; "over" past it, sessions read-only
+  // after seven days; "paused" at 150 %, connections closed.
+  state: "" | "near" | "over" | "paused";
+  keep: number;
+  lastDump?: string;
+};
+
 export type BackupRun = { name: string; status: "running" | "succeeded" | "failed"; started?: string; finished?: string; message?: string };
 export type BackupInfo = {
   enabled: boolean;

@@ -37,7 +37,14 @@ export type PublicConfig = {
   // What the cluster can do with volumes: the least size, and whether
   // it takes snapshots.
   volumes?: { minSize?: string; snapshots: boolean; nodeLocal?: boolean };
+  // The kinds of database the workspace's plan allows, which one a
+  // creation gets without a choice, and the cap of a shared one.
+  postgres?: { types: ("shared" | "dedicated")[]; defaultType: "shared" | "dedicated"; sharedCap: string };
 };
+
+// What converting a database does, in the server's words, before it
+// starts.
+export type ConvertInfo = { name: string; from: string; to: string; note: string };
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type PlatformRole = "platform-admin" | "platform-viewer";

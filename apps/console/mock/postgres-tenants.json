@@ -1,0 +1,82 @@
+{
+  "tenants": [
+    {
+      "workspace": "acme",
+      "project": "shop",
+      "name": "db",
+      "database": "db_3488978c",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 312000000,
+      "state": "",
+      "keep": 7,
+      "lastDump": "2026-10-15T03:07:00Z"
+    },
+    {
+      "workspace": "acme",
+      "project": "billing",
+      "name": "db",
+      "database": "db_34a7c5c9",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 980000000,
+      "state": "near",
+      "keep": 14,
+      "lastDump": "2026-10-15T03:07:00Z"
+    },
+    {
+      "workspace": "fluxyr",
+      "project": "warehouse",
+      "name": "main",
+      "database": "db_34c6f406",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 1620000000,
+      "state": "paused",
+      "keep": 7,
+      "lastDump": "2026-10-15T03:07:00Z"
+    },
+    {
+      "workspace": "fluxyr",
+      "project": "agent-paid-ads",
+      "name": "db",
+      "database": "db_34e62243",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 64000000,
+      "state": "",
+      "keep": 7,
+      "lastDump": "2026-10-15T03:07:00Z"
+    },
+    {
+      "workspace": "igormorales",
+      "project": "site",
+      "name": "db",
+      "database": "db_35055080",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 211000000,
+      "state": "",
+      "keep": 30,
+      "lastDump": "2026-10-15T03:07:00Z"
+    },
+    {
+      "workspace": "acme",
+      "project": "reports",
+      "name": "analytics",
+      "database": "db_35247ebd",
+      "server": "pg-shared-1",
+      "phase": "Ready",
+      "capBytes": 1073741824,
+      "usedBytes": 1110000000,
+      "state": "over",
+      "keep": 7,
+      "lastDump": "2026-10-15T03:07:00Z"
+    }
+  ]
+}

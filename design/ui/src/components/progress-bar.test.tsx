@@ -43,6 +43,13 @@ describe("ProgressBar", () => {
     expect(screen.getByText("80%")).not.toBeNull();
   });
 
+  it("writes its label before the bar when inline, as a table cell holds a number with its bar", () => {
+    render(<ProgressBar inline label="187/200" value={94} />);
+    const bar = screen.getByRole("progressbar", { name: "187/200" });
+    expect(bar.previousElementSibling?.textContent).toBe("187/200");
+    expect(bar.parentElement?.getAttribute("data-inline")).not.toBeNull();
+  });
+
   it("is a span inline, so that it may sit in a line of text", () => {
     const { container } = render(
       <p>
