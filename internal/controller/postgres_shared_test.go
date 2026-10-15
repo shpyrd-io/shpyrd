@@ -394,6 +394,42 @@ func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 	}
 }
 
+// A Postgres carrying its tenant hash (recreated from a platform backup,
+// with a new UID) finds its database and role again on its server; a new
+// one records the hash its UID gives.
+func TestSharedPostgresKeepsItsTenantAcrossARecreation(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-new-after-restore")
+	pg.Annotations = map[string]string{AnnotationSharedServer: "pg-shared-1", AnnotationSharedTenant: "cafe0001"}
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-cafe0001")
+	name, _, _ := unstructured.NestedString(role.Object, "spec", "name")
+	db := getU(t, c, "Database", SharedPostgresNamespace, "db-cafe0001")
+	dbName, _, _ := unstructured.NestedString(db.Object, "spec", "name")
+	if name != "u_cafe0001" || dbName != "db_cafe0001" {
+		t.Errorf("objects named by the recorded hash: role %s database %s", name, dbName)
+	}
+	fresh := sharedPostgres("db2", "p-shop", "uid-fresh")
+	if err := c.Create(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, client.ObjectKeyFromObject(fresh))
+	if err := c.Get(ctx, client.ObjectKeyFromObject(fresh), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Annotations[AnnotationSharedTenant] != tenantHash(fresh.UID) {
+		t.Errorf("a new database records its hash: %v", fresh.Annotations)
+	}
+}
+
 // A suspended workspace fences its shared databases' roles (no connections,
 // sessions ended) and says so; the fence lifts when the workspace is back.
 func TestSharedPostgresSuspendedWorkspaceFencesTheRole(t *testing.T) {

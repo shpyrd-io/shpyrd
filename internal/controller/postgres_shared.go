@@ -50,6 +50,10 @@ const (
 	// AnnotationDropAfter on a tenant's Database object once its Postgres
 	// is gone: the data stays until then, a platform sweep drops it.
 	AnnotationDropAfter = "shpyrd.io/drop-after"
+	// AnnotationSharedTenant records the tenant's hash on the Postgres, so
+	// a Postgres recreated from a platform backup (a new UID) finds its
+	// database and role again on the server it was on.
+	AnnotationSharedTenant = "shpyrd.io/shared-tenant"
 	// AnnotationRotate on a Postgres asks for new credentials: its value is
 	// the moment asked, which the role's Secret and the DatabaseRole record
 	// as shpyrd.io/rotated once they carry the new password.
@@ -87,6 +91,15 @@ func (r *PostgresReconciler) sharedConfig() SharedPostgres {
 }
 
 // tenantHash names a tenant's database and role from the Postgres UID.
+// sharedHash is the tenant's hash: the one recorded on the Postgres, else
+// the one its UID gives (and records, see prepareShared).
+func sharedHash(pg *shpyrdv1.Postgres) string {
+	if h := pg.Annotations[AnnotationSharedTenant]; h != "" {
+		return h
+	}
+	return tenantHash(pg.UID)
+}
+
 func tenantHash(uid types.UID) string {
 	sum := sha256.Sum256([]byte(uid))
 	return hex.EncodeToString(sum[:4])
@@ -134,6 +147,12 @@ func (r *PostgresReconciler) prepareShared(ctx context.Context, pg *shpyrdv1.Pos
 		pg.Annotations[AnnotationSharedServer] = name
 		changed = true
 	}
+	// The hash on the object itself: a Postgres recreated from a platform
+	// backup carries it and finds its database and role again.
+	if pg.Annotations[AnnotationSharedTenant] == "" {
+		pg.Annotations[AnnotationSharedTenant] = tenantHash(pg.UID)
+		changed = true
+	}
 	if !changed {
 		return false, nil
 	}
@@ -168,7 +187,7 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		phase, _, _ := unstructured.NestedString(server.Object, "status", "phase")
 		return ctrl.Result{}, &pendingError{msg: fmt.Sprintf("your database is being placed on shared server %s (%s); this usually takes a few minutes", server.GetName(), firstNonEmpty(phase, "starting"))}
 	}
-	hash := tenantHash(pg.UID)
+	hash := sharedHash(pg)
 	password, err := r.ensureSharedRoleSecret(ctx, pg, hash, server.GetName())
 	if err != nil {
 		return ctrl.Result{}, err
@@ -318,7 +337,7 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 	if !controllerutil.ContainsFinalizer(pg, sharedFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	hash, server := tenantHash(pg.UID), pg.Annotations[AnnotationSharedServer]
+	hash, server := sharedHash(pg), pg.Annotations[AnnotationSharedServer]
 	role := &unstructured.Unstructured{}
 	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
 	err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedRoleObject(hash)}, role)

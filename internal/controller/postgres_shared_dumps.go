@@ -50,7 +50,7 @@ func sharedDumpRoleSecret(server string) string { return server + "-dump" }
 func SharedDumpsName(server string) string { return server + "-dumps" }
 
 // SharedDatabaseName is a shared database's name on its server.
-func SharedDatabaseName(pg *shpyrdv1.Postgres) string { return sharedDatabaseName(tenantHash(pg.UID)) }
+func SharedDatabaseName(pg *shpyrdv1.Postgres) string { return sharedDatabaseName(sharedHash(pg)) }
 
 // The environment a Job cut from the CronJob adds for one database now.
 const (
@@ -65,7 +65,7 @@ const (
 // last one at deletion) and the moment, which names the copy so whoever
 // asked can follow it by name.
 func SharedDumpJob(pg *shpyrdv1.Postgres, cj *batchv1.CronJob, at time.Time, kind string) *batchv1.Job {
-	hash, server := tenantHash(pg.UID), pg.Annotations[AnnotationSharedServer]
+	hash, server := sharedHash(pg), pg.Annotations[AnnotationSharedServer]
 	labels := sharedTenantLabels(pg, server)
 	labels[sharedServerLabel] = sharedDumpPart
 	job := &batchv1.Job{

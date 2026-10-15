@@ -67,7 +67,7 @@ func (m *MeteringLoop) sharedCaps(ctx context.Context, at time.Time) error {
 	}
 	for i := range shared {
 		pg := &shared[i]
-		used, measured := bytes[sharedDatabaseName(tenantHash(pg.UID))]
+		used, measured := bytes[sharedDatabaseName(sharedHash(pg))]
 		if !measured {
 			continue // not scraped yet; the last measurement stands
 		}

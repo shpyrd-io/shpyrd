@@ -97,7 +97,7 @@ func (r *PostgresReconciler) sharedRestoreSource(ctx context.Context, pg *shpyrd
 		if server = source.Annotations[AnnotationSharedServer]; server == "" {
 			return "", "", &pendingError{msg: fmt.Sprintf("the database %s is not placed on a shared server yet", from)}
 		}
-		return server, sharedDatabaseName(tenantHash(source.UID)), nil
+		return server, sharedDatabaseName(sharedHash(source)), nil
 	case !apierrors.IsNotFound(err):
 		return "", "", err
 	}
