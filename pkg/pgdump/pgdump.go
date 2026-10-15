@@ -151,29 +151,14 @@ func (r Run) Do(ctx context.Context) (Report, error) {
 	return rep, nil
 }
 
-// dump streams one pg_dump into the bucket through a pipe: an error on
-// either side ends the other, so a failed dump never leaves an object
-// that looks complete and a failed upload never leaves pg_dump hanging.
+// dump streams one pg_dump into the bucket.
 func (r Run) dump(ctx context.Context, db, key string) error {
-	pr, pw := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		err := r.Source.Dump(ctx, db, pw)
-		pw.CloseWithError(err)
-		done <- err
-	}()
-	putErr := r.Objects.Put(ctx, key, pr)
-	pr.CloseWithError(fmt.Errorf("the upload ended"))
-	dumpErr := <-done
-	switch {
-	case dumpErr != nil && (putErr == nil || strings.Contains(putErr.Error(), dumpErr.Error())):
-		return dumpErr
-	case dumpErr != nil:
-		return fmt.Errorf("upload %s: %w; pg_dump: %v", key, putErr, dumpErr)
-	case putErr != nil:
-		return fmt.Errorf("upload %s: %w", key, putErr)
+	err, fromDump := stream(ctx, func(ctx context.Context, w io.Writer) error { return r.Source.Dump(ctx, db, w) },
+		func(pr io.Reader) error { return r.Objects.Put(ctx, key, pr) })
+	if err != nil && !fromDump {
+		return fmt.Errorf("upload %s: %w", key, err)
 	}
-	return nil
+	return err
 }
 
 // keepOf is how many copies of the database stay: its own count, else Keep.

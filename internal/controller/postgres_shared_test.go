@@ -18,8 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/pgdump"
@@ -1198,5 +1200,304 @@ func TestSharedPostgresNudgeAfterSevenDaysOver(t *testing.T) {
 		if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: name}, &batchv1.Job{}); err == nil {
 			t.Errorf("%s must be gone", name)
 		}
+	}
+}
+
+// spin reconciles a few times, whatever the result asks, so a chain of
+// metadata writes and status writes settles.
+func spin(t *testing.T, r *PostgresReconciler, key types.NamespacedName, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+}
+
+func convertJobEnv(t *testing.T, c client.Client, hash string) (map[string]string, map[string]string) {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, job); err != nil {
+		t.Fatalf("convert job: %v", err)
+	}
+	values, secrets := map[string]string{}, map[string]string{}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			secrets[e.Name] = e.ValueFrom.SecretKeyRef.Name
+		} else {
+			values[e.Name] = e.Value
+		}
+	}
+	return values, secrets
+}
+
+func finishJob(t *testing.T, c client.Client, hash string, ok bool) {
+	t.Helper()
+	ctx := context.Background()
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, job); err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		job.Status.Succeeded = 1
+	} else {
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}
+	}
+	if err := c.Status().Update(ctx, job); err != nil {
+		if err := c.Update(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A shared database converted to a dedicated one: its role paused, a
+// cluster of its own with the shared names and credentials, the rows
+// copied by a Job once the platform's extensions are on it, then the
+// credentials turned to the cluster and the shared side left behind its
+// drop date.
+func TestConvertSharedToDedicated(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	driveShared(t, r, c, pg)
+	if pg.Status.Phase != shpyrdv1.ResourceReady {
+		t.Fatalf("shared database not ready: %+v", pg.Status)
+	}
+	hash := tenantHash(pg.UID)
+	pg.Annotations[AnnotationConvert] = shpyrdv1.PostgresTypeDedicated
+	pg.Annotations[AnnotationConvertOptions] = `{"storage":"10Gi"}`
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Spec.Type != shpyrdv1.PostgresTypeDedicated || pg.Spec.Storage.String() != "10Gi" || pg.Annotations[annotationConvertStep] != convertStepTarget || !strings.Contains(pg.Annotations[AnnotationConvertOptions], `"cap":"1Gi"`) {
+		t.Errorf("after the first step: type=%s storage=%v step=%s options=%s", pg.Spec.Type, pg.Spec.Storage, pg.Annotations[annotationConvertStep], pg.Annotations[AnnotationConvertOptions])
+	}
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	if limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit"); limit != 0 {
+		t.Errorf("the role is paused for the copy: limit %d", limit)
+	}
+	if pg.Status.Phase != shpyrdv1.ResourceProvisioning || !strings.Contains(pg.Status.Message, "Converting to a dedicated database") {
+		t.Errorf("status = %s %q", pg.Status.Phase, pg.Status.Message)
+	}
+	cluster := getU(t, c, "Cluster", "p-shop", "db")
+	initdb, _, _ := unstructured.NestedMap(cluster.Object, "spec", "bootstrap", "initdb")
+	secret, _, _ := unstructured.NestedString(initdb, "secret", "name")
+	if initdb["database"] != "db_"+hash || initdb["owner"] != "u_"+hash || secret != "db-app" {
+		t.Errorf("the cluster's first database = %v", initdb)
+	}
+	// The cluster comes up; the platform's extensions go on it before the copy.
+	_ = unstructured.SetNestedField(cluster.Object, int64(1), "status", "readyInstances")
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 2)
+	ext := getU(t, c, "Database", "p-shop", "db-db")
+	extensions, _, _ := unstructured.NestedSlice(ext.Object, "spec", "extensions")
+	if name, _, _ := unstructured.NestedString(ext.Object, "spec", "name"); name != "db_"+hash || len(extensions) != 1 {
+		t.Errorf("extensions on the new cluster = %s %v", name, extensions)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, &batchv1.Job{}); err == nil {
+		t.Error("no copy before the extensions are applied")
+	}
+	markApplied(t, c, ext)
+	spin(t, r, key, 2)
+	values, secrets := convertJobEnv(t, c, hash)
+	if values["SOURCE_HOST"] != "pg-shared-1-rw" || values["SOURCE_DATABASE"] != "db_"+hash || secrets["SOURCE_USER"] != "pg-shared-1-dump" ||
+		values["PGHOST"] != "db-rw.p-shop.svc.cluster.local" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
+		!strings.HasPrefix(values["SHPYRD_CONVERT_KEY"], "db_"+hash+"/") || !strings.HasSuffix(values["SHPYRD_CONVERT_KEY"], ".converted.dump") ||
+		values["SHPYRD_CONVERT_EXTENSIONS"] != "" || values["SHPYRD_CONVERT_FENCE_ROLE"] != "" || values["SHPYRD_CONVERT_CAP"] != "" {
+		t.Errorf("job env = %v secrets %v", values, secrets)
+	}
+	if err := c.Get(ctx, key, pg); err != nil || pg.Annotations[annotationConvertStep] != convertStepLoad || !strings.Contains(pg.Status.Message, "copying the data") {
+		t.Errorf("loading: %v step=%s %q", err, pg.Annotations[annotationConvertStep], pg.Status.Message)
+	}
+	// The rows are in: the credentials turn to the cluster.
+	finishJob(t, c, hash, true)
+	spin(t, r, key, 4)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Spec.Type != shpyrdv1.PostgresTypeDedicated || pg.Annotations[AnnotationConvert] != "" || pg.Annotations[annotationConvertStep] != "" || pg.Annotations[AnnotationSharedServer] != "" ||
+		!strings.Contains(pg.Annotations[AnnotationConverted], "from shared to dedicated") || controllerutil.ContainsFinalizer(pg, sharedFinalizer) || pg.Annotations[AnnotationSharedTenant] != hash {
+		t.Errorf("after the conversion: %v finalizers %v", pg.Annotations, pg.Finalizers)
+	}
+	for _, name := range []string{"db", "db-direct"} {
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: name}, &corev1.Service{}); err == nil {
+			t.Errorf("the Service %s goes with the shared side", name)
+		}
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db-app"}, sec); err != nil {
+		t.Fatal(err)
+	}
+	if string(sec.Data["host"]) != "db-rw" || !strings.Contains(string(sec.Data["uri"]), "@db-rw:5432/db_"+hash) || !strings.Contains(string(sec.Data["direct_uri"]), "@db-rw:5432/") || string(sec.Data["username"]) != "u_"+hash {
+		t.Errorf("credentials = host %s uri %s direct %s", sec.Data["host"], sec.Data["uri"], sec.Data["direct_uri"])
+	}
+	role = getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	login, _, _ := unstructured.NestedBool(role.Object, "spec", "login")
+	db := getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash)
+	if login || db.GetAnnotations()[AnnotationDropAfter] == "" {
+		t.Errorf("the shared side: login=%v drop-after=%q", login, db.GetAnnotations()[AnnotationDropAfter])
+	}
+	if pg.Status.Phase != shpyrdv1.ResourceReady || !strings.Contains(pg.Status.Message, "1/1 instance") {
+		t.Errorf("a dedicated database now: %s %q", pg.Status.Phase, pg.Status.Message)
+	}
+	vars, err := (PostgresBinder{}).ConfigVars(ctx, c, "p-shop", "db", "DATABASE")
+	if err != nil || !strings.Contains(vars["DATABASE_URL"], "@db-rw:5432/db_"+hash) || vars["DATABASE_HOST"] != "db-rw" {
+		t.Errorf("binder = %v %v", err, vars)
+	}
+}
+
+// A conversion whose copy does not land puts the database back as it was
+// and says why.
+func TestConvertToDedicatedFailsBack(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	driveShared(t, r, c, pg)
+	hash := tenantHash(pg.UID)
+	pg.Annotations[AnnotationConvert] = shpyrdv1.PostgresTypeDedicated
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	cluster := getU(t, c, "Cluster", "p-shop", "db")
+	_ = unstructured.SetNestedField(cluster.Object, int64(1), "status", "readyInstances")
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 2)
+	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	spin(t, r, key, 2)
+	finishJob(t, c, hash, false)
+	spin(t, r, key, 4)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Spec.Type != shpyrdv1.PostgresTypeShared || pg.Spec.Storage.String() != "1Gi" || pg.Spec.Size != "" || pg.Annotations[AnnotationConvert] != "" || !strings.Contains(pg.Annotations[AnnotationConvertFailed], "was not done: Job has reached the specified backoff limit. Your database is as it was.") {
+		t.Errorf("after the failure: type=%s storage=%v annotations=%v", pg.Spec.Type, pg.Spec.Storage, pg.Annotations)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db"}, cluster); err == nil {
+		t.Error("the cluster goes back")
+	}
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	if limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit"); limit != sharedConnectionLimit(pg) {
+		t.Errorf("the role opens again: limit %d", limit)
+	}
+	if pg.Status.Phase != shpyrdv1.ResourceReady || !strings.Contains(pg.Status.Message, "shared, on pg-shared-1. The conversion to a dedicated database was not done") {
+		t.Errorf("status = %s %q", pg.Status.Phase, pg.Status.Message)
+	}
+}
+
+// A dedicated database converted to a shared one: a tenant made beside
+// the running cluster, the cluster's superuser opened for the copy, a Job
+// that pauses the owner, checks and copies, then the cluster gone and the
+// shared credentials in its place.
+func TestConvertDedicatedToShared(t *testing.T) {
+	ctx := context.Background()
+	five := resource.MustParse("5Gi")
+	pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop", UID: types.UID("uid-shop-db"), Generation: 1}, Spec: shpyrdv1.PostgresSpec{Storage: &five, Instances: ptr.To[int32](2)}}
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	cluster := getU(t, c, "Cluster", "app-shop", "db")
+	_ = unstructured.SetNestedField(cluster.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	app := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-app", Namespace: "app-shop"}, Data: map[string][]byte{"username": []byte("app"), "password": []byte("s3cret"), "dbname": []byte("app"), "host": []byte("db-rw"), "uri": []byte("postgresql://app:s3cret@db-rw:5432/app")}}
+	if err := c.Create(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil || pg.Status.Phase != shpyrdv1.ResourceReady {
+		t.Fatalf("dedicated database not ready: %v %+v", err, pg.Status)
+	}
+	pg.Annotations = map[string]string{AnnotationConvert: shpyrdv1.PostgresTypeShared, AnnotationConvertOptions: `{"cap":"1Gi"}`}
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 3)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	hash := tenantHash(pg.UID)
+	if pg.Annotations[AnnotationSharedServer] != "pg-shared-1" || pg.Annotations[AnnotationSharedTenant] != hash || !controllerutil.ContainsFinalizer(pg, sharedFinalizer) || pg.Spec.Type != "" {
+		t.Errorf("placed for the conversion: %v finalizers %v type %q", pg.Annotations, pg.Finalizers, pg.Spec.Type)
+	}
+	cluster = getU(t, c, "Cluster", "app-shop", "db")
+	if super, _, _ := unstructured.NestedBool(cluster.Object, "spec", "enableSuperuserAccess"); !super {
+		t.Error("the cluster opens superuser access for the copy")
+	}
+	// The shared server comes up, the tenant is applied and granted.
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 2)
+	markApplied(t, c, getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash))
+	markApplied(t, c, getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash))
+	spin(t, r, key, 2)
+	grants := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, grants); err != nil {
+		t.Fatal(err)
+	}
+	grants.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, grants); err != nil {
+		if err := c.Update(ctx, grants); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spin(t, r, key, 2)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, &batchv1.Job{}); err == nil {
+		t.Error("no copy before the superuser's credentials are there")
+	}
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "app-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
+	spin(t, r, key, 2)
+	copied := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, copied); err != nil || string(copied.Data["username"]) != "postgres" || string(copied.Data["password"]) != "sup3r" {
+		t.Errorf("the superuser's credentials where the Job reads them: %v %v", err, copied.Data)
+	}
+	values, secrets := convertJobEnv(t, c, hash)
+	if values["SOURCE_HOST"] != "db-rw.app-shop.svc.cluster.local" || values["SOURCE_DATABASE"] != "app" || secrets["SOURCE_USER"] != "convert-"+hash ||
+		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
+		!strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "vector") || !strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "pgcrypto") ||
+		values["SHPYRD_CONVERT_CAP"] != "1073741824" || values["SHPYRD_CONVERT_FENCE_ROLE"] != "app" {
+		t.Errorf("job env = %v secrets %v", values, secrets)
+	}
+	// The rows are in: the cluster goes, the shared credentials take its place.
+	finishJob(t, c, hash, true)
+	spin(t, r, key, 8)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if pg.Spec.Type != shpyrdv1.PostgresTypeShared || pg.Spec.Storage.String() != "1Gi" || pg.Spec.Instances != nil || pg.Annotations[AnnotationConvert] != "" || !strings.Contains(pg.Annotations[AnnotationConverted], "from dedicated to shared") {
+		t.Errorf("after the conversion: type=%s storage=%v instances=%v annotations=%v", pg.Spec.Type, pg.Spec.Storage, pg.Spec.Instances, pg.Annotations)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db"}, cluster); err == nil {
+		t.Error("the cluster goes")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "convert-" + hash}, copied); err == nil {
+		t.Error("the copied credentials go")
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db-app"}, sec); err != nil || string(sec.Data["username"]) != "u_"+hash || string(sec.Data["host"]) != "db" {
+		t.Errorf("the shared credentials in place: %v %s %s", err, sec.Data["username"], sec.Data["host"])
+	}
+	svc := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db"}, svc); err != nil || svc.Spec.ExternalName != "pg-shared-1-rw."+SharedPostgresNamespace+".svc.cluster.local" {
+		t.Errorf("the Service at the shared server: %v %s", err, svc.Spec.ExternalName)
+	}
+	if pg.Status.Phase != shpyrdv1.ResourceReady || !strings.Contains(pg.Status.Message, "shared, on pg-shared-1") {
+		t.Errorf("a shared database now: %s %q", pg.Status.Phase, pg.Status.Message)
 	}
 }

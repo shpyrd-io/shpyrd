@@ -15,8 +15,29 @@ import (
 
 // Postgres is a server reached as the dump role, the connection from the
 // PG* environment: pg_dump runs next to this process (the CloudNativePG
-// image has it) with the same environment.
-type Postgres struct{ Conn *pgx.Conn }
+// image has it) with the same environment. Env names another server for
+// pg_dump and pg_restore (PGHOST, PGUSER, ... as a process environment)
+// when the conversion of a database works on two at once; Database is
+// then the one pg_restore loads.
+type Postgres struct {
+	Conn     *pgx.Conn
+	Env      []string
+	Database string
+}
+
+func (p Postgres) env() []string {
+	if p.Env != nil {
+		return p.Env
+	}
+	return os.Environ()
+}
+
+func (p Postgres) database() string {
+	if p.Database != "" {
+		return p.Database
+	}
+	return os.Getenv("PGDATABASE")
+}
 
 // Databases lists the tenants' databases the role may open: those named
 // by the platform (db_<hash>) and granted CONNECT, so a database whose
@@ -33,7 +54,7 @@ func (p Postgres) Databases(ctx context.Context) ([]string, error) {
 // grants left out: a restore gives the rows to whoever restores them.
 func (p Postgres) Dump(ctx context.Context, database string, w io.Writer) error {
 	cmd := exec.CommandContext(ctx, "pg_dump", "--format=custom", "--no-owner", "--no-acl", "--dbname="+database)
-	cmd.Env = os.Environ()
+	cmd.Env = p.env()
 	cmd.Stdout = w
 	var stderr tail
 	cmd.Stderr = &stderr

@@ -44,3 +44,22 @@ func TestUploadsUseSmallParts(t *testing.T) {
 		t.Errorf("part size = %d", o.PartSize)
 	}
 }
+
+// The restore list keeps everything but the comments on extensions.
+func TestRestoreListLeavesExtensionCommentsOut(t *testing.T) {
+	toc := `;
+; Archive created at 2026-10-15 09:00:00 UTC
+;
+3; 2615 16400 SCHEMA - public pg_database_owner
+2; 3079 16401 EXTENSION - vector
+4; 0 0 COMMENT - EXTENSION vector
+5; 3079 16402 EXTENSION - pgcrypto
+6; 0 0 COMMENT - EXTENSION pgcrypto
+7; 1259 16403 TABLE public orders u_abc
+8; 0 0 COMMENT - TABLE public orders u_abc
+`
+	got := RestoreList(toc)
+	if strings.Contains(got, "COMMENT - EXTENSION") || !strings.Contains(got, "EXTENSION - vector") || !strings.Contains(got, "COMMENT - TABLE public orders") || !strings.Contains(got, "Archive created") {
+		t.Errorf("list = %q", got)
+	}
+}

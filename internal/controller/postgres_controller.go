@@ -194,7 +194,9 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !pg.DeletionTimestamp.IsZero() {
-		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		// A shared database, or one with a shared side still (a conversion
+		// under way), leaves its data behind its drop date.
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared || controllerutil.ContainsFinalizer(pg, sharedFinalizer) {
 			return r.finalizeShared(ctx, pg)
 		}
 		return ctrl.Result{}, nil
@@ -208,7 +210,7 @@ func (r *PostgresReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{Requeue: moved}, err
 	}
-	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared || convertingTo(pg) == shpyrdv1.PostgresTypeShared {
 		// Its finalizer and its placement are metadata written once, before
 		// the status-tracked part, so the status write below never races them.
 		if changed, err := r.prepareShared(ctx, pg); err != nil || changed {
@@ -313,9 +315,18 @@ func sizeLike(list *sizes.List, cpu, mem string) string {
 func postgresSizeRecord(name string) string { return sizes.ForPostgres + ":" + name }
 
 func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
+	if converting(pg) {
+		return r.reconcileConvert(ctx, pg)
+	}
 	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
 		return r.reconcileShared(ctx, pg)
 	}
+	return r.reconcileDedicated(ctx, pg)
+}
+
+// reconcileDedicated renders a database's own CloudNativePG cluster and
+// reads its status.
+func (r *PostgresReconciler) reconcileDedicated(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
 	catalog := loadCatalog(ctx, r.Client, r.SystemNamespace)
 	size, err := catalog.Postgres.Pick(sizes.ForPostgres, pg.Spec.Size)
 	if err != nil {
@@ -495,6 +506,12 @@ func (r *PostgresReconciler) updateCluster(ctx context.Context, pg *shpyrdv1.Pos
 	wantRes, _, _ := unstructured.NestedMap(desired.Object, "spec", "resources")
 	if curRes, _, _ := unstructured.NestedMap(current.Object, "spec", "resources"); !equalJSON(curRes, wantRes) {
 		_ = unstructured.SetNestedMap(current.Object, wantRes, "spec", "resources")
+		changed = true
+	}
+	// Superuser access opens for a conversion to shared and closes after it.
+	wantSuper, _, _ := unstructured.NestedBool(desired.Object, "spec", "enableSuperuserAccess")
+	if curSuper, _, _ := unstructured.NestedBool(current.Object, "spec", "enableSuperuserAccess"); curSuper != wantSuper {
+		_ = unstructured.SetNestedField(current.Object, wantSuper, "spec", "enableSuperuserAccess")
 		changed = true
 	}
 	// The size's parameters (only the keys shpyrd sets; CNPG writes its
@@ -706,8 +723,8 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		"imageName":             "ghcr.io/cloudnative-pg/postgresql:" + version(pg),
 		"storage":               cnpgStorage(storage, storageClass),
 		"resources":             map[string]interface{}{"requests": toMap(res.Requests), "limits": toMap(res.Limits)},
-		"bootstrap":             map[string]interface{}{"initdb": map[string]interface{}{"database": PostgresDatabase, "owner": PostgresUser}},
-		"enableSuperuserAccess": false,
+		"bootstrap":             map[string]interface{}{"initdb": dedicatedInitdb(pg)},
+		"enableSuperuserAccess": convertingTo(pg) == shpyrdv1.PostgresTypeShared, // the conversion's Job pauses the owner as the superuser
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},
@@ -754,6 +771,17 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 	}
 	u.Object["spec"] = spec
 	return u
+}
+
+// dedicatedInitdb is what the cluster's first database and owner are: app
+// and app, or, for a database converted from a shared one, the shared
+// names with the shpyrd-owned credentials Secret as the owner's, so
+// DATABASE_URL changes only its host.
+func dedicatedInitdb(pg *shpyrdv1.Postgres) map[string]interface{} {
+	if hash := pg.Annotations[AnnotationSharedTenant]; hash != "" {
+		return map[string]interface{}{"database": sharedDatabaseName(hash), "owner": sharedRoleName(hash), "secret": map[string]interface{}{"name": PostgresSecretName(pg.Name)}}
+	}
+	return map[string]interface{}{"database": PostgresDatabase, "owner": PostgresUser}
 }
 
 // setResourceCondition maintains the Ready condition of a resource status.

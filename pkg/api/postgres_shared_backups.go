@@ -119,6 +119,9 @@ func (s *Server) sharedBackupsOf(ctx context.Context, pg *shpyrdv1.Postgres) ([]
 }
 
 func dumpKind(kind string) string {
+	if kind == pgdump.KindConverted {
+		return "converted"
+	}
 	switch kind {
 	case pgdump.KindNow:
 		return "on demand"

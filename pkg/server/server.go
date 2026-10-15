@@ -131,6 +131,16 @@ func Main(opts Options) {
 		}
 		return
 	}
+	// `shpyrd-server convert-db`: one database's rows moved between a
+	// dedicated cluster and a shared server, then exit.
+	if len(os.Args) > 1 && os.Args[1] == "convert-db" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runConvertDB(logger); err != nil {
+			logger.Error("conversion failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server copy-self DIR`: this binary into DIR, for a pod of
 	// another image.
 	if len(os.Args) > 2 && os.Args[1] == "copy-self" {

@@ -310,6 +310,37 @@ jobs:
           kubectl --context kind-ci -n "$NS" get svc shared-direct -o jsonpath='{.spec.externalName}' | grep -q '^pg-shared-1-rw\.'
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${URI/@shared:5432/@pg-shared-1-pooler:5432}" -At -c "select current_user like 'u_%'" | grep -q '^t$'
           ./bin/shpyrd pg info shared --project hello-world --context kind-ci | grep -q 'through its connection pooler'
+          # Conversion: the shared database becomes a cluster of its own under
+          # its name, with its rows and its credentials; then back. The row
+          # count is the same at every stop.
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create table conv(id int primary key, v vector(3)); insert into conv select g, '[1,2,3]' from generate_series(1,250) g; comment on table conv is 'kept'" >/dev/null
+          (./bin/shpyrd pg convert shared --to dedicated --project hello-world --context kind-ci 2>&1 || true) | grep -q 're-run with --yes'
+          ./bin/shpyrd pg convert shared --to dedicated --yes --project hello-world --context kind-ci
+          for i in $(seq 1 120); do
+            TYPE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.spec.type}{" "}{.status.phase}{" "}{.metadata.annotations.shpyrd\.io/convert}')
+            [ "$TYPE" = "dedicated Ready " ] && break
+            sleep 5
+          done
+          kubectl --context kind-ci -n "$NS" get postgres shared -o yaml | grep -E 'type:|phase:|message:|convert'
+          [ "$TYPE" = "dedicated Ready " ]
+          DURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          echo "$DURI" | grep -q '@shared-rw:5432/db_'
+          kubectl --context kind-ci -n "$NS" exec shared-1 -c postgres -- psql "${DURI/@shared-rw:5432/@localhost:5432}" -At -c "select count(*) from conv; select obj_description('conv'::regclass)" | tr '\n' ' ' | grep -q '^250 kept '
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci || true
+          # And back onto the shared server, with new names.
+          ./bin/shpyrd pg convert shared --to shared --yes --project hello-world --context kind-ci
+          for i in $(seq 1 120); do
+            TYPE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.spec.type}{" "}{.status.phase}{" "}{.metadata.annotations.shpyrd\.io/convert}')
+            [ "$TYPE" = "shared Ready " ] && break
+            sleep 5
+          done
+          kubectl --context kind-ci -n "$NS" get postgres shared -o yaml | grep -E 'type:|phase:|message:|convert'
+          [ "$TYPE" = "shared Ready " ]
+          ! kubectl --context kind-ci -n "$NS" get cluster shared 2>/dev/null
+          SURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${SURI/@shared:5432/@localhost:5432}" -At -c "select count(*) from conv" | grep -q '^250$'
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | grep -q converted
+          INPOD=${SURI/@shared:5432/@localhost:5432}
           # Deleting fences the role at once, takes a last copy, and keeps the
           # data seven days behind a drop date.
           ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci

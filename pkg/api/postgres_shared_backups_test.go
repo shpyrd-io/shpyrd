@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -219,5 +220,66 @@ func TestRotatePostgresAsksTheController(t *testing.T) {
 	rec = do(t, s, "POST", "/api/projects/shop/resources/postgres/new/rotate", "", true)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not ready yet") {
 		t.Errorf("rotate a database not ready = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A conversion is asked for through the API, which refuses what cannot be
+// converted in words and stamps the rest for the controller.
+func TestConvertPostgresStampsTheDatabase(t *testing.T) {
+	s, cr, _ := newTenantServer(t)
+	s.opts.Extensions = all.All()
+	ctx := context.Background()
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-acme-shop", UID: types.UID("uid-shop-db")}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}}
+	if err := cr.Create(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/projects/shop/resources/postgres/db/convert"
+	call := func(body string, want int) string {
+		t.Helper()
+		rec := at(t, s, "acme.shpyrd.test", "POST", path, body)
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d %s", body, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	if body := call(`{"to":"dedicated"}`, http.StatusConflict); !strings.Contains(body, "db is provisioning; convert it once it is ready") {
+		t.Errorf("not ready: %s", body)
+	}
+	// (The fake client keeps a status written with the object.)
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, db); err != nil {
+		t.Fatal(err)
+	}
+	db.Status.Phase = shpyrdv1.ResourceReady
+	if err := cr.Update(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if body := call(`{"to":"shared"}`, http.StatusConflict); !strings.Contains(body, "db is a shared database already") {
+		t.Errorf("same kind: %s", body)
+	}
+	call(`{"to":"elsewhere"}`, http.StatusBadRequest)
+	var view ConvertView
+	if err := json.Unmarshal([]byte(call(`{"to":"dedicated","storage":"10Gi"}`, http.StatusAccepted)), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.From != "shared" || view.To != "dedicated" || !strings.Contains(view.Note, "cluster of its own with a 10 GB disk") || !strings.Contains(view.Note, "DATABASE_URL changes only its host") {
+		t.Errorf("view = %+v", view)
+	}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: "db"}, db); err != nil {
+		t.Fatal(err)
+	}
+	if db.Annotations[controller.AnnotationConvert] != "dedicated" || !strings.Contains(db.Annotations[controller.AnnotationConvertOptions], `"storage":"10Gi"`) {
+		t.Errorf("stamped = %v", db.Annotations)
+	}
+	if body := call(`{"to":"dedicated"}`, http.StatusConflict); !strings.Contains(body, "being converted to a dedicated database already") {
+		t.Errorf("twice: %s", body)
+	}
+	// A dedicated one on an older version, going to shared: the upgrade is said.
+	old := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "app-acme-shop", UID: types.UID("uid-shop-old")}, Spec: shpyrdv1.PostgresSpec{Version: "16", Instances: ptr.To[int32](2)}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	if err := cr.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources/postgres/old/convert", `{"to":"shared"}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "major upgrade from 16") || !strings.Contains(rec.Body.String(), "high-availability setting goes") || !strings.Contains(rec.Body.String(), "1 GB cap") {
+		t.Errorf("to shared = %d %s", rec.Code, rec.Body.String())
 	}
 }

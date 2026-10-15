@@ -157,15 +157,29 @@ func (r *PostgresReconciler) desiredSharedRestoreJob(pg *shpyrdv1.Postgres, hash
 							env("PGUSER", "username"),
 							env("PGPASSWORD", "password"),
 							{Name: "SHPYRD_RESTORE_KEY", Value: key},
+							{Name: "TMPDIR", Value: sharedScratchDir},
 						},
 						EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: SharedDumpsName(sourceServer)}}}},
-						VolumeMounts:    []corev1.VolumeMount{tools},
+						VolumeMounts:    []corev1.VolumeMount{tools, scratch},
 						Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resourceMustParse("50m"), corev1.ResourceMemory: resourceMustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resourceMustParse("512Mi")}},
 						SecurityContext: locked,
 					}},
-					Volumes: []corev1.Volume{{Name: "tools", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resourceMustParse("512Mi"))}}}},
+					Volumes: []corev1.Volume{
+						{Name: "tools", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resourceMustParse("512Mi"))}}},
+						sharedScratchVolume(),
+					},
 				},
 			},
 		},
 	}
+}
+
+// Scratch space for a copy on its way into a database: pg_restore reads
+// the copy from a file, so the Job keeps one on the node's disk.
+const sharedScratchDir = "/scratch"
+
+var scratch = corev1.VolumeMount{Name: "scratch", MountPath: sharedScratchDir}
+
+func sharedScratchVolume() corev1.Volume {
+	return corev1.Volume{Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resourceMustParse("20Gi"))}}}
 }

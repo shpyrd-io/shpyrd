@@ -159,81 +159,108 @@ func (r *PostgresReconciler) prepareShared(ctx context.Context, pg *shpyrdv1.Pos
 	return true, r.Patch(ctx, pg, client.MergeFrom(before))
 }
 
-// reconcileShared places a shared database on a server and renders its
-// tenant objects; Ready once CloudNativePG applied them.
-func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
+// sharedTenant is what ensureSharedTenant made: the server, the hash, the
+// role's password, the pooler's state, and why the tenant is not ready
+// yet when it is not.
+type sharedTenant struct {
+	server        *unstructured.Unstructured
+	hash          string
+	password      string
+	pooled        bool
+	poolerWaiting bool
+	message       string
+}
+
+// ensureSharedTenant places a database on a server and renders its tenant
+// objects there: the server (and its dumps, access, pooler), the role and
+// its Secret, the database and its copy count, the grants. It reports,
+// in words, what is still coming.
+func (r *PostgresReconciler) ensureSharedTenant(ctx context.Context, pg *shpyrdv1.Postgres) (*sharedTenant, error) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: SharedPostgresNamespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
 		ns.Labels = mergeMaps(ns.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd"})
 		return nil
 	}); err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	if err := r.ensureSharedNetworkPolicy(ctx); err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	server, err := r.sharedServerFor(ctx, pg)
 	if err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	if err := r.ensureSharedServerAccess(ctx, server.GetName()); err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	if err := r.ensureSharedDumps(ctx, server); err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	pooled, poolerWaiting, err := r.ensureSharedPooler(ctx, server)
 	if err != nil {
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	ready, _, _ := unstructured.NestedInt64(server.Object, "status", "readyInstances")
 	if ready < 1 {
 		phase, _, _ := unstructured.NestedString(server.Object, "status", "phase")
-		return ctrl.Result{}, &pendingError{msg: fmt.Sprintf("your database is being placed on shared server %s (%s); this usually takes a few minutes", server.GetName(), firstNonEmpty(phase, "starting"))}
+		return nil, &pendingError{msg: fmt.Sprintf("your database is being placed on shared server %s (%s); this usually takes a few minutes", server.GetName(), firstNonEmpty(phase, "starting"))}
 	}
 	hash := sharedHash(pg)
-	password, err := r.ensureSharedRoleSecret(ctx, pg, hash, server.GetName())
+	t := &sharedTenant{server: server, hash: hash, pooled: pooled, poolerWaiting: poolerWaiting}
+	if t.password, err = r.ensureSharedRoleSecret(ctx, pg, hash, server.GetName()); err != nil {
+		return nil, err
+	}
+	if err := r.ensureSharedRole(ctx, pg, hash, server.GetName()); err != nil {
+		return nil, err
+	}
+	if err := r.ensureSharedDatabase(ctx, pg, hash, server.GetName()); err != nil {
+		return nil, err
+	}
+	if err := r.ensureSharedDumpsKeep(ctx, pg, hash, server.GetName()); err != nil {
+		return nil, err
+	}
+	applied, message, err := r.sharedTenantApplied(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		t.message = firstNonEmpty(message, "creating your database on shared server "+server.GetName())
+		return t, nil
+	}
+	secured, err := r.ensureSharedGrants(ctx, pg, hash, server.GetName())
+	if err != nil {
+		return nil, err
+	}
+	if !secured {
+		t.message = "securing your database on shared server " + server.GetName()
+	}
+	return t, nil
+}
+
+// reconcileShared places a shared database on a server and renders its
+// tenant objects; Ready once CloudNativePG applied them.
+func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
+	t, err := r.ensureSharedTenant(ctx, pg)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureSharedRole(ctx, pg, hash, server.GetName()); err != nil {
+	server, hash := t.server, t.hash
+	if err := r.ensureSharedAppSecret(ctx, pg, hash, t.password); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureSharedDatabase(ctx, pg, hash, server.GetName()); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.ensureSharedDumpsKeep(ctx, pg, hash, server.GetName()); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.ensureSharedAppSecret(ctx, pg, hash, password); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.ensureSharedServices(ctx, pg, server.GetName(), pooled); err != nil {
+	if err := r.ensureSharedServices(ctx, pg, server.GetName(), t.pooled); err != nil {
 		return ctrl.Result{}, err
 	}
 	pg.Status.CredentialsSecret = PostgresSecretName(pg.Name)
 	pg.Status.Endpoint = fmt.Sprintf("%s:%d", pg.Name, PostgresPort)
 	pg.Status.Storage = ""
-	applied, message, err := r.sharedTenantApplied(ctx, hash)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !applied {
+	if t.message != "" {
 		pg.Status.Phase = shpyrdv1.ResourceProvisioning
-		pg.Status.Message = firstNonEmpty(message, "creating your database on shared server "+server.GetName())
+		pg.Status.Message = t.message
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	secured, err := r.ensureSharedGrants(ctx, pg, hash, server.GetName())
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !secured {
-		pg.Status.Phase = shpyrdv1.ResourceProvisioning
-		pg.Status.Message = "securing your database on shared server " + server.GetName()
-		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "Provisioning", pg.Status.Message)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
+	pooled, poolerWaiting := t.pooled, t.poolerWaiting
 	if pg.Spec.Recovery != nil {
 		restored, err := r.reconcileSharedRestore(ctx, pg, hash, server.GetName())
 		if err != nil {
@@ -259,6 +286,9 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if pooled {
 		pg.Status.Message += " through its connection pooler"
 	}
+	if failed := pg.Annotations[AnnotationConvertFailed]; failed != "" {
+		pg.Status.Message += ". " + failed
+	}
 	switch {
 	case fenced && suspendedWithWorkspace(pg):
 		pg.Status.Message = "Connections are paused: your workspace is suspended. They return when it is active again."
@@ -272,6 +302,41 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// fenceSharedRole closes the role: connection limit 0, which the tenant
+// cannot undo, and its sessions ended by a Job as the server's superuser.
+func (r *PostgresReconciler) fenceSharedRole(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) error {
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedRoleObject(hash)}, role); err != nil {
+		return err
+	}
+	if limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit"); limit != 0 {
+		before := role.DeepCopy()
+		_ = unstructured.SetNestedField(role.Object, int64(0), "spec", "connectionLimit")
+		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
+			return err
+		}
+	}
+	job := r.desiredSharedSQLJob(pg, hash, server, sharedFenceJob(hash),
+		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '%s';", sharedRoleName(hash)))
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// liftSharedFence opens the role again, at its tier's limit.
+func (r *PostgresReconciler) liftSharedFence(ctx context.Context, pg *shpyrdv1.Postgres, hash string) error {
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedRoleObject(hash)}, role); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	before := role.DeepCopy()
+	_ = unstructured.SetNestedField(role.Object, sharedConnectionLimit(pg), "spec", "connectionLimit")
+	return r.Patch(ctx, role, client.MergeFrom(before))
 }
 
 // The fence (storage plan, step 3): at 150 % of its cap a shared database's
@@ -309,15 +374,8 @@ func (r *PostgresReconciler) reconcileSharedFence(ctx context.Context, pg *shpyr
 	wanted := reason == CapFar || suspended
 	switch {
 	case wanted && !fenced:
-		before := role.DeepCopy()
-		_ = unstructured.SetNestedField(role.Object, int64(0), "spec", "connectionLimit")
-		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
+		if err := r.fenceSharedRole(ctx, pg, hash, server); err != nil {
 			return false, err
-		}
-		job := r.desiredSharedSQLJob(pg, hash, server, sharedFenceJob(hash),
-			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '%s';", sharedRoleName(hash)))
-		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
-			return true, err
 		}
 		if suspended {
 			r.Recorder.Event(pg, corev1.EventTypeWarning, "WorkspaceSuspended", "the workspace is suspended: connections paused")
