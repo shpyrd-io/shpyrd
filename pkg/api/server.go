@@ -156,6 +156,10 @@ type PublicConfig struct {
 	Door string `json:"door,omitempty"`
 	// Volumes describes the profile's storage rules (RFC-0060).
 	Volumes VolumesConfig `json:"volumes"`
+	// Postgres is the workspace's plan rules for databases, at a workspace
+	// door only: the kinds allowed, the kind a creation without a choice
+	// gets, and the cap of a shared database.
+	Postgres *PostgresConfig `json:"postgres,omitempty"`
 }
 
 // VolumesConfig is what the dashboard needs to know about volumes here.
@@ -165,6 +169,16 @@ type VolumesConfig struct {
 	MinSize string `json:"minSize,omitempty"`
 	// Snapshots is true when the cluster can take volume snapshots.
 	Snapshots bool `json:"snapshots"`
+}
+
+// PostgresConfig is what the dashboard needs to know to make a database
+// here: "shared", "dedicated" or both; which one a creation gets without
+// a choice; and the cap a shared database is metered by, a quantity
+// ("1Gi"). The defaults are filled in, so none is ever empty.
+type PostgresConfig struct {
+	Types       []string `json:"types"`
+	DefaultType string   `json:"defaultType"`
+	SharedCap   string   `json:"sharedCap"`
 }
 
 // Server is the shpyrd API server.
@@ -594,6 +608,9 @@ func (s *Server) routes() error {
 	api.GET("/namespaces", console, s.require(authz.ClusterView), s.listNamespaces)
 	api.GET("/helm/releases", console, s.require(authz.ClusterView), s.listHelmReleases)
 	api.GET("/cluster", console, s.require(authz.ClusterView), s.clusterSummary)
+	api.GET("/cluster/postgres-servers", console, s.require(authz.ClusterView), s.postgresServers) // storage plan, step 3
+	api.GET("/cluster/postgres-servers/:name/databases", console, s.require(authz.ClusterView), s.postgresServerDatabases)
+	api.GET("/cluster/postgres-databases", console, s.require(authz.ClusterView), s.findPostgresDatabases)
 	api.GET("/cluster/scheduling", console, s.require(authz.ClusterView), s.clusterScheduling)
 	api.GET("/cluster/overview", console, s.require(authz.ClusterView), s.clusterOverview)
 	api.GET("/cluster/overview/nodes", console, s.require(authz.ClusterView), s.overviewNodes)
@@ -739,6 +756,8 @@ func (s *Server) routes() error {
 	// Postgres sleep (RFC-0075): policy, suspend and resume.
 	api.PATCH("/projects/:slug/resources/postgres/:name/sleep", s.require(authz.ProjectResource), s.patchPostgresSleep)
 	api.POST("/projects/:slug/resources/postgres/:name/suspend", s.require(authz.ProjectResource), s.suspendPostgres)
+	api.POST("/projects/:slug/resources/postgres/:name/rotate", s.require(authz.ProjectResource), s.rotatePostgres)
+	api.POST("/projects/:slug/resources/postgres/:name/convert", s.require(authz.ProjectResource), s.convertPostgres)
 	api.POST("/projects/:slug/resources/postgres/:name/resume", s.require(authz.ProjectResource), s.resumePostgres)
 	// Backups and restore (RFC-0038) with the account alone (#74).
 	api.GET("/projects/:slug/resources/postgres/:name/backups", s.require(authz.ProjectView), s.listPostgresBackups)
@@ -883,6 +902,8 @@ func (s *Server) config(c *gin.Context) {
 		pub.Workspace = &WorkspaceRef{Capabilities: s.workspaceCapabilities(ws), Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws), AppHost: s.appHostView(c.Request.Context(), ws)}
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
+		rules := s.postgresRules(c.Request.Context(), ws.Slug)
+		pub.Postgres = &PostgresConfig{Types: rules.Types, DefaultType: rules.DefaultType, SharedCap: rules.SharedCap}
 	}
 	pub.Volumes = VolumesConfig{NodeLocal: install.ProjectStorageClass(s.vars) == controller.LocalStorageClass, MinSize: install.ProjectVolumeMinSize(s.vars), Snapshots: s.vars(install.VarSnapshotClass) != ""}
 	if s.store != nil {

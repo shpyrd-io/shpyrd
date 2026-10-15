@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -523,5 +524,163 @@ func TestNodePools(t *testing.T) {
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, dep)
 	if dep.Spec.Template.Spec.NodeSelector != nil {
 		t.Errorf("single pool web nodeSelector = %v", dep.Spec.Template.Spec.NodeSelector)
+	}
+}
+
+// A shared database's size, read from its server's exporter, becomes its
+// storage line and a Cap condition on the plan's ladder.
+func TestSharedCapsAreMeasuredAgainstTheCap(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := resource.MustParse("1Gi")
+	near := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "near", Namespace: "p-shop", UID: "uid-near", Generation: 2}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	over := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "over", Namespace: "p-shop", UID: "uid-over"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	quiet := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "quiet", Namespace: "p-shop", UID: "uid-quiet"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "own", Namespace: "p-shop", UID: "uid-own"}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	srv := fakeProm(t, map[string][]map[string]any{
+		"cnpg_pg_database_size_bytes": {
+			sample(map[string]string{"datname": sharedDatabaseName(tenantHash(near.UID))}, fmt.Sprint(900*1024*1024)),
+			sample(map[string]string{"datname": sharedDatabaseName(tenantHash(over.UID))}, fmt.Sprint(1700*1024*1024)),
+		},
+	})
+	defer srv.Close()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(near, over, quiet, dedicated).WithStatusSubresource(near, over, quiet, dedicated).Build()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	if err := m.sharedCaps(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	get := func(name string) *shpyrdv1.Postgres {
+		pg := &shpyrdv1.Postgres{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "p-shop", Name: name}, pg); err != nil {
+			t.Fatal(err)
+		}
+		return pg
+	}
+	capOf := func(pg *shpyrdv1.Postgres) *metav1.Condition {
+		for i := range pg.Status.Conditions {
+			if pg.Status.Conditions[i].Type == ConditionCap {
+				return &pg.Status.Conditions[i]
+			}
+		}
+		return nil
+	}
+	n := get("near")
+	if n.Status.Storage != "900Mi of 1Gi" || capOf(n) == nil || capOf(n).Reason != CapNear || !strings.Contains(capOf(n).Message, "88%") {
+		t.Errorf("near = %q %+v", n.Status.Storage, capOf(n))
+	}
+	o := get("over")
+	if capOf(o) == nil || capOf(o).Reason != CapFar || capOf(o).Status != metav1.ConditionFalse {
+		t.Errorf("over 150%% = %+v", capOf(o))
+	}
+	if q := get("quiet"); q.Status.Storage != "" || capOf(q) != nil {
+		t.Errorf("a tenant not scraped yet keeps its status: %q %+v", q.Status.Storage, capOf(q))
+	}
+	if d := get("own"); d.Status.Storage != "" || capOf(d) != nil {
+		t.Errorf("a dedicated database is not measured here: %q %+v", d.Status.Storage, capOf(d))
+	}
+}
+
+// A shared database is metered by its cap, from the object: cap GiB times
+// the window, one bucket per database; a dedicated one is not.
+func TestSharedDatabasesAreMeteredByTheirCap(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: store.DefaultWorkspace, shpyrdv1.LabelProject: "shop"}}}
+	cap := resource.MustParse("5Gi")
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Storage: &cap}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "own", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Storage: &cap}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, shared, dedicated).Build()
+	srv := fakeProm(t, nil)
+	defer srv.Close()
+	st := store.NewMemory()
+	m := &MeteringLoop{Store: st, Prom: prom.NewClient(srv.URL), Client: c}
+	end := time.Now().UTC().Truncate(bucketInterval)
+	if _, err := m.writeBuckets(context.Background(), end.Add(-bucketInterval), end); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.QueryBuckets(context.Background(), store.DefaultWorkspace, "shop", end.Add(-bucketInterval-time.Second), end.Add(time.Second))
+	var buckets []store.UsageBucket
+	for _, b := range got {
+		if b.Metric == store.MetricPostgresShared {
+			buckets = append(buckets, b)
+		}
+	}
+	if len(buckets) != 1 || buckets[0].Component != "postgres/db" || buckets[0].Quantity == nil || *buckets[0].Quantity != 5*bucketInterval.Seconds() || buckets[0].Unit != store.UnitGiBSeconds || buckets[0].Quality != store.QualityComplete {
+		t.Fatalf("shared buckets = %+v", buckets)
+	}
+}
+
+// A shared server's disk grows by half when its fullest instance passes
+// 70 %, once the previous step has landed; below that, or while a step is
+// in flight, nothing moves.
+func TestSharedServerDisksGrowAtSeventyPercent(t *testing.T) {
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := func(name, size string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(CNPGClusterGVK)
+		u.SetNamespace(SharedPostgresNamespace)
+		u.SetName(name)
+		u.SetLabels(map[string]string{sharedServerLabel: "server"})
+		_ = unstructured.SetNestedField(u.Object, size, "spec", "storage", "size")
+		return u
+	}
+	gi := func(n float64) string { return fmt.Sprint(int64(n * (1 << 30))) }
+	answers := map[string][]map[string]any{
+		"kubelet_volume_stats_used_bytes": {
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(38)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(20)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-10-1"}, gi(10)),
+		},
+		"kubelet_volume_stats_capacity_bytes": {
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(50)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(50)),
+			sample(map[string]string{"persistentvolumeclaim": "pg-shared-10-1"}, gi(50)),
+		},
+	}
+	srv := fakeProm(t, answers)
+	defer srv.Close()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(server("pg-shared-1", "50Gi"), server("pg-shared-10", "50Gi")).Build()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	sizeOf := func(name string) string {
+		u := getU(t, c, "Cluster", SharedPostgresNamespace, name)
+		size, _, _ := unstructured.NestedString(u.Object, "spec", "storage", "size")
+		return size
+	}
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" || sizeOf("pg-shared-10") != "50Gi" {
+		t.Errorf("after 76%% on one instance: %s and %s", sizeOf("pg-shared-1"), sizeOf("pg-shared-10"))
+	}
+	// The capacity still says 50Gi: the step is in flight, no second step.
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" {
+		t.Errorf("a step in flight is waited for: %s", sizeOf("pg-shared-1"))
+	}
+	// Landed at 75Gi with 38Gi used (51 %): nothing more.
+	answers["kubelet_volume_stats_capacity_bytes"][0] = sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-1"}, gi(75))
+	answers["kubelet_volume_stats_capacity_bytes"][1] = sample(map[string]string{"persistentvolumeclaim": "pg-shared-1-2"}, gi(75))
+	if err := m.sharedServerDisks(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf("pg-shared-1") != "75Gi" {
+		t.Errorf("under the threshold: %s", sizeOf("pg-shared-1"))
+	}
+}
+
+func TestHumanBytesReadsLikeAPerson(t *testing.T) {
+	for n, want := range map[int64]string{7829171: "7.5Mi", 900 * 1024 * 1024: "900Mi", 1700 * 1024 * 1024: "1.7Gi", 1 << 30: "1Gi", 512: "512", 4 * 1024: "4Ki"} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

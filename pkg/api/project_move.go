@@ -171,6 +171,9 @@ func (s *Server) prepareProjectMove(ctx context.Context, app *shpyrdv1.App, grou
 		if pg.Annotations[controller.AnnotationStorageMigration] != "" {
 			return nil, fmt.Errorf("database %s is being migrated to another storage class; wait for that to finish", pg.Name)
 		}
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return nil, fmt.Errorf("the shared database %q has no disk of its own to move: it lives on the platform's server", pg.Name)
+		}
 		if pg.Spec.Instances != nil && *pg.Spec.Instances != 1 {
 			return nil, errors.New("this MVP moves single-instance PostgreSQL databases only")
 		}

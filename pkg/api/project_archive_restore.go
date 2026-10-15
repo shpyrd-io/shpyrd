@@ -252,6 +252,10 @@ func (s *Server) archiveParticipants(app *shpyrdv1.App, op *projectArchiveOperat
 			Commit: func(ctx context.Context) error { return invoke(ctx, "commit", nil) }, Rollback: func(ctx context.Context) error { return invoke(ctx, "rollback", nil) }, Finish: func(ctx context.Context) error { return invoke(ctx, "finish", nil) }})
 	}
 	for _, pg := range m.Databases {
+		if !pg.carried() {
+			op.warn(sharedArchiveNote(pg.Name))
+			continue
+		}
 		withDB := func(ctx context.Context, fn func(projectarchive.PostgreSQL) error) error {
 			db, err := s.archiveDatabase(ctx, app.Namespace, pg.Name)
 			if err != nil {

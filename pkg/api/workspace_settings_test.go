@@ -2,11 +2,16 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
@@ -57,5 +62,31 @@ func TestApplyPostgresTypeFollowsThePlan(t *testing.T) {
 	spec = map[string]interface{}{"type": "dedicated"}
 	if _, err := s.applyPostgresType(ctx, "acme", spec); err == nil || !strings.Contains(err.Error(), "allows only shared") {
 		t.Errorf("a kind the plan does not allow: %v", err)
+	}
+}
+
+// A shared database is always on and has no instance settings: sleep,
+// suspend, resume and resize are refused in the plan's words; its backups
+// come with the platform's dumps, not yet.
+func TestSharedPostgresRefusalsAreSaidInWords(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {}}}}
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared, Backups: &shpyrdv1.PostgresBackups{}}}
+	s, _ := newTestServer(t, nil, []client.Object{app, db})
+	s.opts.Extensions = all.All()
+	for _, c := range []struct {
+		method, path, body string
+		code               int
+		want               string
+	}{
+		{"PATCH", "/api/projects/shop/resources/postgres/db/sleep", `{"sleep":{"after":"30m"}}`, http.StatusBadRequest, "always on"},
+		{"POST", "/api/projects/shop/resources/postgres/db/suspend", ``, http.StatusBadRequest, "always on"},
+		{"POST", "/api/projects/shop/resources/postgres/db/backups", ``, http.StatusConflict, "nightly dumps"},
+		{"POST", "/api/projects/shop/resources/postgres/db/restore", `{"as":"copy"}`, http.StatusConflict, "nightly dumps"},
+		{"POST", "/api/projects/shop/resources/postgres/db/resize", `{"size":"shared-m"}`, http.StatusBadRequest, "no instance size"},
+	} {
+		rec := do(t, s, c.method, c.path, c.body, true)
+		if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s %s = %d %s, want %d saying %q", c.method, c.path, rec.Code, strings.TrimSpace(rec.Body.String()), c.code, c.want)
+		}
 	}
 }

@@ -1,0 +1,219 @@
+// Package pgdump takes the nightly dumps of the databases on a shared
+// Postgres server (storage plan, step 3): one pg_dump per database, as the
+// platform's dump role, streamed into the server's bucket; the newest few
+// of each database are kept.
+package pgdump
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Source is the server: the databases the dump role may open, and a dump
+// of one of them.
+type Source interface {
+	Databases(ctx context.Context) ([]string, error)
+	Dump(ctx context.Context, database string, w io.Writer) error
+}
+
+// Lister lists a bucket's keys under a prefix.
+type Lister interface {
+	List(ctx context.Context, prefix string) ([]string, error)
+}
+
+// Objects is the bucket.
+type Objects interface {
+	Lister
+	Put(ctx context.Context, key string, r io.Reader) error
+	Remove(ctx context.Context, key string) error
+}
+
+// Run is one night, or one database now.
+type Run struct {
+	Source  Source
+	Objects Objects
+	// Keep is how many dumps of each database stay; 0 keeps them all.
+	Keep int
+	// KeepFor says a database's own count, when it has one (0: Keep).
+	KeepFor func(database string) int
+	// Only names one database to dump instead of every one.
+	Only string
+	// Kind marks the copies ("" is the nightly run, "now" one asked for).
+	Kind string
+	Now  func() time.Time
+	Log  *slog.Logger
+}
+
+// The kinds of copy besides the nightly one: KindNow is one somebody asked
+// for, KindLast the one taken when the database is deleted.
+const (
+	KindNow  = "now"
+	KindLast = "last"
+)
+
+// Report says what the night did.
+type Report struct {
+	Dumped  []string
+	Failed  map[string]error
+	Removed int
+}
+
+const timeLayout = "20060102T150405Z"
+
+// Key is where a dump of the database taken at that moment goes:
+// <database>/<time>[.<kind>].dump, so one database's copies list together
+// and sort by age.
+func Key(database string, at time.Time, kind string) string {
+	return database + "/" + Name(at, kind) + ".dump"
+}
+
+// Name is how a copy is called in a listing: its time, and its kind when
+// it was asked for.
+func Name(at time.Time, kind string) string {
+	name := at.UTC().Format(timeLayout)
+	if kind != "" {
+		name += "." + kind
+	}
+	return name
+}
+
+// Parse reads a key back: the database, the copy's name, when it was
+// taken and its kind. Not ok for a key that is not a dump's.
+func Parse(key string) (database, name string, at time.Time, kind string, ok bool) {
+	database, file, found := strings.Cut(key, "/")
+	if !found || !strings.HasSuffix(file, ".dump") {
+		return "", "", time.Time{}, "", false
+	}
+	name = strings.TrimSuffix(file, ".dump")
+	stamp, kind, _ := strings.Cut(name, ".")
+	at, err := time.Parse(timeLayout, stamp)
+	if err != nil {
+		return "", "", time.Time{}, "", false
+	}
+	return database, name, at, kind, true
+}
+
+// Do dumps every database, each on its own: one that fails is reported
+// and the rest are still taken; then that database's old copies go. The
+// error names what failed.
+func (r Run) Do(ctx context.Context) (Report, error) {
+	rep := Report{Failed: map[string]error{}}
+	now := time.Now
+	if r.Now != nil {
+		now = r.Now
+	}
+	logger := r.Log
+	if logger == nil {
+		logger = slog.Default()
+	}
+	dbs, err := r.Source.Databases(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("list the databases: %w", err)
+	}
+	if r.Only != "" {
+		if !slices.Contains(dbs, r.Only) {
+			return rep, fmt.Errorf("the database %s is not on this server, or the platform's dump role was not granted it yet", r.Only)
+		}
+		dbs = []string{r.Only}
+	}
+	for _, db := range dbs {
+		key := Key(db, now(), r.Kind)
+		if err := r.dump(ctx, db, key); err != nil {
+			rep.Failed[db] = err
+			logger.Error("dump failed", "database", db, "err", err.Error())
+			continue
+		}
+		rep.Dumped = append(rep.Dumped, db)
+		logger.Info("dumped", "database", db, "key", key)
+		n, err := r.prune(ctx, db, r.keepOf(db))
+		if err != nil {
+			logger.Warn("old dumps kept", "database", db, "err", err.Error())
+		}
+		rep.Removed += n
+	}
+	if len(rep.Failed) > 0 {
+		names := make([]string, 0, len(rep.Failed))
+		for db := range rep.Failed {
+			names = append(names, db)
+		}
+		sort.Strings(names)
+		return rep, fmt.Errorf("%d of %d databases were not dumped: %s", len(rep.Failed), len(dbs), strings.Join(names, ", "))
+	}
+	return rep, nil
+}
+
+// dump streams one pg_dump into the bucket.
+func (r Run) dump(ctx context.Context, db, key string) error {
+	err, fromDump := stream(ctx, func(ctx context.Context, w io.Writer) error { return r.Source.Dump(ctx, db, w) },
+		func(pr io.Reader) error { return r.Objects.Put(ctx, key, pr) })
+	if err != nil && !fromDump {
+		return fmt.Errorf("upload %s: %w", key, err)
+	}
+	return err
+}
+
+// keepOf is how many copies of the database stay: its own count, else Keep.
+func (r Run) keepOf(db string) int {
+	if r.KeepFor != nil {
+		if n := r.KeepFor(db); n > 0 {
+			return n
+		}
+	}
+	return r.Keep
+}
+
+// KeepFromDir reads each database's count from a directory of files named
+// after the databases (a ConfigMap mounted in the pod): absent or unreadable
+// means no count of its own.
+func KeepFromDir(dir string) func(string) int {
+	return func(db string) int {
+		b, err := os.ReadFile(filepath.Join(dir, db))
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+}
+
+// prune removes a database's copies past the newest keep.
+func (r Run) prune(ctx context.Context, db string, keep int) (int, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	keys, err := r.Objects.List(ctx, db+"/")
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, key := range Older(keys, keep) {
+		if err := r.Objects.Remove(ctx, key); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// Older is the keys past the newest keep, oldest last; keys sort by time
+// because Key names them so.
+func Older(keys []string, keep int) []string {
+	sorted := append([]string(nil), keys...)
+	sort.Sort(sort.Reverse(sort.StringSlice(sorted)))
+	if len(sorted) <= keep {
+		return nil
+	}
+	return sorted[keep:]
+}

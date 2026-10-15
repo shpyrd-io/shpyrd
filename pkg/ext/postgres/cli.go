@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os"
 	"os/signal"
 	"strings"
@@ -46,7 +48,7 @@ settings for them.
 Databases run on CloudNativePG; one cluster per database, 1 instance by
 default (2-3 for high availability with --instances).`,
 	}
-	cmd.AddCommand(metrics.ResourceCommand(g, "postgres"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
+	cmd.AddCommand(metrics.ResourceCommand(g, "postgres"), newCreateCmd(g), newListCmd(g), newInfoCmd(g), newResizeCmd(g), newRotateCmd(g), newConvertCmd(g), newPsqlCmd(g), newDeleteCmd(g), newBackupsCmd(g), newBackupCmd(g), newRestoreCmd(g), newPgSleepCmd(g), newPgSuspendCmd(g), newPgResumeCmd(g))
 	return cmd
 }
 
@@ -261,6 +263,86 @@ unavailable for a moment.`,
 	return cmd
 }
 
+func newRotateCmd(g ext.CLIGlobals) *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "rotate <name>",
+		Short: "Give a database new credentials (the apps bound to it restart)",
+		Long: `Writes a new password for the database's role and into the project's
+credentials; the apps bound to the database are re-rendered and restart
+with it within a minute.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var out struct {
+				Name   string `json:"name"`
+				Rotate string `json:"rotate"`
+				Note   string `json:"note"`
+			}
+			if err := backupsCall(cliContext(), g, "POST", backupsPath(project, args[0])+"/rotate", nil, &out); err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": out.Name, "rotate": out.Rotate}, func(w io.Writer) {
+				fmt.Fprintln(w, out.Note)
+			})
+		},
+	}
+	ext.ProjectFlag(g, cmd, &project)
+	return cmd
+}
+
+func newConvertCmd(g ext.CLIGlobals) *cobra.Command {
+	var project, to, size, storage string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "convert <name> --to dedicated|shared",
+		Short: "Move a database between the shared server and a cluster of its own",
+		Long: `Converts a database under its name, so the apps bound to it keep their
+binding: to dedicated, a cluster of its own takes the shared database's
+user, database and credentials (DATABASE_URL changes only its host); to
+shared, a database and a role on the platform's server take the cluster's
+rows (new names, so the apps restart once with the new credentials).
+Connections pause while the data is copied; a copy of the source stays
+restorable for seven days. Without --yes the command says what will happen
+and stops.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if to != "dedicated" && to != "shared" {
+				return fmt.Errorf("--to names the kind to convert to: dedicated or shared")
+			}
+			body := map[string]string{"to": to}
+			if size != "" {
+				body["size"] = size
+			}
+			if storage != "" {
+				body["storage"] = storage
+			}
+			var out struct {
+				Name string `json:"name"`
+				From string `json:"from"`
+				To   string `json:"to"`
+				Note string `json:"note"`
+			}
+			if !yes {
+				// The server's own words, before anything moves: the same
+				// request, not sent.
+				return fmt.Errorf("this converts %q to a %s database: connections pause while the data is copied, then the apps bound to it restart once; re-run with --yes to confirm", args[0], to)
+			}
+			if err := backupsCall(cliContext(), g, "POST", backupsPath(project, args[0])+"/convert", body, &out); err != nil {
+				return err
+			}
+			return ext.Print(g, cmd, map[string]any{"project": project, "name": out.Name, "from": out.From, "to": out.To}, func(w io.Writer) {
+				fmt.Fprintf(w, "Converting %s from a %s database to a %s one. %s\nFollow it with shpyrd pg info %s.\n", out.Name, out.From, out.To, out.Note, out.Name)
+			})
+		},
+	}
+	ext.ProjectFlag(g, cmd, &project)
+	cmd.Flags().StringVar(&to, "to", "", "the kind to convert to: dedicated or shared")
+	cmd.Flags().StringVar(&size, "size", "", "the instance size of the dedicated database (default: the smallest)")
+	cmd.Flags().StringVar(&storage, "storage", "", "the disk of the dedicated database (default 5Gi)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm")
+	return cmd
+}
+
 func newListCmd(g ext.CLIGlobals) *cobra.Command {
 	var project string
 	cmd := &cobra.Command{
@@ -284,7 +366,11 @@ func newListCmd(g ext.CLIGlobals) *cobra.Command {
 				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "NAME\tVERSION\tSIZE\tSTORAGE\tINSTANCES\tSTATUS\tATTACHED TO")
 				for _, v := range list {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), firstNonEmpty(v.Details["size"], "-"), firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"), firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
+					size, instances := firstNonEmpty(v.Details["size"], "-"), firstNonEmpty(v.Details["instances"], "1")
+					if v.Details["type"] == shpyrdv1.PostgresTypeShared {
+						size, instances = "shared", "-" // a database on a platform server; storage is its cap
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", v.Name, firstNonEmpty(v.Details["version"], "17"), size, firstNonEmpty(v.Details["storage"], "5Gi"), instances, firstNonEmpty(v.Phase, "Pending"), firstNonEmpty(strings.Join(v.AttachedTo, ", "), "-"))
 				}
 				_ = tw.Flush()
 			})
@@ -311,8 +397,14 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 				fmt.Fprintf(out, "Status:     %s%s\n", firstNonEmpty(v.Phase, "Pending"), suffix(v.Message))
 				fmt.Fprintf(out, "Endpoint:   %s\n", firstNonEmpty(v.Endpoint, "-"))
 				fmt.Fprintf(out, "Version:    PostgreSQL %s\n", firstNonEmpty(v.Details["version"], "17"))
-				fmt.Fprintf(out, "Size:       %s (shpyrd pg resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
-				fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
+				if v.Details["type"] == shpyrdv1.PostgresTypeShared {
+					fmt.Fprintf(out, "Type:       shared (a database on a platform server, always on)\n")
+					fmt.Fprintf(out, "Cap:        %s\n", firstNonEmpty(v.Details["storage"], "1Gi"))
+				} else {
+					fmt.Fprintf(out, "Type:       dedicated (a cluster of its own)\n")
+					fmt.Fprintf(out, "Size:       %s (shpyrd pg resize %s <size> --project %s)\n", firstNonEmpty(v.Details["size"], "-"), v.Name, project)
+					fmt.Fprintf(out, "Storage:    %s, %s instance(s)\n", firstNonEmpty(v.Details["storage"], "5Gi"), firstNonEmpty(v.Details["instances"], "1"))
+				}
 				fmt.Fprintf(out, "Attached:   %s\n", firstNonEmpty(strings.Join(v.AttachedTo, ", "), "- (shpyrd attach "+v.Name+" --project "+project+")"))
 				backups := "off (create with --backups, or restore from another database's backup)"
 				if b := v.Details["backups"]; b != "" {
@@ -356,6 +448,18 @@ func newPsqlCmd(g ext.CLIGlobals) *cobra.Command {
 			}
 			pg, err := get(ctx, c, project, args[0])
 			if err != nil {
+				return err
+			}
+			if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+				// Through a helper pod of the project with the tenant's
+				// credentials, removed when psql ends.
+				pod, err := sharedPsqlHelper(ctx, c, pg, 2*time.Minute)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Connecting to %s (shared)...\n", pg.Name)
+				err = kexec.RemoteExit(kexec.Exec(ctx, k, pg.Namespace, pod, "psql", append([]string{"psql"}, args[1:]...), kexec.StdinIsTerminal()))
+				_ = c.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: pod, Namespace: pg.Namespace}})
 				return err
 			}
 			pod, err := primaryPod(ctx, c, pg)

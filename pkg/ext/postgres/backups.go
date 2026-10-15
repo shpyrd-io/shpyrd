@@ -33,10 +33,16 @@ type backup struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// dumps is how a shared database is backed up (api.DumpsView).
+type dumps struct {
+	Keep int `json:"keep"`
+}
+
 // backups is a database's backups as the API gives them (api.BackupsView).
 type backups struct {
 	Name            string                    `json:"name"`
 	Policy          *shpyrdv1.PostgresBackups `json:"policy"`
+	Dumps           *dumps                    `json:"dumps,omitempty"`
 	LastBackup      *time.Time                `json:"lastBackup,omitempty"`
 	RecoverableFrom *time.Time                `json:"recoverableFrom,omitempty"`
 	Backups         []backup                  `json:"backups"`
@@ -71,6 +77,15 @@ func backupsCall(ctx context.Context, g ext.CLIGlobals, method, path string, bod
 }
 
 func backupsLine(b backups) string {
+	if b.Dumps != nil {
+		out := fmt.Sprintf("the platform's nightly dumps, the newest %d kept", b.Dumps.Keep)
+		if b.LastBackup != nil {
+			out += ", last " + b.LastBackup.UTC().Format(time.RFC3339)
+		} else {
+			out += ", none taken yet"
+		}
+		return out
+	}
 	if b.Policy == nil {
 		return "off (shpyrd pg backups enable " + b.Name + ")"
 	}
@@ -240,17 +255,20 @@ func newRestoreCmd(g ext.CLIGlobals) *cobra.Command {
 		project string
 		to      string
 		as      string
+		from    string
 		size    string
 		storage string
 	)
 	cmd := &cobra.Command{
-		Use:   "restore <name> --as <new-name> [--to <time>]",
-		Short: "Restore a database's backups into a new database, at a point in time",
-		Long: `Creates a new database from the backups of an existing one, recovered to
-the given moment (RFC 3339, e.g. 2026-09-25T10:00:00Z; the latest possible
-when omitted), which must lie inside the window its backups cover. The
-source keeps running; attach the app to the new database with
-"shpyrd attach" when it is ready.`,
+		Use:   "restore <name> --as <new-name> [--to <time> | --backup <copy>]",
+		Short: "Restore a database's backups into a new database",
+		Long: `Creates a new database from the backups of an existing one. A dedicated
+database is recovered to the given moment (RFC 3339, e.g.
+2026-09-25T10:00:00Z; the latest possible when omitted), which must lie
+inside the window its backups cover. A shared database restores one of
+the platform's copies of it (--backup names one as "shpyrd pg backups
+list" shows them; the newest when omitted). The source keeps running;
+attach the app to the new database with "shpyrd attach" when it is ready.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
@@ -262,14 +280,17 @@ source keeps running; attach the app to the new database with
 					return fmt.Errorf("--to %q: use RFC 3339, e.g. 2026-09-25T10:00:00Z", to)
 				}
 			}
-			body := map[string]string{"as": as, "to": to, "size": size, "storage": storage}
+			body := map[string]string{"as": as, "to": to, "backup": from, "size": size, "storage": storage}
 			var created resources.View
 			if err := backupsCall(ctx, g, "POST", backupsPath(project, args[0])+"/restore", body, &created); err != nil {
 				return err
 			}
 			when := "the latest point"
-			if to != "" {
+			switch {
+			case to != "":
 				when = to
+			case from != "":
+				when = "the copy " + from
 			}
 			out := ext.Progress(g, cmd)
 			fmt.Fprintf(out, "Restoring %s from the backups of %s to %s...\n", as, args[0], when)
@@ -295,7 +316,8 @@ source keeps running; attach the app to the new database with
 	}
 	ext.ProjectFlag(g, cmd, &project)
 	cmd.Flags().StringVar(&as, "as", "", "name of the new database (required)")
-	cmd.Flags().StringVar(&to, "to", "", "point in time to recover to, RFC 3339 (default: latest)")
+	cmd.Flags().StringVar(&to, "to", "", "point in time to recover to, RFC 3339 (default: latest; dedicated databases)")
+	cmd.Flags().StringVar(&from, "backup", "", "the copy to restore, as `shpyrd pg backups list` names it (default: the newest; shared databases)")
 	cmd.Flags().StringVar(&size, "size", "", "a Postgres size for the new database (default: the source's)")
 	cmd.Flags().StringVar(&storage, "storage", "", "data volume of the new database (default: the source's)")
 	return cmd

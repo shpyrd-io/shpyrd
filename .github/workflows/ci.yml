@@ -187,11 +187,23 @@ jobs:
           key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   e2e:
-    name: End to end on kind
+    name: End to end on kind (${{ matrix.suite }})
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.go == 'true'
     timeout-minutes: 45
+    # Two clusters, side by side: the applications on the default
+    # extensions, and the databases with the postgres and object-storage
+    # extensions (CloudNativePG and a bucket store take minutes of their
+    # own, and the shared server, its dumps and a conversion more).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: apps
+            enable: ""
+          - suite: databases
+            enable: --enable postgres,object-storage
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -210,7 +222,7 @@ jobs:
       # build, and the next step but one waits for it.
       - name: Create the cluster, in the background
         run: |
-          ( ./bin/shpyrd cluster create --name ci --skip shpyrd --http-port 8080 --https-port 8443 \
+          ( ./bin/shpyrd cluster create --name ci --skip shpyrd ${{ matrix.enable }} --http-port 8080 --https-port 8443 \
               > "$RUNNER_TEMP/cluster.log" 2>&1; echo $? > "$RUNNER_TEMP/cluster.exit" ) &
       - name: Build the applications and the server image
         run: |
@@ -227,6 +239,7 @@ jobs:
           ./bin/shpyrd cluster init --context kind-ci --only shpyrd --set SHPYRD_SERVER_IMAGE=shpyrd-server:ci --http-port 8080 --https-port 8443
           ./bin/shpyrd cluster status --context kind-ci
       - name: Deploy a buildpacks project, a Dockerfile project and a workspace package
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           export SHPYRD_CONTEXT=kind-ci
@@ -239,7 +252,135 @@ jobs:
           ./bin/shpyrd projects create monorepo --public --context kind-ci
           (cd examples/monorepo/apps/web && ../../../../bin/shpyrd deploy --project monorepo --context kind-ci)
           ./bin/shpyrd projects list --context kind-ci
+      - name: A project for the databases
+        if: matrix.suite == 'databases'
+        run: |
+          set -euo pipefail
+          ./bin/shpyrd projects create "Hello World" --public --context kind-ci
+          ./bin/shpyrd cluster status --context kind-ci
+          kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
+      - name: A shared database on the platform's server
+        if: matrix.suite == 'databases'
+        run: |
+          set -euo pipefail
+          # Step 3 of the storage plan: a database and a role on a platform-owned
+          # server, always on; the project keeps a Service and a Secret named
+          # after the database, so DATABASE_URL has its usual shape.
+          ./bin/shpyrd pg create shared --type shared --project hello-world --context kind-ci
+          ./bin/shpyrd pg list --project hello-world --context kind-ci
+          kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,database,databaserole,job
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          URI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          echo "$URI" | grep -q 'sslmode=require&connect_timeout=10'
+          # The tenant's own credentials open its database; from inside the
+          # server, at the primary (the URL names the database's own Service).
+          INPOD=${URI/@shared:5432/@localhost:5432}
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select current_database() like 'db_%', current_user like 'u_%'" | grep -q 't|t'
+          # New credentials on request: the role's password changes and the
+          # new URL opens the database.
+          ./bin/shpyrd pg rotate shared --project hello-world --context kind-ci
+          for i in $(seq 1 30); do
+            NEW=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+            [ "$NEW" != "$URI" ] && break
+            sleep 2
+          done
+          [ "$NEW" != "$URI" ]
+          # The operator applies the new password within seconds; a first
+          # success may be followed by a stale re-apply of the old one, so the
+          # new URL has to open the database twice, three seconds apart, and
+          # the old one must be refused by then.
+          opened=0
+          for i in $(seq 1 30); do
+            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then
+              sleep 3
+              if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then opened=1; break; fi
+            fi
+            sleep 2
+          done
+          [ "$opened" = 1 ]
+          ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select 1" 2>/dev/null | grep -q '^1$'
+          URI=$NEW
+          INPOD=${URI/@shared:5432/@localhost:5432}
+          # Extensions: a trusted one is the owner's to create, pgvector is there already, the rest are a dedicated database's.
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension if not exists pgcrypto; select count(*) from pg_extension where extname in ('pgcrypto','vector')" | grep -q '^2$'
+          ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension pg_stat_statements" 2>/dev/null
+          # Nobody else: the superuser-granted REVOKE keeps PUBLIC out.
+          DB=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.dbname}' | base64 -d)
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep -q '^f$'
+          # The nightly dump, run now: pg_dump as the platform's dump role,
+          # into the server's bucket.
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=jsonpath='{.status.phase}'=Ready objectbucket/pg-shared-1-dumps --timeout=180s
+          kubectl --context kind-ci -n shpyrd-shared-postgres create job dumps-now --from=cronjob/pg-shared-1-dumps
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=condition=complete job/dumps-now --timeout=300s || { kubectl --context kind-ci -n shpyrd-shared-postgres describe job/dumps-now; kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now --all-containers; exit 1; }
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now -c dump | grep -q 'dumped=1 failed=0'
+          # One asked for now, then the listing shows both kinds.
+          ./bin/shpyrd pg backup shared --project hello-world --context kind-ci
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | tee /tmp/shared-backups.txt
+          grep -q 'nightly' /tmp/shared-backups.txt && grep -q 'on demand' /tmp/shared-backups.txt
+          # The newest copy restored into a new shared database, as its owner.
+          ./bin/shpyrd pg restore shared --as shared2 --project hello-world --context kind-ci
+          ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep -q 'from shared'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep -q restore-
+          # The server's pooler, switched on by the platform when connections
+          # run high (here: by hand): the tenants turn to it once it answers,
+          # "<name>-direct" keeps the primary, and the tenant's credentials
+          # open the database through it.
+          kubectl --context kind-ci -n shpyrd-shared-postgres annotate cluster pg-shared-1 shpyrd.io/pooler=now
+          for i in $(seq 1 60); do
+            if kubectl --context kind-ci -n shpyrd-shared-postgres get deploy pg-shared-1-pooler >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=condition=Available deploy/pg-shared-1-pooler --timeout=300s
+          POOLER=pg-shared-1-pooler.shpyrd-shared-postgres.svc.cluster.local
+          for i in $(seq 1 30); do
+            TARGET=$(kubectl --context kind-ci -n "$NS" get svc shared -o jsonpath='{.spec.externalName}')
+            [ "$TARGET" = "$POOLER" ] && break
+            sleep 2
+          done
+          [ "$TARGET" = "$POOLER" ]
+          kubectl --context kind-ci -n "$NS" get svc shared-direct -o jsonpath='{.spec.externalName}' | grep -q '^pg-shared-1-rw\.'
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${URI/@shared:5432/@pg-shared-1-pooler:5432}" -At -c "select current_user like 'u_%'" | grep -q '^t$'
+          ./bin/shpyrd pg info shared --project hello-world --context kind-ci | grep -q 'through its connection pooler'
+          # Conversion: the shared database becomes a cluster of its own under
+          # its name, with its rows and its credentials; then back. The row
+          # count is the same at every stop.
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create table conv(id int primary key, v vector(3)); insert into conv select g, '[1,2,3]' from generate_series(1,250) g; comment on table conv is 'kept'" >/dev/null
+          (./bin/shpyrd pg convert shared --to dedicated --project hello-world --context kind-ci 2>&1 || true) | grep -q 're-run with --yes'
+          ./bin/shpyrd pg convert shared --to dedicated --yes --project hello-world --context kind-ci
+          for i in $(seq 1 120); do
+            TYPE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.spec.type}{" "}{.status.phase}{" "}{.metadata.annotations.shpyrd\.io/convert}')
+            [ "$TYPE" = "dedicated Ready " ] && break
+            sleep 5
+          done
+          kubectl --context kind-ci -n "$NS" get postgres shared -o yaml | grep -E 'type:|phase:|message:|convert'
+          [ "$TYPE" = "dedicated Ready " ]
+          DURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          echo "$DURI" | grep -q '@shared-rw:5432/db_'
+          kubectl --context kind-ci -n "$NS" exec shared-1 -c postgres -- psql "${DURI/@shared-rw:5432/@localhost:5432}" -At -c "select count(*) from conv; select obj_description('conv'::regclass)" | tr '\n' ' ' | grep -q '^250 kept '
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci || true
+          # And back onto the shared server, with new names.
+          ./bin/shpyrd pg convert shared --to shared --yes --project hello-world --context kind-ci
+          for i in $(seq 1 120); do
+            TYPE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.spec.type}{" "}{.status.phase}{" "}{.metadata.annotations.shpyrd\.io/convert}')
+            [ "$TYPE" = "shared Ready " ] && break
+            sleep 5
+          done
+          kubectl --context kind-ci -n "$NS" get postgres shared -o yaml | grep -E 'type:|phase:|message:|convert'
+          [ "$TYPE" = "shared Ready " ]
+          ! kubectl --context kind-ci -n "$NS" get cluster shared 2>/dev/null
+          SURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${SURI/@shared:5432/@localhost:5432}" -At -c "select count(*) from conv" | grep -q '^250$'
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | grep -q converted
+          INPOD=${SURI/@shared:5432/@localhost:5432}
+          # Deleting fences the role at once, takes a last copy, and keeps the
+          # data seven days behind a drop date.
+          ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci
+          ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
+          kubectl --context kind-ci -n shpyrd-shared-postgres get databaserole -o jsonpath='{range .items[*]}{.spec.name} login={.spec.login} limit={.spec.connectionLimit}{"\n"}{end}' | grep -q 'login=false limit=0'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/shared-postgres=dump -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].env[?(@.name=="SHPYRD_DUMPS_KIND")].value}{"\n"}{end}' | grep -q '^last$'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
       - name: The projects answer on their URLs
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           TOKEN=$(./bin/shpyrd cluster token --context kind-ci | tail -1)
@@ -281,6 +422,7 @@ jobs:
           done
           grep -q "Hello from a workspace package" /tmp/monorepo.html
       - name: Scale, logs, volumes, roles
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           ./bin/shpyrd scale web=2 --project hello-world --context kind-ci
@@ -318,6 +460,11 @@ jobs:
           kubectl --context kind-ci -n shpyrd-system logs deployment/shpyrd-server --tail=200 || true
           kubectl --context kind-ci get apps.shpyrd.io -A -o yaml || true
           kubectl --context kind-ci get events -A --sort-by=.lastTimestamp | tail -60 || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,pooler,database,databaserole,job,cronjob,objectbucket -o wide 2>/dev/null || true
+          kubectl --context kind-ci get postgres -A -o yaml 2>/dev/null | grep -E "name:|type:|phase:|message:|convert" || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=convert --all-containers --tail=60 2>/dev/null || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs -l shpyrd.io/shared-postgres=dump --all-containers --tail=20 2>/dev/null || true
+          kubectl --context kind-ci -n cnpg-system logs deployment/cnpg-cloudnative-pg --tail=80 2>/dev/null | grep -v "level=debug" || true
 
   ci:
     name: CI

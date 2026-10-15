@@ -39,6 +39,18 @@ type archivedDatabase struct {
 	Name string                `json:"name"`
 	Spec shpyrdv1.PostgresSpec `json:"spec"`
 }
+
+// carried says whether the archive holds the database's data: a dedicated
+// database's dump is in it; a shared database's data lives on the
+// platform's server and stays there (storage plan, step 3), so the archive
+// carries its spec only and a restore recreates it empty.
+func (d archivedDatabase) carried() bool { return d.Spec.Type != shpyrdv1.PostgresTypeShared }
+
+// sharedArchiveNote is what the report says about a shared database.
+func sharedArchiveNote(name string) string {
+	return fmt.Sprintf("database %s is shared: its data lives on the platform's server and is not in this archive; a restore recreates it empty, and its copies are restored with shpyrd pg restore", name)
+}
+
 type projectArchiveMetadata struct {
 	CreatedAt     time.Time                     `json:"createdAt"`
 	Name          string                        `json:"name"`
@@ -241,6 +253,12 @@ func validateProjectArchive(ctx context.Context, b *projectarchive.Bundle) (*pro
 		}
 	}
 	for _, pg := range m.Databases {
+		if !pg.carried() {
+			if !project.ValidSlug(pg.Name) {
+				return nil, errors.New("invalid database inventory")
+			}
+			continue
+		}
 		name := "databases/" + pg.Name + ".dump"
 		if !project.ValidSlug(pg.Name) || names[name] {
 			return nil, errors.New("invalid database inventory")

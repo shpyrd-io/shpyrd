@@ -1,6 +1,7 @@
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { ProjectArchiveStatus } from "@shpyrd/shared/api/project-archives";
 import type {
+  ConvertInfo,
   Access,
   AllowEntry,
   APIToken,
@@ -138,6 +139,9 @@ export type Api = {
   // Another size of its kind's list for a Postgres or a Redis; the note
   // says what follows.
   resizeResource: (slug: string, kind: string, name: string, size: string) => Promise<ResourceInfo>;
+  // A database moved between the shared server and a cluster of its own,
+  // under its name; the note says what follows.
+  convertPostgres: (slug: string, name: string, body: { to: "shared" | "dedicated"; size?: string; storage?: string }) => Promise<ConvertInfo>;
   removeResource: (slug: string, kind: string, name: string, force?: boolean) => Promise<void>;
   attach: (slug: string, body: { kind: string; name: string; prefix?: string }) => Promise<void>;
   detach: (slug: string, kind: string, name: string) => Promise<void>;

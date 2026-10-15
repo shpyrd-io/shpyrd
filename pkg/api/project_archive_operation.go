@@ -285,6 +285,11 @@ func (s *Server) drainProjectArchive(ctx context.Context, app *shpyrdv1.App, op 
 
 func (s *Server) fenceArchiveDatabases(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, databases []archivedDatabase) error {
 	for _, pg := range databases {
+		if !pg.carried() {
+			// On the platform's server, with no pod of its own here: nothing
+			// to fence, nothing the operation moves or copies.
+			continue
+		}
 		if err := s.setDatabaseMaintenance(ctx, app.Namespace, pg.Name, op.ID); err != nil {
 			return err
 		}

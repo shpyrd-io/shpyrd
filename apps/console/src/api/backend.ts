@@ -61,6 +61,17 @@ export const backend: Api = {
   registry: () => request("/api/cluster/registry"),
   registryGC: () => request("/api/cluster/registry/gc", { method: "POST" }),
   objectStorage: () => request("/api/cluster/object-storage"),
+  postgresServers: () => request("/api/cluster/postgres-servers"),
+  postgresTenants: (server, query) => {
+    const p = new URLSearchParams();
+    if (query.page) p.set("page", String(query.page));
+    if (query.size) p.set("size", String(query.size));
+    if (query.state) p.set("state", query.state);
+    if (query.q) p.set("q", query.q);
+    const qs = p.toString();
+    return request(`/api/cluster/postgres-servers/${encodeURIComponent(server)}/databases${qs ? `?${qs}` : ""}`);
+  },
+  findPostgresTenants: (q) => request(`/api/cluster/postgres-databases?q=${encodeURIComponent(q)}`),
   backups: () => request("/api/cluster/backups"),
   runBackup: () => request("/api/cluster/backups", { method: "POST" }),
   license: () => request("/api/cluster/license"),

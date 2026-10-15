@@ -41,10 +41,13 @@ type BackupView struct {
 }
 
 // BackupsView is a database's backups: the policy (nil when off), the
-// window that can be restored and the base backups, newest first.
+// window that can be restored and the base backups, newest first. A
+// shared database has no policy: Dumps says how the platform backs it up
+// and the entries are its dumps.
 type BackupsView struct {
 	Name            string                    `json:"name"`
 	Policy          *shpyrdv1.PostgresBackups `json:"policy"`
+	Dumps           *DumpsView                `json:"dumps,omitempty"`
 	LastBackup      *metav1.Time              `json:"lastBackup,omitempty"`
 	RecoverableFrom *metav1.Time              `json:"recoverableFrom,omitempty"`
 	Backups         []BackupView              `json:"backups"`
@@ -106,6 +109,10 @@ func (s *Server) backupsOf(ctx context.Context, pg *shpyrdv1.Postgres) ([]Backup
 }
 
 func (s *Server) backupsView(c *gin.Context, pg *shpyrdv1.Postgres) {
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.sharedBackupsView(c, pg)
+		return
+	}
 	backups, err := s.backupsOf(c.Request.Context(), pg)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
@@ -133,6 +140,9 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 		}
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return setSharedDumpsRetention(pg, req)
+		}
 		next := shpyrdv1.PostgresBackups{}
 		if pg.Spec.Backups != nil {
 			next = *pg.Spec.Backups
@@ -152,6 +162,11 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.audit(c, c.Param("slug"), "postgres.backups", pg.Name, fmt.Sprintf("%d copies kept", controller.SharedDumpsKeep(pg)))
+		s.backupsView(c, pg)
+		return
+	}
 	s.audit(c, c.Param("slug"), "postgres.backups", pg.Name, fmt.Sprintf("on, kept %s, cron %s", firstNonEmpty(pg.Spec.Backups.Retention, "14d"), firstNonEmpty(pg.Spec.Backups.Schedule, "0 2 * * *")))
 	s.backupsView(c, pg)
 }
@@ -160,6 +175,9 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 // stop; the backups taken stay restorable until the database is deleted.
 func (s *Server) deletePostgresBackups(c *gin.Context) {
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return &sharedRefusal{errSharedDumpsNotASetting}
+		}
 		pg.Spec.Backups = nil
 		return nil
 	})
@@ -175,6 +193,10 @@ func (s *Server) deletePostgresBackups(c *gin.Context) {
 func (s *Server) takePostgresBackup(c *gin.Context) {
 	pg, ok := s.postgresOf(c)
 	if !ok {
+		return
+	}
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.takeSharedDump(c, pg)
 		return
 	}
 	if pg.Spec.Backups == nil {
@@ -208,10 +230,12 @@ func (s *Server) takePostgresBackup(c *gin.Context) {
 
 // RestoreRequest is POST .../postgres/:name/restore: a new database As,
 // from the backups of :name, at To (RFC 3339; the latest when empty). Size
-// and Storage default to the source's.
+// and Storage default to the source's. A shared source restores one of
+// its copies, Backup (the newest when empty), never a point in time.
 type RestoreRequest struct {
 	As      string `json:"as" binding:"required"`
 	To      string `json:"to,omitempty"`
+	Backup  string `json:"backup,omitempty"`
 	Size    string `json:"size,omitempty"`
 	Storage string `json:"storage,omitempty"`
 }
@@ -226,6 +250,10 @@ func (s *Server) restorePostgres(c *gin.Context) {
 	}
 	source, ok := s.postgresOf(c)
 	if !ok {
+		return
+	}
+	if source.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.restoreSharedPostgres(c, source, req)
 		return
 	}
 	t, ok := s.resourceType("Postgres")
@@ -285,6 +313,10 @@ func (s *Server) checkRecovery(ctx context.Context, ns, name, from string, to *t
 		return err
 	}
 	switch {
+	case source.Spec.Type == shpyrdv1.PostgresTypeShared && to != nil:
+		return errors.New(errSharedPointInTime)
+	case source.Spec.Type == shpyrdv1.PostgresTypeShared:
+		return nil // one of its copies, checked where the restore is asked
 	case source.Spec.Backups == nil:
 		return fmt.Errorf("the database %q has no backups to restore from: turn its backups on first", from)
 	case source.Status.LastBackup == nil:

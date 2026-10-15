@@ -38,10 +38,15 @@ func (extension) Components() []ext.ComponentRef {
 func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	r := &controller.PostgresReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: deps.SystemNamespace, Storage: controller.StorageProfile{Class: install.DatabaseStorageClass(deps.Var), MinSize: install.DatabaseVolumeMinSize(deps.Var)}, DataPool: install.DataPool(deps.Var)}
 	r.SleepAllowed = deps.SleepAllowed
+	r.Shared = controller.SharedPostgres{Instances: install.SharedPostgresInstances(deps.Var), DatabasesPerServer: install.SharedPostgresPerServer(deps.Var)}
+	r.ServerImage = deps.Var(install.VarServerImage)
 	if deps.Store != nil {
 		r.WorkspaceSleepDefault = workspaceSleepDefault(mgr.GetClient(), deps.Store)
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	if err := (&controller.SharedTenantSweep{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		return err
 	}
 	controller.RegisterBinder("Postgres", controller.PostgresBinder{})

@@ -66,13 +66,11 @@ rules:
     resources: [deployments/scale]
     verbs: [get, update, patch]
   # Dockerfile builds run as Jobs in the project namespace; platform
-  # backups are Jobs of the platform-backup CronJob (RFC-0037).
+  # backups are Jobs of the platform-backup CronJob (RFC-0037); a shared
+  # Postgres server's nightly dumps are a CronJob of its own.
   - apiGroups: [batch]
-    resources: [jobs]
+    resources: [jobs, cronjobs]
     verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [batch]
-    resources: [cronjobs]
-    verbs: [get, list, watch]
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -86,8 +84,10 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # The membership controller mirrors project roles into RBAC (RFC-0008);
   # it may only bind the shpyrd roles below.
+  # Roles: a shared Postgres server's pod reads its tenants' password
+  # Secrets (CloudNativePG applies a DatabaseRole from the instance).
   - apiGroups: [rbac.authorization.k8s.io]
-    resources: [rolebindings, clusterrolebindings]
+    resources: [roles, rolebindings, clusterrolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]
@@ -101,8 +101,9 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # Postgres resources become CloudNativePG clusters (extension postgres);
   # their backups go through the Barman Cloud plugin's ObjectStore (RFC-0038).
+  # A shared database is a Database and a DatabaseRole on a platform server.
   - apiGroups: [postgresql.cnpg.io]
-    resources: [clusters, poolers, backups, scheduledbackups]
+    resources: [clusters, poolers, backups, scheduledbackups, databases, databaseroles]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [barmancloud.cnpg.io]
     resources: [objectstores]

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Link2, Minus, Plus, Trash2, Undo2, Unlink2 } from "lucide-react";
+import { ArrowLeftRight, Camera, Link2, Minus, Plus, Trash2, Undo2, Unlink2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
@@ -12,12 +12,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Field } from "@shpyrd/ui/components/field";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Input } from "@shpyrd/ui/components/input";
+import { ProgressBar } from "@shpyrd/ui/components/progress-bar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
-import type { InstanceSize, Project, ResourceInfo, SizeCatalog, SnapshotInfo, VolumeInfo } from "@/api/types";
+import type { InstanceSize, Project, PublicConfig, ResourceInfo, SizeCatalog, SnapshotInfo, VolumeInfo } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import { ago } from "@/lib/project";
 import { busy } from "./heading";
@@ -182,11 +183,23 @@ const prefixOf = (kind: string) => (kind === "Postgres" ? "DATABASE" : kind === 
 
 // What the details of a resource say, in one line; a database's or a
 // store's address goes on a line of its own, beside it.
-function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
+export function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
   const d = r.details ?? {};
   if (r.kind === "App") return [d.release, d.build, r.endpoint?.replace(/^https:\/\//, "")].filter(Boolean).join(" · ");
   if (r.kind === "Volume") return [d.capacity && d.capacity !== d.size ? `${d.capacity} → ${d.size}` : d.size, d.mode, volume?.restoredFrom && `restored from ${volume.restoredFrom}`].filter(Boolean).join(" · ");
+  if (r.kind === "Postgres" && d.type === "shared")
+    return [
+      "shared",
+      d.version && `PostgreSQL ${d.version}`,
+      d.pooler === "on" && "via the pooler",
+      d.backups && `${d.backups.replace(/^nightly, kept (\d+)$/, "$1 nightly copies")}${d.lastBackup ? `, last ${ago(d.lastBackup)}` : ", none yet"}`,
+      d.restoredFrom && `restored from ${d.restoredFrom}`,
+      d.converted,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   return [
+    r.kind === "Postgres" && (d.type === "dedicated" || !d.type) && "dedicated",
     d.engine,
     d.version && `v${d.version}`,
     d.size,
@@ -199,6 +212,28 @@ function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
     .filter(Boolean)
     .join(" · ");
 }
+
+// A shared database's cap: what it holds over what it may, a thin bar
+// with its words.
+function CapGauge({ d }: { d: Record<string, string> }) {
+  const used = Number(d.usedBytes ?? 0);
+  const cap = Number(d.capBytes ?? 0);
+  if (!cap) return null;
+  const pct = Math.round((used / cap) * 100);
+  return <ProgressBar inline size="sm" label={`${sizeOf(used)} of ${sizeOf(cap)} · ${pct}%`} value={Math.min(pct, 100)} tone={pct >= 150 ? "error" : pct >= 80 ? "warning" : "orange"} className="mt-1 w-auto [&>span:last-child]:w-16" />;
+}
+
+// "312 MiB", "1.5 GiB".
+function sizeOf(n: number) {
+  if (n <= 0) return "nothing";
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(n % (1 << 30) === 0 ? 0 : 1)} GiB`;
+  if (n >= 1 << 20) return `${Math.round(n / (1 << 20))} MiB`;
+  return `${Math.round(n / 1024)} KiB`;
+}
+
+// The kind of a database: shared on the platform's server, or a cluster
+// of its own.
+export const kindOf = (r: ResourceInfo) => (r.details?.type === "shared" ? "shared" : "dedicated");
 
 // Databases, caches and volumes of the project: made here, attached to
 // the app, and what happens to their data.
@@ -262,6 +297,8 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
               {list.map((r) => {
                 const volume = r.kind === "Volume" ? volumeOf(r.name) : undefined;
                 const settled = /Bound|Running|Ready/.test(r.phase);
+                // A shared database over its cap says so while Ready.
+                const paused = settled && r.kind === "Postgres" && !!r.message && /paused/i.test(r.message);
                 return (
                   <TableRow key={`${r.kind}/${r.name}`}>
                     <TableCell>{r.kind}</TableCell>
@@ -269,13 +306,14 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                       <InlineCode>{r.name}</InlineCode>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge type={settled ? "success" : /Fail/.test(r.phase) ? "error" : "warning"} live={/Pending|Restoring|Building/.test(r.phase)}>
-                        {r.phase}
+                      <StatusBadge type={paused ? "warning" : settled ? "success" : /Fail/.test(r.phase) ? "error" : "warning"} live={/Pending|Restoring|Building|Converting/.test(r.phase)}>
+                        {paused ? "Paused" : r.phase}
                       </StatusBadge>
-                      {r.message && !settled && <div className="mt-1 max-w-64 text-[11px] text-muted-foreground">{r.message}</div>}
+                      {r.message && (!settled || paused) && <div className="mt-1 w-48 text-[11px] whitespace-normal text-muted-foreground">{r.message}</div>}
                     </TableCell>
                     <TableCell className="max-w-72 font-mono text-xs whitespace-normal text-muted-foreground">
                       {detailsOf(r, volume)}
+                      {r.kind === "Postgres" && r.details?.type === "shared" && <CapGauge d={r.details} />}
                       {r.kind !== "Volume" && r.endpoint && (
                         <div className="truncate" title={r.endpoint}>
                           {r.endpoint}
@@ -302,7 +340,8 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                             </>
                           ) : (
                             <>
-                              {(r.kind === "Postgres" || r.kind === "Redis") && <SizeDialog slug={project.slug} resource={r} onDone={refresh} />}
+                              {(r.kind === "Redis" || (r.kind === "Postgres" && kindOf(r) === "dedicated")) && <SizeDialog slug={project.slug} resource={r} onDone={refresh} />}
+                              {r.kind === "Postgres" && settled && <ConvertDialog slug={project.slug} resource={r} config={config.data} onDone={refresh} />}
                               {r.bindable &&
                                 (attached(r) ? (
                                   <Button variant="outline" size="xs" icon={<Unlink2 />} disabled={detach.isPending} onClick={() => detach.mutate(r)}>
@@ -470,10 +509,18 @@ function SizeOption({ size }: { size: InstanceSize }) {
 }
 
 // A Postgres or a Redis, with the few things that matter.
-function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "Postgres" | "Redis"; onDone: () => void; onClose: () => void }) {
+export function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "Postgres" | "Redis"; onDone: () => void; onClose: () => void }) {
   const catalog = useQuery({ queryKey: ["sizes"], queryFn: api.sizes, staleTime: 60_000 });
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   const objectStorage = config.data?.extensions.includes("object-storage") ?? false;
+  // The kinds of database the plan allows: one, or a choice.
+  const rules = config.data?.postgres;
+  const kinds = rules?.types?.length ? rules.types : (["dedicated"] as const);
+  const [pickedType, setPickedType] = useState<"shared" | "dedicated">();
+  const type = kind === "Postgres" ? (pickedType ?? rules?.defaultType ?? kinds[0]) : "dedicated";
+  const shared = kind === "Postgres" && type === "shared";
+  const cap = rules?.sharedCap ?? "1Gi";
+  const [copies, setCopies] = useState("7");
   const list = sizesOf(catalog.data, kind);
   const [name, setName] = useState(kind === "Postgres" ? "db" : "cache");
   const [picked, setPicked] = useState<string>();
@@ -487,13 +534,18 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
   const save = useMutation({
     mutationFn: () => {
       const spec: Record<string, unknown> = {};
-      if (size) spec.size = size;
-      if (kind === "Postgres") {
+      if (shared) {
+        spec.type = "shared";
+        if (copies !== "7") spec.backups = { retention: `${copies}d` };
+      } else if (kind === "Postgres") {
+        spec.type = "dedicated";
+        if (size) spec.size = size;
         spec.version = version;
         spec.storage = storage.trim();
         spec.instances = Number(instances) || 1;
         if (backups !== "off") spec.backups = { retention: `${backups}d` };
       } else {
+        if (size) spec.size = size;
         spec.engine = engine;
         spec.persistent = persistent;
         if (persistent) spec.storage = storage.trim();
@@ -513,9 +565,19 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
         <DialogHeader divider>
           <DialogTitle>{kind === "Postgres" ? "New Postgres database" : "New Redis-compatible store"}</DialogTitle>
           <DialogDescription>
-            {kind === "Postgres" ? "A PostgreSQL cluster in the project, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars." : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
+            {kind === "Postgres"
+              ? shared
+                ? `A database on the platform's shared server: always on, holds up to ${humanCap(cap)}, PostgreSQL 17, a nightly copy kept. Attached, it puts DATABASE_URL and friends in the config vars.`
+                : "A PostgreSQL cluster of the project's own, with a disk, run by CloudNativePG. Attached, it puts DATABASE_URL and friends in the config vars."
+              : "Valkey or Redis in the project. A cache loses its data on restart; a persistent store keeps a file on a volume. Attached, it puts REDIS_URL and friends in the config vars."}
           </DialogDescription>
         </DialogHeader>
+        {/* The form waits for the config: a select whose items change
+            under it (the plan's kinds, backups needing an extension) loses
+            its value in Radix. */}
+        {!config.data ? (
+          <Loading rows={3} />
+        ) : (
         <form
           className="grid gap-4"
           onSubmit={(e) => {
@@ -527,22 +589,63 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
             <Field label="Name">
               <Input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus />
             </Field>
-            <Field label="Instance size">
-              <Select value={size} onValueChange={setPicked} disabled={!list}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="size" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(list?.sizes ?? []).map((s) => (
-                    <SelectItem key={s.name} value={s.name}>
-                      <SizeOption size={s} />
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
+            {kind === "Postgres" && (
+              <Field label="Kind" hint={kinds.length === 1 ? `The workspace's plan has ${kinds[0]} databases.` : undefined}>
+                <Select value={type} onValueChange={(v) => setPickedType(v as "shared" | "dedicated")} disabled={kinds.length === 1}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {kinds.map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {k === "shared" ? `Shared · on the platform's server, up to ${humanCap(cap)}` : "Dedicated · a cluster of its own, with a disk"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            {!shared && (
+              <Field label="Instance size">
+                <Select value={size} onValueChange={setPicked} disabled={!list}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="size" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(list?.sizes ?? []).map((s) => (
+                      <SelectItem key={s.name} value={s.name}>
+                        <SizeOption size={s} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
           </div>
-          {kind === "Postgres" ? (
+          {shared ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                No size, version or disk to choose: the server is PostgreSQL 17 with two instances, and the cap of {humanCap(cap)} is what the database is metered by. pgvector is installed; PostgreSQL's trusted extensions are yours to create. At 80 % of the cap the status warns; at 150 % connections pause until it is back under 95 %.
+              </p>
+              <Field label="Copies kept" hint="A copy is taken every night; the newest ones stay. Any of them restores into a new database.">
+                {/* Keyed: React would otherwise reuse this Select for the
+                    Backups one of the other kind, and Radix reads the value
+                    of the swapped items as empty. */}
+                <Select key="copies" value={copies} onValueChange={setCopies}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["7", "14", "30"].map((d) => (
+                      <SelectItem key={d} value={d}>
+                        {d} nights
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </>
+          ) : kind === "Postgres" ? (
             <>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="PostgreSQL">
@@ -576,15 +679,22 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
                 </Field>
               </div>
               <Field label="Backups" hint={objectStorage ? "Continuous archiving and a daily base backup to the platform's object store; any point in the window can be restored into a new database." : "Needs the object-storage extension."}>
-                <Select value={backups} onValueChange={setBackups}>
+                <Select key="backups" value={backups} onValueChange={setBackups}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="off">Off</SelectItem>
-                    {["7", "14", "30"].map((d) => (
-                      <SelectItem key={d} value={d} disabled={!objectStorage}>
-                        Daily, kept {d} days
+                    {/* One array of items: a Radix Select whose children
+                        mix an element and an array reads its value as
+                        empty when the native select fires first. */}
+                    {[
+                      ["off", "Off", false],
+                      ["7", "Daily, kept 7 days", !objectStorage],
+                      ["14", "Daily, kept 14 days", !objectStorage],
+                      ["30", "Daily, kept 30 days", !objectStorage],
+                    ].map(([value, words, off]) => (
+                      <SelectItem key={String(value)} value={String(value)} disabled={Boolean(off)}>
+                        {words}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -626,8 +736,106 @@ function ResourceDialog({ slug, kind, onDone, onClose }: { slug: string; kind: "
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || !size || save.isPending}>
+            <Button type="submit" disabled={!name.trim() || (!shared && !size) || save.isPending}>
               Make it
+            </Button>
+          </DialogFooter>
+        </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// "1 GB" for 1Gi: the cap in words.
+export function humanCap(q: string) {
+  const m = /^(\d+(?:\.\d+)?)(Gi|Mi|G|M)?$/.exec(q.trim());
+  if (!m) return q;
+  const n = Number(m[1]);
+  return m[2]?.startsWith("M") ? `${n} MB` : `${n} GB`;
+}
+
+// A database moved between the shared server and a cluster of its own,
+// under its name. The words say what follows before anything moves;
+// the server's own words come back with the answer.
+export function ConvertDialog({ slug, resource, config, onDone }: { slug: string; resource: ResourceInfo; config?: PublicConfig; onDone: () => void }) {
+  const catalog = useQuery({ queryKey: ["sizes"], queryFn: api.sizes, staleTime: 60_000 });
+  const from = kindOf(resource);
+  const to = from === "shared" ? "dedicated" : "shared";
+  const allowed = !config?.postgres?.types?.length || config.postgres.types.includes(to);
+  const cap = config?.postgres?.sharedCap ?? "1Gi";
+  const list = catalog.data?.postgres;
+  const [open, setOpen] = useState(false);
+  const [storage, setStorage] = useState("5Gi");
+  const [picked, setPicked] = useState<string>();
+  const size = picked ?? list?.default ?? "";
+  const convert = useMutation({
+    mutationFn: () => api.convertPostgres(slug, resource.name, to === "dedicated" ? { to, size: size || undefined, storage: storage.trim() || undefined } : { to }),
+    onSuccess: (r) => {
+      toast.success(`Converting ${r.name} to a ${r.to} database`, { description: r.note, duration: 15_000 });
+      setOpen(false);
+      onDone();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  if (!allowed) return null;
+  const words =
+    to === "dedicated"
+      ? [`${resource.name} becomes a cluster of its own with a ${storage || "5Gi"} disk, priced as a dedicated database.`, "Its user and database names stay; DATABASE_URL changes only its host, and the apps bound to it restart once."]
+      : [`${resource.name} moves onto the platform's shared server with a ${humanCap(cap)} cap; its disk goes.`, "It gets new user and database names, so the apps bound to it restart once with the new credentials. Only the extensions a shared database can hold may be installed: PostgreSQL's trusted ones and pgvector."];
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs" icon={<ArrowLeftRight />} title={`Convert to a ${to} database`}>
+          Convert
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>Convert {resource.name} to a {to} database?</DialogTitle>
+          <DialogDescription>Connections pause while the data is copied, a few minutes per gigabyte; a copy of the source stays restorable for seven days. A conversion that cannot land puts the database back as it was and says why.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            convert.mutate();
+          }}
+        >
+          {to === "dedicated" && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Disk">
+                <Input value={storage} onChange={(e) => setStorage(e.target.value)} placeholder="5Gi" className="font-mono text-xs" />
+              </Field>
+              <Field label="Instance size">
+                <Select value={size} onValueChange={setPicked} disabled={!list}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="size" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(list?.sizes ?? []).map((s) => (
+                      <SelectItem key={s.name} value={s.name}>
+                        <SizeOption size={s} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+          )}
+          <ul className="grid list-disc gap-1 pl-4 text-xs text-muted-foreground">
+            {words.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={convert.isPending}>
+              Convert
             </Button>
           </DialogFooter>
         </form>

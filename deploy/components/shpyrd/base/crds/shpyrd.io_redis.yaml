@@ -86,6 +86,20 @@ spec:
               ResourceStatus is the status shape every project resource shares so the
               dashboard renders any of them.
             properties:
+              capOverSince:
+                description: |-
+                  CapOverSince is when a shared database was first measured over its
+                  cap, cleared when it is back under; the read-only nudge applies
+                  after seven days.
+                format: date-time
+                type: string
+              capPercent:
+                description: |-
+                  CapPercent is how full a shared database is against its cap, from the
+                  last measurement (storage plan, step 3); the Cap condition says the
+                  step of the ladder.
+                format: int32
+                type: integer
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

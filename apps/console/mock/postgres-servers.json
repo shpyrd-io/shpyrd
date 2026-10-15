@@ -1,0 +1,104 @@
+{
+  "servers": [
+    {
+      "name": "pg-shared-1",
+      "version": "17",
+      "ready": 2,
+      "instances": 2,
+      "phase": "Cluster in healthy state",
+      "tenants": 200,
+      "limit": 200,
+      "open": false,
+      "disk": {
+        "usedBytes": 61300000000,
+        "sizeBytes": 112500000000
+      },
+      "connections": {
+        "p95": 262,
+        "max": 400
+      },
+      "pooler": {
+        "on": true,
+        "since": "2026-10-12T09:14:00Z",
+        "ready": 2
+      },
+      "archiving": "ok",
+      "lastBaseBackup": "2026-10-15T02:00:00Z",
+      "lastDumps": {
+        "at": "2026-10-15T03:07:00Z",
+        "dumped": 198,
+        "failed": 0,
+        "took": "51s"
+      },
+      "kept": 3,
+      "converting": 1,
+      "createdAt": "2026-10-10T14:02:00Z"
+    },
+    {
+      "name": "pg-shared-2",
+      "version": "17",
+      "ready": 2,
+      "instances": 2,
+      "phase": "Cluster in healthy state",
+      "tenants": 187,
+      "limit": 200,
+      "open": true,
+      "disk": {
+        "usedBytes": 44000000000,
+        "sizeBytes": 53700000000
+      },
+      "connections": {
+        "p95": 148,
+        "max": 400
+      },
+      "pooler": {
+        "on": false
+      },
+      "archiving": "ok",
+      "lastBaseBackup": "2026-10-15T02:00:00Z",
+      "lastDumps": {
+        "at": "2026-10-15T03:14:00Z",
+        "dumped": 186,
+        "failed": 1,
+        "took": "48s"
+      },
+      "kept": 0,
+      "converting": 0,
+      "createdAt": "2026-10-13T18:41:00Z"
+    },
+    {
+      "name": "pg-shared-3",
+      "version": "17",
+      "ready": 1,
+      "instances": 2,
+      "phase": "Waiting for the instances to become active",
+      "tenants": 1,
+      "limit": 200,
+      "open": true,
+      "disk": {
+        "usedBytes": 420000000,
+        "sizeBytes": 53700000000
+      },
+      "connections": {
+        "p95": 0,
+        "max": 400
+      },
+      "pooler": {
+        "on": false
+      },
+      "archiving": "starting",
+      "lastBaseBackup": "",
+      "lastDumps": null,
+      "kept": 0,
+      "converting": 0,
+      "createdAt": "2026-10-15T11:28:00Z"
+    }
+  ],
+  "dedicated": {
+    "clusters": 13,
+    "ready": 12,
+    "diskBytes": 650000000000,
+    "backedUp": 11
+  },
+  "measuredAt": "2026-10-15T13:05:00Z"
+}

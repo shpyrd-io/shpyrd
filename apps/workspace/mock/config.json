@@ -45,5 +45,13 @@
   },
   "capabilities": [
     "workspaces"
-  ]
+  ],
+  "postgres": {
+    "types": [
+      "shared",
+      "dedicated"
+    ],
+    "defaultType": "shared",
+    "sharedCap": "1Gi"
+  }
 }

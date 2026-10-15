@@ -22,6 +22,16 @@ type ResourceStatus struct {
 	// Phase is Pending, Provisioning, Ready or Failed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
+	// CapPercent is how full a shared database is against its cap, from the
+	// last measurement (storage plan, step 3); the Cap condition says the
+	// step of the ladder.
+	// +optional
+	CapPercent *int32 `json:"capPercent,omitempty"`
+	// CapOverSince is when a shared database was first measured over its
+	// cap, cleared when it is back under; the read-only nudge applies
+	// after seven days.
+	// +optional
+	CapOverSince *metav1.Time `json:"capOverSince,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 	// Endpoint is host:port inside the project.
@@ -153,9 +163,13 @@ type PostgresRecovery struct {
 	// restored.
 	From string `json:"from"`
 	// TargetTime is the point in time to recover to; the latest possible
-	// when unset.
+	// when unset. Dedicated databases only.
 	// +optional
 	TargetTime *metav1.Time `json:"targetTime,omitempty"`
+	// Backup is the copy to restore when From is a shared database, named
+	// as its backups are listed; the newest when unset.
+	// +optional
+	Backup string `json:"backup,omitempty"`
 }
 
 // +kubebuilder:object:root=true

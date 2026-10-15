@@ -142,6 +142,10 @@ func (s *Server) buildProjectArchive(ctx context.Context, app *shpyrdv1.App, op 
 		}
 	}
 	for _, pg := range m.Databases {
+		if !pg.carried() {
+			op.warn(sharedArchiveNote(pg.Name))
+			continue
+		}
 		db, err := s.archiveDatabase(ctx, app.Namespace, pg.Name)
 		if err != nil {
 			return "", err

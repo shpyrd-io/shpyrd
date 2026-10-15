@@ -71,7 +71,7 @@ func TestDatabaseCommandsWithATokenAndNoKubeconfig(t *testing.T) {
 		{[]string{"pg", "backups", "enable", "db", "--project", "shop", "--retention", "7d"}, "Backups of db: on, daily at 02:00 UTC, kept 7d", `PUT /api/projects/shop/resources/postgres/db/backups {"retention":"7d"}`},
 		{[]string{"pg", "backups", "list", "db", "--project", "shop"}, "db-20261005-100000", "GET /api/projects/shop/resources/postgres/db/backups"},
 		{[]string{"pg", "backup", "db", "--project", "shop"}, "Backup db-20261005-100000 completed.", "POST /api/projects/shop/resources/postgres/db/backups"},
-		{[]string{"pg", "restore", "db", "--as", "db2", "--to", "2026-10-05T09:00:00Z", "--project", "shop"}, "Database db2 is ready", `POST /api/projects/shop/resources/postgres/db/restore {"as":"db2","size":"","storage":"","to":"2026-10-05T09:00:00Z"}`},
+		{[]string{"pg", "restore", "db", "--as", "db2", "--to", "2026-10-05T09:00:00Z", "--project", "shop"}, "Database db2 is ready", `POST /api/projects/shop/resources/postgres/db/restore {"as":"db2","backup":"","size":"","storage":"","to":"2026-10-05T09:00:00Z"}`},
 		{[]string{"pg", "backups", "disable", "db", "--yes", "--project", "shop"}, "Backups of db are off.", "DELETE /api/projects/shop/resources/postgres/db/backups"},
 		{[]string{"pg", "resize", "db", "shared-m", "--project", "shop"}, "db now has the size shared-m.", `POST /api/projects/shop/resources/Postgres/db/resize {"size":"shared-m"}`},
 		{[]string{"redis", "resize", "cache", "shared-m", "--project", "shop"}, "cache now has the size shared-m.", `POST /api/projects/shop/resources/Redis/cache/resize {"size":"shared-m"}`},

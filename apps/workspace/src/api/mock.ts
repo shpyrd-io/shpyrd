@@ -529,6 +529,24 @@ export const mock: Api = {
   createResource: async (slug, body) => {
     const [all, t] = await ofProject(slug);
     if (t.resources.some((r) => r.kind === body.kind && r.name === body.name)) throw new ApiError(409, `${body.kind} ${body.name} exists`);
+    if (body.kind === "Postgres" && body.spec.type === "shared") {
+      const cap = (config as PublicConfig).postgres?.sharedCap ?? "1Gi";
+      const kept = String((body.spec.backups as { retention?: string } | undefined)?.retention ?? "7d").replace(/d$/, "");
+      const r: ResourceInfo = { kind: "Postgres", name: body.name, phase: "Pending", message: "your database is being placed on shared server pg-shared-2", details: { type: "shared", version: "17", storage: cap, used: "0", usedBytes: "0", capBytes: String(1 << 30), pooler: "off", backups: `nightly, kept ${kept}` }, attachedTo: [], data: true, bindable: true, createdAt: now(), note: `Your database can hold up to ${cap.replace(/Gi$/, " GB")}.` };
+      t.resources.push(r);
+      await thingsOf.set(all);
+      setTimeout(async () => {
+        const [all2, t2] = await ofProject(slug);
+        const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === body.name);
+        if (x) {
+          x.phase = "Ready";
+          x.message = "PostgreSQL 17, shared, on pg-shared-2";
+          x.endpoint = `${body.name}.p-${slug}:5432`;
+        }
+        await thingsOf.set(all2);
+      }, 6000);
+      return r;
+    }
     const list = body.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
     const size = list.sizes.find((x) => x.name === (body.spec.size || list.default));
     if (!size) throw new ApiError(400, `unknown size "${body.spec.size}" for a ${body.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`);
@@ -556,6 +574,49 @@ export const mock: Api = {
     await thingsOf.set(all);
     const restart = r.kind === "Redis" ? "It restarts with it: a cache comes back empty, a persistent store reloads its file." : "Its instances restart with it, one at a time; with one instance the database is unavailable for a moment.";
     return { ...r, note: `${name} now has the size ${size}: ${s.cpu} CPU, ${s.memory} of memory, ${s.connections} connections. ${restart}` };
+  },
+  convertPostgres: async (slug, name, body) => {
+    await wait();
+    const [all, t] = await ofProject(slug);
+    const r = t.resources.find((x) => x.kind === "Postgres" && x.name === name);
+    if (!r) throw new ApiError(404, `no database named ${name}`);
+    const from = r.details?.type === "shared" ? "shared" : "dedicated";
+    if (from === body.to) throw new ApiError(409, `${name} is a ${from} database already.`);
+    if (r.phase !== "Ready" && r.phase !== "Running") throw new ApiError(409, `${name} is ${r.phase.toLowerCase()}; convert it once it is ready.`);
+    const cap = (config as PublicConfig).postgres?.sharedCap ?? "1Gi";
+    const note =
+      body.to === "dedicated"
+        ? `${name} becomes a cluster of its own with a ${body.storage ?? "5Gi"} disk, priced as a dedicated database; its user and database names stay; DATABASE_URL changes only its host, and the apps bound to it restart once; connections pause while the data is copied (a few minutes per gigabyte), and a copy of the source stays restorable for seven days.`
+        : `${name} moves onto the platform's shared server with a ${cap} cap; its disk goes; it gets new user and database names, so the apps bound to it restart once with the new credentials; only the extensions a shared database can hold may be installed (PostgreSQL's trusted ones and pgvector); connections pause while the data is copied (a few minutes per gigabyte), and a copy of the source stays restorable for seven days.`;
+    r.phase = "Converting";
+    r.message = `Converting to a ${body.to} database: preparing (step 1 of 3)`;
+    await thingsOf.set(all);
+    const steps = ["waiting for the new cluster (step 1 of 3)", "copying the data (step 2 of 3); connections are paused meanwhile", "switching the credentials over (step 3 of 3)"];
+    steps.forEach((words, i) =>
+      setTimeout(async () => {
+        const [all2, t2] = await ofProject(slug);
+        const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === name);
+        if (x) x.message = `Converting to a ${body.to} database: ${words}`;
+        await thingsOf.set(all2);
+      }, 3000 * (i + 1)),
+    );
+    setTimeout(async () => {
+      const [all2, t2] = await ofProject(slug);
+      const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === name);
+      if (!x) return;
+      x.phase = "Ready";
+      if (body.to === "dedicated") {
+        x.details = { type: "dedicated", version: x.details?.version ?? "17", size: body.size ?? all2.sizes.postgres.default, storage: body.storage ?? "5Gi", instances: "1" };
+        x.message = `PostgreSQL ${x.details.version}, 1/1 instance(s) ready`;
+        x.endpoint = `${name}-rw.p-${slug}:5432`;
+      } else {
+        x.details = { type: "shared", version: "17", storage: cap, used: "0", usedBytes: "0", capBytes: String(1 << 30), pooler: "off", backups: "nightly, kept 7" };
+        x.message = "PostgreSQL 17, shared, on pg-shared-2";
+        x.endpoint = `${name}.p-${slug}:5432`;
+      }
+      await thingsOf.set(all2);
+    }, 13000);
+    return { name, from, to: body.to, note };
   },
   removeResource: async (slug, kind, name, force) => {
     const [all, t] = await ofProject(slug);

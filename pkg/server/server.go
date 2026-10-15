@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
@@ -107,6 +108,45 @@ func Main(opts Options) {
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 		if err := runSnapshots(logger); err != nil {
 			logger.Error("disk snapshots failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server dumps`: one night of a shared Postgres server's dumps,
+	// then exit (storage plan, step 3).
+	if len(os.Args) > 1 && os.Args[1] == "dumps" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runDumps(logger); err != nil {
+			logger.Error("dumps failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server restore-dump`: one copy of a shared database loaded
+	// into another, then exit.
+	if len(os.Args) > 1 && os.Args[1] == "restore-dump" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runRestoreDump(logger); err != nil {
+			logger.Error("restore failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server convert-db`: one database's rows moved between a
+	// dedicated cluster and a shared server, then exit.
+	if len(os.Args) > 1 && os.Args[1] == "convert-db" {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := runConvertDB(logger); err != nil {
+			logger.Error("conversion failed", "err", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+	// `shpyrd-server copy-self DIR`: this binary into DIR, for a pod of
+	// another image.
+	if len(os.Args) > 2 && os.Args[1] == "copy-self" {
+		if err := copySelf(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
@@ -422,7 +462,16 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	// control plane that answers slowly for half a minute must not cost the
 	// lease, since losing it stops every controller.
 	lease, renew, retry := 60*time.Second, 40*time.Second, 5*time.Second
-	mgr, err := ctrl.NewManager(k.Config, ctrl.Options{
+	// The controllers' request budget. client-go's default (20 a second,
+	// 30 in a burst) throttled the Postgres controller on dev with 400
+	// shared databases: the metering loop's status writes every five
+	// minutes bring 400 reconciles of ten calls each, and every reconcile
+	// waited ten seconds at the client ("Waited before sending request")
+	// while the API server idled. The server's priority and fairness is
+	// what protects it, not this client.
+	mgrConfig := rest.CopyConfig(k.Config)
+	mgrConfig.QPS, mgrConfig.Burst = 200, 400
+	mgr, err := ctrl.NewManager(mgrConfig, ctrl.Options{
 		Scheme:                        scheme,
 		Metrics:                       metricsserver.Options{BindAddress: o.metricsAddr},
 		HealthProbeBindAddress:        "0",
