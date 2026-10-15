@@ -324,7 +324,6 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 const (
 	errSharedAlwaysOn           = "Shared databases are always on."
 	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
-	errRotateDedicatedLater     = "Rotating the credentials of a dedicated database is not available yet; a shared database's are rotated by the platform."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.
@@ -746,14 +745,15 @@ func (s *Server) patchPostgresSleep(c *gin.Context) {
 // suspendPostgres hibernates a database now with no wake on connect;
 // resumePostgres brings it back. Both are POSTs without a body.
 // rotatePostgres is POST .../postgres/:name/rotate: new credentials for a
-// database. On a shared one the controller writes a new password to the
-// role's Secret and the project's, and the apps bound to it restart with
-// it. A dedicated database's credentials are CloudNativePG's; not yet.
+// database. The controller writes a new password where the database's
+// credentials live (a shared database's role Secret and the project's; a
+// dedicated database's CloudNativePG Secret, which the operator applies to
+// the role) and the apps bound to it restart with it.
 func (s *Server) rotatePostgres(c *gin.Context) {
 	stamp := time.Now().UTC().Format(time.RFC3339)
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
-		if pg.Spec.Type != shpyrdv1.PostgresTypeShared {
-			return &sharedRefusal{errRotateDedicatedLater}
+		if pg.Status.Phase != shpyrdv1.ResourceReady {
+			return &sharedRefusal{"The database is not ready yet; rotate its credentials once it is."}
 		}
 		if pg.Annotations == nil {
 			pg.Annotations = map[string]string{}

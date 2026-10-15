@@ -417,6 +417,9 @@ func (r *PostgresReconciler) reconcile(ctx context.Context, pg *shpyrdv1.Postgre
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionFalse, "ClusterFailed", pg.Status.Message)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	case ready >= 1 && secretExists:
+		if err := r.rotateDedicated(ctx, pg); err != nil {
+			return ctrl.Result{}, err
+		}
 		pg.Status.Phase = shpyrdv1.ResourceReady
 		pg.Status.Message = fmt.Sprintf("PostgreSQL %s, %d/%d instance(s) ready", version(pg), ready, instances(pg))
 		setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Ready", pg.Status.Message)

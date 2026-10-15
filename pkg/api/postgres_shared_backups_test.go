@@ -182,9 +182,10 @@ func TestSharedPostgresRestoreNeedsACopy(t *testing.T) {
 // stamp; a dedicated one is refused in words.
 func TestRotatePostgresAsksTheController(t *testing.T) {
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {}}}}
-	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}}
-	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "big", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
-	s, cr := newTestServer(t, nil, []client.Object{app, shared, dedicated})
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "big", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	pending := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "new", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
+	s, cr := newTestServer(t, nil, []client.Object{app, shared, dedicated, pending})
 	s.opts.Extensions = all.All()
 	rec := do(t, s, "POST", "/api/projects/shop/resources/postgres/db/rotate", "", true)
 	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "restart with them within a minute") {
@@ -194,7 +195,14 @@ func TestRotatePostgresAsksTheController(t *testing.T) {
 		t.Errorf("the stamp: %v %v", err, shared.Annotations)
 	}
 	rec = do(t, s, "POST", "/api/projects/shop/resources/postgres/big/rotate", "", true)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not available yet") {
+	if rec.Code != http.StatusAccepted {
 		t.Errorf("rotate dedicated = %d %s", rec.Code, rec.Body.String())
+	}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "big"}, dedicated); err != nil || dedicated.Annotations[controller.AnnotationRotate] == "" {
+		t.Errorf("the dedicated stamp: %v %v", err, dedicated.Annotations)
+	}
+	rec = do(t, s, "POST", "/api/projects/shop/resources/postgres/new/rotate", "", true)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not ready yet") {
+		t.Errorf("rotate a database not ready = %d %s", rec.Code, rec.Body.String())
 	}
 }

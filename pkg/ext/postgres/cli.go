@@ -270,7 +270,7 @@ func newRotateCmd(g ext.CLIGlobals) *cobra.Command {
 		Short: "Give a database new credentials (the apps bound to it restart)",
 		Long: `Writes a new password for the database's role and into the project's
 credentials; the apps bound to the database are re-rendered and restart
-with it within a minute. Shared databases today.`,
+with it within a minute.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var out struct {
