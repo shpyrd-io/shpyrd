@@ -197,10 +197,17 @@ func (r *PostgresReconciler) reconcileShared(ctx context.Context, pg *shpyrdv1.P
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	nudged, err := r.reconcileSharedNudge(ctx, pg, hash, server.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	pg.Status.Phase = shpyrdv1.ResourceReady
 	pg.Status.Message = fmt.Sprintf("PostgreSQL %s, shared, on %s", defaultPostgresVersion, server.GetName())
-	if fenced {
+	switch {
+	case fenced:
 		pg.Status.Message = fmt.Sprintf("Connections are paused: your database is at %d%% of its %s cap. Free space, or raise the limit; connections return below 95%%.", ptr.Deref(pg.Status.CapPercent, 0), capText(pg))
+	case nudged:
+		pg.Status.Message = fmt.Sprintf("Writes are paused because the database is over its %s limit. Free space, or raise the limit.", capText(pg))
 	}
 	setResourceCondition(&pg.Status, pg.Generation, metav1.ConditionTrue, "Ready", pg.Status.Message)
 	return ctrl.Result{}, nil
@@ -284,7 +291,7 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 		return ctrl.Result{}, err
 	}
 	policy := metav1.DeletePropagationBackground
-	for _, job := range []string{sharedGrantsJob(hash), sharedFenceJob(hash)} {
+	for _, job := range []string{sharedGrantsJob(hash), sharedFenceJob(hash), sharedNudgeJob(hash), sharedUnnudgeJob(hash)} {
 		if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: job, Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
@@ -671,4 +678,83 @@ func (r *PostgresReconciler) desiredSharedSQLJob(pg *shpyrdv1.Postgres, hash, se
 			},
 		},
 	}
+}
+
+// The nudge (storage plan, step 3): seven days over the cap, the owner's
+// sessions default to read-only. That is a session default the tenant can
+// override, so it is advisory and the words say "paused", not "blocked";
+// it lifts as soon as the database is back under its cap. Its state is
+// recorded on the Database object; the SQL runs as the server's superuser.
+const (
+	annotationSharedNudge = "shpyrd.io/nudge"
+	sharedNudgeAfter      = 7 * 24 * time.Hour
+)
+
+func sharedNudgeJob(hash string) string   { return "nudge-" + hash }
+func sharedUnnudgeJob(hash string) string { return "unnudge-" + hash }
+
+// reconcileSharedNudge applies or lifts the nudge and reports whether the
+// database is nudged.
+func (r *PostgresReconciler) reconcileSharedNudge(ctx context.Context, pg *shpyrdv1.Postgres, hash, server string) (bool, error) {
+	db := &unstructured.Unstructured{}
+	db.SetGroupVersionKind(CNPGDatabaseGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedDBObject(hash)}, db); err != nil {
+		return false, err
+	}
+	nudged := db.GetAnnotations()[annotationSharedNudge] == "on"
+	over := pg.Status.CapOverSince != nil
+	longOver := over && time.Since(pg.Status.CapOverSince.Time) >= sharedNudgeAfter
+	role := sharedRoleName(hash)
+	switch {
+	case longOver && !nudged:
+		return r.sharedNudgeStep(ctx, pg, db, hash, server, sharedNudgeJob(hash), sharedUnnudgeJob(hash),
+			fmt.Sprintf("ALTER ROLE %s SET default_transaction_read_only = on;", role), "on")
+	case nudged && !over:
+		done, err := r.sharedNudgeStep(ctx, pg, db, hash, server, sharedUnnudgeJob(hash), sharedNudgeJob(hash),
+			fmt.Sprintf("ALTER ROLE %s RESET default_transaction_read_only;", role), "off")
+		return !done, err
+	}
+	return nudged, nil
+}
+
+// sharedNudgeStep runs one SQL Job and, when it succeeded, records the
+// state on the Database object and removes the opposite Job. It reports
+// whether the state is recorded.
+func (r *PostgresReconciler) sharedNudgeStep(ctx context.Context, pg *shpyrdv1.Postgres, db *unstructured.Unstructured, hash, server, jobName, opposite, sql, state string) (bool, error) {
+	job := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: jobName}, job)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, r.desiredSharedSQLJob(pg, hash, server, jobName, sql)); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if job.Status.Succeeded < 1 {
+		return false, nil
+	}
+	before := db.DeepCopy()
+	ann := db.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[annotationSharedNudge] = state
+	db.SetAnnotations(ann)
+	if err := r.Patch(ctx, db, client.MergeFrom(before)); err != nil {
+		return false, err
+	}
+	policy := metav1.DeletePropagationBackground
+	for _, name := range []string{opposite, jobName} {
+		if err := r.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: SharedPostgresNamespace}}, &client.DeleteOptions{PropagationPolicy: &policy}); client.IgnoreNotFound(err) != nil {
+			return true, err
+		}
+	}
+	if state == "on" {
+		r.Recorder.Event(pg, corev1.EventTypeWarning, "CapNudge", "over its cap for seven days: writes paused")
+	} else {
+		r.Recorder.Event(pg, corev1.EventTypeNormal, "CapNudgeLifted", "back under its cap: writes return")
+	}
+	return true, nil
 }

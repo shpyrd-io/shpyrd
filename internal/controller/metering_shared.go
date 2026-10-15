@@ -89,6 +89,12 @@ func applyCap(st *shpyrdv1.ResourceStatus, generation int64, used int64, cap *re
 	ratio := float64(used) / float64(capBytes)
 	percent := int(ratio*100 + 0.5)
 	st.CapPercent = ptr.To(int32(percent))
+	switch {
+	case ratio >= 1.0 && st.CapOverSince == nil:
+		st.CapOverSince = ptr.To(metav1.NewTime(at))
+	case ratio < 1.0:
+		st.CapOverSince = nil
+	}
 	cond := metav1.Condition{Type: ConditionCap, ObservedGeneration: generation, LastTransitionTime: metav1.NewTime(at)}
 	switch {
 	case ratio >= 1.5:

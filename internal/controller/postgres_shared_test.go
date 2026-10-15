@@ -412,3 +412,83 @@ func TestSharedPostgresFenceFollowsTheCap(t *testing.T) {
 		t.Errorf("released message = %q", pg.Status.Message)
 	}
 }
+
+// Seven days over the cap, the owner's sessions default to read-only; back
+// under, the default is reset. Both run as the superuser and are recorded.
+func TestSharedPostgresNudgeAfterSevenDaysOver(t *testing.T) {
+	ctx := context.Background()
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	r, c := sharedReconciler(t, 200, pg)
+	key := client.ObjectKeyFromObject(pg)
+	settle(t, r, key)
+	server := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	hash := tenantHash(pg.UID)
+	markApplied(t, c, getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash))
+	markApplied(t, c, getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash))
+	settle(t, r, key)
+	succeed := func(name string) {
+		job := &batchv1.Job{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: name}, job); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		job.Status.Succeeded = 1
+		if err := c.Status().Update(ctx, job); err != nil {
+			if err := c.Update(ctx, job); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	succeed("grant-" + hash)
+	settle(t, r, key)
+
+	// Over its cap since eight days, at 120 %.
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	cap := resource.MustParse("1Gi")
+	applyCap(&pg.Status, pg.Generation, int64(float64(cap.Value())*1.2), &cap, time.Now().Add(-8*24*time.Hour))
+	if err := c.Status().Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	nudge := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "nudge-" + hash}, nudge); err != nil || !strings.Contains(strings.Join(nudge.Spec.Template.Spec.Containers[0].Command, " "), "SET default_transaction_read_only = on") {
+		t.Fatalf("the nudge job: %v", err)
+	}
+	succeed("nudge-" + hash)
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pg.Status.Message, "Writes are paused") || getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash).GetAnnotations()[annotationSharedNudge] != "on" {
+		t.Errorf("nudged: %q", pg.Status.Message)
+	}
+
+	// Back under the cap: reset, recorded, the jobs gone.
+	applyCap(&pg.Status, pg.Generation, int64(float64(cap.Value())*0.5), &cap, time.Now())
+	if err := c.Status().Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "unnudge-" + hash}, &batchv1.Job{}); err != nil {
+		t.Fatalf("the reset job: %v", err)
+	}
+	succeed("unnudge-" + hash)
+	settle(t, r, key)
+	if err := c.Get(ctx, key, pg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(pg.Status.Message, "paused") || getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash).GetAnnotations()[annotationSharedNudge] != "off" {
+		t.Errorf("released: %q", pg.Status.Message)
+	}
+	for _, name := range []string{"nudge-" + hash, "unnudge-" + hash} {
+		if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: name}, &batchv1.Job{}); err == nil {
+			t.Errorf("%s must be gone", name)
+		}
+	}
+}

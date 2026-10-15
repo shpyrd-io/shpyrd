@@ -1004,6 +1004,10 @@ func (in *ResourceStatus) DeepCopyInto(out *ResourceStatus) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.CapOverSince != nil {
+		in, out := &in.CapOverSince, &out.CapOverSince
+		*out = (*in).DeepCopy()
+	}
 	if in.LastBackup != nil {
 		in, out := &in.LastBackup, &out.LastBackup
 		*out = (*in).DeepCopy()

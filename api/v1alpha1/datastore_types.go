@@ -27,6 +27,11 @@ type ResourceStatus struct {
 	// step of the ladder.
 	// +optional
 	CapPercent *int32 `json:"capPercent,omitempty"`
+	// CapOverSince is when a shared database was first measured over its
+	// cap, cleared when it is back under; the read-only nudge applies
+	// after seven days.
+	// +optional
+	CapOverSince *metav1.Time `json:"capOverSince,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 	// Endpoint is host:port inside the project.
