@@ -89,6 +89,9 @@ func (s *Server) projectPlacement(ctx context.Context, app *shpyrdv1.App) ([]pla
 		return nil, nil, err
 	}
 	for _, pg := range databases.Items {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			continue // on the platform's server, placed by the platform; nothing of it is in this project
+		}
 		groups = append(groups, placementGroup{PlacementGroup: controller.PlacementGroup{ID: "postgres:" + pg.Name, Processes: []string{}, Volumes: []string{}}, Database: pg.Name, Pool: install.ProjectDataPool(s.vars), Nodes: []string{}})
 	}
 	var pods corev1.PodList

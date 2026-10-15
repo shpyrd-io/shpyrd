@@ -49,3 +49,24 @@ func TestProjectArchiveSkipsSharedDatabases(t *testing.T) {
 		t.Errorf("the note names the way back: %s", sharedArchiveNote("db"))
 	}
 }
+
+// The placement view shows what is placed in the project: a shared
+// database, on the platform's server, is not a group of it.
+func TestProjectPlacementLeavesSharedDatabasesOut(t *testing.T) {
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}}
+	dedicated := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "big", Namespace: "app-shop"}, Spec: shpyrdv1.PostgresSpec{Size: "shared-s"}}
+	s, _ := newTestServer(t, nil, []client.Object{app, shared, dedicated})
+	groups, _, err := s.projectPlacement(context.Background(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, g := range groups {
+		ids = append(ids, g.ID)
+	}
+	joined := strings.Join(ids, " ")
+	if strings.Contains(joined, "postgres:db") || !strings.Contains(joined, "postgres:big") {
+		t.Errorf("groups = %v", ids)
+	}
+}
