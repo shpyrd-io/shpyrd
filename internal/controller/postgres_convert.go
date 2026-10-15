@@ -657,6 +657,15 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 		if err := r.dropDedicatedBackups(ctx, pg); err != nil {
 			return ctrl.Result{}, err
 		}
+		// The extensions object a conversion from shared had put on the
+		// cluster, if this database came that way; it reclaims nothing.
+		ext := &unstructured.Unstructured{}
+		ext.SetGroupVersionKind(CNPGDatabaseGVK)
+		ext.SetNamespace(pg.Namespace)
+		ext.SetName(pg.Name + "-db")
+		if err := r.Delete(ctx, ext); err != nil && !apierrors.IsNotFound(err) && !isNoKind(err) {
+			return ctrl.Result{}, err
+		}
 		if err := r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedConvertSecret(hash), Namespace: SharedPostgresNamespace}}); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}

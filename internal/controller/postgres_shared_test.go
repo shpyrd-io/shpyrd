@@ -1606,4 +1606,15 @@ func TestConvertBackTakesANewHashAndJob(t *testing.T) {
 	if cluster, _, _ := unstructured.NestedString(kept.Object, "spec", "cluster", "name"); cluster != "pg-shared-1" || kept.GetAnnotations()[AnnotationDropAfter] == "" {
 		t.Errorf("the kept side: cluster %s drop-after %q", cluster, kept.GetAnnotations()[AnnotationDropAfter])
 	}
+	// The way back lands: the cluster and the extensions object it had go.
+	finishJob(t, c, key, true)
+	spin(t, r, key, 8)
+	if err := c.Get(ctx, key, pg); err != nil || pg.Spec.Type != shpyrdv1.PostgresTypeShared {
+		t.Fatalf("back to shared: %v %s", err, pg.Spec.Type)
+	}
+	ext := &unstructured.Unstructured{}
+	ext.SetGroupVersionKind(CNPGDatabaseGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db-db"}, ext); err == nil {
+		t.Error("the extensions object of the first conversion goes with the cluster")
+	}
 }
