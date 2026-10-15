@@ -147,7 +147,8 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	dbName, _, _ := unstructured.NestedString(db.Object, "spec", "name")
 	owner, _, _ := unstructured.NestedString(db.Object, "spec", "owner")
 	onServer, _, _ := unstructured.NestedString(db.Object, "spec", "cluster", "name")
-	if roleName != "u_"+hash || limit != 20 || secretRef != "u-"+hash || dbName != "db_"+hash || owner != roleName || onServer != "pg-shared-1" || db.GetLabels()[sharedOfServerLabel] != "pg-shared-1" {
+	roleReclaim, _, _ := unstructured.NestedString(role.Object, "spec", "databaseRoleReclaimPolicy")
+	if roleReclaim != "delete" || roleName != "u_"+hash || limit != 20 || secretRef != "u-"+hash || dbName != "db_"+hash || owner != roleName || onServer != "pg-shared-1" || db.GetLabels()[sharedOfServerLabel] != "pg-shared-1" {
 		t.Errorf("tenant objects: role %s limit %d secret %s; database %s owner %s on %s labels %v", roleName, limit, secretRef, dbName, owner, onServer, db.GetLabels())
 	}
 	roleSecret := &corev1.Secret{}
@@ -302,7 +303,7 @@ func TestSharedDumpJobIsCutFromTheCronJob(t *testing.T) {
 	cj := r.desiredSharedDumpsCronJob("pg-shared-1", nil)
 	cj.UID = "cj-uid"
 	at := time.Date(2026, 10, 14, 10, 15, 0, 0, time.UTC)
-	job := SharedDumpJob(pg, cj, at)
+	job := SharedDumpJob(pg, cj, at, "now")
 	hash := tenantHash(pg.UID)
 	env := map[string]string{}
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
@@ -463,36 +464,52 @@ func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {
 	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
 	r, c := sharedReconciler(t, 200, pg)
 	key := client.ObjectKeyFromObject(pg)
-	settle(t, r, key)
-	s := getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
-	_ = unstructured.SetNestedField(s.Object, int64(2), "status", "readyInstances")
-	if err := c.Update(ctx, s); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, r, key)
+	driveShared(t, r, c, pg)
 	hash := tenantHash(pg.UID)
-	if err := c.Get(ctx, key, pg); err != nil {
-		t.Fatal(err)
-	}
 	if err := c.Delete(ctx, pg); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, r, key)
-	role := &unstructured.Unstructured{}
-	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
-	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}, role); err == nil {
-		t.Error("the role must be gone")
+	// The role stays, fenced: no login, no connections, its sessions ended.
+	role := getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-"+hash)
+	login, _, _ := unstructured.NestedBool(role.Object, "spec", "login")
+	limit, _, _ := unstructured.NestedInt64(role.Object, "spec", "connectionLimit")
+	reclaim, _, _ := unstructured.NestedString(role.Object, "spec", "databaseRoleReclaimPolicy")
+	if login || limit != 0 || reclaim != "delete" {
+		t.Errorf("the role after deletion: login=%v limit=%d reclaim=%s", login, limit, reclaim)
 	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}, &corev1.Secret{}); err == nil {
-		t.Error("the role's secret must be gone")
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-" + hash}, &corev1.Secret{}); err != nil {
+		t.Error("the role's secret stays until the role goes:", err)
+	}
+	fence := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "fence-" + hash + "-final"}, fence); err != nil || !strings.Contains(strings.Join(fence.Spec.Template.Spec.Containers[0].Command, " "), "pg_terminate_backend") {
+		t.Errorf("the final fence job = %v", err)
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "grant-" + hash}, &batchv1.Job{}); err == nil {
 		t.Error("the grants job must be gone")
 	}
+	// A last copy, named on the Database object.
 	db := getU(t, c, "Database", SharedPostgresNamespace, "db-"+hash)
 	policy, _, _ := unstructured.NestedString(db.Object, "spec", "databaseReclaimPolicy")
 	if db.GetAnnotations()[AnnotationDropAfter] == "" || policy != "retain" {
 		t.Errorf("the data stays behind a drop date: %v %s", db.GetAnnotations(), policy)
+	}
+	last := db.GetAnnotations()[annotationSharedLastDump]
+	if !strings.HasSuffix(last, ".last") {
+		t.Errorf("last dump = %q", last)
+	}
+	dumps := &batchv1.JobList{}
+	if err := c.List(ctx, dumps, client.InNamespace(SharedPostgresNamespace), client.MatchingLabels{sharedTenantLabel: string(pg.UID), sharedServerLabel: "dump"}); err != nil || len(dumps.Items) != 1 {
+		t.Fatalf("dump jobs = %v %d", err, len(dumps.Items))
+	}
+	kind := ""
+	for _, e := range dumps.Items[0].Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "SHPYRD_DUMPS_KIND" {
+			kind = e.Value
+		}
+	}
+	if kind != "last" {
+		t.Errorf("the last dump's kind = %q", kind)
 	}
 	if err := c.Get(ctx, key, pg); err == nil {
 		t.Error("the Postgres must be released once its finalizer is done")
@@ -538,8 +555,39 @@ func TestSharedTenantSweepDropsOnTheDate(t *testing.T) {
 	if ensure != "absent" || policy != "delete" {
 		t.Errorf("on the date: ensure=%s policy=%s", ensure, policy)
 	}
+	// Until the operator says the drop is applied, the rest waits.
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
+	role.SetNamespace(SharedPostgresNamespace)
+	role.SetName("u-deadbeef")
+	if err := c.Create(ctx, role); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "u-deadbeef", Namespace: SharedPostgresNamespace}}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil || res.RequeueAfter != time.Minute {
+		t.Errorf("waiting for the drop: %+v %v", res, err)
+	}
+	getU(t, c, "DatabaseRole", SharedPostgresNamespace, "u-deadbeef")
+	_ = unstructured.SetNestedField(u.Object, true, "status", "applied")
+	if err := c.Update(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-deadbeef"}, role); err == nil {
+		t.Error("the role object goes with the data")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "u-deadbeef"}, &corev1.Secret{}); err == nil {
+		t.Error("the role's secret goes with it")
+	}
+	if err := c.Get(ctx, key, u); err == nil {
+		t.Error("the Database object goes last")
+	}
 	if res, err := sweep.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil || res.RequeueAfter != 0 {
-		t.Errorf("done is done: %+v %v", res, err)
+		t.Errorf("gone is gone: %+v %v", res, err)
 	}
 }
 

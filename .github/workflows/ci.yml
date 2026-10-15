@@ -272,9 +272,12 @@ jobs:
           ./bin/shpyrd pg restore shared --as shared2 --project hello-world --context kind-ci
           ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep -q 'from shared'
           kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep -q restore-
-          # Deleting keeps the data seven days behind a drop date.
+          # Deleting fences the role at once, takes a last copy, and keeps the
+          # data seven days behind a drop date.
           ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci
           ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
+          kubectl --context kind-ci -n shpyrd-shared-postgres get databaserole -o jsonpath='{range .items[*]}{.spec.name} login={.spec.login} limit={.spec.connectionLimit}{"\n"}{end}' | grep -q 'login=false limit=0'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/shared-postgres=dump -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].env[?(@.name=="SHPYRD_DUMPS_KIND")].value}{"\n"}{end}' | grep -q '^last$'
           kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
       - name: The projects answer on their URLs
         run: |

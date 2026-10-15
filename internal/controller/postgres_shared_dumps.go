@@ -20,7 +20,6 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
-	"github.com/shpyrd-io/shpyrd/pkg/pgdump"
 )
 
 // Nightly dumps (storage plan, step 3). Every shared server has a dump
@@ -60,9 +59,10 @@ const (
 )
 
 // SharedDumpJob is a dump of one shared database now: a Job cut from its
-// server's CronJob, told the database, that it was asked for, and the
-// moment, which names the copy so whoever asked can follow it by name.
-func SharedDumpJob(pg *shpyrdv1.Postgres, cj *batchv1.CronJob, at time.Time) *batchv1.Job {
+// server's CronJob, told the database, the kind of copy (asked for, or the
+// last one at deletion) and the moment, which names the copy so whoever
+// asked can follow it by name.
+func SharedDumpJob(pg *shpyrdv1.Postgres, cj *batchv1.CronJob, at time.Time, kind string) *batchv1.Job {
 	hash, server := tenantHash(pg.UID), pg.Annotations[AnnotationSharedServer]
 	labels := sharedTenantLabels(pg, server)
 	labels[sharedServerLabel] = sharedDumpPart
@@ -82,7 +82,7 @@ func SharedDumpJob(pg *shpyrdv1.Postgres, cj *batchv1.CronJob, at time.Time) *ba
 		if c.Name == sharedDumpPart {
 			job.Spec.Template.Spec.Containers[i].Env = append(c.Env,
 				corev1.EnvVar{Name: envDumpsDatabase, Value: sharedDatabaseName(hash)},
-				corev1.EnvVar{Name: envDumpsKind, Value: pgdump.KindNow},
+				corev1.EnvVar{Name: envDumpsKind, Value: kind},
 				corev1.EnvVar{Name: envDumpsAt, Value: at.UTC().Format(time.RFC3339)})
 		}
 	}

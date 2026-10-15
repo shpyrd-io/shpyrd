@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/pgdump"
 )
 
 // A shared database (storage plan, step 3) is a database and a role on a
@@ -287,23 +288,34 @@ func (r *PostgresReconciler) reconcileSharedFence(ctx context.Context, pg *shpyr
 	return fenced, nil
 }
 
-// finalizeShared is a shared database's deletion: the role and its
-// secrets go now, the data stays seven days behind a drop date a platform
-// sweep honours, and the Postgres is released.
+// finalizeShared is a shared database's deletion: the role is fenced at
+// once (no login, no connections, its sessions ended), a last copy is
+// taken, the data stays seven days behind a drop date the platform sweep
+// honours, the role and its object go with the data, and the Postgres is
+// released now.
 func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Postgres) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(pg, sharedFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	hash := tenantHash(pg.UID)
+	hash, server := tenantHash(pg.UID), pg.Annotations[AnnotationSharedServer]
 	role := &unstructured.Unstructured{}
 	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
-	role.SetNamespace(SharedPostgresNamespace)
-	role.SetName(sharedRoleObject(hash))
-	if err := r.Delete(ctx, role); client.IgnoreNotFound(err) != nil {
+	err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: sharedRoleObject(hash)}, role)
+	if client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedRoleObject(hash), Namespace: SharedPostgresNamespace}}); client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, err
+	if err == nil {
+		before := role.DeepCopy()
+		_ = unstructured.SetNestedField(role.Object, false, "spec", "login")
+		_ = unstructured.SetNestedField(role.Object, int64(0), "spec", "connectionLimit")
+		if err := r.Patch(ctx, role, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, err
+		}
+		job := r.desiredSharedSQLJob(pg, hash, server, sharedFinalFenceJob(hash),
+			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '%s';", sharedRoleName(hash)))
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, err
+		}
 	}
 	policy := metav1.DeletePropagationBackground
 	for _, job := range []string{sharedGrantsJob(hash), sharedFenceJob(hash), sharedNudgeJob(hash), sharedUnnudgeJob(hash)} {
@@ -322,6 +334,15 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 		if ann[AnnotationDropAfter] == "" {
 			ann[AnnotationDropAfter] = time.Now().UTC().Add(sharedKeep).Format(time.RFC3339)
 		}
+		if ann[annotationSharedLastDump] == "" && ann[annotationSharedGrants] == "done" {
+			name, err := r.sharedLastDump(ctx, pg, server)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if name != "" {
+				ann[annotationSharedLastDump] = name
+			}
+		}
 		db.SetAnnotations(ann)
 		_ = unstructured.SetNestedField(db.Object, "retain", "spec", "databaseReclaimPolicy")
 		if err := r.Patch(ctx, db, client.MergeFrom(before)); err != nil {
@@ -333,6 +354,32 @@ func (r *PostgresReconciler) finalizeShared(ctx context.Context, pg *shpyrdv1.Po
 	before := pg.DeepCopy()
 	controllerutil.RemoveFinalizer(pg, sharedFinalizer)
 	return ctrl.Result{}, r.Patch(ctx, pg, client.MergeFrom(before))
+}
+
+// sharedFinalFenceJob ends a deleted database's sessions; its own name,
+// since the cap's fence Job may exist and be finished.
+func sharedFinalFenceJob(hash string) string { return "fence-" + hash + "-final" }
+
+// annotationSharedLastDump records, on the Database object, the copy taken
+// at deletion.
+const annotationSharedLastDump = "shpyrd.io/last-dump"
+
+// sharedLastDump starts the copy taken at deletion, when the server has
+// its dumps; the copy's name, or "" when there is nothing to run it with.
+func (r *PostgresReconciler) sharedLastDump(ctx context.Context, pg *shpyrdv1.Postgres, server string) (string, error) {
+	cj := &batchv1.CronJob{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: SharedDumpsName(server)}, cj)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := r.Create(ctx, SharedDumpJob(pg, cj, at, pgdump.KindLast)); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", err
+	}
+	return pgdump.Name(at, pgdump.KindLast), nil
 }
 
 // pickSharedServer is the server a new database goes to: the open one
@@ -513,6 +560,9 @@ func (r *PostgresReconciler) ensureSharedRole(ctx context.Context, pg *shpyrdv1.
 			"connectionLimit": limit,
 			"passwordSecret":  map[string]interface{}{"name": sharedRoleObject(hash)},
 			"ensure":          "present",
+			// Dropped with its object: the sweep deletes the object once
+			// the data is gone (a role owning a database cannot be dropped).
+			"databaseRoleReclaimPolicy": "delete",
 		}, "spec")
 	})
 	return err

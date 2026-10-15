@@ -46,7 +46,7 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbName := controller.SharedDatabaseName(db)
-	lister := &fakeDumpLister{keys: []string{dbName + "/20261013T030700Z.dump", dbName + "/20261014T030700Z.dump", "db_other/20261014T030700Z.dump", dbName + "/notes.txt"}}
+	lister := &fakeDumpLister{keys: []string{dbName + "/20261013T030700Z.dump", dbName + "/20261014T030700Z.dump", dbName + "/20261012T120000Z.last.dump", "db_other/20261014T030700Z.dump", dbName + "/notes.txt"}}
 	previous := sharedDumpLister
 	sharedDumpLister = func(*corev1.Secret) (pgdump.Lister, error) { return lister, nil }
 	t.Cleanup(func() { sharedDumpLister = previous })
@@ -72,7 +72,7 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 	}
 
 	v := view(call("GET", base+"/backups", "", http.StatusOK))
-	if v.Dumps == nil || v.Dumps.Keep != 7 || v.Policy != nil || len(v.Backups) != 2 || v.Backups[0].Name != "20261014T030700Z" || v.Backups[0].Kind != "nightly" || v.Backups[0].Phase != "completed" || v.Backups[0].Started != "2026-10-14T03:07:00Z" || v.LastBackup == nil {
+	if v.Dumps == nil || v.Dumps.Keep != 7 || v.Policy != nil || len(v.Backups) != 3 || v.Backups[0].Name != "20261014T030700Z" || v.Backups[0].Kind != "nightly" || v.Backups[0].Phase != "completed" || v.Backups[0].Started != "2026-10-14T03:07:00Z" || v.LastBackup == nil || v.Backups[2].Kind != "at deletion" {
 		t.Errorf("listing = %+v", v)
 	}
 
@@ -106,7 +106,7 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 	}
 	// Until it lands, the listing shows it running; a second one waits.
 	v = view(call("GET", base+"/backups", "", http.StatusOK))
-	if len(v.Backups) != 3 || v.Backups[0].Name != started.Name || v.Backups[0].Phase != "running" || v.Backups[0].Kind != "on demand" {
+	if len(v.Backups) != 4 || v.Backups[0].Name != started.Name || v.Backups[0].Phase != "running" || v.Backups[0].Kind != "on demand" {
 		t.Errorf("with a job running = %+v", v.Backups)
 	}
 	if body := call("POST", base+"/backups", "", http.StatusConflict); !strings.Contains(body, "running already") {
@@ -129,7 +129,7 @@ func TestSharedPostgresBackupsAreTheDumps(t *testing.T) {
 	}
 	lister.keys = append(lister.keys, dbName+"/"+started.Name+".dump")
 	v = view(call("GET", base+"/backups", "", http.StatusOK))
-	if len(v.Backups) != 3 || v.Backups[0].Name != started.Name || v.Backups[0].Phase != "completed" || v.Backups[0].Kind != "on demand" {
+	if len(v.Backups) != 4 || v.Backups[0].Name != started.Name || v.Backups[0].Phase != "completed" || v.Backups[0].Kind != "on demand" {
 		t.Errorf("landed = %+v", v.Backups)
 	}
 

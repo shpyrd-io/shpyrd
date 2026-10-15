@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -60,10 +63,33 @@ func (s *SharedTenantSweep) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	ensure, _, _ := unstructured.NestedString(db.Object, "spec", "ensure")
 	policy, _, _ := unstructured.NestedString(db.Object, "spec", "databaseReclaimPolicy")
 	if ensure == "absent" && policy == "delete" {
-		return ctrl.Result{}, nil
+		return s.finish(ctx, db)
 	}
 	before := db.DeepCopy()
 	_ = unstructured.SetNestedField(db.Object, "absent", "spec", "ensure")
 	_ = unstructured.SetNestedField(db.Object, "delete", "spec", "databaseReclaimPolicy")
 	return ctrl.Result{}, s.Patch(ctx, db, client.MergeFrom(before))
+}
+
+// finish, once the operator dropped the database, removes what is left of
+// the tenant: the role's object (dropping the role, which nothing owns
+// now), its password Secret and the Database object itself.
+func (s *SharedTenantSweep) finish(ctx context.Context, db *unstructured.Unstructured) (ctrl.Result, error) {
+	applied, _, _ := unstructured.NestedBool(db.Object, "status", "applied")
+	observed, _, _ := unstructured.NestedInt64(db.Object, "status", "observedGeneration")
+	if !applied || (db.GetGeneration() > 0 && observed < db.GetGeneration()) {
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+	hash := strings.TrimPrefix(db.GetName(), "db-")
+	role := &unstructured.Unstructured{}
+	role.SetGroupVersionKind(CNPGDatabaseRoleGVK)
+	role.SetNamespace(SharedPostgresNamespace)
+	role.SetName(sharedRoleObject(hash))
+	if err := s.Delete(ctx, role); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, err
+	}
+	if err := s.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedRoleObject(hash), Namespace: SharedPostgresNamespace}}); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, client.IgnoreNotFound(s.Delete(ctx, db))
 }

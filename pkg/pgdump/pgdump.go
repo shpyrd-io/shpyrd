@@ -48,8 +48,12 @@ type Run struct {
 	Log  *slog.Logger
 }
 
-// KindNow marks a dump somebody asked for, as against the nightly one.
-const KindNow = "now"
+// The kinds of copy besides the nightly one: KindNow is one somebody asked
+// for, KindLast the one taken when the database is deleted.
+const (
+	KindNow  = "now"
+	KindLast = "last"
+)
 
 // Report says what the night did.
 type Report struct {

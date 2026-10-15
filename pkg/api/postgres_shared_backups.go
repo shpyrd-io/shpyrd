@@ -115,8 +115,11 @@ func (s *Server) sharedBackupsOf(ctx context.Context, pg *shpyrdv1.Postgres) ([]
 }
 
 func dumpKind(kind string) string {
-	if kind == pgdump.KindNow {
+	switch kind {
+	case pgdump.KindNow:
 		return "on demand"
+	case pgdump.KindLast:
+		return "at deletion"
 	}
 	return "nightly"
 }
@@ -160,7 +163,7 @@ func (s *Server) takeSharedDump(c *gin.Context, pg *shpyrdv1.Postgres) {
 		}
 	}
 	at := time.Now().UTC().Truncate(time.Second)
-	job := controller.SharedDumpJob(pg, cj, at)
+	job := controller.SharedDumpJob(pg, cj, at, pgdump.KindNow)
 	if _, err := s.kube.Kube.BatchV1().Jobs(controller.SharedPostgresNamespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			abort(c, http.StatusConflict, errors.New("a backup of this database started this second already"))
