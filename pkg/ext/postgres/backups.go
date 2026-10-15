@@ -33,10 +33,16 @@ type backup struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// dumps is how a shared database is backed up (api.DumpsView).
+type dumps struct {
+	Keep int `json:"keep"`
+}
+
 // backups is a database's backups as the API gives them (api.BackupsView).
 type backups struct {
 	Name            string                    `json:"name"`
 	Policy          *shpyrdv1.PostgresBackups `json:"policy"`
+	Dumps           *dumps                    `json:"dumps,omitempty"`
 	LastBackup      *time.Time                `json:"lastBackup,omitempty"`
 	RecoverableFrom *time.Time                `json:"recoverableFrom,omitempty"`
 	Backups         []backup                  `json:"backups"`
@@ -71,6 +77,15 @@ func backupsCall(ctx context.Context, g ext.CLIGlobals, method, path string, bod
 }
 
 func backupsLine(b backups) string {
+	if b.Dumps != nil {
+		out := fmt.Sprintf("the platform's nightly dumps, the newest %d kept", b.Dumps.Keep)
+		if b.LastBackup != nil {
+			out += ", last " + b.LastBackup.UTC().Format(time.RFC3339)
+		} else {
+			out += ", none taken yet"
+		}
+		return out
+	}
 	if b.Policy == nil {
 		return "off (shpyrd pg backups enable " + b.Name + ")"
 	}

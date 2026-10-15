@@ -109,7 +109,7 @@ func TestDoReportsAFailedUpload(t *testing.T) {
 func TestDoKeepsTheNewestCopies(t *testing.T) {
 	objects := &fakeObjects{objects: map[string]string{}}
 	for day := 1; day <= 9; day++ {
-		objects.objects[Key("db_a", tonight.AddDate(0, 0, -day))] = "old"
+		objects.objects[Key("db_a", tonight.AddDate(0, 0, -day), "")] = "old"
 	}
 	objects.objects["db_b/20261001T030700Z.dump"] = "another database's"
 	run := Run{Source: fakeSource{dbs: []string{"db_a"}}, Objects: objects, Keep: 7, Now: func() time.Time { return tonight }}
@@ -123,6 +123,38 @@ func TestDoKeepsTheNewestCopies(t *testing.T) {
 	}
 	if _, ok := objects.objects["db_b/20261001T030700Z.dump"]; !ok {
 		t.Error("another database's copy was removed")
+	}
+}
+
+func TestDoDumpsOneDatabaseNowWhenAsked(t *testing.T) {
+	objects := &fakeObjects{objects: map[string]string{}}
+	run := Run{Source: fakeSource{dbs: []string{"db_a", "db_b"}}, Objects: objects, Only: "db_b", Kind: KindNow, Now: func() time.Time { return tonight }}
+	if _, err := run.Do(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(objects.objects) != 1 || objects.objects["db_b/20261014T030700Z.now.dump"] == "" {
+		t.Errorf("objects = %v", objects.objects)
+	}
+	run.Only = "db_c"
+	if _, err := run.Do(context.Background()); err == nil || !strings.Contains(err.Error(), "db_c is not on this server") {
+		t.Errorf("a database the role cannot see: %v", err)
+	}
+}
+
+func TestParseReadsAKeyBack(t *testing.T) {
+	for key, want := range map[string]string{
+		"db_a/20261014T030700Z.dump":     "db_a 20261014T030700Z 2026-10-14T03:07:00Z kind=",
+		"db_a/20261014T101500Z.now.dump": "db_a 20261014T101500Z.now 2026-10-14T10:15:00Z kind=now",
+	} {
+		db, name, at, kind, ok := Parse(key)
+		if got := db + " " + name + " " + at.Format(time.RFC3339) + " kind=" + kind; !ok || got != want {
+			t.Errorf("Parse(%s) = %q ok=%v, want %q", key, got, ok, want)
+		}
+	}
+	for _, key := range []string{"db_a/notes.txt", "db_a", "db_a/2026.dump"} {
+		if _, _, _, _, ok := Parse(key); ok {
+			t.Errorf("Parse(%s) ok", key)
+		}
 	}
 }
 

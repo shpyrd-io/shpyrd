@@ -17,11 +17,12 @@ import (
 )
 
 // runDumps is `shpyrd-server dumps`: one night of a shared Postgres
-// server's dumps (storage plan, step 3). The CronJob the controller
-// renders in the server's namespace runs it inside the CloudNativePG
-// image, for pg_dump: PG* in the environment name the server and the dump
-// role, the bucket's Secret (BUCKET, AWS_*) the target, SHPYRD_DUMPS_KEEP
-// how many copies of each database stay.
+// server's dumps (storage plan, step 3), or one database's dump now. The
+// CronJob the controller renders in the server's namespace runs it inside
+// the CloudNativePG image, for pg_dump: PG* in the environment name the
+// server and the dump role, the bucket's Secret (BUCKET, AWS_*) the
+// target, SHPYRD_DUMPS_KEEP how many copies of each database stay. A Job
+// cut from it for one database adds SHPYRD_DUMPS_DATABASE, _KIND and _AT.
 func runDumps(logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	defer cancel()
@@ -38,7 +39,13 @@ func runDumps(logger *slog.Logger) error {
 	if v, err := strconv.Atoi(os.Getenv("SHPYRD_DUMPS_KEEP")); err == nil && v >= 0 {
 		keep = v
 	}
-	run := pgdump.Run{Source: pgdump.Postgres{Conn: conn}, Objects: pgdump.Bucket{Client: s3.Client, Name: s3.Bucket}, Keep: keep, Log: logger}
+	run := pgdump.Run{Source: pgdump.Postgres{Conn: conn}, Objects: pgdump.Bucket{Client: s3.Client, Name: s3.Bucket}, Keep: keep, Log: logger,
+		Only: os.Getenv("SHPYRD_DUMPS_DATABASE"), Kind: os.Getenv("SHPYRD_DUMPS_KIND")}
+	// A dump asked for is named by the moment it was asked, so the one who
+	// asked can follow it by name.
+	if at, err := time.Parse(time.RFC3339, os.Getenv("SHPYRD_DUMPS_AT")); err == nil {
+		run.Now = func() time.Time { return at }
+	}
 	rep, err := run.Do(ctx)
 	logger.Info("dumps done", "dumped", len(rep.Dumped), "failed", len(rep.Failed), "removed", rep.Removed)
 	return err

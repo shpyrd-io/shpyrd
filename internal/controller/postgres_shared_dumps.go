@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -19,6 +20,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/pgdump"
 )
 
 // Nightly dumps (storage plan, step 3). Every shared server has a dump
@@ -41,7 +43,72 @@ const (
 )
 
 func sharedDumpRoleSecret(server string) string { return server + "-dump" }
-func sharedDumpsName(server string) string      { return server + "-dumps" }
+
+// SharedDumpsName names a server's dumps bucket, its credential Secret and
+// its CronJob.
+func SharedDumpsName(server string) string { return server + "-dumps" }
+
+// SharedDatabaseName is a shared database's name on its server.
+func SharedDatabaseName(pg *shpyrdv1.Postgres) string { return sharedDatabaseName(tenantHash(pg.UID)) }
+
+// The environment a Job cut from the CronJob adds for one database now.
+const (
+	envDumpsDatabase = "SHPYRD_DUMPS_DATABASE"
+	envDumpsKind     = "SHPYRD_DUMPS_KIND"
+	envDumpsAt       = "SHPYRD_DUMPS_AT"
+	sharedDumpPart   = "dump"
+)
+
+// SharedDumpJob is a dump of one shared database now: a Job cut from its
+// server's CronJob, told the database, that it was asked for, and the
+// moment, which names the copy so whoever asked can follow it by name.
+func SharedDumpJob(pg *shpyrdv1.Postgres, cj *batchv1.CronJob, at time.Time) *batchv1.Job {
+	hash, server := tenantHash(pg.UID), pg.Annotations[AnnotationSharedServer]
+	labels := sharedTenantLabels(pg, server)
+	labels[sharedServerLabel] = sharedDumpPart
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            fmt.Sprintf("dump-%s-%s", hash, at.UTC().Format("20060102150405")),
+			Namespace:       SharedPostgresNamespace,
+			Labels:          labels,
+			Annotations:     map[string]string{"cronjob.kubernetes.io/instantiate": "manual"},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "CronJob", Name: cj.Name, UID: cj.UID}},
+		},
+		Spec: *cj.Spec.JobTemplate.Spec.DeepCopy(),
+	}
+	job.Spec.BackoffLimit = ptr.To[int32](1)
+	job.Spec.Template.Labels = mergeMaps(job.Spec.Template.Labels, labels)
+	for i, c := range job.Spec.Template.Spec.Containers {
+		if c.Name == sharedDumpPart {
+			job.Spec.Template.Spec.Containers[i].Env = append(c.Env,
+				corev1.EnvVar{Name: envDumpsDatabase, Value: sharedDatabaseName(hash)},
+				corev1.EnvVar{Name: envDumpsKind, Value: pgdump.KindNow},
+				corev1.EnvVar{Name: envDumpsAt, Value: at.UTC().Format(time.RFC3339)})
+		}
+	}
+	return job
+}
+
+// SharedDumpJobsSelector selects the dump Jobs asked for a shared database.
+func SharedDumpJobsSelector(pg *shpyrdv1.Postgres) string {
+	return sharedTenantLabel + "=" + string(pg.UID) + "," + sharedServerLabel + "=" + sharedDumpPart
+}
+
+// SharedDumpAt is the moment a dump Job's copy is named by.
+func SharedDumpAt(job *batchv1.Job) (time.Time, bool) {
+	for _, c := range job.Spec.Template.Spec.Containers {
+		if c.Name != sharedDumpPart {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == envDumpsAt {
+				at, err := time.Parse(time.RFC3339, e.Value)
+				return at, err == nil
+			}
+		}
+	}
+	return time.Time{}, false
+}
 
 // sharedServerLabels mark an object of a server's: its name and which
 // part it is.
@@ -124,10 +191,10 @@ func (r *PostgresReconciler) ensureSharedDumpRole(ctx context.Context, server *u
 // ensureSharedDumpsBucket is the server's bucket, its credential Secret
 // named after it. Retained on deletion: the dumps outlive a server.
 func (r *PostgresReconciler) ensureSharedDumpsBucket(ctx context.Context, server string) error {
-	b := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: sharedDumpsName(server), Namespace: SharedPostgresNamespace}}
+	b := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: SharedDumpsName(server), Namespace: SharedPostgresNamespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, b, func() error {
 		b.Labels = mergeMaps(b.Labels, sharedServerLabels(server, "dumps"))
-		b.Spec.SecretName = sharedDumpsName(server)
+		b.Spec.SecretName = SharedDumpsName(server)
 		b.Spec.DeletionPolicy = "Retain"
 		return nil
 	})
@@ -187,7 +254,7 @@ func (r *PostgresReconciler) desiredSharedDumpsCronJob(server string, pull []cor
 	locked := &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}
 	tools := corev1.VolumeMount{Name: "tools", MountPath: sharedToolsDir}
 	return &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{Name: sharedDumpsName(server), Namespace: SharedPostgresNamespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: SharedDumpsName(server), Namespace: SharedPostgresNamespace, Labels: labels},
 		Spec: batchv1.CronJobSpec{
 			Schedule:                   sharedDumpsSchedule(server),
 			TimeZone:                   ptr.To("Etc/UTC"),
@@ -216,7 +283,7 @@ func (r *PostgresReconciler) desiredSharedDumpsCronJob(server string, pull []cor
 								SecurityContext: locked,
 							}},
 							Containers: []corev1.Container{{
-								Name:    "dump",
+								Name:    sharedDumpPart,
 								Image:   "ghcr.io/cloudnative-pg/postgresql:" + defaultPostgresVersion,
 								Command: []string{sharedToolsDir + "/shpyrd-server", "dumps"},
 								Env: []corev1.EnvVar{
@@ -228,7 +295,7 @@ func (r *PostgresReconciler) desiredSharedDumpsCronJob(server string, pull []cor
 									env("PGPASSWORD", "password"),
 									{Name: "SHPYRD_DUMPS_KEEP", Value: fmt.Sprint(sharedDumpsKeep)},
 								},
-								EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: sharedDumpsName(server)}}}},
+								EnvFrom:         []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: SharedDumpsName(server)}}}},
 								VolumeMounts:    []corev1.VolumeMount{tools},
 								Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resourceMustParse("50m"), corev1.ResourceMemory: resourceMustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resourceMustParse("512Mi")}},
 								SecurityContext: locked,

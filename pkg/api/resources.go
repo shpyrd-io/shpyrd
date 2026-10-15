@@ -323,7 +323,7 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 const (
 	errSharedAlwaysOn           = "Shared databases are always on."
 	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
-	errSharedBackupsLater       = "A shared database is backed up by the platform's nightly dumps; backups and restores of one are not available yet."
+	errSharedBackupsLater       = "A shared database is backed up by the platform's nightly dumps; restoring one is not available yet."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.
@@ -803,7 +803,10 @@ func (s *Server) mutatePostgres(c *gin.Context, mutate func(*shpyrdv1.Postgres) 
 	})
 	if err != nil {
 		var ue *userError
+		var shared *sharedRefusal
 		switch {
+		case errors.As(err, &ue) && errors.As(ue.error, &shared):
+			abort(c, http.StatusConflict, shared)
 		case errors.As(err, &ue):
 			abort(c, http.StatusBadRequest, ue.error)
 		case apierrors.IsNotFound(err):

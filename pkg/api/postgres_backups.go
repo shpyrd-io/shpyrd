@@ -41,10 +41,13 @@ type BackupView struct {
 }
 
 // BackupsView is a database's backups: the policy (nil when off), the
-// window that can be restored and the base backups, newest first.
+// window that can be restored and the base backups, newest first. A
+// shared database has no policy: Dumps says how the platform backs it up
+// and the entries are its dumps.
 type BackupsView struct {
 	Name            string                    `json:"name"`
 	Policy          *shpyrdv1.PostgresBackups `json:"policy"`
+	Dumps           *DumpsView                `json:"dumps,omitempty"`
 	LastBackup      *metav1.Time              `json:"lastBackup,omitempty"`
 	RecoverableFrom *metav1.Time              `json:"recoverableFrom,omitempty"`
 	Backups         []BackupView              `json:"backups"`
@@ -106,6 +109,10 @@ func (s *Server) backupsOf(ctx context.Context, pg *shpyrdv1.Postgres) ([]Backup
 }
 
 func (s *Server) backupsView(c *gin.Context, pg *shpyrdv1.Postgres) {
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+		s.sharedBackupsView(c, pg)
+		return
+	}
 	backups, err := s.backupsOf(c.Request.Context(), pg)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
@@ -133,6 +140,9 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 		}
 	}
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return &sharedRefusal{errSharedDumpsNotASetting}
+		}
 		next := shpyrdv1.PostgresBackups{}
 		if pg.Spec.Backups != nil {
 			next = *pg.Spec.Backups
@@ -160,6 +170,9 @@ func (s *Server) putPostgresBackups(c *gin.Context) {
 // stop; the backups taken stay restorable until the database is deleted.
 func (s *Server) deletePostgresBackups(c *gin.Context) {
 	pg, err := s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
+		if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
+			return &sharedRefusal{errSharedDumpsNotASetting}
+		}
 		pg.Spec.Backups = nil
 		return nil
 	})
@@ -178,7 +191,7 @@ func (s *Server) takePostgresBackup(c *gin.Context) {
 		return
 	}
 	if pg.Spec.Type == shpyrdv1.PostgresTypeShared {
-		abort(c, http.StatusConflict, errors.New(errSharedBackupsLater))
+		s.takeSharedDump(c, pg)
 		return
 	}
 	if pg.Spec.Backups == nil {

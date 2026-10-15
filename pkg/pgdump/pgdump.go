@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -21,22 +22,34 @@ type Source interface {
 	Dump(ctx context.Context, database string, w io.Writer) error
 }
 
+// Lister lists a bucket's keys under a prefix.
+type Lister interface {
+	List(ctx context.Context, prefix string) ([]string, error)
+}
+
 // Objects is the bucket.
 type Objects interface {
+	Lister
 	Put(ctx context.Context, key string, r io.Reader) error
-	List(ctx context.Context, prefix string) ([]string, error)
 	Remove(ctx context.Context, key string) error
 }
 
-// Run is one night.
+// Run is one night, or one database now.
 type Run struct {
 	Source  Source
 	Objects Objects
 	// Keep is how many dumps of each database stay; 0 keeps them all.
 	Keep int
+	// Only names one database to dump instead of every one.
+	Only string
+	// Kind marks the copies ("" is the nightly run, "now" one asked for).
+	Kind string
 	Now  func() time.Time
 	Log  *slog.Logger
 }
+
+// KindNow marks a dump somebody asked for, as against the nightly one.
+const KindNow = "now"
 
 // Report says what the night did.
 type Report struct {
@@ -45,11 +58,39 @@ type Report struct {
 	Removed int
 }
 
+const timeLayout = "20060102T150405Z"
+
 // Key is where a dump of the database taken at that moment goes:
-// <database>/<time>.dump, so one database's copies list together and
-// sort by age.
-func Key(database string, at time.Time) string {
-	return database + "/" + at.UTC().Format("20060102T150405Z") + ".dump"
+// <database>/<time>[.<kind>].dump, so one database's copies list together
+// and sort by age.
+func Key(database string, at time.Time, kind string) string {
+	return database + "/" + Name(at, kind) + ".dump"
+}
+
+// Name is how a copy is called in a listing: its time, and its kind when
+// it was asked for.
+func Name(at time.Time, kind string) string {
+	name := at.UTC().Format(timeLayout)
+	if kind != "" {
+		name += "." + kind
+	}
+	return name
+}
+
+// Parse reads a key back: the database, the copy's name, when it was
+// taken and its kind. Not ok for a key that is not a dump's.
+func Parse(key string) (database, name string, at time.Time, kind string, ok bool) {
+	database, file, found := strings.Cut(key, "/")
+	if !found || !strings.HasSuffix(file, ".dump") {
+		return "", "", time.Time{}, "", false
+	}
+	name = strings.TrimSuffix(file, ".dump")
+	stamp, kind, _ := strings.Cut(name, ".")
+	at, err := time.Parse(timeLayout, stamp)
+	if err != nil {
+		return "", "", time.Time{}, "", false
+	}
+	return database, name, at, kind, true
 }
 
 // Do dumps every database, each on its own: one that fails is reported
@@ -69,8 +110,14 @@ func (r Run) Do(ctx context.Context) (Report, error) {
 	if err != nil {
 		return rep, fmt.Errorf("list the databases: %w", err)
 	}
+	if r.Only != "" {
+		if !slices.Contains(dbs, r.Only) {
+			return rep, fmt.Errorf("the database %s is not on this server, or the platform's dump role was not granted it yet", r.Only)
+		}
+		dbs = []string{r.Only}
+	}
 	for _, db := range dbs {
-		key := Key(db, now())
+		key := Key(db, now(), r.Kind)
 		if err := r.dump(ctx, db, key); err != nil {
 			rep.Failed[db] = err
 			logger.Error("dump failed", "database", db, "err", err.Error())

@@ -293,6 +293,38 @@ func TestSharedServerGetsTheDumpRoleAndThePullSecret(t *testing.T) {
 	}
 }
 
+// A dump asked for now is a Job cut from the server's CronJob, for one
+// database, named by its moment.
+func TestSharedDumpJobIsCutFromTheCronJob(t *testing.T) {
+	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
+	pg.Annotations = map[string]string{AnnotationSharedServer: "pg-shared-1"}
+	r, _ := sharedReconciler(t, 200)
+	cj := r.desiredSharedDumpsCronJob("pg-shared-1", nil)
+	cj.UID = "cj-uid"
+	at := time.Date(2026, 10, 14, 10, 15, 0, 0, time.UTC)
+	job := SharedDumpJob(pg, cj, at)
+	hash := tenantHash(pg.UID)
+	env := map[string]string{}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if job.Name != "dump-"+hash+"-20261014101500" || job.Namespace != SharedPostgresNamespace || env["SHPYRD_DUMPS_DATABASE"] != "db_"+hash || env["SHPYRD_DUMPS_KIND"] != "now" || env["SHPYRD_DUMPS_AT"] != "2026-10-14T10:15:00Z" || env["PGHOST"] != "pg-shared-1-rw" || env["SHPYRD_DUMPS_KEEP"] != "7" {
+		t.Errorf("job = %s/%s env %v", job.Namespace, job.Name, env)
+	}
+	if job.OwnerReferences[0].UID != "cj-uid" || job.Labels[sharedTenantLabel] != "uid-shop-db" || job.Labels[sharedServerLabel] != "dump" || job.Spec.Template.Labels[sharedServerLabel] != "dump" || *job.Spec.BackoffLimit != 1 {
+		t.Errorf("job owner %v labels %v pod labels %v", job.OwnerReferences, job.Labels, job.Spec.Template.Labels)
+	}
+	if got, ok := SharedDumpAt(job); !ok || !got.Equal(at) {
+		t.Errorf("SharedDumpAt = %v %v", got, ok)
+	}
+	if SharedDumpJobsSelector(pg) != "shpyrd.io/shared-tenant=uid-shop-db,shpyrd.io/shared-postgres=dump" {
+		t.Errorf("selector = %s", SharedDumpJobsSelector(pg))
+	}
+	if SharedDatabaseName(pg) != "db_"+hash {
+		t.Errorf("database name = %s", SharedDatabaseName(pg))
+	}
+}
+
 // Deleting a shared database removes its role and secrets now and keeps
 // the data seven days behind a drop date.
 func TestSharedPostgresDeletionKeepsTheDataSevenDays(t *testing.T) {
