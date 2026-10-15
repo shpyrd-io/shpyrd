@@ -285,11 +285,20 @@ jobs:
             sleep 2
           done
           [ "$NEW" != "$URI" ]
+          # The operator applies the new password within seconds; a first
+          # success may be followed by a stale re-apply of the old one, so the
+          # new URL has to open the database twice, three seconds apart, and
+          # the old one must be refused by then.
+          opened=0
           for i in $(seq 1 30); do
-            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then break; fi
+            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then
+              sleep 3
+              if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then opened=1; break; fi
+            fi
             sleep 2
           done
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" | grep -q '^1$'
+          [ "$opened" = 1 ]
+          ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select 1" 2>/dev/null | grep -q '^1$'
           URI=$NEW
           # Extensions: a trusted one is the owner's to create, pgvector is there already, the rest are a dedicated database's.
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension if not exists pgcrypto; select count(*) from pg_extension where extname in ('pgcrypto','vector')" | grep -q '^2$'
