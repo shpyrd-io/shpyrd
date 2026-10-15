@@ -239,6 +239,28 @@ jobs:
           ./bin/shpyrd projects create monorepo --public --context kind-ci
           (cd examples/monorepo/apps/web && ../../../../bin/shpyrd deploy --project monorepo --context kind-ci)
           ./bin/shpyrd projects list --context kind-ci
+      - name: A shared database on the platform's server
+        run: |
+          set -euo pipefail
+          # Step 3 of the storage plan: a database and a role on a platform-owned
+          # server, always on; the project keeps a Service and a Secret named
+          # after the database, so DATABASE_URL has its usual shape.
+          ./bin/shpyrd pg create shared --type shared --project hello-world --context kind-ci
+          ./bin/shpyrd pg list --project hello-world --context kind-ci
+          kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,database,databaserole,job
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          URI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
+          echo "$URI" | grep -q 'sslmode=require'
+          # The tenant's own credentials open its database; from inside the
+          # server, at the primary (the URL names the database's own Service).
+          INPOD=${URI/@shared:5432/@localhost:5432}
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select current_database() like 'db_%', current_user like 'u_%'" | grep -q 't|t'
+          # Nobody else: the superuser-granted REVOKE keeps PUBLIC out.
+          DB=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.dbname}' | base64 -d)
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep -q '^f$'
+          # Deleting keeps the data seven days behind a drop date.
+          ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
+          kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
       - name: The projects answer on their URLs
         run: |
           set -euo pipefail
