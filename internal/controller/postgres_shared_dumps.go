@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -346,4 +347,30 @@ func (r *PostgresReconciler) sharedNetworkPolicySpec() networkingv1.NetworkPolic
 			samePods, projects, namespace(cnpgOperatorNamespace), namespace(monitoringNamespace), namespace(r.SystemNamespace),
 		}}},
 	}
+}
+
+// ensureSharedServerAccess lets a server's own pods read the Secrets of
+// its namespace: CloudNativePG applies a DatabaseRole from the instance,
+// as the Cluster's ServiceAccount (named after it), and the tenant's
+// password is in a Secret that account is not given by the operator (it
+// grants only the Cluster spec's own). Every Secret there is the
+// platform's: the tenants' passwords, the dump role's, the bucket's.
+func (r *PostgresReconciler) ensureSharedServerAccess(ctx context.Context, server string) error {
+	name := server + "-tenant-secrets"
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: SharedPostgresNamespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+		role.Labels = mergeMaps(role.Labels, sharedServerLabels(server, "access"))
+		role.Rules = []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get", "list", "watch"}}}
+		return nil
+	}); err != nil {
+		return err
+	}
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: SharedPostgresNamespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
+		binding.Labels = mergeMaps(binding.Labels, sharedServerLabels(server, "access"))
+		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}
+		binding.Subjects = []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: server, Namespace: SharedPostgresNamespace}}
+		return nil
+	})
+	return err
 }

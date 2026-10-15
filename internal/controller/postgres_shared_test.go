@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -117,6 +118,19 @@ func TestSharedPostgresGetsAServerAndATenant(t *testing.T) {
 	}
 	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress || len(from) != 5 || from[0].PodSelector == nil || from[1].NamespaceSelector == nil || from[1].NamespaceSelector.MatchExpressions[0].Key != shpyrdv1.LabelProject || strings.Join(names, ",") != "cnpg-system,monitoring,shpyrd-system" {
 		t.Errorf("network policy = types %v from %+v (namespaces %v)", np.Spec.PolicyTypes, from, names)
+	}
+	// The server's pods may read the namespace's Secrets: the operator
+	// applies a DatabaseRole from the instance, as the Cluster's account.
+	binding := &rbacv1.RoleBinding{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-tenant-secrets"}, binding); err != nil {
+		t.Fatal(err)
+	}
+	access := &rbacv1.Role{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: SharedPostgresNamespace, Name: "pg-shared-1-tenant-secrets"}, access); err != nil {
+		t.Fatal(err)
+	}
+	if binding.RoleRef.Name != "pg-shared-1-tenant-secrets" || len(binding.Subjects) != 1 || binding.Subjects[0].Kind != "ServiceAccount" || binding.Subjects[0].Name != "pg-shared-1" || len(access.Rules) != 1 || access.Rules[0].Resources[0] != "secrets" || strings.Join(access.Rules[0].Verbs, ",") != "get,list,watch" {
+		t.Errorf("server access = %+v / %+v", binding.Subjects, access.Rules)
 	}
 	// The server's dump role, its bucket and its nightly run come with it.
 	roles, _, _ := unstructured.NestedSlice(server.Object, "spec", "managed", "roles")

@@ -84,8 +84,10 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   # The membership controller mirrors project roles into RBAC (RFC-0008);
   # it may only bind the shpyrd roles below.
+  # Roles: a shared Postgres server's pod reads its tenants' password
+  # Secrets (CloudNativePG applies a DatabaseRole from the instance).
   - apiGroups: [rbac.authorization.k8s.io]
-    resources: [rolebindings, clusterrolebindings]
+    resources: [roles, rolebindings, clusterrolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]
