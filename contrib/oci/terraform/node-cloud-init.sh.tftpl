@@ -11,10 +11,15 @@
 #
 # A failure to grow never keeps the node out of the cluster: the bootstrap
 # runs whatever happens before it.
+#
+# This is a Terraform template (cluster.tf renders it per pool): kubelet_args
+# is empty for most pools; the apps pool passes the registry-trust taint, so
+# the kubelet registers a new node with it (#44, #159) and project pods wait
+# until the registry-nodes DaemonSet has written the platform CA.
 
 /usr/libexec/oci-growfs -y || echo "oci-growfs failed; the node joins with its factory-sized root filesystem" >&2
 
 curl --fail -H "Authorization: Bearer Oracle" -L0 \
   http://169.254.169.254/opc/v2/instance/metadata/oke_init_script \
   | base64 --decode > /var/run/oke-init.sh
-bash /var/run/oke-init.sh
+bash /var/run/oke-init.sh ${kubelet_args}
