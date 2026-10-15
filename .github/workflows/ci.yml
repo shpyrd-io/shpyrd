@@ -187,11 +187,23 @@ jobs:
           key: go-release-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   e2e:
-    name: End to end on kind
+    name: End to end on kind (${{ matrix.suite }})
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.go == 'true'
     timeout-minutes: 45
+    # Two clusters, side by side: the applications on the default
+    # extensions, and the databases with the postgres and object-storage
+    # extensions (CloudNativePG and a bucket store take minutes of their
+    # own, and the shared server, its dumps and a conversion more).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: apps
+            enable: ""
+          - suite: databases
+            enable: --enable postgres,object-storage
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -210,7 +222,7 @@ jobs:
       # build, and the next step but one waits for it.
       - name: Create the cluster, in the background
         run: |
-          ( ./bin/shpyrd cluster create --name ci --skip shpyrd --http-port 8080 --https-port 8443 \
+          ( ./bin/shpyrd cluster create --name ci --skip shpyrd ${{ matrix.enable }} --http-port 8080 --https-port 8443 \
               > "$RUNNER_TEMP/cluster.log" 2>&1; echo $? > "$RUNNER_TEMP/cluster.exit" ) &
       - name: Build the applications and the server image
         run: |
@@ -227,6 +239,7 @@ jobs:
           ./bin/shpyrd cluster init --context kind-ci --only shpyrd --set SHPYRD_SERVER_IMAGE=shpyrd-server:ci --http-port 8080 --https-port 8443
           ./bin/shpyrd cluster status --context kind-ci
       - name: Deploy a buildpacks project, a Dockerfile project and a workspace package
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           export SHPYRD_CONTEXT=kind-ci
@@ -239,7 +252,15 @@ jobs:
           ./bin/shpyrd projects create monorepo --public --context kind-ci
           (cd examples/monorepo/apps/web && ../../../../bin/shpyrd deploy --project monorepo --context kind-ci)
           ./bin/shpyrd projects list --context kind-ci
+      - name: A project for the databases
+        if: matrix.suite == 'databases'
+        run: |
+          set -euo pipefail
+          ./bin/shpyrd projects create "Hello World" --public --context kind-ci
+          ./bin/shpyrd cluster status --context kind-ci
+          kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
       - name: A shared database on the platform's server
+        if: matrix.suite == 'databases'
         run: |
           set -euo pipefail
           # Step 3 of the storage plan: a database and a role on a platform-owned
@@ -349,6 +370,7 @@ jobs:
           kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/shared-postgres=dump -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].env[?(@.name=="SHPYRD_DUMPS_KIND")].value}{"\n"}{end}' | grep -q '^last$'
           kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
       - name: The projects answer on their URLs
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           TOKEN=$(./bin/shpyrd cluster token --context kind-ci | tail -1)
@@ -390,6 +412,7 @@ jobs:
           done
           grep -q "Hello from a workspace package" /tmp/monorepo.html
       - name: Scale, logs, volumes, roles
+        if: matrix.suite == 'apps'
         run: |
           set -euo pipefail
           ./bin/shpyrd scale web=2 --project hello-world --context kind-ci
@@ -427,6 +450,8 @@ jobs:
           kubectl --context kind-ci -n shpyrd-system logs deployment/shpyrd-server --tail=200 || true
           kubectl --context kind-ci get apps.shpyrd.io -A -o yaml || true
           kubectl --context kind-ci get events -A --sort-by=.lastTimestamp | tail -60 || true
+          kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,pooler,database,databaserole,job,cronjob,objectbucket -o wide 2>/dev/null || true
+          kubectl --context kind-ci get postgres -A -o yaml 2>/dev/null | grep -E "name:|type:|phase:|message:" || true
 
   ci:
     name: CI
