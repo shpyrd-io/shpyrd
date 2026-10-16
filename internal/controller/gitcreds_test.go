@@ -38,7 +38,7 @@ func TestReconcileGitCredentialsPicksWorkspaceToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != gitauth.KindToken || got.CloneURL != "https://github.com/acme/shop.git" {
+	if got.Kind != gitauth.KindToken || got.CloneURL != "https://github.com/acme/shop" {
 		t.Fatalf("build = %+v", got)
 	}
 	sec := &corev1.Secret{}
@@ -59,8 +59,8 @@ func TestReconcileGitCredentialsPicksWorkspaceToken(t *testing.T) {
 		t.Errorf("SA = %+v", sa)
 	}
 	img, _ := r.Config.desiredKpackImage(app, got)
-	if u, _, _ := unstructured.NestedString(img.Object, "spec", "source", "git", "url"); u != "https://github.com/acme/shop.git" {
-		t.Errorf("kpack url = %s", u)
+	if u, _, _ := unstructured.NestedString(img.Object, "spec", "source", "git", "url"); u != "https://github.com/acme/shop" {
+		t.Errorf("a token keeps the app's https URL: kpack url = %s", u)
 	}
 	if n, _, _ := unstructured.NestedString(img.Object, "spec", "serviceAccountName"); n != BuildServiceAccount {
 		t.Errorf("kpack SA = %s", n)
@@ -70,9 +70,10 @@ func TestReconcileGitCredentialsPicksWorkspaceToken(t *testing.T) {
 func TestReconcileGitCredentialsDeployKeyAndRegistry(t *testing.T) {
 	app := gitApp("shop", "https://github.com/acme/shop")
 	dk := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-shop", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey}},
-		Type:       corev1.SecretTypeSSHAuth,
-		Data:       map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
+		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-shop", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey},
+			Annotations: map[string]string{gitauth.AnnotationHost: "github.com"}},
+		Type: corev1.SecretTypeSSHAuth,
+		Data: map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
 	}
 	reg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-registry", Namespace: "shpyrd-system"}, Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{}`)}}
@@ -178,7 +179,7 @@ func TestDockerfileFetchWithToken(t *testing.T) {
 	if strings.Contains(script, "ghp_s3cret") {
 		t.Fatal("the token must never be inlined in the script")
 	}
-	if !strings.Contains(script, "url='https://github.com/acme/dk.git'") || !strings.Contains(script, ".netrc") {
+	if !strings.Contains(script, "url='https://github.com/acme/dk'") || !strings.Contains(script, ".netrc") {
 		t.Errorf("script: %s", script)
 	}
 	if !hasGitAuthMount(init) || !hasSecretVolume(job, "dk-git") {
@@ -192,9 +193,10 @@ func TestDockerfileFetchWithToken(t *testing.T) {
 func TestDockerfileFetchWithDeployKey(t *testing.T) {
 	app := dockerfileGitApp("https://github.com/acme/dk")
 	dk := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-dk", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey}},
-		Type:       corev1.SecretTypeSSHAuth,
-		Data:       map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
+		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-dk", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey},
+			Annotations: map[string]string{gitauth.AnnotationHost: "github.com"}},
+		Type: corev1.SecretTypeSSHAuth,
+		Data: map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
 	}
 	r, c := newTestReconciler(t, app, dk)
 	runReconcile(t, r, app)

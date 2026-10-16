@@ -16,11 +16,12 @@ func tokenSecret(host, token, user string) *corev1.Secret {
 	}
 }
 
-func deployKeySecret() *corev1.Secret {
+func deployKeySecret(host string) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: DeployKeySecretName, Namespace: "app-shop", Labels: map[string]string{LabelCredential: KindDeployKey}},
-		Type:       corev1.SecretTypeSSHAuth,
-		Data:       map[string][]byte{corev1.SSHAuthPrivateKey: []byte("PRIVATE"), KeyKnownHosts: []byte("github.com ssh-ed25519 AAAA")},
+		ObjectMeta: metav1.ObjectMeta{Name: DeployKeySecretName, Namespace: "app-shop", Labels: map[string]string{LabelCredential: KindDeployKey},
+			Annotations: map[string]string{AnnotationHost: host}},
+		Type: corev1.SecretTypeSSHAuth,
+		Data: map[string][]byte{corev1.SSHAuthPrivateKey: []byte("PRIVATE"), KeyKnownHosts: []byte("github.com ssh-ed25519 AAAA")},
 	}
 }
 
@@ -32,7 +33,7 @@ func TestResolveNothing(t *testing.T) {
 }
 
 func TestResolveDeployKeyWinsOverToken(t *testing.T) {
-	b, err := Resolve("https://github.com/acme/api", "shop", "app-shop", deployKeySecret(), tokenSecret("github.com", "ghp_x", ""))
+	b, err := Resolve("https://github.com/acme/api", "shop", "app-shop", deployKeySecret("github.com"), tokenSecret("github.com", "ghp_x", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestResolveToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := b.Secret
-	if b.Kind != KindToken || b.CloneURL != "https://github.com/acme/api.git" || s.Type != corev1.SecretTypeBasicAuth {
+	if b.Kind != KindToken || b.CloneURL != "https://github.com/acme/api" || s.Type != corev1.SecretTypeBasicAuth {
 		t.Fatalf("got %+v", b)
 	}
 	if s.Annotations["kpack.io/git"] != "https://github.com" || string(s.Data[corev1.BasicAuthUsernameKey]) != "x-access-token" || string(s.Data[corev1.BasicAuthPasswordKey]) != "ghp_x" {
@@ -68,8 +69,43 @@ func TestResolveConvertsURLForm(t *testing.T) {
 		t.Errorf("ssh URL with a token must clone over https as oauth2: %+v", b)
 	}
 	b, _ = Resolve("http://gitea.local:3000/me/site", "shop", "app-shop", nil, tokenSecret("gitea.local", "t", "me"))
-	if b.CloneURL != "http://gitea.local:3000/me/site.git" || b.Secret.Annotations["kpack.io/git"] != "http://gitea.local:3000" || string(b.Secret.Data[corev1.BasicAuthUsernameKey]) != "me" {
+	if b.CloneURL != "http://gitea.local:3000/me/site" || b.Secret.Annotations["kpack.io/git"] != "http://gitea.local:3000" || string(b.Secret.Data[corev1.BasicAuthUsernameKey]) != "me" {
 		t.Errorf("http with port keeps both: %+v", b)
+	}
+}
+
+func TestResolveKeepsAURLWhoseFormFits(t *testing.T) {
+	for _, tc := range []struct {
+		url       string
+		deployKey *corev1.Secret
+		token     *corev1.Secret
+	}{
+		{"https://github.com/acme/shop", nil, tokenSecret("github.com", "ghp_x", "")},
+		{"  https://github.com/acme/shop.git ", nil, tokenSecret("github.com", "ghp_x", "")},
+		{"git@github.com:acme/shop", deployKeySecret("github.com"), nil},
+		{"ssh://git@github.com/acme/shop.git", deployKeySecret("github.com"), nil},
+	} {
+		b, err := Resolve(tc.url, "shop", "app-shop", tc.deployKey, tc.token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.Secret == nil || b.CloneURL != strings.TrimSpace(tc.url) {
+			t.Errorf("%q with a %s must stay as given, got %q", tc.url, b.Kind, b.CloneURL)
+		}
+	}
+}
+
+func TestResolveDeployKeyOnlyForItsHost(t *testing.T) {
+	b, err := Resolve("https://github.com/acme/api", "shop", "app-shop", deployKeySecret("gitlab.com"), tokenSecret("github.com", "ghp_x", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Kind != KindToken || string(b.Secret.Data[corev1.BasicAuthPasswordKey]) != "ghp_x" {
+		t.Fatalf("a gitlab.com deploy key must not clone from github.com: %+v", b)
+	}
+	b, _ = Resolve("https://github.com/acme/api", "shop", "app-shop", deployKeySecret("gitlab.com"), nil)
+	if b.Kind != "" || b.Secret != nil {
+		t.Fatalf("no credential for github.com: %+v", b)
 	}
 }
 

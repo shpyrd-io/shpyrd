@@ -75,7 +75,10 @@ type Build struct {
 	// Kind is KindDeployKey, KindToken, or "" when the clone goes without
 	// credentials (a public repository).
 	Kind string
-	// CloneURL is the URL in the form the credential needs.
+	// CloneURL is the URL the build clones: the app's own URL when its form
+	// fits the credential, converted only when it does not (an ssh URL with
+	// a token, an https URL with a deploy key). kpack rebuilds when the URL
+	// changes, so a form that fits is never rewritten.
 	CloneURL string
 	// Host is the repository's host.
 	Host string
@@ -84,8 +87,8 @@ type Build struct {
 }
 
 // Resolve chooses the credential a build of gitURL clones with: the
-// project's deploy key, else the workspace's token for the host, else none.
-// deployKey and token may be nil.
+// project's deploy key when it is for the repository's host, else the
+// workspace's token for the host, else none. deployKey and token may be nil.
 func Resolve(gitURL, app, namespace string, deployKey, token *corev1.Secret) (Build, error) {
 	r, err := Parse(gitURL)
 	if err != nil {
@@ -96,10 +99,15 @@ func Resolve(gitURL, app, namespace string, deployKey, token *corev1.Secret) (Bu
 		Namespace: namespace,
 		Labels:    map[string]string{"app.kubernetes.io/managed-by": "shpyrd", "shpyrd.io/project": app},
 	}
+	given := strings.TrimSpace(gitURL)
 	switch {
-	case deployKey != nil:
+	case DeployKeyFits(deployKey, r.Host):
+		cloneURL := given
+		if r.Scheme != "ssh" {
+			cloneURL = r.SSH()
+		}
 		meta.Annotations = map[string]string{kpackGitAnnotation: "git@" + r.Host}
-		return Build{Kind: KindDeployKey, CloneURL: r.SSH(), Host: r.Host, Secret: &corev1.Secret{
+		return Build{Kind: KindDeployKey, CloneURL: cloneURL, Host: r.Host, Secret: &corev1.Secret{
 			ObjectMeta: meta,
 			Type:       corev1.SecretTypeSSHAuth,
 			Data: map[string][]byte{
@@ -114,7 +122,11 @@ func Resolve(gitURL, app, namespace string, deployKey, token *corev1.Secret) (Bu
 		if user == "" {
 			user = DefaultUsername(r.Host)
 		}
-		return Build{Kind: KindToken, CloneURL: r.HTTPS(), Host: r.Host, Secret: &corev1.Secret{
+		cloneURL := given
+		if r.Scheme == "ssh" {
+			cloneURL = r.HTTPS()
+		}
+		return Build{Kind: KindToken, CloneURL: cloneURL, Host: r.Host, Secret: &corev1.Secret{
 			ObjectMeta: meta,
 			Type:       corev1.SecretTypeBasicAuth,
 			Data: map[string][]byte{
@@ -124,4 +136,10 @@ func Resolve(gitURL, app, namespace string, deployKey, token *corev1.Secret) (Bu
 		}}, nil
 	}
 	return Build{CloneURL: gitURL, Host: r.Host}, nil
+}
+
+// DeployKeyFits says a project's deploy key applies to a repository on
+// host: a key is for the one host it was made for.
+func DeployKeyFits(deployKey *corev1.Secret, host string) bool {
+	return deployKey != nil && strings.EqualFold(deployKey.Annotations[AnnotationHost], host)
 }
