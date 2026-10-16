@@ -153,8 +153,10 @@ shpyrd deploy --git https://github.com/org/repo --no-auto-deploy
 ```
 
 or switch **Auto-deploy** off under the project's Summary. The project shows
-the latest commit it has not deployed; a deploy or switching auto-deploy on
-again deploys it. A deploy that names neither `--auto-deploy` nor
+the latest commit it has not deployed; a deploy deploys it, and so does
+switching auto-deploy on again, at once and without waiting for the next
+check: the release says `Commit a1b2c3d (auto-deploy on)`. A commit that
+asked to be skipped stays skipped. A deploy that names neither `--auto-deploy` nor
 `--no-auto-deploy` keeps the project's setting.
 
 **What runs.** A `--ref` that is a branch or a tag is followed; a tag's
@@ -165,7 +167,11 @@ keeps running, and the project says so.
 
 The first time a project on a branch is built this way after an upgrade, it
 builds once more, the same code: the build now names the commit instead of
-the branch.
+the branch. A project already deployed from a branch that shpyrd cannot read
+keeps building the branch as before, and says why it cannot read it. A URL
+with a user name and password in it (`https://user:pass@host/org/repo`)
+still works without a token: shpyrd reads the branch with them, and never
+shows them.
 
 <Callout title="Connect GitHub is coming">
 
@@ -393,7 +399,7 @@ shpyrd env unset LOG_LEVEL
 shpyrd secrets list            # names and when each was last set; values are never shown
 ```
 
-Changes are saved without restarting the app. Run `shpyrd redeploy` (or deploy new source) when ready to apply them. Until then, running processes, replacement instances and one-off commands keep using the deployed configuration. The project's **Config** page shows a pending-changes notice and a save toast; it supports editing visible variables, replacing hidden secrets, and pasting `.env` files with a choice of kind.
+Changes are saved without restarting the app. Run `shpyrd redeploy` (or deploy new source) when ready to apply them. On a project that deploys on push, the next push to the branch deploys them too, with its commit. Until then, running processes, replacement instances and one-off commands keep using the deployed configuration. The project's **Config** page shows a pending-changes notice and a save toast; it supports editing visible variables, replacing hidden secrets, and pasting `.env` files with a choice of kind.
 
 Variables are readable by everyone who can view the project. New entries default to secrets, and existing secrets stay hidden on upgrade. Making a secret a variable requires confirmation; credential-looking names such as `API_KEY` or `AUTH_TOKEN` also require confirmation (`shpyrd env set --confirm-plain` in the CLI). Making a variable a secret hides its value without changing it. A name has one project-owned value: saving it as a secret takes precedence, while existing secrets cannot be converted back to visible variables. Attached-resource variables still override project configuration.
 
