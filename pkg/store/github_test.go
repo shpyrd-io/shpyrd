@@ -1,0 +1,133 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+func acme(id int64, by string) GitHubInstallation {
+	return GitHubInstallation{ID: id, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: by}
+}
+
+func TestGitHubInstallations(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "beta", Name: "Beta"}); err != nil {
+				t.Fatal(err)
+			}
+			moved, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test"))
+			if err != nil || moved != "" {
+				t.Fatalf("add: %q %v", moved, err)
+			}
+			list, err := s.GitHubInstallations(ctx, DefaultWorkspace)
+			if err != nil || len(list) != 1 || list[0].ID != 42 || list[0].Workspace != DefaultWorkspace || list[0].AccountLogin != "Acme" ||
+				list[0].AccountType != "Organization" || list[0].ConnectedBy != "ana@acme.test" || list[0].CreatedAt.IsZero() || list[0].SuspendedAt != nil {
+				t.Fatalf("list: %+v %v", list, err)
+			}
+			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace {
+				t.Errorf("by id: %+v %v", got, err)
+			}
+			if _, err := s.GitHubInstallation(ctx, 7); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown id: %v", err)
+			}
+			// Suspended on GitHub, then unsuspended.
+			if err := s.SetGitHubInstallationState(ctx, 42, true, false); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt == nil {
+				t.Errorf("suspended: %+v", got)
+			}
+			if err := s.SetGitHubInstallationState(ctx, 42, false, false); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt != nil {
+				t.Errorf("unsuspended: %+v", got)
+			}
+			if err := s.SetGitHubInstallationState(ctx, 7, true, false); !errors.Is(err, ErrNotFound) {
+				t.Errorf("unknown id: %v", err)
+			}
+			// Deleted on GitHub: gone from the lists; a new connect revives it.
+			if err := s.SetGitHubInstallationState(ctx, 42, false, true); err != nil {
+				t.Fatal(err)
+			}
+			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 0 {
+				t.Errorf("deleted is not listed: %+v", list)
+			}
+			if _, err := s.GitHubInstallation(ctx, 42); !errors.Is(err, ErrNotFound) {
+				t.Errorf("deleted by id: %v", err)
+			}
+			if moved, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "bob@acme.test")); err != nil || moved != "" {
+				t.Fatalf("revive: %q %v", moved, err)
+			}
+			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 1 || list[0].ConnectedBy != "bob@acme.test" || list[0].DeletedAt != nil {
+				t.Errorf("revived: %+v", list)
+			}
+			// Disconnect: only from the workspace it belongs to.
+			if err := s.DeleteGitHubInstallation(ctx, "beta", 42); !errors.Is(err, ErrNotFound) {
+				t.Errorf("another workspace's: %v", err)
+			}
+			if err := s.DeleteGitHubInstallation(ctx, DefaultWorkspace, 42); err != nil {
+				t.Fatal(err)
+			}
+			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 0 {
+				t.Errorf("disconnected: %+v", list)
+			}
+		})
+	}
+}
+
+func TestGitHubInstallationMovesBetweenWorkspaces(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "beta", Name: "Beta"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+				t.Fatal(err)
+			}
+			moved, err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test"))
+			if err != nil || moved != DefaultWorkspace {
+				t.Fatalf("move: %q %v", moved, err)
+			}
+			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 0 {
+				t.Errorf("the old workspace keeps nothing: %+v", list)
+			}
+			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != "beta" || got.ConnectedBy != "bob@beta.test" {
+				t.Errorf("by id: %+v %v", got, err)
+			}
+			if moved, err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test")); err != nil || moved != "" {
+				t.Errorf("connecting again where it is moves nothing: %q %v", moved, err)
+			}
+		})
+	}
+}
+
+func TestOneWorkspaceSeesOnlyItsGitHubInstallations(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := open(t)
+			if _, err := st.CreateWorkspace(ctx, Workspace{Slug: "byhand", Name: "By hand"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.AddGitHubInstallation(ctx, "byhand", acme(9, "x@byhand.test")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+				t.Fatal(err)
+			}
+			one := OneWorkspace(st)
+			if _, err := one.GitHubInstallation(ctx, 9); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a workspace added by hand: %v", err)
+			}
+			if got, err := one.GitHubInstallation(ctx, 42); err != nil || got.ID != 42 {
+				t.Errorf("the default one's: %+v %v", got, err)
+			}
+		})
+	}
+}
