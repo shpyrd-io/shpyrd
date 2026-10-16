@@ -1,15 +1,20 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr/funcr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -182,7 +187,7 @@ func TestDockerfileFetchWithToken(t *testing.T) {
 	if !strings.Contains(script, "url='https://github.com/acme/dk'") || !strings.Contains(script, ".netrc") {
 		t.Errorf("script: %s", script)
 	}
-	if !hasGitAuthMount(init) || !hasSecretVolume(job, "dk-git") {
+	if !hasGitAuthMount(init) || !hasSecretVolume(job, "dk-git") || !gitAuthVolumeOptional(job) {
 		t.Errorf("fetch container lacks the credential: %+v", init.VolumeMounts)
 	}
 	if hasGitAuthMount(job.Spec.Template.Spec.Containers[0]) {
@@ -241,4 +246,63 @@ func hasSecretVolume(job *batchv1.Job, name string) bool {
 		}
 	}
 	return false
+}
+
+func gitAuthVolumeOptional(job *batchv1.Job) bool {
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == "git-auth" && v.Secret != nil {
+			return v.Secret.Optional != nil && *v.Secret.Optional
+		}
+	}
+	return false
+}
+
+func TestReconcileSendsNoDeleteForAnAbsentGitSecret(t *testing.T) {
+	app := sampleApp("shop")
+	app.Spec.Source = &shpyrdv1.Source{Blob: &shpyrdv1.BlobSource{URL: "http://shpyrd-server.shpyrd-system.svc:8082/api/sources/" + strings.Repeat("a", 64) + ".tgz", SHA256: strings.Repeat("a", 64)}}
+	r, _ := newTestReconciler(t, app)
+	gitDeletes := 0
+	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.Secret); ok && obj.GetName() == gitauth.BuildSecretName(app.Name) {
+				gitDeletes++
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	runReconcile(t, r, app)
+	runReconcile(t, r, app)
+	if gitDeletes != 0 {
+		t.Errorf("a DELETE of shop-git per reconcile: %d", gitDeletes)
+	}
+}
+
+func TestGitSecretIsOwnedByTheApp(t *testing.T) {
+	app := gitApp("shop", "https://github.com/acme/shop")
+	app.UID = "uid-shop"
+	r, c := newTestReconciler(t, app, workspaceToken("default", "github.com", "ghp"))
+	if _, err := r.reconcileGitCredentials(context.Background(), app); err != nil {
+		t.Fatal(err)
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-git"}, sec); err != nil {
+		t.Fatal(err)
+	}
+	ref := metav1.GetControllerOf(sec)
+	if ref == nil || ref.Kind != "App" || ref.Name != "shop" || ref.UID != "uid-shop" {
+		t.Errorf("owner = %+v", sec.OwnerReferences)
+	}
+}
+
+func TestUnparseableURLIsNotLogged(t *testing.T) {
+	app := gitApp("shop", "git://user:s3cret@example.com/a/b")
+	r, _ := newTestReconciler(t, app)
+	var buf bytes.Buffer
+	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) { buf.WriteString(prefix + args + "\n") }, funcr.Options{}))
+	if _, err := r.reconcileGitCredentials(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "s3cret") || strings.Contains(buf.String(), "example.com") || !strings.Contains(buf.String(), "its git URL is not one shpyrd can parse; building without credentials") {
+		t.Errorf("log: %s", buf.String())
+	}
 }

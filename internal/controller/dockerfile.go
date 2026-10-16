@@ -544,8 +544,10 @@ func gitAuthVolumes(git gitauth.Build) []corev1.Volume {
 	if git.Secret == nil {
 		return nil
 	}
+	// Optional: a credential removed between the Job and its pod fails the
+	// clone at once rather than holding the pod in ContainerCreating.
 	return []corev1.Volume{{Name: "git-auth", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-		SecretName: git.Secret.Name, DefaultMode: ptr.To[int32](0o440),
+		SecretName: git.Secret.Name, DefaultMode: ptr.To[int32](0o440), Optional: ptr.To(true),
 	}}}}
 }
 

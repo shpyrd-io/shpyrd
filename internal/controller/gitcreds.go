@@ -30,7 +30,7 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	url := app.Spec.Source.Git.URL
 	repo, err := gitauth.Parse(url)
 	if err != nil {
-		return r.noGitCredential(ctx, app, err)
+		return r.noGitCredential(ctx, app)
 	}
 	deployKey, err := r.optionalSecret(ctx, app.Namespace, gitauth.DeployKeySecretName)
 	if err != nil {
@@ -42,19 +42,23 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	}
 	b, err := gitauth.Resolve(url, app.Name, app.Namespace, deployKey, token)
 	if err != nil {
-		return r.noGitCredential(ctx, app, err)
+		return r.noGitCredential(ctx, app)
 	}
 	if b.Secret == nil {
 		return b, r.deleteSecret(ctx, app.Namespace, name)
 	}
 	want := b.Secret
+	// Owned by the App: deleted with it.
+	if err := controllerutil.SetControllerReference(app, want, r.Scheme); err != nil {
+		return b, fmt.Errorf("git credentials: %w", err)
+	}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = mergeMaps(sec.Labels, want.Labels)
 		sec.Annotations = mergeMaps(sec.Annotations, want.Annotations)
 		sec.Type = want.Type
 		sec.Data = want.Data
-		return nil
+		return controllerutil.SetControllerReference(app, sec, r.Scheme)
 	}); err != nil {
 		if apierrors.IsInvalid(err) {
 			// The Secret's type is immutable: a deploy key replacing a
@@ -72,8 +76,9 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 // noGitCredential is the fallback for a git URL shpyrd cannot parse: no
 // credential applies and the build uses the raw URL, as it did before
 // credentials existed. It is not a reconcile error.
-func (r *AppReconciler) noGitCredential(ctx context.Context, app *shpyrdv1.App, cause error) (gitauth.Build, error) {
-	log.FromContext(ctx).Info("no git credential applies: the git URL cannot be parsed", "app", app.Namespace+"/"+app.Name, "reason", cause.Error())
+// The URL is not logged: it may carry a user name or password.
+func (r *AppReconciler) noGitCredential(ctx context.Context, app *shpyrdv1.App) (gitauth.Build, error) {
+	log.FromContext(ctx).Info("its git URL is not one shpyrd can parse; building without credentials", "app", app.Namespace+"/"+app.Name)
 	return gitauth.Build{}, r.deleteSecret(ctx, app.Namespace, gitauth.BuildSecretName(app.Name))
 }
 
@@ -127,10 +132,16 @@ func (r *AppReconciler) optionalSecret(ctx context.Context, ns, name string) (*c
 	return sec, nil
 }
 
+// deleteSecret removes a Secret when the cache holds it: every reconcile
+// of an app without a credential passes here, and must not send a DELETE
+// each time.
 func (r *AppReconciler) deleteSecret(ctx context.Context, ns, name string) error {
-	err := r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
-	if err != nil && !apierrors.IsNotFound(err) {
+	sec := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
-	return nil
+	return r.deleteIfExists(ctx, sec)
 }
