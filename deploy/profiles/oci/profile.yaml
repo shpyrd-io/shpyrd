@@ -152,7 +152,7 @@ runlevels:
   - name: rc3
     components: [kpack, monitoring, dns, control-plane-db, cluster-autoscaler]
   - name: rc4
-    components: [shpyrd, platform-backup, platform-snapshots]
+    components: [shpyrd, platform-backup, platform-snapshots, object-gateway-door]
 # Retired: installed by this profile once, removed by a full cluster init
 # from a cluster that still has it. Project disks and databases are on
 # block storage here; the node's disk is for kind only.

@@ -926,3 +926,144 @@ func TestPlatformBackupAlerts(t *testing.T) {
 		}
 	}
 }
+
+// The buckets' door (storage plan step 5): on a cluster with the gateway,
+// one host through the front door to the gateway's listener for the
+// projects' buckets, with its certificate and a body limit an object fits
+// in; the gateway's Service carries that listener and its metrics are
+// scraped. Without the gateway there is no door and no host.
+func TestObjectGatewayRendersItsDoorAndMetrics(t *testing.T) {
+	gateway := map[string]string{VarDomain: "oci.example.com", VarACMEEmail: "ops@example.com", VarGatewayBucket: "gateway", VarGatewayEndpoint: "https://ns.compat.objectstorage.sa-saopaulo-1.oraclecloud.com", VarGatewayRegion: "sa-saopaulo-1", VarDNSProvider: "oci"}
+	eng, err := New(nil, Options{Profile: "oci", Vars: gateway, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.vars[VarBucketsHost]; got != "buckets.oci.example.com" {
+		t.Errorf("SHPYRD_BUCKETS_HOST = %q", got)
+	}
+	door := eng.components["object-gateway-door"]
+	if door == nil {
+		t.Fatal("no object-gateway-door component on the oci profile")
+	}
+	objs, err := eng.renderComponent(door)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ingress, certificate bool
+	for _, o := range objs {
+		switch o.GetKind() {
+		case "Certificate":
+			names, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "dnsNames")
+			issuer, _, _ := unstructured.NestedString(o.Object, "spec", "issuerRef", "name")
+			certificate = len(names) == 1 && names[0] == "buckets.oci.example.com" && issuer == "letsencrypt-dns01"
+			if !certificate {
+				t.Errorf("certificate names %v issuer %q", names, issuer)
+			}
+		case "Ingress":
+			ingress = true
+			ann := o.GetAnnotations()
+			if ann["nginx.ingress.kubernetes.io/proxy-body-size"] != "5g" || ann["nginx.ingress.kubernetes.io/proxy-request-buffering"] != "off" {
+				t.Errorf("door annotations = %v", ann)
+			}
+			rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "rules")
+			host, _, _ := unstructured.NestedString(rules[0].(map[string]interface{}), "host")
+			paths, _, _ := unstructured.NestedSlice(rules[0].(map[string]interface{}), "http", "paths")
+			port, _, _ := unstructured.NestedString(paths[0].(map[string]interface{}), "backend", "service", "port", "name")
+			svc, _, _ := unstructured.NestedString(paths[0].(map[string]interface{}), "backend", "service", "name")
+			if host != "buckets.oci.example.com" || svc != "object-storage" || port != "s3-apps" {
+				t.Errorf("door rule: host %q service %q port %q", host, svc, port)
+			}
+		}
+	}
+	if !ingress || !certificate {
+		t.Errorf("door: ingress=%v certificate=%v", ingress, certificate)
+	}
+	objs, err = eng.renderComponent(eng.components["object-gateway"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var apps, monitor bool
+	for _, o := range objs {
+		switch {
+		case o.GetKind() == "Service" && o.GetName() == "object-storage":
+			ports, _, _ := unstructured.NestedSlice(o.Object, "spec", "ports")
+			for _, p := range ports {
+				m := p.(map[string]interface{})
+				if m["name"] == "s3-apps" && fmt.Sprint(m["port"]) == "3901" {
+					apps = true
+				}
+			}
+		case o.GetKind() == "ServiceMonitor" && o.GetName() == "object-storage":
+			endpoints, _, _ := unstructured.NestedSlice(o.Object, "spec", "endpoints")
+			path, _, _ := unstructured.NestedString(endpoints[0].(map[string]interface{}), "path")
+			port, _, _ := unstructured.NestedString(endpoints[0].(map[string]interface{}), "port")
+			monitor = path == "/metrics" && port == "admin"
+		}
+	}
+	if !apps || !monitor {
+		t.Errorf("gateway: apps port=%v service monitor=%v", apps, monitor)
+	}
+	// An operator's own host, outside the domain, gets the cluster issuer.
+	d := derivedVars(map[string]string{VarDomain: "oci.example.com", VarGatewayBucket: "gateway", VarBucketsHost: "files.example.net", VarClusterIssuer: "letsencrypt-http01", VarDNSProvider: "oci"}, nil)
+	if d[VarBucketsHost] != "files.example.net" || d[VarBucketsIssuer] != "letsencrypt-http01" {
+		t.Errorf("an operator's host: %q with issuer %q", d[VarBucketsHost], d[VarBucketsIssuer])
+	}
+	// Without the gateway: no host, and the door component is skipped.
+	local, err := New(nil, Options{Profile: "local", Vars: map[string]string{VarDomain: "example.test", VarHTTPSPort: "8443"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local.vars[VarBucketsHost]; got != "" {
+		t.Errorf("SHPYRD_BUCKETS_HOST without the gateway = %q", got)
+	}
+	if c := local.components["object-gateway-door"]; c == nil || c.RequiredVar != VarBucketsHost {
+		t.Errorf("the door is gated by the host variable: %+v", c)
+	}
+}
+
+// The gateway's alerts (storage plan step 5) are worded for an operator.
+func TestObjectGatewayAlerts(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "example.test", VarACMEEmail: "ops@example.com"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals, err := loadValues(deploy.FS, valuesFiles(deploy.FS, eng.components["monitoring"], "oci"), eng.vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesMap, _ := vals["additionalPrometheusRulesMap"].(map[string]interface{})
+	groups, _, _ := unstructured.NestedSlice(rulesMap, "shpyrd-object-storage", "groups")
+	if len(groups) != 1 {
+		t.Fatalf("gateway rule groups = %v", groups)
+	}
+	rules, _, _ := unstructured.NestedSlice(groups[0].(map[string]interface{}), "rules")
+	alerts := map[string]map[string]interface{}{}
+	for _, r := range rules {
+		rule := r.(map[string]interface{})
+		alerts[rule["alert"].(string)] = rule
+	}
+	for name, metric := range map[string]string{"ObjectGatewayDown": "kube_deployment_status_replicas_available", "ObjectGatewayErrors": "shpyrd_gateway_requests_total", "ObjectGatewayProviderSlow": "shpyrd_gateway_provider_request_duration_seconds_bucket"} {
+		rule := alerts[name]
+		if rule == nil {
+			t.Errorf("no %s rule", name)
+			continue
+		}
+		if expr, _ := rule["expr"].(string); !strings.Contains(expr, metric) {
+			t.Errorf("%s reads %s, not %s", name, expr, metric)
+		}
+		if component, _, _ := unstructured.NestedString(rule, "labels", "shpyrd_component"); component != "object-storage" {
+			t.Errorf("%s component = %q", name, component)
+		}
+		ann, _, _ := unstructured.NestedStringMap(rule, "annotations")
+		for _, k := range []string{"summary", "description"} {
+			if ann[k] == "" {
+				t.Errorf("%s has no %s", name, k)
+			}
+			for _, word := range []string{"kubectl", "Deployment", "pod", "namespace", "shpyrd-system", "`"} {
+				if strings.Contains(ann[k], word) {
+					t.Errorf("%s %s names %q: %s", name, k, word, ann[k])
+				}
+			}
+		}
+	}
+}

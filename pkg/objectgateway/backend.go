@@ -6,8 +6,11 @@ package objectgateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -30,6 +33,24 @@ func (b *Backend) String() string                               { return "shpyrd
 func (b *Backend) NormalizeObjectKey(bucket, key string) string { return key }
 func prefix(bucket string) string                               { return "buckets/" + bucket + "/" }
 func denied() error                                             { return s3err.GetAPIError(s3err.ErrAccessDenied) }
+
+// prefixOf is where a logical bucket's objects live, through its record:
+// its own prefix, or the one it serves as an alias (storage plan step 5).
+// The record comes from the authentication cache, so a data operation
+// costs no provider read.
+func (b *Backend) prefixOf(ctx context.Context, bucket string) (string, error) {
+	if !validName(bucket) {
+		return "", denied()
+	}
+	rec, err := b.records.cachedGet(ctx, bucket)
+	if err != nil {
+		if errors.Is(err, s3err.GetAPIError(s3err.ErrNoSuchBucket)) {
+			return "", denied()
+		}
+		return "", err
+	}
+	return rec.prefix(), nil
+}
 func safeKey(key string) bool {
 	for _, part := range strings.Split(key, "/") {
 		if part == "." || part == ".." {
@@ -38,34 +59,91 @@ func safeKey(key string) bool {
 	}
 	return !strings.ContainsRune(key, '\x00')
 }
-func (b *Backend) mapKey(bucket, key **string) error {
-	if *bucket == nil || !validName(**bucket) || *key == nil || !safeKey(**key) {
+func (b *Backend) mapKey(ctx context.Context, bucket, key **string) error {
+	if *bucket == nil || *key == nil || !safeKey(**key) {
 		return denied()
 	}
-	*key = aws.String(prefix(**bucket) + **key)
+	p, err := b.prefixOf(ctx, **bucket)
+	if err != nil {
+		return err
+	}
+	*key = aws.String(p + **key)
 	*bucket = aws.String(b.physical)
 	return nil
 }
+
+// sizeOf is an object's size at the provider, 0 when it is not there.
+func (b *Backend) sizeOf(ctx context.Context, physicalKey string) int64 {
+	out, err := b.proxy.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.physical), Key: aws.String(physicalKey)})
+	if err != nil || out == nil {
+		return 0
+	}
+	return aws.ToInt64(out.ContentLength)
+}
+
 func (b *Backend) GetBucketAcl(ctx context.Context, in *s3.GetBucketAclInput) ([]byte, error) {
-	r, err := b.records.Get(ctx, aws.ToString(in.Bucket))
+	r, err := b.records.cachedGet(ctx, aws.ToString(in.Bucket))
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(auth.ACL{Owner: r.Name, Grantees: []auth.Grantee{{Access: r.Name, Permission: auth.PermissionFullControl, Type: types.TypeCanonicalUser}}})
 }
+
+// GetBucketPolicy is how a public bucket opens its objects to anyone
+// (storage plan step 5): a policy allowing GetObject to every principal,
+// and nothing else, so an address is readable and a listing is not. A
+// bucket that is not public has no policy. Policies are never written by
+// consumers; the bucket's resource says whether it is public.
 func (b *Backend) GetBucketPolicy(ctx context.Context, bucket string) ([]byte, error) {
-	return nil, s3err.GetAPIError(s3err.ErrNoSuchBucketPolicy)
+	r, err := b.records.cachedGet(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if !r.Public {
+		return nil, s3err.GetAPIError(s3err.ErrNoSuchBucketPolicy)
+	}
+	return json.Marshal(map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []map[string]any{{
+			"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::" + bucket + "/*",
+		}},
+	})
+}
+
+// CORS is the consumer's, kept on the record: a browser uploads through a
+// presigned address only when the bucket allows its origin.
+func (b *Backend) PutBucketCors(ctx context.Context, bucket string, cors []byte) error {
+	if !validName(bucket) {
+		return denied()
+	}
+	return b.records.SetCORS(ctx, bucket, cors)
+}
+func (b *Backend) GetBucketCors(ctx context.Context, bucket string) ([]byte, error) {
+	r, err := b.records.cachedGet(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if r.CORS == "" {
+		return nil, s3err.GetAPIError(s3err.ErrNoSuchCORSConfiguration)
+	}
+	return []byte(r.CORS), nil
+}
+func (b *Backend) DeleteBucketCors(ctx context.Context, bucket string) error {
+	if !validName(bucket) {
+		return denied()
+	}
+	return b.records.SetCORS(ctx, bucket, nil)
 }
 func (b *Backend) GetBucketOwnershipControls(ctx context.Context, bucket string) (types.ObjectOwnership, error) {
 	return types.ObjectOwnershipBucketOwnerEnforced, nil
 }
 func (b *Backend) HeadBucket(ctx context.Context, in *s3.HeadBucketInput) (*s3.HeadBucketOutput, error) {
-	_, err := b.records.Get(ctx, aws.ToString(in.Bucket))
+	_, err := b.records.cachedGet(ctx, aws.ToString(in.Bucket))
 	return &s3.HeadBucketOutput{}, err
 }
 func (b *Backend) ListBuckets(ctx context.Context, in s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
 	out := s3response.ListAllMyBucketsResult{Owner: s3response.CanonicalUser{ID: in.Owner}}
-	r, err := b.records.Get(ctx, in.Owner)
+	r, err := b.records.cachedGet(ctx, in.Owner)
 	if err != nil {
 		return out, err
 	}
@@ -138,38 +216,66 @@ func (b *Backend) PutObject(ctx context.Context, in s3response.PutObjectInput) (
 		in.ChecksumAlgorithm = ""
 	}
 	in.ExpectedBucketOwner = nil
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	bucket, size := aws.ToString(in.Bucket), aws.ToInt64(in.ContentLength)
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
-	return b.proxy.PutObject(ctx, in)
+	// The cap (storage plan step 5): an upload that would pass it is
+	// refused before a byte reaches the provider. An overwrite counts as
+	// new bytes until the sweep measures; the cap errs on the full side.
+	if err := b.records.Allow(ctx, bucket, size); err != nil {
+		return s3response.PutObjectOutput{}, err
+	}
+	out, err := b.proxy.PutObject(ctx, in)
+	if err == nil {
+		b.records.Add(bucket, size, 1)
+	}
+	return out, err
 }
 func (b *Backend) HeadObject(ctx context.Context, in *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return nil, err
 	}
 	return b.proxy.HeadObject(ctx, in)
 }
 func (b *Backend) GetObject(ctx context.Context, in *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return nil, err
 	}
 	return b.proxy.GetObject(ctx, in)
 }
 func (b *Backend) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	bucket := aws.ToString(in.Bucket)
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return nil, err
 	}
-	return b.proxy.DeleteObject(ctx, in)
+	// What goes is counted out at once, so room freed is room usable.
+	size := b.sizeOf(ctx, aws.ToString(in.Key))
+	out, err := b.proxy.DeleteObject(ctx, in)
+	if err == nil && size > 0 {
+		b.records.Add(bucket, -size, -1)
+	}
+	return out, err
 }
 func (b *Backend) UploadPart(ctx context.Context, in *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
 	if unvaluedAlgorithm(in.ChecksumAlgorithm, partChecksumValues(in)) {
 		in.ChecksumAlgorithm = ""
 	}
 	in.ExpectedBucketOwner = nil
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	bucket, size := aws.ToString(in.Bucket), aws.ToInt64(in.ContentLength)
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return nil, err
 	}
-	return b.proxy.UploadPart(ctx, in)
+	// Parts of an unfinished upload count: they are bytes the provider
+	// holds; an abort counts them out, the sweep aborts what is forgotten.
+	if err := b.records.Allow(ctx, bucket, size); err != nil {
+		return nil, err
+	}
+	out, err := b.proxy.UploadPart(ctx, in)
+	if err == nil {
+		b.records.Add(bucket, size, 0)
+	}
+	return out, err
 }
 func (b *Backend) CreateMultipartUpload(ctx context.Context, in s3response.CreateMultipartUploadInput) (s3response.InitiateMultipartUploadResult, error) {
 	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
@@ -181,7 +287,7 @@ func (b *Backend) CreateMultipartUpload(ctx context.Context, in s3response.Creat
 	in.GrantWriteACP = nil
 	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	in.ExpectedBucketOwner = nil
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
 	out, err := b.proxy.CreateMultipartUpload(ctx, in)
@@ -191,24 +297,56 @@ func (b *Backend) CreateMultipartUpload(ctx context.Context, in s3response.Creat
 }
 func (b *Backend) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput) (s3response.CompleteMultipartUploadResult, string, error) {
 	bucket, key := in.Bucket, in.Key
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", err
 	}
 	out, version, err := b.proxy.CompleteMultipartUpload(ctx, in)
 	out.Bucket = bucket
 	out.Key = key
 	out.Location = nil
+	if err == nil {
+		// The parts were counted as they came; the object is one more.
+		b.records.Add(aws.ToString(bucket), 0, 1)
+	}
 	return out, version, err
 }
 func (b *Backend) AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput) error {
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	bucket := aws.ToString(in.Bucket)
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return err
 	}
-	return b.proxy.AbortMultipartUpload(ctx, in)
+	parts := b.partsSize(ctx, in.Bucket, in.Key, in.UploadId)
+	if err := b.proxy.AbortMultipartUpload(ctx, in); err != nil {
+		return err
+	}
+	if parts > 0 {
+		b.records.Add(bucket, -parts, 0)
+	}
+	return nil
+}
+
+// partsSize is what the parts of an unfinished upload weigh, 0 when they
+// cannot be listed.
+func (b *Backend) partsSize(ctx context.Context, physicalBucket, key, uploadID *string) int64 {
+	var total int64
+	in := &s3.ListPartsInput{Bucket: physicalBucket, Key: key, UploadId: uploadID}
+	for {
+		out, err := b.proxy.ListParts(ctx, in)
+		if err != nil {
+			return 0
+		}
+		for _, p := range out.Parts {
+			total += p.Size
+		}
+		if !out.IsTruncated || out.NextPartNumberMarker <= 0 {
+			return total
+		}
+		in.PartNumberMarker = aws.String(strconv.Itoa(out.NextPartNumberMarker))
+	}
 }
 func (b *Backend) ListParts(ctx context.Context, in *s3.ListPartsInput) (s3response.ListPartsResult, error) {
 	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
-	if err := b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err := b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.ListPartsResult{}, err
 	}
 	out, err := b.proxy.ListParts(ctx, in)
@@ -216,20 +354,29 @@ func (b *Backend) ListParts(ctx context.Context, in *s3.ListPartsInput) (s3respo
 	out.Key = key
 	return out, err
 }
-func (b *Backend) copySource(bucket string, source *string) (*string, error) {
+
+// copySource maps a copy's source to the provider; the source's physical
+// key comes back too, for its size.
+func (b *Backend) copySource(ctx context.Context, bucket string, source *string) (*string, string, error) {
 	raw, err := url.PathUnescape(aws.ToString(source))
 	if err != nil {
-		return nil, denied()
+		return nil, "", denied()
 	}
 	parts := strings.SplitN(strings.TrimPrefix(raw, "/"), "/", 2)
 	if len(parts) != 2 || parts[0] != bucket || !safeKey(parts[1]) {
-		return nil, denied()
+		return nil, "", denied()
 	}
-	return aws.String(url.PathEscape(b.physical + "/" + prefix(bucket) + parts[1])), nil
+	p, err := b.prefixOf(ctx, bucket)
+	if err != nil {
+		return nil, "", err
+	}
+	return aws.String(url.PathEscape(b.physical + "/" + p + parts[1])), p + parts[1], nil
 }
 func (b *Backend) CopyObject(ctx context.Context, in s3response.CopyObjectInput) (s3response.CopyObjectOutput, error) {
 	var err error
-	in.CopySource, err = b.copySource(aws.ToString(in.Bucket), in.CopySource)
+	bucket := aws.ToString(in.Bucket)
+	var sourceKey string
+	in.CopySource, sourceKey, err = b.copySource(ctx, bucket, in.CopySource)
 	if err != nil {
 		return s3response.CopyObjectOutput{}, err
 	}
@@ -245,23 +392,73 @@ func (b *Backend) CopyObject(ctx context.Context, in s3response.CopyObjectInput)
 	in.ExpectedSourceBucketOwner = nil
 	in.StorageClass = ""
 	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
-	if err = b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err = b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.CopyObjectOutput{}, err
 	}
-	return b.proxy.CopyObject(ctx, in)
+	size := b.sizeOf(ctx, sourceKey)
+	if err := b.records.Allow(ctx, bucket, size); err != nil {
+		return s3response.CopyObjectOutput{}, err
+	}
+	out, err := b.proxy.CopyObject(ctx, in)
+	if err == nil {
+		b.records.Add(bucket, size, 1)
+	}
+	return out, err
 }
 func (b *Backend) UploadPartCopy(ctx context.Context, in *s3.UploadPartCopyInput) (s3response.CopyPartResult, error) {
 	var err error
-	in.CopySource, err = b.copySource(aws.ToString(in.Bucket), in.CopySource)
+	bucket := aws.ToString(in.Bucket)
+	var sourceKey string
+	in.CopySource, sourceKey, err = b.copySource(ctx, bucket, in.CopySource)
 	if err != nil {
 		return s3response.CopyPartResult{}, err
 	}
 	in.ExpectedBucketOwner = nil
 	in.ExpectedSourceBucketOwner = nil
-	if err = b.mapKey(&in.Bucket, &in.Key); err != nil {
+	if err = b.mapKey(ctx, &in.Bucket, &in.Key); err != nil {
 		return s3response.CopyPartResult{}, err
 	}
-	return b.proxy.UploadPartCopy(ctx, in)
+	size := b.sizeOf(ctx, sourceKey)
+	if rng := aws.ToString(in.CopySourceRange); rng != "" {
+		size = rangeSize(rng, size)
+	}
+	if err := b.records.Allow(ctx, bucket, size); err != nil {
+		return s3response.CopyPartResult{}, err
+	}
+	out, err := b.proxy.UploadPartCopy(ctx, in)
+	if err == nil {
+		b.records.Add(bucket, size, 0)
+	}
+	return out, err
+}
+
+// rangeSize is what a "bytes=a-b" range of an object of size n covers.
+func rangeSize(rng string, n int64) int64 {
+	spec, ok := strings.CutPrefix(rng, "bytes=")
+	if !ok {
+		return n
+	}
+	first, last, ok := strings.Cut(spec, "-")
+	if !ok {
+		return n
+	}
+	a, err := strconv.ParseInt(first, 10, 64)
+	if err != nil {
+		return n
+	}
+	bEnd := n - 1
+	if last != "" {
+		if bEnd, err = strconv.ParseInt(last, 10, 64); err != nil {
+			return n
+		}
+	}
+	if bEnd >= n {
+		bEnd = n - 1
+	}
+	if a > bEnd {
+		return 0
+	}
+	return bEnd - a + 1
 }
 func strip(p string, s *string) *string {
 	if s == nil {
@@ -280,9 +477,9 @@ func stripObjects(p string, objects []s3response.Object, common []types.CommonPr
 }
 func (b *Backend) ListObjects(ctx context.Context, in *s3.ListObjectsInput) (s3response.ListObjectsResult, error) {
 	bucket := aws.ToString(in.Bucket)
-	p := prefix(bucket)
-	if !validName(bucket) || !safeKey(aws.ToString(in.Prefix)) {
-		return s3response.ListObjectsResult{}, denied()
+	p, err := b.prefixOf(ctx, bucket)
+	if err != nil || !safeKey(aws.ToString(in.Prefix)) {
+		return s3response.ListObjectsResult{}, firstError(err, denied())
 	}
 	in.Bucket = aws.String(b.physical)
 	in.Prefix = aws.String(p + aws.ToString(in.Prefix))
@@ -300,9 +497,9 @@ func (b *Backend) ListObjects(ctx context.Context, in *s3.ListObjectsInput) (s3r
 }
 func (b *Backend) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input) (s3response.ListObjectsV2Result, error) {
 	bucket := aws.ToString(in.Bucket)
-	p := prefix(bucket)
-	if !validName(bucket) || !safeKey(aws.ToString(in.Prefix)) {
-		return s3response.ListObjectsV2Result{}, denied()
+	p, err := b.prefixOf(ctx, bucket)
+	if err != nil || !safeKey(aws.ToString(in.Prefix)) {
+		return s3response.ListObjectsV2Result{}, firstError(err, denied())
 	}
 	in.Bucket = aws.String(b.physical)
 	in.Prefix = aws.String(p + aws.ToString(in.Prefix))
@@ -319,9 +516,9 @@ func (b *Backend) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input) 
 }
 func (b *Backend) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput) (s3response.DeleteResult, error) {
 	bucket := aws.ToString(in.Bucket)
-	p := prefix(bucket)
-	if !validName(bucket) || in.Delete == nil {
-		return s3response.DeleteResult{}, denied()
+	p, err := b.prefixOf(ctx, bucket)
+	if err != nil || in.Delete == nil {
+		return s3response.DeleteResult{}, firstError(err, denied())
 	}
 	for i := range in.Delete.Objects {
 		if !safeKey(aws.ToString(in.Delete.Objects[i].Key)) {
@@ -330,14 +527,55 @@ func (b *Backend) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput) 
 		in.Delete.Objects[i].Key = aws.String(p + aws.ToString(in.Delete.Objects[i].Key))
 	}
 	in.Bucket = aws.String(b.physical)
+	sizes := b.sizesOf(ctx, in.Delete.Objects)
 	out, err := b.proxy.DeleteObjects(ctx, in)
+	var freed, gone int64
 	for i := range out.Deleted {
+		if size := sizes[aws.ToString(out.Deleted[i].Key)]; size > 0 {
+			freed += size
+			gone++
+		}
 		out.Deleted[i].Key = strip(p, out.Deleted[i].Key)
 	}
 	for i := range out.Error {
 		out.Error[i].Key = strip(p, out.Error[i].Key)
 	}
+	if gone > 0 {
+		b.records.Add(bucket, -freed, -gone)
+	}
 	return out, err
+}
+
+// sizesOf asks the provider what each object weighs, a few at a time.
+func (b *Backend) sizesOf(ctx context.Context, objects []types.ObjectIdentifier) map[string]int64 {
+	var mu sync.Mutex
+	sizes := map[string]int64{}
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for _, o := range objects {
+		key := aws.ToString(o.Key)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			size := b.sizeOf(ctx, key)
+			mu.Lock()
+			sizes[key] = size
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return sizes
+}
+
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Backend) GetBucketVersioning(ctx context.Context, bucket string) (s3response.GetBucketVersioningOutput, error) {
@@ -345,9 +583,9 @@ func (b *Backend) GetBucketVersioning(ctx context.Context, bucket string) (s3res
 }
 func (b *Backend) ListMultipartUploads(ctx context.Context, in *s3.ListMultipartUploadsInput) (s3response.ListMultipartUploadsResult, error) {
 	bucket := aws.ToString(in.Bucket)
-	p := prefix(bucket)
-	if !validName(bucket) || !safeKey(aws.ToString(in.Prefix)) {
-		return s3response.ListMultipartUploadsResult{}, denied()
+	p, err := b.prefixOf(ctx, bucket)
+	if err != nil || !safeKey(aws.ToString(in.Prefix)) {
+		return s3response.ListMultipartUploadsResult{}, firstError(err, denied())
 	}
 	in.Bucket = aws.String(b.physical)
 	in.Prefix = aws.String(p + aws.ToString(in.Prefix))
