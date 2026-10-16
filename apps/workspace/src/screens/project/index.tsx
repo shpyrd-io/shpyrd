@@ -14,6 +14,7 @@ import {
   Rocket,
   ScrollText,
   ShieldCheck,
+  SlidersHorizontal,
   Terminal,
   UsersRound,
   Waves,
@@ -32,7 +33,8 @@ import { Drains } from "./drains";
 import { Heading } from "./heading";
 import { Logs } from "./logs";
 import { Metrics } from "./metrics";
-import { Overview } from "./overview";
+import { Advanced } from "./advanced";
+import { Home } from "./home";
 import { Releases } from "./releases";
 import { Resources } from "./resources";
 import { Shell } from "./shell";
@@ -42,6 +44,7 @@ import { Shell } from "./shell";
 // operating, configuring and access.
 const pages = [
   { group: "", slug: "", title: "Overview", icon: <LayoutDashboard /> },
+  { group: "", slug: "advanced", title: "Advanced", icon: <SlidersHorizontal /> },
   { group: "Run", slug: "releases", title: "Releases", icon: <Rocket /> },
   { group: "Run", slug: "backups", title: "Backups", icon: <Archive />, needs: "destroy" },
   { group: "Run", slug: "metrics", title: "Metrics", icon: <ChartBar /> },
@@ -73,7 +76,7 @@ export function ProjectPages() {
         group === "" ? (
           shown.filter((p) => p.group === "").map((p) => (
             <NavListItem key={p.slug} asChild icon={p.icon} aria-current={here === p.slug ? "page" : undefined}>
-              <Link to={base}>{p.title}</Link>
+              <Link to={p.slug ? `${base}/${p.slug}` : base}>{p.title}</Link>
             </NavListItem>
           ))
         ) : (
@@ -90,8 +93,12 @@ export function ProjectPages() {
   );
 
   const name = project.data?.displayName ?? slug;
+  // The overview is the whole project for most people: no side. Every
+  // other page is Advanced, with the list of them at the side.
+  const simple = here === "";
+  const crumbs = [{ label: "Projects", to: "/" }, { label: name, to: base }, ...(simple ? [] : [{ label: "Advanced", to: `${base}/advanced` }])];
   return (
-    <Frame nav={nav} crumbs={[{ label: "Projects", to: "/" }, { label: name, to: base }]}>
+    <Frame nav={simple ? undefined : nav} crumbs={crumbs}>
       {project.isLoading ? (
         <>
           <Skeleton className="h-8 w-64" />
@@ -104,9 +111,10 @@ export function ProjectPages() {
         </Alert>
       ) : (
         <>
-          <Heading project={project.data} perms={perms} />
+          <Heading project={project.data} perms={perms} simple={simple} />
           <Routes>
-            <Route index element={<Overview project={project.data} />} />
+            <Route index element={<Home project={project.data} perms={perms} />} />
+            <Route path="advanced" element={<Advanced project={project.data} shown={shown.filter((p) => p.group !== "")} />} />
             <Route path="releases" element={<Releases project={project.data} perms={perms} />} />
             <Route path="backups" element={<Backups project={project.data} perms={perms} />} />
             <Route path="metrics" element={<Metrics project={project.data} />} />

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@/api/types";
 import workspace from "../../../mock/workspace.json";
-import { General } from "./general";
+import { Plan } from "./plan";
 
 // The queries answer by the first word of their key: "workspace",
 // "projects". Permissions say the person administers the workspace.
@@ -18,7 +18,7 @@ vi.mock("react-router-dom", () => ({ Link: ({ children }: { children: React.Reac
 const paid = workspace as unknown as WorkspaceInfo;
 const draw = (w: WorkspaceInfo) => {
   state.answers = { workspace: w, projects: [{ slug: "hello-world", displayName: "Hello World" }] };
-  return renderToStaticMarkup(<General />);
+  return renderToStaticMarkup(<Plan />);
 };
 afterEach(() => {
   state.answers = {};

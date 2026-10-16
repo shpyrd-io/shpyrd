@@ -77,6 +77,14 @@ export default function Page() {
           />
         </div>
       </Section>
+      <Section title="Small, in a row of others: a broken one, one updating, a worker">
+        <div className="flex flex-wrap gap-3">
+          <LauncherCard size="sm" name="Billing" icon={<Briefcase />} tone="orange" url="billing.acme.com" phase="failed" access="locked" onSettings={settings} />
+          <LauncherCard size="sm" name="Docs" description="Not shown when small." icon={<BookOpen />} tone="green" url="docs.acme.com" phase="deploying" />
+          <LauncherCard size="sm" name="Dash TV" icon={<Tv />} tone="violet" url="tv.acme.internal" exposure="internal" />
+          <LauncherCard size="sm" name="Reports" tone="blue" phase="failed" />
+        </div>
+      </Section>
     </>
   );
 }

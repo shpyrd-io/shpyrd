@@ -188,7 +188,7 @@ export function People() {
   );
 }
 
-function Invite({ onDone, canOwner }: { onDone: () => void; canOwner: boolean }) {
+export function Invite({ onDone, canOwner }: { onDone: () => void; canOwner: boolean }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<WorkspaceRole>("member");

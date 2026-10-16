@@ -26,10 +26,13 @@ export type Crumb = { label: string; to?: string };
 export function Frame({
   nav,
   crumbs,
+  width = "large",
   children,
 }: {
-  nav: React.ReactNode;
+  // Without one, the page has no side: the simple pages of a project.
+  nav?: React.ReactNode;
   crumbs: Crumb[];
+  width?: "medium" | "large";
   children: React.ReactNode;
 }) {
   const { pathname } = useLocation();
@@ -40,6 +43,7 @@ export function Frame({
 
   return (
     <PageLayout containerWidth="full" padding="none" columnGap="none" rowGap="none" className="min-h-svh">
+      {nav && (
       <PageLayoutSidebar aria-label="Navigation" width="small" divider="line" sticky hidden={{ narrow: true }} className="pb-4">
         <Stack direction="horizontal" align="center" gap="cozy" padding="normal">
           {/* The symbol of the workspace, its own or the platform's, and its name: back to the launcher. */}
@@ -50,9 +54,11 @@ export function Frame({
         </Stack>
         {nav}
       </PageLayoutSidebar>
+      )}
 
       <PageLayoutHeader divider="line" className="px-4 py-3 @3xl/page-layout:px-6">
         <Stack direction="horizontal" align="center" gap="cozy">
+          {nav && (
           <AnchoredOverlay
             open={menu}
             onOpenChange={setMenu}
@@ -64,6 +70,12 @@ export function Frame({
           >
             {nav}
           </AnchoredOverlay>
+          )}
+          {!nav && (
+            <Link to="/" aria-label="Launcher" className="mr-1 shrink-0">
+              {workspace?.branding?.logoUrl ? <img src={workspace.branding.logoUrl} alt="" className="size-6 object-contain" /> : <LogoMark className="size-6" />}
+            </Link>
+          )}
           <Breadcrumbs className="min-w-0 [&_ol]:flex-nowrap [&_li]:min-w-0 [&_li>*]:truncate">
             {crumbs.map((crumb, i) =>
               crumb.to ? (
@@ -84,7 +96,7 @@ export function Frame({
         </Stack>
       </PageLayoutHeader>
 
-      <PageLayoutContent width="large" padding="normal" className="grid content-start gap-6">
+      <PageLayoutContent width={width} padding="normal" className="grid content-start gap-6">
         {children}
       </PageLayoutContent>
     </PageLayout>

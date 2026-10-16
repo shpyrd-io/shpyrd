@@ -4,6 +4,7 @@ import { Bot, Globe, Lock, Moon, Network, Settings } from "lucide-react";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardFooter } from "./card";
+import { StatusBadge } from "./status-badge";
 import { inks, type Tone } from "../lib/chart";
 import { symbolInk } from "./app-icons";
 
@@ -129,6 +130,7 @@ function LauncherCard({
   access = "open",
   tags,
   onSettings,
+  size = "default",
   style,
   ...props
 }: Omit<React.ComponentProps<typeof Card>, "children"> & {
@@ -154,15 +156,22 @@ function LauncherCard({
   tags?: string[];
   // With it, a gear at the top opens the settings of the application.
   onSettings?: () => void;
+  // `sm` is the card in a row of others, where it is one of many: smaller,
+  // without its description and its tags.
+  size?: "default" | "sm";
 }) {
+  const small = size === "sm";
   const opens = url !== undefined;
   return (
     <Card
       data-slot="launcher-card"
       data-phase={phase}
+      data-size={size}
+      data-exposure={exposure}
+      data-access={access}
       data-worker={!opens || undefined}
       className={cn(
-        "relative h-60 w-64 gap-3 overflow-hidden [--card-spacing:--spacing(5)] transition-shadow",
+        small ? "relative h-36 w-48 shrink-0 gap-2 overflow-hidden [--card-spacing:--spacing(4)] transition-shadow" : "relative h-60 w-64 gap-3 overflow-hidden [--card-spacing:--spacing(5)] transition-shadow",
         opens && "cursor-pointer hover:ring-primary focus-within:ring-primary",
         // A worker is not a door: no ring, a border of its own colour.
         !opens && "border-2 border-(--ink)/40 bg-(--ink)/5 ring-0",
@@ -176,7 +185,7 @@ function LauncherCard({
       <div className="flex items-start justify-between gap-3 px-(--card-spacing)">
         {/* The light sits on the corner of the icon. A worker is always the bot: its own icon is not drawn. */}
         <span className="relative">
-          <Tile icon={opens ? icon : <Bot />} picture={opens ? picture : undefined} />
+          <Tile icon={opens ? icon : <Bot />} picture={opens ? picture : undefined} className={small ? "size-9 [&_svg]:size-5" : undefined} />
           <Semaphore
             phase={phase}
             className={cn(
@@ -186,16 +195,23 @@ function LauncherCard({
             )}
           />
         </span>
+        {/* The corner is only for who manages it; the signs are in the band. */}
         <div className="flex items-center gap-2">
-          <Signs exposure={exposure} access={access} />
+          {/* A web application that is not well says so in words: the light
+              alone is easy to miss. A worker says it in its band. */}
+          {opens && (phase === "failed" || phase === "deploying") && (
+            <StatusBadge data-slot="launcher-trouble" type={phase === "failed" ? "error" : "warning"} live={phase === "deploying"}>
+              {phase === "failed" ? "Not working" : "Updating"}
+            </StatusBadge>
+          )}
           {onSettings && <Gear name={name} onClick={onSettings} />}
         </div>
       </div>
       <div className="grid gap-1 px-(--card-spacing)">
-        <div className="truncate font-heading text-lg font-semibold">{name}</div>
-        {description && <p className="line-clamp-2 text-sm text-muted-foreground">{description}</p>}
+        <div className={cn("truncate font-heading font-semibold", small ? "text-base" : "text-lg")}>{name}</div>
+        {description && !small && <p className="line-clamp-2 text-sm text-muted-foreground">{description}</p>}
       </div>
-      {tags && tags.length > 0 && (
+      {tags && tags.length > 0 && !small && (
         <div className="flex max-h-6 flex-wrap gap-1 overflow-hidden px-(--card-spacing)">
           {tags.map((tag) => (
             <Badge key={tag} variant="secondary">
@@ -214,14 +230,18 @@ function LauncherCard({
       >
         {opens ? (
           // The link covers the whole card: anywhere on it opens the application.
-          <a
-            href={href ?? `https://${url}`}
-            className="truncate outline-none after:absolute after:inset-0 after:rounded-xl"
-          >
-            {url}
-          </a>
+          <>
+            {/* How it is reached and who may open it, beside the address they are about. */}
+            <Signs exposure={exposure} access={access} className="mr-1.5 shrink-0 gap-1 [&_svg]:size-3.5" />
+            <a
+              href={href ?? `https://${url}`}
+              className="truncate outline-none after:absolute after:inset-0 after:rounded-xl"
+            >
+              {url}
+            </a>
+          </>
         ) : (
-          phases[phase].label
+          <span className={cn(phase === "failed" && "font-medium text-destructive")}>{phases[phase].label}</span>
         )}
       </CardFooter>
     </Card>

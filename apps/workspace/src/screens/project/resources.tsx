@@ -89,11 +89,54 @@ export function Resources({
   project: Project;
   perms: Perms;
 }) {
+  const usage = useQuery({
+    queryKey: ["usage", project.slug],
+    queryFn: () => api.projectUsage(project.slug),
+    staleTime: 30_000,
+  });
   return (
     <>
+      {usage.data?.ceiling && <StorageUsed usage={usage.data} />}
       <Processes project={project} perms={perms} />
       <Beside project={project} perms={perms} />
     </>
+  );
+}
+
+// What the project's disks claim against the ceiling that applies to it
+// (storage plan step 4): its own cap, or the workspace's, shared with the
+// other projects. Over the line, everything keeps working and nothing
+// more fits.
+function StorageUsed({
+  usage,
+}: {
+  usage: { storage: string; ceiling?: string; own?: boolean };
+}) {
+  const used = gbOf(usage.storage);
+  const of = gbOf(usage.ceiling ?? "0");
+  const pct = of > 0 ? Math.round((used / of) * 100) : 0;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Storage</CardTitle>
+        <CardDescription>
+          {usage.own
+            ? "This project has a cap of its own, set under the workspace's Plan."
+            : "The workspace's ceiling, shared with its other projects."}{" "}
+          Disks and dedicated databases count by the capacity they claim.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ProgressBar
+          label={`${gbWords(used)} of ${gbWords(of)}${pct > 100 ? ` · ${pct}%` : ""}`}
+          value={Math.min(used, of)}
+          max={of}
+          size="sm"
+          tone={pct >= 100 ? "error" : pct >= 80 ? "warning" : "orange"}
+          format={(v) => gbWords(v)}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
