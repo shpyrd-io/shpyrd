@@ -73,15 +73,19 @@ the postgres and memory backends):
 - `github_installations`: installation id, GitHub account login and type
   (organisation or user), workspace, who connected it and when (for the audit
   log only), and a removed or suspended state. A workspace can have several.
-- `git_credentials`: for any other host.
-  - Token: one per host per workspace (`gitlab.example.com`).
-  - Deploy key: one per project, because a deploy key belongs to one
-    repository. shpyrd generates an ed25519 pair and shows only the public
-    half.
+For any other host, credentials are Secrets alone, with no table. That is the
+pattern of log drains and global config vars. A table would only repeat the
+host, kind and dates the Secret's labels already carry (decided while
+planning PR 1):
 
-  The store keeps names, hosts, kinds and dates. The values live in Secrets in
-  `shpyrd-system` and are write-only, following the pattern of config vars and
-  cost drains.
+- Token: one per host per workspace (`gitlab.example.com`), a Secret in
+  `shpyrd-system` labelled with the workspace.
+- Deploy key: one per project, because a deploy key belongs to one
+  repository. shpyrd generates an ed25519 pair and shows only the public
+  half. It is a Secret in the project namespace, holding the host key
+  recorded when the key was made.
+
+Values are write-only.
 
 **The GitHub App's own credentials** are a Secret `shpyrd-github-app` in
 `shpyrd-system`: app id, slug, private key, webhook secret, client id and
