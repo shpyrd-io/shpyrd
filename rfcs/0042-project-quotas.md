@@ -19,6 +19,32 @@ platform, the operator's tools on a platform that hosts many. Every workspace th
 plan kept the ceilings the plan gave it. The ResourceQuota backstop follows the
 workspace's settings as it followed the plan's.
 
+## Amendment (2026-10-16, storage plan step 4)
+
+Three ceilings bound storage in `settings.limits`: `storage`, block storage
+in provisioned capacity (volumes, a dedicated database's disk once per
+instance, a durable store's disk); `objectStorage` (buckets, per-bucket
+cap, total); `postgres` (kinds, default kind, shared cap, databases,
+instances per dedicated database). A workspace whose plan includes no disks
+says so with `allowDisks: false`, refused at the API in words, never as a
+storage quota of zero (which would refuse the platform's own claims). A
+project may have a cap of its own below the workspace's
+(`settings.projectCaps`, by slug), mirrored by its namespace quota and kept
+when the plan changes.
+
+One computation feeds the judgement, the dashboard and the console; one
+judgement runs for every create and resize under the workspace's lock in
+the control-plane database, so parallel changes admit exactly what fits. A
+ceiling refuses what would be added, never what exists: a workspace above a
+ceiling that shrank keeps everything, may act on the other axes and may grow
+a disk where it may not claim one; the namespace quota is never rendered
+below what the namespace uses. Refusals are one sentence with the numbers
+("This would bring the workspace to 150 GB of 100 GB."). Growth is checked
+before acceptance (the class can grow the disk, a size a machine can hold)
+and a volume's growth says where it stands. The metering loop writes an
+`object-storage` line per project bucket beside `postgres_shared`, and the
+workspace reads its ledger at `GET /api/workspace/usage`.
+
 ## Summary
 
 Per-project ceilings on total CPU, memory, storage and instances, set by platform admins,
