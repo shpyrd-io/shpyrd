@@ -39,6 +39,9 @@ type VolumeView struct {
 	// Note explains a provider rule applied at creation, such as a size
 	// rounded up to the provider's minimum (RFC-0060).
 	Note string `json:"note,omitempty"`
+	// Resize is where the last growth stands: requested, pending,
+	// completed or failed, with the size asked for and the reason.
+	Resize *shpyrdv1.VolumeResize `json:"resize,omitempty"`
 }
 
 func volumeView(v shpyrdv1.Volume) VolumeView {
@@ -46,7 +49,7 @@ func volumeView(v shpyrdv1.Volume) VolumeView {
 		Name: v.Name, Namespace: v.Namespace, Size: v.Spec.Size.String(), Capacity: v.Status.Capacity,
 		Shared: v.Shared(), StorageClass: firstNonEmpty(v.Status.StorageClass, v.Spec.StorageClass), Phase: firstNonEmpty(v.Status.Phase, shpyrdv1.VolumePending),
 		Message: v.Status.Message, MountedBy: v.Status.MountedBy, CreatedAt: v.CreationTimestamp.Time,
-		RestoredFrom: v.Status.RestoredFrom,
+		RestoredFrom: v.Status.RestoredFrom, Resize: v.Status.Resize,
 	}
 	if out.MountedBy == nil {
 		out.MountedBy = []string{}
@@ -188,6 +191,31 @@ func (s *Server) sharedFoldersOperatorHint() string {
 	return "Operators: install a ReadWriteMany storage class and name it in SHPYRD_STORAGE_CLASS_SHARED."
 }
 
+// checkVolumeGrowth refuses the growth of a volume whose storage class
+// cannot grow disks; a class the cluster does not show (or none named) is
+// left to the controller, which reports in the volume's standing.
+func (s *Server) checkVolumeGrowth(ctx context.Context, vol *shpyrdv1.Volume) error {
+	class := firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass)
+	if class == "" {
+		if vol.Shared() {
+			class = install.ProjectSharedStorageClass(s.vars)
+		} else {
+			class = install.ProjectStorageClass(s.vars)
+		}
+	}
+	if class == "" || s.kube == nil || s.kube.Kube == nil {
+		return nil
+	}
+	sc, err := s.kube.Kube.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	if sc.AllowVolumeExpansion == nil || !*sc.AllowVolumeExpansion {
+		return fmt.Errorf("volumes of the %s class cannot grow; create a new volume of the size you need and copy the data", class)
+	}
+	return nil
+}
+
 // checkVolumeClass refuses a volume whose storage class does not exist on
 // the cluster before anything is created: the shared class in particular
 // is installed only where the profile's shared storage is set up.
@@ -257,6 +285,13 @@ func (s *Server) resizeVolume(c *gin.Context) {
 		if rounded, note := s.applyVolumeMinimum(size); note != "" {
 			size = rounded
 		}
+	}
+	// Checked before acceptance (storage plan step 4): a class that cannot
+	// grow a disk refuses the growth here, in words, not in the status
+	// later.
+	if err := s.checkVolumeGrowth(c.Request.Context(), vol); err != nil {
+		abort(c, http.StatusBadRequest, err)
+		return
 	}
 	growth := size.DeepCopy()
 	growth.Sub(vol.Spec.Size)

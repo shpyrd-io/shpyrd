@@ -650,6 +650,7 @@ func (s *Server) routes() error {
 	// The workspace (RFC-0033): its name and the people it has seen.
 	api.GET("/workspace", s.getWorkspace) // any signed-in user: the dashboard shows the name
 	api.PUT("/workspace/project-caps", s.require(authz.ClusterAdmin), s.putProjectCaps)
+	api.GET("/workspace/usage", s.require(authz.ClusterAdmin), s.workspaceUsageLedger)
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)

@@ -72,9 +72,34 @@ type VolumeStatus struct {
 	// any (RFC-0060).
 	// +optional
 	RestoredFrom string `json:"restoredFrom,omitempty"`
+	// Resize is the last growth asked for (storage plan step 4): requested
+	// until the claim takes it, pending while the provider grows the disk,
+	// completed when the capacity matches, failed with the reason.
+	// +optional
+	Resize *VolumeResize `json:"resize,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+// VolumeResize is where a growth stands.
+type VolumeResize struct {
+	// Phase is requested, pending, completed or failed.
+	Phase string `json:"phase"`
+	// To is the size asked for.
+	To string `json:"to"`
+	// +optional
+	Message string `json:"message,omitempty"`
+	// +optional
+	At metav1.Time `json:"at,omitempty"`
+}
+
+// Resize phases.
+const (
+	ResizeRequested = "requested"
+	ResizePending   = "pending"
+	ResizeCompleted = "completed"
+	ResizeFailed    = "failed"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

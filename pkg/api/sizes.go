@@ -148,8 +148,13 @@ func (s *Server) resizeApp(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	if _, ok := cat.Get(req.Size); !ok {
+	size, ok := cat.Get(req.Size)
+	if !ok {
 		abort(c, http.StatusBadRequest, fmt.Errorf("unknown size %q", req.Size))
+		return
+	}
+	if err := s.fitsAPool(c.Request.Context(), size); err != nil {
+		abort(c, http.StatusBadRequest, err)
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {

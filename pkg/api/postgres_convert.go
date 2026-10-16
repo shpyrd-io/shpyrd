@@ -119,6 +119,15 @@ func convertWords(pg *shpyrdv1.Postgres, from string, req ConvertRequest, cap st
 	case pg.Status.Phase != shpyrdv1.ResourceReady:
 		return "", fmt.Sprintf("%s is %s; convert it once it is ready.", pg.Name, strings.ToLower(firstNonEmpty(pg.Status.Phase, "provisioning")))
 	}
+	if req.To == shpyrdv1.PostgresTypeShared {
+		// Measured by the metering loop; a database never measured is
+		// let through and the conversion itself refuses past the cap.
+		if capQ, err := resource.ParseQuantity(cap); err == nil {
+			if held := controller.DataBytes(pg); held > capQ.Value() {
+				return "", fmt.Sprintf("This database holds %s; a shared database holds up to %s.", humanQuantity(fmt.Sprintf("%d", held)), humanQuantity(cap))
+			}
+		}
+	}
 	var notes []string
 	if req.To == shpyrdv1.PostgresTypeDedicated {
 		disk := firstNonEmpty(req.Storage, "5Gi")
