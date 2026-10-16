@@ -119,3 +119,21 @@ func TestDeployKeyNeedsAHost(t *testing.T) {
 		t.Errorf("no source, no host: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestDeployKeyRefusesUnsafeHost(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("shop", shpyrdv1.PhaseRunning)})
+	called := false
+	s.scanHostKey = func(context.Context, string, string) (string, string, error) {
+		called = true
+		return "", "", nil
+	}
+	for _, bad := range []string{"10.0.0.1:6379", "a b"} {
+		rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"`+bad+`"}`, true)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("host %q: %d %s", bad, rec.Code, rec.Body.String())
+		}
+	}
+	if called {
+		t.Error("an unsafe host must not be dialed")
+	}
+}

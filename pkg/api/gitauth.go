@@ -61,10 +61,12 @@ type ProjectGitAuthView struct {
 // by the repository URL's host name, whatever port the URL names.
 var gitHostRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
 
+var errGitHost = errors.New("give a host name such as github.com or gitlab.example.com, without a port")
+
 func gitHostParam(c *gin.Context) (string, bool) {
 	host := c.Param("host")
 	if !gitHostRe.MatchString(host) {
-		abort(c, http.StatusBadRequest, errors.New("give a host name such as github.com or gitlab.example.com, without a port"))
+		abort(c, http.StatusBadRequest, errGitHost)
 		return "", false
 	}
 	return host, true
@@ -225,6 +227,10 @@ func (s *Server) createDeployKey(c *gin.Context) {
 	}
 	var req DeployKeyRequest
 	_ = c.ShouldBindJSON(&req)
+	if req.Host != "" && !gitHostRe.MatchString(req.Host) {
+		abort(c, http.StatusBadRequest, errGitHost)
+		return
+	}
 	host, port := req.Host, ""
 	if host == "" && app.Spec.Source != nil && app.Spec.Source.Git != nil {
 		if r, err := gitauth.Parse(app.Spec.Source.Git.URL); err == nil {
