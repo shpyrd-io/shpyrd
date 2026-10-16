@@ -95,6 +95,10 @@ type Build struct {
 	// AppRefused says why the GitHub App could not give access, when it
 	// was tried and the build fell through to another credential.
 	AppRefused string
+	// AppRetry says the GitHub App failed for a reason that may pass (GitHub
+	// down, slow or rate-limiting): an App token already written that has
+	// not expired may be kept, and the App is tried again soon.
+	AppRetry bool
 }
 
 // Resolve chooses the credential a build of gitURL clones with: the

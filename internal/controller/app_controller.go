@@ -279,8 +279,9 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		out.result.RequeueAfter = 30 * time.Second
 	}
 	// A build cloning through the GitHub App gets a new token before the
-	// one in <app>-git is 50 minutes old (RFC-0054).
-	if d := r.githubTokenRefresh(ctx, app); d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
+	// one in <app>-git is 50 minutes old (RFC-0054); only a reconcile that
+	// wrote <app>-git knows when.
+	if d := out.gitRefresh; d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
 		out.result.RequeueAfter = d
 	}
 	return out.result, nil
@@ -294,11 +295,22 @@ type outcome struct {
 	result         ctrl.Result
 	newRelease     *shpyrdv1.Release
 	clearNote      bool
+	// gitRefresh is when <app>-git, written by this reconcile, needs the
+	// GitHub App again (RFC-0054); 0: never.
+	gitRefresh time.Duration
 }
 
 func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{RequeueAfter: d}} }
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	var gitRefresh time.Duration
+	out, err := r.reconcileApp(ctx, app, &gitRefresh)
+	out.gitRefresh = gitRefresh
+	return out, err
+}
+
+// reconcileApp is reconcile; it sets gitRefresh once <app>-git is written.
+func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, gitRefresh *time.Duration) (outcome, error) {
 	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
 		return r.reconcileMaintenance(ctx, app)
 	}
@@ -356,6 +368,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err != nil {
 		return outcome{}, err
 	}
+	*gitRefresh = r.githubRefreshOf(gitBuild)
 	if err := r.ensureBuildServiceAccount(ctx, app, gitBuild); err != nil {
 		return outcome{}, err
 	}

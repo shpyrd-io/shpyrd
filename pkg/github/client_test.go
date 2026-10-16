@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +195,32 @@ func TestWhoThePersonIsAndTheirRoleInAnOrg(t *testing.T) {
 	fake.SetDown(true)
 	if _, _, err := c.OrgMembership(ctx, githubtest.UserToken, "Acme"); err == nil {
 		t.Error("GitHub down is an error, not a stranger")
+	}
+}
+
+func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
+	c, fake := newClient(t)
+	fake.SetRateLimited(2 * time.Minute)
+	_, err := c.InstallationToken(context.Background(), 42, "shop")
+	var apiErr *github.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != 2*time.Minute {
+		t.Errorf("Retry-After: %v", err)
+	}
+
+	// Without Retry-After, a spent quota says when it resets.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(t0.Add(7*time.Minute).Unix(), 10))
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer srv.Close()
+	c2, err := github.New(fake.App(), github.Options{APIURL: srv.URL, HTTP: srv.Client(), Now: func() time.Time { return t0 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c2.InstallationToken(context.Background(), 42, "shop")
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RetryAfter != 7*time.Minute {
+		t.Errorf("X-RateLimit-Reset: %v", err)
 	}
 }

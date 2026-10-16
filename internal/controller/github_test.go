@@ -8,6 +8,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -89,7 +91,7 @@ func TestGitHubAppFallsThroughWhenTheInstallationIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
-	if err != nil || b.Kind != gitauth.KindToken || b.AppRefused != "The GitHub App is no longer installed on Gone: an owner of Gone installs it again on GitHub." {
+	if err != nil || b.Kind != gitauth.KindToken || b.AppRefused != "The GitHub App is no longer installed on Gone: an owner of Gone installs it again, then a workspace admin connects it from Workspace settings → Git." {
 		t.Errorf("build = %+v, %v", b, err)
 	}
 }
@@ -189,11 +191,122 @@ func TestGitHubTokenIsRewrittenFiftyMinutesAfterItWasMinted(t *testing.T) {
 }
 
 func TestAnAppCloningThroughGitHubIsRequeuedBeforeItsTokenAges(t *testing.T) {
+	// A settled app: its release's image built, its instances ready.
 	app := pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit)
-	r, _, _, _ := githubReconciler(t, app)
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
-	if err != nil || res.RequeueAfter <= 0 || res.RequeueAfter > githubTokenLife+time.Second {
+	app.Spec.Image = "example.test/shop:1"
+	r, c, _, _ := githubReconciler(t, app)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	markDeploymentReady(t, c, app.Namespace, "shop-web", 1)
+	res, err := r.Reconcile(context.Background(), req)
+	if err != nil || res.RequeueAfter != githubTokenLife+time.Second {
 		t.Errorf("requeue after %v, %v", res.RequeueAfter, err)
+	}
+}
+
+// oldAppToken is an <app>-git holding the App's token, minted at.
+func oldAppToken(app *shpyrdv1.App, minted time.Time) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: gitauth.BuildSecretName(app.Name), Namespace: app.Namespace,
+			Annotations: map[string]string{gitauth.AnnotationGitHubAccount: "Acme", gitauth.AnnotationTokenMintedAt: minted.UTC().Format(time.RFC3339)}},
+		Type: corev1.SecretTypeBasicAuth,
+		Data: map[string][]byte{corev1.BasicAuthUsernameKey: []byte("x-access-token"), corev1.BasicAuthPasswordKey: []byte("ghs_old")},
+	}
+}
+
+func TestAnAppInMaintenanceDoesNotSpinOnAnAgedToken(t *testing.T) {
+	app := pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit)
+	app.Annotations[shpyrdv1.AnnotationMaintenance] = "paused"
+	r, _, _, _ := githubReconciler(t, app, oldAppToken(app, sourceNow.Add(-55*time.Minute)))
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+	// Maintenance polls on its own; the aged token adds nothing.
+	if err != nil || res.RequeueAfter == time.Second {
+		t.Errorf("requeue after %v, %v", res.RequeueAfter, err)
+	}
+}
+
+func TestAnAppTokenIsKeptWhileGitHubIsDown(t *testing.T) {
+	app := pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit)
+	r, c, fake, _ := githubReconciler(t, app)
+	ctx := context.Background()
+	if _, err := r.reconcileGitCredentials(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetDown(true)
+	fake.SetNow(sourceNow.Add(52 * time.Minute))
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+	if err != nil || res.RequeueAfter <= 0 || res.RequeueAfter > 2*time.Minute {
+		t.Errorf("requeue after %v, %v", res.RequeueAfter, err)
+	}
+	sec := buildSecretOf(t, c, app)
+	if string(sec.Data[corev1.BasicAuthPasswordKey]) != "ghs_42_1" || sec.Annotations[gitauth.AnnotationTokenMintedAt] != sourceNow.Format(time.RFC3339) {
+		t.Errorf("the token still valid is kept: %q %v", sec.Data[corev1.BasicAuthPasswordKey], sec.Annotations)
+	}
+	// An hour on, it has expired: it goes.
+	fake.SetNow(sourceNow.Add(61 * time.Minute))
+	if _, err := r.reconcileGitCredentials(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: gitauth.BuildSecretName(app.Name)}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("an expired token is not kept: %v", err)
+	}
+}
+
+// tokenCalls counts the token requests GitHub saw.
+func tokenCalls(fake *githubtest.Server) int {
+	n := 0
+	for _, c := range fake.Calls() {
+		if strings.HasSuffix(c, "/access_tokens") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestGitHubIsNotAskedAgainSoonAfterItFailed(t *testing.T) {
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r, _, fake, _ := githubReconciler(t, app)
+	ctx := context.Background()
+	fake.SetDown(true)
+	lookup := func() gitauth.Build {
+		t.Helper()
+		b, err := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	if b := lookup(); b.AppRefused != "GitHub did not give shpyrd a token for this repository just now; shpyrd tries again by itself." {
+		t.Errorf("refused %q", b.AppRefused)
+	}
+	fake.SetNow(sourceNow.Add(30 * time.Second))
+	if b := lookup(); tokenCalls(fake) != 1 || b.AppRefused == "" {
+		t.Errorf("within the minute: %d calls, %+v", tokenCalls(fake), b)
+	}
+	fake.SetDown(false)
+	fake.SetNow(sourceNow.Add(61 * time.Second))
+	if b := lookup(); tokenCalls(fake) != 2 || b.Kind != gitauth.KindGitHubApp {
+		t.Errorf("after the minute: %d calls, %+v", tokenCalls(fake), b)
+	}
+}
+
+func TestGitHubsRetryAfterIsHonoured(t *testing.T) {
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r, _, fake, _ := githubReconciler(t, app)
+	ctx := context.Background()
+	fake.SetRateLimited(5 * time.Minute)
+	_, _ = lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
+	fake.SetRateLimited(0)
+	fake.SetNow(sourceNow.Add(4 * time.Minute))
+	_, _ = lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
+	if tokenCalls(fake) != 1 {
+		t.Errorf("asked again within Retry-After: %d calls", tokenCalls(fake))
+	}
+	fake.SetNow(sourceNow.Add(5*time.Minute + time.Second))
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app); tokenCalls(fake) != 2 || b.Kind != gitauth.KindGitHubApp {
+		t.Errorf("after Retry-After: %d calls, %+v", tokenCalls(fake), b)
 	}
 }
 

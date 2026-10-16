@@ -82,9 +82,11 @@ type Installation struct {
 type Server struct {
 	*httptest.Server
 
-	mu       sync.Mutex
-	now      time.Time
-	down     bool
+	mu   sync.Mutex
+	now  time.Time
+	down bool
+	// limited is the Retry-After of a rate limit; 0: none.
+	limited  time.Duration
 	repos    map[int64][]Repo
 	branches map[string][]string // by full name, lower case
 	people   []Installation
@@ -155,6 +157,9 @@ func (f *Server) clock() time.Time {
 
 func (f *Server) SetNow(t time.Time) { f.mu.Lock(); f.now = t; f.mu.Unlock() }
 
+// SetRateLimited makes every call answer 429 with Retry-After d; 0 lifts it.
+func (f *Server) SetRateLimited(d time.Duration) { f.mu.Lock(); f.limited = d; f.mu.Unlock() }
+
 // SetDown makes every call answer 503.
 func (f *Server) SetDown(down bool) { f.mu.Lock(); f.down = down; f.mu.Unlock() }
 
@@ -213,6 +218,11 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
+	if f.limited > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(f.limited/time.Second)))
+		reply(w, http.StatusTooManyRequests, map[string]string{"message": "API rate limit exceeded"})
+		return
+	}
 	if f.down {
 		reply(w, http.StatusServiceUnavailable, map[string]string{"message": "Service unavailable"})
 		return

@@ -36,6 +36,12 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	if err != nil {
 		return gitauth.Build{}, err
 	}
+	if b.AppRetry {
+		if kept := r.keptAppToken(ctx, app); kept != nil {
+			kept.AppRefused, kept.AppRetry = b.AppRefused, true
+			b = *kept
+		}
+	}
 	if b.Secret == nil {
 		return b, r.deleteSecret(ctx, app.Namespace, name)
 	}
@@ -132,7 +138,7 @@ func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, gh *G
 	if err != nil {
 		return gitauth.Build{}, errGitURL
 	}
-	viaApp, refused := gh.build(ctx, app, repo)
+	viaApp, refused, retry := gh.build(ctx, app, repo)
 	if viaApp != nil {
 		return *viaApp, nil
 	}
@@ -148,7 +154,7 @@ func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, gh *G
 	if err != nil {
 		return gitauth.Build{}, errGitURL
 	}
-	b.AppRefused = refused
+	b.AppRefused, b.AppRetry = refused, retry
 	return b, nil
 }
 

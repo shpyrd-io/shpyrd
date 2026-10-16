@@ -100,6 +100,10 @@ type Installation struct {
 type APIError struct {
 	Status  int
 	Message string
+	// RetryAfter is how long GitHub asks to wait before the next call:
+	// its Retry-After, or the reset of a spent rate limit. 0 when it
+	// said neither.
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string { return fmt.Sprintf("GitHub answered %d: %s", e.Status, e.Message) }
@@ -417,12 +421,28 @@ func (c *Client) send(req *http.Request, out any) error {
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		return &APIError{Status: resp.StatusCode, Message: firstNonEmpty(e.Message, http.StatusText(resp.StatusCode))}
+		return &APIError{Status: resp.StatusCode, Message: firstNonEmpty(e.Message, http.StatusText(resp.StatusCode)), RetryAfter: c.retryAfter(resp.Header)}
 	}
 	if out == nil {
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// retryAfter reads Retry-After (seconds), else X-RateLimit-Reset when
+// the quota is spent.
+func (c *Client) retryAfter(h http.Header) time.Duration {
+	if secs, err := strconv.Atoi(h.Get("Retry-After")); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if h.Get("X-RateLimit-Remaining") == "0" {
+		if reset, err := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			if d := time.Unix(reset, 0).Sub(c.now()); d > 0 {
+				return d
+			}
+		}
+	}
+	return 0
 }
 
 func firstNonEmpty(vals ...string) string {
