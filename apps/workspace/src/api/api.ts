@@ -18,6 +18,9 @@ import type {
   Drain,
   Exposure,
   GitHooks,
+  GitHubConnections,
+  GitHubRepository,
+  ProjectGitAuth,
   Identity,
   Link,
   Instance,
@@ -153,6 +156,15 @@ export type Api = {
   ) => Promise<Project>;
   // The project's webhook for deploy on push: its URL and secret.
   projectGitHooks: (slug: string) => Promise<GitHooks>;
+  // What the project's builds clone with: a GitHub App, a deploy key, a token.
+  projectGitAuth: (slug: string) => Promise<ProjectGitAuth>;
+  // The workspace's GitHub (RFC-0054): its connections; Connect sends the
+  // browser to GitHub's install page, which sends it back to the Git page.
+  github: () => Promise<GitHubConnections>;
+  connectGitHub: () => Promise<{ installURL: string }>;
+  disconnectGitHub: (id: number) => Promise<void>;
+  githubRepositories: () => Promise<GitHubRepository[]>;
+  githubBranches: (fullName: string) => Promise<string[]>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
   removeProjectIcon: (slug: string) => Promise<Project>;

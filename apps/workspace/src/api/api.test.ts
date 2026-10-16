@@ -71,6 +71,22 @@ describe("the api picks the Mock when asked to", () => {
     expect((await api.project("billing")).status.source?.latest).not.toBe((await api.project("billing")).status.source?.commit);
     expect((await api.project("reports")).status.source?.error).toContain("shpyrd git-auth");
   });
+
+  it("connects GitHub in the Mock, lists what it reaches and forgets a connection", async () => {
+    const before = await api.github();
+    expect(before.configured).toBe(true);
+    const { installURL } = await api.connectGitHub();
+    expect(installURL).toBe("/workspace/git");
+    const after = await api.github();
+    expect(after.installations.length).toBe(before.installations.length + 1);
+    const repos = await api.githubRepositories();
+    expect(repos.map((r) => r.fullName)).toContain("acme/hello-world");
+    expect(await api.githubBranches("acme/hello-world")).toContain("main");
+    await expect(api.githubBranches("someone/else")).rejects.toThrow(/No GitHub connection/);
+    await api.disconnectGitHub(77);
+    expect((await api.github()).installations.length).toBe(before.installations.length);
+    expect((await api.projectGitAuth("hello-world")).using).toBe("github-app");
+  }, 15_000);
 });
 
 // The Mock judges like the server (storage plan step 4): the plan's

@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Project, SourceStatus } from "@/api/types";
@@ -6,11 +6,12 @@ import type { Perms } from "@/lib/perms";
 import seed from "../../../mock/projects.json";
 import { GitSource } from "./source";
 
-const fake = vi.hoisted(() => ({ updateProject: vi.fn(), projectGitHooks: vi.fn() }));
+const fake = vi.hoisted(() => ({ updateProject: vi.fn(), projectGitHooks: vi.fn(), projectGitAuth: vi.fn() }));
 vi.mock("@/api/api", () => ({ api: fake }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toasts }));
 let queries: QueryClient;
+beforeEach(() => fake.projectGitAuth.mockResolvedValue({ using: "none" }));
 afterEach(() => {
   cleanup();
   queries?.clear();
@@ -146,4 +147,11 @@ it("says when the clipboard cannot be written", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Copy the URL" }));
   await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("URL copied"));
   Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+});
+
+it("says pushes arrive through the GitHub App and offers no webhook to set up", async () => {
+  fake.projectGitAuth.mockResolvedValue({ url: repo.url, using: "github-app", githubAccount: "acme" });
+  show(projectWith(repo, { commit, latest: commit, via: "push", checkedAt: minutesAgo(1) }));
+  expect(await screen.findByText("Through the GitHub App (acme): every push arrives by itself, nothing to set up.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Deploy on push" })).toBeNull();
 });

@@ -15,6 +15,8 @@ import type {
   DomainClaim,
   DomainStatus,
   Drain,
+  GitHubConnections,
+  GitHubRepository,
   Identity,
   Invitation,
   LoginMethods,
@@ -77,6 +79,9 @@ type Things = {
   domainClaims: DomainClaim[];
   sizes: SizeCatalog;
   globals: Globals;
+  github: GitHubConnections;
+  githubRepositories: GitHubRepository[];
+  githubBranches: Record<string, string[]>;
 };
 
 // The shape of the files changes with the application: what a browser
@@ -699,6 +704,47 @@ export const mock: Api = {
       url: `https://acme.shpyrd.app/api/hooks/git/${slug}/5e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f6138`,
       secret: "9a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f36",
     };
+  },
+  projectGitAuth: async (slug) => {
+    const url = (await projectsOf.find(slug)).spec.source?.git?.url;
+    // The fixtures' URLs come with and without the scheme.
+    const owner = url?.match(/^(?:https:\/\/)?github\.com\/([^/]+)\//i)?.[1]?.toLowerCase();
+    return owner === "acme" ? { url, using: "github-app", githubAccount: "acme" } : { url, using: "none" };
+  },
+  github: async () => (await thingsOf.get()).github,
+  // GitHub would ask where to install, then send the browser back to the
+  // Git page: the Mock connects acme-labs and sends it there at once.
+  connectGitHub: async () => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    if (!all.github.installations.some((i) => i.id === 77)) {
+      all.github.installations.push({
+        id: 77,
+        account: "acme-labs",
+        type: "Organization",
+        connectedBy: "you@acme.test",
+        createdAt: now(),
+        suspended: false,
+        manageURL: "https://github.com/organizations/acme-labs/settings/installations/77",
+      });
+      await thingsOf.set(all);
+    }
+    return { installURL: "/workspace/git" };
+  },
+  disconnectGitHub: async (id) => {
+    const all = await thingsOf.get();
+    all.github.installations = all.github.installations.filter((i) => i.id !== id);
+    await thingsOf.set(all);
+  },
+  githubRepositories: async () => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    return all.github.installations.length ? all.githubRepositories : [];
+  },
+  githubBranches: async (fullName) => {
+    const branches = (await thingsOf.get()).githubBranches[fullName];
+    if (!branches) throw new ApiError(404, `No GitHub connection of this workspace reaches ${fullName.split("/")[0]}.`);
+    return branches;
   },
   // The Mock keeps the image itself, as the data URL it came as.
   setProjectIcon: async (slug, dataUrl) => {

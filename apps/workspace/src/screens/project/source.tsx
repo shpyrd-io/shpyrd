@@ -87,7 +87,7 @@ export function GitSource({ project, perms }: { project: Project; perms: Perms }
           <AlertDescription>{source.error}</AlertDescription>
         </Alert>
       )}
-      {perms.config && <DeployOnPush slug={project.slug} />}
+      <SourceAccess slug={project.slug} canConfig={perms.config} />
     </div>
   );
 }
@@ -129,6 +129,19 @@ function AutoDeploySwitch({ slug, on, allowed }: { slug: string; on: boolean; al
       aria-label="Auto-deploy"
     />
   );
+}
+
+// How pushes reach shpyrd: through the GitHub App, with nothing to set
+// up, or through the project's own webhook (RFC-0054).
+function SourceAccess({ slug, canConfig }: { slug: string; canConfig: boolean }) {
+  const auth = useQuery({ queryKey: ["git-auth", slug], queryFn: () => api.projectGitAuth(slug), staleTime: 60_000 });
+  if (auth.data?.using === "github-app")
+    return (
+      <p className="text-xs text-muted-foreground">
+        Through the GitHub App ({auth.data.githubAccount}): every push arrives by itself, nothing to set up.
+      </p>
+    );
+  return canConfig ? <DeployOnPush slug={slug} /> : null;
 }
 
 // The webhook a git host calls, to copy into it. Its secret is shown only

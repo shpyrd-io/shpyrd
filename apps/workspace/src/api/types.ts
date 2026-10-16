@@ -269,6 +269,42 @@ export type SourceStatus = {
 // The webhook a git host calls on a push: its address and its secret.
 export type GitHooks = { url: string; secret: string };
 
+// A GitHub App installation connected to the workspace (RFC-0054).
+export type GitHubInstallation = {
+  id: number;
+  account: string;
+  type: "Organization" | "User";
+  connectedBy: string;
+  createdAt: string;
+  suspended: boolean;
+  // The installation's settings on GitHub.
+  manageURL: string;
+};
+
+// The workspace's GitHub: whether the platform has an App, why not, and
+// the connections.
+export type GitHubConnections = {
+  configured: boolean;
+  appURL?: string;
+  note?: string;
+  installations: GitHubInstallation[];
+};
+
+// A repository a connection reaches, for New project.
+export type GitHubRepository = {
+  installation: number;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+};
+
+// What the project's builds clone with.
+export type ProjectGitAuth = {
+  url?: string;
+  using: "none" | "token" | "deploy-key" | "github-app";
+  githubAccount?: string;
+};
+
 // buildFailed says the project's last build failed (its Built condition).
 // A branch shpyrd cannot read (SourceUnreadable) built nothing.
 export const buildFailed = (status: {
