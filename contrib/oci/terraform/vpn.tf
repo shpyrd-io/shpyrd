@@ -146,7 +146,12 @@ resource "oci_core_instance" "vpn" {
   }
 
   lifecycle {
-    ignore_changes = [source_details[0].source_id] # a newer image is not a reason to rebuild
+    # A newer image is not a reason to rebuild, nor is a changed key list:
+    # the instance's metadata is written at launch and OCI replaces the
+    # instance to change it, which would take the VPN down and the
+    # cluster's private endpoint with it. New keys reach the VPN host at
+    # its next rebuild, or by hand (the runner does the same).
+    ignore_changes = [source_details[0].source_id, metadata]
   }
 }
 

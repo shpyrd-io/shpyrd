@@ -179,7 +179,7 @@ variable "ssh_public_key_path" {
 }
 
 variable "ssh_public_keys" {
-  description = "Public keys installed on every machine (the node pools' nodes and the VPN instance) for the opc user, one per person; a root fills it from a folder of .pub files. Applied at a node's first boot: a change reaches nodes created afterwards. Empty: the single key at ssh_public_key_path."
+  description = "Public keys installed on every machine (the node pools' nodes and the VPN instance) for the opc user, one per person; a root fills it from a folder of .pub files. Applied at a machine's first boot: a change reaches nodes created afterwards and the VPN instance at its next rebuild (its metadata is never a reason to replace it). Empty: the single key at ssh_public_key_path."
   type        = list(string)
   default     = []
   validation {
