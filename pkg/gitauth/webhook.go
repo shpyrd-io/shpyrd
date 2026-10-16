@@ -52,6 +52,20 @@ func VerifyDelivery(h http.Header, body []byte, secret string) error {
 	return ErrBadSignature
 }
 
+// VerifyGitHubDelivery checks GitHub's X-Hub-Signature-256 alone: the
+// GitHub App's webhook (RFC-0054) is only ever called by GitHub.
+func VerifyGitHubDelivery(h http.Header, body []byte, secret string) error {
+	if secret == "" {
+		return ErrBadSignature
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	if sig, ok := strings.CutPrefix(h.Get("X-Hub-Signature-256"), "sha256="); ok && hexEqual(sig, mac.Sum(nil)) {
+		return nil
+	}
+	return ErrBadSignature
+}
+
 func hexEqual(given string, sum []byte) bool {
 	got, err := hex.DecodeString(strings.TrimSpace(given))
 	return err == nil && hmac.Equal(got, sum)

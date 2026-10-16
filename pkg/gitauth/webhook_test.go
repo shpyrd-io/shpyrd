@@ -200,3 +200,27 @@ func TestParsePushGitLabWithoutTheHeadCommit(t *testing.T) {
 		t.Errorf("push = %+v err %v", p, err)
 	}
 }
+
+func TestVerifyGitHubDeliveryTakesOnlyGitHubsSignature(t *testing.T) {
+	body := []byte(`{"zen":"Keep it logically awesome."}`)
+	mac := hmac.New(sha256.New, []byte("whsec"))
+	mac.Write(body)
+	sig := hex.EncodeToString(mac.Sum(nil))
+	h := http.Header{}
+	h.Set("X-Hub-Signature-256", "sha256="+sig)
+	if err := VerifyGitHubDelivery(h, body, "whsec"); err != nil {
+		t.Errorf("GitHub's signature: %v", err)
+	}
+	for name, h := range map[string]http.Header{
+		"GitLab's token":    {"X-Gitlab-Token": {"whsec"}},
+		"Gitea's signature": {"X-Gitea-Signature": {sig}},
+		"none":              {},
+	} {
+		if err := VerifyGitHubDelivery(h, body, "whsec"); !errors.Is(err, ErrBadSignature) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := VerifyGitHubDelivery(h, body, ""); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("no secret: %v", err)
+	}
+}

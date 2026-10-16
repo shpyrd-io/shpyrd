@@ -598,6 +598,9 @@ func (s *Server) routes() error {
 	// Git hosts deliver pushes here (RFC-0018): no session; the URL's
 	// token and the delivery's signature are the credential.
 	pub.POST("/hooks/git/:slug/:token", s.gitHook)
+	// The GitHub App's webhook (RFC-0054): no session; the App's webhook
+	// secret signs every delivery. 404 while the platform has no App.
+	pub.POST("/github/webhook", s.githubWebhook)
 	// The web terminal (RFC-0026) carries no header and may carry no cookie: a
 	// browser cannot set headers on a WebSocket, and `shpyrd cluster dashboard`
 	// signs in with a token in localStorage. So it skips s.auth() and the
