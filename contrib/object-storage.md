@@ -174,8 +174,9 @@ platform's own consumers' (registry, sources, platform backups, a
 database's backups), signing with `garage` as before. Port 3901 is the
 projects' buckets' (`ObjectBucket` resources with the project label and
 without `shpyrd.io/postgres`): it signs with `us-east-1`, limits each
-logical bucket to `SHPYRD_GATEWAY_BUCKET_RATE` requests a second (200
-unless set; `SlowDown` past it), and is the one the public door reaches.
+logical bucket to `SHPYRD_GATEWAY_BUCKET_RATE` requests a second (1000
+unless set, a backstop against a runaway client; `SlowDown` with
+`Retry-After` past it), and is the one the public door reaches.
 The bucket controller hands a project's bucket the 3901 endpoint and the
 `us-east-1` region, and `AWS_PUBLIC_ENDPOINT_URL` when the cluster has a
 door.
