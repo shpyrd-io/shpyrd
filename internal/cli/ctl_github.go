@@ -15,8 +15,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -214,6 +215,9 @@ func showResult(w http.ResponseWriter, status int, title, text string) {
 // it, and waits for GitHub to send the browser back with a code, which it
 // turns into the App's credentials and writes into the Secret.
 func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard string, public bool) error {
+	if n := utf8.RuneCountInString(strings.TrimSpace(name)); n > githubNameLimit {
+		return fmt.Errorf("--name is %d characters: GitHub takes at most %d characters for an App's name", n, githubNameLimit)
+	}
 	ctx := signalContext()
 	out := g.progress(cmd)
 	k, err := ctlKube(g)
@@ -231,7 +235,15 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 		if err != nil {
 			return fmt.Errorf("could not read the cluster's install settings (%v): give the dashboard's public URL with --url", err)
 		}
-		dashboard = firstNonEmpty(info.Vars[install.VarDashboardURL], install.BaseURL(info.Vars)("shpyrd"))
+		// BaseURL with no domain is https://shpyrd., which looks like a
+		// URL: fall back to it only when the cluster names its domain.
+		dashboard = info.Vars[install.VarDashboardURL]
+		if dashboard == "" && info.Vars[install.VarDomain] != "" {
+			dashboard = install.BaseURL(info.Vars)("shpyrd")
+		}
+		if dashboard == "" {
+			return errors.New("this cluster's install settings name no dashboard URL: give it with --url")
+		}
 	}
 	dashboard = strings.TrimSuffix(dashboard, "/")
 	if u, err := url.Parse(dashboard); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -260,7 +272,7 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 		err error
 	}
 	done := make(chan result, 1)
-	var once sync.Once
+	var taken atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -276,17 +288,24 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 			showResult(w, http.StatusBadRequest, "GitHub sent no code", "Start again with shpyrd-ctl github app create.")
 			return
 		}
-		handled := false
-		once.Do(func() {
-			handled = true
-			reg, err := github.ConvertManifest(r.Context(), apiURL, nil, code)
+		// The first good callback takes the code; another, even while
+		// the first is still at work, is told so at once.
+		if !taken.CompareAndSwap(false, true) {
+			showResult(w, http.StatusConflict, "Already registering", "This registration is being finished or is done. You can close this tab.")
+			return
+		}
+		func() {
+			// GitHub has created the App by now: keep its credentials even
+			// if the tab closes and the request is cancelled.
+			keep := context.WithoutCancel(r.Context())
+			reg, err := github.ConvertManifest(keep, apiURL, nil, code)
 			if err == nil {
 				sec := &corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{Name: github.SecretName, Namespace: ns, Labels: map[string]string{"app.kubernetes.io/managed-by": "shpyrd"}},
 					Type:       corev1.SecretTypeOpaque,
 					Data:       reg.App.SecretData(),
 				}
-				_, err = k.Kube.CoreV1().Secrets(ns).Create(r.Context(), sec, metav1.CreateOptions{})
+				_, err = k.Kube.CoreV1().Secrets(ns).Create(keep, sec, metav1.CreateOptions{})
 			}
 			if err != nil {
 				showResult(w, http.StatusBadGateway, "Not registered", "GitHub created the App, but shpyrd-ctl could not keep its credentials: "+err.Error()+". Delete the App on GitHub and run shpyrd-ctl github app create again.")
@@ -294,12 +313,19 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 				showResult(w, http.StatusOK, "Registered "+reg.Name, "The App is ready. You can close this tab; the terminal says what is next.")
 			}
 			done <- result{reg, err}
-		})
-		if !handled {
-			showResult(w, http.StatusConflict, "Already registered", "This registration is finished. You can close this tab.")
-		}
+		}()
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Only the page this run opened, by the address it opened: another
+	// Host is a name rebound to 127.0.0.1 by some other site.
+	host := ln.Addr().String()
+	onlyHere := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != host {
+			showResult(w, http.StatusForbidden, "Not this address", "Open "+base+"/ itself.")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: onlyHere, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() {
 		shut, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -318,7 +344,7 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 		return errors.New("cancelled: nothing was registered")
 	case <-time.After(manifestWait):
 		fmt.Fprintln(out)
-		return errors.New("GitHub did not come back within 10 minutes: run shpyrd-ctl github app create again")
+		return fmt.Errorf("GitHub did not come back within %s: run shpyrd-ctl github app create again", waitText(manifestWait))
 	case r := <-done:
 		fmt.Fprintln(out)
 		if r.err != nil {
@@ -332,4 +358,15 @@ func createGitHubApp(cmd *cobra.Command, g *globalFlags, org, name, dashboard st
 			fmt.Fprintln(w, "Workspaces connect it from the dashboard (Workspace settings, Git) or with: shpyrd github connect")
 		})
 	}
+}
+
+// waitText says how long the registration waits, in words.
+func waitText(wait time.Duration) string {
+	switch {
+	case wait == time.Minute:
+		return "1 minute"
+	case wait > 0 && wait%time.Minute == 0:
+		return fmt.Sprintf("%d minutes", wait/time.Minute)
+	}
+	return wait.String()
 }
