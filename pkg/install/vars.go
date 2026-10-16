@@ -103,7 +103,7 @@ const (
 	VarInternalLBSubnet     = "SHPYRD_INTERNAL_LB_SUBNET"       // subnet OCID for the private LB (OCI)
 	VarIngressClassInternal = "SHPYRD_INGRESS_CLASS_INTERNAL"   // ingress class of the internal controller
 	VarIngressClassExternal = "SHPYRD_INGRESS_CLASS_EXTERNAL"   // ingress class of the external controller
-	VarPlatformIngressClass = "SHPYRD_PLATFORM_INGRESS_CLASS"   // derived: the class the dashboard, sign-in and Grafana use
+	VarPlatformIngressClass = "SHPYRD_PLATFORM_INGRESS_CLASS"   // derived: the class the dashboard and sign-in use
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
@@ -361,7 +361,7 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if domain := vars[VarDomain]; domain != "" && authHost != domain && !strings.HasSuffix(authHost, "."+domain) {
 		out[VarAuthIssuer] = vars[VarClusterIssuer]
 	}
-	// Front door of the dashboard, sign-in and Grafana (RFC-0036), and the
+	// Front door of the dashboard and sign-in (RFC-0036), and the
 	// controller Service behind it, which the server dials for those
 	// hostnames instead of hairpinning through the load balancer.
 	// Cloud layer: empty string means not in use, which the template

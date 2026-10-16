@@ -217,10 +217,6 @@ func run(o runOptions, logger *slog.Logger) error {
 	}
 	domain := envOr("SHPYRD_DOMAIN", "127.0.0.1.nip.io")
 	httpsPort := envOr("SHPYRD_HTTPS_PORT", "443")
-	grafana := "https://grafana." + domain
-	if httpsPort != "443" {
-		grafana += ":" + httpsPort
-	}
 	var prom *api.PromClient
 	if u := envOr("SHPYRD_PROMETHEUS_URL", "http://monitoring-prometheus.monitoring.svc:9090"); u != "" && u != "off" {
 		prom = api.NewPromClient(u)
@@ -326,7 +322,6 @@ func run(o runOptions, logger *slog.Logger) error {
 			Version:      version.Version,
 			Domain:       domain,
 			HTTPSPort:    httpsPort,
-			GrafanaURL:   grafana,
 			DashboardURL: dashboard,
 		},
 		Logger:     logger,
@@ -678,7 +673,9 @@ func registryInsecure(flag, host string) bool {
 
 // ByAddress is the host-based resolver over the platform's names: the
 // building block of a multi-workspace binary. The console host is the
-// console; the platform's other names (sign-in, Grafana) are nobody's.
+// console; the platform's other names (sign-in, the registry) are nobody's.
+// grafana.<domain> stays reserved although shpyrd no longer installs
+// Grafana: clusters served it there, and people may still have it saved.
 func ByAddress(st store.Store, domain, dashboardURL string) tenancy.Resolver {
 	reserved := []string{"auth." + domain, "grafana." + domain, "registry." + domain}
 	if u, err := url.Parse(envOr("SHPYRD_AUTH_URL", "")); err == nil && u.Host != "" {

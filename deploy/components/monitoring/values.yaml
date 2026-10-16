@@ -10,9 +10,9 @@ alertmanager:
   enabled: false
 
 # Alerts on the platform's own jobs. There is no Alertmanager: they show as
-# firing in Prometheus (Alerts) and Grafana (Alerting > Alert rules) and the
-# operator console reads them from there. Every annotation says what
-# happened and what to do in words (#52): no command, tool or object name.
+# firing in Prometheus (Alerts) and the operator console reads them from
+# there. Every annotation says what happened and what to do in words (#52):
+# no command, tool or object name.
 additionalPrometheusRulesMap:
   shpyrd-cluster-overview:
     groups:
@@ -438,41 +438,9 @@ prometheus:
         cpu: 100m
         memory: 512Mi
 
+# No Grafana: shpyrd's charts and alerts read Prometheus directly.
 grafana:
-  enabled: true
-  defaultDashboardsEnabled: true
-  sidecar:
-    dashboards:
-      enabled: true
-      searchNamespace: ALL
-      label: grafana_dashboard
-      folderAnnotation: grafana_folder
-      provider:
-        foldersFromFilesStructure: true
-  grafana.ini:
-    server:
-      root_url: https://grafana.${SHPYRD_DOMAIN}
-    security:
-      # Panels are embedded in the shpyrd dashboard.
-      allow_embedding: true
-    analytics:
-      check_for_updates: false
-      reporting_enabled: false
-  ingress:
-    enabled: true
-    ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
-    annotations:
-      cert-manager.io/cluster-issuer: ${SHPYRD_PLATFORM_ISSUER}
-    hosts:
-      - grafana.${SHPYRD_DOMAIN}
-    tls:
-      - secretName: grafana-tls
-        hosts:
-          - grafana.${SHPYRD_DOMAIN}
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
+  enabled: false
 
 kube-state-metrics:
   # The chart's default collectors stay: the platform backup alerts above

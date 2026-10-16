@@ -17,11 +17,3 @@ prometheus:
       requests:
         cpu: 100m
         memory: 512Mi
-
-# Grafana is the operators' tool: shpyrd's own charts read Prometheus, not
-# Grafana. Reachable only through the internal front door (the VPN), with
-# no anonymous access and the chart's generated admin password (kept across
-# upgrades in the monitoring-grafana Secret; read it with kubectl).
-grafana:
-  ingress:
-    ingressClassName: ${SHPYRD_INGRESS_CLASS_INTERNAL}

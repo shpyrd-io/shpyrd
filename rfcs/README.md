@@ -32,9 +32,8 @@ belong to Accounts/Clerk or the customer IdP; OSS uses operator-managed Dex stat
 credentials. Workspace invitations, authorization, CLI/MCP grants and revocation
 remain in Core. Historical proposals are retained with explicit current decisions.
 
-SCIM (0074), direct kubectl OIDC (0062), access zones (0063), signed-in hints (0068)
-and Grafana OIDC/role mapping (0015) are separate proposals, not completed by the
-account migration. Existing authentication of an app or an internal API does not
+SCIM (0074), direct kubectl OIDC (0062), access zones (0063) and signed-in hints
+(0068) are separate proposals, not completed by the account migration. Existing authentication of an app or an internal API does not
 implement those proposals.
 
 ## Index
@@ -55,7 +54,7 @@ implement those proposals.
 | [0012](0012-sign-in-experience.md) | Sign-in experience: shpyrd's own sign-in page (local sign-in, sign-out) | replaced by 0082 (local password form/grant removed) | 0007 |
 | [0013](0013-email-delivery.md) | Email delivery (`mail` extension) | implemented (v0.9.13; SMTP only — suppression and bounces are the relay's) | 0002 |
 | [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | replaced by 0082 (local lifecycle removed; workspace invitations retained) | 0012, 0013 |
-| [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
+| [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | withdrawn (Grafana no longer installed, 2026-10-14) | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |
 | [0018](0018-repository-monitoring.md) | Repository monitoring and auto-deploy | provisional | 0017 |

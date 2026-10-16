@@ -11,7 +11,6 @@ export type PublicConfig = {
   domain: string;
   authRequired: boolean;
   metrics: boolean;
-  grafanaUrl?: string;
   auth: {
     token: boolean;
     providers: {

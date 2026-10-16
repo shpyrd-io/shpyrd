@@ -17,15 +17,6 @@ prometheus:
         cpu: 50m
         memory: 400Mi
 
-grafana:
-  # Development only: anonymous read access so the shpyrd dashboard can embed
-  # panels without a login round-trip. Admin login is admin / shpyrd.
-  adminPassword: shpyrd
-  grafana.ini:
-    auth.anonymous:
-      enabled: true
-      org_role: Viewer
-
 prometheus-node-exporter:
   # Docker Desktop cannot provide the host root filesystem mount.
   hostRootFsMount:

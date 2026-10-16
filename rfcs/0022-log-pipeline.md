@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-23
+**Last update:** 2026-10-14
 
 This RFC was split on 2026-09-23 into two independent parts so the log agent
 and drains can ship without first implementing object storage or Loki:
@@ -44,7 +44,7 @@ lose theirs after ten minutes, and the audit trail expires with Kubernetes Event
 
 ### Non-Goals
 
-- Full-text analytics UI beyond the project's viewer (Grafana Explore covers the rest).
+- Full-text analytics UI beyond the project's viewer.
 
 ### Proposal
 
@@ -54,7 +54,6 @@ lose theirs after ten minutes, and the audit trail expires with Kubernetes Event
 - Server: `GET /api/projects/{slug}/logs?since=&until=&process=` backed by Loki when
   the extension is on; the viewer gains a time range and "load earlier".
 - Retention: `SHPYRD_LOGS_RETENTION` (default 7d) and a size cap on the bucket.
-- Grafana gets Loki as a data source (behind RFC-0015's sign-in).
 
 ### Open questions
 
@@ -67,3 +66,5 @@ lose theirs after ten minutes, and the audit trail expires with Kubernetes Event
   (Loki/storage, provisional, depends on RFC-0046). Log storage is an optional
   add-on; any OTLP-compatible backend can receive from the agent. RFC-0023 (drains)
   now depends on RFC-0022a only.
+- 2026-10-14: Grafana lines removed: shpyrd no longer installs Grafana (RFC-0015
+  withdrawn).
