@@ -1,0 +1,127 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+)
+
+// Private git repositories (RFC-0017): before a build, the project's
+// credential is written to <app>-git in its namespace, where kpack (through
+// the build ServiceAccount) and the BuildKit fetch container read it. The
+// project's deploy key wins over the workspace's token for the host.
+
+// reconcileGitCredentials writes or removes <app>-git and says how the
+// build clones.
+func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrdv1.App) (gitauth.Build, error) {
+	name := gitauth.BuildSecretName(app.Name)
+	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return gitauth.Build{}, r.deleteSecret(ctx, app.Namespace, name)
+	}
+	url := app.Spec.Source.Git.URL
+	repo, err := gitauth.Parse(url)
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	deployKey, err := r.optionalSecret(ctx, app.Namespace, gitauth.DeployKeySecretName)
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	token, err := r.optionalSecret(ctx, r.Config.SystemNamespace, gitauth.TokenSecretName(workspaceOf(app), repo.Host))
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	b, err := gitauth.Resolve(url, app.Name, app.Namespace, deployKey, token)
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	if b.Secret == nil {
+		return b, r.deleteSecret(ctx, app.Namespace, name)
+	}
+	want := b.Secret
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
+		sec.Labels = mergeMaps(sec.Labels, want.Labels)
+		sec.Annotations = mergeMaps(sec.Annotations, want.Annotations)
+		sec.Type = want.Type
+		sec.Data = want.Data
+		return nil
+	}); err != nil {
+		if apierrors.IsInvalid(err) {
+			// The Secret's type is immutable: a deploy key replacing a
+			// token needs a new Secret.
+			if derr := r.deleteSecret(ctx, app.Namespace, name); derr != nil {
+				return b, derr
+			}
+			return b, r.Create(ctx, want)
+		}
+		return b, fmt.Errorf("git credentials: %w", err)
+	}
+	return b, nil
+}
+
+// ensureBuildServiceAccount keeps shpyrd-builder listing the registry
+// Secret and <app>-git, whichever the project needs. With neither, an
+// existing account is emptied rather than left pointing at a Secret that
+// is gone.
+func (r *AppReconciler) ensureBuildServiceAccount(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) error {
+	var secrets []corev1.ObjectReference
+	var pulls []corev1.LocalObjectReference
+	if r.Config.RegistrySecret != "" {
+		secrets = append(secrets, corev1.ObjectReference{Name: r.Config.RegistrySecret})
+		pulls = append(pulls, corev1.LocalObjectReference{Name: r.Config.RegistrySecret})
+	}
+	if git.Secret != nil {
+		secrets = append(secrets, corev1.ObjectReference{Name: git.Secret.Name})
+	}
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: BuildServiceAccount, Namespace: app.Namespace}}
+	if len(secrets) == 0 {
+		if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: BuildServiceAccount}, sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if len(sa.Secrets) == 0 && len(sa.ImagePullSecrets) == 0 {
+			return nil
+		}
+		sa.Secrets, sa.ImagePullSecrets = nil, nil
+		return r.Update(ctx, sa)
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.Labels = mergeMaps(sa.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: app.Name})
+		sa.Secrets = secrets
+		sa.ImagePullSecrets = pulls
+		return nil
+	}); err != nil {
+		return fmt.Errorf("build service account: %w", err)
+	}
+	return nil
+}
+
+func (r *AppReconciler) optionalSecret(ctx context.Context, ns, name string) (*corev1.Secret, error) {
+	sec := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return sec, nil
+}
+
+func (r *AppReconciler) deleteSecret(ctx context.Context, ns, name string) error {
+	err := r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}

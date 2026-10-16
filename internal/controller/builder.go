@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Build composition (RFC-0065): a project that names buildpacks or a stack
@@ -168,7 +169,7 @@ func (c Config) desiredBuilder(app *shpyrdv1.App, buildEnv bool) (*unstructured.
 	u.Object["spec"] = map[string]interface{}{
 		"tag":                tag + "/builder",
 		"stack":              map[string]interface{}{"name": stack, "kind": "ClusterStack"},
-		"serviceAccountName": c.buildServiceAccountName(),
+		"serviceAccountName": c.buildServiceAccountName(gitauth.Build{}),
 		"order":              group,
 	}
 	return u, nil

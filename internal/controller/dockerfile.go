@@ -22,6 +22,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Dockerfile builds run as Kubernetes Jobs: an init container fetches the
@@ -49,7 +50,8 @@ type buildResult struct {
 
 // reconcileDockerfileBuild makes sure a Job exists for the current source and
 // build settings and reports its state.
-func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App) (buildState, error) {
+func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (buildState, error) {
+	_ = git // Task 5 passes it to the fetch container.
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {
 		return buildState{}, fmt.Errorf("list builds: %w", err)

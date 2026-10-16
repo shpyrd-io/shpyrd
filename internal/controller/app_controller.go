@@ -34,6 +34,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
@@ -346,6 +347,13 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err := r.reconcileRegistryCredentials(ctx, app); err != nil {
 		return outcome{}, err
 	}
+	gitBuild, err := r.reconcileGitCredentials(ctx, app)
+	if err != nil {
+		return outcome{}, err
+	}
+	if err := r.ensureBuildServiceAccount(ctx, app, gitBuild); err != nil {
+		return outcome{}, err
+	}
 	globals, err := r.reconcileGlobals(ctx, app)
 	if err != nil {
 		return outcome{}, err
@@ -374,7 +382,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	var kpackBuild *unstructured.Unstructured
 	if app.HasSource() {
 		if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
-			st, err := r.reconcileDockerfileBuild(ctx, app)
+			st, err := r.reconcileDockerfileBuild(ctx, app, gitBuild)
 			if err != nil {
 				return outcome{}, err
 			}
@@ -398,7 +406,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
-			img, err := r.reconcileKpackImage(ctx, app)
+			img, err := r.reconcileKpackImage(ctx, app, gitBuild)
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
 				app.Status.Message = "moving the build to its new image repository"
@@ -656,14 +664,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
-func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (*unstructured.Unstructured, error) {
 	// The project's own builder when it composes its build (RFC-0065),
 	// else the platform's.
 	builderRef, err := r.reconcileBuilder(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := r.Config.desiredKpackImage(app)
+	desired, err := r.Config.desiredKpackImage(app, git)
 	if err != nil {
 		return nil, err
 	}
