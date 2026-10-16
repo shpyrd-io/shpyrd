@@ -129,6 +129,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newDrainsCmd(g))
 	root.AddCommand(newGitAuthCmd(g))
+	root.AddCommand(newGitHooksCmd(g))
 	root.AddCommand(newScaleCmd(g))
 	root.AddCommand(newResizeCmd(g))
 	root.AddCommand(newSizesCmd(g))

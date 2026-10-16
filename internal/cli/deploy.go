@@ -24,15 +24,17 @@ import (
 
 func newDeployCmd(g *globalFlags) *cobra.Command {
 	var (
-		appName     string
-		gitURL      string
-		gitRef      string
-		subPath     string
-		image       string
-		noWait      bool
-		workingTree bool
-		dockerfile  string
-		save        bool
+		appName      string
+		gitURL       string
+		gitRef       string
+		subPath      string
+		image        string
+		noWait       bool
+		workingTree  bool
+		dockerfile   string
+		save         bool
+		autoDeploy   bool
+		noAutoDeploy bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -47,7 +49,7 @@ at https://<app>.<domain>.
 
   shpyrd deploy --project myapp               archive the committed tree and build in-cluster
   shpyrd deploy --working-tree                archive the directory as is, uncommitted changes included
-  shpyrd deploy --git https://github.com/o/r  build from a Git URL; new commits rebuild automatically (buildpacks)
+  shpyrd deploy --git https://github.com/o/r  build from a Git URL; every push to the branch deploys (--no-auto-deploy records them only)
   shpyrd deploy --git ... --dockerfile Dockerfile   build the repository's Dockerfile
   shpyrd deploy --image ghcr.io/o/r:tag       run a prebuilt image (no build)
 
@@ -63,6 +65,12 @@ ones into the file.
 
 The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if gitURL == "" && (autoDeploy || noAutoDeploy) {
+				return errors.New("--auto-deploy and --no-auto-deploy go with --git")
+			}
+			if autoDeploy && noAutoDeploy {
+				return errors.New("--auto-deploy and --no-auto-deploy contradict each other")
+			}
 			ctx := signalContext()
 			out := g.progress(cmd)
 			name, err := resolveAppName(appName)
@@ -194,9 +202,12 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				req.Image = image
 				req.Note = "Deploy image " + image
 			case gitURL != "":
-				ref := firstNonEmpty(gitRef, "main")
-				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, ref, name)
-				req.Git = &shpyrdv1.GitSource{URL: gitURL, Revision: ref}
+				src, err := gitDeploySource(gitURL, gitRef, autoDeploy, noAutoDeploy)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, src.Revision, name)
+				req.Git = src
 			default:
 				archive, ref, err := archiveSource(out, workingTree, workspaceRoot)
 				workspacePackage := ""
@@ -308,6 +319,8 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "build with this Dockerfile (path relative to the deployed directory) instead of buildpacks")
 	cmd.Flags().Lookup("dockerfile").NoOptDefVal = "auto"
 	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile or workspace detection inferred into shpyrd.yaml")
+	cmd.Flags().BoolVar(&autoDeploy, "auto-deploy", false, "with --git: deploy every push to the branch (the default; switches it back on)")
+	cmd.Flags().BoolVar(&noAutoDeploy, "no-auto-deploy", false, "with --git: record pushes to the branch without deploying them")
 	return cmd
 }
 
@@ -479,4 +492,18 @@ func sameSource(a, b *shpyrdv1.Source) bool {
 		return a.Git.URL == b.Git.URL && a.Git.Revision == b.Git.Revision
 	}
 	return false
+}
+
+// gitDeploySource is the source `deploy --git` sends. Without a flag
+// auto-deploy is left out, and the server keeps the project's setting.
+func gitDeploySource(url, ref string, on, off bool) (*shpyrdv1.GitSource, error) {
+	if on && off {
+		return nil, errors.New("--auto-deploy and --no-auto-deploy contradict each other")
+	}
+	src := &shpyrdv1.GitSource{URL: url, Revision: firstNonEmpty(ref, "main")}
+	if on || off {
+		v := on
+		src.AutoDeploy = &v
+	}
+	return src, nil
 }

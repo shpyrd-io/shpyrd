@@ -190,13 +190,19 @@ A project's deploy key wins over the workspace's token.
 // gitAuthRequest calls the API signed in; git credentials are not managed
 // over a kubeconfig.
 func gitAuthRequest(g *globalFlags, cmd *cobra.Command, method, path string, body []byte, out any) error {
+	return signedInRequest(g, cmd, "git credentials are managed signed in: run shpyrd login first", method, path, body, out)
+}
+
+// signedInRequest calls the API with the signed-in session; over a
+// kubeconfig it refuses with refusal.
+func signedInRequest(g *globalFlags, cmd *cobra.Command, refusal, method, path string, body []byte, out any) error {
 	ctx := signalContext()
 	ac, err := newAppClient(g, g.progress(cmd))
 	if err != nil {
 		return err
 	}
 	if !ac.session {
-		return errors.New("git credentials are managed signed in: run shpyrd login first")
+		return errors.New(refusal)
 	}
 	ct := ""
 	if body != nil {
