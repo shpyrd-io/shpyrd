@@ -100,8 +100,8 @@
         }
       ],
       "source": {
-        "commit": "4f9e2c1a7b3d5e6f8091a2b3c4d5e6f708192a3b",
-        "latest": "4f9e2c1a7b3d5e6f8091a2b3c4d5e6f708192a3b",
+        "commit": "a3f9c21e5b7d4c6f8091a2b3c4d5e6f708192a3b",
+        "latest": "a3f9c21e5b7d4c6f8091a2b3c4d5e6f708192a3b",
         "latestAt": "2026-10-16T09:41:00Z",
         "message": "Fix the login redirect",
         "author": "alice",

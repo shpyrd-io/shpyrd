@@ -270,13 +270,14 @@ export type SourceStatus = {
 export type GitHooks = { url: string; secret: string };
 
 // buildFailed says the project's last build failed (its Built condition).
+// A branch shpyrd cannot read (SourceUnreadable) built nothing.
 export const buildFailed = (status: {
   phase: string;
-  conditions?: { type: string; status: string }[];
+  conditions?: { type: string; status: string; reason?: string }[];
 }) =>
   status.phase === "Failed" &&
   (status.conditions ?? []).some(
-    (c) => c.type === "Built" && c.status === "False",
+    (c) => c.type === "Built" && c.status === "False" && c.reason !== "SourceUnreadable",
   );
 
 export type DeployRequest = {

@@ -8,6 +8,8 @@ import { GitSource } from "./source";
 
 const fake = vi.hoisted(() => ({ updateProject: vi.fn(), projectGitHooks: vi.fn() }));
 vi.mock("@/api/api", () => ({ api: fake }));
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: toasts }));
 let queries: QueryClient;
 afterEach(() => {
   cleanup();
@@ -50,15 +52,23 @@ it("shows the commit that runs, its message and author, and when the branch was 
 });
 
 it("says the branch is being read before a commit is pinned", () => {
-  show(projectWith(repo, undefined));
+  show(projectWith(repo, {}));
   expect(screen.getByText("Reading the branch's latest commit.")).toBeTruthy();
   expect(screen.getByText("not yet")).toBeTruthy();
 });
 
+it("says the build follows the branch when shpyrd does not watch it", () => {
+  show(projectWith({ url: "git://git.example.test/acme/hello-world", revision: "main" }, undefined));
+  expect(screen.getByText("The build follows the branch")).toBeTruthy();
+  expect(screen.queryByText("Reading the branch's latest commit.")).toBeNull();
+});
+
 it("says a skipped commit was not deployed", () => {
   show(projectWith(repo, { commit, latest: newer, skipped: newer, message: "[skip deploy] typo", author: "bruno", via: "push", checkedAt: minutesAgo(1) }));
-  expect(screen.getByText("Skipped b2c3d4e: [skip deploy]")).toBeTruthy();
-  expect(screen.queryByText("[skip deploy] typo")).toBeNull();
+  expect(screen.getByText("Skipped b2c3d4e: [skip deploy] typo")).toBeTruthy();
+  cleanup();
+  show(projectWith(repo, { commit, latest: newer, skipped: newer, via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("Skipped b2c3d4e: a skip marker")).toBeTruthy();
 });
 
 it("says the latest commit waits when auto-deploy is off", () => {
@@ -104,4 +114,36 @@ it("shows the webhook URL and secret to copy in the dialog", async () => {
   expect(screen.getByText("s3cr3t")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy the secret" })).toBeTruthy();
   expect(fake.projectGitHooks).toHaveBeenCalledWith(project.slug);
+});
+
+it("forgets the webhook's secret when the dialog closes", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(project);
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  expect(await screen.findByText("s3cr3t")).toBeTruthy();
+  expect(queries.getQueryData(["git-hooks", project.slug])).toBeTruthy();
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByText("s3cr3t")).toBeNull());
+  expect(queries.getQueryData(["git-hooks", project.slug])).toBeUndefined();
+});
+
+it("says when the clipboard cannot be written", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(project);
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Copy the secret" }));
+  await waitFor(() => expect(toasts.error).toHaveBeenCalled());
+  expect(toasts.success).not.toHaveBeenCalled();
+
+  const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the URL" }));
+  await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(2));
+
+  writeText.mockResolvedValue(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Copy the URL" }));
+  await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("URL copied"));
+  Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
 });

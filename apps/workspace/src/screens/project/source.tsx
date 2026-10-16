@@ -72,7 +72,9 @@ export function GitSource({ project, perms }: { project: Project; perms: Perms }
         </InfoTableItem>
       </InfoTable>
       {source?.skipped && (
-        <p className="text-xs text-muted-foreground">Skipped {short(source.skipped)}: [skip deploy]</p>
+        <p className="text-xs text-muted-foreground">
+          Skipped {short(source.skipped)}: {(source.latest === source.skipped && subject(source.message)) || "a skip marker"}
+        </p>
       )}
       {!autoDeploy && source?.latest && source.latest !== source.commit && (
         <p className="text-xs text-muted-foreground">
@@ -91,8 +93,11 @@ export function GitSource({ project, perms }: { project: Project; perms: Perms }
 }
 
 // The commit that runs, with its subject and author when a push said them.
+// Without status.source shpyrd does not watch the branch (a URL it cannot
+// read, such as git://): the build follows the branch by itself.
 function CommitLine({ source }: { source?: SourceStatus }) {
-  if (!source?.commit)
+  if (!source) return <span className="text-muted-foreground">The build follows the branch</span>;
+  if (!source.commit)
     return <span className="text-muted-foreground">Reading the branch's latest commit.</span>;
   const known = source.latest === source.commit;
   return (
@@ -130,13 +135,24 @@ function AutoDeploySwitch({ slug, on, allowed }: { slug: string; on: boolean; al
 // to those who may change the project.
 function DeployOnPush({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
-  const hooks = useQuery({ queryKey: ["git-hooks", slug], queryFn: () => api.projectGitHooks(slug), enabled: open });
-  const copy = (what: string, text: string) => {
-    void navigator.clipboard?.writeText(text);
-    toast.success(`${what} copied`);
+  const queries = useQueryClient();
+  // The secret is not kept once the dialog closes.
+  const hooks = useQuery({ queryKey: ["git-hooks", slug], queryFn: () => api.projectGitHooks(slug), enabled: open, gcTime: 0 });
+  const toggle = (next: boolean) => {
+    setOpen(next);
+    if (!next) queries.removeQueries({ queryKey: ["git-hooks", slug] });
+  };
+  const copy = async (what: string, text: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error("no clipboard");
+      await navigator.clipboard.writeText(text);
+      toast.success(`${what} copied`);
+    } catch {
+      toast.error(`Could not copy the ${what.toLowerCase()}: select it and copy it by hand`);
+    }
   };
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={toggle}>
       <DialogTrigger asChild>
         <Button variant="link" size="sm" className="justify-self-start px-0">
           Deploy on push
@@ -158,8 +174,8 @@ function DeployOnPush({ slug }: { slug: string }) {
           </Alert>
         ) : hooks.data ? (
           <div className="grid gap-3 text-sm">
-            <Value label="Payload URL" value={hooks.data.url} onCopy={() => copy("URL", hooks.data.url)} copyLabel="Copy the URL" />
-            <Value label="Secret" value={hooks.data.secret} onCopy={() => copy("Secret", hooks.data.secret)} copyLabel="Copy the secret" />
+            <Value label="Payload URL" value={hooks.data.url} onCopy={() => void copy("URL", hooks.data.url)} copyLabel="Copy the URL" />
+            <Value label="Secret" value={hooks.data.secret} onCopy={() => void copy("Secret", hooks.data.secret)} copyLabel="Copy the secret" />
             <ul className="grid gap-1 text-muted-foreground">
               <li>
                 <b className="font-medium text-foreground">GitHub</b>: Settings, Webhooks, Add webhook. Content type{" "}
