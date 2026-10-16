@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -143,14 +144,21 @@ func (s *Server) gitHook(c *gin.Context) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, hookBodyLimit))
-	if err != nil {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
 		abort(c, http.StatusRequestEntityTooLarge, errors.New("the delivery is larger than shpyrd reads (1 MiB)"))
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusBadRequest, fmt.Errorf("could not read the delivery: %w", err))
 		return
 	}
 	ctx := c.Request.Context()
 	app, err := s.findApp(ctx, s.workspace(c), c.Param("slug"))
 	if errors.Is(err, store.ErrNotFound) || apierrors.IsNotFound(err) {
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "no such project"})
+		// Answered as a wrong URL: the webhook does not tell which
+		// projects exist.
+		s.refuseHook(c, c.Param("slug"))
 		return
 	}
 	if err != nil {

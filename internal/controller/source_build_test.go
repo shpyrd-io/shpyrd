@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +155,49 @@ func TestStatusSourceIgnoresAnotherBranchsRecord(t *testing.T) {
 	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
 	if s := sourceStatus(app); s == nil || s.Commit != otherCommit || s.Error != "" {
 		t.Errorf("status.source %+v", s)
+	}
+}
+
+// Switching auto-deploy is a setting, not a source: the pinned commit is
+// still what is built, so no new build starts.
+func TestFlippingAutoDeployStartsNoBuild(t *testing.T) {
+	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
+		gitauth.SourceRecord{Ref: "main", Latest: testCommit, CheckedAt: at(sourceNow)})
+	r, c := newTestReconciler(t, app)
+	ctx := context.Background()
+	kpackSource := func() map[string]any {
+		t.Helper()
+		img := &unstructured.Unstructured{}
+		img.SetGroupVersionKind(KpackImageGVK)
+		if err := c.Get(ctx, client.ObjectKeyFromObject(app), img); err != nil {
+			t.Fatal(err)
+		}
+		src, _, _ := unstructured.NestedMap(img.Object, "spec", "source")
+		return src
+	}
+	runReconcile(t, r, app)
+	before := kpackSource()
+	for _, on := range []bool{false, true} {
+		got := &shpyrdv1.App{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(app), got); err != nil {
+			t.Fatal(err)
+		}
+		got.Spec.Source.Git.AutoDeploy = &on
+		if err := c.Update(ctx, got); err != nil {
+			t.Fatal(err)
+		}
+		runReconcile(t, r, got)
+		if after := kpackSource(); !reflect.DeepEqual(before, after) {
+			t.Errorf("auto-deploy %v changed the kpack source: %v -> %v", on, before, after)
+		}
+	}
+
+	dk := dockerfileGitApp("https://github.com/acme/dk")
+	key := buildKey(dk)
+	for _, on := range []bool{false, true} {
+		dk.Spec.Source.Git.AutoDeploy = &on
+		if buildKey(dk) != key {
+			t.Errorf("auto-deploy %v is a new Dockerfile build", on)
+		}
 	}
 }

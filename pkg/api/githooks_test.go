@@ -7,12 +7,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path"
 	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -125,7 +130,7 @@ func TestGitHookAcceptsASignedGitHubPush(t *testing.T) {
 }
 
 func TestGitHookRefusesAWrongTokenOrSignature(t *testing.T) {
-	s, _ := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning), sampleApp("web2", shpyrdv1.PhaseRunning)})
+	s, cr := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning), sampleApp("web2", shpyrdv1.PhaseRunning)})
 	token, secret := hookOf(t, s, "web1")
 	body := githubPush("refs/heads/main")
 	for name, rec := range map[string]*httptest.ResponseRecorder{
@@ -137,6 +142,52 @@ func TestGitHookRefusesAWrongTokenOrSignature(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), secret) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
 		}
+	}
+	// A delivery to a project without a webhook does not make one.
+	err := cr.Get(context.Background(), types.NamespacedName{Namespace: "app-web2", Name: gitauth.HookSecretName}, &corev1.Secret{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("web2's hook Secret: %v", err)
+	}
+}
+
+func TestGitHookDoesNotTellWhichProjectsExist(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	_, secret := hookOf(t, s, "web1")
+	body := githubPush("refs/heads/main")
+	wrong := deliver(t, s, "web1", strings.Repeat("0", 64), body, githubHeaders(secret, "push", "w", body))
+	unknown := deliver(t, s, "nope", strings.Repeat("0", 64), body, githubHeaders(secret, "push", "u", body))
+	if wrong.Code != http.StatusUnauthorized || unknown.Code != wrong.Code || unknown.Body.String() != wrong.Body.String() {
+		t.Errorf("an unknown project %d %s, a wrong token %d %s", unknown.Code, unknown.Body.String(), wrong.Code, wrong.Body.String())
+	}
+}
+
+func TestGitHookUnreadableBodyIsABadRequest(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	token, _ := hookOf(t, s, "web1")
+	req := httptest.NewRequest("POST", "/api/hooks/git/web1/"+token, iotest.ErrReader(errors.New("connection reset")))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a body that cannot be read: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHookDedupesAPendingDelivery(t *testing.T) {
+	s, cr := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	token, secret := hookOf(t, s, "web1")
+	body := githubPush("refs/heads/main")
+	if rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "d-1", body)); rec.Code != http.StatusAccepted {
+		t.Fatalf("push: %d %s", rec.Code, rec.Body.String())
+	}
+	first := appNamed(t, cr, "web1").Annotations[shpyrdv1.AnnotationGitPush]
+	time.Sleep(2 * time.Millisecond)
+	rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "d-1", body))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "delivered before") {
+		t.Errorf("again: %d %s", rec.Code, rec.Body.String())
+	}
+	if again := appNamed(t, cr, "web1").Annotations[shpyrdv1.AnnotationGitPush]; again != first {
+		t.Errorf("the pending push was written again: %s -> %s", first, again)
 	}
 }
 
@@ -172,11 +223,10 @@ func TestGitHookIgnoresWhatIsNotAPushToTheBranch(t *testing.T) {
 	deleted := []byte(`{"ref":"refs/heads/main","after":"0000000000000000000000000000000000000000"}`)
 	tag := githubPush("refs/tags/v1.2")
 	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"an issue":           deliver(t, s, "web1", token, issue, githubHeaders(secret, "issues", "i", issue)),
-		"another branch":     deliver(t, s, "web1", token, other, githubHeaders(secret, "push", "o", other)),
-		"a deleted branch":   deliver(t, s, "web1", token, deleted, githubHeaders(secret, "push", "x", deleted)),
-		"a tag":              deliver(t, s, "web1", token, tag, githubHeaders(secret, "push", "v", tag)),
-		"an unknown project": deliver(t, s, "nope", token, other, githubHeaders(secret, "push", "n", other)),
+		"an issue":         deliver(t, s, "web1", token, issue, githubHeaders(secret, "issues", "i", issue)),
+		"another branch":   deliver(t, s, "web1", token, other, githubHeaders(secret, "push", "o", other)),
+		"a deleted branch": deliver(t, s, "web1", token, deleted, githubHeaders(secret, "push", "x", deleted)),
+		"a tag":            deliver(t, s, "web1", token, tag, githubHeaders(secret, "push", "v", tag)),
 	} {
 		if rec.Code != http.StatusAccepted {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
