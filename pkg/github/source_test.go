@@ -65,3 +65,35 @@ func TestAnIncompleteSecretIsNoApp(t *testing.T) {
 		t.Errorf("no reader: %v", err)
 	}
 }
+
+func TestABrokenSecretStopsTheOldClient(t *testing.T) {
+	for name, breakIt := range map[string]func(*corev1.Secret){
+		"incomplete": func(s *corev1.Secret) { delete(s.Data, github.KeyClientSecret) },
+		"a bad key":  func(s *corev1.Secret) { s.Data[github.KeyPrivateKey] = []byte("not a key") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := githubtest.NewServer(t)
+			fake.SetNow(t0)
+			c := crfake.NewClientBuilder().WithObjects(fake.Secret("shpyrd-system")).Build()
+			src := fake.Source(c, "shpyrd-system")
+			ctx := context.Background()
+			if _, err := src.Client(ctx); err != nil {
+				t.Fatal(err)
+			}
+			sec := &corev1.Secret{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "shpyrd-system", Name: github.SecretName}, sec); err != nil {
+				t.Fatal(err)
+			}
+			breakIt(sec)
+			if err := c.Update(ctx, sec); err != nil {
+				t.Fatal(err)
+			}
+			for _, after := range []time.Duration{31 * time.Second, 32 * time.Second, 45 * time.Second, 70 * time.Second} {
+				fake.SetNow(t0.Add(after))
+				if got, err := src.Client(ctx); got != nil || !errors.Is(err, github.ErrNotConfigured) {
+					t.Errorf("at %v: a client %v, err %v", after, got != nil, err)
+				}
+			}
+		})
+	}
+}

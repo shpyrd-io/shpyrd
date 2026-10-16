@@ -143,7 +143,8 @@ func (c *Client) AppJWT() (string, error) {
 // InstallationToken is a token of the installation that reads one
 // repository (by its name, without the owner), or lists the whole
 // installation when repo is "". It is kept and given again until it ages.
-// A repository the installation does not include is ErrRepoNotGranted.
+// A repository the installation does not include is ErrRepoNotGranted; an
+// installation GitHub no longer knows is ErrInstallationGone.
 func (c *Client) InstallationToken(ctx context.Context, installation int64, repo string) (Token, error) {
 	key := tokenKey{installation, strings.ToLower(repo)}
 	c.mu.Lock()
@@ -165,8 +166,15 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	err = c.call(ctx, "POST", fmt.Sprintf("%s/app/installations/%d/access_tokens", c.api, installation), bearer, body, &out)
-	if apiErr, ok := err.(*APIError); ok && repo != "" && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusUnprocessableEntity) {
-		return Token{}, ErrRepoNotGranted
+	// GitHub answers 404 when the installation is gone (the App was
+	// uninstalled), and 422 when it does not include the repository.
+	if apiErr, ok := err.(*APIError); ok {
+		switch {
+		case apiErr.Status == http.StatusNotFound:
+			return Token{}, fmt.Errorf("%w: %w", ErrInstallationGone, apiErr)
+		case apiErr.Status == http.StatusUnprocessableEntity && repo != "":
+			return Token{}, ErrRepoNotGranted
+		}
 	}
 	if err != nil {
 		return Token{}, err

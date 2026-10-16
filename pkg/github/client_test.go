@@ -150,3 +150,18 @@ func TestCallsRefuseLoopbackWithoutAnInjectedClient(t *testing.T) {
 		t.Errorf("the fake was reached: %v", calls)
 	}
 }
+
+func TestA404MeansTheInstallationIsGoneAndA422ThatTheRepositoryIsNotGranted(t *testing.T) {
+	c, _ := newClient(t)
+	ctx := context.Background()
+	for _, repo := range []string{"shop", ""} {
+		_, err := c.InstallationToken(ctx, 7, repo)
+		if !errors.Is(err, github.ErrInstallationGone) || errors.Is(err, github.ErrRepoNotGranted) {
+			t.Errorf("installation 7, repo %q: %v", repo, err)
+		}
+	}
+	_, err := c.InstallationToken(ctx, 42, "vault")
+	if !errors.Is(err, github.ErrRepoNotGranted) || errors.Is(err, github.ErrInstallationGone) {
+		t.Errorf("a repository not granted: %v", err)
+	}
+}

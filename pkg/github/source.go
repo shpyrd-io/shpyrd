@@ -63,12 +63,16 @@ func (s *Source) Client(ctx context.Context) (*Client, error) {
 	if s.client != nil && sec.ResourceVersion == s.version {
 		return s.client, nil
 	}
+	// A Secret that no longer makes an App stops the old client: callers get
+	// the error, never the previous App's credentials.
 	app, err := AppFromSecret(sec)
 	if err != nil {
+		s.client, s.version = nil, ""
 		return nil, err
 	}
 	c, err := New(app, s.Options)
 	if err != nil {
+		s.client, s.version = nil, ""
 		return nil, err
 	}
 	s.client, s.version = c, sec.ResourceVersion
