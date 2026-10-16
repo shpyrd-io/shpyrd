@@ -697,7 +697,7 @@ func TestVolumesAPIAndScaleRefusal(t *testing.T) {
 	}
 
 	// Scaling web past 1 is refused because "data" is single-instance.
-	if rec := do(t, s, "POST", "/api/projects/demo/scale", `{"process":"web","replicas":3}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "single-instance volume") {
+	if rec := do(t, s, "POST", "/api/projects/demo/scale", `{"process":"web","replicas":3}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "which one instance at a time can use; files that several instances share belong in a bucket") {
 		t.Errorf("scale: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := do(t, s, "POST", "/api/projects/demo/processes", `{"processes":{"web":{"replicas":2}}}`, true); rec.Code != http.StatusBadRequest {

@@ -1300,7 +1300,9 @@ export function ResourceDialog({
                       hint={
                         maxInstances < 3
                           ? `A dedicated database here runs up to ${maxInstances} instance${maxInstances === 1 ? "" : "s"}.`
-                          : undefined
+                          : instances === "1"
+                            ? "One instance pauses for about 40 seconds when its machine is replaced; a second avoids it."
+                            : undefined
                       }
                     >
                       <Select value={instances} onValueChange={setInstances}>
