@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
@@ -310,5 +311,60 @@ func TestAutoDeployIsAProjectSetting(t *testing.T) {
 	}
 	if rec := do(t, s, "PATCH", "/api/projects/site", `{"autoDeploy":true}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "git repository") {
 		t.Errorf("an archive has no branch: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A git:// URL is built as given and not watched: a push to it is
+// ignored, as for a commit revision.
+func TestGitHookIgnoresAPushToAnUnwatchedURL(t *testing.T) {
+	app := sampleApp("web1", shpyrdv1.PhaseRunning)
+	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "git://git.example.test/acme/web1", Revision: "main"}}
+	s, cr := newTestServer(t, nil, []client.Object{app})
+	token, secret := hookOf(t, s, "web1")
+	body := githubPush("refs/heads/main")
+	rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "d-1", body))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "ignored") {
+		t.Errorf("push: %d %s", rec.Code, rec.Body.String())
+	}
+	if appNamed(t, cr, "web1").Annotations[shpyrdv1.AnnotationGitPush] != "" {
+		t.Error("a push to an unwatched URL is not written")
+	}
+}
+
+// Before the delivery is authenticated, a failure says nothing of the
+// cluster.
+func TestGitHookLookupFailureSaysNothingOfTheCluster(t *testing.T) {
+	s, cr := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	token, secret := hookOf(t, s, "web1")
+	s.apps = interceptor.NewClient(cr.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*shpyrdv1.App); ok {
+				return errors.New("etcdserver: leader changed (app-web1)")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	body := githubPush("refs/heads/main")
+	rec := deliver(t, s, "web1", token, body, githubHeaders(secret, "push", "d-1", body))
+	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "etcd") || strings.Contains(rec.Body.String(), "app-web1") {
+		t.Errorf("lookup failure: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Through an internal door (the kubeconfig proxy, an in-cluster caller)
+// the request's host is no address a git host reaches: the URL is the
+// workspace's own.
+func TestGitHooksURLAtAnInternalDoorIsTheWorkspaces(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	s.opts.Public.DashboardURL = "https://shpyrd.example.test"
+	req := httptest.NewRequest("GET", "/api/projects/web1/git-hooks", nil)
+	req.Host = "10.96.0.12:8080"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	var v GitHooksView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(v.URL, "https://shpyrd.example.test/api/hooks/git/web1/") {
+		t.Errorf("git-hooks: %d %+v", rec.Code, v)
 	}
 }

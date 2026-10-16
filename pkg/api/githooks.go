@@ -102,13 +102,19 @@ func (s *Server) projectHookSecret(ctx context.Context, app *shpyrdv1.App, rotat
 }
 
 // hookURL is the webhook's address at the door the request came through,
-// HTTPS when the platform is.
+// HTTPS when the platform is. An internal door (the kubeconfig proxy, an
+// in-cluster caller) is no address a git host reaches: there it is the
+// workspace's own URL, when the platform knows it.
 func (s *Server) hookURL(c *gin.Context, slug, token string) string {
+	path := "/api/hooks/git/" + url.PathEscape(slug) + "/" + token
+	if t, err := s.door(c); err == nil && t.Internal && t.Workspace != nil && (t.Workspace.Address != "" || s.opts.Public.DashboardURL != "") {
+		return strings.TrimSuffix(s.dashboardURLOf(t.Workspace), "/") + path
+	}
 	scheme := requestScheme(c)
 	if scheme == "http" && strings.HasPrefix(s.opts.Public.DashboardURL, "https://") {
 		scheme = "https"
 	}
-	return scheme + "://" + c.Request.Host + "/api/hooks/git/" + url.PathEscape(slug) + "/" + token
+	return scheme + "://" + c.Request.Host + path
 }
 
 func (s *Server) showGitHooks(c *gin.Context)   { s.gitHooks(c, false) }
@@ -162,13 +168,13 @@ func (s *Server) gitHook(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		abort(c, http.StatusBadGateway, err)
+		s.hookUnavailable(c, err)
 		return
 	}
 	sec := &corev1.Secret{}
 	err = s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: gitauth.HookSecretName}, sec)
 	if err != nil && !apierrors.IsNotFound(err) {
-		abort(c, http.StatusBadGateway, err)
+		s.hookUnavailable(c, err)
 		return
 	}
 	if err != nil || subtle.ConstantTimeCompare([]byte(c.Param("token")), sec.Data[gitauth.HookKeyToken]) != 1 ||
@@ -211,8 +217,8 @@ func ignoredPush(app *shpyrdv1.App, p gitauth.Push) string {
 	switch {
 	case p.Deleted:
 		return "the branch was deleted; what runs keeps running"
-	case !app.WatchesGit():
-		return "the project does not follow a git branch"
+	case !gitauth.Watched(app):
+		return "the project does not follow a git branch shpyrd reads"
 	case p.Ref != "refs/heads/"+app.GitRevision():
 		return "a push to another branch"
 	case p.Delivery != "" && seenDelivery(app, p.Delivery):
@@ -228,6 +234,14 @@ func seenDelivery(app *shpyrdv1.App, id string) bool {
 		return true
 	}
 	return gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource]).Delivery == id
+}
+
+// hookUnavailable answers a delivery that could not be checked: before
+// it is authenticated, nothing of the cluster is said. The host delivers
+// again; the watcher reads the branch meanwhile.
+func (s *Server) hookUnavailable(c *gin.Context, err error) {
+	s.log.Warn("git webhook: could not look up the project", "project", c.Param("slug"), "err", err.Error())
+	abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branch by itself meanwhile"))
 }
 
 // refuseHook answers a delivery whose URL or signature is not the

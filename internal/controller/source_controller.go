@@ -123,14 +123,8 @@ func (r *SourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // watchesGit says the App follows a branch or tag of a repository shpyrd
-// can read. A URL it cannot parse (git://) builds as given, as before.
-func watchesGit(app *shpyrdv1.App) bool {
-	if !app.WatchesGit() {
-		return false
-	}
-	_, err := gitauth.Parse(app.Spec.Source.Git.URL)
-	return err == nil
-}
+// can read: the webhook's predicate too (gitauth.Watched).
+func watchesGit(app *shpyrdv1.App) bool { return gitauth.Watched(app) }
 
 // sourceEvent is what one reconcile learnt: a push, or the branch's
 // commit from a listing, or why the listing failed.
