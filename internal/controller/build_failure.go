@@ -84,12 +84,12 @@ func describeBuildFailure(step, out string) string {
 	if script != "" {
 		while = fmt.Sprintf("The build failed while running `%s`", script)
 	}
-	if refusedClone.MatchString(text) {
+	if step == "prepare" && refusedClone.MatchString(text) {
 		return "The build could not read the repository: it is private, or does not exist under that name. " +
 			"Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, " +
 			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then deploy again. " + buildLogHint
 	}
-	if strings.Contains(text, "Host key verification failed") {
+	if step == "prepare" && strings.Contains(text, "Host key verification failed") {
 		return "The build could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. " +
 			"If the host changed its key, make a new deploy key with `shpyrd git-auth deploy-key` and add it to the repository. " + buildLogHint
 	}

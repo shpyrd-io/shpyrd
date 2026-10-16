@@ -155,3 +155,18 @@ func TestRefusedCloneNamesTheFix(t *testing.T) {
 		t.Errorf("a network failure is not an access failure: %s", msg)
 	}
 }
+
+// Only a clone of the app's own repository, in the prepare step, gets the
+// git-auth hint. An app's own fetch inside the build (npm, go, pip) does not.
+func TestAppDependencyFetchIsNotAClone(t *testing.T) {
+	for _, c := range []struct{ step, out string }{
+		{"build", "npm ERR! code E401\nnpm ERR! Authentication failed for registry"},
+		{"dockerfile", "process \"/bin/sh -c go mod download\" did not complete successfully: exit code: 1\nfatal: could not read Username for 'https://github.com': terminal prompts disabled"},
+		{"build", "Host key verification failed."},
+	} {
+		msg := describeBuildFailure(c.step, c.out)
+		if strings.Contains(msg, "git-auth") || strings.Contains(msg, "private") {
+			t.Errorf("%s: %q -> %s", c.step, c.out, msg)
+		}
+	}
+}
