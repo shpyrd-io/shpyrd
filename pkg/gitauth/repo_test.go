@@ -1,6 +1,9 @@
 package gitauth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParse(t *testing.T) {
 	for _, tc := range []struct {
@@ -33,6 +36,22 @@ func TestParseRefuses(t *testing.T) {
 	for _, in := range []string{"", "github.com/acme/api", "ftp://x/y", "https://github.com/", "git@github.com"} {
 		if _, err := Parse(in); err == nil {
 			t.Errorf("%q: want an error", in)
+		}
+	}
+}
+
+func TestParseRefusesUnsafe(t *testing.T) {
+	for _, in := range []string{
+		"git@-oProxyCommand=x:p",
+		"https://github.com/a/$(x);y",
+		"https://github.com/a/b%3Bc",
+		"git@github.com:a b/c",
+		"https://github.com/a/../b",
+		"https://git hub.com/a/b",
+		"ssh://git@github.com:22x/a/b",
+	} {
+		if _, err := Parse(in); err == nil || !strings.Contains(err.Error(), "is not a git URL") {
+			t.Errorf("%q: want a not-a-git-URL error, got %v", in, err)
 		}
 	}
 }

@@ -7,6 +7,7 @@ package gitauth
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -54,11 +55,29 @@ func Parse(raw string) (Repo, error) {
 	}
 	r.Host = strings.ToLower(r.Host)
 	r.Path = strings.TrimSuffix(strings.Trim(r.Path, "/"), ".git")
-	if r.Host == "" || r.Path == "" {
+	if !safeHost.MatchString(r.Host) || r.Path == "" {
 		return Repo{}, bad
+	}
+	if r.Port != "" && !digits.MatchString(r.Port) {
+		return Repo{}, bad
+	}
+	for _, seg := range strings.Split(r.Path, "/") {
+		if !safeSegment.MatchString(seg) || seg == "." || seg == ".." {
+			return Repo{}, bad
+		}
 	}
 	return r, nil
 }
+
+// What a URL may carry once Parse has taken it apart. CloneURL reaches a
+// git command in a build script, and the scp host reaches ssh as an
+// argument, so anything outside these sets is refused: no leading dash,
+// no whitespace, shell metacharacters, or escapes.
+var (
+	safeHost    = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+	digits      = regexp.MustCompile(`^[0-9]+$`)
+	safeSegment = regexp.MustCompile(`^[A-Za-z0-9._~][A-Za-z0-9._~-]*$`)
+)
 
 // HTTPS is the URL to clone with a token: https, or http when the URL was
 // http. The port is kept only for http(s) URLs; an ssh port means nothing
