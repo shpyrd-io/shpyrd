@@ -17,6 +17,7 @@ import type {
   DomainStatus,
   Drain,
   Exposure,
+  GitHooks,
   Identity,
   Link,
   Instance,
@@ -146,8 +147,12 @@ export type Api = {
       featured?: boolean;
       icon?: string;
       iconColor?: string;
+      // Whether a push to the project's branch deploys.
+      autoDeploy?: boolean;
     },
   ) => Promise<Project>;
+  // The project's webhook for deploy on push: its URL and secret.
+  projectGitHooks: (slug: string) => Promise<GitHooks>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
   removeProjectIcon: (slug: string) => Promise<Project>;

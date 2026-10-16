@@ -27,11 +27,13 @@ import { ProgressBar } from "@shpyrd/ui/components/progress-bar";
 import { api } from "@/api/api";
 import type { AuditEntry, Project } from "@/api/types";
 import { ago } from "@/lib/project";
+import type { Perms } from "@/lib/perms";
+import { GitSource } from "./source";
 
 // What the project is made of, as one table of names and values, and
 // the last things done to it. Everything else has a page of its own at
 // the side.
-export function Overview({ project }: { project: Project }) {
+export function Overview({ project, perms }: { project: Project; perms: Perms }) {
   const { spec, status } = project;
   const current = [...status.releases].sort((a, b) => b.number - a.number)[0];
   const audit = useQuery({
@@ -69,18 +71,9 @@ export function Overview({ project }: { project: Project }) {
             </Link>
           </CardAction>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-4">
+          <GitSource project={project} perms={perms} />
           <InfoTable columns={3}>
-            {spec.source?.git && (
-              <>
-                <InfoTableItem label="Git" mono truncate span={2}>
-                  {spec.source.git.url}
-                </InfoTableItem>
-                <InfoTableItem label="Revision" mono>
-                  {spec.source.git.revision ?? "main"}
-                </InfoTableItem>
-              </>
-            )}
             {spec.source?.blob && (
               <>
                 <InfoTableItem label="Archive" mono>

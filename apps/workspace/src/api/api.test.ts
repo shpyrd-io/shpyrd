@@ -57,6 +57,20 @@ describe("the api picks the Mock when asked to", () => {
   it("has no socket for the shell: the screen makes one up", async () => {
     expect(await api.shellSocket("hello-world", "web-1", "mock")).toBeNull();
   });
+
+  it("switches auto-deploy of a project on a branch, and refuses it for one that is not", async () => {
+    const billing = await api.updateProject("billing", { autoDeploy: true });
+    expect(billing.spec.source?.git?.autoDeploy).toBe(true);
+    await expect(api.updateProject("dash-tv", { autoDeploy: false })).rejects.toThrow(/git repository/);
+    expect((await api.projectGitHooks("billing")).url).toContain("/api/hooks/git/billing/");
+  });
+
+  it("knows the source of the projects on a branch: pinned, skipped, recorded only, unreadable", async () => {
+    expect((await api.project("hello-world")).status.source?.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect((await api.project("docs")).status.source?.skipped).toBeTruthy();
+    expect((await api.project("billing")).status.source?.latest).not.toBe((await api.project("billing")).status.source?.commit);
+    expect((await api.project("reports")).status.source?.error).toContain("shpyrd git-auth");
+  });
 });
 
 // The Mock judges like the server (storage plan step 4): the plan's

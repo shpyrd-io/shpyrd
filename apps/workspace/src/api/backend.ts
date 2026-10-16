@@ -277,6 +277,7 @@ export const backend: Api = {
     ),
   updateProject: async (slug, body) =>
     toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
+  projectGitHooks: (slug) => request(`${project(slug)}/git-hooks`),
   setProjectIcon: async (slug, dataUrl) =>
     toProject(
       await request<DetailAnswer>(

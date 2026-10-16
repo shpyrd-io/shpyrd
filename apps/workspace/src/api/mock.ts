@@ -81,7 +81,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "5";
+const shape = "6";
 const projectsOf = collection<Project>(
   `projects${shape}`,
   projects as Project[],
@@ -682,7 +682,23 @@ export const mock: Api = {
     if (body.featured !== undefined) p.featured = body.featured;
     if (body.icon !== undefined) p.icon = body.icon || undefined;
     if (body.iconColor !== undefined) p.iconColor = body.iconColor || undefined;
+    if (body.autoDeploy !== undefined) {
+      const git = p.spec.source?.git;
+      if (!git)
+        throw new ApiError(
+          400,
+          "the project does not deploy from a git repository: auto-deploy follows a git branch",
+        );
+      git.autoDeploy = body.autoDeploy;
+    }
     return projectsOf.set(p);
+  },
+  projectGitHooks: async (slug) => {
+    await projectsOf.find(slug);
+    return {
+      url: `https://acme.shpyrd.app/api/hooks/git/${slug}/5e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f61385e0c2a7b9d4f6138`,
+      secret: "9a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f369a41d0c7e2b85f36",
+    };
   },
   // The Mock keeps the image itself, as the data URL it came as.
   setProjectIcon: async (slug, dataUrl) => {

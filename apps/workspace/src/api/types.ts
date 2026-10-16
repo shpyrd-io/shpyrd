@@ -204,7 +204,7 @@ export type ProjectSummary = {
 export type Project = ProjectSummary & {
   spec: {
     source?: {
-      git?: { url: string; revision?: string };
+      git?: { url: string; revision?: string; autoDeploy?: boolean };
       blob?: { sha256?: string; ref?: string };
       subPath?: string;
     };
@@ -236,6 +236,8 @@ export type Project = ProjectSummary & {
       state: "Running" | "Succeeded" | "Failed";
       message?: string;
     };
+    // What the source watcher knows of the branch (RFC-0018).
+    source?: SourceStatus;
     // Built is False when the last build failed; Ready's reason says what
     // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
     conditions?: {
@@ -246,6 +248,26 @@ export type Project = ProjectSummary & {
     }[];
   };
 };
+
+// What the source watcher knows of the branch a project follows
+// (RFC-0018): the commit that runs, the newest seen, and how.
+export type SourceStatus = {
+  commit?: string;
+  latest?: string;
+  latestAt?: string;
+  message?: string;
+  author?: string;
+  via?: "push" | "poll" | "deploy";
+  // A commit whose message asked not to deploy it.
+  skipped?: string;
+  lastWebhookAt?: string;
+  checkedAt?: string;
+  // Why the branch cannot be read, in words.
+  error?: string;
+};
+
+// The webhook a git host calls on a push: its address and its secret.
+export type GitHooks = { url: string; secret: string };
 
 // buildFailed says the project's last build failed (its Built condition).
 export const buildFailed = (status: {

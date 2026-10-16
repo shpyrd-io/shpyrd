@@ -98,7 +98,17 @@
           "build": "48",
           "createdAt": "2026-09-29T15:10:00Z"
         }
-      ]
+      ],
+      "source": {
+        "commit": "4f9e2c1a7b3d5e6f8091a2b3c4d5e6f708192a3b",
+        "latest": "4f9e2c1a7b3d5e6f8091a2b3c4d5e6f708192a3b",
+        "latestAt": "2026-10-16T09:41:00Z",
+        "message": "Fix the login redirect",
+        "author": "alice",
+        "via": "push",
+        "lastWebhookAt": "2026-10-16T09:41:00Z",
+        "checkedAt": "2026-10-16T09:41:00Z"
+      }
     }
   },
   {
@@ -164,7 +174,18 @@
           "build": "12",
           "createdAt": "2026-09-30T04:40:00Z"
         }
-      ]
+      ],
+      "source": {
+        "commit": "2b7d9e0f1a2c3b4d5e6f708192a3b4c5d6e7f809",
+        "latest": "c31f8a2e9d0b4c5a6f7e8d9c0b1a2f3e4d5c6b7a",
+        "latestAt": "2026-10-16T09:41:00Z",
+        "message": "[skip deploy] Fix a typo in the README",
+        "author": "bruno",
+        "via": "push",
+        "skipped": "c31f8a2e9d0b4c5a6f7e8d9c0b1a2f3e4d5c6b7a",
+        "lastWebhookAt": "2026-10-16T09:41:00Z",
+        "checkedAt": "2026-10-16T09:41:00Z"
+      }
     }
   },
   {
@@ -197,7 +218,8 @@
       "source": {
         "git": {
           "url": "github.com/acme/billing",
-          "revision": "release"
+          "revision": "release",
+          "autoDeploy": false
         }
       },
       "processes": {
@@ -240,7 +262,14 @@
           "build": "203",
           "createdAt": "2026-09-29T09:15:00Z"
         }
-      ]
+      ],
+      "source": {
+        "commit": "d4e5f60718293a4b5c6d7e8f9012345678a1b2c3",
+        "latest": "e5f60718293a4b5c6d7e8f9012345678a1b2c3d4",
+        "latestAt": "2026-10-16T09:41:00Z",
+        "via": "poll",
+        "checkedAt": "2026-10-16T09:41:00Z"
+      }
     }
   },
   {
@@ -366,7 +395,12 @@
           "build": "3",
           "createdAt": "2026-09-29T22:00:00Z"
         }
-      ]
+      ],
+      "source": {
+        "commit": "f60718293a4b5c6d7e8f9012345678a1b2c3d4e5",
+        "error": "shpyrd could not read the repository: it is private, or does not exist under that name. Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, or a workspace admin sets a token for the host with `shpyrd git-auth set --host github.com --token -`. shpyrd tries again by itself.",
+        "checkedAt": "2026-10-16T09:41:00Z"
+      }
     }
   },
   {
