@@ -69,16 +69,17 @@ func TestGitHubWebhookRoutesAPushToTheProjectsOnThatRepositoryWhateverTheCase(t 
 	s, cr, _ := githubServer(t,
 		onGitHub("shop", "https://github.com/acme/shop", "main", ""),
 		onGitHub("shopsh", "git@github.com:ACME/Shop.git", "", ""),
+		onGitHub("shopssh", "ssh://git@github.com/acme/shop.git", "main", ""),
 		onGitHub("shopdev", "https://github.com/acme/shop", "dev", ""),
 		onGitHub("site", "https://github.com/acme/site", "main", ""),
 		onGitHub("theirs", "https://github.com/acme/shop", "main", "beta"),
 	)
 	connectAcme(t, s, store.DefaultWorkspace)
 	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/Shop", "refs/heads/main"), githubtest.WebhookSecret)
-	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["shop","shopsh"]`) {
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["shop","shopsh","shopssh"]`) {
 		t.Fatalf("push: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, slug := range []string{"shop", "shopsh"} {
+	for _, slug := range []string{"shop", "shopsh", "shopssh"} {
 		if p := pushOn(t, cr, slug); p == nil || p.SHA != hookCommit || p.Delivery != "d-1" || p.Author != "alice" || p.Ref != "refs/heads/main" {
 			t.Errorf("%s: %+v", slug, p)
 		}
@@ -119,6 +120,21 @@ func TestGitHubWebhookBeforeTheCallbackIsAcceptedAndIgnored(t *testing.T) {
 	}
 	if p := pushOn(t, cr, "shop"); p == nil || p.Delivery != "d-2" {
 		t.Errorf("after connecting: %+v", p)
+	}
+}
+
+func TestGitHubWebhookIgnoresAPushOfASuspendedInstallation(t *testing.T) {
+	s, cr, _ := githubServer(t, onGitHub("shop", "https://github.com/acme/shop", "main", ""))
+	connectAcme(t, s, store.DefaultWorkspace)
+	if err := s.store.SetGitHubInstallationState(context.Background(), 42, true, false); err != nil {
+		t.Fatal(err)
+	}
+	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "the installation is suspended") {
+		t.Fatalf("suspended push: %d %s", rec.Code, rec.Body.String())
+	}
+	if p := pushOn(t, cr, "shop"); p != nil {
+		t.Errorf("a suspended installation's push wrote %+v", p)
 	}
 }
 

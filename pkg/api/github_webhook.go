@@ -106,6 +106,11 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
 		return
 	}
+	if inst.SuspendedAt != nil {
+		// A delivery queued before the suspension, or redelivered by hand.
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the installation is suspended"})
+		return
+	}
 	push, err := gitauth.ParsePush(body)
 	if err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -114,7 +119,7 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 	push.Delivery, push.At = delivery, time.Now().UTC()
 	var list shpyrdv1.AppList
 	if err := s.apps.List(ctx, &list); err != nil {
-		abort(c, http.StatusBadGateway, err)
+		s.githubPushUnavailable(c, "could not list the apps", err)
 		return
 	}
 	raw, _ := json.Marshal(push)
@@ -126,13 +131,21 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 			continue
 		}
 		if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
-			abort(c, http.StatusBadGateway, err)
+			s.githubPushUnavailable(c, "could not leave the push on "+project.SlugOf(app), err)
 			return
 		}
 		accepted = append(accepted, project.SlugOf(app))
 	}
 	sort.Strings(accepted)
 	c.JSON(http.StatusAccepted, gin.H{"accepted": push.SHA, "projects": accepted})
+}
+
+// githubPushUnavailable answers a push shpyrd could not apply: the real
+// error goes to the log, the public answer says nothing of the cluster.
+// GitHub delivers again; the watcher reads the branches meanwhile.
+func (s *Server) githubPushUnavailable(c *gin.Context, what string, err error) {
+	s.log.Warn("github webhook: "+what, "err", err.Error())
+	abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
 }
 
 // namesGitHubRepo says the App builds the repository GitHub names
