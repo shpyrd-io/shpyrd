@@ -64,7 +64,7 @@ https://acme-hello-world.shpyrd.app
 Other sources:
 
 ```shell
-shpyrd deploy --git https://github.com/org/repo --ref main --path services/api   # new commits rebuild automatically
+shpyrd deploy --git https://github.com/org/repo --ref main --path services/api   # every push to the branch deploys
 shpyrd deploy --image ghcr.io/org/repo:1.4.2                                   # run a prebuilt image, no build
 shpyrd deploy --no-wait                                                         # do not follow the build
 ```
@@ -104,6 +104,65 @@ Values are write-only: shpyrd never shows a token or a private key again.
 **The host key.** When the deploy key is made, shpyrd records the git host's SSH host key. Dockerfile builds check it and refuse a host that presents another. Buildpack builds clone with kpack, whose git client does not check the host key.
 
 **When access is refused.** A clone that the host refuses for access fails the build, and the message names `shpyrd git-auth`. Once access is given, `shpyrd redeploy` builds the same source again.
+
+### Deploying on push
+
+A project that deploys from a git branch deploys every push to it. shpyrd
+reads the branch's latest commit and builds that commit, never the branch
+itself, for buildpack and Dockerfile builds alike. Each release names its
+commit: `Push a1b2c3d by alice: fix login`, or `Commit a1b2c3d (polled)`.
+
+**With a webhook: within seconds.** Each project has a webhook URL and a
+secret. Add them to the repository:
+
+```shell
+shpyrd git-hooks show --project shop      # the URL, the secret, and where they go
+shpyrd git-hooks rotate --project shop    # a new URL and secret; the old ones are refused
+```
+
+- GitHub: the repository's Settings, Webhooks, Add webhook. Payload URL: the
+  URL; Content type: `application/json`; Secret: the secret; "Just the push
+  event".
+- GitLab: the project's Settings, Webhooks, Add new webhook. URL: the URL;
+  Secret token: the secret; Trigger: Push events.
+- Gitea: the repository's Settings, Webhooks, Add webhook, Gitea. Target
+  URL: the URL; Content type: `application/json`; Secret: the secret;
+  Trigger on: Push events.
+
+The dashboard shows the same under the project's Summary, **Deploy on
+push**. Only people who may change the project see the secret.
+
+**Without one: within minutes.** shpyrd checks the branch every 2 minutes
+(the operator sets it with `SHPYRD_GIT_POLL_INTERVAL`), and every hour once a
+webhook has delivered in the last day: the webhook is then the signal, the
+check the net under it. A repository shpyrd cannot read says why on the
+project, with the `shpyrd git-auth` command that fixes it, and shpyrd tries
+again by itself.
+
+**Skipping a commit.** A commit whose message says `[skip deploy]` (or
+`[deploy skip]`) is recorded and not deployed, also when shpyrd finds it
+later at the head of the branch. The next commit deploys as usual.
+
+**Auto-deploy off.** To record pushes without deploying them:
+
+```shell
+shpyrd deploy --git https://github.com/org/repo --no-auto-deploy
+```
+
+or switch **Auto-deploy** off under the project's Summary. The project shows
+the latest commit it has not deployed; a deploy or switching auto-deploy on
+again deploys it. A deploy that names neither `--auto-deploy` nor
+`--no-auto-deploy` keeps the project's setting.
+
+**What runs.** A `--ref` that is a branch or a tag is followed; a tag's
+commit is the one it points at. A `--ref` that is a commit (7 to 40
+hexadecimal characters) is built as given, and nothing is followed. A
+deploy reads the branch again at once. If the branch is deleted, what runs
+keeps running, and the project says so.
+
+The first time a project on a branch is built this way after an upgrade, it
+builds once more, the same code: the build now names the commit instead of
+the branch.
 
 <Callout title="Connect GitHub is coming">
 
@@ -290,7 +349,7 @@ processes:
     command: ["node", "worker.js"]   # Dockerfile images have one entrypoint: other process types name their command
 ```
 
-From Git, detection is not possible; say so explicitly: `shpyrd deploy --git https://github.com/o/r --dockerfile` (optionally `--dockerfile deploy/Dockerfile`). The dashboard's **Deploy** dialog has the same choice. Git sources with a Dockerfile are rebuilt when the revision or the build settings change, not on every new commit as buildpack builds are; pass a commit or redeploy to rebuild a branch.
+From Git, detection is not possible; say so explicitly: `shpyrd deploy --git https://github.com/o/r --dockerfile` (optionally `--dockerfile deploy/Dockerfile`). The dashboard's **Deploy** dialog has the same choice. Git sources with a Dockerfile are rebuilt on every push to the branch, like buildpack builds ([Deploying on push](#deploying-on-push)), and when the build settings change.
 
 Failures show BuildKit's error in the CLI, the Activity panel and `shpyrd projects info <project>`; the previous release keeps serving. `examples/hello-docker` in the repository is a complete example.
 

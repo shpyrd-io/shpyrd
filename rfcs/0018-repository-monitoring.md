@@ -1,14 +1,14 @@
 # RFC-0018 Repository monitoring and auto-deploy
 
-**Status:** provisional
+**Status:** in progress
 
-**Owner:** unassigned
+**Owner:** Marcelo Paez Sequeira
 
-**Depends on:** RFC-0017
+**Depends on:** RFC-0017 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-16
 
 ## Summary
 
@@ -57,3 +57,4 @@ redeploy. Webhooks are faster than polling and the standard integration.
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-16: a source watcher pins each branch's commit (shpyrd.io/git-commit) from a generic webhook (GitHub HMAC, GitLab token, Gitea HMAC) or polling with a built-in ls-remote; kpack and BuildKit build the pinned SHA, so Dockerfile builds redeploy on push; [skip deploy]; auto-deploy per project; shpyrd git-hooks; the dashboard's source in the project Summary. See docs/superpowers/specs/2026-10-16-private-git-watcher-decisions.md.
