@@ -390,7 +390,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			// what runs keeps running.
 			build = buildState{Ready: "Unknown", Reason: reasonWaitingForCommit, Message: msg, LatestImage: app.Status.Image, LatestBuild: app.Status.LatestBuild}
 			if failed {
-				build.Ready = "False"
+				build.Ready, build.Reason = "False", reasonSourceUnreadable
 			}
 		} else if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
 			st, err := r.reconcileDockerfileBuild(ctx, app, gitBuild)
@@ -471,7 +471,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "True":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionTrue, "BuildSucceeded", "image "+shortImage(build.LatestImage))
 		case "False":
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, build.failedReason(), build.Message)
 		default:
 			reason := "Building"
 			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit {
@@ -497,7 +497,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		if build.Ready == "False" {
 			app.Status.Phase = shpyrdv1.PhaseFailed
 			app.Status.Message = build.Message
-			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 			return outcome{}, nil
 		}
 		app.Status.Phase = shpyrdv1.PhaseBuilding
@@ -662,7 +662,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	case app.HasSource() && app.Spec.Image == "" && build.Ready == "False":
 		app.Status.Phase = shpyrdv1.PhaseFailed
 		app.Status.Message = build.Message + " The previous release keeps running."
-		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 	case !ready:
 		app.Status.Phase = shpyrdv1.PhaseDeploying
 		app.Status.Message = summary
@@ -1158,7 +1158,7 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 		}
 		for k, v := range asked {
 			if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
-				log.FromContext(ctx).V(1).Info("kept who asked for the next release", "annotation", k, "err", err.Error())
+				logRemoveAnnotation(ctx, err, "kept who asked for the next release", "who asked for the release", "annotation", k)
 			}
 		}
 	case app.Status.Phase == shpyrdv1.PhaseFailed && before.Status.Phase != shpyrdv1.PhaseFailed:
@@ -1181,7 +1181,7 @@ func (r *AppReconciler) clearReleaseNote(ctx context.Context, app *shpyrdv1.App)
 	}
 	for k, v := range read {
 		if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
-			log.FromContext(ctx).V(1).Info("kept a newer one-shot annotation", "annotation", k, "err", err.Error())
+			logRemoveAnnotation(ctx, err, "kept a newer one-shot annotation", "a one-shot annotation", "annotation", k)
 		}
 	}
 }

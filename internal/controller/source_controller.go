@@ -53,7 +53,15 @@ const (
 	// errorBackoff is the first wait after a failed listing; it doubles
 	// up to the interval.
 	errorBackoff = 30 * time.Second
+	// maxFailures caps the failures counted: the backoff has reached the
+	// interval by then, and a record that stops changing is not written on
+	// each attempt.
+	maxFailures = 6
 )
+
+// sourceUnreadable is what a person reads when the branch could not be
+// read for a reason without words of its own; the error itself is logged.
+const sourceUnreadable = "shpyrd could not read the branch; it tries again by itself."
 
 // PollInterval reads SHPYRD_GIT_POLL_INTERVAL ("2m", "30s"): empty or
 // unreadable is the default, and nothing below 10 s.
@@ -95,6 +103,9 @@ type sourceCheck struct {
 	// push is the last push annotation consumed, as written: read again
 	// from a stale App, it is only dropped.
 	push string
+	// pinned is the last commit this watcher pinned for ref: a stale App
+	// that does not show it yet is not pinned again.
+	pinned string
 }
 
 // SetupWithManager registers the watcher on the Apps that follow a branch.
@@ -184,28 +195,71 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
 	var ev sourceEvent
 	switch {
-	case push != nil:
+	case push != nil && pushFollows(push, rec):
 		ev.push = push
-	case badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
+	case push != nil || badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
+		// A push that does not follow the commit last seen may be late,
+		// or delivered again: the branch says what its head is.
 		ev.latest, ev.err = r.poll(ctx, app)
+		if push != nil && ev.err == nil && ev.latest == strings.ToLower(push.SHA) {
+			// The head is the push's commit: what the push says of it
+			// (its words, author, a skip) holds.
+			ev.push, ev.latest = push, ""
+		}
 	default:
+		if sha := waitingCommit(app, rec); sha != "" && sha != r.lastPinned(app.UID, rev) {
+			// Auto-deploy switched back on: the commit that waited
+			// deploys now, from the record.
+			u := sourceUpdate{record: written, pin: sha, note: "Commit " + shortCommit(sha) + " (auto-deploy on)",
+				deployedBy: "git", client: "auto-deploy", audit: "git.push", actor: "git"}
+			if err := r.apply(ctx, app, u); err != nil {
+				return ctrl.Result{}, err
+			}
+			r.notePinned(app.UID, rev, sha, last.CheckedAt)
+			r.dropPush(ctx, app, rawPush)
+			r.auditUpdate(ctx, app, u)
+			return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
+		}
 		r.dropPush(ctx, app, rawPush)
 		return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
+	if ev.err != nil && u.record.Error == sourceUnreadable {
+		log.FromContext(ctx).Info("could not read the branch", "revision", rev, "err", ev.err.Error())
+	}
 	if u.pin != "" || sourceChanged(written, u.record) || written.CheckedAt == nil || now.Sub(*written.CheckedAt) >= recordRefresh {
 		if err := r.apply(ctx, app, u); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 	consumed := ""
-	if ev.push != nil {
+	if push != nil {
+		// Applied, or answered by the listing: read again from a stale
+		// App, it is only dropped.
 		consumed = rawPush
 	}
-	r.remember(app.UID, rev, now, consumed)
+	r.remember(app.UID, rev, now, consumed, u.pin)
 	r.dropPush(ctx, app, rawPush)
 	r.auditUpdate(ctx, app, u)
 	return ctrl.Result{RequeueAfter: r.untilDue(u.record, now)}, nil
+}
+
+// pushFollows says a push applies as it is: it follows the commit last
+// seen on the branch, or nothing was seen of the branch yet.
+func pushFollows(p *gitauth.Push, rec gitauth.SourceRecord) bool {
+	return rec.Latest == "" || strings.EqualFold(p.Before, rec.Latest) || rec.Ref != strings.TrimPrefix(p.Ref, "refs/heads/")
+}
+
+// waitingCommit is the commit the record holds that auto-deploy would
+// have deployed: newer than the pin, not skipped, read without a failure
+// since. "" when there is none, or auto-deploy is off.
+func waitingCommit(app *shpyrdv1.App, rec gitauth.SourceRecord) string {
+	pin := app.PinnedCommit()
+	if !app.AutoDeploys() || rec.Ref != app.GitRevision() || rec.Failures != 0 || rec.Latest == "" || pin == "" ||
+		rec.Latest == pin || rec.Latest == rec.Skipped {
+		return ""
+	}
+	return rec.Latest
 }
 
 // sourceChanged says the record shows a person something new: all but
@@ -234,8 +288,8 @@ func (r *SourceReconciler) lastChecked(uid types.UID, rev string, rec gitauth.So
 // remember keeps the time of a check, and drops the checks of Apps not
 // seen for a while.
 // A push consumed by this check is kept with it; without one, the last
-// one consumed stays.
-func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, push string) {
+// one consumed stays. So does the last commit pinned, for the revision.
+func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, push, pinned string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.checked == nil {
@@ -246,10 +300,43 @@ func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, pu
 			delete(r.checked, k)
 		}
 	}
+	prev := r.checked[uid]
 	if push == "" {
-		push = r.checked[uid].push
+		push = prev.push
 	}
-	r.checked[uid] = sourceCheck{at: now, ref: rev, push: push}
+	if pinned == "" && prev.ref == rev {
+		pinned = prev.pinned
+	}
+	r.checked[uid] = sourceCheck{at: now, ref: rev, push: push, pinned: pinned}
+}
+
+// notePinned keeps a commit pinned without a check: the check remembered
+// stays as it was.
+func (r *SourceReconciler) notePinned(uid types.UID, rev, sha string, checked *time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.checked == nil {
+		r.checked = map[types.UID]sourceCheck{}
+	}
+	c, ok := r.checked[uid]
+	if !ok || c.ref != rev {
+		c = sourceCheck{ref: rev}
+		if checked != nil {
+			c.at = *checked
+		}
+	}
+	c.pinned = sha
+	r.checked[uid] = c
+}
+
+// lastPinned is the last commit this watcher pinned for rev.
+func (r *SourceReconciler) lastPinned(uid types.UID, rev string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c := r.checked[uid]; c.ref == rev {
+		return c.pinned
+	}
+	return ""
 }
 
 // consumedPush is the last push annotation applied to the App.
@@ -277,7 +364,7 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 	u.record.CheckedAt = &now
 	if ev.err != nil {
 		u.record.Error = describeSourceError(ev.err, app)
-		u.record.Failures++
+		u.record.Failures = min(u.record.Failures+1, maxFailures)
 		return u
 	}
 	u.record.Error, u.record.Failures = "", 0
@@ -302,7 +389,7 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 	}
 	pin := app.PinnedCommit()
 	// A skip of the commit already running is no skip.
-	skip := ev.push != nil && gitauth.SkipsDeploy(message) && sha != pin
+	skip := ev.push != nil && (ev.push.Skip || gitauth.SkipsDeploy(message)) && sha != pin
 	if skip {
 		if rec.Skipped != sha {
 			u.audit = "git.skip"
@@ -376,10 +463,12 @@ func describeSourceError(err error, app *shpyrdv1.App) string {
 		return fmt.Sprintf("The repository lists more refs than shpyrd reads (%d MiB) before it reaches %s: follow a branch, or pin a commit with `shpyrd deploy --git <url> --ref <commit>`.", gitauth.MaxAdvertisement>>20, rev)
 	case errors.Is(err, gitauth.ErrHostKeyChanged):
 		return "shpyrd could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. If the host changed its key, make a new deploy key with `shpyrd git-auth deploy-key` and add it to the repository."
+	case errors.Is(err, gitauth.ErrRefusedAddress):
+		return fmt.Sprintf("%s is not an address shpyrd connects to: shpyrd does not read repositories at loopback, link-local or cloud metadata addresses.", host)
 	case errors.Is(err, gitauth.ErrNoAccess):
 		return fmt.Sprintf("shpyrd could not read the repository: it is private, or does not exist under that name. Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, or a workspace admin sets a token for the host with `shpyrd git-auth set --host %s --token -`. shpyrd tries again by itself.", host)
 	}
-	return fmt.Sprintf("shpyrd could not read the branch's latest commit from %s (%v). It tries again by itself.", host, err)
+	return sourceUnreadable
 }
 
 // poll lists the repository with the build's credential and finds the
@@ -443,7 +532,7 @@ func (r *SourceReconciler) dropPush(ctx context.Context, app *shpyrdv1.App, raw 
 		return
 	}
 	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, shpyrdv1.AnnotationGitPush, raw); err != nil {
-		log.FromContext(ctx).V(1).Info("kept a newer push for the next pass", "err", err.Error())
+		logRemoveAnnotation(ctx, err, "kept a newer push for the next pass", "the push")
 	}
 }
 

@@ -254,7 +254,7 @@ func TestSourceWebhookBeatsAStalePoll(t *testing.T) {
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
 	app := withPush(withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, CheckedAt: at(sourceNow.Add(-time.Hour))}),
-		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Author: "alice"})
+		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Before: testCommit, Author: "alice"})
 	r, _ := newSourceReconciler(t, ls, app)
 	_, got := reconcileSource(t, r, app)
 	_, got = reconcileSource(t, r, got)
@@ -616,10 +616,16 @@ func TestSourceAppliesAConsumedPushOnce(t *testing.T) {
 func TestSourceAuditsASkipOnce(t *testing.T) {
 	app := withPush(withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Skipped: otherCommit, CheckedAt: at(sourceNow.Add(-time.Minute))}),
-		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Message: "Fix a typo [skip deploy]", Author: "bruno", Delivery: "d-2"})
-	r, _ := newSourceReconciler(t, &fakeLsRemote{}, app)
+		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Before: testCommit, Message: "Fix a typo [skip deploy]", Author: "bruno", Delivery: "d-2"})
+	// Delivered again: it does not follow the latest, so the branch is
+	// read, and its head is the skipped commit.
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	r, _ := newSourceReconciler(t, ls, app)
 	heard := heardAudits(t)
 	_, got := reconcileSource(t, r, app)
+	if ls.calls != 1 || sourceRecord(got).Error != "" {
+		t.Errorf("listings %d record %+v", ls.calls, sourceRecord(got))
+	}
 	if len(*heard) != 0 || got.PinnedCommit() != testCommit || sourceRecord(got).Skipped != otherCommit {
 		t.Errorf("audits %+v pin %q record %+v", *heard, got.PinnedCommit(), sourceRecord(got))
 	}

@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // removeAnnotationIfUnchanged removes key from obj on the server only
@@ -30,4 +31,17 @@ func removeAnnotationIfUnchanged(ctx context.Context, c client.Client, obj clien
 		return false, err
 	}
 	return true, nil
+}
+
+// logRemoveAnnotation says why removeAnnotationIfUnchanged removed
+// nothing: a newer value kept (its test op failed: Invalid) is routine,
+// said at V(1) as kept; any other failure is said at Info as "could not
+// clear <what>".
+func logRemoveAnnotation(ctx context.Context, err error, kept, what string, kv ...any) {
+	kv = append(kv, "err", err.Error())
+	if apierrors.IsInvalid(err) {
+		log.FromContext(ctx).V(1).Info(kept, kv...)
+		return
+	}
+	log.FromContext(ctx).Info("could not clear "+what, kv...)
 }
