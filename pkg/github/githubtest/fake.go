@@ -86,12 +86,14 @@ type Server struct {
 	now  time.Time
 	down bool
 	// limited is the Retry-After of a rate limit; 0: none.
-	limited  time.Duration
-	repos    map[int64][]Repo
-	branches map[string][]string // by full name, lower case
-	people   []Installation
-	login    string
-	orgRoles map[string][2]string // by org, lower case: role, state
+	limited time.Duration
+	// forbidden answers 403, not for a rate limit.
+	forbidden bool
+	repos     map[int64][]Repo
+	branches  map[string][]string // by full name, lower case
+	people    []Installation
+	login     string
+	orgRoles  map[string][2]string // by org, lower case: role, state
 	// noMembers is an App registered without members: read.
 	noMembers bool
 	minted    map[int64]int
@@ -160,6 +162,10 @@ func (f *Server) SetNow(t time.Time) { f.mu.Lock(); f.now = t; f.mu.Unlock() }
 // SetRateLimited makes every call answer 429 with Retry-After d; 0 lifts it.
 func (f *Server) SetRateLimited(d time.Duration) { f.mu.Lock(); f.limited = d; f.mu.Unlock() }
 
+// SetForbidden makes every call answer 403 as GitHub refusing the App,
+// not limiting its rate.
+func (f *Server) SetForbidden(forbidden bool) { f.mu.Lock(); f.forbidden = forbidden; f.mu.Unlock() }
+
 // SetDown makes every call answer 503.
 func (f *Server) SetDown(down bool) { f.mu.Lock(); f.down = down; f.mu.Unlock() }
 
@@ -221,6 +227,10 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if f.limited > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(f.limited/time.Second)))
 		reply(w, http.StatusTooManyRequests, map[string]string{"message": "API rate limit exceeded"})
+		return
+	}
+	if f.forbidden {
+		reply(w, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
 		return
 	}
 	if f.down {

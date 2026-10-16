@@ -361,3 +361,81 @@ func TestSourceSaysWhyTheGitHubAppCouldNotReadTheRepository(t *testing.T) {
 		t.Errorf("error %q", rec.Error)
 	}
 }
+
+func TestGitHubTokenIsKeptOnlyWellBeforeItExpires(t *testing.T) {
+	for _, age := range []time.Duration{52 * time.Minute, 54 * time.Minute} {
+		app := pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit)
+		r, c, fake, _ := githubReconciler(t, app)
+		ctx := context.Background()
+		if _, err := r.reconcileGitCredentials(ctx, app); err != nil {
+			t.Fatal(err)
+		}
+		if sec := buildSecretOf(t, c, app); sec.Annotations[gitauth.AnnotationGitHubRepo] != "acme/shop" ||
+			sec.Annotations[gitauth.AnnotationTokenExpiresAt] != sourceNow.Add(time.Hour).Format(time.RFC3339) {
+			t.Errorf("annotations %v", sec.Annotations)
+		}
+		fake.SetDown(true)
+		now := sourceNow.Add(age)
+		fake.SetNow(now)
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+		if err != nil || res.RequeueAfter <= 0 || !now.Add(res.RequeueAfter).Before(sourceNow.Add(time.Hour)) {
+			t.Errorf("%v: requeue after %v, %v", age, res.RequeueAfter, err)
+		}
+		err = c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: gitauth.BuildSecretName(app.Name)}, &corev1.Secret{})
+		if kept := err == nil; kept != (age < 53*time.Minute) {
+			t.Errorf("%v: kept %v (%v)", age, kept, err)
+		}
+	}
+}
+
+func TestGitHubTokenIsNotKeptForAnotherRepository(t *testing.T) {
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r, c, fake, _ := githubReconciler(t, app)
+	ctx := context.Background()
+	if _, err := r.reconcileGitCredentials(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetDown(true)
+	fake.SetNow(sourceNow.Add(time.Minute))
+	app.Spec.Source.Git.URL = "https://github.com/acme/site"
+	b, err := r.reconcileGitCredentials(ctx, app)
+	if err != nil || b.Kind != "" {
+		t.Errorf("build = %+v, %v", b, err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: gitauth.BuildSecretName(app.Name)}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Errorf("shop's token is not kept for site: %v", err)
+	}
+}
+
+func TestGitHubForbiddingATokenIsARefusalNotABackoff(t *testing.T) {
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r, _, fake, _ := githubReconciler(t, app, workspaceToken("default", "github.com", "ghp_ours"))
+	ctx := context.Background()
+	fake.SetForbidden(true)
+	b, err := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
+	if err != nil || b.Kind != gitauth.KindToken || b.AppRetry || b.AppRefused != "GitHub refused the GitHub App's installation on Acme a token for shop." {
+		t.Errorf("build = %+v, %v", b, err)
+	}
+	fake.SetForbidden(false)
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app); b.Kind != gitauth.KindGitHubApp || tokenCalls(fake) != 2 {
+		t.Errorf("asked again at once: %d calls, %+v", tokenCalls(fake), b)
+	}
+}
+
+func TestATokenGitHubAlreadyGaveIsUsedWhileItsInstallationIsBackedOff(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	site := gitApp("site", "https://github.com/acme/site")
+	r, _, fake, _ := githubReconciler(t, shop, site)
+	ctx := context.Background()
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, shop); b.Kind != gitauth.KindGitHubApp {
+		t.Fatalf("shop: %+v", b)
+	}
+	fake.SetDown(true)
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, site); !b.AppRetry {
+		t.Fatalf("site: %+v", b)
+	}
+	b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, shop)
+	if b.Kind != gitauth.KindGitHubApp || b.AppRetry || string(b.Secret.Data[corev1.BasicAuthPasswordKey]) != "ghs_42_1" || tokenCalls(fake) != 2 {
+		t.Errorf("shop while backed off: %d calls, %+v", tokenCalls(fake), b)
+	}
+}

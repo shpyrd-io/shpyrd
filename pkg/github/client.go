@@ -104,6 +104,10 @@ type APIError struct {
 	// its Retry-After, or the reset of a spent rate limit. 0 when it
 	// said neither.
 	RetryAfter time.Duration
+	// RateLimited says GitHub limits the rate: a 429, a time to wait, or a
+	// 403 for a spent quota or naming a rate limit. Any other 403 is a
+	// refusal.
+	RateLimited bool
 }
 
 func (e *APIError) Error() string { return fmt.Sprintf("GitHub answered %d: %s", e.Status, e.Message) }
@@ -194,6 +198,18 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 	}
 	c.tokens[key] = t
 	return t, nil
+}
+
+// CachedInstallationToken is the token InstallationToken would give
+// without calling GitHub: one kept and not yet due for renewal.
+func (c *Client) CachedInstallationToken(installation int64, repo string) (Token, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.tokens[tokenKey{installation, strings.ToLower(repo)}]
+	if !ok || !c.now().Before(t.renewAt()) {
+		return Token{}, false
+	}
+	return t, true
 }
 
 // Repositories pages through everything the installation grants.
@@ -421,7 +437,10 @@ func (c *Client) send(req *http.Request, out any) error {
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		return &APIError{Status: resp.StatusCode, Message: firstNonEmpty(e.Message, http.StatusText(resp.StatusCode)), RetryAfter: c.retryAfter(resp.Header)}
+		apiErr := &APIError{Status: resp.StatusCode, Message: firstNonEmpty(e.Message, http.StatusText(resp.StatusCode)), RetryAfter: c.retryAfter(resp.Header)}
+		apiErr.RateLimited = resp.StatusCode == http.StatusTooManyRequests || apiErr.RetryAfter > 0 ||
+			(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-RateLimit-Remaining") == "0" || strings.Contains(strings.ToLower(e.Message), "rate limit")))
+		return apiErr
 	}
 	if out == nil {
 		return nil

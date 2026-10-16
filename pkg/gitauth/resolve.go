@@ -38,6 +38,10 @@ const (
 	// (RFC3339). Only a GitHub App credential carries them (RFC-0054).
 	AnnotationGitHubAccount = "shpyrd.io/github-account"
 	AnnotationTokenMintedAt = "shpyrd.io/github-token-minted-at"
+	// AnnotationTokenExpiresAt is when GitHub said the token expires
+	// (RFC3339), and AnnotationGitHubRepo the owner/name it is for.
+	AnnotationTokenExpiresAt = "shpyrd.io/github-token-expires-at"
+	AnnotationGitHubRepo     = "shpyrd.io/github-repo"
 
 	// DeployKeySecretName is a project's deploy key, in its namespace.
 	DeployKeySecretName = "shpyrd-git-deploy-key"

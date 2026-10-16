@@ -30,9 +30,14 @@ import (
 // ten minutes.
 const githubTokenLife = 50 * time.Minute
 
-// githubTokenExpiry is when GitHub's token expires: an App token already
-// in <app>-git is kept until then while GitHub gives no new one.
-const githubTokenExpiry = time.Hour
+// githubTokenExpiry is when GitHub's token expires, when <app>-git does
+// not say: an App token already in <app>-git is kept while GitHub gives no
+// new one, until githubKeepMargin before it expires counting the next
+// try, so no build starts with an expired one.
+const (
+	githubTokenExpiry = time.Hour
+	githubKeepMargin  = 5 * time.Minute
+)
 
 // githubRetry is how soon an App whose token GitHub did not give is
 // reconciled again.
@@ -85,7 +90,7 @@ func (gh *GitHubApp) remember(id int64, err error) {
 		switch {
 		case apiErr.RetryAfter > 0:
 			wait = max(githubBackoff, apiErr.RetryAfter)
-		case apiErr.Status == http.StatusForbidden || apiErr.Status == http.StatusTooManyRequests:
+		case apiErr.RateLimited:
 			wait = githubRateBackoff
 		}
 	}
@@ -103,7 +108,7 @@ const githubTransient = "GitHub did not give shpyrd a token for this repository 
 
 // githubMarks are the annotations only a GitHub App credential carries:
 // another credential replacing it must not keep them.
-var githubMarks = []string{gitauth.AnnotationGitHubAccount, gitauth.AnnotationTokenMintedAt}
+var githubMarks = []string{gitauth.AnnotationGitHubAccount, gitauth.AnnotationTokenMintedAt, gitauth.AnnotationTokenExpiresAt, gitauth.AnnotationGitHubRepo}
 
 // build is the App's credential for the App's repository; nil when the
 // App does not apply. refused says why it did not when it was tried, for
@@ -145,17 +150,26 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	case inst.SuspendedAt != nil:
 		return nil, fmt.Sprintf("The GitHub App's installation on %s is suspended: an owner of %s unsuspends it on GitHub.", inst.AccountLogin, inst.AccountLogin), false
 	}
-	if gh.backingOff(inst.ID) {
+	// A token GitHub already gave is used without asking; the backoff
+	// only holds back a call.
+	tok, cached := cl.CachedInstallationToken(inst.ID, name)
+	if !cached && gh.backingOff(inst.ID) {
 		return nil, githubTransient, true
 	}
-	callCtx, cancel := context.WithTimeout(ctx, githubCallTimeout)
-	defer cancel()
-	tok, err := cl.InstallationToken(callCtx, inst.ID, name)
+	if !cached {
+		callCtx, cancel := context.WithTimeout(ctx, githubCallTimeout)
+		defer cancel()
+		tok, err = cl.InstallationToken(callCtx, inst.ID, name)
+	}
+	var apiErr *github.APIError
 	switch {
 	case errors.Is(err, github.ErrRepoNotGranted):
 		return nil, fmt.Sprintf("The GitHub App's installation on %s does not include %s: add the repository to it on GitHub.", inst.AccountLogin, name), false
 	case errors.Is(err, github.ErrInstallationGone):
 		return nil, fmt.Sprintf("The GitHub App is no longer installed on %s: an owner of %s installs it again, then a workspace admin connects it from Workspace settings → Git.", inst.AccountLogin, inst.AccountLogin), false
+	case errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited:
+		logger.Info("GitHub refused the App a token; building with the other credentials", "installation", inst.ID, "err", err.Error())
+		return nil, fmt.Sprintf("GitHub refused the GitHub App's installation on %s a token for %s.", inst.AccountLogin, name), false
 	case err != nil:
 		gh.remember(inst.ID, err)
 		logger.Info("GitHub gave no token; building with the other credentials", "installation", inst.ID, "err", err.Error())
@@ -169,6 +183,10 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	b.Kind = gitauth.KindGitHubApp
 	b.Secret.Annotations[gitauth.AnnotationGitHubAccount] = inst.AccountLogin
 	b.Secret.Annotations[gitauth.AnnotationTokenMintedAt] = tok.MintedAt.UTC().Format(time.RFC3339)
+	if !tok.ExpiresAt.IsZero() {
+		b.Secret.Annotations[gitauth.AnnotationTokenExpiresAt] = tok.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	b.Secret.Annotations[gitauth.AnnotationGitHubRepo] = repo.Path
 	return &b, "", false
 }
 
@@ -201,16 +219,28 @@ func (r *AppReconciler) githubRefreshOf(b gitauth.Build) time.Duration {
 }
 
 // keptAppToken is the App token already in <app>-git, as a build, while
-// it has not expired; nil otherwise. GitHub giving no new one for a while
+// it is for the App's repository and will not have expired by the next
+// try, with a margin; nil otherwise. GitHub giving no new one for a while
 // leaves builds the one they have.
 func (r *AppReconciler) keptAppToken(ctx context.Context, app *shpyrdv1.App) *gitauth.Build {
 	old := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: gitauth.BuildSecretName(app.Name)}, old); err != nil {
 		return nil
 	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	if err != nil || !strings.EqualFold(old.Annotations[gitauth.AnnotationGitHubRepo], repo.Path) {
+		return nil
+	}
 	account := old.Annotations[gitauth.AnnotationGitHubAccount]
 	minted, err := time.Parse(time.RFC3339, old.Annotations[gitauth.AnnotationTokenMintedAt])
-	if account == "" || err != nil || r.now().Sub(minted) >= githubTokenExpiry {
+	if account == "" || err != nil {
+		return nil
+	}
+	expires := minted.Add(githubTokenExpiry)
+	if at, err := time.Parse(time.RFC3339, old.Annotations[gitauth.AnnotationTokenExpiresAt]); err == nil {
+		expires = at
+	}
+	if !r.now().Add(githubRetry).Before(expires.Add(-githubKeepMargin)) {
 		return nil
 	}
 	tok := &corev1.Secret{Data: map[string][]byte{gitauth.KeyToken: old.Data[corev1.BasicAuthPasswordKey], gitauth.KeyUsername: old.Data[corev1.BasicAuthUsernameKey]}}
@@ -219,8 +249,11 @@ func (r *AppReconciler) keptAppToken(ctx context.Context, app *shpyrdv1.App) *gi
 		return nil
 	}
 	b.Kind = gitauth.KindGitHubApp
-	b.Secret.Annotations[gitauth.AnnotationGitHubAccount] = account
-	b.Secret.Annotations[gitauth.AnnotationTokenMintedAt] = old.Annotations[gitauth.AnnotationTokenMintedAt]
+	for _, k := range githubMarks {
+		if v, ok := old.Annotations[k]; ok {
+			b.Secret.Annotations[k] = v
+		}
+	}
 	return &b
 }
 

@@ -203,7 +203,7 @@ func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
 	fake.SetRateLimited(2 * time.Minute)
 	_, err := c.InstallationToken(context.Background(), 42, "shop")
 	var apiErr *github.APIError
-	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != 2*time.Minute {
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != 2*time.Minute || !apiErr.RateLimited {
 		t.Errorf("Retry-After: %v", err)
 	}
 
@@ -220,7 +220,39 @@ func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c2.InstallationToken(context.Background(), 42, "shop")
-	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RetryAfter != 7*time.Minute {
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RetryAfter != 7*time.Minute || !apiErr.RateLimited {
 		t.Errorf("X-RateLimit-Reset: %v", err)
+	}
+}
+
+func TestAForbiddenCallIsNotARateLimit(t *testing.T) {
+	c, fake := newClient(t)
+	fake.SetForbidden(true)
+	_, err := c.InstallationToken(context.Background(), 42, "shop")
+	var apiErr *github.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RateLimited {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestCachedInstallationTokenNeverCallsGitHub(t *testing.T) {
+	c, fake := newClient(t)
+	if _, ok := c.CachedInstallationToken(42, "shop"); ok {
+		t.Error("nothing is cached yet")
+	}
+	tok, err := c.InstallationToken(context.Background(), 42, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.SetDown(true)
+	if got, ok := c.CachedInstallationToken(42, "Shop"); !ok || got.Value != tok.Value {
+		t.Errorf("cached %+v %v", got, ok)
+	}
+	fake.SetNow(t0.Add(50 * time.Minute))
+	if _, ok := c.CachedInstallationToken(42, "shop"); ok {
+		t.Error("a token due for renewal is not given")
+	}
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("%d calls", n)
 	}
 }
