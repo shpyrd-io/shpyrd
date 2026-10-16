@@ -649,6 +649,7 @@ func (s *Server) routes() error {
 	api.POST("/sources", s.uploadSource) // deploys check the project right when the App is updated
 	// The workspace (RFC-0033): its name and the people it has seen.
 	api.GET("/workspace", s.getWorkspace) // any signed-in user: the dashboard shows the name
+	api.PUT("/workspace/project-caps", s.require(authz.ClusterAdmin), s.putProjectCaps)
 	api.PATCH("/workspace", s.require(authz.ClusterAdmin), s.updateWorkspace)
 	api.GET("/workspace/people", s.require(authz.ClusterAdmin), s.listPeople)
 	api.DELETE("/workspace/people/:email", s.require(authz.ClusterAdmin), s.forgetPerson)
@@ -716,6 +717,7 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/secrets", s.require(authz.ProjectView), s.appSecretKeys)
 	api.PUT("/projects/:slug/secrets", s.require(authz.ProjectConfig), s.updateAppSecrets)
 	api.GET("/projects/:slug/metrics", s.require(authz.ProjectView), s.appMetrics)
+	api.GET("/projects/:slug/usage", s.require(authz.ProjectView), s.projectUsage)
 	api.POST("/projects/:slug/scale", s.require(authz.ProjectScale), s.scaleApp)
 	api.POST("/projects/:slug/resize", s.require(authz.ProjectScale), s.resizeApp)
 	api.POST("/projects/:slug/processes", s.require(authz.ProjectScale), s.applyProcesses)
@@ -933,6 +935,16 @@ func (s *Server) requestLogger() gin.HandlerFunc {
 			)
 		}
 	}
+}
+
+// abortAdmission writes what admit refused: a refusal with the status
+// given, in its words; anything else as the gateway's fault.
+func abortAdmission(c *gin.Context, err error, status int) {
+	if r, ok := refused(err); ok {
+		abort(c, status, errors.New(r.msg))
+		return
+	}
+	abort(c, http.StatusBadGateway, err)
 }
 
 func abort(c *gin.Context, status int, err error) {

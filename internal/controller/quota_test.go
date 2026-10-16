@@ -73,3 +73,66 @@ func TestReconcileQuota(t *testing.T) {
 }
 
 func mustQ(s string) resource.Quantity { return resource.MustParse(s) }
+
+// A quota is never rendered below what the namespace already uses
+// (storage plan step 4): what exists above a ceiling that shrank keeps
+// working, the API refuses what would be added.
+func TestAQuotaNeverFallsBelowWhatIsUsed(t *testing.T) {
+	ctx := context.Background()
+	acme := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop")}, Spec: shpyrdv1.AppSpec{Slug: "shop"}}
+	used := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: QuotaStorageName, Namespace: "app-acme-shop"},
+		Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{corev1.ResourceRequestsStorage: mustQ("100Gi")}},
+		Status:     corev1.ResourceQuotaStatus{Used: corev1.ResourceList{corev1.ResourceRequestsStorage: mustQ("80Gi")}},
+	}
+	r, c := newTestReconciler(t, acme, used)
+	r.Config.WorkspaceLimits = func(string) *store.Limits { return &store.Limits{Storage: "50Gi"} }
+	if err := r.reconcileQuota(ctx, acme); err != nil {
+		t.Fatal(err)
+	}
+	q := &corev1.ResourceQuota{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: QuotaStorageName}, q); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Spec.Hard[corev1.ResourceRequestsStorage]; got.Cmp(mustQ("80Gi")) != 0 {
+		t.Errorf("storage quota = %s, want 80Gi (what is used), not the 50Gi ceiling", got.String())
+	}
+}
+
+// A project's own cap bounds its namespace below the workspace's ceiling,
+// and never above it; a plan without disks is the API's to refuse, never
+// a storage quota of zero.
+func TestAProjectCapBoundsItsQuotaAndNoDisksIsNotAZeroQuota(t *testing.T) {
+	ctx := context.Background()
+	shop := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop")}, Spec: shpyrdv1.AppSpec{Slug: "shop"}}
+	wiki := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "wiki", Namespace: "app-acme-wiki", Labels: project.NamespaceLabels("acme", "wiki")}, Spec: shpyrdv1.AppSpec{Slug: "wiki"}}
+	r, c := newTestReconciler(t, shop, wiki)
+	r.Config.WorkspaceLimits = func(string) *store.Limits { return &store.Limits{Storage: "50Gi"} }
+	r.Config.ProjectStorageCap = func(_, p string) string { return map[string]string{"shop": "10Gi", "wiki": "100Gi"}[p] }
+	for _, app := range []*shpyrdv1.App{shop, wiki} {
+		if err := r.reconcileQuota(ctx, app); err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := &corev1.ResourceQuota{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: QuotaStorageName}, q); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Spec.Hard[corev1.ResourceRequestsStorage]; got.Cmp(mustQ("10Gi")) != 0 {
+		t.Errorf("shop's quota = %s, want its own 10Gi cap", got.String())
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-wiki", Name: QuotaStorageName}, q); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Spec.Hard[corev1.ResourceRequestsStorage]; got.Cmp(mustQ("50Gi")) != 0 {
+		t.Errorf("wiki's quota = %s, want the workspace's 50Gi (its cap is above it)", got.String())
+	}
+	no := false
+	compute, storage := quotaHard(&store.Limits{CPU: "1", AllowDisks: &no}, "")
+	if storage != nil {
+		t.Errorf("no disks rendered a storage quota: %v", storage)
+	}
+	if cpu := compute[corev1.ResourceRequestsCPU]; cpu.Cmp(mustQ("1")) != 0 {
+		t.Errorf("compute = %v", compute)
+	}
+}

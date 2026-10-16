@@ -60,7 +60,7 @@ func TestApplyPostgresTypeFollowsThePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec = map[string]interface{}{"type": "dedicated"}
-	if _, err := s.applyPostgresType(ctx, "acme", spec); err == nil || !strings.Contains(err.Error(), "allows only shared") {
+	if _, err := s.applyPostgresType(ctx, "acme", spec); err == nil || !strings.Contains(err.Error(), "A dedicated database comes with a paid plan") {
 		t.Errorf("a kind the plan does not allow: %v", err)
 	}
 }

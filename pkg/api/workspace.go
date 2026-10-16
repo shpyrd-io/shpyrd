@@ -52,6 +52,8 @@ type WorkspaceView struct {
 	Limits *store.Limits        `json:"limits,omitempty"`
 	Usage  *Usage               `json:"usage,omitempty"`
 	Sleep  *store.SleepDefaults `json:"sleep,omitempty"`
+	// ProjectCaps are the projects' own ceilings, by slug (nil: none).
+	ProjectCaps map[string]store.ProjectCap `json:"projectCaps,omitempty"`
 	// JoinPolicy says who becomes a person on first sign-in: open,
 	// company (through a claimed domain's method) or listed (already named
 	// in a team or a grant, holding a role, or invited).
@@ -143,10 +145,11 @@ func (s *Server) getWorkspace(c *gin.Context) {
 	}
 	view := s.workspaceView(c, w)
 	view.Sleep = w.Settings.Sleep
-	if l := w.Settings.Limits; l != nil {
-		view.Limits = l
-		view.Usage = s.usageOf(c.Request.Context(), w.Slug)
-	}
+	view.Limits = w.Settings.Limits
+	view.ProjectCaps = w.Settings.ProjectCaps
+	// What the workspace holds, with or without ceilings: the bars say
+	// how much, the ceilings whether it is a share of something.
+	view.Usage = s.usageOf(c.Request.Context(), w.Slug)
 	c.JSON(http.StatusOK, view)
 }
 

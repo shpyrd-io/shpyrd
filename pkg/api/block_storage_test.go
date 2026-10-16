@@ -31,7 +31,7 @@ func TestDatabaseDiskCountsAgainstTheStorageCeiling(t *testing.T) {
 		return map[string]string{install.VarStorageClass: "oci-bv", install.VarVolumeMinSize: "50Gi"}[key]
 	}
 	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", `{"kind":"Postgres","name":"db"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "50Gi of storage; the workspace allows 10Gi") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 50 GB of 10 GB.") {
 		t.Errorf("database over the storage ceiling = %d %s", rec.Code, rec.Body.String())
 	}
 	// A store without persistence has no disk.
@@ -52,7 +52,7 @@ func TestDatabaseDiskCountsAgainstTheStorageCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resources", `{"kind":"Postgres","name":"db2"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "100Gi of storage; the workspace allows 60Gi") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 100 GB of 60 GB.") {
 		t.Errorf("second database = %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -137,15 +137,16 @@ func (s *Server) createVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), vol.Spec.Size); err != nil {
-		abort(c, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.apps.Create(c.Request.Context(), vol); err != nil {
+	// A new disk, judged against the workspace's ceilings (its plan may
+	// include no disks at all) and made under its lock.
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: vol.Spec.Size, newDisk: true}, func(ctx context.Context) error {
+		return s.apps.Create(ctx, vol)
+	})
+	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			abort(c, http.StatusConflict, fmt.Errorf("volume %q already exists", req.Name))
 		} else {
-			abort(c, http.StatusBadGateway, err)
+			abortAdmission(c, err, http.StatusBadRequest)
 		}
 		return
 	}
@@ -259,13 +260,14 @@ func (s *Server) resizeVolume(c *gin.Context) {
 	}
 	growth := size.DeepCopy()
 	growth.Sub(vol.Spec.Size)
-	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), growth); err != nil {
-		abort(c, http.StatusBadRequest, err)
-		return
-	}
-	vol.Spec.Size = size
-	if err := s.apps.Update(c.Request.Context(), vol); err != nil {
-		abort(c, http.StatusBadGateway, err)
+	// The growth, judged against the ceilings (a disk that exists may
+	// grow where a new one is refused) and written under the lock.
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: growth}, func(ctx context.Context) error {
+		vol.Spec.Size = size
+		return s.apps.Update(ctx, vol)
+	})
+	if err != nil {
+		abortAdmission(c, err, http.StatusBadRequest)
 		return
 	}
 	s.audit(c, c.Param("slug"), "volume.resize", vol.Name, req.Size)
