@@ -181,6 +181,9 @@ type AppDetailStatus struct {
 	// state of the release command for the release rolling out.
 	ProcessTypes []string                     `json:"processTypes,omitempty"`
 	Release      *shpyrdv1.ReleasePhaseStatus `json:"release,omitempty"`
+	// Source is what the source watcher knows of the branch and the
+	// commit pinned for it (RFC-0018).
+	Source *shpyrdv1.SourceStatus `json:"source,omitempty"`
 }
 
 // ReleaseView is a release with the image reduced to its digest and linked
@@ -247,6 +250,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Releases:   []ReleaseView{},
 			Conditions: a.Status.Conditions,
 			Domains:    a.Status.Domains,
+			Source:     a.Status.Source,
 		},
 		Processes: a.Status.Processes,
 	}
@@ -550,6 +554,9 @@ type UpdateAppRequest struct {
 	// IconColor its colour; "" removes either.
 	Icon      *string `json:"icon,omitempty"`
 	IconColor *string `json:"iconColor,omitempty"`
+	// AutoDeploy switches whether a push to the project's branch deploys
+	// (spec.source.git.autoDeploy, RFC-0018).
+	AutoDeploy *bool `json:"autoDeploy,omitempty"`
 }
 
 // updateApp changes a project's display name, description, featured flag,
@@ -561,8 +568,8 @@ func (s *Server) updateApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.Name == nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
-		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description, featured, icon or iconColor"))
+	if req.Name == nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil && req.AutoDeploy == nil {
+		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description, featured, icon, iconColor or autoDeploy"))
 		return
 	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
@@ -596,13 +603,21 @@ func (s *Server) updateApp(c *gin.Context) {
 			}
 			changes = append(changes, "icon colour")
 		}
+		if req.AutoDeploy != nil {
+			if a.Spec.Source == nil || a.Spec.Source.Git == nil {
+				return errors.New("the project does not deploy from a git repository: auto-deploy follows a git branch")
+			}
+			on := *req.AutoDeploy
+			a.Spec.Source.Git.AutoDeploy = &on
+			changes = append(changes, fmt.Sprintf("auto-deploy %v", on))
+		}
 		return nil
 	})
 	if err != nil {
 		return
 	}
 	action := "project.update"
-	if req.Name != nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
+	if req.Name != nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil && req.AutoDeploy == nil {
 		action = "project.rename"
 	}
 	s.audit(c, project.SlugOf(app), action, project.Label(app), strings.Join(changes, ", "))
@@ -699,7 +714,15 @@ func (s *Server) deployApp(c *gin.Context) {
 			if req.Git.Revision == "" {
 				req.Git.Revision = "main"
 			}
+			// Auto-deploy is the project's setting: a deploy that does not
+			// say keeps it (RFC-0018).
+			if req.Git.AutoDeploy == nil && a.Spec.Source != nil && a.Spec.Source.Git != nil {
+				req.Git.AutoDeploy = a.Spec.Source.Git.AutoDeploy
+			}
 			a.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
+			// The source watcher reads the branch's commit again at once.
+			delete(a.Annotations, shpyrdv1.AnnotationGitCommit)
+			delete(a.Annotations, shpyrdv1.AnnotationGitCommitRef)
 		case hasBlob:
 			a.Spec.Image = ""
 			a.Spec.Source = &shpyrdv1.Source{Blob: req.Blob, SubPath: req.SubPath}

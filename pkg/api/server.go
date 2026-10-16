@@ -278,6 +278,10 @@ type Server struct {
 	// deployKeyMints throttles deploy key creation per actor: each one
 	// dials a host the caller names (RFC-0017).
 	deployKeyMints *rateLimiter
+	// gitHookDeliveries throttles webhook deliveries per address, and
+	// hookRefusals the log lines of refused ones per project (RFC-0018).
+	gitHookDeliveries *rateLimiter
+	hookRefusals      *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -380,6 +384,8 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
 	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
+	s.gitHookDeliveries = newRateLimiter(gitHooksPerMinute)
+	s.hookRefusals = newRateLimiter(hookRefusalsPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -575,6 +581,9 @@ func (s *Server) routes() error {
 	// Archives are content addressed (SHA-256) and fetched by build
 	// instances, which cannot present the admin token.
 	pub.GET("/sources/:name", s.serveSource)
+	// Git hosts deliver pushes here (RFC-0018): no session; the URL's
+	// token and the delivery's signature are the credential.
+	pub.POST("/hooks/git/:slug/:token", s.gitHook)
 	// The web terminal (RFC-0026) carries no header and may carry no cookie: a
 	// browser cannot set headers on a WebSocket, and `shpyrd cluster dashboard`
 	// signs in with a token in localStorage. So it skips s.auth() and the
@@ -797,6 +806,8 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/git-auth", s.require(authz.ProjectView), s.showProjectGitAuth) // RFC-0017
 	api.POST("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.throttleDeployKeys(), s.createDeployKey)
 	api.DELETE("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.deleteDeployKey)
+	api.GET("/projects/:slug/git-hooks", s.require(authz.ProjectConfig), s.showGitHooks) // RFC-0018
+	api.POST("/projects/:slug/git-hooks/rotate", s.require(authz.ProjectConfig), s.rotateGitHooks)
 	api.GET("/projects/:slug/members", s.require(authz.ProjectMembers), s.listMembers)
 	api.POST("/projects/:slug/members", s.require(authz.ProjectMembers), s.addMember)
 	api.DELETE("/projects/:slug/members/:name", s.require(authz.ProjectMembers), s.removeMember)
