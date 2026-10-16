@@ -140,8 +140,11 @@ project, with the `shpyrd git-auth` command that fixes it, and shpyrd tries
 again by itself.
 
 **Skipping a commit.** A commit whose message says `[skip deploy]` (or
-`[deploy skip]`) is recorded and not deployed, also when shpyrd finds it
-later at the head of the branch. The next commit deploys as usual.
+`[deploy skip]`, in any case) is recorded and not deployed, also when a
+later check finds it at the head of the branch. The next commit deploys as
+usual. This works when the push reaches shpyrd by webhook: a check of the
+branch cannot read commit messages, so a project that relies on checking
+deploys the commit anyway.
 
 **Auto-deploy off.** To record pushes without deploying them:
 
