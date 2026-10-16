@@ -613,13 +613,13 @@ const (
 	// MetricPostgresShared is a shared database's cap over time (storage
 	// plan, step 3): the GiB it may hold, whatever it holds, as a disk is
 	// billed for its size.
-	MetricPostgresShared = "postgres_shared"  // GiB-seconds (the cap)
+	MetricPostgresShared = "postgres_shared" // GiB-seconds (the cap)
 	// MetricObjectStorage is what a project's buckets hold, GiB-seconds of
 	// bytes stored (storage plan step 4).
 	MetricObjectStorage = "object-storage"
-	MetricEgressHTTP     = "egress_http"      // bytes
-	MetricInstanceSec    = "instance_seconds" // process-seconds
-	MetricStateSec       = "state_seconds"    // seconds in each state
+	MetricEgressHTTP    = "egress_http"      // bytes
+	MetricInstanceSec   = "instance_seconds" // process-seconds
+	MetricStateSec      = "state_seconds"    // seconds in each state
 
 	UnitCoreSeconds = "core_seconds"
 	UnitGiBSeconds  = "gib_seconds"
