@@ -106,7 +106,15 @@ func Resolve(gitURL, app, namespace string, deployKey, token *corev1.Secret) (Bu
 		if r.Scheme != "ssh" {
 			cloneURL = r.SSH()
 		}
-		meta.Annotations = map[string]string{kpackGitAnnotation: "git@" + r.Host}
+		// kpack matches the clone URL's host with its port (url.Host)
+		// against this annotation: an ssh:// URL that names a port needs
+		// it here, or kpack clones without the key. Only an ssh URL is
+		// kept with its port; a converted one is the scp form, port 22.
+		matches := "git@" + r.Host
+		if r.Scheme == "ssh" && r.Port != "" {
+			matches += ":" + r.Port
+		}
+		meta.Annotations = map[string]string{kpackGitAnnotation: matches}
 		return Build{Kind: KindDeployKey, CloneURL: cloneURL, Host: r.Host, Secret: &corev1.Secret{
 			ObjectMeta: meta,
 			Type:       corev1.SecretTypeSSHAuth,

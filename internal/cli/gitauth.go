@@ -143,7 +143,7 @@ A project's deploy key wins over the workspace's token.
 				fmt.Fprintf(w, "Add this key to the repository on %s as a read-only deploy key:\n\n  %s\n\n", v.Host, v.PublicKey)
 				fmt.Fprintf(w, "On GitHub: the repository's Settings, Deploy keys, Add deploy key (leave write access off).\n")
 				fmt.Fprintf(w, "%s's host key was recorded as %s; builds refuse a host that presents another.\n", v.Host, v.HostKeyFingerprint)
-				fmt.Fprintf(w, "Then deploy again. A new deploy-key replaces this one.\n")
+				fmt.Fprintf(w, "Then build again: shpyrd redeploy --project %s. A new deploy-key replaces this one.\n", name)
 			})
 		},
 	}

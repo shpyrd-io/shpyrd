@@ -28,7 +28,9 @@ import (
 const buildLogHint = "The build's log has the full output."
 
 // refusedClone is git (or kpack's git) refused access to a repository.
-var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository not found|Permission denied \(publickey\)|authentication required|Authentication failed|could not read from remote repository`)
+// kpack's go-git says SSH_AUTH_SOCK when no Secret matched an ssh URL, and
+// "unable to authenticate" when the host refused the key.
+var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository not found|Permission denied \(publickey\)|authentication required|Authentication failed|could not read from remote repository|SSH agent requested but SSH_AUTH_SOCK|ssh: unable to authenticate`)
 
 var (
 	ansiEscape     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -87,7 +89,7 @@ func describeBuildFailure(step, out string) string {
 	if step == "prepare" && refusedClone.MatchString(text) {
 		return "The build could not read the repository: it is private, or does not exist under that name. " +
 			"Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, " +
-			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then deploy again. " + buildLogHint
+			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then build again with `shpyrd redeploy`. " + buildLogHint
 	}
 	if step == "prepare" && strings.Contains(text, "Host key verification failed") {
 		return "The build could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. " +

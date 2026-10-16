@@ -142,9 +142,13 @@ func TestRefusedCloneNamesTheFix(t *testing.T) {
 		"remote: Repository not found.\nfatal: repository 'https://github.com/acme/api.git/' not found",
 		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
 		"Error: failed to fetch: authentication required",
+		// kpack, an ssh URL with no credential for it (seen on a kind run)
+		`unable to fetch references for repository: error creating SSH agent: "SSH agent requested but SSH_AUTH_SOCK not-specified"`,
+		// kpack (go-git), a key the host does not accept
+		"unable to fetch references for repository: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain",
 	} {
 		msg := describeBuildFailure("prepare", out)
-		if !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || !strings.Contains(msg, "shpyrd git-auth set") {
+		if !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || !strings.Contains(msg, "shpyrd git-auth set") || !strings.Contains(msg, "shpyrd redeploy") {
 			t.Errorf("%q -> %s", out, msg)
 		}
 	}

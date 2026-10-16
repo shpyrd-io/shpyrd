@@ -128,3 +128,26 @@ func TestTokenSecretNameDistinct(t *testing.T) {
 		t.Errorf("not a DNS-1123 name: %s", long)
 	}
 }
+
+// kpack matches an ssh Secret against the clone URL's host with its port
+// (url.Host): an ssh:// URL naming a port needs the port in kpack.io/git,
+// or kpack clones without the key. Found on a kind run against a Gitea on
+// port 2222: "SSH agent requested but SSH_AUTH_SOCK not-specified".
+func TestResolveDeployKeyAnnotationKeepsTheSSHPort(t *testing.T) {
+	for _, tc := range []struct{ url, clone, annotation string }{
+		{"ssh://git@gitea.local:2222/me/site.git", "ssh://git@gitea.local:2222/me/site.git", "git@gitea.local:2222"},
+		{"ssh://git@gitea.local:22/me/site.git", "ssh://git@gitea.local:22/me/site.git", "git@gitea.local:22"},
+		{"ssh://git@gitea.local/me/site.git", "ssh://git@gitea.local/me/site.git", "git@gitea.local"},
+		{"git@gitea.local:me/site.git", "git@gitea.local:me/site.git", "git@gitea.local"},
+		// an http port is not an ssh port: the converted URL is the scp form
+		{"http://gitea.local:3000/me/site", "git@gitea.local:me/site.git", "git@gitea.local"},
+	} {
+		b, err := Resolve(tc.url, "shop", "app-shop", deployKeySecret("gitea.local"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.CloneURL != tc.clone || b.Secret.Annotations["kpack.io/git"] != tc.annotation {
+			t.Errorf("%s: clone %q annotation %q, want %q %q", tc.url, b.CloneURL, b.Secret.Annotations["kpack.io/git"], tc.clone, tc.annotation)
+		}
+	}
+}
