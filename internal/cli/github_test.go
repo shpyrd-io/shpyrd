@@ -2,6 +2,7 @@ package cli
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -119,5 +120,67 @@ func TestGitHooksShowSaysTheGitHubAppNeedsNothing(t *testing.T) {
 	}, "git-hooks", "show", "--project", "shop")
 	if err != nil || !strings.Contains(out, "Pushes arrive through the GitHub App (Acme); nothing to set up.") || strings.Contains(out, "Payload URL") {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestGitHubDisconnectPrefersTheIDAndRefusesAmbiguousNames(t *testing.T) {
+	row := func(id int, account string) string {
+		return `{"id":` + strconv.Itoa(id) + `,"account":"` + account + `","type":"User","connectedBy":"x","createdAt":"2026-10-01T00:00:00Z","suspended":false,"manageURL":"u"}`
+	}
+	var deleted atomic.Value
+	deleted.Store("")
+	handler := func(rows string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "DELETE" {
+				deleted.Store(r.URL.Path)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			_, _ = w.Write([]byte(`{"configured":true,"installations":[` + rows + `]}`))
+		}
+	}
+	// An id beats a login that spells the same number.
+	if _, err := runShpyrd(t, handler(row(5, "123")+","+row(123, "other")), "github", "disconnect", "123"); err != nil || deleted.Load() != "/api/workspace/github/installations/123" {
+		t.Fatalf("id: %v %v", err, deleted.Load())
+	}
+	// Two rows of one account are refused, nothing deleted.
+	deleted.Store("")
+	_, err := runShpyrd(t, handler(row(1, "Acme")+","+row(2, "acme")), "github", "disconnect", "ACME")
+	if err == nil || !strings.Contains(err.Error(), "matches several connections (ids 1, 2): give the id") || deleted.Load() != "" {
+		t.Fatalf("ambiguous: %v %v", err, deleted.Load())
+	}
+	// One match goes.
+	if _, err := runShpyrd(t, handler(row(1, "Acme")+","+row(2, "beta")), "github", "disconnect", "beta"); err != nil || deleted.Load() != "/api/workspace/github/installations/2" {
+		t.Fatalf("one: %v %v", err, deleted.Load())
+	}
+}
+
+func TestGitHubConnectRidesOutABlipButNotFour(t *testing.T) {
+	fastGitHubPolls(t)
+	var reads atomic.Int32
+	out, err := runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
+		n := reads.Add(1)
+		switch {
+		case n == 1:
+			_, _ = w.Write([]byte(`{"configured":true,"installations":[]}`))
+		case n <= 4: // three failures in a row
+			http.Error(w, "blip", http.StatusBadGateway)
+		default:
+			_, _ = w.Write([]byte(`{"configured":true,"installations":[` + acmeConnection + `]}`))
+		}
+	}, "github", "connect")
+	if err != nil || !strings.Contains(out, "Connected Acme") {
+		t.Fatalf("three blips: %v\n%s", err, out)
+	}
+	reads.Store(0)
+	_, err = runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
+		if reads.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"configured":true,"installations":[]}`))
+			return
+		}
+		http.Error(w, "down", http.StatusBadGateway)
+	}, "github", "connect")
+	if err == nil || reads.Load() != 5 {
+		t.Fatalf("four blips: err=%v reads=%d", err, reads.Load())
 	}
 }

@@ -82,6 +82,7 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			}
 			ctx := signalContext()
 			deadline := time.Now().Add(githubConnectWait)
+			failures := 0
 			for {
 				select {
 				case <-ctx.Done():
@@ -90,7 +91,12 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 				}
 				var now api.GitHubView
 				if err := githubRequest(g, cmd, "GET", "api/workspace/github", &now); err != nil {
-					return err
+					// A blip does not end a long wait: three in a row do.
+					if failures++; failures > 3 {
+						return err
+					}
+				} else {
+					failures = 0
 				}
 				for _, inst := range now.Installations {
 					if known[inst.ID] {
@@ -148,16 +154,29 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			if err := githubRequest(g, cmd, "GET", "api/workspace/github", &v); err != nil {
 				return err
 			}
-			var found *api.GitHubInstallationView
+			// A number equal to an id names that connection; otherwise the
+			// account, which must be one connection only.
+			var matches []*api.GitHubInstallationView
 			for i := range v.Installations {
-				inst := &v.Installations[i]
-				if strings.EqualFold(inst.Account, args[0]) || strconv.FormatInt(inst.ID, 10) == args[0] {
-					found = inst
+				if strconv.FormatInt(v.Installations[i].ID, 10) == args[0] {
+					matches = []*api.GitHubInstallationView{&v.Installations[i]}
+					break
+				}
+				if strings.EqualFold(v.Installations[i].Account, args[0]) {
+					matches = append(matches, &v.Installations[i])
 				}
 			}
-			if found == nil {
+			if len(matches) == 0 {
 				return fmt.Errorf("this workspace has no GitHub connection named %s: shpyrd github list", args[0])
 			}
+			if len(matches) > 1 {
+				ids := make([]string, len(matches))
+				for i, m := range matches {
+					ids[i] = strconv.FormatInt(m.ID, 10)
+				}
+				return fmt.Errorf("%s matches several connections (ids %s): give the id", args[0], strings.Join(ids, ", "))
+			}
+			found := matches[0]
 			if err := githubRequest(g, cmd, "DELETE", "api/workspace/github/installations/"+url.PathEscape(strconv.FormatInt(found.ID, 10)), nil); err != nil {
 				return err
 			}
