@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +92,9 @@ type SourceReconciler struct {
 type sourceCheck struct {
 	at  time.Time
 	ref string
+	// push is the last push annotation consumed, as written: read again
+	// from a stale App, it is only dropped.
+	push string
 }
 
 // SetupWithManager registers the watcher on the Apps that follow a branch.
@@ -161,6 +165,16 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if push != nil && push.Ref != "refs/heads/"+rev {
 		push = nil // another branch's, or a tag's: dropped below
 	}
+	if rawPush != "" && rawPush == r.consumedPush(app.UID) {
+		// Already applied: this App is a stale read.
+		push = nil
+	}
+	// A push whose commit is not a commit name is not trusted: dropped,
+	// and the branch read instead.
+	badPush := push != nil && (!pushCommit.MatchString(push.SHA) || strings.Trim(push.SHA, "0") == "")
+	if badPush {
+		push = nil
+	}
 	// The last check: the one remembered, when it is later than the one
 	// written. A check remembered but not yet seen in the App may be a
 	// write the cache has not caught up with: a missing pin then is not a
@@ -172,7 +186,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	switch {
 	case push != nil:
 		ev.push = push
-	case (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
+	case badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
 		ev.latest, ev.err = r.poll(ctx, app)
 	default:
 		r.dropPush(ctx, app, rawPush)
@@ -184,7 +198,11 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 	}
-	r.remember(app.UID, rev, now)
+	consumed := ""
+	if ev.push != nil {
+		consumed = rawPush
+	}
+	r.remember(app.UID, rev, now, consumed)
 	r.dropPush(ctx, app, rawPush)
 	r.auditUpdate(ctx, app, u)
 	return ctrl.Result{RequeueAfter: r.untilDue(u.record, now)}, nil
@@ -215,7 +233,9 @@ func (r *SourceReconciler) lastChecked(uid types.UID, rev string, rec gitauth.So
 
 // remember keeps the time of a check, and drops the checks of Apps not
 // seen for a while.
-func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time) {
+// A push consumed by this check is kept with it; without one, the last
+// one consumed stays.
+func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, push string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.checked == nil {
@@ -226,8 +246,22 @@ func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time) {
 			delete(r.checked, k)
 		}
 	}
-	r.checked[uid] = sourceCheck{at: now, ref: rev}
+	if push == "" {
+		push = r.checked[uid].push
+	}
+	r.checked[uid] = sourceCheck{at: now, ref: rev, push: push}
 }
+
+// consumedPush is the last push annotation applied to the App.
+func (r *SourceReconciler) consumedPush(uid types.UID) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.checked[uid].push
+}
+
+// pushCommit is a commit name as a push must carry it: 40 or 64
+// lowercase hex digits (and, checked apart, not all zeros: a deleted ref).
+var pushCommit = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 func (r *SourceReconciler) forget(uid types.UID) {
 	r.mu.Lock()
@@ -266,12 +300,15 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 	if u.record.Author != "" {
 		u.actor = "git:" + u.record.Author
 	}
-	skip := ev.push != nil && gitauth.SkipsDeploy(message)
-	if skip {
-		u.record.Skipped = sha
-		u.audit = "git.skip"
-	}
 	pin := app.PinnedCommit()
+	// A skip of the commit already running is no skip.
+	skip := ev.push != nil && gitauth.SkipsDeploy(message) && sha != pin
+	if skip {
+		if rec.Skipped != sha {
+			u.audit = "git.skip"
+		}
+		u.record.Skipped = sha
+	}
 	switch {
 	case pin == "":
 		// Nothing pinned for this revision yet (a new app, a deploy, a

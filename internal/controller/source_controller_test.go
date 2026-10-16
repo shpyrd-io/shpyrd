@@ -575,3 +575,77 @@ func TestSourcePinsACommitOnce(t *testing.T) {
 		t.Errorf("listings %d pin %q", ls.calls, got.PinnedCommit())
 	}
 }
+
+// Fix round 1: a push read again from a stale App, after it was consumed,
+// is only dropped: no second pin, no second audit.
+func TestSourceAppliesAConsumedPushOnce(t *testing.T) {
+	app := withPush(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit), gitauth.Push{
+		Ref: "refs/heads/main", SHA: otherCommit, Message: "fix login", Author: "alice", Delivery: "d-1", At: sourceNow,
+	})
+	raw := app.Annotations[shpyrdv1.AnnotationGitPush]
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	r, c := newSourceReconciler(t, ls, app)
+	heard := heardAudits(t)
+	_, got := reconcileSource(t, r, app)
+	if got.PinnedCommit() != otherCommit || len(*heard) != 1 {
+		t.Fatalf("pin %q audits %d", got.PinnedCommit(), len(*heard))
+	}
+	// The App as a stale cache shows it: the old pin, the old record, and
+	// the push still there.
+	stale := got.DeepCopy()
+	stale.Annotations[shpyrdv1.AnnotationGitCommit] = testCommit
+	stale.Annotations[shpyrdv1.AnnotationGitPush] = raw
+	delete(stale.Annotations, shpyrdv1.AnnotationGitSource)
+	delete(stale.Annotations, shpyrdv1.AnnotationReleaseNote)
+	if err := c.Update(context.Background(), stale); err != nil {
+		t.Fatal(err)
+	}
+	r.Now = func() time.Time { return sourceNow.Add(5 * time.Second) }
+	_, got = reconcileSource(t, r, stale)
+	if len(*heard) != 1 || ls.calls != 0 {
+		t.Errorf("audits %+v listings %d", *heard, ls.calls)
+	}
+	if got.PinnedCommit() != testCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "" {
+		t.Errorf("the consumed push was applied again: pin %q note %q", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote])
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitPush]; ok {
+		t.Error("the consumed push is dropped")
+	}
+}
+
+func TestSourceAuditsASkipOnce(t *testing.T) {
+	app := withPush(withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
+		gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Skipped: otherCommit, CheckedAt: at(sourceNow.Add(-time.Minute))}),
+		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Message: "Fix a typo [skip deploy]", Author: "bruno", Delivery: "d-2"})
+	r, _ := newSourceReconciler(t, &fakeLsRemote{}, app)
+	heard := heardAudits(t)
+	_, got := reconcileSource(t, r, app)
+	if len(*heard) != 0 || got.PinnedCommit() != testCommit || sourceRecord(got).Skipped != otherCommit {
+		t.Errorf("audits %+v pin %q record %+v", *heard, got.PinnedCommit(), sourceRecord(got))
+	}
+}
+
+func TestSourceSkipOfTheRunningCommitIsNoSkip(t *testing.T) {
+	app := withPush(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
+		gitauth.Push{Ref: "refs/heads/main", SHA: testCommit, Message: "Docs [skip deploy]", Author: "bruno", Delivery: "d-3"})
+	r, _ := newSourceReconciler(t, &fakeLsRemote{}, app)
+	heard := heardAudits(t)
+	_, got := reconcileSource(t, r, app)
+	if len(*heard) != 0 || got.PinnedCommit() != testCommit || sourceRecord(got).Skipped != "" {
+		t.Errorf("audits %+v pin %q record %+v", *heard, got.PinnedCommit(), sourceRecord(got))
+	}
+}
+
+func TestSourceDropsAPushWithoutACommitAndPolls(t *testing.T) {
+	for _, sha := range []string{"nothex", "0123456", strings.ToUpper(otherCommit), strings.Repeat("0", 40), otherCommit + "zz"} {
+		ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+		app := withPush(withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
+			gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", CheckedAt: at(sourceNow.Add(-5 * time.Second))}),
+			gitauth.Push{Ref: "refs/heads/main", SHA: sha, Author: "mallory"})
+		r, _ := newSourceReconciler(t, ls, app)
+		_, got := reconcileSource(t, r, app)
+		if ls.calls != 1 || got.PinnedCommit() != otherCommit || sourceRecord(got).Via != "poll" || got.Annotations[shpyrdv1.AnnotationGitPush] != "" {
+			t.Errorf("%q: listings %d pin %q record %+v", sha, ls.calls, got.PinnedCommit(), sourceRecord(got))
+		}
+	}
+}
