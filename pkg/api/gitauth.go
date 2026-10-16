@@ -211,8 +211,10 @@ func (s *Server) showProjectGitAuth(c *gin.Context) {
 		tv := gitTokenView(tk)
 		view.Token = &tv
 	}
+	// Using is what builds really clone with: a deploy key made for
+	// another host is shown, but not used.
 	switch {
-	case dk != nil:
+	case host != "" && gitauth.DeployKeyFits(dk, host):
 		view.Using = gitauth.KindDeployKey
 	case tk != nil:
 		view.Using = gitauth.KindToken

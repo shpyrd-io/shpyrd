@@ -137,3 +137,30 @@ func TestDeployKeyRefusesUnsafeHost(t *testing.T) {
 		t.Error("an unsafe host must not be dialed")
 	}
 }
+
+func TestProjectGitAuthIgnoresADeployKeyForAnotherHost(t *testing.T) {
+	app := sampleApp("shop", shpyrdv1.PhaseRunning)
+	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/acme/shop"}}
+	s, _ := newTestServer(t, nil, []client.Object{app})
+	s.scanHostKey = func(context.Context, string, string) (string, string, error) {
+		return "gitlab.com ssh-ed25519 AAAAhost", "SHA256:host", nil
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"gitlab.com"}`, true); rec.Code != http.StatusCreated {
+		t.Fatal(rec.Body.String())
+	}
+	rec := do(t, s, "GET", "/api/projects/shop/git-auth", "", true)
+	var pv ProjectGitAuthView
+	_ = json.Unmarshal(rec.Body.Bytes(), &pv)
+	if pv.Using != "none" || pv.DeployKey == nil || pv.DeployKey.Host != "gitlab.com" {
+		t.Errorf("a gitlab.com key does not clone github.com, but is shown: %s", rec.Body.String())
+	}
+	if rec := do(t, s, "PUT", "/api/workspace/git-auth/github.com", `{"token":"t"}`, true); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	rec = do(t, s, "GET", "/api/projects/shop/git-auth", "", true)
+	pv = ProjectGitAuthView{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &pv)
+	if pv.Using != gitauth.KindToken || pv.DeployKey == nil || pv.Token == nil {
+		t.Errorf("the token is used, the key still shown: %s", rec.Body.String())
+	}
+}

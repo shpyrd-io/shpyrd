@@ -75,3 +75,21 @@ func TestGitAuthShow(t *testing.T) {
 		t.Errorf("%v: %s", err, out)
 	}
 }
+
+func TestGitAuthShowWithoutTheCredentialObject(t *testing.T) {
+	out, err := runGitAuth(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"using":"token"}`))
+	}, "", "show", "--project", "shop")
+	if err != nil || !strings.Contains(out, "without credentials") {
+		t.Errorf("%v: %s", err, out)
+	}
+}
+
+func TestGitAuthShowADeployKeyForAnotherHost(t *testing.T) {
+	out, err := runGitAuth(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"url":"https://github.com/acme/shop","using":"none","deployKey":{"host":"gitlab.com","publicKey":"ssh-ed25519 A","fingerprint":"SHA256:k","hostKeyFingerprint":"SHA256:h","createdAt":"2026-10-16T10:00:00Z"}}`))
+	}, "", "show", "--project", "shop")
+	if err != nil || !strings.Contains(out, "Its deploy key is for gitlab.com, not github.com: builds do not use it.") {
+		t.Errorf("%v: %s", err, out)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Git credentials (RFC-0017): `shpyrd git-auth`. A workspace admin sets a
@@ -164,13 +165,18 @@ A project's deploy key wins over the workspace's token.
 				return err
 			}
 			return g.print(cmd, v, func(w io.Writer) {
-				switch v.Using {
-				case "deploy-key":
+				switch {
+				case v.Using == "deploy-key" && v.DeployKey != nil:
 					fmt.Fprintf(w, "%s clones %s with its deploy key %s (for %s).\n", name, v.URL, v.DeployKey.Fingerprint, v.DeployKey.Host)
-				case "token":
+				case v.Using == "token" && v.Token != nil:
 					fmt.Fprintf(w, "%s clones %s with the workspace's token for %s (user %s).\n", name, v.URL, v.Token.Host, v.Token.Username)
 				default:
 					fmt.Fprintf(w, "%s clones %s without credentials: fine for a public repository. For a private one: shpyrd git-auth --help\n", name, firstNonEmpty(v.URL, "(no git repository)"))
+				}
+				if v.Using != "deploy-key" && v.DeployKey != nil {
+					if r, err := gitauth.Parse(v.URL); err == nil && v.DeployKey.Host != r.Host {
+						fmt.Fprintf(w, "Its deploy key is for %s, not %s: builds do not use it.\n", v.DeployKey.Host, r.Host)
+					}
 				}
 			})
 		},
