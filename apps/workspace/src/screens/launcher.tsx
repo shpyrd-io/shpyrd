@@ -131,7 +131,7 @@ function Card({ project, operator }: { project: ProjectSummary; operator: boolea
 
 // The dialog that makes a project. It is the "+" at the top, or the
 // button of the empty page.
-function NewProject({ asButton = false }: { asButton?: boolean }) {
+export function NewProject({ asButton = false }: { asButton?: boolean }) {
   const queries = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -151,6 +151,9 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
   const repos = useQuery({ queryKey: ["github-repositories"], queryFn: api.githubRepositories, enabled: open, retry: false, staleTime: 60_000 });
   const githubShown = repos.isSuccess ? repos.data.length > 0 : repos.error instanceof ApiError && repos.error.status === 502;
   const fromGitHub = githubShown && from === "github";
+  // A repository the list no longer has is not picked: GitHub took it
+  // away from the connection meanwhile.
+  if (picked && repos.data && !repos.data.some((r) => r.fullName === picked.fullName)) setPicked(undefined);
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   // The app's address around the slug: acme-<slug>.shpyrd.app, or
   // <slug>.<domain> where the server gives no pattern.
@@ -170,7 +173,8 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
           : git.trim()
             ? { url: git.trim(), revision: ref.trim() || "main" }
             : undefined,
-        subPath: path.trim() || undefined,
+        // The directory is a field of the Git URL tab alone.
+        subPath: fromGitHub ? undefined : path.trim() || undefined,
       }),
     onSuccess: (p) => {
       queries.invalidateQueries({ queryKey: ["projects"] });
@@ -270,7 +274,7 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal)} onClick={() => create.mutate()}>
+          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal) || (fromGitHub && !picked)} onClick={() => create.mutate()}>
             Create
           </Button>
         </DialogFooter>

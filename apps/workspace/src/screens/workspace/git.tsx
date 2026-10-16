@@ -7,6 +7,7 @@ import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
+import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
 import type { GitHubInstallation } from "@/api/types";
@@ -52,7 +53,7 @@ export function Git() {
         ) : github.error ? (
           <Failed what="the GitHub connections" error={github.error} />
         ) : !data?.configured ? (
-          <p className="text-sm text-muted-foreground">{data?.note ?? "GitHub is not set up on this platform."}</p>
+          <p className="text-sm text-muted-foreground">{withCode(data?.note ?? "GitHub is not set up on this platform.")}</p>
         ) : (
           <>
             {perms.admin && (
@@ -116,5 +117,13 @@ export function Git() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// withCode sets what the server's sentence quotes in backticks, a
+// command, as code.
+function withCode(text: string) {
+  return text.split(/(`[^`]+`)/).map((part, i) =>
+    part.length > 2 && part.startsWith("`") && part.endsWith("`") ? <InlineCode key={i}>{part.slice(1, -1)}</InlineCode> : part,
   );
 }

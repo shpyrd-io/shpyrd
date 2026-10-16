@@ -76,6 +76,15 @@ it("says GitHub is not set up, in the server's words, and offers nothing to clic
   expect(screen.queryByRole("button", { name: "Connect GitHub" })).toBeNull();
 });
 
+it("sets the commands in the server's note as code", async () => {
+  fake.github.mockResolvedValue({ configured: false, note: "GitHub is not set up on this platform. An operator sets it up with `shpyrd-ctl github app create`.", installations: [] });
+  show();
+  const code = await screen.findByText("shpyrd-ctl github app create");
+  expect(code.tagName).toBe("CODE");
+  expect(code.getAttribute("data-slot")).toBe("inline-code");
+  expect(screen.queryByText(/`/)).toBeNull();
+});
+
 it("shows someone who is not an admin the connections without Connect or Disconnect", async () => {
   perms.admin = false;
   show();
