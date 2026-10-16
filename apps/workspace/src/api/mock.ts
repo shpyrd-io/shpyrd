@@ -227,6 +227,11 @@ const currentWorkspace = async (): Promise<WorkspaceInfo> => {
 };
 
 // "20Gi", "512Mi", "0" as GiB.
+// 5 as "5 GB", 0.5 as "512 MB": the server's words for a quantity.
+const gbWordsOf = (g: number) =>
+  g >= 1 || g === 0
+    ? `${Number.isInteger(g) ? g : g.toFixed(1)} GB`
+    : `${Math.round(g * 1024)} MB`;
 const gib = (q: string | undefined) => {
   const n = parseFloat(q ?? "0");
   if (Number.isNaN(n)) return 0;
@@ -1005,6 +1010,58 @@ export const mock: Api = {
       }, 6000);
       return r;
     }
+    if (body.kind === "ObjectBucket") {
+      // The plan's rules for buckets, in the server's words: how many,
+      // what one may hold, what they may hold together.
+      const o = ws.limits?.objectStorage;
+      const asked = body.spec.maxBytes as string | undefined;
+      const capGb = asked ? gib(asked) : o?.bucketCap ? gib(o.bucketCap) : 0;
+      if (o?.bucketCap && capGb > gib(o.bucketCap))
+        throw new ApiError(400, `A bucket holds up to ${gbWordsOf(gib(o.bucketCap))}.`);
+      const have = ws.usage?.buckets ?? 0;
+      if (o?.buckets && have + 1 > o.buckets)
+        throw new ApiError(400, `This would bring the workspace to ${have + 1} of ${o.buckets} buckets.`);
+      const held = gib(ws.usage?.objectStorage ?? "0");
+      if (o?.total && held + capGb > gib(o.total))
+        throw new ApiError(400, `This would bring the workspace to ${gbWordsOf(held + capGb)} of ${gbWordsOf(gib(o.total))} of object storage.`);
+      const r: ResourceInfo = {
+        kind: "ObjectBucket",
+        name: body.name,
+        phase: "Pending",
+        details: {
+          capBytes: String(Math.round(capGb * (1 << 30))),
+          usedBytes: "0",
+          objects: "0",
+          public: String(body.spec.public === true),
+          retentionDays: String(body.spec.retentionDays ?? 0),
+          region: "us-east-1",
+        },
+        attachedTo: [],
+        data: true,
+        bindable: true,
+        createdAt: now(),
+        note: capGb ? `Your bucket can hold up to ${gbWordsOf(capGb)}.` : undefined,
+      };
+      t.resources.push(r);
+      await thingsOf.set(all);
+      setTimeout(async () => {
+        const [all2, t2] = await ofProject(slug);
+        const x = t2.resources.find(
+          (y) => y.kind === "ObjectBucket" && y.name === body.name,
+        );
+        if (x) {
+          x.phase = "Ready";
+          x.endpoint = "http://object-storage.shpyrd-system.svc:3901";
+          x.details = {
+            ...x.details,
+            bucket: `shpyrd-${slug.replace(/[^a-z0-9]/g, "").padEnd(8, "0")}${body.name.replace(/[^a-z0-9]/g, "").padEnd(20, "0")}`,
+            publicEndpoint: "https://buckets.shpyrd.cloud",
+          };
+        }
+        await thingsOf.set(all2);
+      }, 4000);
+      return r;
+    }
     const list =
       body.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
     const size = list.sizes.find(
@@ -1067,6 +1124,30 @@ export const mock: Api = {
       ...r,
       note: `${name} now has the size ${size}: ${s.cpu} CPU, ${s.memory} of memory, ${s.connections} connections. ${restart}`,
     };
+  },
+  rotateBucket: async (slug, name) => {
+    const [all, t] = await ofProject(slug);
+    const r = t.resources.find(
+      (x) => x.kind === "ObjectBucket" && x.name === name,
+    );
+    if (!r) throw new ApiError(404, `no bucket "${name}" in this project`);
+    if (r.phase !== "Ready")
+      throw new ApiError(409, "The bucket is not ready yet; rotate its key once it is.");
+    const stamp = now();
+    r.details = { ...r.details, rotating: stamp };
+    await thingsOf.set(all);
+    setTimeout(async () => {
+      const [all2, t2] = await ofProject(slug);
+      const x = t2.resources.find(
+        (y) => y.kind === "ObjectBucket" && y.name === name,
+      );
+      if (x?.details) {
+        const { rotating: _rotating, ...rest } = x.details;
+        x.details = rest;
+      }
+      await thingsOf.set(all2);
+    }, 5000);
+    return { note: `A new key for ${name} is being written; the apps bound to it restart with it within a minute.` };
   },
   convertPostgres: async (slug, name, body) => {
     await wait();

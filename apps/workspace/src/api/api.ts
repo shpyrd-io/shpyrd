@@ -203,6 +203,9 @@ export type Api = {
   ) => Promise<ResourceInfo>;
   // A database moved between the shared server and a cluster of its own,
   // under its name; the note says what follows.
+  // A new key for a bucket (storage plan step 5): the apps attached to it
+  // restart with it.
+  rotateBucket: (slug: string, name: string) => Promise<{ note?: string }>;
   convertPostgres: (
     slug: string,
     name: string,

@@ -360,6 +360,11 @@ export const backend: Api = {
       `${project(slug)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/resize`,
       json("POST", { size }),
     ),
+  rotateBucket: (slug, name) =>
+    request(
+      `/api/projects/${encodeURIComponent(slug)}/resources/objectbucket/${encodeURIComponent(name)}/rotate`,
+      { method: "POST" },
+    ),
   convertPostgres: (slug, name, body) =>
     request(
       `${project(slug)}/resources/postgres/${encodeURIComponent(name)}/convert`,

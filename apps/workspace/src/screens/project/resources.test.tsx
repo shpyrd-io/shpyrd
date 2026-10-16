@@ -6,7 +6,7 @@ import type { Perms } from "@/lib/perms";
 import mockConfig from "../../../mock/config.json";
 import projects from "../../../mock/projects.json";
 import things from "../../../mock/things.json";
-import { allowanceOf, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, VolumeDialog } from "./resources";
+import { allowanceOf, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, VolumeDialog } from "./resources";
 import workspace from "../../../mock/workspace.json";
 
 // The queries answer from the Mock's files, by the first word of their
@@ -199,5 +199,55 @@ describe("the ceilings in the dialogs", () => {
     const v = { ...volumes[0], resize: { phase: "pending" as const, to: "20Gi", message: "the provider is growing the disk" } };
     expect(detailsOf(r, v)).toBe("20Gi · single · growth to 20Gi pending: the provider is growing the disk");
     expect(detailsOf(r, { ...v, resize: { phase: "completed", to: "20Gi" } })).toBe("20Gi · single");
+  });
+});
+
+describe("a bucket beside the application", () => {
+  it("says what a bucket is in one line and reads as a bucket", () => {
+    expect(detailsOf(named("uploads"))).toBe("up to 10 GB · region us-east-1");
+    expect(detailsOf({ ...named("uploads"), details: { capBytes: "0", public: "true", retentionDays: "30", rotating: "2026-10-16T10:00:00Z" } })).toBe("no cap · public read · kept 30 days · key being rotated");
+  });
+
+  it("draws its use against its cap, its public door, and offers a new key, attach and remove", () => {
+    state.answers = { config, resources, volumes, sizes, workspace };
+    const html = renderToStaticMarkup(<Resources project={project} perms={perms} />);
+    const uploads = rowOf(html, "uploads");
+    expect(uploads).toContain(">Bucket</td>");
+    expect(uploads).toContain("3.4 GiB of 10 GiB · 34%");
+    expect(uploads).toContain("New key");
+    expect(uploads).toContain("Attach");
+    expect(uploads).toContain("Remove uploads");
+  });
+
+  it("offers a bucket from the Add menu when the cluster has object storage", async () => {
+    // A Radix menu opens on the pointer going down on its trigger.
+    const open = () => fireEvent.pointerDown(screen.getByRole("button", { name: "Add" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    state.answers = { config, resources: [], volumes: [], sizes, workspace };
+    render(<Resources project={project} perms={perms} />);
+    open();
+    const item = await screen.findByRole("menuitem", { name: /A bucket/ });
+    expect(item.getAttribute("aria-disabled")).not.toBe("true");
+    cleanup();
+    state.answers = { config: { ...config, extensions: config.extensions.filter((x) => x !== "object-storage") }, resources: [], volumes: [], sizes, workspace };
+    render(<Resources project={project} perms={perms} />);
+    open();
+    expect((await screen.findByRole("menuitem", { name: /A bucket/ })).textContent).toContain("needs the object-storage extension");
+  });
+
+  it("says the plan's cap per bucket, and refuses more in the plan's words before the request", async () => {
+    state.answers = { workspace };
+    render(<BucketDialog slug="hello-world" onDone={nothing} onClose={nothing} />);
+    expect(screen.getByText("The plan's cap per bucket, 10 GB, unless you ask for less.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Holds up to"), { target: { value: "50Gi" } });
+    await waitFor(() => expect(screen.getByText("A bucket holds up to 10 GB.")).toBeTruthy());
+    expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says when the plan's buckets are used up", () => {
+    const w = workspace as unknown as WorkspaceInfo;
+    state.answers = { workspace: { ...w, limits: { ...w.limits, objectStorage: { buckets: 1, bucketCap: "1Gi" } }, usage: { ...w.usage, buckets: 1 } } };
+    render(<BucketDialog slug="hello-world" onDone={nothing} onClose={nothing} />);
+    expect(screen.getByText("This would bring the workspace to 2 of 1 buckets.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
