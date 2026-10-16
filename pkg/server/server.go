@@ -558,6 +558,17 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := rec.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("app controller: %w", err)
 	}
+	// The source watcher (RFC-0018): pins the commit each App on a git
+	// branch builds, from webhooks and polling.
+	source := &controller.SourceReconciler{
+		Client:          mgr.GetClient(),
+		Kube:            k.Kube,
+		SystemNamespace: k.Namespace,
+		PollInterval:    controller.PollInterval(os.Getenv("SHPYRD_GIT_POLL_INTERVAL")),
+	}
+	if err := source.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("source watcher: %w", err)
+	}
 	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace, Kube: k.Kube}
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)

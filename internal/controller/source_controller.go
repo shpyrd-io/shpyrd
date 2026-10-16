@@ -1,0 +1,477 @@
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"strings"
+	"sync"
+	"time"
+
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+)
+
+// The source watcher (RFC-0018). For each App that follows a git branch
+// or tag it decides which commit runs: from a push the webhook left on the
+// App, else from a listing of the repository when a check is due. It pins
+// the commit in two annotations, with the release note and attribution a
+// deploy uses, and records what it saw in AnnotationGitSource. It never
+// writes status: the App controller copies the record there.
+
+const (
+	// DefaultPollInterval is how often a branch with no recent webhook is
+	// read (SHPYRD_GIT_POLL_INTERVAL).
+	DefaultPollInterval = 2 * time.Minute
+	minPollInterval     = 10 * time.Second
+	// webhookInterval is how often a branch whose webhook delivered in
+	// the last day is read: the webhook is the signal, the listing the
+	// net under it.
+	webhookInterval = time.Hour
+	webhookRecent   = 24 * time.Hour
+	// recordRefresh is how stale the record's checkedAt may get: a check
+	// that finds nothing new writes nothing (each write of the App wakes
+	// the App controller) until the written time is this old.
+	recordRefresh = time.Hour
+	// forgetChecks drops a remembered check this old: its App is gone, or
+	// the written record has caught up with it.
+	forgetChecks = 2 * time.Hour
+	// errorBackoff is the first wait after a failed listing; it doubles
+	// up to the interval.
+	errorBackoff = 30 * time.Second
+)
+
+// PollInterval reads SHPYRD_GIT_POLL_INTERVAL ("2m", "30s"): empty or
+// unreadable is the default, and nothing below 10 s.
+func PollInterval(v string) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil || d <= 0 {
+		return DefaultPollInterval
+	}
+	return max(d, minPollInterval)
+}
+
+// SourceReconciler pins the commit each watched App builds.
+type SourceReconciler struct {
+	client.Client
+	// Kube writes the git.push and git.skip audit entries; nil records
+	// nothing.
+	Kube            kubernetes.Interface
+	SystemNamespace string
+	// PollInterval is the wait between listings; zero is the default.
+	PollInterval time.Duration
+	// LsRemote lists a repository; nil is gitauth.LsRemote. Tests inject one.
+	LsRemote func(ctx context.Context, cloneURL string, b gitauth.Build) (map[string]string, error)
+	// Now and Jitter are the clock and the spread of requeues; nil is
+	// time.Now and ±10 %.
+	Now    func() time.Time
+	Jitter func(time.Duration) time.Duration
+
+	// checked is when each App's branch was last read, kept here because
+	// a check that finds nothing new is not written on the App. After a
+	// restart it is empty, and the record's checkedAt stands in.
+	mu      sync.Mutex
+	checked map[types.UID]sourceCheck
+}
+
+// sourceCheck is a check remembered: when, and of which revision.
+type sourceCheck struct {
+	at  time.Time
+	ref string
+}
+
+// SetupWithManager registers the watcher on the Apps that follow a branch.
+func (r *SourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("source").
+		For(&shpyrdv1.App{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+			app, ok := o.(*shpyrdv1.App)
+			return ok && watchesGit(app)
+		}))).
+		// A listing may take up to 20 s; a few at a time keep hundreds of
+		// apps on their schedule.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
+		Complete(r)
+}
+
+// watchesGit says the App follows a branch or tag of a repository shpyrd
+// can read. A URL it cannot parse (git://) builds as given, as before.
+func watchesGit(app *shpyrdv1.App) bool {
+	if !app.WatchesGit() {
+		return false
+	}
+	_, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	return err == nil
+}
+
+// sourceEvent is what one reconcile learnt: a push, or the branch's
+// commit from a listing, or why the listing failed.
+type sourceEvent struct {
+	push   *gitauth.Push
+	latest string
+	err    error
+}
+
+// sourceUpdate is what one reconcile writes on the App.
+type sourceUpdate struct {
+	record gitauth.SourceRecord
+	// pin is a commit to pin; "" keeps the pin.
+	pin string
+	// note, deployedBy and client go with a pin made for a push or a poll.
+	note, deployedBy, client string
+	// audit is "git.push" or "git.skip", in the name of actor.
+	audit, actor string
+}
+
+var errNoSuchRevision = errors.New("no such branch or tag")
+
+func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	app := &shpyrdv1.App{}
+	if err := r.Get(ctx, req.NamespacedName, app); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !app.DeletionTimestamp.IsZero() || !watchesGit(app) {
+		r.forget(app.UID)
+		return ctrl.Result{}, nil
+	}
+	now := r.now()
+	rev := app.GitRevision()
+	written := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+	rec := written
+	if rec.Ref != rev {
+		// Another branch's record: only what says the webhook works
+		// carries over.
+		rec = gitauth.SourceRecord{LastWebhookAt: rec.LastWebhookAt, Delivery: rec.Delivery}
+	}
+	rawPush := app.Annotations[shpyrdv1.AnnotationGitPush]
+	push, _ := gitauth.ReadPush(rawPush)
+	if push != nil && push.Ref != "refs/heads/"+rev {
+		push = nil // another branch's, or a tag's: dropped below
+	}
+	// The last check: the one remembered, when it is later than the one
+	// written. A check remembered but not yet seen in the App may be a
+	// write the cache has not caught up with: a missing pin then is not a
+	// reason to read the branch, and pin it, again.
+	last := rec
+	var remembered bool
+	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
+	var ev sourceEvent
+	switch {
+	case push != nil:
+		ev.push = push
+	case (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
+		ev.latest, ev.err = r.poll(ctx, app)
+	default:
+		r.dropPush(ctx, app, rawPush)
+		return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
+	}
+	u := decideSource(app, rec, ev, now)
+	if u.pin != "" || sourceChanged(written, u.record) || written.CheckedAt == nil || now.Sub(*written.CheckedAt) >= recordRefresh {
+		if err := r.apply(ctx, app, u); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	r.remember(app.UID, rev, now)
+	r.dropPush(ctx, app, rawPush)
+	r.auditUpdate(ctx, app, u)
+	return ctrl.Result{RequeueAfter: r.untilDue(u.record, now)}, nil
+}
+
+// sourceChanged says the record shows a person something new: all but
+// the time of the check.
+func sourceChanged(written, next gitauth.SourceRecord) bool {
+	written.CheckedAt, next.CheckedAt = nil, nil
+	a, errA := json.Marshal(written)
+	b, errB := json.Marshal(next)
+	return errA != nil || errB != nil || string(a) != string(b)
+}
+
+// lastChecked is when the branch was last read: the check remembered, or
+// the record's when it is later or nothing is remembered (after a
+// restart). A check of another revision does not count. It says whether
+// the remembered check is the later one.
+func (r *SourceReconciler) lastChecked(uid types.UID, rev string, rec gitauth.SourceRecord) (*time.Time, bool) {
+	r.mu.Lock()
+	seen, ok := r.checked[uid]
+	r.mu.Unlock()
+	if !ok || seen.ref != rev || (rec.CheckedAt != nil && !seen.at.After(*rec.CheckedAt)) {
+		return rec.CheckedAt, false
+	}
+	return &seen.at, true
+}
+
+// remember keeps the time of a check, and drops the checks of Apps not
+// seen for a while.
+func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.checked == nil {
+		r.checked = map[types.UID]sourceCheck{}
+	}
+	for k, c := range r.checked {
+		if now.Sub(c.at) > forgetChecks {
+			delete(r.checked, k)
+		}
+	}
+	r.checked[uid] = sourceCheck{at: now, ref: rev}
+}
+
+func (r *SourceReconciler) forget(uid types.UID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.checked, uid)
+}
+
+// decideSource turns what was learnt into what is written: the record
+// (Reconcile writes it when it changed), a pin when the branch moved and the App deploys it.
+func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, now time.Time) sourceUpdate {
+	u := sourceUpdate{record: rec}
+	u.record.Ref = app.GitRevision()
+	u.record.CheckedAt = &now
+	if ev.err != nil {
+		u.record.Error = describeSourceError(ev.err, app)
+		u.record.Failures++
+		return u
+	}
+	u.record.Error, u.record.Failures = "", 0
+	sha, via, message, author := ev.latest, "poll", "", ""
+	// seen is when the commit was seen: the push's own time, else now.
+	seen := now
+	if p := ev.push; p != nil {
+		sha, via, message, author = strings.ToLower(p.SHA), "push", p.Message, p.Author
+		if !p.At.IsZero() {
+			seen = p.At.UTC()
+		}
+		u.record.LastWebhookAt = &seen
+		u.record.Delivery = p.Delivery
+	}
+	if via == "push" || sha != rec.Latest {
+		u.record.Latest, u.record.LatestAt = sha, &seen
+		u.record.Message, u.record.Author, u.record.Via = message, author, via
+	}
+	u.actor = "git"
+	if u.record.Author != "" {
+		u.actor = "git:" + u.record.Author
+	}
+	skip := ev.push != nil && gitauth.SkipsDeploy(message)
+	if skip {
+		u.record.Skipped = sha
+		u.audit = "git.skip"
+	}
+	pin := app.PinnedCommit()
+	switch {
+	case pin == "":
+		// Nothing pinned for this revision yet (a new app, a deploy, a
+		// changed branch): its commit, whatever auto-deploy says. A
+		// person's deploy keeps their note and name.
+		if by := app.Annotations[shpyrdv1.AnnotationDeployedBy]; by != "" && by != "git" && !strings.HasPrefix(by, "git:") {
+			u.pin, u.record.Via, u.record.Skipped, u.audit = sha, "deploy", "", ""
+			return u
+		}
+	case sha == pin, skip, sha == rec.Skipped, !app.AutoDeploys():
+		// Nothing new, a commit that asked not to deploy (now, or when a
+		// push said so before this poll found it), or pushes recorded only.
+		return u
+	}
+	u.pin, u.record.Skipped, u.audit = sha, "", "git.push"
+	u.deployedBy, u.client = u.actor, u.record.Via
+	if u.record.Via == "push" {
+		u.note = pushNote(sha, u.record.Author, u.record.Message)
+	} else {
+		u.note = "Commit " + shortCommit(sha) + " (polled)"
+	}
+	return u
+}
+
+// pushNote is the release's description: "Push a1b2c3d by alice: fix login".
+func pushNote(sha, author, message string) string {
+	note := "Push " + shortCommit(sha)
+	if author != "" {
+		note += " by " + author
+	}
+	if line := firstLine(message); line != "" {
+		note += ": " + line
+	}
+	return note
+}
+
+func shortCommit(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// firstLine is a commit message's subject, at most 72 characters.
+func firstLine(message string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
+	if r := []rune(strings.TrimSpace(line)); len(r) > 72 {
+		return string(r[:71]) + "…"
+	}
+	return strings.TrimSpace(line)
+}
+
+// describeSourceError says why the branch could not be read, and what to
+// do, in the words of PR 1's refused clone.
+func describeSourceError(err error, app *shpyrdv1.App) string {
+	rev := app.GitRevision()
+	host := "<host>"
+	if r, perr := gitauth.Parse(app.Spec.Source.Git.URL); perr == nil {
+		host = r.Host
+	}
+	switch {
+	case errors.Is(err, errNoSuchRevision):
+		return fmt.Sprintf("The repository has no branch or tag named %s: it was deleted or renamed. What runs keeps running; deploy another branch with `shpyrd deploy --git <url> --ref <branch>`.", rev)
+	case errors.Is(err, gitauth.ErrTooManyRefs):
+		return fmt.Sprintf("The repository lists more refs than shpyrd reads (%d MiB) before it reaches %s: follow a branch, or pin a commit with `shpyrd deploy --git <url> --ref <commit>`.", gitauth.MaxAdvertisement>>20, rev)
+	case errors.Is(err, gitauth.ErrHostKeyChanged):
+		return "shpyrd could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. If the host changed its key, make a new deploy key with `shpyrd git-auth deploy-key` and add it to the repository."
+	case errors.Is(err, gitauth.ErrNoAccess):
+		return fmt.Sprintf("shpyrd could not read the repository: it is private, or does not exist under that name. Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, or a workspace admin sets a token for the host with `shpyrd git-auth set --host %s --token -`. shpyrd tries again by itself.", host)
+	}
+	return fmt.Sprintf("shpyrd could not read the branch's latest commit from %s (%v). It tries again by itself.", host, err)
+}
+
+// poll lists the repository with the build's credential and finds the
+// revision's commit. A listing cut at the cap still answers when the
+// revision is among what was read.
+func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string, error) {
+	b, err := lookupGitBuild(ctx, r.Client, r.SystemNamespace, app)
+	if err != nil {
+		return "", err
+	}
+	list := r.LsRemote
+	if list == nil {
+		list = gitauth.LsRemote
+	}
+	// The URL the build clones, in the form the credential fits: an
+	// https URL with a deploy key is read over SSH.
+	refs, err := list(ctx, firstNonEmpty(b.CloneURL, app.Spec.Source.Git.URL), b)
+	if err != nil && !errors.Is(err, gitauth.ErrTooManyRefs) {
+		return "", err
+	}
+	if sha, ok := gitauth.ResolveBranch(refs, app.GitRevision()); ok {
+		return strings.ToLower(sha), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", errNoSuchRevision
+}
+
+// apply writes the record, and the pin with its note and attribution, in
+// one merge patch: the App controller's own writes are not touched.
+func (r *SourceReconciler) apply(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) error {
+	raw, err := json.Marshal(u.record)
+	if err != nil {
+		return err
+	}
+	ann := map[string]any{shpyrdv1.AnnotationGitSource: string(raw)}
+	if u.pin != "" {
+		ann[shpyrdv1.AnnotationGitCommit] = u.pin
+		ann[shpyrdv1.AnnotationGitCommitRef] = app.GitRevision()
+		if u.note != "" {
+			ann[shpyrdv1.AnnotationReleaseNote] = u.note
+		}
+		if u.deployedBy != "" {
+			ann[shpyrdv1.AnnotationDeployedBy] = u.deployedBy
+			ann[shpyrdv1.AnnotationDeployedClient] = u.client
+			ann[shpyrdv1.AnnotationDeployedSubject] = nil
+		}
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": ann}})
+	if err != nil {
+		return err
+	}
+	return r.Patch(ctx, app, client.RawPatch(types.MergePatchType, patch))
+}
+
+// dropPush removes the push this reconcile read, unless a newer one
+// arrived meanwhile: that one is read next.
+func (r *SourceReconciler) dropPush(ctx context.Context, app *shpyrdv1.App, raw string) {
+	if raw == "" {
+		return
+	}
+	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, shpyrdv1.AnnotationGitPush, raw); err != nil {
+		log.FromContext(ctx).V(1).Info("kept a newer push for the next pass", "err", err.Error())
+	}
+}
+
+func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) {
+	if r.Kube == nil || u.audit == "" {
+		return
+	}
+	entry := audit.Entry{
+		Actor: u.actor, Action: u.audit, Target: shortCommit(firstNonEmpty(u.pin, u.record.Skipped)),
+		Detail: firstLine(u.record.Message), Via: "controller", Client: u.record.Via, Realm: "workspace",
+	}
+	if err := audit.Record(ctx, r.Kube, audit.AppRefIn(app.Namespace, app.Name), entry); err != nil {
+		log.FromContext(ctx).Info("could not audit the push", "err", err.Error())
+	}
+}
+
+// due says the branch should be read now: never read, a deploy asked
+// after the last check, or the wait since the last check has passed (90 %
+// of it: requeues are spread ±10 %).
+func (r *SourceReconciler) due(app *shpyrdv1.App, rec gitauth.SourceRecord, now time.Time) bool {
+	if rec.CheckedAt == nil {
+		return true
+	}
+	if asked, err := time.Parse(time.RFC3339Nano, app.Annotations[configvars.AnnotationDeployRequested]); err == nil && asked.After(*rec.CheckedAt) {
+		return true
+	}
+	return now.Sub(*rec.CheckedAt) >= r.wait(rec, now)*9/10
+}
+
+// wait is the time between checks: the interval (an hour while webhooks
+// arrive), or after failures a backoff from 30 s that doubles up to it.
+func (r *SourceReconciler) wait(rec gitauth.SourceRecord, now time.Time) time.Duration {
+	every := r.PollInterval
+	if every <= 0 {
+		every = DefaultPollInterval
+	}
+	if rec.LastWebhookAt != nil && now.Sub(*rec.LastWebhookAt) < webhookRecent {
+		every = max(every, webhookInterval)
+	}
+	if rec.Failures > 0 {
+		return min(every, errorBackoff<<min(rec.Failures-1, 10))
+	}
+	return every
+}
+
+func (r *SourceReconciler) untilDue(rec gitauth.SourceRecord, now time.Time) time.Duration {
+	left := r.wait(rec, now)
+	if rec.CheckedAt != nil {
+		left -= now.Sub(*rec.CheckedAt)
+	}
+	spread := r.Jitter
+	if spread == nil {
+		spread = jitter
+	}
+	return spread(max(left, time.Second))
+}
+
+// jitter spreads d by ±10 %, so apps checked together drift apart.
+func jitter(d time.Duration) time.Duration {
+	return d + time.Duration((rand.Float64()*0.2-0.1)*float64(d))
+}
+
+func (r *SourceReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now().UTC()
+	}
+	return time.Now().UTC()
+}
