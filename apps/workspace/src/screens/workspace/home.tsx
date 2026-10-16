@@ -21,7 +21,7 @@ import { NameAndLook, RolesNotEnforced } from "./general";
 import { Invite } from "./people";
 
 // The workspace for someone who builds with an agent: who is in it, how
-// the agent gets in, how much of the plan is taken, and how it looks.
+// the agent gets in, and what an administrator changes.
 // The rest is Advanced, one link away.
 export function Home() {
   const perms = usePerms();
@@ -60,7 +60,7 @@ export function Home() {
           <CardContent className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <div className="font-medium">Advanced</div>
-              <div className="text-muted-foreground">API tokens, connections, log drains, the MCP server and everyone's roles.</div>
+              <div className="text-muted-foreground">The plan, API tokens, connections, log drains, the MCP server and everyone's roles.</div>
             </div>
             <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
           </CardContent>

@@ -70,6 +70,9 @@ type Config struct {
 	// WorkspaceLimits answers a workspace's ceilings, nil when it has none; the
 	// controller backs it with a ResourceQuota per project namespace.
 	WorkspaceLimits func(slug string) *store.Limits
+	// ProjectStorageCap answers a project's own storage cap ("" when it has
+	// none), which its namespace quota mirrors below the workspace's.
+	ProjectStorageCap func(ws, project string) string
 	// WorkspaceSuspended says a workspace is suspended: its apps are not
 	// served (their Ingresses go; the front door answers with a page saying
 	// so) and stopped (every process at zero). Nil: never.

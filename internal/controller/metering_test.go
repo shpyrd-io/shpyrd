@@ -684,3 +684,70 @@ func TestHumanBytesReadsLikeAPerson(t *testing.T) {
 		}
 	}
 }
+
+// A project's buckets are metered by what they hold; the bucket a
+// database's backups go to is the platform's and is not.
+func TestBucketsAreMeteredByWhatTheyHold(t *testing.T) {
+	ctx := context.Background()
+	scheme, _ := kube.Scheme()
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p-shop", Labels: project.NamespaceLabels("acme", "shop")}}
+	uploads := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: "p-shop"}, Status: shpyrdv1.ObjectBucketStatus{UsedBytes: 2 << 30}}
+	backups := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "db-backups", Namespace: "p-shop", Labels: map[string]string{"shpyrd.io/postgres": "db"}}, Status: shpyrdv1.ObjectBucketStatus{UsedBytes: 5 << 30}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, uploads, backups).Build()
+	m := &MeteringLoop{Store: store.NewMemory(), Client: c}
+	nsMap, err := m.nsMapping(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	out := m.bucketBuckets(ctx, start, start.Add(5*time.Minute), nsMap)
+	if len(out) != 1 {
+		t.Fatalf("buckets = %+v, want the project's own only", out)
+	}
+	if b := out[0]; b.Component != "bucket/uploads" || b.Metric != store.MetricObjectStorage || b.Unit != store.UnitGiBSeconds || *b.Quantity != 2*300 {
+		t.Errorf("bucket = %+v", b)
+	}
+}
+
+// Every Ready dedicated database is stamped with what its data weighs,
+// from the exporter's size by pod, so a conversion can be judged against
+// the cap before it starts.
+func TestDedicatedDatabasesAreStampedWithTheirSize(t *testing.T) {
+	ctx := context.Background()
+	scheme, _ := kube.Scheme()
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeDedicated}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	dbtwo := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db-two", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeDedicated}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	shared := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "tenant", Namespace: "p-shop"}, Spec: shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}, Status: shpyrdv1.ResourceStatus{Phase: shpyrdv1.ResourceReady}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(db, dbtwo, shared).Build()
+	srv := fakeProm(t, map[string][]map[string]any{
+		"cnpg_pg_database_size_bytes": {
+			sample(map[string]string{"namespace": "p-shop", "pod": "db-1"}, "3221225472"),
+			sample(map[string]string{"namespace": "p-shop", "pod": "db-2"}, "3221225400"),
+			sample(map[string]string{"namespace": "p-shop", "pod": "db-two-1"}, "1024"),
+		},
+	})
+	defer srv.Close()
+	m := &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL), Client: c}
+	if err := m.dedicatedSizes(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got := &shpyrdv1.Postgres{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if DataBytes(got) != 3221225472 {
+		t.Errorf("db weighs %d, want the primary's 3221225472 (the pods' largest)", DataBytes(got))
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "db-two"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if DataBytes(got) != 1024 {
+		t.Errorf("db-two weighs %d, want 1024 (its own pod, not db's prefix)", DataBytes(got))
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "p-shop", Name: "tenant"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, stamped := got.Annotations[AnnotationDataBytes]; stamped {
+		t.Error("a shared database was stamped; its cap is measured elsewhere")
+	}
+}

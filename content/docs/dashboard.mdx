@@ -21,11 +21,11 @@ On shpyrd cloud you sign in at your workspace's address with your account, or wi
 
 ## The launcher
 
-Everyone lands on the **launcher** after signing in: a card for every app they may open (public apps included), sorted by name. Each card has the app's icon, its one-line description, who may open it (*Anyone* for a public app, *Everyone* when the `everyone` team has access, else its teams by name), whether it is internal, and the address it opens: its own domain once that domain answers, else its address under the workspace.
+Everyone lands on the **launcher** after signing in: a card for every app they may open (public apps included), sorted by name. Each card has the app's icon, its one-line description, who may open it (*Anyone* for a public app, *Everyone* when the `everyone` team has access, else its teams by name), and, in its band, whether it is internal or asks visitors to sign in, then the address it opens: its own domain once that domain answers, else its address under the workspace. A card says *Not working* or *Updating* beside its gear while the app is failed or a release is going out; a worker, which has no address, says how it is in its band.
 
-People who build open a project from the settings button on its card. The **+** button (**New project**) creates one: a slug, a name, a line of description, the network (public internet or internal, where the workspace has private networking), and optionally a Git repository to build and release right away. The gear opens the workspace's pages (owners and admins). People whose only roles are `user` or `reader` see the cards and nothing else.
+People who build open a project from the settings button on its card. **New project** offers first the sentence to give your agent, then a short form: a name (the address follows it, until you change it), and optionally a Git repository to build and release right away; a line of description, the branch and directory, and the network (public internet or internal, where the workspace has private networking) are under **More options**. **Settings** opens the workspace's pages (owners and admins). People whose only roles are `user` or `reader` see the cards and nothing else.
 
-A project's name, description and icon are set from the pencil next to its name (or `shpyrd projects describe`): a symbol in one of 14 colours, or an image of its own, an SVG drawn in the colour or a PNG or WebP shown as it is. The workspace's **Name and look** (Workspace › General) puts your logo and accent colour on the launcher, the header and the login page. See [Sign-in for your app](/docs/app-access).
+A project's name, description and icon are set from the pencil next to its name (or `shpyrd projects describe`): a symbol in one of 14 colours, or an image of its own, an SVG drawn in the colour or a PNG or WebP shown as it is. The workspace's **Name and look** (the pencil next to its name, in Settings) puts your logo and accent colour on the launcher, the header and the login page. See [Sign-in for your app](/docs/app-access).
 
 ## A project
 
@@ -33,9 +33,10 @@ A project's header has its name and slug, its phase, the network badge (**public
 
 Under the header, only while something is happening: the build's output as it prints; the release command's output, with **Run it again** when it failed; the rollout per process ("web 1/3 on the new release, 3 serving"); or why the build failed or the release is not healthy.
 
-The pages are in a list at the side:
+A project opens on one page, without a list at the side: how it did in the last day (visits a minute, p95 speed, errors), its four latest **Releases** (the newest *Live*, **Go back** on the others, which waits while a release goes out), the last lines of its **Logs** as they come, and four tiles that say how each is now and open its page: **Secrets and settings**, **Domain**, **Database**, **Who can open it**. Its header leaves out the slug, the network badge and the trash icon there.
 
-- **Overview**: the **Summary** (source, build strategy, current release and build, each process' size and count) and the latest **Activity**.
+Everything else is under **Advanced**, at the bottom: a line for each page, and the list at the side comes back on them:
+
 - Run
   - **Releases**: the releases (what changed, build number, **Rollback**) and the **Builds** (status, strategy, source, duration; open one to read its output, live while building).
   - **Backups** (admins): back the project up to a file and restore it.
@@ -44,7 +45,7 @@ The pages are in a list at the side:
   - **Shell** (developers and admins): a shell in a running instance.
 - Configure
   - **Config**: **Config vars**, by name; set, replace, remove, or **Set from a .env**. Values are never shown. Variables of attached resources are listed read-only. **Plain environment** shows what every process sees besides them.
-  - **Resources**: **Processes** (size and number of instances of each, applied together in one release) and **Beside the application** (databases, caches and volumes: create, resize, snapshots).
+  - **Resources**: the project's **Storage** against the ceiling that applies to it (its own cap, or the workspace's), where there is one, **Processes** (size and number of instances of each, applied together in one release) and **Beside the application** (databases, caches and volumes: create, resize, snapshots).
   - **Domains**: the project's own domains, with the exact DNS record to create and each one's DNS and certificate state. See [Domains and exposure](/docs/domains).
   - **Drains**: the project's log drains and their delivery status.
 - Access
@@ -78,9 +79,10 @@ The project's **Access** page says who may open the app in the **Who may open it
 
 ## Workspace
 
-Every project, team and person belongs to the workspace. Its pages are in a list at the side:
+Every project, team and person belongs to the workspace. **Settings** opens on one page: its name, logo and address, with the pencil for **Name and look** (name, accent colour, logo) and **Billing** where the platform has it; a row of its projects, small cards that open each project's page; **People** (owners and admins: who is in it, and **Invite**); **Your agent**, the `shpyrd login` line to copy; and four tiles for owners and admins, **Teams**, **Sign-in**, **Shared config vars** and **Domain** (owners).
 
-- **General**: the name, the **Name and look** (name, accent colour, logo) and, where the workspace has one, its **Plan**.
+Everything else is under **Advanced**, with the list at the side:
+
 - Access
   - **People** (owners and admins): the people with their workspace role (owner, admin, member; only owners name owners), the method they signed in with, when they were last seen, **Suspend** and **Let back in**, and the **Invite** dialog, whose link is shown once and emailed when the platform sends mail, with the pending **Invitations** below.
   - **Teams** (owners and admins): the teams projects grant roles to.
@@ -88,6 +90,7 @@ Every project, team and person belongs to the workspace. Its pages are in a list
   - **API tokens**: your tokens, and the session tokens of your CLI logins.
   - **Connections** (with the MCP server): the assistants and pipelines connected to the workspace.
 - Platform
+  - **Plan**: where the workspace has one, a bar per ceiling (projects, instances, CPU, memory, block storage, object storage, buckets, databases) and a line on what the plan includes. A change that would go over is refused with the number; what is already over keeps working and nothing more fits there. Administrators also set **Caps per project** there: a project with a cap claims no more block storage than it says, below the workspace's; the project's **Resources** shows its storage against whichever applies.
   - **Config vars** (owners and admins): config vars every project receives.
   - **Log drains** (owners and admins): drains for every project's lines.
   - **Domains** (owners): the workspace's address and its custom domains. See [Domains and exposure](/docs/domains#the-workspace-s-own-names).

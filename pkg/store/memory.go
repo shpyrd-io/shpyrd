@@ -28,6 +28,7 @@ type invitationEntry struct {
 
 type Memory struct {
 	mu          sync.Mutex
+	locks       sync.Map              // workspace slug -> *sync.Mutex, the admission lock
 	workspaces  map[string]*Workspace // by slug
 	identities  []Identity
 	teams       []Team
@@ -395,6 +396,16 @@ func (m *Memory) UpdateWorkspaceSettings(_ context.Context, slug string, setting
 	w.Settings, w.UpdatedAt = settings, m.now()
 	c := *w
 	return &c, nil
+}
+
+// LockWorkspace serialises admissions per workspace with a mutex of its
+// own: what the advisory lock does in the database.
+func (m *Memory) LockWorkspace(ctx context.Context, slug string, fn func(ctx context.Context) error) error {
+	v, _ := m.locks.LoadOrStore(slug, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn(ctx)
 }
 
 func (m *Memory) ListDomainClaims(_ context.Context, ws string) ([]DomainClaim, error) {

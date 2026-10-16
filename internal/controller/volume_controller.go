@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -9,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -164,6 +166,7 @@ func (r *VolumeReconciler) reconcile(ctx context.Context, vol *shpyrdv1.Volume) 
 	if pvc.Spec.DataSource != nil && pvc.Spec.DataSource.Kind == "VolumeSnapshot" {
 		vol.Status.RestoredFrom = pvc.Spec.DataSource.Name
 	}
+	resizeStanding(vol, pvc)
 	switch pvc.Status.Phase {
 	case corev1.ClaimBound:
 		vol.Status.Phase = shpyrdv1.VolumeBound
@@ -203,21 +206,58 @@ func (r *VolumeReconciler) reconcileExisting(ctx context.Context, vol *shpyrdv1.
 	case cmp < 0:
 		return fmt.Errorf("volumes cannot shrink (currently %s)", current.String())
 	case cmp > 0:
+		// Where the growth stands, for the person who asked for it.
+		vol.Status.Resize = &shpyrdv1.VolumeResize{Phase: shpyrdv1.ResizeRequested, To: vol.Spec.Size.String(), At: metav1.Now()}
 		ok, className, err := r.expansionAllowed(ctx, pvc)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("storage class %q does not allow volume expansion: create a new volume and copy the data", className)
+			msg := fmt.Sprintf("storage class %q does not allow volume expansion: create a new volume and copy the data", className)
+			vol.Status.Resize.Phase, vol.Status.Resize.Message = shpyrdv1.ResizeFailed, msg
+			return errors.New(msg)
 		}
 		patch := client.MergeFrom(pvc.DeepCopy())
 		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = vol.Spec.Size
 		if err := r.Patch(ctx, pvc, patch); err != nil {
+			vol.Status.Resize.Phase, vol.Status.Resize.Message = shpyrdv1.ResizeFailed, "the claim did not take the new size: "+err.Error()
 			return fmt.Errorf("expand claim: %w", err)
 		}
+		vol.Status.Resize.Phase, vol.Status.Resize.Message = shpyrdv1.ResizePending, "the provider is growing the disk"
 		r.Recorder.Eventf(vol, corev1.EventTypeNormal, "Expanding", "claim %s grows from %s to %s", pvc.Name, current.String(), vol.Spec.Size.String())
 	}
 	return nil
+}
+
+// resizeStanding moves a growth along from what the claim reports: pending
+// while the provider or the file system still has it, completed once the
+// capacity matches what was asked.
+func resizeStanding(vol *shpyrdv1.Volume, pvc *corev1.PersistentVolumeClaim) {
+	rs := vol.Status.Resize
+	if rs == nil || rs.Phase == shpyrdv1.ResizeFailed || rs.Phase == shpyrdv1.ResizeCompleted {
+		return
+	}
+	to, err := resource.ParseQuantity(rs.To)
+	if err != nil {
+		return
+	}
+	if cap, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && cap.Cmp(to) >= 0 {
+		rs.Phase, rs.Message = shpyrdv1.ResizeCompleted, ""
+		return
+	}
+	for _, c := range pvc.Status.Conditions {
+		switch c.Type {
+		case corev1.PersistentVolumeClaimFileSystemResizePending:
+			rs.Phase, rs.Message = shpyrdv1.ResizePending, "the disk has grown; the file system grows when the process next starts"
+			return
+		case corev1.PersistentVolumeClaimResizing:
+			rs.Phase, rs.Message = shpyrdv1.ResizePending, "the provider is growing the disk"
+			return
+		}
+	}
+	if req := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; req.Cmp(to) >= 0 {
+		rs.Phase = shpyrdv1.ResizePending
+	}
 }
 
 // expansionAllowed checks the claim's storage class (or the default one).

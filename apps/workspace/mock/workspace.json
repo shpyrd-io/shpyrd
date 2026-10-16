@@ -2,19 +2,56 @@
   "slug": "acme",
   "name": "Acme",
   "ownedByOperator": false,
-  "capabilities": { "internalExposure": false },
+  "capabilities": {
+    "internalExposure": false
+  },
   "domain": "acme.shpyrd.cloud",
   "address": "acme.shpyrd.cloud",
   "url": "https://acme.shpyrd.cloud",
   "status": "active",
-  "limits": { "projects": 10, "instances": 20, "cpu": "8", "memory": "16Gi", "storage": "500Gi" },
-  "usage": { "projects": 6, "instances": 9, "cpu": "4.4", "memory": "8.8Gi", "storage": "120Gi" },
+  "limits": {
+    "projects": 10,
+    "instances": 20,
+    "cpu": "8",
+    "memory": "16Gi",
+    "storage": "500Gi",
+    "objectStorage": {
+      "buckets": 10,
+      "bucketCap": "10Gi",
+      "total": "100Gi"
+    },
+    "postgres": {
+      "types": ["shared", "dedicated"],
+      "defaultType": "shared",
+      "sharedCap": "1Gi",
+      "databases": 10,
+      "maxInstances": 3
+    }
+  },
+  "usage": {
+    "projects": 6,
+    "instances": 9,
+    "cpu": "4.4",
+    "memory": "8.8Gi",
+    "storage": "120Gi",
+    "buckets": 2,
+    "objectStorage": "12Gi",
+    "databases": 4,
+    "sharedDatabases": 2
+  },
   "joinPolicy": "company",
   "ownMethodsOnly": false,
-  "branding": { "color": "#ff4f00" },
+  "branding": {
+    "color": "#ff4f00"
+  },
   "mcpName": "acme",
   "mcpUrl": "https://acme.shpyrd.cloud/mcp",
   "owners": ["ana@acme.com"],
   "createdAt": "2026-06-02T14:11:00Z",
-  "updatedAt": "2026-09-28T09:40:00Z"
+  "updatedAt": "2026-09-28T09:40:00Z",
+  "projectCaps": {
+    "hello-world": {
+      "storage": "20Gi"
+    }
+  }
 }

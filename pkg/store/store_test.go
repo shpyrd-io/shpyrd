@@ -1419,3 +1419,54 @@ func TestOneWorkspaceShowsOnlyTheDefault(t *testing.T) {
 		})
 	}
 }
+
+// The admission lock serialises what is judged against a workspace's
+// ceilings: the second holder enters only once the first has left.
+func TestLockWorkspaceSerialises(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			st := open(t)
+			ctx := context.Background()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 2)
+			go func() {
+				done <- st.LockWorkspace(ctx, "acme", func(context.Context) error {
+					close(entered)
+					<-release
+					return nil
+				})
+			}()
+			<-entered
+			second := make(chan struct{})
+			go func() {
+				done <- st.LockWorkspace(ctx, "acme", func(context.Context) error {
+					close(second)
+					return nil
+				})
+			}()
+			select {
+			case <-second:
+				t.Fatal("the second holder entered while the first held the lock")
+			case <-time.After(200 * time.Millisecond):
+			}
+			close(release)
+			<-second
+			for i := 0; i < 2; i++ {
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Another workspace's lock is another lock.
+			other := make(chan struct{})
+			go func() {
+				_ = st.LockWorkspace(ctx, "other", func(context.Context) error { close(other); return nil })
+			}()
+			select {
+			case <-other:
+			case <-time.After(2 * time.Second):
+				t.Fatal("another workspace waited on acme's lock")
+			}
+		})
+	}
+}

@@ -2,7 +2,7 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, CreditCard, ExternalLink, Globe, KeyRound, Link2, LogIn, Plug, Settings, SlidersHorizontal, Users, UsersRound, Waves } from "lucide-react";
+import { ArrowLeft, CreditCard, ExternalLink, Gauge, Globe, KeyRound, Link2, LogIn, Plug, Settings, SlidersHorizontal, Users, UsersRound, Waves } from "lucide-react";
 import { placeLinks, shown as visibleIn } from "@shpyrd/shared/links";
 import { NavList, NavListDivider, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
@@ -13,9 +13,11 @@ import { Drains } from "./drains";
 import { Home } from "./home";
 import { Globals } from "./globals";
 import { People } from "./people";
+import { Plan } from "./plan";
 import { MCP, WorkspaceDomains } from "./platform";
 import { SignIn } from "./sign-in";
 import { Teams } from "./teams";
+import { Tokens } from "./tokens";
 import { AdvancedIndex } from "@/shell/advanced";
 
 // What each page of the workspace's Advanced is for, in a line.
@@ -25,12 +27,12 @@ const lines: Record<string, string> = {
   "sign-in": "How people sign in: GitHub, Google, your company's SSO.",
   tokens: "Keys for scripts and CI that act without a person.",
   connections: "The agents and apps signed in as you.",
+  plan: "What the workspace may use, and a storage cap per project.",
   globals: "Config vars every project receives.",
   drains: "Send the logs of every project to another service.",
   domains: "The workspace's own address, and the projects' under it.",
   mcp: "The name and the address agents connect to.",
 };
-import { Tokens } from "./tokens";
 
 // The workspace itself: its name and plan, its people, and what the
 // platform does for it. One page for each knob, down the list.
@@ -42,6 +44,7 @@ const pages = [
   { group: "Access", slug: "sign-in", title: "Sign-in", icon: <LogIn />, needs: "admin" },
   { group: "Access", slug: "tokens", title: "API tokens", icon: <KeyRound /> },
   { group: "Access", slug: "connections", title: "Connections", icon: <Link2 />, extension: "mcp" },
+  { group: "Platform", slug: "plan", title: "Plan", icon: <Gauge /> },
   { group: "Platform", slug: "globals", title: "Config vars", icon: <KeyRound />, needs: "admin" },
   { group: "Platform", slug: "drains", title: "Log drains", icon: <Waves />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
@@ -112,6 +115,7 @@ export function WorkspacePages() {
         <Route path="sign-in" element={<SignIn />} />
         <Route path="tokens" element={<Tokens />} />
         <Route path="connections" element={<Connections />} />
+        <Route path="plan" element={<Plan />} />
         <Route path="globals" element={<Globals />} />
         <Route path="drains" element={<Drains />} />
         <Route path="domains" element={<WorkspaceDomains />} />

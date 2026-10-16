@@ -173,9 +173,19 @@ variable "max_pods_per_node" {
 }
 
 variable "ssh_public_key_path" {
-  description = "Public key installed on the workers (ssh through the Bastion service)."
+  description = "Public key installed on the workers (ssh through the Bastion service). Read only when ssh_public_keys is empty."
   type        = string
   default     = "~/.ssh/id_ed25519.pub"
+}
+
+variable "ssh_public_keys" {
+  description = "Public keys installed on every machine (the node pools' nodes and the VPN instance) for the opc user, one per person; a root fills it from a folder of .pub files. Applied at a machine's first boot: a change reaches nodes created afterwards and the VPN instance at its next rebuild (its metadata is never a reason to replace it). Empty: the single key at ssh_public_key_path."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for k in var.ssh_public_keys : can(regex("^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256))(@openssh\\.com)? [A-Za-z0-9+/=]+", trimspace(k)))])
+    error_message = "Every entry of ssh_public_keys must be one OpenSSH public key line (type, base64 key, optional comment)."
+  }
 }
 
 # Access

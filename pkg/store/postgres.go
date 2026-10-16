@@ -422,6 +422,23 @@ func (p *Postgres) UpdateWorkspaceSettings(ctx context.Context, slug string, set
 	return p.Workspace(ctx, slug)
 }
 
+// LockWorkspace holds a transaction-scoped advisory lock keyed by the
+// workspace's slug while fn runs: a second admission for the same
+// workspace waits here, on any replica of the server, until the first has
+// written what it admitted. The transaction carries nothing but the lock;
+// it is rolled back when fn returns, which releases it.
+func (p *Postgres) LockWorkspace(ctx context.Context, slug string, fn func(ctx context.Context) error) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("workspace lock: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('workspace:' || $1))`, slug); err != nil {
+		return fmt.Errorf("workspace lock: %w", err)
+	}
+	return fn(ctx)
+}
+
 const claimColumns = `id, workspace_id, domain, token, connector, verified_at, created_at`
 
 func scanClaim(row pgx.Row) (*DomainClaim, error) {

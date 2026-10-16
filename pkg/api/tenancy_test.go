@@ -518,7 +518,7 @@ func TestPlanLimits(t *testing.T) {
 	}
 	// acme already has shop and wiki: a third project is one too many.
 	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects", `{"name":"third"}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "allows 2 projects") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 3 of 2 projects.") {
 		t.Errorf("third project = %d %s", rec.Code, rec.Body.String())
 	}
 	// Scaling shop's web to 2 instances is fine (shop 2 + wiki 1 = 3)...
@@ -527,18 +527,18 @@ func TestPlanLimits(t *testing.T) {
 	}
 	// ...to 3 is one instance over the limit.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":3}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "run 4 instances; the workspace allows 3") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 4 of 3 instances.") {
 		t.Errorf("scale to 3 = %d %s", rec.Code, rec.Body.String())
 	}
 	// CPU: shop at shared-xl (2 CPU × 2 instances) + wiki's shared-s (0.5)
 	// = 4.5 > 2.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/resize", `{"process":"web","size":"shared-xl"}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "CPU; the workspace allows 2") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 4.5 of 2 cores.") {
 		t.Errorf("resize over CPU = %d %s", rec.Code, rec.Body.String())
 	}
 	// Storage: a 20Gi volume exceeds 10Gi.
 	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"data","size":"20Gi"}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "storage; the workspace allows 10Gi") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 20 GB of 10 GB.") {
 		t.Errorf("volume over storage = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"data","size":"5Gi"}`); rec.Code != http.StatusCreated {
@@ -931,7 +931,7 @@ func TestDatabaseAndStoreSizes(t *testing.T) {
 		t.Errorf("Redis without a size = %q %q", v.Details["size"], v.Note)
 	}
 	// 128 + 128 + 2×128 + 64 = 576Mi; a 512Mi store would take 1088Mi.
-	if v := create(`{"kind":"Redis","name":"big","spec":{"size":"shared-l"}}`, http.StatusBadRequest); !strings.Contains(v.Note, "this would request 1088Mi of memory; the workspace allows 1Gi") {
+	if v := create(`{"kind":"Redis","name":"big","spec":{"size":"shared-l"}}`, http.StatusBadRequest); !strings.Contains(v.Note, "This would bring the workspace to 1.1 GB of 1 GB of memory.") {
 		t.Errorf("a store past the limit = %s", v.Note)
 	}
 
@@ -942,7 +942,7 @@ func TestDatabaseAndStoreSizes(t *testing.T) {
 		t.Errorf("resize = %q %q", v.Details["size"], v.Note)
 	}
 	resize("postgres", "ha", "shared-m", http.StatusOK) // 704 - 256 + 512 = 960Mi
-	if v := resize("postgres", "db", "shared-l", http.StatusBadRequest); !strings.Contains(v.Note, "this would request 1216Mi of memory") {
+	if v := resize("postgres", "db", "shared-l", http.StatusBadRequest); !strings.Contains(v.Note, "This would bring the workspace to 1.2 GB of 1 GB of memory.") {
 		t.Errorf("resize past the limit = %s", v.Note)
 	}
 	if v := resize("redis", "cache", "shared-s", http.StatusOK); !strings.Contains(v.Note, "already has the size shared-s") {
@@ -966,7 +966,7 @@ func TestDatabaseAndStoreSizes(t *testing.T) {
 	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":2}`); rec.Code != http.StatusOK {
 		t.Errorf("scale to 2 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":3}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "1088Mi of memory") {
+	if rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/scale", `{"process":"web","replicas":3}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 1.1 GB of 1 GB of memory.") {
 		t.Errorf("scale to 3 = %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -997,7 +997,7 @@ func TestTheConsoleSetsTheWorkspaceSettings(t *testing.T) {
 		t.Fatalf("after PUT = %v", got)
 	}
 	// The default workspace has a project already (shop): a second is refused.
-	if rec := at(t, s, "example.test", "POST", "/api/projects", `{"name":"second"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "the workspace allows 1") {
+	if rec := at(t, s, "example.test", "POST", "/api/projects", `{"name":"second"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This would bring the workspace to 2 of 1 projects.") {
 		t.Errorf("second project = %d %s", rec.Code, rec.Body.String())
 	}
 	var v WorkspaceView

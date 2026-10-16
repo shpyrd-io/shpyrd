@@ -116,6 +116,9 @@ func (m *MeteringLoop) Start(ctx context.Context) error {
 			if err := m.postgresActivity(ctx, end); err != nil {
 				logger.Error(err, "postgres activity check failed")
 			}
+			if err := m.dedicatedSizes(ctx, end); err != nil {
+				logger.Error(err, "dedicated database sizes")
+			}
 			if err := m.sharedCaps(ctx, end); err != nil {
 				logger.Error(err, "shared database caps")
 			}
@@ -241,6 +244,7 @@ func (m *MeteringLoop) writeBuckets(ctx context.Context, start, end time.Time) (
 	buckets = append(buckets, m.memoryBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.storageBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.sharedBuckets(ctx, start, end, nsMap)...)
+	buckets = append(buckets, m.bucketBuckets(ctx, start, end, nsMap)...)
 	buckets = append(buckets, m.egressBuckets(ctx, start, end, nsMap)...)
 	if len(buckets) == 0 {
 		return 0, nil

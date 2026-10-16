@@ -71,6 +71,27 @@ func (s *Server) convertPostgres(c *gin.Context) {
 		}
 		opts.Storage = storage
 	}
+	if req.To == shpyrdv1.PostgresTypeDedicated {
+		// A cluster of its own: an instance of a size and a disk, judged
+		// against the workspace's ceilings like a new dedicated database
+		// (its plan may include no disks at all).
+		ch := change{project: c.Param("slug"), newDisk: true, instances: 1}
+		if cat, err := s.catalog(c.Request.Context()); err == nil {
+			if res, n, ok := storeResources(cat, "Postgres", req.Size, nil); ok {
+				ch.add, ch.addN = res, n
+			}
+		}
+		var disk *resource.Quantity
+		if opts.Storage != "" {
+			q := resource.MustParse(opts.Storage)
+			disk = &q
+		}
+		ch.storage = s.databaseDiskSize(disk)
+		if err := s.admit(c.Request.Context(), s.workspace(c), ch, nil); err != nil {
+			abortAdmission(c, err, http.StatusConflict)
+			return
+		}
+	}
 	raw, _ := json.Marshal(opts)
 	pg, err = s.mutatePostgres(c, func(pg *shpyrdv1.Postgres) error {
 		if pg.Annotations == nil {
@@ -97,6 +118,15 @@ func convertWords(pg *shpyrdv1.Postgres, from string, req ConvertRequest, cap st
 		return "", fmt.Sprintf("%s is a %s database already.", pg.Name, from)
 	case pg.Status.Phase != shpyrdv1.ResourceReady:
 		return "", fmt.Sprintf("%s is %s; convert it once it is ready.", pg.Name, strings.ToLower(firstNonEmpty(pg.Status.Phase, "provisioning")))
+	}
+	if req.To == shpyrdv1.PostgresTypeShared {
+		// Measured by the metering loop; a database never measured is
+		// let through and the conversion itself refuses past the cap.
+		if capQ, err := resource.ParseQuantity(cap); err == nil {
+			if held := controller.DataBytes(pg); held > capQ.Value() {
+				return "", fmt.Sprintf("This database holds %s; a shared database holds up to %s.", humanQuantity(fmt.Sprintf("%d", held)), humanQuantity(cap))
+			}
+		}
 	}
 	var notes []string
 	if req.To == shpyrdv1.PostgresTypeDedicated {

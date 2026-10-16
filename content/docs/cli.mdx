@@ -123,7 +123,7 @@ Self-hosted: the operator's, in `shpyrd-ctl`.
 | Command | What it does |
 | --- | --- |
 | `shpyrd-ctl workspace status` | The platform's workspace: its address, its limits and its sleep defaults, and what its projects use against them. |
-| `shpyrd-ctl workspace limits [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi \| --none]` | What the workspace may use; the flags given are set over the limits in force. A project, a deploy or a database beyond them is refused with the limit it would cross. |
+| `shpyrd-ctl workspace limits [--projects N --instances N --cpu 2 --memory 1Gi --storage 10Gi --disks=false --buckets N --bucket-cap 1Gi --object-storage 10Gi --databases N --database-kinds shared,dedicated --database-default shared --shared-cap 1Gi --database-instances N \| --none]` | What the workspace may use; the flags given are set over the limits in force. Three ceilings bound storage: block storage (`--storage`, or none at all with `--disks=false`), buckets and databases. A project, a deploy, a volume or a database beyond them is refused with the numbers; what already exists above a ceiling that shrank keeps working. |
 | `shpyrd-ctl workspace sleep [--apps 15m --resuming page\|wait] [--databases 30m] [--none]` | The sleep its apps and databases take when they set none of their own (enterprise: auto sleep). `off` for either turns it off. |
 | `shpyrd-ctl console-users list` | Who may open the console: its own list, apart from every workspace's people. Each is an admin of the console. |
 | `shpyrd-ctl console-users add <principal-id>` / `remove <principal-id>` | Authorize or remove a console principal after sign-in. This manages console access, not credentials. |
