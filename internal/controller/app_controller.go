@@ -375,13 +375,24 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return outcome{}, err
 	}
 
+	// What the source watcher saw of the branch (RFC-0018).
+	app.Status.Source = sourceStatus(app)
+	setSourceCondition(app)
+
 	// 2. Image: pinned, or built from the source (kpack Image for
 	// buildpacks, BuildKit Job for Dockerfiles).
 	image := app.Spec.Image
 	var build buildState
 	var kpackBuild *unstructured.Unstructured
 	if app.HasSource() {
-		if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
+		if msg, failed := waitingForCommit(app); msg != "" {
+			// No commit pinned for the branch yet: nothing is built, and
+			// what runs keeps running.
+			build = buildState{Ready: "Unknown", Reason: reasonWaitingForCommit, Message: msg, LatestImage: app.Status.Image, LatestBuild: app.Status.LatestBuild}
+			if failed {
+				build.Ready = "False"
+			}
+		} else if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
 			st, err := r.reconcileDockerfileBuild(ctx, app, gitBuild)
 			if err != nil {
 				return outcome{}, err
@@ -463,7 +474,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
 		default:
 			reason := "Building"
-			if build.Reason == "PreparingBuilder" {
+			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit {
 				reason = build.Reason
 			}
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
@@ -492,6 +503,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Phase = shpyrdv1.PhaseBuilding
 		app.Status.Message = firstNonEmpty(build.Message, "waiting for the first build")
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
+		if build.Reason == reasonWaitingForCommit {
+			return requeue(5 * time.Second), nil
+		}
 		return requeue(30 * time.Second), nil
 	}
 
@@ -635,6 +649,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = firstNonEmpty(build.Message, "building new release; "+summary)
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
 		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
+		if build.Reason == reasonWaitingForCommit {
+			out.result.RequeueAfter = 5 * time.Second
+		}
 	case failing && !ready:
 		// New instances cannot start; older ones may still be serving.
 		app.Status.Phase = shpyrdv1.PhaseFailed
@@ -1122,16 +1139,27 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 			log.FromContext(ctx).Info("could not audit the release", "err", err.Error())
 			return
 		}
+		// Drop who asked for the release, unless someone (a push) asked
+		// for the next one meanwhile.
+		asked := map[string]string{}
+		for _, k := range []string{shpyrdv1.AnnotationDeployedBy, shpyrdv1.AnnotationDeployedSubject, shpyrdv1.AnnotationDeployedClient} {
+			if v, ok := app.Annotations[k]; ok {
+				asked[k] = v
+			}
+		}
 		patch := client.MergeFrom(app.DeepCopy())
 		if app.Annotations == nil {
 			app.Annotations = map[string]string{}
 		}
 		app.Annotations[shpyrdv1.AnnotationAuditedRelease] = strconv.Itoa(cur.Number)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedBy)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedSubject)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedClient)
 		if err := r.Patch(ctx, app, patch); err != nil {
 			log.FromContext(ctx).Info("could not mark the release audited", "err", err.Error())
+			return
+		}
+		for k, v := range asked {
+			if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+				log.FromContext(ctx).V(1).Info("kept who asked for the next release", "annotation", k, "err", err.Error())
+			}
 		}
 	case app.Status.Phase == shpyrdv1.PhaseFailed && before.Status.Phase != shpyrdv1.PhaseFailed:
 		entry.Action, entry.Detail = "release.failed", app.Status.Message
@@ -1141,13 +1169,20 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 	}
 }
 
-// clearReleaseNote removes the one-shot annotations once consumed.
+// clearReleaseNote removes the one-shot annotations once consumed, each
+// only while it holds the value this reconcile read: a note the source
+// watcher wrote meanwhile is the next release's (RFC-0018).
 func (r *AppReconciler) clearReleaseNote(ctx context.Context, app *shpyrdv1.App) {
-	patch := client.MergeFrom(app.DeepCopy())
-	delete(app.Annotations, shpyrdv1.AnnotationReleaseNote)
-	delete(app.Annotations, shpyrdv1.AnnotationRollbackTo)
-	if err := r.Patch(ctx, app, patch); err != nil {
-		log.FromContext(ctx).Info("could not clear release note", "err", err.Error())
+	read := map[string]string{}
+	for _, k := range []string{shpyrdv1.AnnotationReleaseNote, shpyrdv1.AnnotationRollbackTo} {
+		if v, ok := app.Annotations[k]; ok {
+			read[k] = v
+		}
+	}
+	for k, v := range read {
+		if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+			log.FromContext(ctx).V(1).Info("kept a newer one-shot annotation", "annotation", k, "err", err.Error())
+		}
 	}
 }
 

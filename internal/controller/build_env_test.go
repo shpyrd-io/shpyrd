@@ -168,7 +168,7 @@ func TestGitImageBindsTheVariablesAtOnce(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "web1", Namespace: "app-web1", Generation: 1},
 		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/repo.git", Revision: "main"}}},
 	}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 	old, err := r.Config.desiredKpackImage(app, gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)

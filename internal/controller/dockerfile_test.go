@@ -171,12 +171,12 @@ func TestDockerfileGitFetchAndProcesses(t *testing.T) {
 	app := dockerfileApp()
 	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/o/r.git", Revision: "v1.2"}, SubPath: "services/api"}
 	app.Spec.Processes = map[string]shpyrdv1.Process{"web": {}, "worker": {}}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 
 	got := runReconcile(t, r, app)
 	job := getJob(t, c, "app-dk", "dk-build-1")
 	fetch := job.Spec.Template.Spec.InitContainers[0].Command[2]
-	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='v1.2'") {
+	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='"+testCommit+"'") {
 		t.Errorf("git fetch script: %s", fetch)
 	}
 	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--local context=/workspace/src/services/api") {

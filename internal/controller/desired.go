@@ -589,12 +589,9 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App, git gitauth.Build) (*unstru
 		if git.CloneURL != "" {
 			url = git.CloneURL
 		}
-		gitSrc := map[string]interface{}{"url": url}
-		rev := app.Spec.Source.Git.Revision
-		if rev == "" {
-			rev = "main"
-		}
-		gitSrc["revision"] = rev
+		// A branch builds the commit the source watcher pinned, so kpack
+		// does not poll it (RFC-0018); a commit builds as given.
+		gitSrc := map[string]interface{}{"url": url, "revision": app.BuildRevision()}
 		source["git"] = gitSrc
 	case app.Spec.Source.Blob != nil:
 		source["blob"] = map[string]interface{}{"url": c.sourceURL(app.Spec.Source.Blob.URL)}

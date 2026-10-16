@@ -214,7 +214,7 @@ func TestReconcileSourceBuild(t *testing.T) {
 			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/example/repo", Revision: "main"}, SubPath: "svc"},
 		},
 	}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 
 	// First pass creates the kpack Image and reports Building.
 	got := runReconcile(t, r, app)
@@ -283,7 +283,7 @@ func TestRunningKpackBuildIsTheLatest(t *testing.T) {
 			Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/example/repo", Revision: "main"}},
 		},
 	}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 	runReconcile(t, r, app)
 	img := &unstructured.Unstructured{}
 	img.SetGroupVersionKind(KpackImageGVK)
@@ -512,7 +512,7 @@ func TestKpackImageRecreatedWhenRegistryChanges(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "mig", Namespace: "app-mig", Generation: 1},
 		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/example/repo", Revision: "main"}}},
 	}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 	r.Config.RegistryHost = "gru.ocir.io/ns"
 	runReconcile(t, r, app)
 	img := &unstructured.Unstructured{}

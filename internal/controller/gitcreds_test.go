@@ -82,7 +82,7 @@ func TestReconcileGitCredentialsDeployKeyAndRegistry(t *testing.T) {
 	}
 	reg := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shpyrd-registry", Namespace: "shpyrd-system"}, Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{}`)}}
-	r, c := newTestReconciler(t, app, dk, reg)
+	r, c := newTestReconciler(t, pinGit(app, testCommit), dk, reg)
 	r.Config.RegistrySecret = "shpyrd-registry"
 	runReconcile(t, r, app)
 	sa := &corev1.ServiceAccount{}
@@ -171,7 +171,7 @@ func TestReconcileGitCredentialsUnparseableURL(t *testing.T) {
 func dockerfileGitApp(url string) *shpyrdv1.App {
 	app := dockerfileApp()
 	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: url, Revision: "main"}}
-	return app
+	return pinGit(app, testCommit)
 }
 
 func TestDockerfileFetchWithToken(t *testing.T) {
