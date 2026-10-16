@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -91,7 +92,9 @@ func (b *Backend) GetBucketAcl(ctx context.Context, in *s3.GetBucketAclInput) ([
 
 // GetBucketPolicy is how a public bucket opens its objects to anyone
 // (storage plan step 5): a policy allowing GetObject to every principal,
-// and nothing else, so an address is readable and a listing is not. A
+// and nothing else, so an address is readable and a listing is not. The
+// owner keeps everything: once a bucket has a policy the front door
+// judges the owner's own requests by it too, so the policy says so. A
 // bucket that is not public has no policy. Policies are never written by
 // consumers; the bucket's resource says whether it is public.
 func (b *Backend) GetBucketPolicy(ctx context.Context, bucket string) ([]byte, error) {
@@ -104,9 +107,10 @@ func (b *Backend) GetBucketPolicy(ctx context.Context, bucket string) ([]byte, e
 	}
 	return json.Marshal(map[string]any{
 		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::" + bucket + "/*",
-		}},
+		"Statement": []map[string]any{
+			{"Effect": "Allow", "Principal": map[string]any{"AWS": r.Name}, "Action": "s3:*", "Resource": []string{"arn:aws:s3:::" + bucket, "arn:aws:s3:::" + bucket + "/*"}},
+			{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::" + bucket + "/*"},
+		},
 	})
 }
 
@@ -116,7 +120,13 @@ func (b *Backend) PutBucketCors(ctx context.Context, bucket string, cors []byte)
 	if !validName(bucket) {
 		return denied()
 	}
-	return b.records.SetCORS(ctx, bucket, cors)
+	if err := b.records.SetCORS(ctx, bucket, cors); err != nil {
+		// The front door answers an internal error without a word of its
+		// own; the log keeps the cause.
+		log.Printf("gateway: CORS of %s could not be kept: %v", bucket, err)
+		return err
+	}
+	return nil
 }
 func (b *Backend) GetBucketCors(ctx context.Context, bucket string) ([]byte, error) {
 	r, err := b.records.cachedGet(ctx, bucket)

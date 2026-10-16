@@ -217,8 +217,26 @@ func TestAPublicBucketOpensItsObjectsAndNothingElse(t *testing.T) {
 	if err := json.Unmarshal(policy, &parsed); err != nil {
 		t.Fatalf("the policy does not parse: %v\n%s", err, policy)
 	}
-	if !parsed.IsPublic() || len(parsed.Statement) != 1 || !parsed.Statement[0].Actions.FindMatch(auth.GetObjectAction) || parsed.Statement[0].Actions.FindMatch(auth.ListBucketAction) {
-		t.Errorf("policy = %s", policy)
+	if !parsed.IsPublic() || len(parsed.Statement) != 2 {
+		t.Fatalf("policy = %s", policy)
+	}
+	// The owner keeps everything; anyone else reads an object and nothing more.
+	owner, anyone := parsed.Statement[0], parsed.Statement[1]
+	_, ownerIsAnyone := owner.Principals["*"]
+	_, anyoneIsAnyone := anyone.Principals["*"]
+	if ownerIsAnyone || !owner.Actions.FindMatch(auth.ListBucketAction) || !owner.Actions.FindMatch(auth.PutObjectAction) || !owner.Resources.FindMatch("consumer-a", b.NormalizeObjectKey) || !owner.Resources.FindMatch("consumer-a/some/key", b.NormalizeObjectKey) {
+		t.Errorf("the owner's statement = %+v", owner)
+	}
+	if !anyoneIsAnyone || !anyone.Actions.FindMatch(auth.GetObjectAction) || anyone.Actions.FindMatch(auth.ListBucketAction) || anyone.Actions.FindMatch(auth.PutObjectAction) {
+		t.Errorf("the public statement = %+v", anyone)
+	}
+	// The owner's principal is its access key, which exists once a
+	// credential was issued.
+	if _, err := b.records.Credential(ctx, "consumer-a", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate("consumer-a", &IAM{Records: b.records}); err != nil {
+		t.Errorf("the policy does not validate: %v", err)
 	}
 	if _, err := b.GetBucketCors(ctx, "consumer-a"); !errors.Is(err, s3err.GetAPIError(s3err.ErrNoSuchCORSConfiguration)) {
 		t.Errorf("no CORS yet = %v", err)

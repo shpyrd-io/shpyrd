@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/cors"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 )
@@ -50,7 +52,14 @@ func TestGatewayIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 	physical := fmt.Sprintf("gateway-test-%d", time.Now().UnixNano())
-	store, err := objectstore.NewS3(endpoint, "us-east-1", physical, "", "shpyrdtest", "shpyrd-test-only-password")
+	// The provider's credential: the MinIO root of the note above unless
+	// the backend hands out its own (Garage: SHPYRD_GATEWAY_TEST_ACCESS_KEY
+	// and _SECRET_KEY of a key allowed to create buckets).
+	providerKey, providerSecret := os.Getenv("SHPYRD_GATEWAY_TEST_ACCESS_KEY"), os.Getenv("SHPYRD_GATEWAY_TEST_SECRET_KEY")
+	if providerKey == "" {
+		providerKey, providerSecret = "shpyrdtest", "shpyrd-test-only-password"
+	}
+	store, err := objectstore.NewS3(endpoint, "us-east-1", physical, "", providerKey, providerSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +98,8 @@ func TestGatewayIntegration(t *testing.T) {
 		args = []string{"-test.run=^TestGatewayProcess$", "-test.v"}
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), "SHPYRD_GATEWAY_TEST_CHILD=1", "SHPYRD_GATEWAY_ENDPOINT="+endpoint, "SHPYRD_GATEWAY_REGION=us-east-1", "SHPYRD_GATEWAY_BUCKET="+physical, "AWS_ACCESS_KEY_ID=shpyrdtest", "AWS_SECRET_ACCESS_KEY=shpyrd-test-only-password", "SHPYRD_GATEWAY_ADMIN_TOKEN=local-test-admin", "SHPYRD_GATEWAY_LISTEN="+addr, "SHPYRD_GATEWAY_ADMIN_LISTEN="+admin)
+	apps := freeAddress(t)
+	cmd.Env = append(os.Environ(), "SHPYRD_GATEWAY_TEST_CHILD=1", "SHPYRD_GATEWAY_ENDPOINT="+endpoint, "SHPYRD_GATEWAY_REGION=us-east-1", "SHPYRD_GATEWAY_BUCKET="+physical, "AWS_ACCESS_KEY_ID="+providerKey, "AWS_SECRET_ACCESS_KEY="+providerSecret, "SHPYRD_GATEWAY_ADMIN_TOKEN=local-test-admin", "SHPYRD_GATEWAY_LISTEN="+addr, "SHPYRD_GATEWAY_APPS_LISTEN="+apps, "SHPYRD_GATEWAY_ADMIN_LISTEN="+admin)
 	var logs bytes.Buffer
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
@@ -269,6 +279,94 @@ func TestGatewayIntegration(t *testing.T) {
 			t.Fatalf("object still accessible after batch delete: %v", err)
 		}
 	})
+	// Storage plan step 5: the cap refuses before the provider sees a byte
+	// and frees on a delete; CORS is the consumer's; a public bucket opens
+	// an object to anyone and keeps everything for its owner.
+	t.Run("cap-cors-public", func(t *testing.T) {
+		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-c", MaxBytes: 10, Public: true}); err != nil {
+			t.Fatal(err)
+		}
+		c, err := records.Credential(ctx, "consumer-c", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cc := client(c)
+		put(cc, c.AccessKey, "cap/one", "123456")
+		_, err = cc.PutObject(ctx, c.AccessKey, "cap/two", strings.NewReader("123456"), 6, minio.PutObjectOptions{})
+		if resp := minio.ToErrorResponse(err); resp.Code != "QuotaExceeded" || !strings.Contains(resp.Message, "This bucket holds up to 10 bytes; this upload would bring it to 12 bytes.") {
+			t.Fatalf("past the cap: %v", err)
+		}
+		if err := cc.RemoveObject(ctx, c.AccessKey, "cap/one", minio.RemoveObjectOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		put(cc, c.AccessKey, "cap/two", "123456")
+		// Anyone reads an object of a public bucket by its address; nobody
+		// lists it; the owner still writes and lists.
+		resp, err := http.Get("http://" + addr + "/" + c.AccessKey + "/cap/two")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != "123456" {
+			t.Fatalf("anonymous read of a public object: %d %q", resp.StatusCode, body)
+		}
+		if resp, err := http.Get("http://" + addr + "/" + c.AccessKey + "/"); err != nil || resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("anonymous listing of a public bucket: %v %v", resp, err)
+		}
+		n := 0
+		for obj := range cc.ListObjects(ctx, c.AccessKey, minio.ListObjectsOptions{Recursive: true}) {
+			if obj.Err != nil {
+				t.Fatalf("the owner's listing: %v", obj.Err)
+			}
+			n++
+		}
+		if n != 1 {
+			t.Fatalf("the owner lists %d objects, want 1", n)
+		}
+		if resp, err := http.Get("http://" + addr + "/" + a.AccessKey + "/private/data"); err != nil || resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("anonymous read of a private object: %v %v", resp, err)
+		}
+		// CORS: none, set, read back, removed. (The client answers a
+		// missing configuration with nothing, not an error.)
+		if got, err := cc.GetBucketCors(ctx, c.AccessKey); err != nil || got != nil {
+			t.Fatalf("a CORS configuration before any was set: %+v %v", got, err)
+		}
+		rules := cors.NewConfig([]cors.Rule{{AllowedOrigin: []string{"https://shop.example"}, AllowedMethod: []string{"PUT", "GET"}, AllowedHeader: []string{"*"}}})
+		if err := cc.SetBucketCors(ctx, c.AccessKey, rules); err != nil {
+			t.Fatalf("PutBucketCors: %v", err)
+		}
+		got, err := cc.GetBucketCors(ctx, c.AccessKey)
+		if err != nil || len(got.CORSRules) != 1 || got.CORSRules[0].AllowedOrigin[0] != "https://shop.example" {
+			t.Fatalf("GetBucketCors: %+v %v", got, err)
+		}
+		req, _ := http.NewRequest(http.MethodOptions, "http://"+addr+"/"+c.AccessKey+"/cap/two", nil)
+		req.Header.Set("Origin", "https://shop.example")
+		req.Header.Set("Access-Control-Request-Method", "PUT")
+		pre, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pre.Body.Close()
+		if pre.Header.Get("Access-Control-Allow-Origin") != "https://shop.example" {
+			t.Errorf("preflight from the allowed origin: %d %v", pre.StatusCode, pre.Header)
+		}
+		req.Header.Set("Origin", "https://evil.example")
+		pre, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pre.Body.Close()
+		if pre.Header.Get("Access-Control-Allow-Origin") != "" {
+			t.Errorf("preflight from another origin allowed: %v", pre.Header)
+		}
+		if err := cc.SetBucketCors(ctx, c.AccessKey, nil); err != nil {
+			t.Fatalf("DeleteBucketCors: %v", err)
+		}
+		if got, err := cc.GetBucketCors(ctx, c.AccessKey); err != nil || got != nil {
+			t.Fatalf("a CORS configuration after its removal: %+v %v", got, err)
+		}
+	})
 	t.Run("concurrent-provisioning", func(t *testing.T) {
 		const name = "concurrent-consumer"
 		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: name}); err != nil {
@@ -299,17 +397,40 @@ func TestGatewayIntegration(t *testing.T) {
 			}
 		}
 	})
-	t.Run("revocation", func(t *testing.T) {
-		if err := records.Revoke(ctx, b.AccessKey); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := cb.StatObject(ctx, b.AccessKey, "private/data", minio.StatObjectOptions{}); err == nil {
-			t.Fatal("revoked key works")
-		}
-		fresh, err := records.Credential(ctx, b.AccessKey, b.AccessKey, b.SecretKey)
+	// Revocation goes through the gateway's own administrative API, as the
+	// controller's does: the replica that revokes forgets the credential at
+	// once; another replica (this test's own Records) would keep it for
+	// descriptorTTL.
+	adminCall := func(t *testing.T, path string, body map[string]string, out any) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		req, err := http.NewRequest(http.MethodPost, "http://"+admin+path, bytes.NewReader(raw))
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.Header.Set("Authorization", "Bearer local-test-admin")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			answer, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, answer)
+		}
+		if out != nil {
+			if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Run("revocation", func(t *testing.T) {
+		adminCall(t, "/v1/delete-user", map[string]string{"Bucket": b.AccessKey, "AccessKey": b.AccessKey}, nil)
+		if _, err := cb.StatObject(ctx, b.AccessKey, "private/data", minio.StatObjectOptions{}); err == nil {
+			t.Fatal("revoked key works")
+		}
+		var fresh objectstore.Credential
+		adminCall(t, "/v1/ensure-user", map[string]string{"Bucket": b.AccessKey, "AccessKey": b.AccessKey, "SecretKey": b.SecretKey}, &fresh)
 		if fresh.SecretKey == b.SecretKey {
 			t.Fatal("reactivation reused a revoked secret")
 		}

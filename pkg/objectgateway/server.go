@@ -57,8 +57,12 @@ type Server struct {
 	Admin   http.Handler
 }
 
-// DefaultBucketRate is the per-bucket request rate when none is set.
-const DefaultBucketRate = 200
+// DefaultBucketRate is the per-bucket request rate when none is set: a
+// thousand a second, with a burst of twice that. The load test on dev
+// (2026-10-16) showed one pod answering a few hundred small requests a
+// second to one bucket; the limit is a backstop against a runaway client,
+// not a share of the gateway.
+const DefaultBucketRate = 1000
 
 func New(ctx context.Context, c Config, opts ...s3api.Option) (*Server, error) {
 	if c.AdminToken == "" {

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/versity/versitygw/s3api/utils"
 	"github.com/versity/versitygw/s3err"
 	"golang.org/x/time/rate"
 )
@@ -55,7 +56,10 @@ func (l *bucketLimiters) allow(name string) bool {
 
 // middleware refuses a request past its bucket's rate. The bucket is the
 // first segment of the path (path style); a request without one (the
-// listing of buckets) is not limited here.
+// listing of buckets) is not limited here. The answer is written here, as
+// S3 writes it (503, SlowDown, Retry-After): an error returned from a
+// middleware reaches the front door's handler as an internal one, and a
+// client backs off from a 503, not from a 500.
 func (l *bucketLimiters) middleware() fiber.Handler {
 	return func(c fiber.Ctx) error {
 		name, _, _ := strings.Cut(strings.TrimPrefix(c.Path(), "/"), "/")
@@ -63,6 +67,10 @@ func (l *bucketLimiters) middleware() fiber.Handler {
 			return c.Next()
 		}
 		slowDowns.Inc()
-		return s3err.GetAPIError(s3err.ErrSlowDown)
+		err := s3err.GetAPIError(s3err.ErrSlowDown)
+		requestID, hostID := utils.EnsureRequestIDs(c)
+		c.Set("Retry-After", "1")
+		c.Set("Content-Type", "application/xml")
+		return c.Status(err.StatusCode()).Send(err.XMLBody(requestID, hostID))
 	}
 }
