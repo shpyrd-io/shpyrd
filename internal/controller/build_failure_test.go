@@ -135,3 +135,23 @@ func TestBuildStepThatNeverStarted(t *testing.T) {
 		t.Errorf("read by the controller: %q", got)
 	}
 }
+
+func TestRefusedCloneNamesTheFix(t *testing.T) {
+	for _, out := range []string{
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		"remote: Repository not found.\nfatal: repository 'https://github.com/acme/api.git/' not found",
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+		"Error: failed to fetch: authentication required",
+	} {
+		msg := describeBuildFailure("prepare", out)
+		if !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || !strings.Contains(msg, "shpyrd git-auth set") {
+			t.Errorf("%q -> %s", out, msg)
+		}
+	}
+	if msg := describeBuildFailure("prepare", "Host key verification failed."); !strings.Contains(msg, "host key") {
+		t.Errorf("host key -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", "fatal: unable to access: Could not resolve host"); strings.Contains(msg, "git-auth") {
+		t.Errorf("a network failure is not an access failure: %s", msg)
+	}
+}

@@ -27,6 +27,9 @@ import (
 // buildLogHint closes every message: where the rest is.
 const buildLogHint = "The build's log has the full output."
 
+// refusedClone is git (or kpack's git) refused access to a repository.
+var refusedClone = regexp.MustCompile(`(?i)could not read Username|Repository not found|Permission denied \(publickey\)|authentication required|Authentication failed|could not read from remote repository`)
+
 var (
 	ansiEscape     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	paketoHeader   = regexp.MustCompile(`^Paketo Buildpack for (.+?) v?\d+(\.\d+)*$`)
@@ -80,6 +83,15 @@ func describeBuildFailure(step, out string) string {
 	while := "The build failed"
 	if script != "" {
 		while = fmt.Sprintf("The build failed while running `%s`", script)
+	}
+	if refusedClone.MatchString(text) {
+		return "The build could not read the repository: it is private, or does not exist under that name. " +
+			"Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, " +
+			"or a workspace admin sets a token for the host with `shpyrd git-auth set --host <host> --token -`. Then deploy again. " + buildLogHint
+	}
+	if strings.Contains(text, "Host key verification failed") {
+		return "The build could not check the git host's identity: its SSH host key is not the one recorded with the deploy key. " +
+			"If the host changed its key, make a new deploy key with `shpyrd git-auth deploy-key` and add it to the repository. " + buildLogHint
 	}
 	for _, re := range missingVariable {
 		if m := re.FindStringSubmatch(text); m != nil {
