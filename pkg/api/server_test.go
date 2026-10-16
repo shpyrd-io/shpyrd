@@ -47,6 +47,13 @@ func sampleApp(name string, phase string, releases ...shpyrdv1.Release) *shpyrdv
 
 func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeObjs ...interface{}) (*Server, client.Client) {
 	t.Helper()
+	return newTestServerPublic(t, PublicConfig{Domain: "example.test"}, prom, crObjs, kubeObjs...)
+}
+
+// newTestServerPublic is newTestServer with the public configuration
+// given before construction, as the resolver of doors reads it then.
+func newTestServerPublic(t *testing.T, pub PublicConfig, prom *PromClient, crObjs []client.Object, kubeObjs ...interface{}) (*Server, client.Client) {
+	t.Helper()
 	scheme, err := kube.Scheme()
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +65,7 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 	}
 	cs := kubefake.NewSimpleClientset(toRuntime(runtimeObjs)...)
 	k := &kube.Client{Kube: cs, Namespace: "shpyrd-system"}
-	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
+	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Prometheus: prom, Public: pub}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

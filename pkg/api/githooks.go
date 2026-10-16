@@ -25,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
 )
 
 // Deploy on push (RFC-0018): a project's webhook, which GitHub, GitLab or
@@ -160,7 +161,7 @@ func (s *Server) gitHook(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	app, err := s.findApp(ctx, s.workspace(c), c.Param("slug"))
+	app, err := s.findApp(ctx, s.hookWorkspace(c), c.Param("slug"))
 	if errors.Is(err, store.ErrNotFound) || apierrors.IsNotFound(err) {
 		// Answered as a wrong URL: the webhook does not tell which
 		// projects exist.
@@ -209,6 +210,17 @@ func (s *Server) gitHook(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"accepted": push.SHA})
+}
+
+// hookWorkspace is the workspace a delivery's project is looked up in:
+// the request's, or the default workspace at the console host, where an
+// internal door prints the URL of a workspace without an address of its
+// own (hookURL). The token in the path authenticates the project.
+func (s *Server) hookWorkspace(c *gin.Context) string {
+	if t, err := s.door(c); err == nil && t.Workspace == nil && t.Realm == tenancy.RealmConsole {
+		return s.defaultSlug(c.Request.Context())
+	}
+	return s.workspace(c)
 }
 
 // ignoredPush says why a push is not for the project's branch; "" when it

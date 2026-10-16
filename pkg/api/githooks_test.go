@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"strings"
 	"testing"
@@ -355,16 +356,61 @@ func TestGitHookLookupFailureSaysNothingOfTheCluster(t *testing.T) {
 // the request's host is no address a git host reaches: the URL is the
 // workspace's own.
 func TestGitHooksURLAtAnInternalDoorIsTheWorkspaces(t *testing.T) {
-	s, _ := newTestServer(t, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
-	s.opts.Public.DashboardURL = "https://shpyrd.example.test"
-	req := httptest.NewRequest("GET", "/api/projects/web1/git-hooks", nil)
+	s, _ := newTestServerPublic(t, PublicConfig{Domain: "example.test", DashboardURL: "https://shpyrd.example.test"}, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	if v := internalHooks(t, s, "web1"); !strings.HasPrefix(v.URL, "https://shpyrd.example.test/api/hooks/git/web1/") {
+		t.Errorf("git-hooks: %+v", v)
+	}
+}
+
+// internalHooks asks for a project's webhook through an internal door.
+func internalHooks(t *testing.T, s *Server, slug string) GitHooksView {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/projects/"+slug+"/git-hooks", nil)
 	req.Host = "10.96.0.12:8080"
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	var v GitHooksView
-	_ = json.Unmarshal(rec.Body.Bytes(), &v)
-	if rec.Code != http.StatusOK || !strings.HasPrefix(v.URL, "https://shpyrd.example.test/api/hooks/git/web1/") {
-		t.Errorf("git-hooks: %d %+v", rec.Code, v)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil {
+		t.Fatalf("git-hooks: %d %s", rec.Code, rec.Body.String())
+	}
+	return v
+}
+
+// In the single-tenant layout the URL an internal door prints is on the
+// console host, which resolves no workspace: a delivery there reaches the
+// default workspace's project, which its token authenticates.
+func TestGitHookAtTheConsoleAddressReachesTheDefaultWorkspace(t *testing.T) {
+	s, cr := newTestServerPublic(t, PublicConfig{Domain: "example.test", DashboardURL: "https://shpyrd.example.test"}, nil, []client.Object{sampleApp("web1", shpyrdv1.PhaseRunning)})
+	v := internalHooks(t, s, "web1")
+	u, err := url.Parse(v.URL)
+	if err != nil || u.Host != "shpyrd.example.test" {
+		t.Fatalf("url = %q", v.URL)
+	}
+	body := githubPush("refs/heads/main")
+	req := httptest.NewRequest("POST", u.Path, bytes.NewReader(body))
+	req.Host = u.Host
+	req.Header.Set("Content-Type", "application/json")
+	for k, h := range githubHeaders(v.Secret, "push", "d-1", body) {
+		req.Header.Set(k, h)
+	}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), hookCommit) {
+		t.Fatalf("delivery at the console address: %d %s", rec.Code, rec.Body.String())
+	}
+	if appNamed(t, cr, "web1").Annotations[shpyrdv1.AnnotationGitPush] == "" {
+		t.Error("the push is not written")
+	}
+	// A wrong token there is still refused.
+	req = httptest.NewRequest("POST", path.Dir(u.Path)+"/"+strings.Repeat("0", 64), bytes.NewReader(body))
+	req.Host = u.Host
+	for k, h := range githubHeaders(v.Secret, "push", "d-2", body) {
+		req.Header.Set(k, h)
+	}
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token at the console address: %d %s", rec.Code, rec.Body.String())
 	}
 }
