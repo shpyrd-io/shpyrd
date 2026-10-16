@@ -36,14 +36,16 @@ func newAttachCmd(g *globalFlags) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <resource>",
-		Short: "Attach a project resource (Postgres, Redis...) to the app as config vars",
+		Short: "Attach a project resource (Postgres, Redis, a bucket...) to the app as config vars",
 		Long: `Attach a resource of the project to its app. The resource's connection
 details are injected as config vars named after a prefix (DATABASE_URL,
-DATABASE_HOST... for Postgres; REDIS_URL... for Redis) and every attach or
-detach is a release that can be rolled back.
+DATABASE_HOST... for Postgres; REDIS_URL... for Redis; BUCKET_ACCESS_KEY_ID,
+BUCKET_ENDPOINT_URL... for a bucket) and every attach or detach is a
+release that can be rolled back.
 
   shpyrd attach db                       # Postgres db -> DATABASE_*
   shpyrd attach cache --prefix SESSIONS  # Redis cache -> SESSIONS_URL, SESSIONS_HOST...
+  shpyrd attach uploads --prefix AWS     # bucket uploads -> AWS_ACCESS_KEY_ID, AWS_ENDPOINT_URL... (what the SDKs read)
   shpyrd detach db`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -115,7 +117,7 @@ detach is a release that can be rolled back.
 		},
 	}
 	appFlag(cmd, &appName)
-	cmd.Flags().StringVar(&kind, "kind", "", "resource kind when the name is ambiguous (Postgres, Redis)")
+	cmd.Flags().StringVar(&kind, "kind", "", "resource kind when the name is ambiguous (Postgres, Redis, ObjectBucket)")
 	cmd.Flags().StringVar(&prefix, "prefix", "", "config var prefix (default per kind: DATABASE, REDIS)")
 	return cmd
 }
@@ -243,6 +245,8 @@ func defaultPrefix(kind string) string {
 		return "DATABASE"
 	case "Redis":
 		return "REDIS"
+	case "ObjectBucket":
+		return "BUCKET"
 	}
 	return strings.ToUpper(kind)
 }

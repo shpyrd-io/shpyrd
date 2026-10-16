@@ -291,25 +291,25 @@ func (s *Server) workspaceUsage(ctx context.Context, ws string, cat *sizes.Catal
 			both(func(u *usage) { u.addStorage(slug, size) })
 		}
 	}
-	// Buckets of the projects' own: the one a database's backups go to
-	// belongs to the platform and is not counted.
+	// Buckets of the projects' own, with their caps: the one a database's
+	// backups go to belongs to the platform and is not counted.
 	var buckets shpyrdv1.ObjectBucketList
 	if err := s.apps.List(ctx, &buckets); err == nil {
 		for i := range buckets.Items {
 			b := &buckets.Items[i]
-			if _, ours := namespaces[b.Namespace]; !ours || !b.DeletionTimestamp.IsZero() || b.Labels[labelBucketPostgres] != "" {
+			if _, ours := namespaces[b.Namespace]; !ours || !b.DeletionTimestamp.IsZero() || b.PlatformBucket() {
 				continue
 			}
-			both(func(u *usage) { u.buckets++ })
+			both(func(u *usage) {
+				u.buckets++
+				if b.Spec.MaxBytes != nil {
+					u.objectStorage.Add(*b.Spec.MaxBytes)
+				}
+			})
 		}
 	}
 	return before, after, nil
 }
-
-// labelBucketPostgres marks the bucket a database's backups go to (the
-// Postgres controller sets it); such a bucket is the platform's, not the
-// workspace's.
-const labelBucketPostgres = "shpyrd.io/postgres"
 
 // volumeWorkspace is the workspace a Volume belongs to: its label
 // (authoritative, set at creation), else the implicit workspace, the only
@@ -361,8 +361,9 @@ type change struct {
 	// dedicated one would run.
 	database  bool
 	instances int32
-	// buckets counts new buckets.
-	buckets int
+	// buckets counts new buckets; objectStorage is their caps together.
+	buckets       int
+	objectStorage resource.Quantity
 }
 
 // admit judges a change against the workspace's ceilings and, admitted,
@@ -394,6 +395,9 @@ func (s *Server) admit(ctx context.Context, ws string, ch change, write func(con
 				after.databases++
 			}
 			after.buckets += ch.buckets
+			if ch.objectStorage.Sign() != 0 {
+				after.objectStorage.Add(ch.objectStorage)
+			}
 			if msg := overCeiling(limits, caps, ch, before, after); msg != "" {
 				return &refusal{msg}
 			}
@@ -418,6 +422,11 @@ func overCeiling(l *store.Limits, caps map[string]store.ProjectCap, ch change, b
 		if pg := l.Postgres; pg != nil && pg.MaxInstances > 0 && ch.instances > int32(pg.MaxInstances) {
 			return fmt.Sprintf("A dedicated database here runs up to %d instances.", pg.MaxInstances)
 		}
+		if o := l.ObjectStorage; o != nil && ch.buckets > 0 {
+			if cap, err := resource.ParseQuantity(o.BucketCap); err == nil && o.BucketCap != "" && ch.objectStorage.Cmp(cap) > 0 {
+				return fmt.Sprintf("A bucket holds up to %s.", bytesWords(cap))
+			}
+		}
 		if l.Projects > 0 && after.projects > l.Projects && after.projects > before.projects {
 			return fmt.Sprintf("This would bring the workspace to %d of %d projects.", after.projects, l.Projects)
 		}
@@ -438,8 +447,13 @@ func overCeiling(l *store.Limits, caps map[string]store.ProjectCap, ch change, b
 				return fmt.Sprintf("This would bring the workspace to %d of %d databases.", after.databases, pg.Databases)
 			}
 		}
-		if o := l.ObjectStorage; o != nil && o.Buckets > 0 && after.buckets > o.Buckets && after.buckets > before.buckets {
-			return fmt.Sprintf("This would bring the workspace to %d of %d buckets.", after.buckets, o.Buckets)
+		if o := l.ObjectStorage; o != nil {
+			if o.Buckets > 0 && after.buckets > o.Buckets && after.buckets > before.buckets {
+				return fmt.Sprintf("This would bring the workspace to %d of %d buckets.", after.buckets, o.Buckets)
+			}
+			if q, err := resource.ParseQuantity(o.Total); err == nil && o.Total != "" && after.objectStorage.Cmp(q) > 0 && after.objectStorage.Cmp(before.objectStorage) > 0 {
+				return fmt.Sprintf("This would bring the workspace to %s of %s of object storage.", bytesWords(after.objectStorage), bytesWords(q))
+			}
 		}
 	}
 	if cap, has := caps[ch.project]; has && ch.project != "" {

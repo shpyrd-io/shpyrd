@@ -53,6 +53,12 @@ type ObjectBucketReconciler struct {
 	Endpoint        string
 	AdminEndpoint   string
 	AdminSecret     string
+	// AppsEndpoint is the gateway's listener for the projects' buckets,
+	// which signs with AppsRegion (storage plan step 5); PublicEndpoint
+	// the same door from outside the cluster, "" when the cluster has
+	// none. The platform's own buckets keep Endpoint and Region.
+	AppsEndpoint   string
+	PublicEndpoint string
 	// CapacityBytes of the store's volume, for the layout of a fresh store.
 	UseGateway    bool
 	CapacityBytes int64
@@ -179,15 +185,33 @@ func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStor
 	if r.UseGateway {
 		bucket = objectstore.LogicalBucketName(b.Namespace, b.Name)
 	}
-	if err := store.EnsureBucket(ctx, objectstore.BucketSpec{Name: bucket, Versioning: b.Spec.Versioning, RetentionDays: b.Spec.RetentionDays}); err != nil {
+	spec := objectstore.BucketSpec{Name: bucket, Versioning: b.Spec.Versioning, RetentionDays: b.Spec.RetentionDays, MaxBytes: b.CapBytes(), Public: b.Spec.Public, Alias: b.Spec.Alias}
+	if err := store.EnsureBucket(ctx, spec); err != nil {
 		return err
 	}
-	// Keep the credential stable across reconciles: reuse what the Secret holds.
+	// Where consumers reach the bucket: the projects' buckets go through
+	// the gateway's door for apps, the platform's own through the one the
+	// platform has always used.
+	endpoint, region, public := r.Endpoint, objectstore.Region, ""
+	if r.UseGateway && !b.PlatformBucket() && r.AppsEndpoint != "" {
+		endpoint, region, public = r.AppsEndpoint, objectstore.AppsRegion, r.PublicEndpoint
+	}
+	// Keep the credential stable across reconciles: reuse what the Secret
+	// holds, unless a rotation was asked for that the Secret does not carry
+	// yet: then the key is revoked and a new one issued in its place.
 	secretName := b.CredentialSecretName()
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: b.Namespace}}
 	var accessKey, secretKey string
 	if err := r.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: secretName}, sec); err == nil {
 		accessKey, secretKey = credentialFrom(sec)
+	}
+	stamp := b.Annotations[AnnotationRotate]
+	rotated := sec.Annotations[annotationRotated]
+	if stamp != "" && rotated != stamp && accessKey != "" {
+		if err := store.DeleteUser(ctx, bucket, accessKey); err != nil {
+			return err
+		}
+		accessKey, secretKey = "", ""
 	}
 	cred, err := store.EnsureUser(ctx, bucket, accessKey, secretKey)
 	if err != nil {
@@ -199,30 +223,46 @@ func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStor
 		StringData: map[string]string{
 			"AWS_ACCESS_KEY_ID":     cred.AccessKey,
 			"AWS_SECRET_ACCESS_KEY": cred.SecretKey,
-			"AWS_ENDPOINT_URL":      r.Endpoint,
-			"AWS_REGION":            objectstore.Region,
+			"AWS_ENDPOINT_URL":      endpoint,
+			"AWS_REGION":            region,
 			"BUCKET":                bucket,
 			// Consumers that name their keys (CloudNativePG's ObjectStore).
 			"accessKeyId":     cred.AccessKey,
 			"secretAccessKey": cred.SecretKey,
 		},
 	}
+	if public != "" {
+		desired.StringData["AWS_PUBLIC_ENDPOINT_URL"] = public
+	}
+	if stamp != "" {
+		desired.Annotations = map[string]string{annotationRotated: stamp}
+	}
 	if err := controllerutil.SetControllerReference(b, desired, r.Scheme); err != nil {
 		return err
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = desired.Labels
+		sec.Annotations = mergeMaps(sec.Annotations, desired.Annotations)
 		sec.Type = corev1.SecretTypeOpaque
 		sec.StringData = desired.StringData
+		if public == "" {
+			delete(sec.Data, "AWS_PUBLIC_ENDPOINT_URL")
+		}
 		sec.OwnerReferences = desired.OwnerReferences
 		return nil
 	}); err != nil {
 		return fmt.Errorf("credential secret: %w", err)
 	}
+	if stamp != "" && rotated != stamp {
+		r.Recorder.Event(b, corev1.EventTypeNormal, "Rotated", "new credentials written; the apps bound to the bucket restart with them")
+	}
 
 	b.Status.Bucket = bucket
-	b.Status.Endpoint = r.Endpoint
+	b.Status.Endpoint = endpoint
+	b.Status.PublicEndpoint = public
+	b.Status.Region = region
 	b.Status.SecretName = secretName
+	b.Status.Rotated = stamp
 	if b.Status.Phase != shpyrdv1.BucketReady {
 		r.Recorder.Eventf(b, corev1.EventTypeNormal, "Ready", "bucket %s with credential %s", bucket, secretName)
 	}

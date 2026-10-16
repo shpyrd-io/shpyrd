@@ -236,7 +236,7 @@ func TestParallelCreatesAdmitExactlyWhatFits(t *testing.T) {
 // namespace, no command.
 func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 	q := resource.MustParse
-	l := &store.Limits{Projects: 2, Instances: 3, CPU: "2", Memory: "1Gi", Storage: "100Gi", Postgres: &store.PostgresLimits{Databases: 1, MaxInstances: 2}, ObjectStorage: &store.ObjectStorageLimits{Buckets: 1}}
+	l := &store.Limits{Projects: 2, Instances: 3, CPU: "2", Memory: "1Gi", Storage: "100Gi", Postgres: &store.PostgresLimits{Databases: 1, MaxInstances: 2}, ObjectStorage: &store.ObjectStorageLimits{Buckets: 1, BucketCap: "1Gi", Total: "2Gi"}}
 	no := false
 	none := usage{}
 	cases := []struct {
@@ -254,6 +254,8 @@ func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 		{"databases", l, change{}, usage{databases: 2}},
 		{"instances of a database", l, change{instances: 3}, none},
 		{"buckets", l, change{}, usage{buckets: 2}},
+		{"a bucket's cap", l, change{buckets: 1, objectStorage: q("5Gi")}, none},
+		{"object storage", l, change{}, usage{objectStorage: q("3Gi")}},
 	}
 	for _, c := range cases {
 		msg := overCeiling(c.l, nil, c.ch, none, c.after)
@@ -268,7 +270,7 @@ func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 			t.Errorf("%s: %q is not a sentence", c.name, msg)
 		}
 	}
-	for _, msg := range []string{errDedicatedNotIncluded, errSharedNotIncluded, noteOneInstance, errNoDisks} {
+	for _, msg := range []string{errDedicatedNotIncluded, errSharedNotIncluded, noteOneInstance, errNoDisks, errBucketVersioning, errBucketAlias} {
 		if bad := controller.PlatformWordingFault(msg); bad != "" {
 			t.Errorf("%q names %q", msg, bad)
 		}

@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.usedBytes
       name: Used
       type: integer
+    - jsonPath: .spec.maxBytes
+      name: Cap
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -60,6 +63,12 @@ spec:
               after the resource and its namespace; the credential lands in a Secret
               next to the resource.
             properties:
+              alias:
+                description: |-
+                  Alias is the logical bucket in the store whose objects this bucket
+                  serves: a bucket restored into another project keeps the files under
+                  the name the first project gave them. Empty: its own.
+                type: string
               deletionPolicy:
                 description: |-
                   DeletionPolicy says what happens to the bucket's contents when the
@@ -69,6 +78,20 @@ spec:
                 - Delete
                 - Retain
                 type: string
+              maxBytes:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  MaxBytes is what the bucket may hold (storage plan step 5): the
+                  gateway refuses an upload that would pass it. Unset: no cap.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              public:
+                description: |-
+                  Public lets anyone read an object by its address, without a
+                  credential; listing and writing still need the key.
+                type: boolean
               retentionDays:
                 description: 'RetentionDays expires objects older than this (0: keep
                   everything).'
@@ -81,7 +104,10 @@ spec:
                   namespace (default: <name>-object-storage).
                 type: string
               versioning:
-                description: Versioning keeps previous versions of overwritten objects.
+                description: |-
+                  Versioning keeps previous versions of overwritten objects. The
+                  gateway refuses it in words (the provider's own versioning is the
+                  platform's undo); Garage ignores it.
                 type: boolean
             type: object
           status:
@@ -107,10 +133,26 @@ spec:
               phase:
                 description: Phase is Pending, Ready or Failed.
                 type: string
+              publicEndpoint:
+                description: |-
+                  PublicEndpoint is the S3 endpoint reachable from outside the
+                  cluster (presigned addresses, public objects), when the cluster
+                  has one.
+                type: string
+              region:
+                description: Region is the signing region consumers put in their configuration.
+                type: string
+              rotated:
+                description: |-
+                  Rotated is the stamp of the last rotation applied (the API's
+                  shpyrd.io/rotate annotation): equal to the annotation once the new
+                  credential is written.
+                type: string
               secretName:
                 description: |-
                   SecretName holds the credential (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-                  AWS_ENDPOINT_URL, BUCKET, AWS_REGION; accessKeyId and secretAccessKey).
+                  AWS_ENDPOINT_URL, AWS_PUBLIC_ENDPOINT_URL, BUCKET, AWS_REGION;
+                  accessKeyId and secretAccessKey).
                 type: string
               usedBytes:
                 description: UsedBytes and Objects are the last measured usage.
