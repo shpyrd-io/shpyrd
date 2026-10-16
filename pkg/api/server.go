@@ -25,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/pages"
@@ -282,6 +283,13 @@ type Server struct {
 	// hookRefusals the log lines of refused ones per project (RFC-0018).
 	gitHookDeliveries *rateLimiter
 	hookRefusals      *rateLimiter
+	// The GitHub App (RFC-0054): its credentials, read from its Secret;
+	// the connect states used; each workspace's repositories, a minute;
+	// and the App webhook's own limiter (Task 5).
+	githubApp        *github.Source
+	githubNonces     *nonceSet
+	githubRepos      *githubRepoCache
+	githubDeliveries *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -386,6 +394,9 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
 	s.gitHookDeliveries = newRateLimiter(gitHooksPerMinute)
 	s.hookRefusals = newRateLimiter(hookRefusalsPerMinute)
+	s.githubNonces = &nonceSet{}
+	s.githubRepos = &githubRepoCache{}
+	s.githubDeliveries = newRateLimiter(githubHooksPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -402,6 +413,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 			systemNS = k.Namespace
 		}
 	}
+	s.githubApp = &github.Source{Reader: opts.Apps, Namespace: systemNS, Options: github.Options{APIURL: opts.Vars(github.EnvAPIURL)}}
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
@@ -605,6 +617,9 @@ func (s *Server) routes() error {
 	// and a page where the person approves it, with the dashboard session.
 	pub.POST("/cli/device", login, s.cliDeviceStart)
 	pub.POST("/cli/device/token", login, s.cliDevicePoll)
+	// GitHub sends the browser here after an install (RFC-0054): no
+	// session; the signed state and the person's own GitHub token decide.
+	pub.GET("/github/installed", login, s.githubInstalled)
 	s.engine.GET("/cli/activate", tenant, login, s.cliActivatePage)
 	s.engine.POST("/cli/activate", tenant, login, s.cliActivateDecide)
 
@@ -663,6 +678,13 @@ func (s *Server) routes() error {
 	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens) // RFC-0017
 	api.PUT("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.putGitToken)
 	api.DELETE("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.deleteGitToken)
+	api.GET("/workspace/github", s.require(authz.ClusterAdmin), s.githubView) // RFC-0054
+	api.POST("/workspace/github/connect", s.require(authz.ClusterAdmin), s.githubConnect)
+	api.DELETE("/workspace/github/installations/:id", s.require(authz.ClusterAdmin), s.githubDisconnect)
+	// Who makes projects picks from the repositories (ClusterCreate, the
+	// action of POST /projects).
+	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)
+	api.GET("/workspace/github/repositories/:owner/:repo/branches", s.require(authz.ClusterCreate), s.githubBranches)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)
