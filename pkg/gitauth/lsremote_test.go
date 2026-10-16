@@ -416,3 +416,36 @@ func TestLsRemoteSSHStopsWithItsContext(t *testing.T) {
 		t.Errorf("returned after %v", d)
 	}
 }
+
+// basicAuthGit serves an advertisement only to a request carrying user and
+// pass, as GitHub does for a private repository: anything else is a 401.
+func basicAuthGit(t *testing.T, user, pass string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != user || p != pass {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		_, _ = io.WriteString(w, pkt("# service=git-upload-pack\n")+"0000"+refLines(sampleRefs...))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestLsRemoteHTTPWithTheGitHubAppsToken(t *testing.T) {
+	srv := basicAuthGit(t, "x-access-token", "ghs_app")
+	b := Build{Kind: KindGitHubApp, Secret: &corev1.Secret{Data: map[string][]byte{
+		corev1.BasicAuthUsernameKey: []byte("x-access-token"), corev1.BasicAuthPasswordKey: []byte("ghs_app"),
+	}}}
+	refs, err := LsRemote(context.Background(), srv.URL+"/acme/shop", b)
+	if err != nil || refs["refs/heads/main"] != mainSHA {
+		t.Fatalf("refs = %v, %v", refs, err)
+	}
+	// Without the token, the same server refuses: the listing above was
+	// not anonymous.
+	if _, err := LsRemote(context.Background(), srv.URL+"/acme/shop", Build{}); !errors.Is(err, ErrNoAccess) {
+		t.Errorf("anonymous: err = %v", err)
+	}
+}

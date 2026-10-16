@@ -497,7 +497,7 @@ echo "source ready"`, dst, shellQuote(c.sourceURL(src.Blob.URL)), shellQuote(src
 		}
 		auth := ""
 		switch git.Kind {
-		case gitauth.KindToken:
+		case gitauth.KindToken, gitauth.KindGitHubApp:
 			auth = fmt.Sprintf(`export HOME=/tmp
 printf 'machine %%s login %%s password %%s\n' %[1]s "$(cat %[2]s/username)" "$(cat %[2]s/password)" > "$HOME/.netrc"
 chmod 600 "$HOME/.netrc"

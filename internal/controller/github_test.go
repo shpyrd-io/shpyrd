@@ -3,6 +3,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -348,6 +351,34 @@ func TestSourceListsWithTheGitHubAppsToken(t *testing.T) {
 	_, got := reconcileSource(t, githubWatcher(t, ls, app), app)
 	if ls.kind != gitauth.KindGitHubApp || ls.url != "https://github.com/acme/shop" || got.PinnedCommit() != testCommit {
 		t.Errorf("listed %q with %q; pinned %q", ls.url, ls.kind, got.PinnedCommit())
+	}
+}
+
+// TestSourceListsAPrivateRepositoryWithTheGitHubAppsToken goes through
+// the real listing, against a host that answers only the App's token.
+func TestSourceListsAPrivateRepositoryWithTheGitHubAppsToken(t *testing.T) {
+	gitauth.AllowLoopbackForTests(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if u, p, ok := req.BasicAuth(); !ok || u != "x-access-token" || p != "ghs_42_1" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		pkt := func(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+		_, _ = io.WriteString(w, pkt("# service=git-upload-pack\n")+"0000"+pkt(testCommit+" refs/heads/main\x00agent=git/2.47.0\n")+"0000")
+	}))
+	defer srv.Close()
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r := githubWatcher(t, &fakeLsRemote{}, app)
+	// The repository is github.com's; the listing goes to the test host,
+	// with the credential the watcher chose.
+	r.LsRemote = func(ctx context.Context, _ string, b gitauth.Build) (map[string]string, error) {
+		return gitauth.LsRemote(ctx, srv.URL+"/acme/shop", b)
+	}
+	_, got := reconcileSource(t, r, app)
+	if got.PinnedCommit() != testCommit {
+		t.Errorf("pinned %q; record %+v", got.PinnedCommit(), sourceRecord(got))
 	}
 }
 
