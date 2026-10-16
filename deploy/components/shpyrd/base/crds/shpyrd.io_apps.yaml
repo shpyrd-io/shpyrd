@@ -754,13 +754,19 @@ spec:
                     - url
                     type: object
                   git:
-                    description: GitSource builds from a Git repository; kpack polls
-                      branches for changes.
+                    description: |-
+                      GitSource builds from a Git repository. A branch or tag is watched: the
+                      source watcher pins its latest commit and builds use that commit
+                      (RFC-0018). A commit is built as given.
                     properties:
-                      revision:
+                      autoDeploy:
                         description: |-
-                          Revision is a branch, tag or commit. Defaults to the default branch
-                          as resolved by kpack ("main" when unset).
+                          AutoDeploy deploys every new commit of the branch; false records
+                          them without deploying. Unset means true.
+                        type: boolean
+                      revision:
+                        description: Revision is a branch, tag or commit. Defaults
+                          to "main".
                         type: string
                       url:
                         type: string
@@ -1089,6 +1095,44 @@ spec:
                 description: Runtime is the runtime detected in the current image's
                   buildpack metadata.
                 type: string
+              source:
+                description: |-
+                  Source is what the source watcher knows of the branch a git source
+                  follows, and the commit pinned for it (RFC-0018).
+                properties:
+                  author:
+                    type: string
+                  checkedAt:
+                    format: date-time
+                    type: string
+                  commit:
+                    description: 'Commit is the commit pinned for the branch: what
+                      is built and runs.'
+                    type: string
+                  error:
+                    description: Error says why the branch could not be read, in words.
+                    type: string
+                  lastWebhookAt:
+                    format: date-time
+                    type: string
+                  latest:
+                    description: Latest is the newest commit seen on the branch.
+                    type: string
+                  latestAt:
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message and Author describe Latest when a push said
+                      them.
+                    type: string
+                  skipped:
+                    description: Skipped is a commit whose message asked not to deploy
+                      it.
+                    type: string
+                  via:
+                    description: 'Via is how Latest was learnt: push, poll or deploy.'
+                    type: string
+                type: object
               staleImages:
                 description: |-
                   StaleImages are images of releases that left the history and that no

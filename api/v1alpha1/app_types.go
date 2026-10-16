@@ -111,6 +111,18 @@ const (
 	// AnnotationRebuildAt, on the App, builds the current source again
 	// (redeploy after a failed build, or to pick up a new base image).
 	AnnotationRebuildAt = "shpyrd.io/rebuild-at"
+	// AnnotationGitCommit and AnnotationGitCommitRef pin the commit a git
+	// branch builds (RFC-0018): the full SHA, and the revision it was read
+	// from. The pin holds only while the ref is spec.source.git's
+	// revision. The source watcher writes them; a git deploy removes them.
+	AnnotationGitCommit    = "shpyrd.io/git-commit"
+	AnnotationGitCommitRef = "shpyrd.io/git-commit-ref"
+	// AnnotationGitPush is a push the webhook received, as JSON, for the
+	// source watcher to consume.
+	AnnotationGitPush = "shpyrd.io/git-push"
+	// AnnotationGitSource is what the source watcher last saw of the
+	// branch, as JSON; the App controller copies it into status.source.
+	AnnotationGitSource = "shpyrd.io/git-source"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes
@@ -134,6 +146,9 @@ const (
 const (
 	ConditionReady = "Ready"
 	ConditionBuilt = "Built"
+	// ConditionSourceReady says whether the branch an App follows could be
+	// read and a commit is pinned for it (RFC-0018).
+	ConditionSourceReady = "SourceReady"
 )
 
 // AppSpec is the desired state of an application.
@@ -299,13 +314,18 @@ type Source struct {
 	SubPath string `json:"subPath,omitempty"`
 }
 
-// GitSource builds from a Git repository; kpack polls branches for changes.
+// GitSource builds from a Git repository. A branch or tag is watched: the
+// source watcher pins its latest commit and builds use that commit
+// (RFC-0018). A commit is built as given.
 type GitSource struct {
 	URL string `json:"url"`
-	// Revision is a branch, tag or commit. Defaults to the default branch
-	// as resolved by kpack ("main" when unset).
+	// Revision is a branch, tag or commit. Defaults to "main".
 	// +optional
 	Revision string `json:"revision,omitempty"`
+	// AutoDeploy deploys every new commit of the branch; false records
+	// them without deploying. Unset means true.
+	// +optional
+	AutoDeploy *bool `json:"autoDeploy,omitempty"`
 }
 
 // BlobSource builds from an archive uploaded with `shpyrd deploy`.
@@ -551,6 +571,10 @@ type AppStatus struct {
 	// (RFC-0034).
 	// +optional
 	Domains []DomainStatus `json:"domains,omitempty"`
+	// Source is what the source watcher knows of the branch a git source
+	// follows, and the commit pinned for it (RFC-0018).
+	// +optional
+	Source *SourceStatus `json:"source,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -571,6 +595,36 @@ type DomainStatus struct {
 	Certificate string `json:"certificate"`
 	// Message explains a pending or failed state.
 	Message string `json:"message,omitempty"`
+}
+
+// SourceStatus is what the source watcher knows of a git branch.
+type SourceStatus struct {
+	// Commit is the commit pinned for the branch: what is built and runs.
+	// +optional
+	Commit string `json:"commit,omitempty"`
+	// Latest is the newest commit seen on the branch.
+	// +optional
+	Latest string `json:"latest,omitempty"`
+	// +optional
+	LatestAt *metav1.Time `json:"latestAt,omitempty"`
+	// Message and Author describe Latest when a push said them.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// +optional
+	Author string `json:"author,omitempty"`
+	// Via is how Latest was learnt: push, poll or deploy.
+	// +optional
+	Via string `json:"via,omitempty"`
+	// Skipped is a commit whose message asked not to deploy it.
+	// +optional
+	Skipped string `json:"skipped,omitempty"`
+	// +optional
+	LastWebhookAt *metav1.Time `json:"lastWebhookAt,omitempty"`
+	// +optional
+	CheckedAt *metav1.Time `json:"checkedAt,omitempty"`
+	// Error says why the branch could not be read, in words.
+	// +optional
+	Error string `json:"error,omitempty"`
 }
 
 // ReleasePhaseStatus is the state of the release command (the image's
