@@ -94,12 +94,13 @@ type Server struct {
 	people    []Installation
 	login     string
 	orgRoles  map[string][2]string // by org, lower case: role, state
-	// noMembers is an App registered without members: read.
-	noMembers bool
-	minted    map[int64]int
-	tokens    map[string]int64 // installation token -> installation
-	lastBody  map[string]any
-	calls     []string
+	// membersRefusal is the message of a 403 the memberships call answers;
+	// "": none.
+	membersRefusal string
+	minted         map[int64]int
+	tokens         map[string]int64 // installation token -> installation
+	lastBody       map[string]any
+	calls          []string
 }
 
 // NewServer starts the fake with installation 42 on Acme.
@@ -197,7 +198,30 @@ func (f *Server) SetOrgRole(org, role, state string) {
 
 // SetNoMembersPermission makes the memberships call answer 403, as for an
 // App whose owner has not accepted members: read.
-func (f *Server) SetNoMembersPermission(no bool) { f.mu.Lock(); f.noMembers = no; f.mu.Unlock() }
+func (f *Server) SetNoMembersPermission(no bool) {
+	msg := ""
+	if no {
+		msg = "Resource not accessible by integration"
+	}
+	f.SetMembershipRefusal(msg)
+}
+
+// SetMembershipRefusal makes the memberships call answer 403 with message:
+// an organisation's SAML enforcement, or a spent rate limit, say so in
+// it. "" lifts it.
+func (f *Server) SetMembershipRefusal(message string) {
+	f.mu.Lock()
+	f.membersRefusal = message
+	f.mu.Unlock()
+}
+
+// Uninstall forgets an installation, as GitHub does once the App is
+// uninstalled: its token calls answer 404.
+func (f *Server) Uninstall(installation int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.repos, installation)
+}
 
 // MintedFor counts the tokens minted for an installation.
 func (f *Server) MintedFor(installation int64) int {
@@ -381,8 +405,8 @@ func (f *Server) membership(w http.ResponseWriter, r *http.Request, org string) 
 		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
 		return
 	}
-	if f.noMembers {
-		reply(w, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
+	if f.membersRefusal != "" {
+		reply(w, http.StatusForbidden, map[string]string{"message": f.membersRefusal})
 		return
 	}
 	m, ok := f.orgRoles[strings.ToLower(org)]

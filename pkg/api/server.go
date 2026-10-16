@@ -97,6 +97,11 @@ type Options struct {
 	// MembershipChanged is called after every team or grant write so the
 	// RBAC mirror runs at once; nil when this replica does not run it.
 	MembershipChanged func()
+	// GitHubChanged is called after a workspace's GitHub connections
+	// change (connect, disconnect, an installation event) so its Apps on
+	// github.com take their credential again at once (RFC-0054); nil when
+	// this replica does not run the controllers.
+	GitHubChanged func(workspace string)
 	// Tenancy maps request hosts to workspaces (RFC-0033 phase 6). Defaults
 	// to tenancy.Single: every host is the implicit workspace. The cloud
 	// layer supplies a resolver that knows many.

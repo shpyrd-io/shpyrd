@@ -52,14 +52,115 @@ const (
 	githubCallTimeout = 5 * time.Second
 )
 
+// githubRefusalLife is how long GitHub's refusal of a repository is kept:
+// a repository not granted, an installation gone, a 403. A change of the
+// workspace's connections, or an installation event, forgets it sooner.
+const githubRefusalLife = 10 * time.Minute
+
 // GitHubApp is the App's credentials and the workspaces' installations.
 type GitHubApp struct {
 	Source        *github.Source
 	Installations store.GitHub
+	// Requeue reconciles a workspace's Apps on github.com again; nil does
+	// nothing (before the controllers start). Set it with SetRequeue once
+	// the API may call Changed.
+	Requeue func(ctx context.Context, workspace string)
 
+	mu sync.Mutex
 	// failed is, by installation, until when GitHub is not asked again.
-	mu     sync.Mutex
 	failed map[int64]time.Time
+	// refused is GitHub's refusal, by installation and repository.
+	refused map[githubRepoKey]githubRefusal
+	// brokenLogged is when a broken App was last logged.
+	brokenLogged time.Time
+}
+
+type githubRepoKey struct {
+	installation int64
+	repo         string // lower case
+}
+
+type githubRefusal struct {
+	workspace string
+	why       string
+	until     time.Time
+}
+
+// refusedLately is GitHub's refusal of the repository, while it is kept.
+func (gh *GitHubApp) refusedLately(id int64, repo string) (string, bool) {
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	key := githubRepoKey{id, strings.ToLower(repo)}
+	r, ok := gh.refused[key]
+	if ok && !gh.now().Before(r.until) {
+		delete(gh.refused, key)
+		return "", false
+	}
+	return r.why, ok
+}
+
+// keepRefusal keeps GitHub's refusal of the repository for
+// githubRefusalLife.
+func (gh *GitHubApp) keepRefusal(ws string, id int64, repo, why string) {
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if gh.refused == nil {
+		gh.refused = map[githubRepoKey]githubRefusal{}
+	}
+	gh.refused[githubRepoKey{id, strings.ToLower(repo)}] = githubRefusal{workspace: ws, why: why, until: gh.now().Add(githubRefusalLife)}
+}
+
+// Forget drops the refusals kept for a workspace's repositories: its
+// connections changed.
+func (gh *GitHubApp) Forget(workspace string) {
+	if gh == nil {
+		return
+	}
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	for k, r := range gh.refused {
+		if r.workspace == workspace {
+			delete(gh.refused, k)
+		}
+	}
+}
+
+// Changed is a workspace's GitHub connections changing (a connect, a
+// disconnect, an installation event): its refusals are forgotten and its
+// Apps on github.com reconciled again, so <app>-git follows at once.
+func (gh *GitHubApp) Changed(ctx context.Context, workspace string) {
+	if gh == nil {
+		return
+	}
+	gh.Forget(workspace)
+	gh.mu.Lock()
+	requeue := gh.Requeue
+	gh.mu.Unlock()
+	if requeue != nil {
+		requeue(ctx, workspace)
+	}
+}
+
+// SetRequeue sets Requeue while the API may be calling Changed.
+func (gh *GitHubApp) SetRequeue(requeue func(ctx context.Context, workspace string)) {
+	gh.mu.Lock()
+	gh.Requeue = requeue
+	gh.mu.Unlock()
+}
+
+// logBroken says, at most once per github.Recheck, that the App's Secret
+// makes no App.
+func (gh *GitHubApp) logBroken(ctx context.Context, err error) {
+	gh.mu.Lock()
+	now := gh.now()
+	due := gh.brokenLogged.IsZero() || now.Sub(gh.brokenLogged) >= github.Recheck
+	if due {
+		gh.brokenLogged = now
+	}
+	gh.mu.Unlock()
+	if due {
+		log.FromContext(ctx).Info("the GitHub App cannot be used; building with the other credentials", "err", err.Error())
+	}
 }
 
 func (gh *GitHubApp) now() time.Time {
@@ -129,11 +230,12 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 		// platform without the App; a broken Secret or a failed read is
 		// worth a line.
 		if err != github.ErrNotConfigured { //nolint:errorlint // identity, not a wrapped error, is the point
-			logger.Info("the GitHub App cannot be used; building with the other credentials", "err", err.Error())
+			gh.logBroken(ctx, err)
 		}
 		return nil, "", false
 	}
-	list, err := gh.Installations.GitHubInstallations(ctx, workspaceOf(app))
+	ws := workspaceOf(app)
+	list, err := gh.Installations.GitHubInstallations(ctx, ws)
 	if err != nil {
 		logger.Info("could not read the workspace's GitHub connections; building with the other credentials", "err", err.Error())
 		return nil, "", false
@@ -150,6 +252,11 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	case inst.SuspendedAt != nil:
 		return nil, fmt.Sprintf("The GitHub App's installation on %s is suspended: an owner of %s unsuspends it on GitHub.", inst.AccountLogin, inst.AccountLogin), false
 	}
+	// A refusal is kept: the repository is not asked for again until it
+	// ages or the workspace's connections change.
+	if why, ok := gh.refusedLately(inst.ID, name); ok {
+		return nil, why, false
+	}
 	// A token GitHub already gave is used without asking; the backoff
 	// only holds back a call.
 	tok, cached := cl.CachedInstallationToken(inst.ID, name)
@@ -164,12 +271,18 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	var apiErr *github.APIError
 	switch {
 	case errors.Is(err, github.ErrRepoNotGranted):
-		return nil, fmt.Sprintf("The GitHub App's installation on %s does not include %s: add the repository to it on GitHub.", inst.AccountLogin, name), false
+		why := fmt.Sprintf("The GitHub App's installation on %s does not include %s: add the repository to it on GitHub.", inst.AccountLogin, name)
+		gh.keepRefusal(ws, inst.ID, name, why)
+		return nil, why, false
 	case errors.Is(err, github.ErrInstallationGone):
-		return nil, fmt.Sprintf("The GitHub App is no longer installed on %s: an owner of %s installs it again, then a workspace admin connects it from Workspace settings → Git.", inst.AccountLogin, inst.AccountLogin), false
+		why := fmt.Sprintf("The GitHub App is no longer installed on %s: an owner of %s installs it again, then a workspace admin connects it from Workspace settings → Git.", inst.AccountLogin, inst.AccountLogin)
+		gh.keepRefusal(ws, inst.ID, name, why)
+		return nil, why, false
 	case errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited:
 		logger.Info("GitHub refused the App a token; building with the other credentials", "installation", inst.ID, "err", err.Error())
-		return nil, fmt.Sprintf("GitHub refused the GitHub App's installation on %s a token for %s.", inst.AccountLogin, name), false
+		why := fmt.Sprintf("GitHub refused the GitHub App a token for %s on %s: check the App's permissions and repository access on GitHub.", name, inst.AccountLogin)
+		gh.keepRefusal(ws, inst.ID, name, why)
+		return nil, why, false
 	case err != nil:
 		gh.remember(inst.ID, err)
 		logger.Info("GitHub gave no token; building with the other credentials", "installation", inst.ID, "err", err.Error())

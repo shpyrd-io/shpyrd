@@ -275,6 +275,9 @@ func run(o runOptions, logger *slog.Logger) error {
 	// front doors; the API pokes it when a workspace changes.
 	memberships := &controller.MembershipReconciler{Store: st}
 	workspaces := &controller.WorkspaceReconciler{Store: st}
+	// The GitHub App (RFC-0054): the API tells it when a workspace's
+	// connections change; the manager gives it the App's Secret.
+	githubApp := &controller.GitHubApp{Installations: st}
 
 	// The open-source platform resolves every host to its one workspace.
 	var resolver tenancy.Resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
@@ -307,6 +310,11 @@ func run(o runOptions, logger *slog.Logger) error {
 		WorkspacesChanged: func() {
 			if o.controller {
 				workspaces.Notify()
+			}
+		},
+		GitHubChanged: func(ws string) {
+			if o.controller {
+				githubApp.Changed(context.Background(), ws)
 			}
 		},
 		UI:                     uiFiles(logger),
@@ -358,7 +366,7 @@ func run(o runOptions, logger *slog.Logger) error {
 
 	if o.controller {
 		runControllers := func() error {
-			mgr, err := newManager(k, o, memberships, workspaces, srv.Deps())
+			mgr, err := newManager(k, o, memberships, workspaces, githubApp, srv.Deps())
 			if err != nil {
 				return err
 			}
@@ -451,7 +459,7 @@ func openStore(logger *slog.Logger, k *kube.Client, def store.DefaultWorkspaceSp
 	return st, nil
 }
 
-func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler, apiDeps ext.Deps) (ctrl.Manager, error) {
+func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler, githubApp *controller.GitHubApp, apiDeps ext.Deps) (ctrl.Manager, error) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, err
@@ -507,10 +515,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	}
 	// The GitHub App (RFC-0054): its Secret through the manager's cache,
 	// and the workspaces' installations.
-	githubApp := &controller.GitHubApp{
-		Source:        &github.Source{Reader: mgr.GetClient(), Namespace: k.Namespace, Options: github.Options{APIURL: os.Getenv(github.EnvAPIURL)}},
-		Installations: memberships.Store,
-	}
+	githubApp.Source = &github.Source{Reader: mgr.GetClient(), Namespace: k.Namespace, Options: github.Options{APIURL: os.Getenv(github.EnvAPIURL)}}
 	rec := &controller.AppReconciler{
 		BindableTypes: bindable,
 		Kube:          k.Kube,
@@ -602,6 +607,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	workspaces.Forget = workspaceCache.Forget
 	workspaces.NamesChanged = rec.RequeueWorkspace
+	githubApp.SetRequeue(rec.RequeueGitHub)
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}

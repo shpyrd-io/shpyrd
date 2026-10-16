@@ -72,9 +72,10 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		s.githubPush(c, body, c.GetHeader("X-GitHub-Delivery"))
 	case "installation":
 		s.githubInstallationEvent(c, body)
+	case "installation_repositories":
+		s.githubRepositoriesEvent(c, body)
 	default:
-		// installation_repositories: the picker reads live. check_suite,
-		// status: part 4.
+		// check_suite, status: part 4.
 		c.JSON(http.StatusAccepted, gin.H{"ignored": event})
 	}
 }
@@ -117,8 +118,15 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		return
 	}
 	push.Delivery, push.At = delivery, time.Now().UTC()
+	// The installation's workspace's Apps; the default workspace's include
+	// the Apps from before workspaces, which carry no label. The filter
+	// below checks the workspace again.
 	var list shpyrdv1.AppList
-	if err := s.apps.List(ctx, &list); err != nil {
+	var opts []client.ListOption
+	if inst.Workspace != store.DefaultWorkspace {
+		opts = append(opts, client.MatchingLabels{shpyrdv1.LabelWorkspace: inst.Workspace})
+	}
+	if err := s.apps.List(ctx, &list, opts...); err != nil {
 		s.githubPushUnavailable(c, "could not list the apps", err)
 		return
 	}
@@ -205,6 +213,35 @@ func (s *Server) githubInstallationEvent(c *gin.Context, body []byte) {
 		return
 	}
 	s.forgetGitHubRepos(inst.Workspace)
+	s.githubChanged(inst.Workspace)
 	s.auditActor(c, "github:"+firstNonEmpty(ev.Sender.Login, "unknown"), action, githubTarget(inst.ID, inst.AccountLogin), "workspace "+inst.Workspace)
 	c.JSON(http.StatusAccepted, gin.H{"recorded": ev.Action})
+}
+
+// githubRepositoriesEvent is a connected installation's repositories
+// added or removed on GitHub: the picker's listing and the refusals the
+// controllers keep are dropped, so a repository just added is used at
+// once.
+func (s *Server) githubRepositoriesEvent(c *gin.Context, body []byte) {
+	var ev struct {
+		Installation struct {
+			ID int64 `json:"id"`
+		} `json:"installation"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil || ev.Installation.ID == 0 {
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the event names no installation"})
+		return
+	}
+	inst, err := s.store.GitHubInstallation(c.Request.Context(), ev.Installation.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now"))
+		return
+	}
+	s.forgetGitHubRepos(inst.Workspace)
+	s.githubChanged(inst.Workspace)
+	c.JSON(http.StatusAccepted, gin.H{"recorded": "repositories"})
 }

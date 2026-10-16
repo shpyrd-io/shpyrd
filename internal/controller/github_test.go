@@ -6,9 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr/funcr"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,9 +19,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -444,12 +450,179 @@ func TestGitHubForbiddingATokenIsARefusalNotABackoff(t *testing.T) {
 	ctx := context.Background()
 	fake.SetForbidden(true)
 	b, err := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app)
-	if err != nil || b.Kind != gitauth.KindToken || b.AppRetry || b.AppRefused != "GitHub refused the GitHub App's installation on Acme a token for shop." {
+	if err != nil || b.Kind != gitauth.KindToken || b.AppRetry ||
+		b.AppRefused != "GitHub refused the GitHub App a token for shop on Acme: check the App's permissions and repository access on GitHub." {
 		t.Errorf("build = %+v, %v", b, err)
 	}
+	// A refusal is kept, with its reason: no call until it is forgotten.
 	fake.SetForbidden(false)
-	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app); b.Kind != gitauth.KindGitHubApp || tokenCalls(fake) != 2 {
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app); b.Kind != gitauth.KindToken || b.AppRetry || !strings.HasPrefix(b.AppRefused, "GitHub refused") || tokenCalls(fake) != 1 {
 		t.Errorf("asked again at once: %d calls, %+v", tokenCalls(fake), b)
+	}
+	r.Config.GitHub.Forget(store.DefaultWorkspace)
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", r.Config.GitHub, app); b.Kind != gitauth.KindGitHubApp || tokenCalls(fake) != 2 {
+		t.Errorf("after Forget: %d calls, %+v", tokenCalls(fake), b)
+	}
+}
+
+func TestGitHubRefusalsAreKeptTenMinutes(t *testing.T) {
+	vault := gitApp("vault", "https://github.com/acme/vault")
+	r, _, fake, _ := githubReconciler(t, vault)
+	ctx := context.Background()
+	gh := r.Config.GitHub
+	want := "The GitHub App's installation on Acme does not include vault: add the repository to it on GitHub."
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); b.AppRefused != want || tokenCalls(fake) != 1 {
+		t.Fatalf("first: %d calls, %+v", tokenCalls(fake), b)
+	}
+	for _, after := range []time.Duration{time.Second, 9 * time.Minute} {
+		fake.SetNow(sourceNow.Add(after))
+		// The repository's name in another case is the same repository.
+		vault.Spec.Source.Git.URL = "https://github.com/acme/Vault"
+		if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); b.AppRefused != want || tokenCalls(fake) != 1 {
+			t.Errorf("at %v: %d calls, %+v", after, tokenCalls(fake), b)
+		}
+	}
+	fake.SetNow(sourceNow.Add(11 * time.Minute))
+	if lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); tokenCalls(fake) != 2 {
+		t.Errorf("after ten minutes: %d calls", tokenCalls(fake))
+	}
+	// Another workspace's Forget leaves it; its own drops it.
+	gh.Forget("beta")
+	if lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); tokenCalls(fake) != 2 {
+		t.Errorf("another workspace's Forget: %d calls", tokenCalls(fake))
+	}
+	gh.Forget(store.DefaultWorkspace)
+	if lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); tokenCalls(fake) != 3 {
+		t.Errorf("after Forget: %d calls", tokenCalls(fake))
+	}
+}
+
+func TestAnUninstalledAppIsRememberedUntilItsWorkspaceChanges(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	r, _, fake, _ := githubReconciler(t, shop)
+	ctx := context.Background()
+	gh := r.Config.GitHub
+	fake.Uninstall(42)
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, shop); !strings.Contains(b.AppRefused, "no longer installed on Acme") || tokenCalls(fake) != 1 {
+		t.Fatalf("first: %d calls, %+v", tokenCalls(fake), b)
+	}
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, shop); !strings.Contains(b.AppRefused, "no longer installed on Acme") || tokenCalls(fake) != 1 {
+		t.Errorf("again: %d calls, %+v", tokenCalls(fake), b)
+	}
+}
+
+func TestGitHubChangesRequeueTheWorkspacesAppsOnGitHub(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	r, c, fake, st := githubReconciler(t, shop, workspaceToken("default", "github.com", "ghp_ours"))
+	ctx := context.Background()
+	gh := r.Config.GitHub
+	var requeued []string
+	gh.Requeue = func(_ context.Context, ws string) { requeued = append(requeued, ws) }
+	if _, err := r.reconcileGitCredentials(ctx, shop); err != nil {
+		t.Fatal(err)
+	}
+	if sec := buildSecretOf(t, c, shop); string(sec.Data[corev1.BasicAuthPasswordKey]) != "ghs_42_1" {
+		t.Fatalf("not through the App: %q", sec.Data[corev1.BasicAuthPasswordKey])
+	}
+	// The App's refusal for another repository, kept.
+	vault := gitApp("vault", "https://github.com/acme/vault")
+	lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault)
+	if err := st.DeleteGitHubInstallation(ctx, store.DefaultWorkspace, 42); err != nil {
+		t.Fatal(err)
+	}
+	gh.Changed(ctx, store.DefaultWorkspace)
+	if fmt.Sprint(requeued) != "[default]" {
+		t.Errorf("requeued %v", requeued)
+	}
+	if _, err := r.reconcileGitCredentials(ctx, shop); err != nil {
+		t.Fatal(err)
+	}
+	sec := buildSecretOf(t, c, shop)
+	if string(sec.Data[corev1.BasicAuthPasswordKey]) != "ghp_ours" || sec.Annotations[gitauth.AnnotationGitHubAccount] != "" {
+		t.Errorf("<app>-git still holds the App's token after the disconnect: %q %v", sec.Data[corev1.BasicAuthPasswordKey], sec.Annotations)
+	}
+	// Connected again: the kept refusal is gone with the change.
+	if err := st.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetRepos(42, githubtest.Repo{FullName: "Acme/shop"}, githubtest.Repo{FullName: "Acme/vault"})
+	calls := tokenCalls(fake)
+	gh.Changed(ctx, store.DefaultWorkspace)
+	if b, _ := lookupGitBuild(ctx, r.Client, "shpyrd-system", gh, vault); b.Kind != gitauth.KindGitHubApp || tokenCalls(fake) != calls+1 {
+		t.Errorf("vault after the change: %d calls, %+v", tokenCalls(fake)-calls, b)
+	}
+}
+
+func TestRequeueGitHubPicksTheWorkspacesAppsOnGitHub(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	gitlab := gitApp("lab", "https://gitlab.com/acme/lab")
+	other := gitApp("beta-shop", "https://github.com/acme/shop")
+	other.Labels = map[string]string{shpyrdv1.LabelWorkspace: "beta"}
+	plain := sampleApp("plain")
+	r, _ := newTestReconciler(t, shop, gitlab, other, plain)
+	r.workspaceEvents = make(chan event.GenericEvent, 8)
+	r.RequeueGitHub(context.Background(), store.DefaultWorkspace)
+	select {
+	case ev := <-r.workspaceEvents:
+		if ev.Object.GetName() != "shop" {
+			t.Errorf("requeued %s", ev.Object.GetName())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing requeued")
+	}
+	select {
+	case ev := <-r.workspaceEvents:
+		t.Errorf("also requeued %s", ev.Object.GetName())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestTheGitHubAppsSecretMapsToTheAppsOnGitHub(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	other := gitApp("beta-shop", "https://github.com/acme/site")
+	other.Labels = map[string]string{shpyrdv1.LabelWorkspace: "beta"}
+	gitlab := gitApp("lab", "https://gitlab.com/acme/lab")
+	r, _ := newTestReconciler(t, shop, other, gitlab, sampleApp("plain"))
+	app := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: github.SecretName, Namespace: r.Config.SystemNamespace}}
+	var got []string
+	for _, req := range r.secretToApps(context.Background(), app) {
+		got = append(got, req.Name)
+	}
+	sort.Strings(got)
+	if fmt.Sprint(got) != "[beta-shop shop]" {
+		t.Errorf("the App's Secret maps to %v", got)
+	}
+	elsewhere := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: github.SecretName, Namespace: "app-shop"}}
+	for _, req := range r.secretToApps(context.Background(), elsewhere) {
+		if req.Name == "shop" || req.Name == "beta-shop" {
+			t.Errorf("a Secret of that name in a project maps to %v", req)
+		}
+	}
+}
+
+func TestABrokenGitHubAppIsLoggedOncePerRecheck(t *testing.T) {
+	broken := func() *corev1.Secret {
+		sec := githubtest.NewServer(t).Secret("shpyrd-system")
+		sec.Data[github.KeyPrivateKey] = []byte("not a key")
+		return sec
+	}()
+	app := gitApp("shop", "https://github.com/acme/shop")
+	r, c := newTestReconciler(t, app, broken)
+	fake, st := connectedGitHub(t)
+	r.Config.GitHub = &GitHubApp{Source: fake.Source(c, "shpyrd-system"), Installations: st}
+	var buf strings.Builder
+	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) { buf.WriteString(prefix + args + "\n") }, funcr.Options{}))
+	lines := func() int { return strings.Count(buf.String(), "the GitHub App cannot be used") }
+	for range 3 {
+		lookupGitBuild(ctx, c, "shpyrd-system", r.Config.GitHub, app)
+	}
+	if lines() != 1 {
+		t.Errorf("%d lines:\n%s", lines(), buf.String())
+	}
+	fake.SetNow(sourceNow.Add(github.Recheck + time.Second))
+	lookupGitBuild(ctx, c, "shpyrd-system", r.Config.GitHub, app)
+	if lines() != 2 {
+		t.Errorf("after the recheck: %d lines", lines())
 	}
 }
 

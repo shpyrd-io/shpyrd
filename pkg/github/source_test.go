@@ -9,7 +9,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
@@ -95,5 +97,35 @@ func TestABrokenSecretStopsTheOldClient(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestABrokenSecretIsNotReadAgainWithinTheRecheck(t *testing.T) {
+	fake := githubtest.NewServer(t)
+	fake.SetNow(t0)
+	sec := fake.Secret("shpyrd-system")
+	sec.Data[github.KeyPrivateKey] = []byte("not a key")
+	reads := 0
+	c := crfake.NewClientBuilder().WithObjects(sec).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			reads++
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	src := fake.Source(c, "shpyrd-system")
+	ctx := context.Background()
+	first, err := src.Client(ctx)
+	if first != nil || !errors.Is(err, github.ErrNotConfigured) {
+		t.Fatalf("broken: %v", err)
+	}
+	for _, after := range []time.Duration{time.Second, 29 * time.Second} {
+		fake.SetNow(t0.Add(after))
+		if got, again := src.Client(ctx); got != nil || again == nil || again.Error() != err.Error() || reads != 1 {
+			t.Errorf("at %v: %d reads, err %v", after, reads, again)
+		}
+	}
+	fake.SetNow(t0.Add(31 * time.Second))
+	if _, err := src.Client(ctx); err == nil || reads != 2 {
+		t.Errorf("after the recheck: %d reads, err %v", reads, err)
 	}
 }

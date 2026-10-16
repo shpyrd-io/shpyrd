@@ -398,6 +398,45 @@ func TestGitHubAppWithoutTheMembersPermissionSaysSo(t *testing.T) {
 	}
 }
 
+func TestGitHubMembershipRefusalsSayWhy(t *testing.T) {
+	for name, tc := range map[string]struct {
+		message string
+		status  int
+		says    string
+	}{
+		"rate limited":    {"API rate limit exceeded for user ID 1.", http.StatusBadGateway, "Try again from the workspace&#39;s Git settings in a minute."},
+		"no members":      {"Resource not accessible by integration", http.StatusConflict, "an owner of the App must accept its new Members permission on GitHub"},
+		"SAML or another": {"Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization.", http.StatusForbidden, "GitHub refused to say whether you own Acme. If the organisation requires SAML single sign-on, authorize your GitHub session for it, then connect again."},
+	} {
+		s, _, fake := githubServer(t)
+		fake.SetMembershipRefusal(tc.message)
+		rec := installed(t, s, "42", githubtest.Code, connectState(t, s))
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.says) {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestGitHubCallbackOfAnInstallStartedOnGitHub(t *testing.T) {
+	s, _, _ := githubServer(t)
+	rec := do(t, s, "GET", "/api/github/installed?installation_id=42&setup_action=install&code="+githubtest.Code, "", false)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Connect GitHub from your workspace&#39;s settings (Workspace settings → Git) so shpyrd knows which workspace to connect it to.") {
+		t.Errorf("no state: %d %s", rec.Code, rec.Body.String())
+	}
+	if list, _ := s.store.GitHubInstallations(context.Background(), store.DefaultWorkspace); len(list) != 0 {
+		t.Errorf("stored %+v", list)
+	}
+}
+
+func TestGitHubCallbackOfARequestedInstall(t *testing.T) {
+	s, _, _ := githubServer(t)
+	// GitHub sends no installation: there is none until an owner approves.
+	rec := do(t, s, "GET", "/api/github/installed?setup_action=request&state="+url.QueryEscape(connectState(t, s)), "", false)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "An owner of the organisation must approve the request on GitHub; then connect it from Workspace settings → Git.") {
+		t.Errorf("request: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGitHubFinishRefusesWhenTheStoreSaysAnotherWorkspaceHasIt(t *testing.T) {
 	s, _, _ := githubServer(t)
 	held := &heldStore{Store: s.store}
@@ -456,6 +495,26 @@ func TestGitHubRepositoriesAndBranchesForThePicker(t *testing.T) {
 	s.forgetGitHubRepos(store.DefaultWorkspace)
 	if rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "Acme") {
 		t.Errorf("GitHub down: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubRepositoriesSkipAnInstallationThatIsGone(t *testing.T) {
+	s, _, fake := githubServer(t)
+	ctx := context.Background()
+	for _, inst := range []store.GitHubInstallation{
+		{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"},
+		{ID: 7, AccountLogin: "Gone", AccountType: "Organization", ConnectedBy: "ana"},
+	} {
+		if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, inst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake.Uninstall(7)
+	rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true)
+	var repos []GitHubRepositoryView
+	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
+	if rec.Code != http.StatusOK || len(repos) != 2 || repos[0].FullName != "Acme/shop" {
+		t.Errorf("an uninstalled App fails the whole list: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -540,5 +599,17 @@ func TestGitHubRoutesNeedTheirRoles(t *testing.T) {
 	}
 	if rec := doCookie(t, s, "GET", "/api/workspace/github/repositories", "", strangerSID, ""); rec.Code != http.StatusForbidden {
 		t.Errorf("stranger lists: %d", rec.Code)
+	}
+	if rec := doCookie(t, s, "GET", "/api/workspace/github/repositories/acme/shop/branches", "", strangerSID, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("stranger lists branches: %d", rec.Code)
+	}
+	if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doCookie(t, s, "DELETE", "/api/workspace/github/installations/42", "", memberSID, memberCSRF); rec.Code != http.StatusForbidden {
+		t.Errorf("member disconnects: %d", rec.Code)
+	}
+	if list, _ := s.store.GitHubInstallations(ctx, store.DefaultWorkspace); len(list) != 1 {
+		t.Errorf("a member's disconnect went through: %+v", list)
 	}
 }

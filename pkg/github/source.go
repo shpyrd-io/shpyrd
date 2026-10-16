@@ -11,9 +11,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// recheck is how long the Secret read last stands: a new App or a removed
-// one is seen within it.
-const recheck = 30 * time.Second
+// Recheck is how long the Secret read last stands: a new App, a removed
+// one or a broken one is seen within it.
+const Recheck = 30 * time.Second
 
 // Source is the App as its Secret says, for the server and the
 // controllers: the Secret read at most every 30 s, and one Client per
@@ -27,6 +27,9 @@ type Source struct {
 	client  *Client
 	version string
 	missing bool
+	// broken is why the Secret read last makes no App: callers get it
+	// until the next read.
+	broken  error
 	checked time.Time
 }
 
@@ -42,9 +45,12 @@ func (s *Source) Client(ctx context.Context) (*Client, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.checked.IsZero() && now.Sub(s.checked) < recheck {
+	if !s.checked.IsZero() && now.Sub(s.checked) < Recheck {
 		if s.missing {
 			return nil, ErrNotConfigured
+		}
+		if s.broken != nil {
+			return nil, s.broken
 		}
 		if s.client != nil {
 			return s.client, nil
@@ -53,13 +59,13 @@ func (s *Source) Client(ctx context.Context) (*Client, error) {
 	sec := &corev1.Secret{}
 	err := s.Reader.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: SecretName}, sec)
 	if apierrors.IsNotFound(err) {
-		s.client, s.version, s.missing, s.checked = nil, "", true, now
+		s.client, s.version, s.missing, s.broken, s.checked = nil, "", true, nil, now
 		return nil, ErrNotConfigured
 	}
 	if err != nil {
 		return nil, err
 	}
-	s.missing, s.checked = false, now
+	s.missing, s.broken, s.checked = false, nil, now
 	if s.client != nil && sec.ResourceVersion == s.version {
 		return s.client, nil
 	}
@@ -67,12 +73,12 @@ func (s *Source) Client(ctx context.Context) (*Client, error) {
 	// the error, never the previous App's credentials.
 	app, err := AppFromSecret(sec)
 	if err != nil {
-		s.client, s.version = nil, ""
+		s.client, s.version, s.broken = nil, "", err
 		return nil, err
 	}
 	c, err := New(app, s.Options)
 	if err != nil {
-		s.client, s.version = nil, ""
+		s.client, s.version, s.broken = nil, "", err
 		return nil, err
 	}
 	s.client, s.version = c, sec.ResourceVersion

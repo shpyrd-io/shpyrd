@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -172,6 +173,86 @@ func TestGitHubWebhookRecordsInstallationEvents(t *testing.T) {
 	}
 	if rec := deliverApp(t, s, "installation_repositories", "d-5", []byte(`{"action":"added"}`), githubtest.WebhookSecret); rec.Code != http.StatusAccepted {
 		t.Errorf("repositories changed: %d", rec.Code)
+	}
+}
+
+// listSelectors records the label selector of every App listing.
+func listSelectors(s *Server) *[]string {
+	var got []string
+	s.apps = interceptor.NewClient(s.apps.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*shpyrdv1.AppList); ok {
+				o := (&client.ListOptions{}).ApplyOptions(opts)
+				sel := ""
+				if o.LabelSelector != nil {
+					sel = o.LabelSelector.String()
+				}
+				got = append(got, sel)
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	return &got
+}
+
+func TestGitHubWebhookListsOnlyTheInstallationsWorkspace(t *testing.T) {
+	s, cr, _ := githubServer(t,
+		onGitHub("ours", "https://github.com/acme/shop", "main", ""),
+		onGitHub("theirs", "https://github.com/acme/shop", "main", "beta"),
+	)
+	if _, err := s.store.CreateWorkspace(context.Background(), store.Workspace{Slug: "beta", Name: "Beta", Address: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	connectAcme(t, s, "beta")
+	selectors := listSelectors(s)
+	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["theirs"]`) {
+		t.Fatalf("push: %d %s", rec.Code, rec.Body.String())
+	}
+	if fmt.Sprint(*selectors) != "["+shpyrdv1.LabelWorkspace+"=beta]" {
+		t.Errorf("listed with %q", *selectors)
+	}
+	if appNamed(t, cr, "ours").Annotations[shpyrdv1.AnnotationGitPush] != "" {
+		t.Error("another workspace's App got the push")
+	}
+}
+
+func TestGitHubWebhookOfTheDefaultWorkspaceListsAppsWithoutALabel(t *testing.T) {
+	s, _, _ := githubServer(t,
+		onGitHub("ours", "https://github.com/acme/shop", "main", ""),
+		onGitHub("theirs", "https://github.com/acme/shop", "main", "beta"),
+	)
+	connectAcme(t, s, store.DefaultWorkspace)
+	selectors := listSelectors(s)
+	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["ours"]`) {
+		t.Fatalf("push: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(*selectors) != 1 || (*selectors)[0] != "" {
+		t.Errorf("listed with %q", *selectors)
+	}
+}
+
+func TestGitHubChangesReachTheControllers(t *testing.T) {
+	s, _, _ := githubServer(t)
+	var changed []string
+	s.opts.GitHubChanged = func(ws string) { changed = append(changed, ws) }
+	if rec := connected(t, s, "42"); rec.Code != http.StatusFound {
+		t.Fatalf("connect: %d", rec.Code)
+	}
+	for i, ev := range []string{"suspend", "unsuspend", "created", "deleted"} {
+		deliverApp(t, s, "installation", fmt.Sprintf("d-%d", i), installationEvent(ev, 42), githubtest.WebhookSecret)
+	}
+	connectAcme(t, s, store.DefaultWorkspace)
+	deliverApp(t, s, "installation_repositories", "d-r", installationEvent("added", 42), githubtest.WebhookSecret)
+	deliverApp(t, s, "installation_repositories", "d-x", installationEvent("added", 99), githubtest.WebhookSecret)
+	if rec := do(t, s, "DELETE", "/api/workspace/github/installations/42", "", true); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect: %d", rec.Code)
+	}
+	// connect; suspend, unsuspend, deleted (not created); repositories
+	// added on 42 (not on 99, connected nowhere); disconnect.
+	if len(changed) != 6 || strings.Join(changed, ",") != "default,default,default,default,default,default" {
+		t.Errorf("changed %v", changed)
 	}
 }
 

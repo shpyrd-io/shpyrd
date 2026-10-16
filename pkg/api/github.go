@@ -243,6 +243,13 @@ func (s *Server) forgetGitHubRepos(ws string) {
 	s.githubRepos.mu.Unlock()
 }
 
+// githubChanged tells the controllers a workspace's connections changed.
+func (s *Server) githubChanged(ws string) {
+	if s.opts.GitHubChanged != nil {
+		s.opts.GitHubChanged(ws)
+	}
+}
+
 // githubMissing says there is no App, and who sets one up on self-hosted.
 func (s *Server) githubMissing() string {
 	msg := "GitHub is not set up on this platform."
@@ -354,6 +361,7 @@ func (s *Server) githubDisconnect(c *gin.Context) {
 		return
 	}
 	s.forgetGitHubRepos(ws)
+	s.githubChanged(ws)
 	s.audit(c, "", "github.disconnect", githubTarget(id, account), "workspace "+ws)
 	c.Status(http.StatusNoContent)
 }
@@ -383,6 +391,12 @@ func (s *Server) githubRepositories(c *gin.Context) {
 			continue
 		}
 		repos, err := cl.Repositories(ctx, inst.ID)
+		if errors.Is(err, github.ErrInstallationGone) {
+			// Uninstalled on GitHub, the webhook not yet heard: the other
+			// connections still list.
+			s.log.Warn("github: the installation is gone; listing the others", "installation", inst.ID, "account", inst.AccountLogin)
+			continue
+		}
 		if err != nil {
 			abort(c, http.StatusBadGateway, fmt.Errorf("GitHub did not list the repositories of %s: %w. Try again in a minute", inst.AccountLogin, err))
 			return
@@ -439,6 +453,12 @@ func (s *Server) githubInstalled(c *gin.Context) {
 		s.githubPage(c, http.StatusNotFound, "GitHub is not set up here", "This platform has no GitHub App, so nothing was connected.", "")
 		return
 	}
+	if c.Query("setup_action") == "request" {
+		// A member asked an organisation's owners to install the App:
+		// GitHub sends no installation until one approves.
+		s.githubPage(c, http.StatusOK, "Waiting for an owner", "An owner of the organisation must approve the request on GitHub; then connect it from Workspace settings → Git.", "")
+		return
+	}
 	id, err := strconv.ParseInt(c.Query("installation_id"), 10, 64)
 	if err != nil || id <= 0 {
 		s.githubPage(c, http.StatusBadRequest, "GitHub sent no installation", "Nothing was connected. Start again from the workspace's Git settings: Connect GitHub.", "")
@@ -449,6 +469,11 @@ func (s *Server) githubInstalled(c *gin.Context) {
 		// connect, and no state comes from GitHub's own settings page. The
 		// generic dashboard: which workspace has it is not said.
 		c.Redirect(http.StatusFound, s.dashboardURLOf(nil))
+		return
+	}
+	if c.Query("state") == "" {
+		// Installed from GitHub's own page: no workspace asked for it.
+		s.githubPage(c, http.StatusBadRequest, "Connect it from your workspace", "Connect GitHub from your workspace's settings (Workspace settings → Git) so shpyrd knows which workspace to connect it to.", "")
 		return
 	}
 	now := time.Now()
@@ -477,6 +502,11 @@ func (s *Server) githubInstalled(c *gin.Context) {
 	if who.inst == nil {
 		s.githubPage(c, http.StatusForbidden, "Not an installation you can see",
 			fmt.Sprintf("GitHub says your account cannot see installation %d. Install the App on an account or organisation you manage, then connect it.", id), back)
+		return
+	}
+	if who.refused {
+		s.githubPage(c, http.StatusForbidden, "GitHub refused",
+			fmt.Sprintf("GitHub refused to say whether you own %s. If the organisation requires SAML single sign-on, authorize your GitHub session for it, then connect again.", who.inst.Account), back)
 		return
 	}
 	if who.noMembers {
@@ -571,6 +601,7 @@ func (s *Server) githubFinish(c *gin.Context) {
 		return
 	}
 	s.forgetGitHubRepos(ws)
+	s.githubChanged(ws)
 	s.audit(c, "", "github.connect", githubTarget(tk.Installation, tk.Account), "workspace "+ws+", by GitHub user "+tk.GitHubLogin)
 	c.Redirect(http.StatusFound, back)
 }
@@ -612,6 +643,9 @@ type githubPerson struct {
 	// noMembers: the App cannot read org memberships, registered before
 	// it asked members: read.
 	noMembers bool
+	// refused: GitHub refused to say, for another reason, most often the
+	// organisation's SAML single sign-on.
+	refused bool
 }
 
 // askGitHub asks GitHub, with the person's own token, who they are and
@@ -642,8 +676,13 @@ func askGitHub(ctx context.Context, cl *github.Client, code string, id int64) (g
 	case "Organization":
 		role, state, err := cl.OrgMembership(ctx, token, who.inst.Account)
 		var apiErr *github.APIError
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden {
-			who.noMembers = true
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited {
+			// GitHub says which refusal it is only in the message.
+			if strings.Contains(apiErr.Message, "Resource not accessible by integration") {
+				who.noMembers = true
+			} else {
+				who.refused = true
+			}
 			return who, nil
 		}
 		if err != nil {
