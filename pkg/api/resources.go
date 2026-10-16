@@ -350,6 +350,9 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		}
 		note = n
 		ch.add, ch.addN, ch.instances = res, count, count
+		if t.Kind == "Postgres" && count == 1 {
+			note = strings.TrimSpace(note + " " + noteOneInstance)
+		}
 		// Its disk counts against the workspace's storage ceiling, as the
 		// namespace quota will count it, once per instance: refused here,
 		// in words, rather than left waiting for a claim the quota never
@@ -391,6 +394,10 @@ const (
 	// What a plan refuses by kind (storage plan step 4).
 	errDedicatedNotIncluded = "Your plan includes a shared database. A dedicated database comes with a paid plan."
 	errSharedNotIncluded    = "This workspace's plan has dedicated databases; a shared one is not among its kinds."
+	// What a dedicated database with one instance is told at creation
+	// (storage plan step 4): a node roll pauses it, a second instance does
+	// not.
+	noteOneInstance = "A database with one instance pauses for about 40 seconds when its machine is replaced; a second instance avoids it."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.
