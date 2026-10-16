@@ -87,9 +87,7 @@
           "phase": "Ready",
           "message": "Connections are paused: your database is at 152% of its 1Gi cap. Free space, or raise the limit; connections return below 95%.",
           "endpoint": "events.p-hello-world:5432",
-          "attachedTo": [
-            "hello-world"
-          ],
+          "attachedTo": ["hello-world"],
           "data": true,
           "createdAt": "2026-09-02T09:30:00Z",
           "details": {
@@ -110,9 +108,7 @@
           "name": "db",
           "phase": "Ready",
           "endpoint": "db.p-hello-world:5432",
-          "attachedTo": [
-            "hello-world"
-          ],
+          "attachedTo": ["hello-world"],
           "data": true,
           "createdAt": "2026-06-10T12:20:00Z",
           "details": {
@@ -132,9 +128,7 @@
           "name": "cache",
           "phase": "Ready",
           "endpoint": "cache.p-hello-world:6379",
-          "attachedTo": [
-            "hello-world"
-          ],
+          "attachedTo": ["hello-world"],
           "data": true,
           "createdAt": "2026-07-02T09:00:00Z",
           "details": {
@@ -148,9 +142,7 @@
           "kind": "Volume",
           "name": "uploads",
           "phase": "Bound",
-          "attachedTo": [
-            "hello-world"
-          ],
+          "attachedTo": ["hello-world"],
           "data": true,
           "createdAt": "2026-08-11T10:00:00Z",
           "details": {
@@ -216,9 +208,7 @@
           "name": "archive",
           "url": "syslog+tls://logs.acme.internal:6514",
           "format": "syslog",
-          "processes": [
-            "worker"
-          ],
+          "processes": ["worker"],
           "phase": "Failing",
           "message": "connection refused",
           "lastDeliveryAt": "2026-09-29T21:10:00Z",
@@ -252,12 +242,10 @@
       "volumes": [
         {
           "name": "uploads",
-          "size": "10Gi",
+          "size": "20Gi",
           "shared": false,
           "phase": "Bound",
-          "mountedBy": [
-            "web"
-          ],
+          "mountedBy": ["web"],
           "createdAt": "2026-07-01T10:00:00Z"
         }
       ],
@@ -386,27 +374,19 @@
     {
       "name": "platform",
       "description": "Operates every project.",
-      "members": [
-        "ana@acme.com",
-        "marcelo@acme.com"
-      ],
+      "members": ["ana@acme.com", "marcelo@acme.com"],
       "platformRole": "platform-admin"
     },
     {
       "name": "finance",
       "description": "Invoices, plans and what each client owes.",
-      "members": [
-        "ana@acme.com"
-      ],
+      "members": ["ana@acme.com"],
       "groups": []
     },
     {
       "name": "support",
       "description": "Opens the apps of the clients.",
-      "members": [
-        "beatriz@acme.com",
-        "rafael@acme.com"
-      ]
+      "members": ["beatriz@acme.com", "rafael@acme.com"]
     },
     {
       "name": "everyone",
@@ -507,12 +487,7 @@
         "workspace": "acme"
       }
     ],
-    "kinds": [
-      "google",
-      "microsoft",
-      "github",
-      "oidc"
-    ],
+    "kinds": ["google", "microsoft", "github", "oidc"],
     "callback": "https://acme.shpyrd.cloud/api/auth/callback"
   },
   "domainClaims": [
@@ -732,9 +707,7 @@
       "name": "datadog",
       "url": "https://http-intake.logs.datadoghq.com/v1/input",
       "format": "json",
-      "headers": [
-        "DD-API-KEY"
-      ],
+      "headers": ["DD-API-KEY"],
       "workspace": "acme",
       "phase": "Active",
       "lastDeliveryAt": "2026-09-30T10:59:00Z",

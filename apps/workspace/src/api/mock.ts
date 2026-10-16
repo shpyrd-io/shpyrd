@@ -44,7 +44,9 @@ import workspace from "../../mock/workspace.json";
 // suffix list; two labels (acme.com) is near enough for the Mock.
 const frontDoor = "203.0.113.10";
 function recordFor(host: string, target: string): DnsRecord {
-  return host.split(".").length === 2 ? { type: "A", name: host, value: frontDoor } : { type: "CNAME", name: host, value: target };
+  return host.split(".").length === 2
+    ? { type: "A", name: host, value: frontDoor }
+    : { type: "CNAME", name: host, value: target };
 }
 
 // Everything of a project beyond itself, and everything of the workspace
@@ -79,9 +81,16 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "4";
-const projectsOf = collection<Project>(`projects${shape}`, projects as Project[], (p) => p.slug);
-const workspaceOf = single<WorkspaceInfo>(`workspace${shape}`, workspace as WorkspaceInfo);
+const shape = "5";
+const projectsOf = collection<Project>(
+  `projects${shape}`,
+  projects as Project[],
+  (p) => p.slug,
+);
+const workspaceOf = single<WorkspaceInfo>(
+  `workspace${shape}`,
+  workspace as WorkspaceInfo,
+);
 const seed = things as unknown as Things;
 const kept = single<Things>(`things${shape}`, seed);
 // What was kept from before this version of the files may lack what
@@ -90,14 +99,28 @@ const thingsOf = {
   async get(): Promise<Things> {
     const all = await kept.get();
     for (const key of Object.keys(seed) as (keyof Things)[]) {
-      if (all[key] === undefined || Array.isArray(all[key]) !== Array.isArray(seed[key])) (all as Record<string, unknown>)[key] = structuredClone(seed[key]);
+      if (
+        all[key] === undefined ||
+        Array.isArray(all[key]) !== Array.isArray(seed[key])
+      )
+        (all as Record<string, unknown>)[key] = structuredClone(seed[key]);
     }
     return all;
   },
   set: (all: Things) => kept.set(all),
 };
 
-const empty = (): ProjectThings => ({ configVars: [], builds: [], resources: [], volumes: [], snapshots: [], domains: { target: "acme.shpyrd.app", domains: [] }, drains: [], members: [], allow: [] });
+const empty = (): ProjectThings => ({
+  configVars: [],
+  builds: [],
+  resources: [],
+  volumes: [],
+  snapshots: [],
+  domains: { target: "acme.shpyrd.app", domains: [] },
+  drains: [],
+  members: [],
+  allow: [],
+});
 
 async function ofProject(slug: string): Promise<[Things, ProjectThings]> {
   const all = await thingsOf.get();
@@ -108,24 +131,47 @@ async function ofProject(slug: string): Promise<[Things, ProjectThings]> {
   return [all, p];
 }
 
-const summary = ({ spec: _spec, status: _status, ...rest }: Project): ProjectSummary => rest;
+const summary = ({
+  spec: _spec,
+  status: _status,
+  ...rest
+}: Project): ProjectSummary => rest;
 // The first domain of a project's own that answers: its DNS points here
 // and its certificate is ready.
 const domainOf = (all: Things, slug: string) =>
-  all.projects[slug]?.domains.domains.find((d) => d.dns === "ok" && (d.certificate === "ready" || d.certificate === "wildcard"))?.host;
+  all.projects[slug]?.domains.domains.find(
+    (d) =>
+      d.dns === "ok" &&
+      (d.certificate === "ready" || d.certificate === "wildcard"),
+  )?.host;
 const now = () => new Date().toISOString();
 const id = () => Math.random().toString(36).slice(2, 10);
 const who = () => (me as Identity).email;
 
 // A release goes out: a number more, and the instances follow.
-function release(p: Project, kind: Project["status"]["releases"][number]["kind"], description: string, build?: string | number) {
+function release(
+  p: Project,
+  kind: Project["status"]["releases"][number]["kind"],
+  description: string,
+  build?: string | number,
+) {
   const number = Math.max(0, ...p.status.releases.map((r) => r.number)) + 1;
-  p.status.releases.push({ number, kind, description, build, createdAt: now() });
+  p.status.releases.push({
+    number,
+    kind,
+    description,
+    build,
+    createdAt: now(),
+  });
   p.release = number;
 }
 
 // A stream that waits for an abort: lines come every so often until then.
-function until(signal: AbortSignal, every: number, tick: () => void): Promise<void> {
+function until(
+  signal: AbortSignal,
+  every: number,
+  tick: () => void,
+): Promise<void> {
   return new Promise((done) => {
     const timer = setInterval(tick, every);
     signal.addEventListener("abort", () => {
@@ -135,18 +181,144 @@ function until(signal: AbortSignal, every: number, tick: () => void): Promise<vo
   });
 }
 
+// The plan the Mock plays (storage plan step 4): the paid workspace of
+// workspace.json, or the free one, with no disks, one shared database
+// and one bucket, when the browser says `shpyrd.mock.plan = free`.
+const freePlan: Pick<WorkspaceInfo, "limits" | "usage" | "projectCaps"> = {
+  limits: {
+    projects: 2,
+    instances: 2,
+    cpu: "2",
+    memory: "512Mi",
+    allowDisks: false,
+    objectStorage: { buckets: 1, bucketCap: "1Gi", total: "1Gi" },
+    postgres: {
+      types: ["shared"],
+      defaultType: "shared",
+      sharedCap: "1Gi",
+      databases: 1,
+    },
+  },
+  usage: {
+    projects: 1,
+    instances: 1,
+    cpu: "0.5",
+    memory: "256Mi",
+    storage: "0",
+    buckets: 0,
+    objectStorage: "0",
+    databases: 1,
+    sharedDatabases: 1,
+  },
+  projectCaps: undefined,
+};
+const planOf = () => {
+  try {
+    return localStorage.getItem("shpyrd.mock.plan") === "free"
+      ? "free"
+      : "paid";
+  } catch {
+    return "paid";
+  }
+};
+const currentWorkspace = async (): Promise<WorkspaceInfo> => {
+  const ws = await workspaceOf.get();
+  return planOf() === "free" ? { ...ws, ...freePlan } : ws;
+};
+
+// "20Gi", "512Mi", "0" as GiB.
+const gib = (q: string | undefined) => {
+  const n = parseFloat(q ?? "0");
+  if (Number.isNaN(n)) return 0;
+  if (q?.endsWith("Mi")) return n / 1024;
+  if (q?.endsWith("Ti")) return n * 1024;
+  return n;
+};
+const gbWords = (g: number) => `${Number.isInteger(g) ? g : g.toFixed(1)} GB`;
+
+// What the project's disks claim: its volumes and its dedicated databases.
+const projectStorageOf = (t: ProjectThings) =>
+  t.volumes.reduce((sum, v) => sum + gib(v.size), 0) +
+  t.resources
+    .filter((r) => r.kind === "Postgres" && r.details?.type !== "shared")
+    .reduce(
+      (sum, r) =>
+        sum + gib(r.details?.storage) * Number(r.details?.instances ?? 1),
+      0,
+    );
+
+// The server's judgement, in its words: a new disk against the plan's
+// switch, the workspace's ceiling and the project's own cap.
+const admitDisk = async (
+  slug: string,
+  t: ProjectThings,
+  extra: number,
+  fresh: boolean,
+) => {
+  const ws = await currentWorkspace();
+  const l = ws.limits ?? {};
+  if (fresh && l.allowDisks === false)
+    throw new ApiError(
+      400,
+      "Disks are not included in the free workspace; use a bucket for files, or upgrade.",
+    );
+  if (l.storage) {
+    const used = gib(ws.usage?.storage);
+    if (used + extra > gib(l.storage) && extra > 0)
+      throw new ApiError(
+        400,
+        `This would bring the workspace to ${gbWords(used + extra)} of ${gbWords(gib(l.storage))}.`,
+      );
+  }
+  const cap = ws.projectCaps?.[slug]?.storage;
+  if (cap) {
+    const used = projectStorageOf(t);
+    if (used + extra > gib(cap) && extra > 0)
+      throw new ApiError(
+        400,
+        `This would bring the project to ${gbWords(used + extra)} of ${gbWords(gib(cap))}.`,
+      );
+  }
+};
+
 export const mock: Api = {
   ...mockProjectArchives("workspace"),
   config: async () => {
     await wait();
-    const ws = await workspaceOf.get();
-    return { ...(config as PublicConfig), workspace: { ...(config as PublicConfig).workspace!, name: ws.name, branding: ws.branding, capabilities: ws.capabilities } };
+    const ws = await currentWorkspace();
+    const rules = ws.limits?.postgres;
+    const postgres = rules
+      ? {
+          types: rules.types?.length
+            ? rules.types
+            : (["shared", "dedicated"] as const),
+          defaultType: rules.defaultType ?? "dedicated",
+          sharedCap: rules.sharedCap ?? "1Gi",
+        }
+      : (config as PublicConfig).postgres;
+    return {
+      ...(config as PublicConfig),
+      postgres: postgres as PublicConfig["postgres"],
+      workspace: {
+        ...(config as PublicConfig).workspace!,
+        name: ws.name,
+        branding: ws.branding,
+        capabilities: ws.capabilities,
+      },
+    };
   },
   me: async () => {
     await wait();
     return me as Identity;
   },
-  links: async () => [{ section: "Cloud", label: "Billing", url: "/.shpyrd/gate?name=billing", icon: "credit-card" }],
+  links: async () => [
+    {
+      section: "Cloud",
+      label: "Billing",
+      url: "/.shpyrd/gate?name=billing",
+      icon: "credit-card",
+    },
+  ],
 
   tokenLogin: async ({ token, next }) => {
     await wait();
@@ -162,19 +334,53 @@ export const mock: Api = {
     const all = await thingsOf.get();
     const ws = await workspaceOf.get();
     const i = all.invitations.find((x) => x.id === token);
-    if (!i) throw new ApiError(404, "this invitation was used, withdrawn, or never was");
-    return { workspace: { slug: ws.slug, name: ws.name, address: ws.address }, email: i.email, role: i.role, team: i.team, invitedBy: i.invitedBy, expiresAt: i.expiresAt, expired: i.expired, url: `/invite/${token}` };
+    if (!i)
+      throw new ApiError(
+        404,
+        "this invitation was used, withdrawn, or never was",
+      );
+    return {
+      workspace: { slug: ws.slug, name: ws.name, address: ws.address },
+      email: i.email,
+      role: i.role,
+      team: i.team,
+      invitedBy: i.invitedBy,
+      expiresAt: i.expiresAt,
+      expired: i.expired,
+      url: `/invite/${token}`,
+    };
   },
   acceptInvitation: async (token) => {
     const all = await thingsOf.get();
     const i = all.invitations.find((x) => x.id === token);
-    if (!i) throw new ApiError(404, "this invitation was used, withdrawn, or never was");
+    if (!i)
+      throw new ApiError(
+        404,
+        "this invitation was used, withdrawn, or never was",
+      );
     all.invitations = all.invitations.filter((x) => x.id !== token);
     await thingsOf.set(all);
-    return { workspace: (await workspaceOf.get()).slug, role: i.role, next: "/" };
+    return {
+      workspace: (await workspaceOf.get()).slug,
+      role: i.role,
+      next: "/",
+    };
   },
 
-  workspace: () => workspaceOf.get(),
+  workspace: async () => {
+    await wait();
+    return currentWorkspace();
+  },
+  putProjectCaps: async (caps) => {
+    await wait();
+    const ws = await workspaceOf.get();
+    const kept = Object.fromEntries(
+      Object.entries(caps).filter(([, c]) => c.storage?.trim()),
+    );
+    ws.projectCaps = Object.keys(kept).length ? kept : undefined;
+    await workspaceOf.set(ws);
+    return currentWorkspace();
+  },
   updateWorkspace: async (body) => {
     const current = await workspaceOf.get();
     const { logo, color, ...rest } = body;
@@ -216,12 +422,34 @@ export const mock: Api = {
     if (known) {
       known.role = body.role;
       await thingsOf.set(all);
-      return { email: body.email, role: body.role, team: body.team, applied: true, emailed: false };
+      return {
+        email: body.email,
+        role: body.role,
+        team: body.team,
+        applied: true,
+        emailed: false,
+      };
     }
-    const invitation: Invitation = { id: id(), ...body, invitedBy: who(), createdAt: now(), expiresAt: new Date(Date.now() + 7 * 86400e3).toISOString(), expired: false };
+    const invitation: Invitation = {
+      id: id(),
+      ...body,
+      invitedBy: who(),
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + 7 * 86400e3).toISOString(),
+      expired: false,
+    };
     all.invitations.push(invitation);
     await thingsOf.set(all);
-    return { email: body.email, role: body.role, team: body.team, applied: false, invitation, link: `${location.origin}/invite/${invitation.id}`, emailed: false, mailError: "no mail is set up in the Mock" };
+    return {
+      email: body.email,
+      role: body.role,
+      team: body.team,
+      applied: false,
+      invitation,
+      link: `${location.origin}/invite/${invitation.id}`,
+      emailed: false,
+      mailError: "no mail is set up in the Mock",
+    };
   },
   revokeInvitation: async (invitationId) => {
     const all = await thingsOf.get();
@@ -246,7 +474,17 @@ export const mock: Api = {
   createToken: async (body) => {
     const all = await thingsOf.get();
     const days = body.expiresIn ? Number(body.expiresIn.replace(/d$/, "")) : 0;
-    const token: APIToken = { id: id(), name: body.name, ownerEmail: who(), platformRole: body.platformRole, projectRoles: body.projectRoles, createdAt: now(), expiresAt: days ? new Date(Date.now() + days * 86400e3).toISOString() : undefined };
+    const token: APIToken = {
+      id: id(),
+      name: body.name,
+      ownerEmail: who(),
+      platformRole: body.platformRole,
+      projectRoles: body.projectRoles,
+      createdAt: now(),
+      expiresAt: days
+        ? new Date(Date.now() + days * 86400e3).toISOString()
+        : undefined,
+    };
     all.tokens.push(token);
     await thingsOf.set(all);
     return { token, secret: `shp_${id()}${id()}${id()}` };
@@ -263,7 +501,15 @@ export const mock: Api = {
       host,
       verified: false,
       primary: false,
-      records: [recordFor(host, "acme.shpyrd.cloud"), { type: "CNAME", name: `*.${host}`, value: "acme.shpyrd.cloud" }, { type: "TXT", name: `_shpyrd-verify.${host}`, value: `shpyrd-verify=${id()}` }],
+      records: [
+        recordFor(host, "acme.shpyrd.cloud"),
+        { type: "CNAME", name: `*.${host}`, value: "acme.shpyrd.cloud" },
+        {
+          type: "TXT",
+          name: `_shpyrd-verify.${host}`,
+          value: `shpyrd-verify=${id()}`,
+        },
+      ],
       url: `https://${host}`,
     };
     all.workspaceDomains.push(domain);
@@ -282,7 +528,8 @@ export const mock: Api = {
   setWorkspaceDomainRedirect: async (host, redirectApps) => {
     const all = await thingsOf.get();
     const d = all.workspaceDomains.find((x) => x.host === host);
-    if (!d || (redirectApps && (!d.verified || !d.primary))) throw new ApiError(400, "Choose a verified primary domain first.");
+    if (!d || (redirectApps && (!d.verified || !d.primary)))
+      throw new ApiError(400, "Choose a verified primary domain first.");
     for (const x of all.workspaceDomains) x.redirectApps = redirectApps;
     await thingsOf.set(all);
     return d;
@@ -305,19 +552,33 @@ export const mock: Api = {
   addLoginMethod: async (body) => {
     const all = await thingsOf.get();
     const cid = body.id || `${body.type}-${id().slice(0, 4)}`;
-    all.loginMethods.connectors.push({ id: cid, type: body.type, name: body.name || body.type, detail: body.hostedDomain || body.org || body.tenant || body.issuer, workspace: "acme" });
+    all.loginMethods.connectors.push({
+      id: cid,
+      type: body.type,
+      name: body.name || body.type,
+      detail: body.hostedDomain || body.org || body.tenant || body.issuer,
+      workspace: "acme",
+    });
     await thingsOf.set(all);
     return { id: cid };
   },
   removeLoginMethod: async (methodId) => {
     const all = await thingsOf.get();
-    all.loginMethods.connectors = all.loginMethods.connectors.filter((c) => c.id !== methodId);
+    all.loginMethods.connectors = all.loginMethods.connectors.filter(
+      (c) => c.id !== methodId,
+    );
     await thingsOf.set(all);
   },
   domainClaims: async () => (await thingsOf.get()).domainClaims,
   claimDomain: async (domain, connector) => {
     const all = await thingsOf.get();
-    const claim: DomainClaim = { domain, connector: connector || undefined, verified: false, record: `_shpyrd.${domain}`, recordValue: `shpyrd-verify=${id()}` };
+    const claim: DomainClaim = {
+      domain,
+      connector: connector || undefined,
+      verified: false,
+      record: `_shpyrd.${domain}`,
+      recordValue: `shpyrd-verify=${id()}`,
+    };
     all.domainClaims.push(claim);
     await thingsOf.set(all);
     return claim;
@@ -340,13 +601,15 @@ export const mock: Api = {
   changeGlobals: async (change) => {
     const all = await thingsOf.get();
     for (const [name, value] of Object.entries(change.set ?? {})) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new ApiError(400, `${name} is not a name`);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+        throw new ApiError(400, `${name} is not a name`);
       if (value === "") throw new ApiError(400, `${name} has no value`);
       const v = all.globals.vars.find((x) => x.name === name);
       if (v) v.updatedAt = now();
       else all.globals.vars.push({ name, updatedAt: now() });
     }
-    for (const name of change.unset ?? []) all.globals.vars = all.globals.vars.filter((v) => v.name !== name);
+    for (const name of change.unset ?? [])
+      all.globals.vars = all.globals.vars.filter((v) => v.name !== name);
     all.globals.vars.sort((a, b) => a.name.localeCompare(b.name));
     await thingsOf.set(all);
     return all.globals;
@@ -358,8 +621,18 @@ export const mock: Api = {
   projects: async () => {
     const all = await thingsOf.get();
     return (await projectsOf.list()).map((p) => {
-      const teams = [...new Set((all.projects[p.slug]?.members ?? []).flatMap((m) => (m.team ? [m.team] : [])))].sort();
-      return { ...summary(p), teams: teams.length ? teams : undefined, domain: domainOf(all, p.slug) };
+      const teams = [
+        ...new Set(
+          (all.projects[p.slug]?.members ?? []).flatMap((m) =>
+            m.team ? [m.team] : [],
+          ),
+        ),
+      ].sort();
+      return {
+        ...summary(p),
+        teams: teams.length ? teams : undefined,
+        domain: domainOf(all, p.slug),
+      };
     });
   },
   project: async (slug) => {
@@ -367,18 +640,45 @@ export const mock: Api = {
     return { ...p, domain: domainOf(await thingsOf.get(), slug) };
   },
   createProject: async (body) => {
-    if (body.exposure === "internal" && !(await workspaceOf.get()).capabilities?.internalExposure) throw new ApiError(403, "Internal exposure is not enabled for this workspace.");
+    if (
+      body.exposure === "internal" &&
+      !(await workspaceOf.get()).capabilities?.internalExposure
+    )
+      throw new ApiError(
+        403,
+        "Internal exposure is not enabled for this workspace.",
+      );
     const all = await projectsOf.list();
-    if (!/^[a-z0-9-]{2,}$/.test(body.slug)) throw new ApiError(400, "the slug has lowercase letters, digits and dashes");
-    if (all.some((p) => p.slug === body.slug)) throw new ApiError(409, `a project named ${body.slug} exists`);
-    const created: Project = { slug: body.slug, displayName: body.displayName || body.slug, description: body.description, namespace: `p-${body.slug}`, phase: "Pending", release: 0, access: "public", exposure: body.exposure ?? "external", createdAt: now(), spec: { source: body.git ? { git: body.git, subPath: body.subPath } : undefined }, status: { phase: "Pending", releases: [] } };
+    if (!/^[a-z0-9-]{2,}$/.test(body.slug))
+      throw new ApiError(
+        400,
+        "the slug has lowercase letters, digits and dashes",
+      );
+    if (all.some((p) => p.slug === body.slug))
+      throw new ApiError(409, `a project named ${body.slug} exists`);
+    const created: Project = {
+      slug: body.slug,
+      displayName: body.displayName || body.slug,
+      description: body.description,
+      namespace: `p-${body.slug}`,
+      phase: "Pending",
+      release: 0,
+      access: "public",
+      exposure: body.exposure ?? "external",
+      createdAt: now(),
+      spec: {
+        source: body.git ? { git: body.git, subPath: body.subPath } : undefined,
+      },
+      status: { phase: "Pending", releases: [] },
+    };
     await projectsOf.set(created);
     return summary(created);
   },
   updateProject: async (slug, body) => {
     const p = await projectsOf.find(slug);
     if (body.name !== undefined) p.displayName = body.name;
-    if (body.description !== undefined) p.description = body.description || undefined;
+    if (body.description !== undefined)
+      p.description = body.description || undefined;
     if (body.featured !== undefined) p.featured = body.featured;
     if (body.icon !== undefined) p.icon = body.icon || undefined;
     if (body.iconColor !== undefined) p.iconColor = body.iconColor || undefined;
@@ -387,7 +687,8 @@ export const mock: Api = {
   // The Mock keeps the image itself, as the data URL it came as.
   setProjectIcon: async (slug, dataUrl) => {
     const type = /^data:([^;,]+)/.exec(dataUrl)?.[1];
-    if (!type || !["image/svg+xml", "image/png", "image/webp"].includes(type)) throw new ApiError(400, "icon must be an SVG, a PNG or a WebP image");
+    if (!type || !["image/svg+xml", "image/png", "image/webp"].includes(type))
+      throw new ApiError(400, "icon must be an SVG, a PNG or a WebP image");
     const p = await projectsOf.find(slug);
     p.iconUrl = dataUrl;
     p.iconType = type;
@@ -405,7 +706,14 @@ export const mock: Api = {
     p.spec.source = { git: body.git, subPath: body.subPath };
     p.spec.build = { strategy: body.strategy, dockerfile: body.dockerfile };
     const number = Math.max(0, ...t.builds.map((b) => b.number)) + 1;
-    t.builds.unshift({ name: `${slug}-${number}`, number, strategy: body.strategy ?? "buildpacks", status: "Building", source: body.git?.revision ?? "main", startedAt: now() });
+    t.builds.unshift({
+      name: `${slug}-${number}`,
+      number,
+      strategy: body.strategy ?? "buildpacks",
+      status: "Building",
+      source: body.git?.revision ?? "main",
+      startedAt: now(),
+    });
     p.phase = p.status.phase = "Building";
     p.status.latestBuild = String(number);
     p.status.message = `building #${number}`;
@@ -422,7 +730,12 @@ export const mock: Api = {
       }
       await thingsOf.set(all2);
       const p2 = await projectsOf.find(slug);
-      release(p2, "deploy", `Deploy of ${body.git?.revision ?? "main"}`, number);
+      release(
+        p2,
+        "deploy",
+        `Deploy of ${body.git?.revision ?? "main"}`,
+        number,
+      );
       p2.phase = p2.status.phase = "Running";
       p2.status.message = undefined;
       await projectsOf.set(p2);
@@ -436,12 +749,25 @@ export const mock: Api = {
     if (t.configPending) {
       t.configPending = false;
       await thingsOf.set(all);
-      release(p, "config", "Apply saved configuration", p.status.releases.at(-1)?.build);
+      release(
+        p,
+        "config",
+        "Apply saved configuration",
+        p.status.releases.at(-1)?.build,
+      );
       await projectsOf.set(p);
     }
-    if (action === "restart") return { action: "restart", message: "Running the release command again" };
-    if (buildFailed({ phase: p.phase, conditions: p.status.conditions })) return { action: "rebuild", message: "Building the same source again" };
-    return { action: "redeploy", message: "Starting new instances of the current release" };
+    if (action === "restart")
+      return {
+        action: "restart",
+        message: "Running the release command again",
+      };
+    if (buildFailed({ phase: p.phase, conditions: p.status.conditions }))
+      return { action: "rebuild", message: "Building the same source again" };
+    return {
+      action: "redeploy",
+      message: "Starting new instances of the current release",
+    };
   },
   rollback: async (slug, to) => {
     const p = await projectsOf.find(slug);
@@ -453,24 +779,48 @@ export const mock: Api = {
   applyProcesses: async (slug, changes) => {
     const p = await projectsOf.find(slug);
     for (const [name, change] of Object.entries(changes)) {
-      const spec = { ...p.spec.processes?.[name], ...(change.size ? { size: change.size } : {}), ...(change.replicas !== undefined ? { replicas: change.replicas } : {}) };
+      const spec = {
+        ...p.spec.processes?.[name],
+        ...(change.size ? { size: change.size } : {}),
+        ...(change.replicas !== undefined ? { replicas: change.replicas } : {}),
+      };
       p.spec.processes = { ...p.spec.processes, [name]: spec };
       const st = p.processes?.[name] ?? { desired: 1, ready: 1 };
-      p.processes = { ...p.processes, [name]: { ...st, desired: spec.replicas ?? st.desired, ready: spec.replicas ?? st.ready, size: spec.size ?? st.size } };
+      p.processes = {
+        ...p.processes,
+        [name]: {
+          ...st,
+          desired: spec.replicas ?? st.desired,
+          ready: spec.replicas ?? st.ready,
+          size: spec.size ?? st.size,
+        },
+      };
     }
-    if (Object.values(changes).some((c) => c.size)) release(p, "config", "Sizes changed", p.status.releases.at(-1)?.build);
+    if (Object.values(changes).some((c) => c.size))
+      release(p, "config", "Sizes changed", p.status.releases.at(-1)?.build);
     return projectsOf.set(p);
   },
   setExposure: async (slug, exposure) => {
     const project = await projectsOf.find(slug);
-    if (exposure === "internal" && project.exposure !== "internal" && !(await workspaceOf.get()).capabilities?.internalExposure) throw new ApiError(403, "Internal exposure is not enabled for this workspace.");
+    if (
+      exposure === "internal" &&
+      project.exposure !== "internal" &&
+      !(await workspaceOf.get()).capabilities?.internalExposure
+    )
+      throw new ApiError(
+        403,
+        "Internal exposure is not enabled for this workspace.",
+      );
     return projectsOf.set({ ...project, exposure });
   },
-  setAccess: async (slug, access) => projectsOf.set({ ...(await projectsOf.find(slug)), access }),
+  setAccess: async (slug, access) =>
+    projectsOf.set({ ...(await projectsOf.find(slug)), access }),
   preview: async (slug, body) => {
     await wait();
     const p = await projectsOf.find(slug);
-    return { url: `${p.url ?? `https://${slug}.acme.shpyrd.app`}/.shpyrd/preview?as=${body.anonymous ? "anonymous" : body.teams.join(",") || "nobody"}` };
+    return {
+      url: `${p.url ?? `https://${slug}.acme.shpyrd.app`}/.shpyrd/preview?as=${body.anonymous ? "anonymous" : body.teams.join(",") || "nobody"}`,
+    };
   },
   audit: async (slug) => {
     await wait();
@@ -481,7 +831,8 @@ export const mock: Api = {
     await wait();
     const [, t] = await ofProject(slug);
     const b = t.builds.find((x) => x.name === build);
-    const lines = b?.status === "Building" ? buildOutput.slice(0, 6) : buildOutput;
+    const lines =
+      b?.status === "Building" ? buildOutput.slice(0, 6) : buildOutput;
     for (const line of lines) onLine(line);
     if (!follow || b?.status !== "Building") return;
     let i = 6;
@@ -492,21 +843,48 @@ export const mock: Api = {
   configVars: async (slug) => {
     const [, t] = await ofProject(slug);
     const p = await projectsOf.find(slug);
-    const bound = (p.spec.bindings ?? []).flatMap((b) => (b.kind === "Postgres" ? [{ name: "DATABASE_URL", provider: `${b.kind} ${b.name}` }] : b.kind === "Redis" ? [{ name: "REDIS_URL", provider: `${b.kind} ${b.name}` }] : []));
-    return { vars: t.configVars.filter((v) => v.value === undefined), variables: t.configVars.filter((v) => v.value !== undefined), pending: t.configPending, bound, global: [{ name: "SENTRY_DSN", updatedAt: "2026-08-01T10:00:00Z" }] };
+    const bound = (p.spec.bindings ?? []).flatMap((b) =>
+      b.kind === "Postgres"
+        ? [{ name: "DATABASE_URL", provider: `${b.kind} ${b.name}` }]
+        : b.kind === "Redis"
+          ? [{ name: "REDIS_URL", provider: `${b.kind} ${b.name}` }]
+          : [],
+    );
+    return {
+      vars: t.configVars.filter((v) => v.value === undefined),
+      variables: t.configVars.filter((v) => v.value !== undefined),
+      pending: t.configPending,
+      bound,
+      global: [{ name: "SENTRY_DSN", updatedAt: "2026-08-01T10:00:00Z" }],
+    };
   },
   changeConfigVars: async (slug, change) => {
     const [all, t] = await ofProject(slug);
     const set = { ...change.set };
     for (const line of (change.dotenv ?? "").split("\n")) {
       const at = line.indexOf("=");
-      if (at > 0 && !line.trim().startsWith("#")) set[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+      if (at > 0 && !line.trim().startsWith("#"))
+        set[line.slice(0, at).trim()] = line.slice(at + 1).trim();
     }
     const plain = change.kind === "variable";
     for (const name of [...Object.keys(set), ...(change.convert ?? [])]) {
       const existing = t.configVars.find((v) => v.name === name);
-      if (plain && existing && existing.value === undefined) throw new ApiError(400, `${name} is a secret: saved secrets cannot be made visible`);
-      if (plain && !change.confirmPlain && (change.convert?.includes(name) || /(_KEY|_SECRET|_TOKEN)$|PASSWORD|^(SECRET|TOKEN)$/i.test(name) || (existing && existing.value === undefined))) throw new ApiError(400, `Confirm that ${name} can be visible to project viewers`);
+      if (plain && existing && existing.value === undefined)
+        throw new ApiError(
+          400,
+          `${name} is a secret: saved secrets cannot be made visible`,
+        );
+      if (
+        plain &&
+        !change.confirmPlain &&
+        (change.convert?.includes(name) ||
+          /(_KEY|_SECRET|_TOKEN)$|PASSWORD|^(SECRET|TOKEN)$/i.test(name) ||
+          (existing && existing.value === undefined))
+      )
+        throw new ApiError(
+          400,
+          `Confirm that ${name} can be visible to project viewers`,
+        );
     }
     t.configValues ??= {};
     for (const name of change.convert ?? []) {
@@ -517,10 +895,16 @@ export const mock: Api = {
     for (const [name, value] of Object.entries(set)) {
       t.configValues[name] = value;
       t.configVars = t.configVars.filter((v) => v.name !== name);
-      t.configVars.push({ name, updatedAt: now(), ...(plain ? { value } : {}) });
+      t.configVars.push({
+        name,
+        updatedAt: now(),
+        ...(plain ? { value } : {}),
+      });
     }
     for (const name of change.unset ?? []) {
-      t.configVars = t.configVars.filter((v) => v.name !== name || (v.value !== undefined) !== plain);
+      t.configVars = t.configVars.filter(
+        (v) => v.name !== name || (v.value !== undefined) !== plain,
+      );
     }
     t.configPending = true;
     await thingsOf.set(all);
@@ -528,16 +912,90 @@ export const mock: Api = {
   resources: async (slug) => (await ofProject(slug))[1].resources,
   createResource: async (slug, body) => {
     const [all, t] = await ofProject(slug);
-    if (t.resources.some((r) => r.kind === body.kind && r.name === body.name)) throw new ApiError(409, `${body.kind} ${body.name} exists`);
+    if (t.resources.some((r) => r.kind === body.kind && r.name === body.name))
+      throw new ApiError(409, `${body.kind} ${body.name} exists`);
+    // The plan's rules for databases and disks, in the server's words.
+    const ws = await currentWorkspace();
+    const rules = ws.limits?.postgres;
+    if (body.kind === "Postgres") {
+      const type =
+        (body.spec.type as string | undefined) ??
+        rules?.defaultType ??
+        "dedicated";
+      const kinds = rules?.types?.length
+        ? rules.types
+        : ["shared", "dedicated"];
+      if (!kinds.includes(type as "shared" | "dedicated"))
+        throw new ApiError(
+          400,
+          type === "dedicated"
+            ? "Your plan includes a shared database. A dedicated database comes with a paid plan."
+            : "This workspace's plan has dedicated databases; a shared one is not among its kinds.",
+        );
+      if (
+        rules?.maxInstances &&
+        Number(body.spec.instances ?? 1) > rules.maxInstances
+      )
+        throw new ApiError(
+          400,
+          `A dedicated database here runs up to ${rules.maxInstances} instances.`,
+        );
+      const have = ws.usage?.databases ?? 0;
+      if (rules?.databases && have + 1 > rules.databases)
+        throw new ApiError(
+          400,
+          `This would bring the workspace to ${have + 1} of ${rules.databases} databases.`,
+        );
+      if (type === "dedicated")
+        await admitDisk(
+          slug,
+          t,
+          gib((body.spec.storage as string | undefined) ?? "5Gi") *
+            Number(body.spec.instances ?? 1),
+          true,
+        );
+    }
+    if (body.kind === "Redis" && body.spec.persistent)
+      await admitDisk(
+        slug,
+        t,
+        gib((body.spec.storage as string | undefined) ?? "1Gi"),
+        true,
+      );
     if (body.kind === "Postgres" && body.spec.type === "shared") {
       const cap = (config as PublicConfig).postgres?.sharedCap ?? "1Gi";
-      const kept = String((body.spec.backups as { retention?: string } | undefined)?.retention ?? "7d").replace(/d$/, "");
-      const r: ResourceInfo = { kind: "Postgres", name: body.name, phase: "Pending", message: "your database is being placed on shared server pg-shared-2", details: { type: "shared", version: "17", storage: cap, used: "0", usedBytes: "0", capBytes: String(1 << 30), pooler: "off", backups: `nightly, kept ${kept}` }, attachedTo: [], data: true, bindable: true, createdAt: now(), note: `Your database can hold up to ${cap.replace(/Gi$/, " GB")}.` };
+      const kept = String(
+        (body.spec.backups as { retention?: string } | undefined)?.retention ??
+          "7d",
+      ).replace(/d$/, "");
+      const r: ResourceInfo = {
+        kind: "Postgres",
+        name: body.name,
+        phase: "Pending",
+        message: "your database is being placed on shared server pg-shared-2",
+        details: {
+          type: "shared",
+          version: "17",
+          storage: cap,
+          used: "0",
+          usedBytes: "0",
+          capBytes: String(1 << 30),
+          pooler: "off",
+          backups: `nightly, kept ${kept}`,
+        },
+        attachedTo: [],
+        data: true,
+        bindable: true,
+        createdAt: now(),
+        note: `Your database can hold up to ${cap.replace(/Gi$/, " GB")}.`,
+      };
       t.resources.push(r);
       await thingsOf.set(all);
       setTimeout(async () => {
         const [all2, t2] = await ofProject(slug);
-        const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === body.name);
+        const x = t2.resources.find(
+          (y) => y.kind === "Postgres" && y.name === body.name,
+        );
         if (x) {
           x.phase = "Ready";
           x.message = "PostgreSQL 17, shared, on pg-shared-2";
@@ -547,17 +1005,40 @@ export const mock: Api = {
       }, 6000);
       return r;
     }
-    const list = body.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
-    const size = list.sizes.find((x) => x.name === (body.spec.size || list.default));
-    if (!size) throw new ApiError(400, `unknown size "${body.spec.size}" for a ${body.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`);
-    const details = Object.fromEntries(Object.entries({ ...body.spec, size: size.name }).filter(([, v]) => typeof v !== "object").map(([k, v]) => [k, String(v)]));
-    const r: ResourceInfo = { kind: body.kind, name: body.name, phase: "Pending", details, attachedTo: [], data: true, bindable: true, createdAt: now() };
+    const list =
+      body.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
+    const size = list.sizes.find(
+      (x) => x.name === (body.spec.size || list.default),
+    );
+    if (!size)
+      throw new ApiError(
+        400,
+        `unknown size "${body.spec.size}" for a ${body.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`,
+      );
+    const details = Object.fromEntries(
+      Object.entries({ ...body.spec, size: size.name })
+        .filter(([, v]) => typeof v !== "object")
+        .map(([k, v]) => [k, String(v)]),
+    );
+    const r: ResourceInfo = {
+      kind: body.kind,
+      name: body.name,
+      phase: "Pending",
+      details,
+      attachedTo: [],
+      data: true,
+      bindable: true,
+      createdAt: now(),
+    };
     t.resources.push(r);
     await thingsOf.set(all);
-    if (!body.spec.size) r.note = `It has the size ${size.name}, the default: ${size.cpu} CPU, ${size.memory} of memory, ${size.connections} connections.`;
+    if (!body.spec.size)
+      r.note = `It has the size ${size.name}, the default: ${size.cpu} CPU, ${size.memory} of memory, ${size.connections} connections.`;
     setTimeout(async () => {
       const [all2, t2] = await ofProject(slug);
-      const x = t2.resources.find((y) => y.kind === body.kind && y.name === body.name);
+      const x = t2.resources.find(
+        (y) => y.kind === body.kind && y.name === body.name,
+      );
       if (x) x.phase = "Running";
       await thingsOf.set(all2);
     }, 6000);
@@ -565,15 +1046,27 @@ export const mock: Api = {
   },
   resizeResource: async (slug, kind, name, size) => {
     const [all, t] = await ofProject(slug);
-    const r = t.resources.find((x) => x.kind.toLowerCase() === kind.toLowerCase() && x.name === name);
+    const r = t.resources.find(
+      (x) => x.kind.toLowerCase() === kind.toLowerCase() && x.name === name,
+    );
     if (!r) throw new ApiError(404, `no ${kind} named ${name}`);
     const list = r.kind === "Postgres" ? all.sizes.postgres : all.sizes.redis;
     const s = list.sizes.find((x) => x.name === size);
-    if (!s) throw new ApiError(400, `unknown size "${size}" for a ${r.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`);
+    if (!s)
+      throw new ApiError(
+        400,
+        `unknown size "${size}" for a ${r.kind} (sizes: ${list.sizes.map((x) => x.name).join(", ")})`,
+      );
     r.details = { ...r.details, size };
     await thingsOf.set(all);
-    const restart = r.kind === "Redis" ? "It restarts with it: a cache comes back empty, a persistent store reloads its file." : "Its instances restart with it, one at a time; with one instance the database is unavailable for a moment.";
-    return { ...r, note: `${name} now has the size ${size}: ${s.cpu} CPU, ${s.memory} of memory, ${s.connections} connections. ${restart}` };
+    const restart =
+      r.kind === "Redis"
+        ? "It restarts with it: a cache comes back empty, a persistent store reloads its file."
+        : "Its instances restart with it, one at a time; with one instance the database is unavailable for a moment.";
+    return {
+      ...r,
+      note: `${name} now has the size ${size}: ${s.cpu} CPU, ${s.memory} of memory, ${s.connections} connections. ${restart}`,
+    };
   },
   convertPostgres: async (slug, name, body) => {
     await wait();
@@ -581,8 +1074,13 @@ export const mock: Api = {
     const r = t.resources.find((x) => x.kind === "Postgres" && x.name === name);
     if (!r) throw new ApiError(404, `no database named ${name}`);
     const from = r.details?.type === "shared" ? "shared" : "dedicated";
-    if (from === body.to) throw new ApiError(409, `${name} is a ${from} database already.`);
-    if (r.phase !== "Ready" && r.phase !== "Running") throw new ApiError(409, `${name} is ${r.phase.toLowerCase()}; convert it once it is ready.`);
+    if (from === body.to)
+      throw new ApiError(409, `${name} is a ${from} database already.`);
+    if (r.phase !== "Ready" && r.phase !== "Running")
+      throw new ApiError(
+        409,
+        `${name} is ${r.phase.toLowerCase()}; convert it once it is ready.`,
+      );
     const cap = (config as PublicConfig).postgres?.sharedCap ?? "1Gi";
     const note =
       body.to === "dedicated"
@@ -591,26 +1089,52 @@ export const mock: Api = {
     r.phase = "Converting";
     r.message = `Converting to a ${body.to} database: preparing (step 1 of 3)`;
     await thingsOf.set(all);
-    const steps = ["waiting for the new cluster (step 1 of 3)", "copying the data (step 2 of 3); connections are paused meanwhile", "switching the credentials over (step 3 of 3)"];
+    const steps = [
+      "waiting for the new cluster (step 1 of 3)",
+      "copying the data (step 2 of 3); connections are paused meanwhile",
+      "switching the credentials over (step 3 of 3)",
+    ];
     steps.forEach((words, i) =>
-      setTimeout(async () => {
-        const [all2, t2] = await ofProject(slug);
-        const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === name);
-        if (x) x.message = `Converting to a ${body.to} database: ${words}`;
-        await thingsOf.set(all2);
-      }, 3000 * (i + 1)),
+      setTimeout(
+        async () => {
+          const [all2, t2] = await ofProject(slug);
+          const x = t2.resources.find(
+            (y) => y.kind === "Postgres" && y.name === name,
+          );
+          if (x) x.message = `Converting to a ${body.to} database: ${words}`;
+          await thingsOf.set(all2);
+        },
+        3000 * (i + 1),
+      ),
     );
     setTimeout(async () => {
       const [all2, t2] = await ofProject(slug);
-      const x = t2.resources.find((y) => y.kind === "Postgres" && y.name === name);
+      const x = t2.resources.find(
+        (y) => y.kind === "Postgres" && y.name === name,
+      );
       if (!x) return;
       x.phase = "Ready";
       if (body.to === "dedicated") {
-        x.details = { type: "dedicated", version: x.details?.version ?? "17", size: body.size ?? all2.sizes.postgres.default, storage: body.storage ?? "5Gi", instances: "1" };
+        x.details = {
+          type: "dedicated",
+          version: x.details?.version ?? "17",
+          size: body.size ?? all2.sizes.postgres.default,
+          storage: body.storage ?? "5Gi",
+          instances: "1",
+        };
         x.message = `PostgreSQL ${x.details.version}, 1/1 instance(s) ready`;
         x.endpoint = `${name}-rw.p-${slug}:5432`;
       } else {
-        x.details = { type: "shared", version: "17", storage: cap, used: "0", usedBytes: "0", capBytes: String(1 << 30), pooler: "off", backups: "nightly, kept 7" };
+        x.details = {
+          type: "shared",
+          version: "17",
+          storage: cap,
+          used: "0",
+          usedBytes: "0",
+          capBytes: String(1 << 30),
+          pooler: "off",
+          backups: "nightly, kept 7",
+        };
         x.message = "PostgreSQL 17, shared, on pg-shared-2";
         x.endpoint = `${name}.p-${slug}:5432`;
       }
@@ -621,19 +1145,35 @@ export const mock: Api = {
   removeResource: async (slug, kind, name, force) => {
     const [all, t] = await ofProject(slug);
     const r = t.resources.find((x) => x.kind === kind && x.name === name);
-    if (r?.attachedTo.length && !force) throw new ApiError(409, `${kind} ${name} is attached to ${r.attachedTo.join(", ")}`);
+    if (r?.attachedTo.length && !force)
+      throw new ApiError(
+        409,
+        `${kind} ${name} is attached to ${r.attachedTo.join(", ")}`,
+      );
     t.resources = t.resources.filter((x) => x.kind !== kind || x.name !== name);
     await thingsOf.set(all);
   },
   attach: async (slug, body) => {
     const [all, t] = await ofProject(slug);
-    const r = t.resources.find((x) => x.kind === body.kind && x.name === body.name);
+    const r = t.resources.find(
+      (x) => x.kind === body.kind && x.name === body.name,
+    );
     if (!r) throw new ApiError(404, `no ${body.kind} named ${body.name}`);
     if (!r.attachedTo.includes(slug)) r.attachedTo.push(slug);
     await thingsOf.set(all);
     const p = await projectsOf.find(slug);
-    p.spec.bindings = [...(p.spec.bindings ?? []).filter((b) => b.kind !== body.kind || b.name !== body.name), { kind: body.kind, name: body.name }];
-    release(p, "config", `${body.kind} ${body.name} attached`, p.status.releases.at(-1)?.build);
+    p.spec.bindings = [
+      ...(p.spec.bindings ?? []).filter(
+        (b) => b.kind !== body.kind || b.name !== body.name,
+      ),
+      { kind: body.kind, name: body.name },
+    ];
+    release(
+      p,
+      "config",
+      `${body.kind} ${body.name} attached`,
+      p.status.releases.at(-1)?.build,
+    );
     await projectsOf.set(p);
   },
   detach: async (slug, kind, name) => {
@@ -642,17 +1182,52 @@ export const mock: Api = {
     if (r) r.attachedTo = r.attachedTo.filter((s) => s !== slug);
     await thingsOf.set(all);
     const p = await projectsOf.find(slug);
-    p.spec.bindings = (p.spec.bindings ?? []).filter((b) => b.kind !== kind || b.name !== name);
-    release(p, "config", `${kind} ${name} detached`, p.status.releases.at(-1)?.build);
+    p.spec.bindings = (p.spec.bindings ?? []).filter(
+      (b) => b.kind !== kind || b.name !== name,
+    );
+    release(
+      p,
+      "config",
+      `${kind} ${name} detached`,
+      p.status.releases.at(-1)?.build,
+    );
     await projectsOf.set(p);
   },
   volumes: async (slug) => (await ofProject(slug))[1].volumes,
+  projectUsage: async (slug) => {
+    await wait();
+    const [, t] = await ofProject(slug);
+    const ws = await currentWorkspace();
+    const own = ws.projectCaps?.[slug]?.storage;
+    return {
+      storage: `${projectStorageOf(t)}Gi`,
+      ceiling: own ?? ws.limits?.storage,
+      own: !!own,
+    };
+  },
   createVolume: async (slug, body) => {
     const [all, t] = await ofProject(slug);
-    if (t.volumes.some((v) => v.name === body.name)) throw new ApiError(409, `a volume named ${body.name} exists`);
-    const v: VolumeInfo = { name: body.name, size: body.size, shared: !!body.shared, phase: "Bound", mountedBy: [], createdAt: now() };
+    if (t.volumes.some((v) => v.name === body.name))
+      throw new ApiError(409, `a volume named ${body.name} exists`);
+    await admitDisk(slug, t, gib(body.size), true);
+    const v: VolumeInfo = {
+      name: body.name,
+      size: body.size,
+      shared: !!body.shared,
+      phase: "Bound",
+      mountedBy: [],
+      createdAt: now(),
+    };
     t.volumes.push(v);
-    t.resources.push({ kind: "Volume", name: body.name, phase: "Bound", details: { size: body.size, mode: body.shared ? "shared" : "single" }, attachedTo: [], data: true, createdAt: now() });
+    t.resources.push({
+      kind: "Volume",
+      name: body.name,
+      phase: "Bound",
+      details: { size: body.size, mode: body.shared ? "shared" : "single" },
+      attachedTo: [],
+      data: true,
+      createdAt: now(),
+    });
     await thingsOf.set(all);
     return v;
   },
@@ -660,24 +1235,56 @@ export const mock: Api = {
     const [all, t] = await ofProject(slug);
     const v = t.volumes.find((x) => x.name === name);
     if (!v) throw new ApiError(404, `no volume named ${name}`);
+    if (gib(size) < gib(v.size))
+      throw new ApiError(400, `volumes cannot shrink (currently ${v.size})`);
+    await admitDisk(slug, t, gib(size) - gib(v.size), false);
     v.size = size;
+    v.resize = {
+      phase: "pending",
+      to: size,
+      message: "the provider is growing the disk",
+    };
     const r = t.resources.find((x) => x.kind === "Volume" && x.name === name);
     if (r) r.details = { ...r.details, size };
     await thingsOf.set(all);
+    setTimeout(async () => {
+      const [all2, t2] = await ofProject(slug);
+      const grown = t2.volumes.find((x) => x.name === name);
+      if (grown) {
+        grown.capacity = size;
+        grown.resize = { phase: "completed", to: size };
+      }
+      await thingsOf.set(all2);
+    }, 6000);
     return v;
   },
   removeVolume: async (slug, name, force) => {
     const [all, t] = await ofProject(slug);
     const v = t.volumes.find((x) => x.name === name);
-    if (v?.mountedBy.length && !force) throw new ApiError(409, `${name} is mounted by ${v.mountedBy.join(", ")}`);
+    if (v?.mountedBy.length && !force)
+      throw new ApiError(
+        409,
+        `${name} is mounted by ${v.mountedBy.join(", ")}`,
+      );
     t.volumes = t.volumes.filter((x) => x.name !== name);
-    t.resources = t.resources.filter((x) => x.kind !== "Volume" || x.name !== name);
+    t.resources = t.resources.filter(
+      (x) => x.kind !== "Volume" || x.name !== name,
+    );
     await thingsOf.set(all);
   },
-  snapshots: async (slug, volume) => (await ofProject(slug))[1].snapshots.filter((s) => s.volume === volume),
+  snapshots: async (slug, volume) =>
+    (await ofProject(slug))[1].snapshots.filter((s) => s.volume === volume),
   createSnapshot: async (slug, volume, name) => {
     const [all, t] = await ofProject(slug);
-    const s: SnapshotInfo = { name: name || `${volume}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`, volume, size: t.volumes.find((v) => v.name === volume)?.size, ready: false, createdAt: now() };
+    const s: SnapshotInfo = {
+      name:
+        name ||
+        `${volume}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`,
+      volume,
+      size: t.volumes.find((v) => v.name === volume)?.size,
+      ready: false,
+      createdAt: now(),
+    };
     t.snapshots.push(s);
     await thingsOf.set(all);
     setTimeout(async () => {
@@ -690,7 +1297,9 @@ export const mock: Api = {
   },
   removeSnapshot: async (slug, volume, snapshot) => {
     const [all, t] = await ofProject(slug);
-    t.snapshots = t.snapshots.filter((s) => s.volume !== volume || s.name !== snapshot);
+    t.snapshots = t.snapshots.filter(
+      (s) => s.volume !== volume || s.name !== snapshot,
+    );
     await thingsOf.set(all);
   },
   restoreVolume: async (slug, volume, body) => {
@@ -698,25 +1307,63 @@ export const mock: Api = {
     const v = t.volumes.find((x) => x.name === volume);
     if (!v) throw new ApiError(404, `no volume named ${volume}`);
     if (body.to) {
-      const made: VolumeInfo = { ...v, name: body.to, mountedBy: [], restoredFrom: body.snapshot, createdAt: now() };
+      const made: VolumeInfo = {
+        ...v,
+        name: body.to,
+        mountedBy: [],
+        restoredFrom: body.snapshot,
+        createdAt: now(),
+      };
       t.volumes.push(made);
-      t.resources.push({ kind: "Volume", name: body.to, phase: "Bound", details: { size: v.size, mode: v.shared ? "shared" : "single", restoredFrom: body.snapshot }, attachedTo: [], data: true, createdAt: now() });
+      t.resources.push({
+        kind: "Volume",
+        name: body.to,
+        phase: "Bound",
+        details: {
+          size: v.size,
+          mode: v.shared ? "shared" : "single",
+          restoredFrom: body.snapshot,
+        },
+        attachedTo: [],
+        data: true,
+        createdAt: now(),
+      });
       await thingsOf.set(all);
-      return { volume: made, inPlace: false, message: `${body.to} was made from ${body.snapshot}` };
+      return {
+        volume: made,
+        inPlace: false,
+        message: `${body.to} was made from ${body.snapshot}`,
+      };
     }
     v.restoredFrom = body.snapshot;
     await thingsOf.set(all);
-    return { volume: v, inPlace: true, message: `${volume} was restored from ${body.snapshot}` };
+    return {
+      volume: v,
+      inPlace: true,
+      message: `${volume} was restored from ${body.snapshot}`,
+    };
   },
   domains: async (slug) => {
     const data = (await ofProject(slug))[1].domains;
     // Older localStorage fixtures predate redirect eligibility.
-    for (const d of data.domains) d.redirectEligible ??= d.dns === "ok" && d.certificate === "ready";
+    for (const d of data.domains)
+      d.redirectEligible ??= d.dns === "ok" && d.certificate === "ready";
     return data;
   },
   setDomainRedirect: async (slug, redirectTo) => {
     const [all, p] = await ofProject(slug);
-    if (redirectTo && !p.domains.domains.some((d) => d.host === redirectTo && (d.redirectEligible ?? (d.dns === "ok" && d.certificate === "ready")))) throw new ApiError(400, "Choose a project domain whose DNS and certificate are ready.");
+    if (
+      redirectTo &&
+      !p.domains.domains.some(
+        (d) =>
+          d.host === redirectTo &&
+          (d.redirectEligible ?? (d.dns === "ok" && d.certificate === "ready")),
+      )
+    )
+      throw new ApiError(
+        400,
+        "Choose a project domain whose DNS and certificate are ready.",
+      );
     p.domains.redirectTo = redirectTo;
     await thingsOf.set(all);
     return p.domains;
@@ -724,7 +1371,14 @@ export const mock: Api = {
   addDomain: async (slug, host) => {
     const [all, p] = await ofProject(slug);
     const record = recordFor(host, p.domains.target);
-    const domain: DomainStatus = { host, dns: "missing", target: p.domains.target, certificate: "issuing", record, message: `create a DNS record: ${record.type} ${host} -> ${record.value}` };
+    const domain: DomainStatus = {
+      host,
+      dns: "missing",
+      target: p.domains.target,
+      certificate: "issuing",
+      record,
+      message: `create a DNS record: ${record.type} ${host} -> ${record.value}`,
+    };
     p.domains.domains.push(domain);
     await thingsOf.set(all);
     return domain;
@@ -738,9 +1392,27 @@ export const mock: Api = {
   workspaceDrains: async () => (await thingsOf.get()).workspaceDrains,
   addWorkspaceDrain: async (body) => {
     const all = await thingsOf.get();
-    const name = body.name || new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.replace(/\./g, "-");
-    if (all.workspaceDrains.some((d) => d.name === name)) throw new ApiError(409, `a drain named ${name} exists`);
-    const drain: Drain = { name, url: body.url, format: body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"), processes: body.processes, headers: Object.keys(body.headers ?? {}), workspace: "acme", phase: "Pending", sent: 0, errors: 0, createdAt: now() };
+    const name =
+      body.name ||
+      new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.replace(
+        /\./g,
+        "-",
+      );
+    if (all.workspaceDrains.some((d) => d.name === name))
+      throw new ApiError(409, `a drain named ${name} exists`);
+    const drain: Drain = {
+      name,
+      url: body.url,
+      format:
+        body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"),
+      processes: body.processes,
+      headers: Object.keys(body.headers ?? {}),
+      workspace: "acme",
+      phase: "Pending",
+      sent: 0,
+      errors: 0,
+      createdAt: now(),
+    };
     all.workspaceDrains.push(drain);
     await thingsOf.set(all);
     return drain;
@@ -753,8 +1425,24 @@ export const mock: Api = {
   drains: async (slug) => (await ofProject(slug))[1].drains,
   addDrain: async (slug, body) => {
     const [all, p] = await ofProject(slug);
-    const name = body.name || new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.split(".")[0] || "drain";
-    const drain: Drain = { name, url: body.url, format: body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"), processes: body.processes, headers: Object.keys(body.headers ?? {}), phase: "Pending", sent: 0, errors: 0, createdAt: now() };
+    const name =
+      body.name ||
+      new URL(body.url.replace(/^syslog(\+tls)?:/, "https:")).hostname.split(
+        ".",
+      )[0] ||
+      "drain";
+    const drain: Drain = {
+      name,
+      url: body.url,
+      format:
+        body.format ?? (body.url.startsWith("syslog") ? "syslog" : "json"),
+      processes: body.processes,
+      headers: Object.keys(body.headers ?? {}),
+      phase: "Pending",
+      sent: 0,
+      errors: 0,
+      createdAt: now(),
+    };
     p.drains.push(drain);
     await thingsOf.set(all);
     return drain;
@@ -788,10 +1476,14 @@ export const mock: Api = {
     await wait();
     const p = await projectsOf.find(slug);
     const processes = Object.keys(p.spec.processes ?? { web: {} });
-    for (const line of logsOf(slug, processes)) if (!query.process || line.instance?.startsWith(query.process + "-")) onLine(line);
+    for (const line of logsOf(slug, processes))
+      if (!query.process || line.instance?.startsWith(query.process + "-"))
+        onLine(line);
     if (!query.follow) return;
     let n = 0;
-    await until(signal, 2000, () => onLine(liveLine(slug, query.process ?? processes[0] ?? "web", n++)));
+    await until(signal, 2000, () =>
+      onLine(liveLine(slug, query.process ?? processes[0] ?? "web", n++)),
+    );
   },
   metrics: async (slug, range) => {
     await wait();
@@ -801,7 +1493,14 @@ export const mock: Api = {
   instances: async (slug) => {
     await wait();
     const p = await projectsOf.find(slug);
-    return Object.entries(p.processes ?? {}).flatMap(([name, st]) => Array.from({ length: Math.max(st.desired, 1) }, (_, i) => ({ name: `${name}-${i + 1}`, process: name, pod: `${slug}-${name}-${id().slice(0, 5)}`, ready: i < st.ready })));
+    return Object.entries(p.processes ?? {}).flatMap(([name, st]) =>
+      Array.from({ length: Math.max(st.desired, 1) }, (_, i) => ({
+        name: `${name}-${i + 1}`,
+        process: name,
+        pod: `${slug}-${name}-${id().slice(0, 5)}`,
+        ready: i < st.ready,
+      })),
+    );
   },
   shellTicket: async () => {
     await wait();

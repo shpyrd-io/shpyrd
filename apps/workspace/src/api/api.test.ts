@@ -58,3 +58,31 @@ describe("the api picks the Mock when asked to", () => {
     expect(await api.shellSocket("hello-world", "web-1", "mock")).toBeNull();
   });
 });
+
+// The Mock judges like the server (storage plan step 4): the plan's
+// switch, the workspace's ceiling, the project's own cap, in its words.
+describe("the mock holds the workspace to its ceilings", () => {
+  it("refuses a disk past the project's cap and past the workspace's ceiling, in the server's words", async () => {
+    await expect(api.createVolume("hello-world", { name: "huge", size: "1000Gi" })).rejects.toThrow("This would bring the workspace to 1120 GB of 500 GB.");
+    await api.putProjectCaps({ "hello-world": { storage: "25Gi" } });
+    await expect(api.createVolume("hello-world", { name: "big", size: "10Gi" })).rejects.toThrow("This would bring the project to 40 GB of 25 GB.");
+    const usage = await api.projectUsage("hello-world");
+    expect(usage).toEqual({ storage: "30Gi", ceiling: "25Gi", own: true });
+    await api.putProjectCaps({});
+    expect((await api.projectUsage("hello-world")).own).toBe(false);
+  }, 20_000);
+
+  it("plays the free plan when the browser asks: no disks, one shared database", async () => {
+    localStorage.setItem("shpyrd.mock.plan", "free");
+    try {
+      const ws = await api.workspace();
+      expect(ws.limits?.allowDisks).toBe(false);
+      expect((await api.config()).postgres?.types).toEqual(["shared"]);
+      await expect(api.createVolume("hello-world", { name: "files", size: "1Gi" })).rejects.toThrow("Disks are not included in the free workspace; use a bucket for files, or upgrade.");
+      await expect(api.createResource("hello-world", { kind: "Postgres", name: "second", spec: { type: "dedicated" } })).rejects.toThrow("Your plan includes a shared database. A dedicated database comes with a paid plan.");
+      await expect(api.createResource("hello-world", { kind: "Postgres", name: "second", spec: {} })).rejects.toThrow("This would bring the workspace to 2 of 1 databases.");
+    } finally {
+      localStorage.removeItem("shpyrd.mock.plan");
+    }
+  }, 20_000);
+});
