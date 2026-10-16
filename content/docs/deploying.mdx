@@ -75,6 +75,8 @@ Deploying from Git is also available in the dashboard (**Deploy** button, or whe
 
 A build clones your repository. For a private one, give shpyrd access in one of two ways. Both need you signed in (`shpyrd login`).
 
+On GitHub, the simplest way is to [connect GitHub](#connect-github) once for the workspace: no key or token per project. The two ways below work on any git host, and on GitHub too when a repository is not in a connected account.
+
 **A deploy key for the project.** Works on any git host. It is read-only and opens one repository.
 
 ```shell
@@ -173,11 +175,33 @@ with a user name and password in it (`https://user:pass@host/org/repo`)
 still works without a token: shpyrd reads the branch with them, and never
 shows them.
 
-<Callout title="Connect GitHub is coming">
+### Connect GitHub
 
-A "Connect GitHub" button, so you do not paste tokens or keys, is planned (RFC-0054). Until then, use a deploy key or a token.
+A workspace connects GitHub once. Then anyone who makes projects picks a repository from a list: private ones build without deploy keys or tokens, and every push to a project's branch deploys, with no webhook to add.
 
-</Callout>
+**Connect an account or organisation** (workspace admins): in the dashboard, Workspace settings, **Git**, **Connect GitHub**. GitHub asks where to install shpyrd's App and which repositories it may read, then sends you back to the workspace's page. From a terminal, `shpyrd github connect` opens that Git page and waits until the new connection appears; you press the button there.
+
+```shell
+shpyrd github connect            # opens the Git page, waits for the connection
+shpyrd github list               # the workspace's connections
+shpyrd github disconnect acme    # forget one; the App stays installed on GitHub
+```
+
+Only an owner of the GitHub account can connect it: an owner of the organisation, or, for a personal account, that account itself. Nobody else can connect it with a copied link. An installation another workspace has connected is refused ("disconnect it there first") and never moves. **Manage on GitHub** opens the installation's settings, where you add repositories, suspend it or remove it.
+
+**Make a project from a repository:** New project, **From GitHub**, filter the list, pick the repository and the branch (its default branch first). Or find it with `shpyrd github repos --filter shop` and deploy it as any git repository:
+
+```shell
+shpyrd deploy --git https://github.com/acme/shop --ref main --project shop
+```
+
+**How builds reach it.** For a repository on github.com whose owner the workspace has connected, every build and every check of the branch uses a token the App gives for that one repository, read-only, that lasts an hour; shpyrd renews it every 50 minutes. The App comes first, then the project's deploy key, then the workspace's token. shpyrd skips the App for a suspended installation, a repository the installation does not include, an installation that is gone, and while GitHub is failing (it asks again after a pause). A token already issued is kept through a short GitHub outage. `shpyrd git-auth show --project shop` says `through the GitHub App (acme)`, and so does the project's Summary.
+
+**Pushes** arrive through the App's own webhook, with nothing to set up per project: `shpyrd git-hooks show` says so. A suspended installation's pushes do not deploy. `[skip deploy]` and auto-deploy work as in [Deploying on push](#deploying-on-push).
+
+**When the App cannot read a repository.** shpyrd tries the deploy key and the token. When nothing gives access, the project says why, starting with the App's reason ("The GitHub App's installation on acme does not include shop: add the repository to it on GitHub."), and what runs keeps running.
+
+**On a self-hosted platform**, an operator registers the cluster's App once first: see [Installation](/docs/installation#connect-github). On shpyrd cloud, it is already set up.
 
 <Callout title="Which languages?">
 

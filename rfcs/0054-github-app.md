@@ -1,14 +1,14 @@
 # RFC-0054 GitHub App integration
 
-**Status:** implementable
+**Status:** in progress
 
-**Owner:** unassigned
+**Owner:** Marcelo Paez Sequeira
 
-**Depends on:** RFC-0017, RFC-0018
+**Depends on:** RFC-0017 (implemented), RFC-0018 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-16
 
 ## Summary
 
@@ -50,3 +50,4 @@ credentials; developers then only "Connect GitHub".
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-16: part 3, Connect GitHub: `shpyrd-ctl github app create` registers the cluster's App from a manifest; workspaces connect installations (only an owner of the GitHub account can connect it) from the dashboard's Git settings, and `shpyrd github connect` opens that page and waits; From GitHub in New project; builds and the source watcher clone with repository-scoped installation tokens before deploy keys and tokens; the App's webhook routes pushes; installation suspensions and removals are recorded. See docs/superpowers/specs/2026-10-16-github-app-connect-design.md. Part 4 (checks, Deployments, watch paths, wait-for-CI) follows.

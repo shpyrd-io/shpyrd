@@ -188,6 +188,25 @@ shpyrd cluster init --context my-cluster --profile local --domain apps.example.t
 
 `--yes` is required for contexts that do not look like kind clusters. The `local` profile assumes ingress-nginx can bind host ports on a node labelled `ingress-ready=true` and that the service subnet is `10.96.0.0/16` (the registry uses the fixed ClusterIP `10.96.0.50`). For a managed Kubernetes cluster use a cloud profile: [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws).
 
+## Connect GitHub
+
+Workspaces connect GitHub through one GitHub App per cluster, which the operator registers once. On shpyrd cloud the App is already set up.
+
+```shell
+shpyrd-ctl github app create --org acme      # or without --org, under your own account
+```
+
+A browser opens on GitHub with the App filled in: its name (`shpyrd-<dashboard host>`, or `--name`, at most 34 characters), its webhook at `<dashboard>/api/github/webhook`, its setup page at `<dashboard>/api/github/installed`, and the permissions it asks for: contents, metadata, members and statuses read; checks and deployments write. Members lets shpyrd check that the person connecting an organisation owns it. Checks, deployments and statuses are for what comes next, asked now so installations do not have to approve again. One click creates the App. `shpyrd-ctl` keeps its credentials in the Secret `shpyrd-system/shpyrd-github-app`. The App is private unless you pass `--public`: then any account can install it, not only its owner.
+
+GitHub must reach the dashboard's address for the webhook. The address comes from the cluster's install settings; `--url` gives another, and the command needs one of them. The command waits ten minutes for GitHub; Ctrl-C stops it.
+
+```shell
+shpyrd-ctl github app show      # slug, id and page on GitHub; never the keys
+shpyrd-ctl github app delete    # remove the Secret; then delete the App on GitHub
+```
+
+For GitHub Enterprise Server, set `SHPYRD_GITHUB_API_URL` on the server to its API's address; nothing else is supported yet.
+
 ## Upgrading
 
 Install the new CLI and run `shpyrd cluster init` again with the same context and profile: the recorded decisions (domain, exposure, extensions) are reused, and `--only shpyrd` limits the run to the platform's own components when nothing else changed. What an upgrade does to running apps:
