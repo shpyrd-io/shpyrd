@@ -123,6 +123,12 @@ func (s *Server) createVolume(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// A plan without disks says so first, before any question of class or
+	// size; the judgement under the lock says it again.
+	if !s.limitsOf(c.Request.Context(), s.workspace(c)).AllowsDisks() {
+		abort(c, http.StatusBadRequest, errors.New(errNoDisks))
+		return
+	}
 	vol := &shpyrdv1.Volume{
 		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: c.Param("slug")}},
 		Spec:       shpyrdv1.VolumeSpec{Size: size, StorageClass: req.StorageClass, AccessMode: corev1.ReadWriteOnce, FromSnapshot: req.FromSnapshot},

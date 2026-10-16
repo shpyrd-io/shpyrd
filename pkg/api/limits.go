@@ -321,6 +321,9 @@ func volumeWorkspace(v *shpyrdv1.Volume) string {
 	return store.DefaultWorkspace
 }
 
+// errNoDisks is what a plan without disks says to a new one.
+const errNoDisks = "Disks are not included in the free workspace; use a bucket for files, or upgrade."
+
 // A refusal is a change the workspace's ceilings say no to, in the words
 // the person reads.
 type refusal struct{ msg string }
@@ -410,7 +413,7 @@ func overCeiling(l *store.Limits, caps map[string]store.ProjectCap, ch change, b
 		// What the plan does not include comes before how much of it is
 		// left: a person learns the shape of their plan first.
 		if ch.newDisk && !l.AllowsDisks() {
-			return "Disks are not included in the free workspace; use a bucket for files, or upgrade."
+			return errNoDisks
 		}
 		if pg := l.Postgres; pg != nil && pg.MaxInstances > 0 && ch.instances > int32(pg.MaxInstances) {
 			return fmt.Sprintf("A dedicated database here runs up to %d instances.", pg.MaxInstances)
