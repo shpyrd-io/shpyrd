@@ -71,6 +71,44 @@ shpyrd deploy --no-wait                                                         
 
 Deploying from Git is also available in the dashboard (**Deploy** button, or when creating the project).
 
+### Private repositories
+
+A build clones your repository. For a private one, give shpyrd access in one of two ways. Both need you signed in (`shpyrd login`).
+
+**A deploy key for the project.** Works on any git host. It is read-only and opens one repository.
+
+```shell
+shpyrd git-auth deploy-key --project shop
+```
+
+shpyrd makes the key and prints its public half. Add it to the repository as a read-only deploy key (on GitHub: Settings, Deploy keys, Add deploy key, with write access off). Then deploy again. A new `deploy-key` replaces the old one, and `shpyrd git-auth deploy-key --project shop --remove` deletes it. Remove it from the repository too.
+
+**A token for a host.** Set once by a workspace admin; every project of the workspace that clones from that host uses it.
+
+```shell
+shpyrd git-auth set --host gitlab.example.com --token -     # reads the token from stdin
+shpyrd git-auth list                                        # hosts, never values
+shpyrd git-auth unset --host gitlab.example.com
+```
+
+shpyrd sends a user name with the token. The default is `x-access-token`, `oauth2` on gitlab.com and `x-token-auth` on bitbucket.org. Another host may want another one: pass `--username`.
+
+If a project has both, the deploy key wins. `shpyrd git-auth show --project shop` says which credential its builds use.
+
+shpyrd turns the repository URL into the form the credential needs: SSH for a deploy key, HTTPS for a token. A git URL it cannot parse, such as `git://`, builds as before, without credentials.
+
+Values are write-only: shpyrd never shows a token or a private key again.
+
+**The host key.** When the deploy key is made, shpyrd records the git host's SSH host key. Dockerfile builds check it and refuse a host that presents another. Buildpack builds clone with kpack, whose git client does not check the host key. Say so to whoever signs off your security review.
+
+**When access is refused.** A clone that the host refuses for access fails the build, and the message names `shpyrd git-auth`.
+
+<Callout title="Connect GitHub is coming">
+
+A "Connect GitHub" button, so you do not paste tokens or keys, is planned (RFC-0054). Until then, use a deploy key or a token.
+
+</Callout>
+
 <Callout title="Which languages?">
 
 Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, PHP, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
