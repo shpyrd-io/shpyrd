@@ -51,7 +51,7 @@ Out of scope:
      - `redirect_url` is `http://127.0.0.1:<port>/created`;
      - `setup_url` and `callback_urls[0]` are `<dashboard>/api/github/installed`.
    - **Flags:** `request_oauth_on_install: true`, `setup_on_update: true`, and `public: <--public>`, default false.
-   - **Permissions:** `contents: read`, `metadata: read`, `checks: write`, `deployments: write` and `statuses: read`.
+   - **Permissions:** `contents: read`, `metadata: read`, `members: read`, `checks: write`, `deployments: write` and `statuses: read`. `members: read` lets shpyrd check that the person connecting an org is one of its owners.
    - **Events:** `push`, `installation_repositories`, `check_suite` and `status`. The `installation` events are always sent.
    - All of part 4's permissions are requested now, so installations never have to re-approve.
 4. GitHub redirects to `127.0.0.1:<port>/created?code&state`. The CLI checks the state, calls `POST https://api.github.com/app-manifests/{code}/conversions` (no auth needed), writes the Secret through the kubeconfig, shows "Registered" in the browser, and prints the App's URL and the install link.
@@ -93,6 +93,11 @@ A small client with no new modules. `golang-jwt/jwt/v5` moves from indirect to d
 - **Tests:** `dropAll` in store_test.go gains the table, and both implementations are tested.
 
 ### Connecting a workspace (workspace admin, `authz.ClusterAdmin`)
+
+Who may connect, and the binding to the browser, were decided by the maintainer after the security review (2026-10-16):
+- **Only an admin of the GitHub account may connect its installation.** For an Organization, `GET /user/memberships/orgs/{org}` with the person's user token must say `role: admin` and `state: active`. For a User account, `GET /user` must return that login. Seeing the installation is not enough: any member with read access to one repository sees it.
+- **No silent move.** An installation another workspace has is refused with "<account> is connected to workspace <slug>: disconnect it there first." Re-connecting it to the same workspace is fine.
+- **The flow finishes on the workspace's own address, with the session that started it.** The fixed callback checks the state, the code, the person's installations and that they administer the account. It then redirects the browser to `<workspace dashboard>/api/workspace/github/finish?ticket=…`. The ticket is signed, single-use and valid for 5 minutes. That route (ClusterAdmin) requires the dashboard session of the same identity as the state's actor before it stores the installation. A link started by someone else cannot finish in another person's browser.
 
 - **Starting:** `POST /api/workspace/github/connect` returns `{installURL}`: `<html-url>/installations/new?state=<state>`.
 - **The state:** base64url JSON `{ws, actor, exp}` (15 minutes) with an HMAC-SHA256 tag keyed by `client-secret`. It is compared in constant time.
