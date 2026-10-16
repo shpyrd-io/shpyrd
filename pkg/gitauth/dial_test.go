@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The test servers listen on 127.0.0.1, which production refuses.
@@ -111,5 +112,16 @@ func TestLsRemoteHTTPStatusesInFixedWords(t *testing.T) {
 		if err == nil || err.Error() != want || strings.Contains(err.Error(), "500") {
 			t.Errorf("%d: err = %v, want %q", code, err, want)
 		}
+	}
+}
+
+func TestSafeHTTPClientRefusesLoopback(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer srv.Close()
+	refuseLoopback(t)
+	_, err := SafeHTTPClient(time.Second).Get(srv.URL)
+	if !errors.Is(err, ErrRefusedAddress) || hit {
+		t.Errorf("err = %v, reached %v", err, hit)
 	}
 }

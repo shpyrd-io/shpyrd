@@ -93,7 +93,11 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func newHTTPClient() *http.Client {
+// SafeHTTPClient is an HTTP client for hosts a customer or a setting
+// names: it dials only addresses shpyrd connects to, follows a redirect
+// only on the same host and never from https to http, and gives up after
+// timeout. The GitHub App's calls go through it too (RFC-0054).
+func SafeHTTPClient(timeout time.Duration) *http.Client {
 	tr := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           newDialer().DialContext,
@@ -103,5 +107,7 @@ func newHTTPClient() *http.Client {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	return &http.Client{Timeout: lsRemoteTimeout, Transport: tr, CheckRedirect: checkRedirect}
+	return &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: checkRedirect}
 }
+
+func newHTTPClient() *http.Client { return SafeHTTPClient(lsRemoteTimeout) }

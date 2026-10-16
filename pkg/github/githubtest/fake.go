@@ -1,0 +1,352 @@
+// Package githubtest is a fake GitHub for shpyrd's tests: the App's token
+// endpoint (which checks the App's JWT), an installation's repositories and
+// branches, the OAuth exchange, a person's installations and the manifest
+// conversion. Its state is read and set through methods, under its lock.
+package githubtest
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/shpyrd-io/shpyrd/pkg/github"
+)
+
+// The App the fake knows, and the codes it accepts.
+const (
+	AppID          = 1234
+	Slug           = "shpyrd-test"
+	WebhookSecret  = "whsec-test"
+	ClientID       = "Iv1.test"
+	ClientSecret   = "cs-test"
+	Code           = "good-code"
+	UserToken      = "gho_person"
+	ConversionCode = "c0de"
+)
+
+var (
+	keyOnce sync.Once
+	key     *rsa.PrivateKey
+)
+
+// Key is the App's private key: one per test binary.
+func Key() *rsa.PrivateKey {
+	keyOnce.Do(func() {
+		k, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		key = k
+	})
+	return key
+}
+
+// KeyPEM is Key as GitHub hands it over.
+func KeyPEM() string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(Key())}))
+}
+
+// Repo is a repository an installation grants.
+type Repo struct {
+	FullName      string
+	Private       bool
+	DefaultBranch string
+}
+
+// Installation is one a person can see.
+type Installation struct {
+	ID          int64
+	Login, Type string
+	Suspended   bool
+}
+
+// Server is the fake.
+type Server struct {
+	*httptest.Server
+
+	mu       sync.Mutex
+	now      time.Time
+	down     bool
+	repos    map[int64][]Repo
+	branches map[string][]string // by full name, lower case
+	people   []Installation
+	minted   map[int64]int
+	tokens   map[string]int64 // installation token -> installation
+	lastBody map[string]any
+	calls    []string
+}
+
+// NewServer starts the fake with installation 42 on Acme.
+func NewServer(t testing.TB) *Server {
+	f := &Server{
+		repos: map[int64][]Repo{42: {
+			{FullName: "Acme/shop", Private: true, DefaultBranch: "main"},
+			{FullName: "Acme/site", DefaultBranch: "trunk"},
+		}},
+		branches: map[string][]string{"acme/shop": {"dev", "main"}, "acme/site": {"trunk"}},
+		people:   []Installation{{ID: 42, Login: "Acme", Type: "Organization"}},
+		minted:   map[int64]int{},
+		tokens:   map[string]int64{},
+	}
+	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.Close)
+	return f
+}
+
+// App is the App's credentials, its html-url on the fake.
+func (f *Server) App() github.App {
+	return github.App{ID: AppID, Slug: Slug, PrivateKey: KeyPEM(), WebhookSecret: WebhookSecret,
+		ClientID: ClientID, ClientSecret: ClientSecret, HTMLURL: f.URL + "/apps/" + Slug}
+}
+
+// Secret is the App's Secret in namespace.
+func (f *Server) Secret(namespace string) *corev1.Secret {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: github.SecretName, Namespace: namespace},
+		Type: corev1.SecretTypeOpaque, Data: f.App().SecretData()}
+}
+
+// Options reach the fake, on its clock.
+func (f *Server) Options() github.Options {
+	return github.Options{APIURL: f.URL, HTTP: f.Client(), Now: f.Time}
+}
+
+// Source reads the App's Secret through r.
+func (f *Server) Source(r client.Reader, namespace string) *github.Source {
+	return &github.Source{Reader: r, Namespace: namespace, Options: f.Options()}
+}
+
+// Time is the fake's clock: SetNow's time, or the real one.
+func (f *Server) Time() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.clock()
+}
+
+func (f *Server) clock() time.Time {
+	if f.now.IsZero() {
+		return time.Now()
+	}
+	return f.now
+}
+
+func (f *Server) SetNow(t time.Time) { f.mu.Lock(); f.now = t; f.mu.Unlock() }
+
+// SetDown makes every call answer 503.
+func (f *Server) SetDown(down bool) { f.mu.Lock(); f.down = down; f.mu.Unlock() }
+
+func (f *Server) SetRepos(installation int64, repos ...Repo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repos[installation] = repos
+}
+
+func (f *Server) SetUserInstallations(list ...Installation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.people = list
+}
+
+// MintedFor counts the tokens minted for an installation.
+func (f *Server) MintedFor(installation int64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.minted[installation]
+}
+
+// LastTokenRequest is the body of the last token request.
+func (f *Server) LastTokenRequest() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastBody
+}
+
+// Calls are "METHOD /path" of every request, in order.
+func (f *Server) Calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
+	if f.down {
+		reply(w, http.StatusServiceUnavailable, map[string]string{"message": "Service unavailable"})
+		return
+	}
+	p := r.URL.Path
+	switch {
+	case r.Method == "POST" && strings.HasPrefix(p, "/app/installations/") && strings.HasSuffix(p, "/access_tokens"):
+		f.accessToken(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/app/installations/"), "/access_tokens"))
+	case r.Method == "GET" && p == "/installation/repositories":
+		f.repositories(w, r)
+	case r.Method == "GET" && strings.HasPrefix(p, "/repos/") && strings.HasSuffix(p, "/branches"):
+		f.branchList(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/branches"))
+	case r.Method == "POST" && p == "/login/oauth/access_token":
+		f.exchange(w, r)
+	case r.Method == "GET" && p == "/user/installations":
+		f.userInstallations(w, r)
+	case r.Method == "POST" && strings.HasPrefix(p, "/app-manifests/") && strings.HasSuffix(p, "/conversions"):
+		f.conversion(w, strings.TrimSuffix(strings.TrimPrefix(p, "/app-manifests/"), "/conversions"))
+	default:
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+	}
+}
+
+func (f *Server) accessToken(w http.ResponseWriter, r *http.Request, id string) {
+	claims := &jwt.RegisteredClaims{}
+	_, err := jwt.ParseWithClaims(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), claims,
+		func(*jwt.Token) (any, error) { return &Key().PublicKey, nil },
+		jwt.WithValidMethods([]string{"RS256"}), jwt.WithTimeFunc(f.clock), jwt.WithIssuer(strconv.Itoa(AppID)))
+	if err != nil {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "A JSON web token could not be decoded"})
+		return
+	}
+	installation, _ := strconv.ParseInt(id, 10, 64)
+	repos, ok := f.repos[installation]
+	if !ok {
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	raw, _ := io.ReadAll(r.Body)
+	var body struct {
+		Repositories []string `json:"repositories"`
+	}
+	_ = json.Unmarshal(raw, &body)
+	f.lastBody = map[string]any{}
+	_ = json.Unmarshal(raw, &f.lastBody)
+	for _, name := range body.Repositories {
+		if !grants(repos, name) {
+			reply(w, http.StatusUnprocessableEntity, map[string]string{"message": "There is at least one repository that does not exist or is not accessible to the parent installation."})
+			return
+		}
+	}
+	f.minted[installation]++
+	tok := fmt.Sprintf("ghs_%d_%d", installation, f.minted[installation])
+	f.tokens[tok] = installation
+	reply(w, http.StatusCreated, map[string]any{"token": tok, "expires_at": f.clock().Add(time.Hour).UTC().Format(time.RFC3339)})
+}
+
+func grants(repos []Repo, name string) bool {
+	for _, r := range repos {
+		if _, n, _ := strings.Cut(r.FullName, "/"); strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// installationOf is the installation an installation token is of.
+func (f *Server) installationOf(r *http.Request) (int64, bool) {
+	id, ok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	return id, ok
+}
+
+func (f *Server) repositories(w http.ResponseWriter, r *http.Request) {
+	id, ok := f.installationOf(r)
+	if !ok {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	var out []map[string]any
+	for _, repo := range pageOf(f.repos[id], r) {
+		out = append(out, map[string]any{"full_name": repo.FullName, "private": repo.Private, "default_branch": repo.DefaultBranch})
+	}
+	reply(w, http.StatusOK, map[string]any{"total_count": len(f.repos[id]), "repositories": out})
+}
+
+func (f *Server) branchList(w http.ResponseWriter, r *http.Request, fullName string) {
+	id, ok := f.installationOf(r)
+	if !ok || !grants(f.repos[id], fullName[strings.Index(fullName, "/")+1:]) {
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	out := []map[string]string{}
+	for _, b := range pageOf(f.branches[strings.ToLower(fullName)], r) {
+		out = append(out, map[string]string{"name": b})
+	}
+	reply(w, http.StatusOK, out)
+}
+
+func (f *Server) exchange(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		Code         string `json:"code"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	switch {
+	case in.ClientID != ClientID || in.ClientSecret != ClientSecret:
+		reply(w, http.StatusOK, map[string]string{"error": "incorrect_client_credentials", "error_description": "The client_id and/or client_secret passed are incorrect."})
+	case in.Code != Code:
+		reply(w, http.StatusOK, map[string]string{"error": "bad_verification_code", "error_description": "The code passed is incorrect or expired."})
+	default:
+		reply(w, http.StatusOK, map[string]string{"access_token": UserToken, "token_type": "bearer"})
+	}
+}
+
+func (f *Server) userInstallations(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+UserToken {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	var out []map[string]any
+	for _, i := range pageOf(f.people, r) {
+		var suspended any
+		if i.Suspended {
+			suspended = f.clock().UTC().Format(time.RFC3339)
+		}
+		out = append(out, map[string]any{"id": i.ID, "account": map[string]string{"login": i.Login, "type": i.Type}, "suspended_at": suspended})
+	}
+	reply(w, http.StatusOK, map[string]any{"total_count": len(f.people), "installations": out})
+}
+
+func (f *Server) conversion(w http.ResponseWriter, code string) {
+	if code != ConversionCode {
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	app := f.App()
+	reply(w, http.StatusCreated, map[string]any{
+		"id": app.ID, "slug": app.Slug, "name": "shpyrd test", "owner": map[string]string{"login": "acme"},
+		"html_url": app.HTMLURL, "client_id": app.ClientID, "client_secret": app.ClientSecret,
+		"webhook_secret": app.WebhookSecret, "pem": app.PrivateKey,
+	})
+}
+
+// pageOf is one page of items, as GitHub's per_page and page say.
+func pageOf[T any](items []T, r *http.Request) []T {
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if per <= 0 {
+		per = 30
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	from := min((page-1)*per, len(items))
+	return items[from:min(from+per, len(items))]
+}
+
+func reply(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
