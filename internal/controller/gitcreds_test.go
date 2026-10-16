@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -158,4 +160,83 @@ func TestReconcileGitCredentialsUnparseableURL(t *testing.T) {
 	if u, _, _ := unstructured.NestedString(img.Object, "spec", "source", "git", "url"); u != "git://example.com/a/b" {
 		t.Errorf("the raw URL builds as before: %s", u)
 	}
+}
+
+func dockerfileGitApp(url string) *shpyrdv1.App {
+	app := dockerfileApp()
+	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: url, Revision: "main"}}
+	return app
+}
+
+func TestDockerfileFetchWithToken(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	r, c := newTestReconciler(t, app, workspaceToken("default", "github.com", "ghp_s3cret"))
+	runReconcile(t, r, app)
+	job := getJob(t, c, "app-dk", "dk-build-1")
+	init := job.Spec.Template.Spec.InitContainers[0]
+	script := init.Command[2]
+	if strings.Contains(script, "ghp_s3cret") {
+		t.Fatal("the token must never be inlined in the script")
+	}
+	if !strings.Contains(script, "url='https://github.com/acme/dk.git'") || !strings.Contains(script, ".netrc") {
+		t.Errorf("script: %s", script)
+	}
+	if !hasGitAuthMount(init) || !hasSecretVolume(job, "dk-git") {
+		t.Errorf("fetch container lacks the credential: %+v", init.VolumeMounts)
+	}
+	if hasGitAuthMount(job.Spec.Template.Spec.Containers[0]) {
+		t.Error("the build container must not see the credential")
+	}
+}
+
+func TestDockerfileFetchWithDeployKey(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	dk := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-dk", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey}},
+		Type:       corev1.SecretTypeSSHAuth,
+		Data:       map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
+	}
+	r, c := newTestReconciler(t, app, dk)
+	runReconcile(t, r, app)
+	script := getJob(t, c, "app-dk", "dk-build-1").Spec.Template.Spec.InitContainers[0].Command[2]
+	for _, want := range []string{"url='git@github.com:acme/dk.git'", "chmod 600", "StrictHostKeyChecking=yes", "UserKnownHostsFile=" + gitAuthDir + "/known_hosts", "GIT_SSH_COMMAND"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestFetchScriptNeverInlinesSecrets(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	b, _ := gitauth.Resolve(app.Spec.Source.Git.URL, "dk", "app-dk", nil, workspaceToken("default", "github.com", "a'b$(c)\nd"))
+	script := Config{}.fetchScript(app, b)
+	if strings.Contains(script, "a'b") || strings.Contains(script, "$(c)") {
+		t.Errorf("secret material in the script:\n%s", script)
+	}
+}
+
+func TestPublicGitFetchUnchanged(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	script := Config{}.fetchScript(app, gitauth.Build{})
+	if strings.Contains(script, ".netrc") || strings.Contains(script, "GIT_SSH_COMMAND") || !strings.Contains(script, "url='https://github.com/acme/dk'") {
+		t.Errorf("a public repository's fetch changed:\n%s", script)
+	}
+}
+
+func hasGitAuthMount(c corev1.Container) bool {
+	for _, m := range c.VolumeMounts {
+		if m.MountPath == gitAuthDir {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSecretVolume(job *batchv1.Job, name string) bool {
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == name {
+			return true
+		}
+	}
+	return false
 }

@@ -74,7 +74,7 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 
 	// BuildKit: TLS (no registry.insecure), docker config mounted, pull secret.
 	dk := dockerfileApp()
-	job, _ := r.Config.desiredBuildJob(dk, 1, "key")
+	job, _ := r.Config.desiredBuildJob(dk, 1, "key", gitauth.Build{})
 	spec := job.Spec.Template.Spec
 	args := strings.Join(spec.Containers[0].Args, " ")
 	if strings.Contains(args, "registry.insecure") {

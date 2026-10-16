@@ -241,7 +241,7 @@ func TestBuildKeyAndFailureSummary(t *testing.T) {
 // both.
 func TestBuildJobDeclaresRequestsInEveryContainer(t *testing.T) {
 	r, _ := newTestReconciler(t)
-	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k")
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k", gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 	app := dockerfileApp()
 	r, c := newTestReconciler(t, app)
 	for n := 1; n <= 2; n++ {
-		job, err := r.Config.desiredBuildJob(app, n, buildKey(app))
+		job, err := r.Config.desiredBuildJob(app, n, buildKey(app), gitauth.Build{})
 		if err != nil {
 			t.Fatal(err)
 		}
