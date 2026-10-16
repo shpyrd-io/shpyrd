@@ -24,7 +24,10 @@ locals {
   services_id    = data.oci_core_services.all.services[0].id
   services_cidr  = data.oci_core_services.all.services[0].cidr_block
   admin_cidrs    = length(var.admin_cidrs) > 0 ? var.admin_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
-  ssh_public_key = trimspace(file(pathexpand(var.ssh_public_key_path)))
+  # One string, one key per line: OCI's ssh_authorized_keys metadata (and
+  # the node pools' ssh_public_key, which becomes it) takes several keys
+  # separated by newlines. The file is read only when the list is empty.
+  ssh_public_key = length(var.ssh_public_keys) > 0 ? join("\n", [for k in var.ssh_public_keys : trimspace(k)]) : trimspace(file(pathexpand(var.ssh_public_key_path)))
   # OKE names must be alphanumeric for the Bastion; DNS labels are letters and digits.
   bastion_name = replace(var.name, "-", "")
   dns_label    = substr(replace(var.name, "-", ""), 0, 15)

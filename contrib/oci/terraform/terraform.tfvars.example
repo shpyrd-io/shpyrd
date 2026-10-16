@@ -15,6 +15,8 @@ node_memory_gb = 12
 node_count     = 2
 
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+# Several people: a folder of .pub files instead of the single path, e.g.
+# ssh_public_keys = [for f in sort(fileset("${path.root}/ssh", "*.pub")) : trimspace(file("${path.root}/ssh/${f}"))]
 # admin_cidrs = ["203.0.113.4/32"]   # default: this machine's address
 
 # Public zone in OCI DNS for the platform (delegate from the parent zone); empty for none.
