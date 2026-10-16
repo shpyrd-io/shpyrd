@@ -84,7 +84,7 @@ A small client with no new modules. `golang-jwt/jwt/v5` moves from indirect to d
 
 - **Migration `000028_github_installations`:** `github_installations(id BIGINT PRIMARY KEY, workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, account_login TEXT NOT NULL, account_type TEXT NOT NULL, connected_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), suspended_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)`.
 - **A new `GitHub` sub-interface** on `Store`, with memory and postgres implementations:
-  - `AddGitHubInstallation`: upsert by id. A re-connect to another workspace moves the installation and is audited.
+  - `AddGitHubInstallation`: upsert by id within its workspace. An installation another workspace has is refused (`GitHubHeldError`): installations never move.
   - `GitHubInstallations(workspace)`: not deleted.
   - `GitHubInstallation(id)`: across workspaces.
   - `SetGitHubInstallationState(id, suspended, deleted)`.
@@ -166,7 +166,7 @@ Who may connect, and the binding to the browser, were decided by the maintainer 
 - **The App Secret is missing:** the connect routes answer 409, "GitHub is not set up on this platform", with the operator hint on self-hosted. The webhook answers 404. Builds skip the App.
 - **GitHub is down or rate-limited:** minting falls through to the other credentials. The picker shows the error. The callback page says to try again.
 - **A suspended installation** is skipped by the lookup. The Source block shows the no-access reason from PR 1 and PR 2.
-- **Audit:** `github.connect`, `github.disconnect`, `github.suspend`, `github.unsuspend` and `github.move`. The workspace goes in the target or detail, because these are cluster-ref entries.
+- **Audit:** `github.connect`, `github.disconnect`, `github.suspend` and `github.unsuspend`. The workspace goes in the target or detail, because these are cluster-ref entries. There is no `github.move`: installations never move between workspaces.
 
 ## Testing
 

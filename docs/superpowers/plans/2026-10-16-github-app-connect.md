@@ -75,8 +75,10 @@ Deployments, watch paths, wait-for-CI) follows separately.
   `X-Hub-Signature-256` only, 404 while no App Secret exists, 401 for a bad
   signature, 200 `pong` for a ping, 202 for everything that is not applied.
 - Audit actions are exactly `github.connect`, `github.disconnect`,
-  `github.suspend`, `github.unsuspend` and `github.move`, recorded against
-  the cluster with `workspace <slug>` in the detail.
+  `github.suspend` and `github.unsuspend`, recorded against the cluster
+  with `workspace <slug>` in the detail. (Superseded during review:
+  installations never move, so there is no `github.move`; the move code
+  and tests below were replaced by the refusal "disconnect it there first".)
 - Messages are plain sentences that name the fix, in the style of
   `internal/controller/build_failure.go` and PR 2's
   `describeSourceError`.
@@ -169,13 +171,13 @@ Deployments, watch paths, wait-for-CI) follows separately.
    own GitHub account can see is connected, and a state connects once.
    Tests: `TestGitHubCallbackRefusesAnInstallationThePersonCannotSee` and
    `TestGitHubStateIsUsedOnceAndExpires` (Task 4).
-2. **An installation moved between workspaces.** An admin of workspace B
-   connects the installation workspace A had. Expected: it moves, the move is
-   audited (`github.move`), A's builds stop using it and fall through, A's
-   pushes are no longer routed. Tests:
-   `TestGitHubInstallationMovesBetweenWorkspaces` (Task 2),
-   `TestGitHubConnectMovesAnInstallationAndAudits` (Task 4),
-   `TestGitHubAppIsSkippedForAnInstallationMovedAway` (Task 6).
+2. **An installation another workspace has.** An admin of workspace B
+   connects the installation workspace A has. Expected: it is refused
+   ("disconnect it there first"); installations never move (superseded
+   during review: the `github.move` design below is not what shipped).
+   Tests: `TestGitHubConnectRefusesAnInstallationAnotherWorkspaceHas`,
+   `TestGitHubFinishRefusesWhenTheStoreSaysAnotherWorkspaceHasIt`,
+   `TestGitHubAppIsSkippedForAnInstallationMovedAway`.
 3. **A token expiring during kpack's own rebuild.** kpack rebuilds when its
    stack or buildpacks change, reading `<app>-git` whenever it starts.
    Expected: the Secret never holds a token in its last 10 minutes. Tests:

@@ -27,7 +27,7 @@ var (
 )
 
 func githubRequest(g *globalFlags, cmd *cobra.Command, method, path string, out any) error {
-	return signedInRequest(g, cmd, "GitHub is connected signed in: run shpyrd login first", method, path, nil, out)
+	return signedInRequest(g, cmd, "GitHub connections are managed signed in: run shpyrd login first.", method, path, nil, out)
 }
 
 // kindOf says GitHub's account type in words.

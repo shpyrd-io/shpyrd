@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -39,15 +40,15 @@ func TestRefusedAddresses(t *testing.T) {
 }
 
 func TestLsRemoteRefusesLoopback(t *testing.T) {
-	hit := false
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	var hit atomic.Bool // the handler runs on the server's goroutine
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit.Store(true) }))
 	defer srv.Close()
 	refuseLoopback(t)
 	_, err := LsRemote(context.Background(), srv.URL+"/acme/shop", Build{})
 	if !errors.Is(err, ErrRefusedAddress) || err.Error() != "127.0.0.1 is not an address shpyrd connects to" {
 		t.Errorf("err = %v", err)
 	}
-	if hit {
+	if hit.Load() {
 		t.Error("the loopback server was reached")
 	}
 }
@@ -116,12 +117,12 @@ func TestLsRemoteHTTPStatusesInFixedWords(t *testing.T) {
 }
 
 func TestSafeHTTPClientRefusesLoopback(t *testing.T) {
-	hit := false
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	var hit atomic.Bool // the handler runs on the server's goroutine
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit.Store(true) }))
 	defer srv.Close()
 	refuseLoopback(t)
 	_, err := SafeHTTPClient(time.Second).Get(srv.URL)
-	if !errors.Is(err, ErrRefusedAddress) || hit {
-		t.Errorf("err = %v, reached %v", err, hit)
+	if !errors.Is(err, ErrRefusedAddress) || hit.Load() {
+		t.Errorf("err = %v, reached %v", err, hit.Load())
 	}
 }

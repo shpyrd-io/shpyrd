@@ -195,13 +195,13 @@ Only an owner of the GitHub account can connect it: an owner of the organisation
 shpyrd deploy --git https://github.com/acme/shop --ref main --project shop
 ```
 
-**How builds reach it.** For a repository on github.com whose owner the workspace has connected, every build and every check of the branch uses a token the App gives for that one repository, read-only, that lasts an hour; shpyrd renews it every 50 minutes. The App comes first, then the project's deploy key, then the workspace's token. shpyrd skips the App for a suspended installation, a repository the installation does not include, an installation that is gone, and while GitHub is failing (it asks again after a pause). A token already issued is kept through a short GitHub outage. `shpyrd git-auth show --project shop` says `through the GitHub App (acme)`, and so does the project's Summary.
+**How builds reach it.** For a repository on github.com whose owner the workspace has connected, every build and every check of the branch uses a token the App gives for that one repository, read-only, that lasts an hour; shpyrd renews it every 50 minutes. The App comes first, then the project's deploy key, then the workspace's token. shpyrd skips the App for a suspended installation, a repository the installation does not include, an installation that is gone, and while GitHub is failing (it asks again after a pause). A token already issued is kept through a short GitHub outage. `shpyrd git-auth show --project shop` says `through the GitHub App (acme)`, and so does the Source block of the project's overview.
 
 **Pushes** arrive through the App's own webhook, with nothing to set up per project: `shpyrd git-hooks show` says so. A suspended installation's pushes do not deploy. `[skip deploy]` and auto-deploy work as in [Deploying on push](#deploying-on-push).
 
 **When the App cannot read a repository.** shpyrd tries the deploy key and the token. When nothing gives access, the project says why, starting with the App's reason ("The GitHub App's installation on acme does not include shop: add the repository to it on GitHub."), and what runs keeps running.
 
-**On a self-hosted platform**, an operator registers the cluster's App once first: see [Installation](/docs/installation#connect-github). On shpyrd cloud, it is already set up.
+On shpyrd cloud the App is already set up; on a self-hosted platform an operator registers it once: see [Installation](/docs/installation#connect-github).
 
 <Callout title="Which languages?">
 
