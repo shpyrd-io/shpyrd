@@ -30,13 +30,15 @@ import (
 
 // The App the fake knows, and the codes it accepts.
 const (
-	AppID          = 1234
-	Slug           = "shpyrd-test"
-	WebhookSecret  = "whsec-test"
-	ClientID       = "Iv1.test"
-	ClientSecret   = "cs-test"
-	Code           = "good-code"
-	UserToken      = "gho_person"
+	AppID         = 1234
+	Slug          = "shpyrd-test"
+	WebhookSecret = "whsec-test"
+	ClientID      = "Iv1.test"
+	ClientSecret  = "cs-test"
+	Code          = "good-code"
+	UserToken     = "gho_person"
+	// UserLogin is who UserToken is, an owner of Acme until SetOrgRole.
+	UserLogin      = "ana"
 	ConversionCode = "c0de"
 )
 
@@ -86,6 +88,8 @@ type Server struct {
 	repos    map[int64][]Repo
 	branches map[string][]string // by full name, lower case
 	people   []Installation
+	login    string
+	orgRoles map[string][2]string // by org, lower case: role, state
 	minted   map[int64]int
 	tokens   map[string]int64 // installation token -> installation
 	lastBody map[string]any
@@ -101,6 +105,8 @@ func NewServer(t testing.TB) *Server {
 		}},
 		branches: map[string][]string{"acme/shop": {"dev", "main"}, "acme/site": {"trunk"}},
 		people:   []Installation{{ID: 42, Login: "Acme", Type: "Organization"}},
+		login:    UserLogin,
+		orgRoles: map[string][2]string{"acme": {"admin", "active"}},
 		minted:   map[int64]int{},
 		tokens:   map[string]int64{},
 	}
@@ -162,6 +168,20 @@ func (f *Server) SetUserInstallations(list ...Installation) {
 	f.people = list
 }
 
+// SetUserLogin is who the person's token says they are.
+func (f *Server) SetUserLogin(login string) { f.mu.Lock(); f.login = login; f.mu.Unlock() }
+
+// SetOrgRole sets the person's membership of org; role "" is none.
+func (f *Server) SetOrgRole(org, role, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if role == "" {
+		delete(f.orgRoles, strings.ToLower(org))
+		return
+	}
+	f.orgRoles[strings.ToLower(org)] = [2]string{role, state}
+}
+
 // MintedFor counts the tokens minted for an installation.
 func (f *Server) MintedFor(installation int64) int {
 	f.mu.Lock()
@@ -203,6 +223,10 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		f.exchange(w, r)
 	case r.Method == "GET" && p == "/user/installations":
 		f.userInstallations(w, r)
+	case r.Method == "GET" && p == "/user":
+		f.user(w, r)
+	case r.Method == "GET" && strings.HasPrefix(p, "/user/memberships/orgs/"):
+		f.membership(w, r, strings.TrimPrefix(p, "/user/memberships/orgs/"))
 	case r.Method == "POST" && strings.HasPrefix(p, "/app-manifests/") && strings.HasSuffix(p, "/conversions"):
 		f.conversion(w, strings.TrimSuffix(strings.TrimPrefix(p, "/app-manifests/"), "/conversions"))
 	default:
@@ -316,6 +340,27 @@ func (f *Server) userInstallations(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"id": i.ID, "account": map[string]string{"login": i.Login, "type": i.Type}, "suspended_at": suspended})
 	}
 	reply(w, http.StatusOK, map[string]any{"total_count": len(f.people), "installations": out})
+}
+
+func (f *Server) user(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+UserToken {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"login": f.login, "type": "User"})
+}
+
+func (f *Server) membership(w http.ResponseWriter, r *http.Request, org string) {
+	if r.Header.Get("Authorization") != "Bearer "+UserToken {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	m, ok := f.orgRoles[strings.ToLower(org)]
+	if !ok {
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"role": m[0], "state": m[1], "organization": map[string]string{"login": org}})
 }
 
 func (f *Server) conversion(w http.ResponseWriter, code string) {

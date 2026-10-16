@@ -81,7 +81,7 @@ func newAppManifest(dashboard, redirect, name string, public bool) appManifest {
 		Public:                public,
 		RequestOAuthOnInstall: true,
 		SetupOnUpdate:         true,
-		DefaultPermissions:    map[string]string{"contents": "read", "metadata": "read", "checks": "write", "deployments": "write", "statuses": "read"},
+		DefaultPermissions:    map[string]string{"contents": "read", "metadata": "read", "members": "read", "checks": "write", "deployments": "write", "statuses": "read"},
 		DefaultEvents:         []string{"push", "installation_repositories", "check_suite", "status"},
 	}
 	m.HookAttributes.URL, m.HookAttributes.Active = dashboard+"/api/github/webhook", true

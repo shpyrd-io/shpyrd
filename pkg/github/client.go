@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -298,6 +299,39 @@ func (c *Client) UserInstallations(ctx context.Context, userToken string) ([]Ins
 		}
 	}
 	return out, nil
+}
+
+// UserLogin is the login of the person behind userToken (GET /user).
+func (c *Client) UserLogin(ctx context.Context, userToken string) (string, error) {
+	var res struct {
+		Login string `json:"login"`
+	}
+	if err := c.call(ctx, "GET", c.api+"/user", userToken, nil, &res); err != nil {
+		return "", err
+	}
+	if res.Login == "" {
+		return "", errors.New("GitHub did not say who the person is")
+	}
+	return res.Login, nil
+}
+
+// OrgMembership is the person's role (admin or member) and the state
+// (active or pending) of their membership of org, through
+// GET /user/memberships/orgs/{org}. Not a member is role "" and no error.
+func (c *Client) OrgMembership(ctx context.Context, userToken, org string) (role, state string, err error) {
+	var res struct {
+		Role  string `json:"role"`
+		State string `json:"state"`
+	}
+	err = c.call(ctx, "GET", c.api+"/user/memberships/orgs/"+url.PathEscape(org), userToken, nil, &res)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return res.Role, res.State, nil
 }
 
 // Registration is a GitHub App GitHub created from a manifest.

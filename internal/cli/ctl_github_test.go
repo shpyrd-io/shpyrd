@@ -135,7 +135,7 @@ func actAsTheBrowser(t *testing.T, page string, hold secretHold, wantTarget stri
 		len(m.CallbackURLs) != 1 || m.CallbackURLs[0] != m.SetupURL || !m.RequestOAuthOnInstall || !m.SetupOnUpdate || m.Public {
 		t.Errorf("manifest = %+v", m)
 	}
-	wantPerms := map[string]string{"contents": "read", "metadata": "read", "checks": "write", "deployments": "write", "statuses": "read"}
+	wantPerms := map[string]string{"contents": "read", "metadata": "read", "members": "read", "checks": "write", "deployments": "write", "statuses": "read"}
 	for k, v := range wantPerms {
 		if m.DefaultPermissions[k] != v {
 			t.Errorf("permission %s = %q", k, m.DefaultPermissions[k])

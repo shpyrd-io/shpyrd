@@ -165,3 +165,32 @@ func TestA404MeansTheInstallationIsGoneAndA422ThatTheRepositoryIsNotGranted(t *t
 		t.Errorf("a repository not granted: %v", err)
 	}
 }
+
+func TestWhoThePersonIsAndTheirRoleInAnOrg(t *testing.T) {
+	c, fake := newClient(t)
+	ctx := context.Background()
+	if login, err := c.UserLogin(ctx, githubtest.UserToken); err != nil || login != githubtest.UserLogin {
+		t.Fatalf("login %q %v", login, err)
+	}
+	fake.SetUserLogin("bob")
+	if login, _ := c.UserLogin(ctx, githubtest.UserToken); login != "bob" {
+		t.Errorf("login %q", login)
+	}
+	if _, err := c.UserLogin(ctx, "someone else's"); err == nil {
+		t.Error("a token GitHub refuses")
+	}
+	if role, state, err := c.OrgMembership(ctx, githubtest.UserToken, "Acme"); err != nil || role != "admin" || state != "active" {
+		t.Errorf("owner of Acme: %q %q %v", role, state, err)
+	}
+	fake.SetOrgRole("Acme", "member", "active")
+	if role, _, err := c.OrgMembership(ctx, githubtest.UserToken, "Acme"); err != nil || role != "member" {
+		t.Errorf("member of Acme: %q %v", role, err)
+	}
+	if role, state, err := c.OrgMembership(ctx, githubtest.UserToken, "Other"); err != nil || role != "" || state != "" {
+		t.Errorf("not a member: %q %q %v", role, state, err)
+	}
+	fake.SetDown(true)
+	if _, _, err := c.OrgMembership(ctx, githubtest.UserToken, "Acme"); err == nil {
+		t.Error("GitHub down is an error, not a stranger")
+	}
+}
