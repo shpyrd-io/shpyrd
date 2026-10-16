@@ -10,6 +10,9 @@ application has to change.
 
 - A select's trigger shrinks with its grid column and clips its value, instead of growing past the column and out of its dialog (a long instance size did).
 - An inline progress bar writes its label before itself: a count over a limit with a thin bar beside it, as a table cell holds it.
+- `LauncherCard` takes `size="sm"`: a smaller card (192×144) for a row of others, without its description and its tags.
+- `LauncherCard` draws its signs (local network, locked) in the band, before the address; the top corner holds only the gear.
+- A web application's `LauncherCard` that is failed or deploying says so with a badge beside the gear, "Not working" or "Updating"; a worker keeps saying how it is in its band.
 
 ## 0.1.2
 

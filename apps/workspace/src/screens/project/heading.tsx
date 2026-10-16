@@ -37,7 +37,9 @@ export const busy = (p: Project) => p.status.phase === "Building" || p.status.ph
 
 // The name, how it is, where it answers, and what can be done: over
 // every page of the project. Under it, what is going on right now.
-export function Heading({ project, perms }: { project: Project; perms: Perms }) {
+// `simple` is the overview's: what an engineer reads (the slug, the
+// network, destroying it) stays in Advanced.
+export function Heading({ project, perms, simple = false }: { project: Project; perms: Perms; simple?: boolean }) {
   const navigate = useNavigate();
   const queries = useQueryClient();
   const phase = phaseOf(project);
@@ -84,12 +86,12 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
         icon={<ProjectTile project={project} className="size-9 rounded-md" />}
         iconEnd={
           <>
-            {project.displayName !== project.slug && <InlineCode>{project.slug}</InlineCode>}
+            {!simple && project.displayName !== project.slug && <InlineCode>{project.slug}</InlineCode>}
             {perms.config && <Describe project={project} onDone={refresh} />}
             <StatusBadge type={types[phase]} live={phase === "deploying"}>
-              {phaseWords[phase]}
+              {simple && phase === "running" ? "Live" : phaseWords[phase]}
             </StatusBadge>
-            {perms.deploy && (supportsInternal || internal) ? (
+            {simple ? null : perms.deploy && (supportsInternal || internal) ? (
               <ConfirmDialog
                 trigger={
                   <Badge variant="outline" className="cursor-pointer gap-1 hover:bg-muted" title={internal ? "On the local network. Click to put it on the public internet." : "On the public internet. Click to keep it on the local network."}>
@@ -135,7 +137,7 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
                 </DropdownMenuItem>
               </Deploy>
             )}
-            {perms.destroy && (
+            {perms.destroy && !simple && (
               <ConfirmDialog
                 trigger={<Button variant="destructive" size="sm" icon={<Trash2 />} aria-label="Destroy the project" />}
                 variant="destructive"

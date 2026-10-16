@@ -81,4 +81,40 @@ describe("LauncherCard", () => {
     expect(tile.querySelector("img")?.getAttribute("src")).toBe("/garden.png");
     expect(screen.queryByTestId("own")).toBeNull();
   });
+
+  it("says in words when a web application is not working or updating, beside the gear", () => {
+    const { container } = render(
+      <>
+        <LauncherCard name="Shop" url="shop.example" phase="failed" />
+        <LauncherCard name="Docs" url="docs.example" phase="deploying" />
+        <LauncherCard name="Blog" url="blog.example" />
+      </>,
+    );
+    const badges = container.querySelectorAll("[data-slot=launcher-trouble]");
+    expect(badges).toHaveLength(2);
+    expect(badges[0].textContent).toBe("Not working");
+    expect(badges[1].textContent).toBe("Updating");
+  });
+
+  it("has no badge for a worker: its band already says how it is", () => {
+    const { container } = render(<LauncherCard name="Reports" phase="failed" />);
+    expect(container.querySelector("[data-slot=launcher-trouble]")).toBeNull();
+    expect(container.querySelector("[data-band]")?.textContent).toBe("Failed");
+  });
+
+  it("puts the signs in the band, before the address", () => {
+    const { container } = render(<LauncherCard name="Mail" url="mail.example" access="locked" />);
+    const band = container.querySelector("[data-band]")!;
+    expect(band.querySelector("[role=img][aria-label='Only for who signs in']")).not.toBeNull();
+    expect(band.lastElementChild?.tagName).toBe("A");
+  });
+
+  it("is smaller in a row of others, without its description and its tags", () => {
+    const { container } = render(<LauncherCard size="sm" name="Docs" url="docs.example" description="The handbook" tags={["Public"]} />);
+    const card = container.querySelector("[data-slot=launcher-card]")!;
+    expect(card.getAttribute("data-size")).toBe("sm");
+    expect(card.className).toContain("h-36");
+    expect(screen.queryByText("The handbook")).toBeNull();
+    expect(screen.queryByText("Public")).toBeNull();
+  });
 });
