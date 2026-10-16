@@ -388,7 +388,7 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 			return
 		}
 		note = n
-		ch.buckets, ch.objectStorage = 1, cap
+		ch.buckets, ch.bucketCap, ch.objectStorage = 1, cap, cap
 	}
 	if (t.Kind == "Postgres" && !shared) || t.Kind == "Redis" {
 		n, res, count, err := s.storeSize(ctx, t.Kind, spec)

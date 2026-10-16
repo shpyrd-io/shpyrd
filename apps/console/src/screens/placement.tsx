@@ -31,7 +31,7 @@ export function Placement() {
       </CardContent>
     </Card>
     {current && <div className="grid gap-2"><p className="text-sm font-medium">{current.workspace} / {current.name}</p><ProjectPlacement key={`placement:${current.id}`} id={current.id} name={current.name} /><ProjectBackups key={current.id} name={current.name} queryKey={`cluster:${current.id}`} actions={{
-      status: () => api.projectArchiveStatus(current.id), backup: () => api.backupProject(current.id), restore: (file) => api.restoreProject(current.id, file), recover: () => api.recoverProject(current.id),
+      status: () => api.projectArchiveStatus(current.id), backup: (options) => api.backupProject(current.id, options), restore: (file) => api.restoreProject(current.id, file), recover: () => api.recoverProject(current.id),
     }} /></div>}
   </div>;
 }

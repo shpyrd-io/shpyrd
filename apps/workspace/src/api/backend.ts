@@ -153,10 +153,10 @@ export const backend: Api = {
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,
     ).status(),
-  backupProject: (slug) =>
+  backupProject: (slug, options) =>
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,
-    ).backup(),
+    ).backup(options),
   restoreProject: (slug, file) =>
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,

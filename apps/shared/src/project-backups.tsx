@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Button } from "@shpyrd/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Checkbox } from "@shpyrd/ui/components/checkbox";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Input } from "@shpyrd/ui/components/input";
 import { Label } from "@shpyrd/ui/components/label";
@@ -22,8 +23,11 @@ export function ProjectBackups({ name, queryKey, actions, allowed = true }: {
   name: string; queryKey: string; actions: ProjectArchiveActions; allowed?: boolean;
 }) {
   const id = useId();
+  const filesId = useId();
   const [file, setFile] = useState<File | null>(null);
+  const [withFiles, setWithFiles] = useState(false);
   const [message, setMessage] = useState("");
+  const [report, setReport] = useState<string[]>([]);
   const submitting = useRef(false);
   const queries = useQueryClient();
   const mutationKey = ["project-archive-operation", queryKey];
@@ -34,9 +38,12 @@ export function ProjectBackups({ name, queryKey, actions, allowed = true }: {
     mutationKey,
     mutationFn: async (kind: Operation) => {
       setMessage("");
+      setReport([]);
       if (kind === "restore") {
         if (!file) throw new Error("Choose a project archive first.");
         await actions.restore(file);
+      } else if (kind === "backup") {
+        setReport((await actions.backup({ files: withFiles })) ?? []);
       } else await actions[kind]();
       return kind;
     },
@@ -73,7 +80,7 @@ export function ProjectBackups({ name, queryKey, actions, allowed = true }: {
     <Card>
       <CardHeader>
         <CardTitle>Project backup and restore</CardTitle>
-        <CardDescription>Download one .tgz with the code, deployed build, configuration, PostgreSQL databases and volume files. The project pauses during backup and restore.</CardDescription>
+        <CardDescription>Download one .tgz with the code, deployed build, configuration, PostgreSQL databases and volume files. Buckets travel by reference: a restore on this platform finds their files where they are. The project pauses during backup and restore.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         {preview && <Alert><AlertTitle>Interactive preview</AlertTitle><AlertDescription>These actions simulate progress. No project is paused, no backup file is downloaded, and restore does not read or upload your selected file.</AlertDescription></Alert>}
@@ -84,6 +91,11 @@ export function ProjectBackups({ name, queryKey, actions, allowed = true }: {
         </Alert>}
         {failure && <Alert variant="destructive"><AlertTitle>The operation could not finish</AlertTitle><AlertDescription>{(failure as Error).message}</AlertDescription></Alert>}
         {message && <p role="status" className="text-sm">{message}</p>}
+        {report.length > 0 && <ul className="grid gap-1 text-sm text-muted-foreground">{report.map((line) => <li key={line}>{line}</li>)}</ul>}
+        <div className="flex items-start gap-2">
+          <Checkbox id={filesId} checked={withFiles} disabled={disabled} onCheckedChange={(checked) => setWithFiles(checked === true)} className="mt-0.5" />
+          <Label htmlFor={filesId} className="font-normal leading-snug">Carry the buckets' files in the backup (up to 5 GB together): for a backup before destroying the project, or a move to another platform.</Label>
+        </div>
         <ConfirmDialog
           title={preview ? `Preview backup of ${name}?` : `Back up ${name}?`}
           description={preview ? "Simulate backup progress. No project will be paused and no file will be downloaded." : "The project will stop briefly so its database and files are captured together. It will resume before the download starts."}

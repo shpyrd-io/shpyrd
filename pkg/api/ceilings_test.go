@@ -254,7 +254,7 @@ func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 		{"databases", l, change{}, usage{databases: 2}},
 		{"instances of a database", l, change{instances: 3}, none},
 		{"buckets", l, change{}, usage{buckets: 2}},
-		{"a bucket's cap", l, change{buckets: 1, objectStorage: q("5Gi")}, none},
+		{"a bucket's cap", l, change{buckets: 1, bucketCap: q("5Gi"), objectStorage: q("5Gi")}, none},
 		{"object storage", l, change{}, usage{objectStorage: q("3Gi")}},
 	}
 	for _, c := range cases {

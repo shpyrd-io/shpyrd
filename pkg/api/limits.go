@@ -361,9 +361,10 @@ type change struct {
 	// dedicated one would run.
 	database  bool
 	instances int32
-	// buckets counts new buckets; objectStorage is their caps together.
-	buckets       int
-	objectStorage resource.Quantity
+	// buckets counts new buckets; bucketCap is the largest cap among
+	// them, objectStorage their caps together.
+	buckets                  int
+	bucketCap, objectStorage resource.Quantity
 }
 
 // admit judges a change against the workspace's ceilings and, admitted,
@@ -423,7 +424,7 @@ func overCeiling(l *store.Limits, caps map[string]store.ProjectCap, ch change, b
 			return fmt.Sprintf("A dedicated database here runs up to %d instances.", pg.MaxInstances)
 		}
 		if o := l.ObjectStorage; o != nil && ch.buckets > 0 {
-			if cap, err := resource.ParseQuantity(o.BucketCap); err == nil && o.BucketCap != "" && ch.objectStorage.Cmp(cap) > 0 {
+			if cap, err := resource.ParseQuantity(o.BucketCap); err == nil && o.BucketCap != "" && ch.bucketCap.Cmp(cap) > 0 {
 				return fmt.Sprintf("A bucket holds up to %s.", bytesWords(cap))
 			}
 		}

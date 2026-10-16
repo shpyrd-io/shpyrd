@@ -72,6 +72,9 @@ func (s *Server) recoverProjectArchive(c *gin.Context) {
 			for _, name := range op.CreatedDatabases {
 				inventory.Databases = append(inventory.Databases, archivedDatabase{Name: name})
 			}
+			for _, name := range op.CreatedBuckets {
+				inventory.Buckets = append(inventory.Buckets, archivedBucket{Name: name})
+			}
 			resources := s.archiveParticipants(app, op, &inventory, nil)
 			err = projectarchive.FinalizeTransaction(ctx, resources, func(context.Context, projectarchive.TransactionState) error { return nil })
 		}

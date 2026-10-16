@@ -66,7 +66,7 @@ export type LogQuery = { process?: string; tail?: number; follow?: boolean };
 
 export type Api = {
   projectArchiveStatus: (slug: string) => Promise<ProjectArchiveStatus>;
-  backupProject: (slug: string) => Promise<void>;
+  backupProject: (slug: string, options?: { files?: boolean }) => Promise<string[]>;
   restoreProject: (slug: string, file: File) => Promise<void>;
   recoverProject: (slug: string) => Promise<void>;
   config: () => Promise<PublicConfig>;

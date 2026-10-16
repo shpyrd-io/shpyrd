@@ -16,7 +16,7 @@ function deferred() {
 function setup(status: ProjectArchiveStatus = { phase: "idle" }) {
   const done = deferred();
   const actions: ProjectArchiveActions = {
-    status: vi.fn(async () => status), backup: vi.fn(() => done.promise),
+    status: vi.fn(async () => status), backup: vi.fn(() => done.promise.then(() => [] as string[])),
     restore: vi.fn(() => done.promise), recover: vi.fn(() => done.promise),
   };
   const queries = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

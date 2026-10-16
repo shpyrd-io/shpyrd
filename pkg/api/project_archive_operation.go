@@ -38,6 +38,7 @@ type projectArchiveOperation struct {
 	Limits           map[string]int                  `json:"limits"`
 	CreatedVolumes   []string                        `json:"createdVolumes,omitempty"`
 	CreatedDatabases []string                        `json:"createdDatabases,omitempty"`
+	CreatedBuckets   []string                        `json:"createdBuckets,omitempty"`
 	// Warnings is the operation's report: what a helper said about the data
 	// without failing, such as a link copied as it is (#129). Each sentence
 	// names the file it is about.
