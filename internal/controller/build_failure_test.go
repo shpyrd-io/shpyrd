@@ -152,8 +152,14 @@ func TestRefusedCloneNamesTheFix(t *testing.T) {
 			t.Errorf("%q -> %s", out, msg)
 		}
 	}
-	if msg := describeBuildFailure("prepare", "Host key verification failed."); !strings.Contains(msg, "host key") {
-		t.Errorf("host key -> %s", msg)
+	// git's real output on a refused host key; only the fetch's marker (a
+	// deploy key was used) makes it the host-key message.
+	gitOut := "Host key verification failed.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists."
+	if msg := describeBuildFailure("prepare", gitOut+"\n"+hostKeyChangedMarker); !strings.Contains(msg, "host key is not the one recorded") || strings.Contains(msg, "private") {
+		t.Errorf("host key with the marker -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", gitOut); !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || strings.Contains(msg, "host key is not") {
+		t.Errorf("no deploy key (no marker) -> %s", msg)
 	}
 	if msg := describeBuildFailure("prepare", "fatal: unable to access: Could not resolve host"); strings.Contains(msg, "git-auth") {
 		t.Errorf("a network failure is not an access failure: %s", msg)

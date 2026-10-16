@@ -306,3 +306,31 @@ func TestUnparseableURLIsNotLogged(t *testing.T) {
 		t.Errorf("log: %s", buf.String())
 	}
 }
+
+// Only a deploy key's fetch says that ssh refused the host key: without a
+// recorded key git fails the same way, and that is a refused clone.
+func TestFetchScriptHostKeyMarkerOnlyWithADeployKey(t *testing.T) {
+	dk := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: "app-dk", Labels: map[string]string{gitauth.LabelCredential: gitauth.KindDeployKey},
+			Annotations: map[string]string{gitauth.AnnotationHost: "github.com"}},
+		Type: corev1.SecretTypeSSHAuth,
+		Data: map[string][]byte{corev1.SSHAuthPrivateKey: []byte("K"), gitauth.KeyKnownHosts: []byte("github.com ssh-ed25519 A")},
+	}
+	app := dockerfileGitApp("git@github.com:acme/dk.git")
+	withKey, _ := gitauth.Resolve(app.Spec.Source.Git.URL, "dk", "app-dk", dk, nil)
+	script := Config{}.fetchScript(app, withKey)
+	if !strings.Contains(script, "grep -q 'Host key verification failed' /tmp/clone.err") || !strings.Contains(script, "echo "+shellQuote(hostKeyChangedMarker)+" >&2") {
+		t.Errorf("a deploy key's fetch lacks the host-key marker:\n%s", script)
+	}
+	httpsApp := dockerfileGitApp("https://github.com/acme/dk")
+	withToken, _ := gitauth.Resolve(httpsApp.Spec.Source.Git.URL, "dk", "app-dk", nil, workspaceToken("default", "github.com", "t"))
+	for name, s := range map[string]string{
+		"token":      Config{}.fetchScript(httpsApp, withToken),
+		"public":     Config{}.fetchScript(httpsApp, gitauth.Build{}),
+		"public ssh": Config{}.fetchScript(app, gitauth.Build{}),
+	} {
+		if strings.Contains(s, shellQuote(hostKeyChangedMarker)) || strings.Contains(s, "grep -q 'Host key verification failed'") {
+			t.Errorf("%s fetch carries the host-key marker:\n%s", name, s)
+		}
+	}
+}

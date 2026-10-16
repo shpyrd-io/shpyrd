@@ -507,13 +507,21 @@ chmod 600 /tmp/deploy-key
 export GIT_SSH_COMMAND="ssh -i /tmp/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%[1]s/known_hosts"
 `, gitAuthDir)
 		}
+		// Only with a deploy key is there a recorded host key for ssh to
+		// refuse: git's output is the same without one, so the marker
+		// says which it was (describeBuildFailure).
+		hostKey := ""
+		if git.Kind == gitauth.KindDeployKey {
+			hostKey = fmt.Sprintf(`    if grep -q 'Host key verification failed' /tmp/clone.err; then echo %s >&2; fi
+`, shellQuote(hostKeyChangedMarker))
+		}
 		rev := firstNonEmpty(src.Git.Revision, "main")
 		return auth + fmt.Sprintf(`url=%[1]s
 rev=%[2]s
 if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/tmp/clone.err; then :; else
   if grep -qiE 'authentication|could not read|permission denied|repository not found|host key verification' /tmp/clone.err; then
     cat /tmp/clone.err >&2
-    exit 1
+%[5]s    exit 1
   fi
   # not a branch or tag: fetch the commit
   git init --quiet %[3]s
@@ -521,7 +529,7 @@ if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/tmp/clone.err; th
   git -C %[3]s checkout --quiet FETCH_HEAD
 fi
 git -C %[3]s rev-parse HEAD > %[4]s/revision
-echo "source ready at $(cat %[4]s/revision)"`, shellQuote(url), shellQuote(rev), dst, workspaceDir)
+echo "source ready at $(cat %[4]s/revision)"`, shellQuote(url), shellQuote(rev), dst, workspaceDir, hostKey)
 	}
 	return "echo 'no source'; exit 1"
 }
