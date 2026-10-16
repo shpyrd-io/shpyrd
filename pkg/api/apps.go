@@ -475,21 +475,13 @@ func (s *Server) createApp(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	if limits := s.limitsOf(ctx, ws.Slug); limits != nil && limits.Projects > 0 {
-		cat, err := s.catalog(ctx)
-		if err != nil {
-			abort(c, http.StatusBadGateway, err)
-			return
-		}
-		u, err := s.workspaceQuotaUsage(ctx, ws.Slug, cat, nil)
-		if err != nil {
-			abort(c, http.StatusBadGateway, err)
-			return
-		}
-		if u.projects+1 > limits.Projects {
-			abort(c, http.StatusBadRequest, fmt.Errorf("workspace limit: the workspace allows %d projects and has %d", limits.Projects, u.projects))
-			return
-		}
+	access := req.Access
+	if access == "" {
+		access = shpyrdv1.AccessAuthenticated
+	}
+	if !validAccess(access) {
+		abort(c, http.StatusBadRequest, fmt.Errorf("access must be public, authenticated or identified"))
+		return
 	}
 	// Identity (RFC-0076): a UUID, the App named by its short form in its
 	// own namespace p-<short id>; the slug and workspace are labels.
@@ -500,18 +492,6 @@ func (s *Server) createApp(c *gin.Context) {
 		Name:   project.IDNamespace(id),
 		Labels: labels,
 	}}
-	if err := s.apps.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
-		abort(c, http.StatusBadGateway, fmt.Errorf("create namespace: %w", err))
-		return
-	}
-	access := req.Access
-	if access == "" {
-		access = shpyrdv1.AccessAuthenticated
-	}
-	if !validAccess(access) {
-		abort(c, http.StatusBadRequest, fmt.Errorf("access must be public, authenticated or identified"))
-		return
-	}
 	app := &shpyrdv1.App{
 		ObjectMeta: metav1.ObjectMeta{Name: short, Namespace: ns.Name, Labels: labels},
 		Spec:       shpyrdv1.AppSpec{Exposure: req.Exposure, ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
@@ -520,8 +500,16 @@ func (s *Server) createApp(c *gin.Context) {
 	if req.Git != nil && req.Git.URL != "" {
 		app.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
 	}
-	if err := s.apps.Create(ctx, app); err != nil {
-		abort(c, http.StatusBadGateway, err)
+	// One more project, with the instances its processes ask for, judged
+	// against the workspace's ceilings and made under its lock.
+	err = s.admit(ctx, ws.Slug, change{newProject: true, app: app, project: slug}, func(ctx context.Context) error {
+		if err := s.apps.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create namespace: %w", err)
+		}
+		return s.apps.Create(ctx, app)
+	})
+	if err != nil {
+		abortAdmission(c, err, http.StatusBadRequest)
 		return
 	}
 	s.audit(c, slug, "project.create", project.Label(app), "")
@@ -1204,20 +1192,20 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 			exposureError(c, err)
 			return nil, err
 		}
-		// The workspace's plan (RFC-0033): checked on the App as it would
-		// be stored, whatever the change was.
-		if err := s.checkLimits(c.Request.Context(), s.workspace(c), app); err != nil {
-			abort(c, http.StatusBadRequest, err)
-			return nil, err
-		}
-		err := s.apps.Update(c.Request.Context(), app)
+		// The workspace's plan (RFC-0033): judged on the App as it would
+		// be stored, whatever the change was, and written under the
+		// workspace's lock.
+		err := s.admit(c.Request.Context(), s.workspace(c), change{app: app, project: app.Spec.Slug}, func(ctx context.Context) error {
+			return s.apps.Update(ctx, app)
+		})
 		if err == nil {
 			return app, nil
 		}
-		if !apierrors.IsConflict(err) {
-			abort(c, http.StatusBadGateway, err)
-			return nil, err
+		if apierrors.IsConflict(err) {
+			continue
 		}
+		abortAdmission(c, err, http.StatusBadRequest)
+		return nil, err
 	}
 	err = errors.New("too many conflicts")
 	abort(c, http.StatusConflict, err)

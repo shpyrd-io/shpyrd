@@ -146,6 +146,11 @@ type WorkspaceSettings struct {
 	// anything; the controller backs them with a ResourceQuota per project
 	// namespace.
 	Limits *Limits `json:"limits,omitempty"`
+	// ProjectCaps are ceilings a project has of its own, below the
+	// workspace's, by project slug (RFC-0042 amended, storage plan step 4):
+	// the customer's own choice, kept when the plan's ceilings change. A
+	// project without one shares the workspace's ceiling with the others.
+	ProjectCaps map[string]ProjectCap `json:"projectCaps,omitempty"`
 	// Sleep is what the workspace's projects do by default when nobody
 	// uses them (RFC-0075): nil means they never sleep unless they say so.
 	Sleep *SleepDefaults `json:"sleep,omitempty"`
@@ -182,25 +187,65 @@ type Branding struct {
 
 // Limits are the ceilings of a workspace plan. Zero values mean no ceiling
 // on that axis. Quantities use Kubernetes notation ("4", "8Gi", "50Gi").
+// Three ceilings bound storage (storage plan step 4): Storage is block
+// storage in provisioned capacity (disks, a dedicated database's disk per
+// instance, a durable store's disk), ObjectStorage the buckets, Postgres
+// the databases. What a workspace already holds above a ceiling that
+// shrank keeps working: a ceiling refuses what would be added, never what
+// exists.
 type Limits struct {
 	Projects  int    `json:"projects,omitempty"`
 	Instances int    `json:"instances,omitempty"`
 	CPU       string `json:"cpu,omitempty"`
 	Memory    string `json:"memory,omitempty"`
 	Storage   string `json:"storage,omitempty"`
+	// AllowDisks says whether the workspace may claim a disk at all: a
+	// volume, a dedicated database's data volume, a durable store's. nil
+	// or true: yes, within Storage; false: no, the free workspace, which
+	// keeps its files in a bucket. Never a storage quota of zero, which
+	// would refuse the platform's own claims too; disks that exist keep
+	// working and may still grow within Storage.
+	AllowDisks *bool `json:"allowDisks,omitempty"`
+	// ObjectStorage bounds the workspace's buckets; nil means no ceiling.
+	ObjectStorage *ObjectStorageLimits `json:"objectStorage,omitempty"`
 	// Postgres bounds the kinds of database the plan allows; nil means
 	// both, dedicated by default.
 	Postgres *PostgresLimits `json:"postgres,omitempty"`
 }
 
+// ObjectStorageLimits are a plan's rules for buckets: how many, what one
+// may hold, and what they may hold together (quantities; empty means no
+// ceiling on that axis).
+type ObjectStorageLimits struct {
+	Buckets   int    `json:"buckets,omitempty"`
+	BucketCap string `json:"bucketCap,omitempty"`
+	Total     string `json:"total,omitempty"`
+}
+
 // PostgresLimits are a plan's rules for databases: the kinds allowed
 // ("shared", "dedicated"; empty means both), the kind a creation without
-// a type gets (empty means dedicated), and the logical cap of a shared
-// database (a quantity; empty means 1Gi).
+// a type gets (empty means dedicated), the logical cap of a shared
+// database (a quantity; empty means 1Gi), how many databases of both
+// kinds the workspace may have and how many instances a dedicated one
+// may run (0 means no ceiling).
 type PostgresLimits struct {
-	Types       []string `json:"types,omitempty"`
-	DefaultType string   `json:"defaultType,omitempty"`
-	SharedCap   string   `json:"sharedCap,omitempty"`
+	Types        []string `json:"types,omitempty"`
+	DefaultType  string   `json:"defaultType,omitempty"`
+	SharedCap    string   `json:"sharedCap,omitempty"`
+	Databases    int      `json:"databases,omitempty"`
+	MaxInstances int      `json:"maxInstances,omitempty"`
+}
+
+// ProjectCap is what one project may claim of its own: its block storage,
+// a quantity (empty means the workspace's ceiling).
+type ProjectCap struct {
+	Storage string `json:"storage,omitempty"`
+}
+
+// AllowsDisks says whether a workspace may claim a new disk: it may unless
+// its limits say otherwise.
+func (l *Limits) AllowsDisks() bool {
+	return l == nil || l.AllowDisks == nil || *l.AllowDisks
 }
 
 // APIToken is a scoped, named credential (RFC-0031): shp_<id>_<random>.
@@ -493,6 +538,48 @@ func MergeLimits(base, patch *Limits) *Limits {
 	if patch.Storage != "" {
 		out.Storage = patch.Storage
 	}
+	if patch.AllowDisks != nil {
+		v := *patch.AllowDisks
+		out.AllowDisks = &v
+	}
+	if po := patch.ObjectStorage; po != nil {
+		o := ObjectStorageLimits{}
+		if out.ObjectStorage != nil {
+			o = *out.ObjectStorage
+		}
+		if po.Buckets > 0 {
+			o.Buckets = po.Buckets
+		}
+		if po.BucketCap != "" {
+			o.BucketCap = po.BucketCap
+		}
+		if po.Total != "" {
+			o.Total = po.Total
+		}
+		out.ObjectStorage = &o
+	}
+	if pp := patch.Postgres; pp != nil {
+		o := PostgresLimits{}
+		if out.Postgres != nil {
+			o = *out.Postgres
+		}
+		if len(pp.Types) > 0 {
+			o.Types = append([]string(nil), pp.Types...)
+		}
+		if pp.DefaultType != "" {
+			o.DefaultType = pp.DefaultType
+		}
+		if pp.SharedCap != "" {
+			o.SharedCap = pp.SharedCap
+		}
+		if pp.Databases > 0 {
+			o.Databases = pp.Databases
+		}
+		if pp.MaxInstances > 0 {
+			o.MaxInstances = pp.MaxInstances
+		}
+		out.Postgres = &o
+	}
 	return &out
 }
 
@@ -526,10 +613,13 @@ const (
 	// MetricPostgresShared is a shared database's cap over time (storage
 	// plan, step 3): the GiB it may hold, whatever it holds, as a disk is
 	// billed for its size.
-	MetricPostgresShared = "postgres_shared"  // GiB-seconds (the cap)
-	MetricEgressHTTP     = "egress_http"      // bytes
-	MetricInstanceSec    = "instance_seconds" // process-seconds
-	MetricStateSec       = "state_seconds"    // seconds in each state
+	MetricPostgresShared = "postgres_shared" // GiB-seconds (the cap)
+	// MetricObjectStorage is what a project's buckets hold, GiB-seconds of
+	// bytes stored (storage plan step 4).
+	MetricObjectStorage = "object-storage"
+	MetricEgressHTTP    = "egress_http"      // bytes
+	MetricInstanceSec   = "instance_seconds" // process-seconds
+	MetricStateSec      = "state_seconds"    // seconds in each state
 
 	UnitCoreSeconds = "core_seconds"
 	UnitGiBSeconds  = "gib_seconds"
@@ -832,6 +922,13 @@ type Store interface {
 	CreateWorkspace(ctx context.Context, w Workspace) (*Workspace, error)
 	UpdateWorkspace(ctx context.Context, slug, name string) (*Workspace, error)
 	UpdateWorkspaceSettings(ctx context.Context, slug string, settings WorkspaceSettings) (*Workspace, error)
+	// LockWorkspace runs fn while holding the workspace's admission lock,
+	// so two changes judged against its ceilings at once (two API replicas,
+	// two parallel requests) are judged one after the other and the second
+	// sees what the first added (storage plan step 4). The lock lives in
+	// the control-plane database, a transaction-scoped advisory lock, and
+	// is released when fn returns, whatever it returns.
+	LockWorkspace(ctx context.Context, slug string, fn func(ctx context.Context) error) error
 	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)

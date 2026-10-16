@@ -471,3 +471,62 @@ func TestSleepingAppKeepsSingleInstanceVolume(t *testing.T) {
 		t.Errorf("over the ceiling: replicas %d, want 1", *web.Spec.Replicas)
 	}
 }
+
+// A growth says where it stands (storage plan step 4): pending once the
+// claim took the new size, completed when the capacity matches, failed
+// with the reason when the class cannot grow disks.
+func TestAGrowthSaysWhereItStands(t *testing.T) {
+	ctx := context.Background()
+	vol := testVolume("data", "5Gi", "")
+	expandable := &storagev1.StorageClass{
+		ObjectMeta:           metav1.ObjectMeta{Name: "standard", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}},
+		Provisioner:          "x",
+		AllowVolumeExpansion: ptr.To(true),
+	}
+	r, c := newVolumeReconciler(t, vol, expandable)
+	vol = reconcileVolume(t, r, vol)
+	if vol.Status.Resize != nil {
+		t.Fatalf("a volume never grown has a standing: %+v", vol.Status.Resize)
+	}
+	vol.Spec.Size = resource.MustParse("10Gi")
+	if err := c.Update(ctx, vol); err != nil {
+		t.Fatal(err)
+	}
+	got := reconcileVolume(t, r, vol)
+	if rs := got.Status.Resize; rs == nil || rs.Phase != shpyrdv1.ResizePending || rs.To != "10Gi" {
+		t.Fatalf("after the claim took the size: %+v", got.Status.Resize)
+	}
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-demo", Name: "vol-data"}, pvc); err != nil {
+		t.Fatal(err)
+	}
+	pvc.Status.Phase = corev1.ClaimBound
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	if err := c.Status().Update(ctx, pvc); err != nil {
+		t.Fatal(err)
+	}
+	got = reconcileVolume(t, r, got)
+	if rs := got.Status.Resize; rs == nil || rs.Phase != shpyrdv1.ResizeCompleted || rs.Message != "" {
+		t.Errorf("after the capacity matched: %+v", got.Status.Resize)
+	}
+
+	// A class that cannot grow disks: failed, with the reason.
+	fixed := testVolume("fixed", "5Gi", "")
+	fixed.Spec.StorageClass = "fixed"
+	class := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fixed"}, Provisioner: "x", AllowVolumeExpansion: ptr.To(false)}
+	if err := c.Create(ctx, class); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, fixed); err != nil {
+		t.Fatal(err)
+	}
+	fixed = reconcileVolume(t, r, fixed)
+	fixed.Spec.Size = resource.MustParse("10Gi")
+	if err := c.Update(ctx, fixed); err != nil {
+		t.Fatal(err)
+	}
+	fixed = reconcileVolume(t, r, fixed)
+	if rs := fixed.Status.Resize; rs == nil || rs.Phase != shpyrdv1.ResizeFailed || !strings.Contains(rs.Message, "does not allow volume expansion") {
+		t.Errorf("on a fixed class: %+v", fixed.Status.Resize)
+	}
+}

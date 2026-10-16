@@ -1,12 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { Project, PublicConfig, ResourceInfo, SizeCatalog, VolumeInfo } from "@/api/types";
+import type { Project, PublicConfig, ResourceInfo, SizeCatalog, VolumeInfo, WorkspaceInfo } from "@/api/types";
 import type { Perms } from "@/lib/perms";
 import mockConfig from "../../../mock/config.json";
 import projects from "../../../mock/projects.json";
 import things from "../../../mock/things.json";
-import { ConvertDialog, detailsOf, humanCap, kindOf, ResourceDialog, Resources } from "./resources";
+import { allowanceOf, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, VolumeDialog } from "./resources";
+import workspace from "../../../mock/workspace.json";
 
 // The queries answer from the Mock's files, by the first word of their
 // key: "resources", "volumes", "config", "sizes".
@@ -150,5 +151,53 @@ describe("the new database dialog", () => {
     expect(kind.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Instance size")).toBeTruthy();
     expect(screen.queryByText("Copies kept")).toBeNull();
+  });
+});
+
+// The plan's words before the request (storage plan step 4): what may
+// still be added, what the plan does not include, the count against it.
+describe("the ceilings in the dialogs", () => {
+  const paid = workspace as unknown as WorkspaceInfo;
+
+  it("works out the allowance from the workspace's ceiling and the project's own cap", () => {
+    expect(allowanceOf("500Gi", "120Gi")).toBe(380);
+    expect(allowanceOf("500Gi", "120Gi", { storage: "30Gi", ceiling: "20Gi", own: true })).toBe(0);
+    expect(allowanceOf("500Gi", "120Gi", { storage: "5Gi", ceiling: "20Gi", own: true })).toBe(15);
+    expect(allowanceOf(undefined, undefined)).toBeUndefined();
+    expect(gbWords(1.5)).toBe("1.5 GB");
+    expect(gbWords(0.5)).toBe("512 MB");
+  });
+
+  it("the volume dialog says what may still be added under the ceiling that applies", () => {
+    state.answers = { config, workspace: paid, usage: { storage: "5Gi", ceiling: "20Gi", own: true } };
+    render(<VolumeDialog slug="hello-world" open onDone={nothing} />);
+    expect(screen.getByTestId("allowance").textContent).toBe("You can add up to 15 GB under this project's cap of 20 GB.");
+    cleanup();
+    state.answers = { config, workspace: paid, usage: { storage: "30Gi", ceiling: "500Gi" } };
+    render(<VolumeDialog slug="hello-world" open onDone={nothing} />);
+    expect(screen.getByTestId("allowance").textContent).toBe("You can add up to 380 GB under the workspace's 500 GB.");
+  });
+
+  it("the volume dialog refuses a disk the free workspace does not include", () => {
+    state.answers = { config, workspace: { ...paid, limits: { ...paid.limits, allowDisks: false } }, usage: { storage: "0" } };
+    render(<VolumeDialog slug="hello-world" open onDone={nothing} />);
+    expect(screen.getByText("Disks are not included in the free workspace")).toBeTruthy();
+    expect(screen.getByText("Use a bucket for files, or upgrade.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the new database dialog says the count against the plan, and the kind the plan includes", async () => {
+    state.answers = { config: onePlan("shared"), sizes, workspace: { ...paid, limits: { postgres: { types: ["shared"], defaultType: "shared", sharedCap: "1Gi", databases: 1 } }, usage: { ...paid.usage!, databases: 1 } } };
+    render(<ResourceDialog slug="hello-world" kind="Postgres" onDone={nothing} onClose={nothing} />);
+    await waitFor(() => expect(screen.getByText("This would bring the workspace to 2 of 1 databases.")).toBeTruthy());
+    expect(screen.getByText("Your plan includes a shared database. A dedicated database comes with a paid plan.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("a volume row says where its growth stands", () => {
+    const r: ResourceInfo = { kind: "Volume", name: "uploads", phase: "Bound", details: { size: "20Gi", mode: "single" }, attachedTo: [], data: true, createdAt: "2026-10-01T00:00:00Z" };
+    const v = { ...volumes[0], resize: { phase: "pending" as const, to: "20Gi", message: "the provider is growing the disk" } };
+    expect(detailsOf(r, v)).toBe("20Gi · single · growth to 20Gi pending: the provider is growing the disk");
+    expect(detailsOf(r, { ...v, resize: { phase: "completed", to: "20Gi" } })).toBe("20Gi · single");
   });
 });

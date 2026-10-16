@@ -335,14 +335,22 @@ type APIClient interface {
 }
 
 // Usage is what a workspace holds at once, as its limits count it:
-// projects, instances of every process, and the CPU, memory and storage of
-// their sizes, volumes and databases.
+// projects, instances of every process, the CPU and memory of their
+// sizes, block storage (disks, a dedicated database's disk per instance,
+// a durable store's disk), buckets and databases.
 type Usage struct {
 	Projects  int    `json:"projects"`
 	Instances int    `json:"instances"`
 	CPU       string `json:"cpu"`
 	Memory    string `json:"memory"`
 	Storage   string `json:"storage"`
+	// Buckets are the projects' own; ObjectStorage their caps together.
+	Buckets       int    `json:"buckets"`
+	ObjectStorage string `json:"objectStorage"`
+	// Databases of both kinds; SharedDatabases how many of them share the
+	// platform's server.
+	Databases       int `json:"databases"`
+	SharedDatabases int `json:"sharedDatabases"`
 }
 
 // Names returns the names of extensions, in order.

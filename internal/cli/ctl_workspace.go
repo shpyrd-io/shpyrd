@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -72,7 +73,7 @@ func printWorkspaceSettings(w io.Writer, a *workspaceSettingsAnswer) {
 	} else {
 		fmt.Fprintf(w, "  limits: %s\n", limitsLine(a.Limits))
 		if a.Usage != nil {
-			fmt.Fprintf(w, "  in use: %d projects, %d instances, %s CPU, %s memory, %s storage\n", a.Usage.Projects, a.Usage.Instances, a.Usage.CPU, a.Usage.Memory, a.Usage.Storage)
+			fmt.Fprintf(w, "  in use: %d projects, %d instances, %s CPU, %s memory, %s storage, %d buckets, %d databases (%d shared)\n", a.Usage.Projects, a.Usage.Instances, a.Usage.CPU, a.Usage.Memory, a.Usage.Storage, a.Usage.Buckets, a.Usage.Databases, a.Usage.SharedDatabases)
 		}
 	}
 	if a.Sleep == nil {
@@ -112,6 +113,37 @@ func limitsLine(l *store.Limits) string {
 	if l.Storage != "" {
 		add(l.Storage + " storage")
 	}
+	if !l.AllowsDisks() {
+		add("no disks")
+	}
+	if o := l.ObjectStorage; o != nil {
+		if o.Buckets > 0 {
+			add(fmt.Sprintf("%d buckets", o.Buckets))
+		}
+		if o.BucketCap != "" {
+			add(o.BucketCap + " per bucket")
+		}
+		if o.Total != "" {
+			add(o.Total + " object storage")
+		}
+	}
+	if pg := l.Postgres; pg != nil {
+		if pg.Databases > 0 {
+			add(fmt.Sprintf("%d databases", pg.Databases))
+		}
+		if len(pg.Types) > 0 {
+			add(strings.Join(pg.Types, " and ") + " databases")
+		}
+		if pg.DefaultType != "" {
+			add(pg.DefaultType + " by default")
+		}
+		if pg.SharedCap != "" {
+			add(pg.SharedCap + " shared cap")
+		}
+		if pg.MaxInstances > 0 {
+			add(fmt.Sprintf("up to %d instances", pg.MaxInstances))
+		}
+	}
 	return firstNonEmpty(out, "none")
 }
 
@@ -132,7 +164,9 @@ func newCtlWorkspaceStatusCmd(g *globalFlags) *cobra.Command {
 
 func newCtlWorkspaceLimitsCmd(g *globalFlags) *cobra.Command {
 	var patch store.Limits
-	var none bool
+	var buckets store.ObjectStorageLimits
+	var pg store.PostgresLimits
+	var disks, none bool
 	cmd := &cobra.Command{
 		Use:   "limits",
 		Short: "Change what the workspace's projects may use together",
@@ -147,8 +181,17 @@ func newCtlWorkspaceLimitsCmd(g *globalFlags) *cobra.Command {
 			if none {
 				return writeWorkspaceSettings(cmd, g, ac, nil, cur.Sleep)
 			}
-			if patch == (store.Limits{}) {
-				return fmt.Errorf("give a limit to change (--projects, --instances, --cpu, --memory, --storage) or --none")
+			if cmd.Flags().Changed("disks") {
+				patch.AllowDisks = &disks
+			}
+			if buckets != (store.ObjectStorageLimits{}) {
+				patch.ObjectStorage = &buckets
+			}
+			if pg.Databases != 0 || pg.MaxInstances != 0 || pg.SharedCap != "" || pg.DefaultType != "" || len(pg.Types) != 0 {
+				patch.Postgres = &pg
+			}
+			if patch.Projects == 0 && patch.Instances == 0 && patch.CPU == "" && patch.Memory == "" && patch.Storage == "" && patch.AllowDisks == nil && patch.ObjectStorage == nil && patch.Postgres == nil {
+				return fmt.Errorf("give a limit to change (--projects, --instances, --cpu, --memory, --storage, --disks, --buckets, --bucket-cap, --object-storage, --databases, --database-kinds, --database-default, --shared-cap, --database-instances) or --none")
 			}
 			return writeWorkspaceSettings(cmd, g, ac, store.MergeLimits(cur.Limits, &patch), cur.Sleep)
 		},
@@ -157,7 +200,16 @@ func newCtlWorkspaceLimitsCmd(g *globalFlags) *cobra.Command {
 	cmd.Flags().IntVar(&patch.Instances, "instances", 0, "how many instances, every process of every project")
 	cmd.Flags().StringVar(&patch.CPU, "cpu", "", "CPU of their instance sizes together (2, 500m)")
 	cmd.Flags().StringVar(&patch.Memory, "memory", "", "memory of their instance sizes together (512Mi, 8Gi)")
-	cmd.Flags().StringVar(&patch.Storage, "storage", "", "storage their volumes and databases claim together (10Gi)")
+	cmd.Flags().StringVar(&patch.Storage, "storage", "", "block storage their disks and databases claim together (10Gi)")
+	cmd.Flags().BoolVar(&disks, "disks", true, "whether disks are included at all (--disks=false: files go in a bucket; disks that exist keep working)")
+	cmd.Flags().IntVar(&buckets.Buckets, "buckets", 0, "how many buckets")
+	cmd.Flags().StringVar(&buckets.BucketCap, "bucket-cap", "", "what one bucket may hold (1Gi)")
+	cmd.Flags().StringVar(&buckets.Total, "object-storage", "", "what the buckets may hold together (10Gi)")
+	cmd.Flags().IntVar(&pg.Databases, "databases", 0, "how many databases, shared and dedicated together")
+	cmd.Flags().StringSliceVar(&pg.Types, "database-kinds", nil, "the kinds of database allowed: shared, dedicated (both when unset)")
+	cmd.Flags().StringVar(&pg.DefaultType, "database-default", "", "the kind a database gets when none is asked (dedicated when unset)")
+	cmd.Flags().StringVar(&pg.SharedCap, "shared-cap", "", "what a shared database may hold (1Gi)")
+	cmd.Flags().IntVar(&pg.MaxInstances, "database-instances", 0, "how many instances a dedicated database may run")
 	cmd.Flags().BoolVar(&none, "none", false, "remove every limit")
 	return cmd
 }

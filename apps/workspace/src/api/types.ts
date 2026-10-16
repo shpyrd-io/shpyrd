@@ -14,7 +14,13 @@ export type PublicConfig = {
   grafanaUrl?: string;
   auth: {
     token: boolean;
-    providers: { id: string; label: string; kind?: string; realm?: string; workspace?: string }[];
+    providers: {
+      id: string;
+      label: string;
+      kind?: string;
+      realm?: string;
+      workspace?: string;
+    }[];
     password?: { id: string; label: string };
   };
   extensions: string[];
@@ -39,12 +45,21 @@ export type PublicConfig = {
   volumes?: { minSize?: string; snapshots: boolean; nodeLocal?: boolean };
   // The kinds of database the workspace's plan allows, which one a
   // creation gets without a choice, and the cap of a shared one.
-  postgres?: { types: ("shared" | "dedicated")[]; defaultType: "shared" | "dedicated"; sharedCap: string };
+  postgres?: {
+    types: ("shared" | "dedicated")[];
+    defaultType: "shared" | "dedicated";
+    sharedCap: string;
+  };
 };
 
 // What converting a database does, in the server's words, before it
 // starts.
-export type ConvertInfo = { name: string; from: string; to: string; note: string };
+export type ConvertInfo = {
+  name: string;
+  from: string;
+  to: string;
+  note: string;
+};
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type PlatformRole = "platform-admin" | "platform-viewer";
@@ -64,6 +79,45 @@ export type Identity = {
   };
 };
 
+// The workspace's ceilings (storage plan step 4): the five of the plan,
+// then block storage's switch, the buckets' and the databases' rules.
+export type Limits = {
+  projects?: number;
+  instances?: number;
+  cpu?: string;
+  memory?: string;
+  storage?: string;
+  // false: the free workspace, which keeps its files in a bucket.
+  allowDisks?: boolean;
+  objectStorage?: { buckets?: number; bucketCap?: string; total?: string };
+  postgres?: {
+    types?: ("shared" | "dedicated")[];
+    defaultType?: "shared" | "dedicated";
+    sharedCap?: string;
+    databases?: number;
+    maxInstances?: number;
+  };
+};
+
+// What the workspace holds, as its ceilings count it.
+export type WorkspaceUsage = {
+  projects: number;
+  instances: number;
+  cpu: string;
+  memory: string;
+  storage: string;
+  buckets?: number;
+  objectStorage?: string;
+  databases?: number;
+  sharedDatabases?: number;
+};
+
+export type ProjectCap = { storage?: string };
+
+// A project's block storage against the ceiling that applies to it: its
+// own cap (own) or the workspace's.
+export type ProjectUsage = { storage: string; ceiling?: string; own?: boolean };
+
 export type WorkspaceInfo = {
   capabilities?: WorkspaceCapabilities;
   slug: string;
@@ -73,8 +127,10 @@ export type WorkspaceInfo = {
   address?: string;
   url?: string;
   status?: "active" | "suspended";
-  limits?: { projects?: number; instances?: number; cpu?: string; memory?: string; storage?: string };
-  usage?: { projects: number; instances: number; cpu: string; memory: string; storage: string };
+  limits?: Limits;
+  usage?: WorkspaceUsage;
+  // The projects' own storage caps, by slug (storage plan step 4).
+  projectCaps?: Record<string, ProjectCap>;
   joinPolicy: "open" | "company" | "listed";
   ownMethodsOnly: boolean;
   branding?: { logoUrl?: string; color?: string };
@@ -153,8 +209,15 @@ export type Project = ProjectSummary & {
       subPath?: string;
     };
     pinnedDigest?: string;
-    processes?: Record<string, { size?: string; replicas?: number; command?: string; port?: number }>;
-    build?: { strategy?: "buildpacks" | "dockerfile"; dockerfile?: string; env?: { name: string; value?: string }[] };
+    processes?: Record<
+      string,
+      { size?: string; replicas?: number; command?: string; port?: number }
+    >;
+    build?: {
+      strategy?: "buildpacks" | "dockerfile";
+      dockerfile?: string;
+      env?: { name: string; value?: string }[];
+    };
     env?: { name: string; value?: string }[];
     bindings?: { kind: string; name: string }[];
   };
@@ -168,16 +231,31 @@ export type Project = ProjectSummary & {
     processTypes?: string[];
     // The release command of the release going out, while it runs or
     // after it failed.
-    release?: { target: string; state: "Running" | "Succeeded" | "Failed"; message?: string };
+    release?: {
+      target: string;
+      state: "Running" | "Succeeded" | "Failed";
+      message?: string;
+    };
     // Built is False when the last build failed; Ready's reason says what
     // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
-    conditions?: { type: string; status: "True" | "False" | "Unknown"; reason?: string; message?: string }[];
+    conditions?: {
+      type: string;
+      status: "True" | "False" | "Unknown";
+      reason?: string;
+      message?: string;
+    }[];
   };
 };
 
 // buildFailed says the project's last build failed (its Built condition).
-export const buildFailed = (status: { phase: string; conditions?: { type: string; status: string }[] }) =>
-  status.phase === "Failed" && (status.conditions ?? []).some((c) => c.type === "Built" && c.status === "False");
+export const buildFailed = (status: {
+  phase: string;
+  conditions?: { type: string; status: string }[];
+}) =>
+  status.phase === "Failed" &&
+  (status.conditions ?? []).some(
+    (c) => c.type === "Built" && c.status === "False",
+  );
 
 export type DeployRequest = {
   git?: { url: string; revision?: string };
@@ -200,11 +278,27 @@ export type ConfigVar = { name: string; updatedAt?: string; value?: string };
 export type ConfigKind = "secret" | "variable";
 // The config vars of a project: its own, the ones its resources provide
 // (read-only, over its own), and the cluster's (under its own).
-export type ConfigVars = { vars: ConfigVar[]; variables?: ConfigVar[]; pending?: boolean; bound?: { name: string; provider: string }[]; global?: ConfigVar[] };
-export type ConfigChange = { kind?: ConfigKind; convert?: string[]; confirmPlain?: boolean; set?: Record<string, string>; unset?: string[]; dotenv?: string };
+export type ConfigVars = {
+  vars: ConfigVar[];
+  variables?: ConfigVar[];
+  pending?: boolean;
+  bound?: { name: string; provider: string }[];
+  global?: ConfigVar[];
+};
+export type ConfigChange = {
+  kind?: ConfigKind;
+  convert?: string[];
+  confirmPlain?: boolean;
+  set?: Record<string, string>;
+  unset?: string[];
+  dotenv?: string;
+};
 // The config vars every project of the workspace receives: names and when
 // each was set, never values, and how many projects receive them.
-export type Globals = { vars: { name: string; updatedAt?: string }[]; projects: number };
+export type Globals = {
+  vars: { name: string; updatedAt?: string }[];
+  projects: number;
+};
 
 export type BuildInfo = {
   name: string;
@@ -247,24 +341,58 @@ export type VolumeInfo = {
   createdAt: string;
   restoredFrom?: string;
   note?: string;
+  // Where the last growth stands (storage plan step 4).
+  resize?: {
+    phase: "requested" | "pending" | "completed" | "failed";
+    to: string;
+    message?: string;
+  };
 };
 
-export type SnapshotInfo = { name: string; volume: string; size?: string; ready: boolean; message?: string; createdAt: string };
-export type RestoreVolumeResult = { volume: VolumeInfo; inPlace: boolean; message: string };
+export type SnapshotInfo = {
+  name: string;
+  volume: string;
+  size?: string;
+  ready: boolean;
+  message?: string;
+  createdAt: string;
+};
+export type RestoreVolumeResult = {
+  volume: VolumeInfo;
+  inPlace: boolean;
+  message: string;
+};
 
 // connections: the clients a database or store of the size takes.
-export type InstanceSize = { name: string; kind: "shared" | "dedicated"; cpu: string; memory: string; description?: string; connections?: number };
+export type InstanceSize = {
+  name: string;
+  kind: "shared" | "dedicated";
+  cpu: string;
+  memory: string;
+  description?: string;
+  connections?: number;
+};
 export type SizeList = { default: string; sizes: InstanceSize[] };
 // The processes' sizes, and the lists of databases and stores: the same
 // names, each list with its own memory and default.
 export type SizeCatalog = SizeList & { postgres: SizeList; redis: SizeList };
 
-export type Instance = { name: string; process: string; pod: string; ready: boolean };
+export type Instance = {
+  name: string;
+  process: string;
+  pod: string;
+  ready: boolean;
+};
 
 // A record to publish at the DNS provider.
 export type DnsRecord = { type: string; name: string; value: string };
 
-export type DomainsAnswer = { target: string; address?: string; domains: DomainStatus[]; redirectTo?: string };
+export type DomainsAnswer = {
+  target: string;
+  address?: string;
+  domains: DomainStatus[];
+  redirectTo?: string;
+};
 
 export type DomainStatus = {
   redirectEligible?: boolean;
@@ -307,11 +435,22 @@ export type Drain = {
   errors: number;
   createdAt: string;
 };
-export type CreateDrain = { name?: string; url: string; format?: "json" | "syslog"; headers?: Record<string, string>; processes?: string[] };
+export type CreateDrain = {
+  name?: string;
+  url: string;
+  format?: "json" | "syslog";
+  headers?: Record<string, string>;
+  processes?: string[];
+};
 
 export type ProjectRole = "reader" | "user" | "viewer" | "developer" | "admin";
 
-export type Member = { name: string; role: ProjectRole; user?: string; team?: string };
+export type Member = {
+  name: string;
+  role: ProjectRole;
+  user?: string;
+  team?: string;
+};
 
 // Who may reach the project from inside the cluster: another project, or
 // a caller of the platform (the MCP connector, the server acting for a
@@ -331,7 +470,7 @@ export type Connection = {
 };
 
 export type Person = {
- id?: string;
+  id?: string;
   email: string;
   name?: string;
   provider?: string;
@@ -367,7 +506,12 @@ export type InviteResult = {
 
 // What the holder of an invitation link sees before signing in.
 export type InvitationPublic = {
-  workspace: { slug: string; name: string; address?: string; ownedByOperator?: boolean };
+  workspace: {
+    slug: string;
+    name: string;
+    address?: string;
+    ownedByOperator?: boolean;
+  };
   email: string;
   role: WorkspaceRole;
   team?: string;
@@ -377,7 +521,14 @@ export type InvitationPublic = {
   url: string;
 };
 
-export type Team = { name: string; description?: string; members: string[]; groups?: string[]; platformRole?: string; everyone?: boolean };
+export type Team = {
+  name: string;
+  description?: string;
+  members: string[];
+  groups?: string[];
+  platformRole?: string;
+  everyone?: boolean;
+};
 
 export type APIToken = {
   id: string;
@@ -389,13 +540,24 @@ export type APIToken = {
   expiresAt?: string;
   lastUsedAt?: string;
 };
-export type NewToken = { name: string; platformRole?: string; projectRoles?: Record<string, string>; expiresIn?: string };
+export type NewToken = {
+  name: string;
+  platformRole?: string;
+  projectRoles?: Record<string, string>;
+  expiresIn?: string;
+};
 
 // The sign-in methods of the workspace: the password of the platform,
 // and the providers, its own and the platform's.
 export type LoginMethods = {
   password: boolean;
-  connectors: { id: string; type: string; name: string; detail?: string; workspace?: string }[];
+  connectors: {
+    id: string;
+    type: string;
+    name: string;
+    detail?: string;
+    workspace?: string;
+  }[];
   kinds: string[];
   callback: string;
 };
@@ -412,12 +574,34 @@ export type NewLoginMethod = {
 };
 
 // An email domain the company owns, proved by a record.
-export type DomainClaim = { domain: string; connector?: string; verified: boolean; verifiedAt?: string; record: string; recordValue: string };
+export type DomainClaim = {
+  domain: string;
+  connector?: string;
+  verified: boolean;
+  verifiedAt?: string;
+  record: string;
+  recordValue: string;
+};
 
 export type Point = [time: number, value: number];
 // `reference` is the allocation the series is measured against (what the
 // project pays for), `burst` the ceiling above it when the size has one.
-export type Series = { name: string; points: Point[]; reference?: number; burst?: number; tone?: "orange" | "blue" | "green" | "violet" | "neutral" | "success" | "info" | "warning" | "error" };
+export type Series = {
+  name: string;
+  points: Point[];
+  reference?: number;
+  burst?: number;
+  tone?:
+    | "orange"
+    | "blue"
+    | "green"
+    | "violet"
+    | "neutral"
+    | "success"
+    | "info"
+    | "warning"
+    | "error";
+};
 export type Metrics = {
   from: number;
   to: number;

@@ -56,7 +56,17 @@ func NormalizeWorkspaceSettings(in WorkspaceSettings) (WorkspaceSettings, error)
 			}
 			n.Postgres = np
 		}
-		if n != (store.Limits{}) {
+		if os := n.ObjectStorage; os != nil {
+			no, err := normalizeObjectStorageLimits(*os)
+			if err != nil {
+				return out, err
+			}
+			n.ObjectStorage = no
+		}
+		if n.AllowDisks != nil && *n.AllowDisks {
+			n.AllowDisks = nil // allowed is the default; only the refusal is kept
+		}
+		if n.Projects != 0 || n.Instances != 0 || n.CPU != "" || n.Memory != "" || n.Storage != "" || n.AllowDisks != nil || n.ObjectStorage != nil || n.Postgres != nil {
 			out.Limits = &n
 		}
 	}
@@ -118,10 +128,61 @@ func normalizePostgresLimits(in store.PostgresLimits) (*store.PostgresLimits, er
 		}
 		out.SharedCap = v.String()
 	}
-	if len(out.Types) == 0 && out.DefaultType == "" && out.SharedCap == "" {
+	if in.Databases < 0 || in.MaxInstances < 0 {
+		return nil, errors.New("limits: postgres counts cannot be negative")
+	}
+	out.Databases, out.MaxInstances = in.Databases, in.MaxInstances
+	if len(out.Types) == 0 && out.DefaultType == "" && out.SharedCap == "" && out.Databases == 0 && out.MaxInstances == 0 {
 		return nil, nil
 	}
 	return &out, nil
+}
+
+// normalizeObjectStorageLimits checks a plan's bucket rules; nil when
+// they say nothing.
+func normalizeObjectStorageLimits(in store.ObjectStorageLimits) (*store.ObjectStorageLimits, error) {
+	if in.Buckets < 0 {
+		return nil, errors.New("limits: objectStorage buckets cannot be negative")
+	}
+	out := store.ObjectStorageLimits{Buckets: in.Buckets}
+	for name, q := range map[string]*string{"bucketCap": &in.BucketCap, "total": &in.Total} {
+		*q = strings.TrimSpace(*q)
+		if *q == "" {
+			continue
+		}
+		v, err := resource.ParseQuantity(*q)
+		if err != nil || v.Sign() <= 0 {
+			return nil, fmt.Errorf("limits: objectStorage %s %q is not a positive quantity (try 1Gi, 10Gi)", name, *q)
+		}
+		*q = v.String()
+	}
+	out.BucketCap, out.Total = in.BucketCap, in.Total
+	if out.Buckets == 0 && out.BucketCap == "" && out.Total == "" {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+// NormalizeProjectCaps checks a workspace's per-project caps: quantities
+// parsed, projects without a cap dropped; nil when none is left.
+func NormalizeProjectCaps(in map[string]store.ProjectCap) (map[string]store.ProjectCap, error) {
+	out := map[string]store.ProjectCap{}
+	for slug, cap := range in {
+		slug = strings.TrimSpace(slug)
+		st := strings.TrimSpace(cap.Storage)
+		if slug == "" || st == "" {
+			continue
+		}
+		v, err := resource.ParseQuantity(st)
+		if err != nil || v.Sign() <= 0 {
+			return nil, fmt.Errorf("project %s: storage %q is not a positive quantity (try 10Gi)", slug, st)
+		}
+		out[slug] = store.ProjectCap{Storage: v.String()}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // shortDuration is a duration as people write it: 10m, 1h, 1h30m.
@@ -194,7 +255,17 @@ func settingsDetail(l *store.Limits, sl *store.SleepDefaults) string {
 	if l == nil {
 		parts = append(parts, "no limits")
 	} else {
-		parts = append(parts, fmt.Sprintf("limits projects=%d instances=%d cpu=%s memory=%s storage=%s", l.Projects, l.Instances, l.CPU, l.Memory, l.Storage))
+		line := fmt.Sprintf("limits projects=%d instances=%d cpu=%s memory=%s storage=%s", l.Projects, l.Instances, l.CPU, l.Memory, l.Storage)
+		if !l.AllowsDisks() {
+			line += " disks=no"
+		}
+		if o := l.ObjectStorage; o != nil {
+			line += fmt.Sprintf(" buckets=%d bucketCap=%s objectStorage=%s", o.Buckets, o.BucketCap, o.Total)
+		}
+		if pg := l.Postgres; pg != nil {
+			line += fmt.Sprintf(" postgres=%s default=%s sharedCap=%s databases=%d maxInstances=%d", strings.Join(pg.Types, ","), pg.DefaultType, pg.SharedCap, pg.Databases, pg.MaxInstances)
+		}
+		parts = append(parts, line)
 	}
 	if sl == nil {
 		parts = append(parts, "no sleep defaults")

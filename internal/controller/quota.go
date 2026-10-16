@@ -39,7 +39,11 @@ func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) e
 	if r.Config.WorkspaceLimits != nil {
 		limits = r.Config.WorkspaceLimits(workspaceOf(app))
 	}
-	compute, storage := quotaHard(limits)
+	cap := ""
+	if r.Config.ProjectStorageCap != nil {
+		cap = r.Config.ProjectStorageCap(workspaceOf(app), app.Spec.Slug)
+	}
+	compute, storage := quotaHard(limits, cap)
 	notBestEffort := []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
 	if err := r.applyQuota(ctx, app, QuotaName, compute, notBestEffort); err != nil {
 		return err
@@ -64,23 +68,16 @@ func (r *WorkspaceReconciler) syncQuotas(ctx context.Context, all []store.Worksp
 	for i := range all {
 		bySlug[all[i].Slug] = &all[i]
 	}
-	limits := map[string]*store.Limits{}
 	for i := range apps.Items {
 		app := &apps.Items[i]
 		if !app.DeletionTimestamp.IsZero() {
 			continue
 		}
-		slug := workspaceOf(app)
-		l, seen := limits[slug]
-		if !seen {
-			ws := bySlug[slug]
-			if ws == nil {
-				continue // a workspace the store does not know: leave it be
-			}
-			l = ws.Settings.Limits
-			limits[slug] = l
+		ws := bySlug[workspaceOf(app)]
+		if ws == nil {
+			continue // a workspace the store does not know: leave it be
 		}
-		compute, storage := quotaHard(l)
+		compute, storage := quotaHard(ws.Settings.Limits, ws.Settings.ProjectCaps[app.Spec.Slug].Storage)
 		if err := applyQuota(ctx, r.Client, app, QuotaName, compute, []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}); err != nil {
 			return err
 		}
@@ -104,7 +101,7 @@ func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name st
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, q, func() error {
 		q.Labels = mergeMaps(q.Labels, commonLabels(app))
-		q.Spec.Hard = hard
+		q.Spec.Hard = floorAtUsed(hard, q.Status.Used)
 		q.Spec.Scopes = scopes
 		return nil
 	})
@@ -114,25 +111,46 @@ func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name st
 	return nil
 }
 
+// floorAtUsed keeps a quota from being rendered below what the namespace
+// already uses (storage plan step 4, the grandfather rule): what exists
+// above a ceiling that shrank keeps working, and the API refuses what
+// would be added. Kubernetes would otherwise refuse the platform's own
+// claims, a database's second instance or a migration's copy.
+func floorAtUsed(hard, used corev1.ResourceList) corev1.ResourceList {
+	for name, h := range hard {
+		if u, ok := used[name]; ok && u.Cmp(h) > 0 {
+			hard[name] = u.DeepCopy()
+		}
+	}
+	return hard
+}
+
 // quotaHard renders a plan as ResourceQuota ceilings, compute and storage
 // apart (pod scopes cannot carry storage); each nil when the plan caps
 // nothing Kubernetes can enforce there. Instances and projects are the
-// API's to count: pods would also count builds and one-off commands.
-func quotaHard(l *store.Limits) (compute, storage corev1.ResourceList) {
-	if l == nil {
-		return nil, nil
-	}
-	if q, err := resource.ParseQuantity(l.CPU); err == nil && l.CPU != "" {
-		compute = corev1.ResourceList{corev1.ResourceRequestsCPU: q}
-	}
-	if q, err := resource.ParseQuantity(l.Memory); err == nil && l.Memory != "" {
-		if compute == nil {
-			compute = corev1.ResourceList{}
+// API's to count: pods would also count builds and one-off commands. A
+// project's own cap, when it has one, bounds its storage below the
+// workspace's. A plan without disks is the API's to refuse: it is never
+// a storage quota of zero, which would refuse every claim.
+func quotaHard(l *store.Limits, projectCap string) (compute, storage corev1.ResourceList) {
+	if l != nil {
+		if q, err := resource.ParseQuantity(l.CPU); err == nil && l.CPU != "" {
+			compute = corev1.ResourceList{corev1.ResourceRequestsCPU: q}
 		}
-		compute[corev1.ResourceRequestsMemory] = q
+		if q, err := resource.ParseQuantity(l.Memory); err == nil && l.Memory != "" {
+			if compute == nil {
+				compute = corev1.ResourceList{}
+			}
+			compute[corev1.ResourceRequestsMemory] = q
+		}
+		if q, err := resource.ParseQuantity(l.Storage); err == nil && l.Storage != "" {
+			storage = corev1.ResourceList{corev1.ResourceRequestsStorage: q}
+		}
 	}
-	if q, err := resource.ParseQuantity(l.Storage); err == nil && l.Storage != "" {
-		storage = corev1.ResourceList{corev1.ResourceRequestsStorage: q}
+	if q, err := resource.ParseQuantity(projectCap); err == nil && projectCap != "" {
+		if cur, has := storage[corev1.ResourceRequestsStorage]; !has || q.Cmp(cur) < 0 {
+			storage = corev1.ResourceList{corev1.ResourceRequestsStorage: q}
+		}
 	}
 	return compute, storage
 }

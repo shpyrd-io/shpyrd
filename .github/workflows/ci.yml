@@ -259,6 +259,23 @@ jobs:
           ./bin/shpyrd projects create "Hello World" --public --context kind-ci
           ./bin/shpyrd cluster status --context kind-ci
           kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
+      - name: The workspace's ceilings refuse in words
+        if: matrix.suite == 'databases'
+        run: |
+          set -euo pipefail
+          # Step 4 of the storage plan: the free workspace's shape (no disks,
+          # shared databases only) refuses a disk and a dedicated database in
+          # the plan's words, before anything exists (a durable store is the
+          # same refusal, in the API's tests: this suite has no redis); the
+          # ceilings are then cleared so the rest of the suite runs.
+          ./bin/shpyrd-ctl workspace limits --disks=false --database-kinds shared --database-default shared --databases 1 --context kind-ci
+          ./bin/shpyrd-ctl workspace status --context kind-ci
+          if ./bin/shpyrd volumes create files --size 1Gi --project hello-world --context kind-ci 2>refused.txt; then echo "a disk was admitted on a plan without disks" >&2; exit 1; fi
+          grep -q "Disks are not included in the free workspace; use a bucket for files, or upgrade." refused.txt || { echo "the disk was refused with other words:"; cat refused.txt; exit 1; }
+          if ./bin/shpyrd pg create own --type dedicated --project hello-world --context kind-ci 2>refused.txt; then echo "a dedicated database was admitted on a plan with shared ones" >&2; exit 1; fi
+          grep -q "Your plan includes a shared database. A dedicated database comes with a paid plan." refused.txt || { echo "the database was refused with other words:"; cat refused.txt; exit 1; }
+          ./bin/shpyrd-ctl workspace limits --none --context kind-ci
+          ./bin/shpyrd-ctl workspace status --context kind-ci | grep -q "limits: none"
       - name: A shared database on the platform's server
         if: matrix.suite == 'databases'
         run: |

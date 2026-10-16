@@ -39,6 +39,9 @@ type VolumeView struct {
 	// Note explains a provider rule applied at creation, such as a size
 	// rounded up to the provider's minimum (RFC-0060).
 	Note string `json:"note,omitempty"`
+	// Resize is where the last growth stands: requested, pending,
+	// completed or failed, with the size asked for and the reason.
+	Resize *shpyrdv1.VolumeResize `json:"resize,omitempty"`
 }
 
 func volumeView(v shpyrdv1.Volume) VolumeView {
@@ -46,7 +49,7 @@ func volumeView(v shpyrdv1.Volume) VolumeView {
 		Name: v.Name, Namespace: v.Namespace, Size: v.Spec.Size.String(), Capacity: v.Status.Capacity,
 		Shared: v.Shared(), StorageClass: firstNonEmpty(v.Status.StorageClass, v.Spec.StorageClass), Phase: firstNonEmpty(v.Status.Phase, shpyrdv1.VolumePending),
 		Message: v.Status.Message, MountedBy: v.Status.MountedBy, CreatedAt: v.CreationTimestamp.Time,
-		RestoredFrom: v.Status.RestoredFrom,
+		RestoredFrom: v.Status.RestoredFrom, Resize: v.Status.Resize,
 	}
 	if out.MountedBy == nil {
 		out.MountedBy = []string{}
@@ -120,6 +123,12 @@ func (s *Server) createVolume(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// A plan without disks says so first, before any question of class or
+	// size; the judgement under the lock says it again.
+	if !s.limitsOf(c.Request.Context(), s.workspace(c)).AllowsDisks() {
+		abort(c, http.StatusBadRequest, errors.New(errNoDisks))
+		return
+	}
 	vol := &shpyrdv1.Volume{
 		ObjectMeta: metav1.ObjectMeta{Name: req.Name, Namespace: ns, Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelWorkspace: s.workspace(c), shpyrdv1.LabelProject: c.Param("slug")}},
 		Spec:       shpyrdv1.VolumeSpec{Size: size, StorageClass: req.StorageClass, AccessMode: corev1.ReadWriteOnce, FromSnapshot: req.FromSnapshot},
@@ -137,15 +146,16 @@ func (s *Server) createVolume(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), vol.Spec.Size); err != nil {
-		abort(c, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.apps.Create(c.Request.Context(), vol); err != nil {
+	// A new disk, judged against the workspace's ceilings (its plan may
+	// include no disks at all) and made under its lock.
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: vol.Spec.Size, newDisk: true}, func(ctx context.Context) error {
+		return s.apps.Create(ctx, vol)
+	})
+	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			abort(c, http.StatusConflict, fmt.Errorf("volume %q already exists", req.Name))
 		} else {
-			abort(c, http.StatusBadGateway, err)
+			abortAdmission(c, err, http.StatusBadRequest)
 		}
 		return
 	}
@@ -185,6 +195,31 @@ func (s *Server) sharedFoldersOperatorHint() string {
 		return "Operators: create the File Storage mount target with contrib/oci/terraform (shared_storage = true) and pass --set SHPYRD_FSS_MOUNT_TARGET and --set SHPYRD_FSS_AD to `shpyrd cluster init`."
 	}
 	return "Operators: install a ReadWriteMany storage class and name it in SHPYRD_STORAGE_CLASS_SHARED."
+}
+
+// checkVolumeGrowth refuses the growth of a volume whose storage class
+// cannot grow disks; a class the cluster does not show (or none named) is
+// left to the controller, which reports in the volume's standing.
+func (s *Server) checkVolumeGrowth(ctx context.Context, vol *shpyrdv1.Volume) error {
+	class := firstNonEmpty(vol.Status.StorageClass, vol.Spec.StorageClass)
+	if class == "" {
+		if vol.Shared() {
+			class = install.ProjectSharedStorageClass(s.vars)
+		} else {
+			class = install.ProjectStorageClass(s.vars)
+		}
+	}
+	if class == "" || s.kube == nil || s.kube.Kube == nil {
+		return nil
+	}
+	sc, err := s.kube.Kube.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	if sc.AllowVolumeExpansion == nil || !*sc.AllowVolumeExpansion {
+		return fmt.Errorf("volumes of the %s class cannot grow; create a new volume of the size you need and copy the data", class)
+	}
+	return nil
 }
 
 // checkVolumeClass refuses a volume whose storage class does not exist on
@@ -257,15 +292,23 @@ func (s *Server) resizeVolume(c *gin.Context) {
 			size = rounded
 		}
 	}
-	growth := size.DeepCopy()
-	growth.Sub(vol.Spec.Size)
-	if err := s.checkStorageLimit(c.Request.Context(), s.workspace(c), growth); err != nil {
+	// Checked before acceptance (storage plan step 4): a class that cannot
+	// grow a disk refuses the growth here, in words, not in the status
+	// later.
+	if err := s.checkVolumeGrowth(c.Request.Context(), vol); err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	vol.Spec.Size = size
-	if err := s.apps.Update(c.Request.Context(), vol); err != nil {
-		abort(c, http.StatusBadGateway, err)
+	growth := size.DeepCopy()
+	growth.Sub(vol.Spec.Size)
+	// The growth, judged against the ceilings (a disk that exists may
+	// grow where a new one is refused) and written under the lock.
+	err = s.admit(c.Request.Context(), s.workspace(c), change{project: c.Param("slug"), storage: growth}, func(ctx context.Context) error {
+		vol.Spec.Size = size
+		return s.apps.Update(ctx, vol)
+	})
+	if err != nil {
+		abortAdmission(c, err, http.StatusBadRequest)
 		return
 	}
 	s.audit(c, c.Param("slug"), "volume.resize", vol.Name, req.Size)

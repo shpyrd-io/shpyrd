@@ -524,6 +524,14 @@ func (a *Addresses) Limits(slug string) *store.Limits {
 	return nil
 }
 
+// ProjectStorageCap is a project's own storage cap, "" when it has none.
+func (a *Addresses) ProjectStorageCap(slug, project string) string {
+	if ws := a.Workspace(slug); ws != nil {
+		return ws.Settings.ProjectCaps[project].Storage
+	}
+	return ""
+}
+
 // SleepDefault is the workspace's default HTTP sleep policy (RFC-0075):
 // after and resuming, or "" when it sets none. Cached like Workspace; a
 // change shows within the TTL.

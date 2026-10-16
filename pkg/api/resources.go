@@ -328,12 +328,14 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 	}}
 	note := ""
 	shared := false
+	ch := change{project: c.Param("slug")}
 	if t.Kind == "Postgres" {
 		cap, err := s.applyPostgresType(ctx, s.workspace(c), spec)
 		if err != nil {
 			abort(c, http.StatusBadRequest, err)
 			return
 		}
+		ch.database = true
 		if shared = spec["type"] == shpyrdv1.PostgresTypeShared; shared {
 			// No instance, no disk: nothing against the workspace's CPU,
 			// memory or storage ceilings; the cap is the database's own.
@@ -341,33 +343,38 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		}
 	}
 	if (t.Kind == "Postgres" && !shared) || t.Kind == "Redis" {
-		n, err := s.storeSize(ctx, s.workspace(c), t.Kind, spec)
+		n, res, count, err := s.storeSize(ctx, t.Kind, spec)
 		if err != nil {
 			abort(c, http.StatusBadRequest, err)
 			return
 		}
 		note = n
+		ch.add, ch.addN, ch.instances = res, count, count
 		// Its disk counts against the workspace's storage ceiling, as the
-		// namespace quota will count it: refused here, in words, rather
-		// than left waiting for a claim the quota never admits.
+		// namespace quota will count it, once per instance: refused here,
+		// in words, rather than left waiting for a claim the quota never
+		// admits.
 		if disk, rounded, has := s.storeDisk(t.Kind, spec); has {
-			if err := s.checkStorageLimit(ctx, s.workspace(c), disk); err != nil {
-				abort(c, http.StatusConflict, err)
-				return
+			ch.newDisk = true
+			for i := int32(0); i < count; i++ {
+				ch.storage.Add(disk)
 			}
 			if rounded {
 				note = strings.TrimSpace(note + fmt.Sprintf(" Its disk is %s, the provider minimum.", disk.String()))
 			}
 		}
 	}
-	if err := s.apps.Create(ctx, u); err != nil {
+	err := s.admit(ctx, s.workspace(c), ch, func(ctx context.Context) error {
+		return s.apps.Create(ctx, u)
+	})
+	if err != nil {
 		switch {
 		case apierrors.IsAlreadyExists(err):
 			abort(c, http.StatusConflict, fmt.Errorf("%s %q already exists", t.Kind, name))
 		case apierrors.IsInvalid(err):
 			abort(c, http.StatusBadRequest, err)
 		default:
-			abort(c, http.StatusBadGateway, err)
+			abortAdmission(c, err, http.StatusBadRequest)
 		}
 		return
 	}
@@ -381,6 +388,9 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 const (
 	errSharedAlwaysOn           = "Shared databases are always on."
 	errSharedNoInstanceSettings = "Shared databases have no instance size, number of instances, version or sleep setting; they are always on. Those belong to a dedicated database."
+	// What a plan refuses by kind (storage plan step 4).
+	errDedicatedNotIncluded = "Your plan includes a shared database. A dedicated database comes with a paid plan."
+	errSharedNotIncluded    = "This workspace's plan has dedicated databases; a shared one is not among its kinds."
 )
 
 // sharedRefusal is a refusal raised inside a retried mutation.
@@ -425,7 +435,10 @@ func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[stri
 		return "", fmt.Errorf("type %q is not one of shared, dedicated", typ)
 	}
 	if !slices.Contains(rules.Types, typ) {
-		return "", fmt.Errorf("this workspace's plan allows only %s databases", strings.Join(rules.Types, " and "))
+		if typ == shpyrdv1.PostgresTypeDedicated {
+			return "", errors.New(errDedicatedNotIncluded)
+		}
+		return "", errors.New(errSharedNotIncluded)
 	}
 	spec["type"] = typ
 	if typ == shpyrdv1.PostgresTypeDedicated {
@@ -454,17 +467,18 @@ func (s *Server) applyPostgresType(ctx context.Context, ws string, spec map[stri
 
 // storeSize records the size of a new database or store (#57): the one
 // it names from the list of its kind, or that list's default, which the
-// note says; one past the workspace's CPU or memory is refused.
-func (s *Server) storeSize(ctx context.Context, ws, kind string, spec map[string]interface{}) (string, error) {
+// note says. It returns what its instances take and how many there are,
+// for the admission.
+func (s *Server) storeSize(ctx context.Context, kind string, spec map[string]interface{}) (string, corev1.ResourceRequirements, int32, error) {
 	cat, err := s.catalog(ctx)
 	if err != nil {
-		return "", err
+		return "", corev1.ResourceRequirements{}, 0, err
 	}
 	what := strings.ToLower(kind)
 	named, _ := spec["size"].(string)
 	size, err := cat.For(what).Pick(what, named)
 	if err != nil {
-		return "", err
+		return "", corev1.ResourceRequirements{}, 0, err
 	}
 	spec["size"] = size.Name
 	var instances *int32
@@ -475,13 +489,10 @@ func (s *Server) storeSize(ctx context.Context, ws, kind string, spec map[string
 		instances = ptrTo(int32(n))
 	}
 	res, count, _ := storeResources(cat, kind, size.Name, instances)
-	if err := s.checkStoreLimits(ctx, ws, res, corev1.ResourceRequirements{}, count, 0); err != nil {
-		return "", err
-	}
 	if named != "" {
-		return "", nil
+		return "", res, count, nil
 	}
-	return fmt.Sprintf("It has the size %s, the default: %s.", size.Name, sizeWords(size)), nil
+	return fmt.Sprintf("It has the size %s, the default: %s.", size.Name, sizeWords(size)), res, count, nil
 }
 
 // sizeWords says what a size gives: "0.5 CPU, 128Mi of memory, 20 connections".
@@ -553,11 +564,14 @@ func (s *Server) resizeResource(c *gin.Context) {
 		}
 		before, beforeN, _ := storeResources(cat, t.Kind, was, instances)
 		after, afterN, _ := storeResources(cat, t.Kind, size.Name, instances)
-		if err := s.checkStoreLimits(ctx, s.workspace(c), after, before, afterN, beforeN); err != nil {
-			return &userError{err}
+		err := s.admit(ctx, s.workspace(c), change{project: c.Param("slug"), add: after, sub: before, addN: afterN, subN: beforeN}, func(ctx context.Context) error {
+			_ = unstructured.SetNestedField(u.Object, size.Name, "spec", "size")
+			return s.apps.Update(ctx, u)
+		})
+		if r, ok := refused(err); ok {
+			return &userError{errors.New(r.msg)}
 		}
-		_ = unstructured.SetNestedField(u.Object, size.Name, "spec", "size")
-		return s.apps.Update(ctx, u)
+		return err
 	})
 	var refused *sharedRefusal
 	if errors.As(err, &refused) {

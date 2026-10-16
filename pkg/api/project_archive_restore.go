@@ -169,14 +169,13 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 		}
 	}
 	ws := s.workspaceOfApp(ctx, app)
-	if err := s.checkStorageLimit(ctx, ws, extra); err != nil {
-		return err
-	}
 	after := app.DeepCopy()
 	after.Spec = restored.Spec
 	after.Spec.ID = app.Spec.ID
 	after.Spec.Slug = app.Spec.Slug
-	return s.checkLimits(ctx, ws, after)
+	// Judged as one change: the disks the restore adds and the App as it
+	// comes back; the restore itself writes later, step by step.
+	return s.admit(ctx, ws, change{project: app.Spec.Slug, app: after, storage: extra, newDisk: extra.Sign() > 0}, nil)
 }
 
 func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, m *projectArchiveMetadata) error {

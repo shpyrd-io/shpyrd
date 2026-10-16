@@ -519,6 +519,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceRedirectDomain: workspaceCache.AppRedirectDomain,
 			Layout:                  workspaceCache.Layout,
 			WorkspaceLimits:         workspaceCache.Limits,
+			ProjectStorageCap:       workspaceCache.ProjectStorageCap,
 			WorkspaceSleepDefault:   workspaceCache.SleepDefault,
 			SleepAllowed:            apiDeps.SleepAllowed,
 			WorkspaceSuspended:      workspaceCache.Suspended,

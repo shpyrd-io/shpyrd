@@ -159,6 +159,27 @@ spec:
               phase:
                 description: Phase is Pending, Bound or Failed.
                 type: string
+              resize:
+                description: |-
+                  Resize is the last growth asked for (storage plan step 4): requested
+                  until the claim takes it, pending while the provider grows the disk,
+                  completed when the capacity matches, failed with the reason.
+                properties:
+                  at:
+                    format: date-time
+                    type: string
+                  message:
+                    type: string
+                  phase:
+                    description: Phase is requested, pending, completed or failed.
+                    type: string
+                  to:
+                    description: To is the size asked for.
+                    type: string
+                required:
+                - phase
+                - to
+                type: object
               restoredFrom:
                 description: |-
                   RestoredFrom is the snapshot the current claim was restored from, if
