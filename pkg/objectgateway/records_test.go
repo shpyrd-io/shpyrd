@@ -612,3 +612,36 @@ func TestFlushesAddUp(t *testing.T) {
 		t.Errorf("a deleted bucket keeps a pending delta %+v", d)
 	}
 }
+
+// Each bucket's delta reaches its own record and no other's.
+func TestAFlushKeepsEachBucketsDeltaWithItsRecord(t *testing.T) {
+	records, _ := testRecords(t)
+	ctx := context.Background()
+	for _, name := range []string{"consumer-a", "consumer-b", "consumer-c"} {
+		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records.Add("consumer-a", 5, 1)
+	records.Add("consumer-b", 4, 1)
+	records.Add("consumer-a", 295, 0)
+	records.Add("consumer-c", 6, 1)
+	records.Add("consumer-c", -6, -1)
+	records.Add("consumer-c", 6, 1)
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]int64{"consumer-a": {300, 1}, "consumer-b": {4, 1}, "consumer-c": {6, 1}}
+	for name, w := range want {
+		rec, err := records.Get(ctx, name)
+		if err != nil || rec.UsedBytes != w[0] || rec.Objects != w[1] {
+			t.Errorf("%s = %d bytes %d objects, want %v (%v)", name, rec.UsedBytes, rec.Objects, w, err)
+		}
+	}
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := records.Get(ctx, "consumer-a"); rec.UsedBytes != 300 {
+		t.Errorf("a second flush with nothing pending changed consumer-a to %d", rec.UsedBytes)
+	}
+}

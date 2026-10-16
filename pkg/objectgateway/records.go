@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -119,7 +120,7 @@ func (r *Records) descriptors() *descriptorCache {
 // conditional conflict remains for other processes. The caller runs the
 // returned function when done.
 func (r *Records) lock(name string) func() {
-	mu, _ := r.locks.LoadOrStore(name, &sync.Mutex{})
+	mu, _ := r.locks.LoadOrStore(kept(name), &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	return mu.(*sync.Mutex).Unlock
 }
@@ -134,10 +135,17 @@ func (r *Records) cachedGet(ctx context.Context, name string) (Record, error) {
 	}
 	rec, err := r.Get(ctx, name)
 	if err == nil || errors.Is(err, s3err.GetAPIError(s3err.ErrNoSuchBucket)) {
-		cache.remember(name, rec, err)
+		cache.remember(kept(name), rec, err)
 	}
 	return rec, err
 }
+
+// kept is a name of the gateway's own to keep: a bucket name arrives from
+// the front door backed by the request's buffer, which the next request
+// reuses, so a key stored as it came would change under the map (the
+// counters of two buckets crossed on dev, 2026-10-16). Lookups may use the
+// name as it came; whatever is kept takes a copy.
+func kept(name string) string { return strings.Clone(name) }
 
 func (r *Records) Get(ctx context.Context, name string) (Record, error) {
 	var out Record
@@ -366,7 +374,7 @@ func (r *Records) Add(name string, bytes, objects int64) {
 	d := r.pending[name]
 	if d == nil {
 		d = &delta{}
-		r.pending[name] = d
+		r.pending[kept(name)] = d
 	}
 	d.bytes += bytes
 	d.objects += objects
@@ -381,8 +389,8 @@ func (r *Records) pendingDelta(name string) delta {
 	return delta{}
 }
 
-// takePending returns the deltas to flush and zeroes them; a flush that
-// fails gives its delta back with Add.
+// takePending returns the deltas to flush and starts a new map; a flush
+// that fails gives its delta back with Add.
 func (r *Records) takePending() map[string]delta {
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
@@ -391,8 +399,8 @@ func (r *Records) takePending() map[string]delta {
 		if d.bytes != 0 || d.objects != 0 {
 			out[name] = *d
 		}
-		delete(r.pending, name)
 	}
+	r.pending = map[string]*delta{}
 	return out
 }
 
@@ -430,11 +438,15 @@ func (r *Records) apply(ctx context.Context, name string, d delta) error {
 		if err != nil {
 			return err
 		}
+		before := [2]int64{rec.UsedBytes, rec.Objects}
 		rec.UsedBytes = max(rec.UsedBytes+d.bytes, 0)
 		rec.Objects = max(rec.Objects+d.objects, 0)
 		err = r.save(ctx, rec)
 		if conditionalConflict(err) {
 			continue
+		}
+		if err == nil {
+			log.Printf("gateway: %s counted %+d bytes, %+d objects: %d bytes, %d objects (was %d, %d)", name, d.bytes, d.objects, rec.UsedBytes, rec.Objects, before[0], before[1])
 		}
 		return err
 	}

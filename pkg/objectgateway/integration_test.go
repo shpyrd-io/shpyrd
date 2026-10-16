@@ -367,6 +367,48 @@ func TestGatewayIntegration(t *testing.T) {
 			t.Fatalf("a CORS configuration after its removal: %+v %v", got, err)
 		}
 	})
+	// The counter follows each bucket's own writes and reaches its record
+	// at the next flush, never a neighbour's.
+	t.Run("counter-per-bucket", func(t *testing.T) {
+		usage := func(t *testing.T, name string) (int64, int64) {
+			t.Helper()
+			req, _ := http.NewRequest(http.MethodGet, "http://"+admin+"/v1/usage?bucket="+name, nil)
+			req.Header.Set("Authorization", "Bearer local-test-admin")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var out objectstore.Capacity
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatal(err)
+			}
+			return out.Buckets[name].Bytes, out.Buckets[name].Objects
+		}
+		before := map[string][2]int64{}
+		for _, name := range []string{a.AccessKey, b.AccessKey} {
+			by, ob := usage(t, name)
+			before[name] = [2]int64{by, ob}
+		}
+		put(ca, a.AccessKey, "counted/one", strings.Repeat("x", 300))
+		by, ob := usage(t, a.AccessKey)
+		if by != before[a.AccessKey][0]+300 || ob != before[a.AccessKey][1]+1 {
+			t.Errorf("a's counter after one write: %d bytes %d objects, before %v", by, ob, before[a.AccessKey])
+		}
+		if by, ob := usage(t, b.AccessKey); by != before[b.AccessKey][0] || ob != before[b.AccessKey][1] {
+			t.Errorf("b's counter moved with a's write: %d bytes %d objects, before %v", by, ob, before[b.AccessKey])
+		}
+		if os.Getenv("SHPYRD_GATEWAY_TEST_FLUSH") == "1" {
+			time.Sleep(FlushEvery + 5*time.Second)
+			rec, err := records.Get(ctx, a.AccessKey)
+			if err != nil || rec.UsedBytes != before[a.AccessKey][0]+300 || rec.Objects != before[a.AccessKey][1]+1 {
+				t.Errorf("a's record after the flush: %+v, %v", rec, err)
+			}
+			if rec, err := records.Get(ctx, b.AccessKey); err != nil || rec.UsedBytes != before[b.AccessKey][0] {
+				t.Errorf("b's record after the flush: %+v, %v", rec, err)
+			}
+		}
+	})
 	t.Run("concurrent-provisioning", func(t *testing.T) {
 		const name = "concurrent-consumer"
 		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: name}); err != nil {

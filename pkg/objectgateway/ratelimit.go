@@ -43,6 +43,7 @@ func (l *bucketLimiters) allow(name string) bool {
 	if ok {
 		l.recent.MoveToFront(el)
 	} else {
+		name = kept(name)
 		el = l.recent.PushFront(&limiterEntry{name: name, limiter: rate.NewLimiter(l.rate, l.burst)})
 		l.entries[name] = el
 		for l.recent.Len() > limiterCacheSize {
