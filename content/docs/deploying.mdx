@@ -81,7 +81,7 @@ A build clones your repository. For a private one, give shpyrd access in one of 
 shpyrd git-auth deploy-key --project shop
 ```
 
-shpyrd makes the key and prints its public half. Add it to the repository as a read-only deploy key (on GitHub: Settings, Deploy keys, Add deploy key, with write access off). Then deploy again. A new `deploy-key` replaces the old one, and `shpyrd git-auth deploy-key --project shop --remove` deletes it. Remove it from the repository too.
+shpyrd makes the key for the host of the project's repository and prints its public half. A project with no git repository yet needs the host: `shpyrd git-auth deploy-key --project shop --host github.com`. Add it to the repository as a read-only deploy key (on GitHub: Settings, Deploy keys, Add deploy key, with write access off). Then deploy again. A new `deploy-key` replaces the old one, and `shpyrd git-auth deploy-key --project shop --remove` deletes it. Remove it from the repository too.
 
 **A token for a host.** Set once by a workspace admin; every project of the workspace that clones from that host uses it.
 
@@ -93,13 +93,15 @@ shpyrd git-auth unset --host gitlab.example.com
 
 shpyrd sends a user name with the token. The default is `x-access-token`, `oauth2` on gitlab.com and `x-token-auth` on bitbucket.org. Another host may want another one: pass `--username`.
 
-If a project has both, the deploy key wins. `shpyrd git-auth show --project shop` says which credential its builds use.
+Mind who can read a token. Every project of the workspace that clones from the host uses it, and project developers with cluster access can read its value from their project's namespace. Use a read-only token limited to the repositories the builds need, and prefer deploy keys for anything sensitive.
 
-shpyrd turns the repository URL into the form the credential needs: SSH for a deploy key, HTTPS for a token. A git URL it cannot parse, such as `git://`, builds as before, without credentials.
+If a project has both, the deploy key wins, as long as it is for the repository's host. `shpyrd git-auth show --project shop` says which credential its builds use.
+
+When the repository URL is not in the form the credential needs, shpyrd converts it: SSH for a deploy key, HTTPS for a token. A URL already in that form is used as given. A git URL it cannot parse, such as `git://`, builds as before, without credentials.
 
 Values are write-only: shpyrd never shows a token or a private key again.
 
-**The host key.** When the deploy key is made, shpyrd records the git host's SSH host key. Dockerfile builds check it and refuse a host that presents another. Buildpack builds clone with kpack, whose git client does not check the host key. Say so to whoever signs off your security review.
+**The host key.** When the deploy key is made, shpyrd records the git host's SSH host key. Dockerfile builds check it and refuse a host that presents another. Buildpack builds clone with kpack, whose git client does not check the host key.
 
 **When access is refused.** A clone that the host refuses for access fails the build, and the message names `shpyrd git-auth`.
 

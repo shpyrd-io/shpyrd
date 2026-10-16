@@ -57,7 +57,7 @@ implement those proposals.
 | [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | replaced by 0082 (local lifecycle removed; workspace invitations retained) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | provisional | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
-| [0017](0017-git-credentials.md) | Git credentials for private repositories | implemented | 0004 |
+| [0017](0017-git-credentials.md) | Git credentials for private repositories | in progress | 0004 |
 | [0018](0018-repository-monitoring.md) | Repository monitoring and auto-deploy | provisional | 0017 |
 | [0019](0019-health-checks-and-rollouts.md) | Health checks and zero-downtime rollouts | implemented, gaps | 0001 |
 | [0020](0020-maintenance-mode.md) | Maintenance mode | provisional | 0001 |

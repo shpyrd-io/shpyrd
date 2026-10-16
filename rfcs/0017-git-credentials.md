@@ -1,6 +1,6 @@
 # RFC-0017 Git credentials for private repositories
 
-**Status:** implemented
+**Status:** in progress
 
 **Owner:** Marcelo Paez Sequeira
 
