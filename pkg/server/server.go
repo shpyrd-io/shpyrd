@@ -39,6 +39,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/objectgateway"
@@ -504,6 +505,12 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		}
 		return store.DefaultWorkspace
 	}
+	// The GitHub App (RFC-0054): its Secret through the manager's cache,
+	// and the workspaces' installations.
+	githubApp := &controller.GitHubApp{
+		Source:        &github.Source{Reader: mgr.GetClient(), Namespace: k.Namespace, Options: github.Options{APIURL: os.Getenv(github.EnvAPIURL)}},
+		Installations: memberships.Store,
+	}
 	rec := &controller.AppReconciler{
 		BindableTypes: bindable,
 		Kube:          k.Kube,
@@ -525,6 +532,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceSuspended:      workspaceCache.Suspended,
 			WorkspaceID:             workspaceCache.ID,
 			Projects:                memberships.Store,
+			GitHub:                  githubApp,
 			DashboardURL:            envOr("SHPYRD_DASHBOARD_URL", ""),
 			HTTPSPort:               os.Getenv("SHPYRD_HTTPS_PORT"),
 			RegistryHost:            os.Getenv("SHPYRD_REGISTRY_HOST"),
@@ -564,6 +572,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		Client:          mgr.GetClient(),
 		Kube:            k.Kube,
 		SystemNamespace: k.Namespace,
+		GitHub:          githubApp,
 		PollInterval:    controller.PollInterval(os.Getenv("SHPYRD_GIT_POLL_INTERVAL")),
 	}
 	if err := source.SetupWithManager(mgr); err != nil {

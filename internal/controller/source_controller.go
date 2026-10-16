@@ -80,6 +80,9 @@ type SourceReconciler struct {
 	// nothing.
 	Kube            kubernetes.Interface
 	SystemNamespace string
+	// GitHub is the GitHub App (RFC-0054): listings use its token as
+	// builds do. Nil: never.
+	GitHub *GitHubApp
 	// PollInterval is the wait between listings; zero is the default.
 	PollInterval time.Duration
 	// LsRemote lists a repository; nil is gitauth.LsRemote. Tests inject one.
@@ -460,7 +463,12 @@ func describeSourceError(err error, app *shpyrdv1.App) string {
 	case errors.Is(err, gitauth.ErrRefusedAddress):
 		return fmt.Sprintf("%s is not an address shpyrd connects to: shpyrd does not read repositories at loopback, link-local or cloud metadata addresses.", host)
 	case errors.Is(err, gitauth.ErrNoAccess):
-		return fmt.Sprintf("shpyrd could not read the repository: it is private, or does not exist under that name. Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, or a workspace admin sets a token for the host with `shpyrd git-auth set --host %s --token -`. shpyrd tries again by itself.", host)
+		msg := fmt.Sprintf("shpyrd could not read the repository: it is private, or does not exist under that name. Give shpyrd access: `shpyrd git-auth deploy-key` prints a key to add to the repository as a read-only deploy key, or a workspace admin sets a token for the host with `shpyrd git-auth set --host %s --token -`. shpyrd tries again by itself.", host)
+		var refused *appRefusedError
+		if errors.As(err, &refused) {
+			msg = refused.why + " " + msg
+		}
+		return msg
 	}
 	return sourceUnreadable
 }
@@ -469,7 +477,7 @@ func describeSourceError(err error, app *shpyrdv1.App) string {
 // revision's commit. A listing cut at the cap still answers when the
 // revision is among what was read.
 func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string, error) {
-	b, err := lookupGitBuild(ctx, r.Client, r.SystemNamespace, app)
+	b, err := lookupGitBuild(ctx, r.Client, r.SystemNamespace, r.GitHub, app)
 	if err != nil {
 		return "", err
 	}
@@ -481,6 +489,9 @@ func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string,
 	// https URL with a deploy key is read over SSH.
 	refs, err := list(ctx, firstNonEmpty(b.CloneURL, app.Spec.Source.Git.URL), b)
 	if err != nil && !errors.Is(err, gitauth.ErrTooManyRefs) {
+		if b.AppRefused != "" {
+			return "", &appRefusedError{why: b.AppRefused, err: err}
+		}
 		return "", err
 	}
 	if sha, ok := gitauth.ResolveBranch(refs, app.GitRevision()); ok {

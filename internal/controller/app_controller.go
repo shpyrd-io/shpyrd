@@ -278,6 +278,11 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {
 		out.result.RequeueAfter = 30 * time.Second
 	}
+	// A build cloning through the GitHub App gets a new token before the
+	// one in <app>-git is 50 minutes old (RFC-0054).
+	if d := r.githubTokenRefresh(ctx, app); d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
+		out.result.RequeueAfter = d
+	}
 	return out.result, nil
 }
 

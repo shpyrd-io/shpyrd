@@ -413,11 +413,11 @@ func TestRemoveAnnotationIfUnchangedKeepsANewerValue(t *testing.T) {
 func TestLookupGitBuildIsWhatTheBuildUses(t *testing.T) {
 	app := gitApp("shop", "https://github.com/acme/shop")
 	_, c := newTestReconciler(t, app, workspaceToken("default", "github.com", "ghp_ours"))
-	b, err := lookupGitBuild(context.Background(), c, "shpyrd-system", app)
+	b, err := lookupGitBuild(context.Background(), c, "shpyrd-system", nil, app)
 	if err != nil || b.Kind != gitauth.KindToken || b.Secret == nil || string(b.Secret.Data["password"]) != "ghp_ours" {
 		t.Fatalf("build %+v err %v", b, err)
 	}
-	if _, err := lookupGitBuild(context.Background(), c, "shpyrd-system", gitApp("raw", "git://example.test/x")); err != errGitURL {
+	if _, err := lookupGitBuild(context.Background(), c, "shpyrd-system", nil, gitApp("raw", "git://example.test/x")); err != errGitURL {
 		t.Errorf("err = %v, want errGitURL", err)
 	}
 }

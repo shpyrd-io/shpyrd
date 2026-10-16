@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -233,5 +234,19 @@ func TestDeployKeyIsRateLimited(t *testing.T) {
 	}
 	if rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"github.com"}`, true); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("over the limit: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProjectGitAuthSaysTheGitHubApp(t *testing.T) {
+	app := sampleApp("shop", shpyrdv1.PhaseRunning)
+	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/acme/shop"}}
+	build := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shop-git", Namespace: "app-shop",
+		Annotations: map[string]string{gitauth.AnnotationGitHubAccount: "Acme", gitauth.AnnotationTokenMintedAt: "2026-10-16T12:00:00Z"}}}
+	s, _ := newTestServer(t, nil, []client.Object{app, build})
+	rec := do(t, s, "GET", "/api/projects/shop/git-auth", "", true)
+	var pv ProjectGitAuthView
+	_ = json.Unmarshal(rec.Body.Bytes(), &pv)
+	if rec.Code != http.StatusOK || pv.Using != gitauth.KindGitHubApp || pv.GitHubAccount != "Acme" {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
 }
