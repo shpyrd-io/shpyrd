@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -18,9 +19,8 @@ func TestGitHubInstallations(t *testing.T) {
 			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "beta", Name: "Beta"}); err != nil {
 				t.Fatal(err)
 			}
-			moved, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test"))
-			if err != nil || moved != "" {
-				t.Fatalf("add: %q %v", moved, err)
+			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+				t.Fatalf("add: %v", err)
 			}
 			list, err := s.GitHubInstallations(ctx, DefaultWorkspace)
 			if err != nil || len(list) != 1 || list[0].ID != 42 || list[0].Workspace != DefaultWorkspace || list[0].AccountLogin != "Acme" ||
@@ -59,8 +59,8 @@ func TestGitHubInstallations(t *testing.T) {
 			if _, err := s.GitHubInstallation(ctx, 42); !errors.Is(err, ErrNotFound) {
 				t.Errorf("deleted by id: %v", err)
 			}
-			if moved, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "bob@acme.test")); err != nil || moved != "" {
-				t.Fatalf("revive: %q %v", moved, err)
+			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "bob@acme.test")); err != nil {
+				t.Fatalf("revive: %v", err)
 			}
 			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 1 || list[0].ConnectedBy != "bob@acme.test" || list[0].DeletedAt != nil {
 				t.Errorf("revived: %+v", list)
@@ -79,7 +79,7 @@ func TestGitHubInstallations(t *testing.T) {
 	}
 }
 
-func TestGitHubInstallationMovesBetweenWorkspaces(t *testing.T) {
+func TestGitHubInstallationIsNeverTakenFromAnotherWorkspace(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -87,21 +87,75 @@ func TestGitHubInstallationMovesBetweenWorkspaces(t *testing.T) {
 			if _, err := s.CreateWorkspace(ctx, Workspace{Slug: "beta", Name: "Beta"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
 				t.Fatal(err)
 			}
-			moved, err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test"))
-			if err != nil || moved != DefaultWorkspace {
-				t.Fatalf("move: %q %v", moved, err)
+			err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test"))
+			var held *GitHubHeldError
+			if !errors.Is(err, ErrGitHubInstallationHeld) || !errors.As(err, &held) || held.Workspace != DefaultWorkspace {
+				t.Fatalf("taken: %v", err)
 			}
-			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 0 {
-				t.Errorf("the old workspace keeps nothing: %+v", list)
+			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace || got.ConnectedBy != "ana@acme.test" {
+				t.Errorf("the default workspace keeps it: %+v %v", got, err)
 			}
-			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != "beta" || got.ConnectedBy != "bob@beta.test" {
+			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+				t.Errorf("connecting again where it is: %v", err)
+			}
+			// Disconnected there, or uninstalled on GitHub: another may have it.
+			if err := s.DeleteGitHubInstallation(ctx, DefaultWorkspace, 42); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test")); err != nil {
+				t.Fatalf("after a disconnect: %v", err)
+			}
+			if err := s.SetGitHubInstallationState(ctx, 42, false, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+				t.Fatalf("after an uninstall: %v", err)
+			}
+			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace {
 				t.Errorf("by id: %+v %v", got, err)
 			}
-			if moved, err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test")); err != nil || moved != "" {
-				t.Errorf("connecting again where it is moves nothing: %q %v", moved, err)
+		})
+	}
+}
+
+func TestGitHubInstallationRaceHasOneWinner(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			slugs := []string{DefaultWorkspace}
+			for _, slug := range []string{"w1", "w2", "w3", "w4", "w5"} {
+				if _, err := s.CreateWorkspace(ctx, Workspace{Slug: slug, Name: slug}); err != nil {
+					t.Fatal(err)
+				}
+				slugs = append(slugs, slug)
+			}
+			errs := make(chan error, len(slugs))
+			var wg sync.WaitGroup
+			for _, slug := range slugs {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					errs <- s.AddGitHubInstallation(ctx, slug, acme(77, slug))
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			won := 0
+			for err := range errs {
+				switch {
+				case err == nil:
+					won++
+				case !errors.Is(err, ErrGitHubInstallationHeld):
+					t.Errorf("unexpected: %v", err)
+				}
+			}
+			got, err := s.GitHubInstallation(ctx, 77)
+			if won != 1 || err != nil || got.ConnectedBy != got.Workspace {
+				t.Errorf("%d won; kept %+v %v", won, got, err)
 			}
 		})
 	}
@@ -115,10 +169,10 @@ func TestOneWorkspaceSeesOnlyItsGitHubInstallations(t *testing.T) {
 			if _, err := st.CreateWorkspace(ctx, Workspace{Slug: "byhand", Name: "By hand"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.AddGitHubInstallation(ctx, "byhand", acme(9, "x@byhand.test")); err != nil {
+			if err := st.AddGitHubInstallation(ctx, "byhand", acme(9, "x@byhand.test")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
+			if err := st.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
 				t.Fatal(err)
 			}
 			one := OneWorkspace(st)

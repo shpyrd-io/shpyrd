@@ -2,8 +2,25 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrGitHubInstallationHeld is an installation another workspace has: it
+// is never taken over. The error is a *GitHubHeldError, which names it.
+var ErrGitHubInstallationHeld = errors.New("the GitHub installation is connected to another workspace")
+
+// GitHubHeldError says which workspace has the installation.
+type GitHubHeldError struct {
+	// Workspace is the slug of the workspace that has it.
+	Workspace string
+}
+
+func (e *GitHubHeldError) Error() string {
+	return "the GitHub installation is connected to workspace " + e.Workspace
+}
+
+func (e *GitHubHeldError) Is(target error) bool { return target == ErrGitHubInstallationHeld }
 
 // GitHubInstallation is a GitHub App installation connected to a
 // workspace (RFC-0054): GitHub's id, the account it is installed on, who
@@ -24,11 +41,11 @@ type GitHubInstallation struct {
 // GitHub is the GitHub App part of the Store.
 type GitHub interface {
 	// AddGitHubInstallation connects an installation to a workspace (slug
-	// or ID), by GitHub's id: a new one, or one connected before, to this
-	// workspace or another, or uninstalled since, taken over. It answers
-	// the slug of the workspace it was connected to before, "" when none
-	// or the same.
-	AddGitHubInstallation(ctx context.Context, ws string, inst GitHubInstallation) (moved string, err error)
+	// or ID), by GitHub's id: a new one, one connected to this workspace
+	// before, or one disconnected or uninstalled since. One another
+	// workspace has is refused with a *GitHubHeldError
+	// (ErrGitHubInstallationHeld), checked in the same transaction.
+	AddGitHubInstallation(ctx context.Context, ws string, inst GitHubInstallation) error
 	// GitHubInstallations are a workspace's, not uninstalled, oldest first.
 	GitHubInstallations(ctx context.Context, ws string) ([]GitHubInstallation, error)
 	// GitHubInstallation finds one by id across workspaces; ErrNotFound

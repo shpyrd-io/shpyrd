@@ -90,10 +90,12 @@ type Server struct {
 	people   []Installation
 	login    string
 	orgRoles map[string][2]string // by org, lower case: role, state
-	minted   map[int64]int
-	tokens   map[string]int64 // installation token -> installation
-	lastBody map[string]any
-	calls    []string
+	// noMembers is an App registered without members: read.
+	noMembers bool
+	minted    map[int64]int
+	tokens    map[string]int64 // installation token -> installation
+	lastBody  map[string]any
+	calls     []string
 }
 
 // NewServer starts the fake with installation 42 on Acme.
@@ -181,6 +183,10 @@ func (f *Server) SetOrgRole(org, role, state string) {
 	}
 	f.orgRoles[strings.ToLower(org)] = [2]string{role, state}
 }
+
+// SetNoMembersPermission makes the memberships call answer 403, as for an
+// App whose owner has not accepted members: read.
+func (f *Server) SetNoMembersPermission(no bool) { f.mu.Lock(); f.noMembers = no; f.mu.Unlock() }
 
 // MintedFor counts the tokens minted for an installation.
 func (f *Server) MintedFor(installation int64) int {
@@ -353,6 +359,10 @@ func (f *Server) user(w http.ResponseWriter, r *http.Request) {
 func (f *Server) membership(w http.ResponseWriter, r *http.Request, org string) {
 	if r.Header.Get("Authorization") != "Bearer "+UserToken {
 		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
+	}
+	if f.noMembers {
+		reply(w, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
 		return
 	}
 	m, ok := f.orgRoles[strings.ToLower(org)]

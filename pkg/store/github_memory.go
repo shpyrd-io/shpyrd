@@ -26,28 +26,27 @@ func (m *Memory) githubOut(r *githubRow) GitHubInstallation {
 	return out
 }
 
-func (m *Memory) AddGitHubInstallation(_ context.Context, ws string, inst GitHubInstallation) (string, error) {
+func (m *Memory) AddGitHubInstallation(_ context.Context, ws string, inst GitHubInstallation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, err := m.wsAny(ws)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if m.github == nil {
 		m.github = map[int64]*githubRow{}
 	}
-	moved, created := "", m.now()
+	created := m.now()
 	if prev, ok := m.github[inst.ID]; ok && prev.DeletedAt == nil {
 		if prev.workspaceID != w.ID {
-			moved = m.slugOfID(prev.workspaceID)
-		} else {
-			created = prev.CreatedAt
+			return &GitHubHeldError{Workspace: m.slugOfID(prev.workspaceID)}
 		}
+		created = prev.CreatedAt
 	}
 	row := &githubRow{GitHubInstallation: inst, workspaceID: w.ID}
 	row.CreatedAt, row.DeletedAt = created, nil
 	m.github[inst.ID] = row
-	return moved, nil
+	return nil
 }
 
 func (m *Memory) GitHubInstallations(_ context.Context, ws string) ([]GitHubInstallation, error) {

@@ -174,7 +174,7 @@ func TestGitHubCallbackOfAnUpdateOnlyGoesBack(t *testing.T) {
 	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta", Address: "beta"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob"}); err != nil {
+	if err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob"}); err != nil {
 		t.Fatal(err)
 	}
 	// The generic dashboard: the redirect says nothing of which workspace
@@ -191,7 +191,7 @@ func TestGitHubConnectRefusesAnInstallationAnotherWorkspaceHas(t *testing.T) {
 	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
+	if err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
 		t.Fatal(err)
 	}
 	heard := githubAudits(t)
@@ -211,7 +211,7 @@ func TestGitHubConnectRefusesAnInstallationAnotherWorkspaceHas(t *testing.T) {
 		t.Fatal(err)
 	}
 	finish := ticketOf(t, installed(t, s, "42", githubtest.Code, connectState(t, s)))
-	if _, err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
+	if err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
 		t.Fatal(err)
 	}
 	if rec := do(t, s, "GET", finish, "", true); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "connected to workspace beta") {
@@ -274,7 +274,9 @@ func TestGitHubFinishNeedsTheSessionThatStarted(t *testing.T) {
 	s, _, _ := githubServer(t)
 	s.authz.TTL = 1
 	ctx := context.Background()
-	person := func(email string) (string, string) {
+	// person signs in a workspace admin: its session, CSRF token and
+	// subject.
+	person := func(email string) (string, string, string) {
 		p, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: email, Provider: "local"})
 		if err != nil {
 			t.Fatal(err)
@@ -282,10 +284,11 @@ func TestGitHubFinishNeedsTheSessionThatStarted(t *testing.T) {
 		if _, err := s.store.PutMembership(ctx, store.DefaultWorkspace, p.ID, store.WorkspaceRoleAdmin); err != nil {
 			t.Fatal(err)
 		}
-		return signIn(t, s, ext.Identity{Subject: p.ID, Email: email, Provider: "local"})
+		sid, csrf := signIn(t, s, ext.Identity{Subject: p.ID, Email: email, Provider: "local"})
+		return sid, csrf, p.ID
 	}
-	anaSID, anaCSRF := person("ana@example.test")
-	bobSID, _ := person("bob@example.test")
+	anaSID, anaCSRF, anaSub := person("ana@example.test")
+	bobSID, _, _ := person("bob@example.test")
 	start := func() string {
 		rec := doCookie(t, s, "POST", "/api/workspace/github/connect", "", anaSID, anaCSRF)
 		var v GitHubConnectView
@@ -319,39 +322,112 @@ func TestGitHubFinishNeedsTheSessionThatStarted(t *testing.T) {
 	refused("replayed", doCookie(t, s, "GET", finish, "", anaSID, ""))
 
 	key := githubtest.ClientSecret
-	tk := func(ws, actor string, exp time.Time, nonce string) string {
+	tk := func(ws, provider, subject string, exp time.Time, nonce string) string {
 		return "/api/workspace/github/finish?ticket=" + url.QueryEscape(signGitHubTicket(key, githubTicket{
-			Workspace: ws, Actor: actor, Installation: 42, Account: "Acme", AccountType: "Organization", GitHubLogin: "ana", Exp: exp.Unix(), Nonce: nonce}))
+			Workspace: ws, Actor: "ana@example.test", Provider: provider, Subject: subject,
+			Installation: 42, Account: "Acme", AccountType: "Organization", GitHubLogin: "ana", Exp: exp.Unix(), Nonce: nonce}))
 	}
-	refused("expired", doCookie(t, s, "GET", tk("default", "ana@example.test", time.Now().Add(-time.Second), "t1"), "", anaSID, ""))
-	refused("another workspace's", doCookie(t, s, "GET", tk("beta", "ana@example.test", time.Now().Add(time.Minute), "t2"), "", anaSID, ""))
-	state := signGitHubState(key, githubState{Workspace: "default", Actor: "ana@example.test", Exp: time.Now().Add(time.Minute).Unix(), Nonce: "t3"})
+	soon := time.Now().Add(time.Minute)
+	refused("expired", doCookie(t, s, "GET", tk("default", "local", anaSub, time.Now().Add(-time.Second), "t1"), "", anaSID, ""))
+	refused("another workspace's", doCookie(t, s, "GET", tk("beta", "local", anaSub, soon, "t2"), "", anaSID, ""))
+	state := signGitHubState(key, githubState{Workspace: "default", Actor: "ana@example.test", Provider: "local", Subject: anaSub, Exp: soon.Unix(), Nonce: "t3"})
 	refused("a state as a ticket", doCookie(t, s, "GET", "/api/workspace/github/finish?ticket="+url.QueryEscape(state), "", anaSID, ""))
 	if _, err := readGitHubTicket(key, state, time.Now()); err == nil {
 		t.Error("a state reads as a ticket")
 	}
-	if _, err := readGitHubState(key, signGitHubTicket(key, githubTicket{Workspace: "default", Actor: "x", Exp: time.Now().Add(time.Minute).Unix(), Nonce: "t4"}), time.Now()); err == nil {
+	if _, err := readGitHubState(key, signGitHubTicket(key, githubTicket{Workspace: "default", Actor: "x", Exp: soon.Unix(), Nonce: "t4"}), time.Now()); err == nil {
 		t.Error("a ticket reads as a state")
 	}
+	// The same email is not the same person: another provider's ana, or
+	// ana's API token, names her alike but is someone else to the store.
+	// (signIn's fixture keys people by email: this one is made by hand,
+	// as an SSO sign-in makes it, by its issuer and subject, through a
+	// configured provider.)
+	s.rp.mu.Lock()
+	s.rp.providers["okta"] = &oidcProvider{OIDCProvider: ext.OIDCProvider{ID: "okta", Issuer: "https://okta.example.test"}}
+	s.rp.order = append(s.rp.order, "okta")
+	s.rp.mu.Unlock()
+	sso, err := s.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "ana@example.test", Provider: "okta", Issuer: "https://okta.example.test", Subject: "00u-ana"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.PutMembership(ctx, store.DefaultWorkspace, sso.ID, store.WorkspaceRoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	ssoSub := sso.ID
+	if ssoSub == anaSub {
+		t.Fatalf("the store made one person of two identities: %s", ssoSub)
+	}
+	ssoSess, err := s.rp.sessions.create(ctx, store.RealmWorkspace, store.DefaultWorkspace, ext.Identity{Subject: ssoSub, Issuer: "https://okta.example.test",
+		ExternalSubject: "00u-ana", EmailVerified: true, Email: "ana@example.test", Provider: "okta"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssoSID := ssoSess.ID
+	refused("ana through another provider", doCookie(t, s, "GET", tk("default", "local", anaSub, soon, "t6"), "", ssoSID, ""))
+	refused("ana's API token's ticket in her browser", doCookie(t, s, "GET", tk("default", "api-token", "token:abc", soon, "t7"), "", anaSID, ""))
 	// A fresh, valid one still works: the refusals spent nothing.
-	if rec := doCookie(t, s, "GET", tk("default", "ana@example.test", time.Now().Add(time.Minute), "t5"), "", anaSID, ""); rec.Code != http.StatusFound {
+	if rec := doCookie(t, s, "GET", tk("default", "local", anaSub, soon, "t5"), "", anaSID, ""); rec.Code != http.StatusFound {
 		t.Errorf("valid: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doCookie(t, s, "GET", tk("default", "okta", ssoSub, soon, "t8"), "", ssoSID, ""); rec.Code != http.StatusFound {
+		t.Errorf("the okta ana finishes her own: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestGitHubFinishSendsABrowserWithoutASessionToSignIn(t *testing.T) {
+func TestGitHubFinishAsksABrowserWithoutASessionToSignIn(t *testing.T) {
 	s, _, _ := githubServer(t)
 	finish := ticketOf(t, installed(t, s, "42", githubtest.Code, connectState(t, s)))
+	// Not through the sign-in's next: it never goes back to an /api/ path.
 	rec := do(t, s, "GET", finish, "", false)
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/?next="+url.QueryEscape(finish) {
-		t.Errorf("%d %q", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(rec.Body.String(), "then open this link again.") || !strings.Contains(rec.Body.String(), `href="`+finish+`"`) {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
+	if list, _ := s.store.GitHubInstallations(context.Background(), store.DefaultWorkspace); len(list) != 0 {
+		t.Errorf("stored %+v", list)
+	}
+}
+
+func TestGitHubAppWithoutTheMembersPermissionSaysSo(t *testing.T) {
+	s, _, fake := githubServer(t)
+	fake.SetNoMembersPermission(true)
+	rec := installed(t, s, "42", githubtest.Code, connectState(t, s))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "check who owns Acme yet: an owner of the App must accept its new Members permission on GitHub") {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubFinishRefusesWhenTheStoreSaysAnotherWorkspaceHasIt(t *testing.T) {
+	s, _, _ := githubServer(t)
+	held := &heldStore{Store: s.store}
+	s.store = held
+	finish := ticketOf(t, installed(t, s, "42", githubtest.Code, connectState(t, s)))
+	// Taken between the finish's own check and its write.
+	held.err = &store.GitHubHeldError{Workspace: "beta"}
+	if rec := do(t, s, "GET", finish, "", true); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Acme is connected to workspace beta: disconnect it there first.") {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// heldStore answers err from AddGitHubInstallation: another workspace won
+// the race.
+type heldStore struct {
+	store.Store
+	err error
+}
+
+func (h *heldStore) AddGitHubInstallation(ctx context.Context, ws string, inst store.GitHubInstallation) error {
+	if h.err != nil {
+		return h.err
+	}
+	return h.Store.AddGitHubInstallation(ctx, ws, inst)
 }
 
 func TestGitHubRepositoriesAndBranchesForThePicker(t *testing.T) {
 	s, _, fake := githubServer(t)
 	ctx := context.Background()
-	if _, err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+	if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
 		t.Fatal(err)
 	}
 	rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true)
@@ -386,7 +462,7 @@ func TestGitHubRepositoriesAndBranchesForThePicker(t *testing.T) {
 func TestGitHubDisconnect(t *testing.T) {
 	s, _, _ := githubServer(t)
 	ctx := context.Background()
-	if _, err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+	if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
 		t.Fatal(err)
 	}
 	heard := githubAudits(t)
