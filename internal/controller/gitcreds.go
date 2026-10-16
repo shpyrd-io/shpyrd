@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -29,7 +30,7 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	url := app.Spec.Source.Git.URL
 	repo, err := gitauth.Parse(url)
 	if err != nil {
-		return gitauth.Build{}, err
+		return r.noGitCredential(ctx, app, err)
 	}
 	deployKey, err := r.optionalSecret(ctx, app.Namespace, gitauth.DeployKeySecretName)
 	if err != nil {
@@ -41,7 +42,7 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	}
 	b, err := gitauth.Resolve(url, app.Name, app.Namespace, deployKey, token)
 	if err != nil {
-		return gitauth.Build{}, err
+		return r.noGitCredential(ctx, app, err)
 	}
 	if b.Secret == nil {
 		return b, r.deleteSecret(ctx, app.Namespace, name)
@@ -66,6 +67,14 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 		return b, fmt.Errorf("git credentials: %w", err)
 	}
 	return b, nil
+}
+
+// noGitCredential is the fallback for a git URL shpyrd cannot parse: no
+// credential applies and the build uses the raw URL, as it did before
+// credentials existed. It is not a reconcile error.
+func (r *AppReconciler) noGitCredential(ctx context.Context, app *shpyrdv1.App, cause error) (gitauth.Build, error) {
+	log.FromContext(ctx).Info("no git credential applies: the git URL cannot be parsed", "app", app.Namespace+"/"+app.Name, "reason", cause.Error())
+	return gitauth.Build{}, r.deleteSecret(ctx, app.Namespace, gitauth.BuildSecretName(app.Name))
 }
 
 // ensureBuildServiceAccount keeps shpyrd-builder listing the registry

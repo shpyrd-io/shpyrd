@@ -138,3 +138,24 @@ func TestGitCredentialSecretsReachTheirApps(t *testing.T) {
 		t.Errorf("deploy key -> %v", reqs)
 	}
 }
+
+func TestReconcileGitCredentialsUnparseableURL(t *testing.T) {
+	app := gitApp("shop", "git://example.com/a/b")
+	r, c := newTestReconciler(t, app, workspaceToken("default", "example.com", "ghp"))
+	got, err := r.reconcileGitCredentials(context.Background(), app)
+	if err != nil || got.Kind != "" || got.Secret != nil {
+		t.Fatalf("build = %+v, %v", got, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-git"}, &corev1.Secret{}); err == nil {
+		t.Error("no shop-git for a URL shpyrd cannot parse")
+	}
+	runReconcile(t, r, app)
+	img := &unstructured.Unstructured{}
+	img.SetGroupVersionKind(KpackImageGVK)
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, img); err != nil {
+		t.Fatal(err)
+	}
+	if u, _, _ := unstructured.NestedString(img.Object, "spec", "source", "git", "url"); u != "git://example.com/a/b" {
+		t.Errorf("the raw URL builds as before: %s", u)
+	}
+}
