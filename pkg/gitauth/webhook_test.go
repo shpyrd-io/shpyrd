@@ -167,3 +167,36 @@ func TestPushAndRecordAnnotations(t *testing.T) {
 		t.Errorf("an unreadable record is an empty one: %+v", rec)
 	}
 }
+
+func TestParsePushReadsBefore(t *testing.T) {
+	p, err := ParsePush([]byte(`{"ref":"refs/heads/main","before":"` + strings.ToUpper(beforeSHA) + `","after":"` + afterSHA + `"}`))
+	if err != nil || p.Before != beforeSHA {
+		t.Errorf("push %+v err %v", p, err)
+	}
+}
+
+// The marker is read on the whole message, before it is clipped.
+func TestParsePushSkipsALongMessageEndingInTheMarker(t *testing.T) {
+	msg := strings.Repeat("x", 5000-len("[SKIP DEPLOY]")) + "[SKIP DEPLOY]"
+	body, _ := json.Marshal(map[string]any{"ref": "refs/heads/main", "after": afterSHA, "head_commit": map[string]any{"id": afterSHA, "message": msg}})
+	p, err := ParsePush(body)
+	if err != nil || !p.Skip || SkipsDeploy(p.Message) {
+		t.Errorf("skip %v, clipped message skips %v, err %v", p.Skip, SkipsDeploy(p.Message), err)
+	}
+	short, _ := ParsePush([]byte(`{"ref":"refs/heads/main","after":"` + afterSHA + `","head_commit":{"id":"` + afterSHA + `","message":"docs [skip deploy]"}}`))
+	plain, _ := ParsePush([]byte(`{"ref":"refs/heads/main","after":"` + afterSHA + `","head_commit":{"id":"` + afterSHA + `","message":"docs"}}`))
+	if !short.Skip || plain.Skip {
+		t.Errorf("short %v plain %v", short.Skip, plain.Skip)
+	}
+}
+
+// GitLab without checkout_sha, and none of the commits is the one pushed:
+// no other commit's words or author are taken for it.
+func TestParsePushGitLabWithoutTheHeadCommit(t *testing.T) {
+	body := `{"object_kind":"push","ref":"refs/heads/main","before":"` + beforeSHA + `","after":"` + afterSHA + `",
+	  "commits":[{"id":"` + beforeSHA + `","message":"older [skip deploy]","author":{"name":"Carla"}}]}`
+	p, err := ParsePush([]byte(body))
+	if err != nil || p.Message != "" || p.Author != "" || p.Skip {
+		t.Errorf("push = %+v err %v", p, err)
+	}
+}

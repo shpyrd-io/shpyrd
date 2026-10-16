@@ -90,12 +90,17 @@ func eventOf(e string) string {
 // Push is a push to a ref, as the webhook keeps it in the App's
 // shpyrd.io/git-push annotation for the source watcher.
 type Push struct {
-	Ref      string    `json:"ref"`
-	SHA      string    `json:"sha"`
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+	// Before is the branch's commit before the push: a push applies
+	// directly only when it follows the commit last seen.
+	Before   string    `json:"before,omitempty"`
 	Message  string    `json:"message,omitempty"`
 	Author   string    `json:"author,omitempty"`
 	Delivery string    `json:"delivery,omitempty"`
 	At       time.Time `json:"at"`
+	// Skip: the whole message, before it was clipped, asks not to deploy.
+	Skip bool `json:"skip,omitempty"`
 	// Deleted: the push removed the ref (its new commit is all zeros).
 	Deleted bool `json:"-"`
 }
@@ -117,8 +122,8 @@ type payloadCommit struct {
 func ParsePush(body []byte) (Push, error) {
 	var p struct {
 		Ref          string          `json:"ref"`
+		Before       string          `json:"before"`
 		After        string          `json:"after"`
-		CheckoutSHA  string          `json:"checkout_sha"`
 		HeadCommit   *payloadCommit  `json:"head_commit"`
 		Commits      []payloadCommit `json:"commits"`
 		UserUsername string          `json:"user_username"`
@@ -134,7 +139,7 @@ func ParsePush(body []byte) (Push, error) {
 	if p.Ref == "" || p.After == "" {
 		return Push{}, errors.New("the push names no ref or no commit")
 	}
-	out := Push{Ref: p.Ref, SHA: strings.ToLower(p.After)}
+	out := Push{Ref: p.Ref, SHA: strings.ToLower(p.After), Before: strings.ToLower(p.Before)}
 	if strings.Trim(out.SHA, "0") == "" {
 		out.Deleted = true
 		return out, nil
@@ -144,17 +149,16 @@ func ParsePush(body []byte) (Push, error) {
 	}
 	head := p.HeadCommit
 	if head == nil {
-		want := strings.ToLower(firstNonEmpty(p.CheckoutSHA, p.After))
+		// GitLab: the commit pushed among the commits, when it is there.
+		// Another commit's words and author are not taken for it.
 		for i := range p.Commits {
-			if strings.ToLower(p.Commits[i].ID) == want {
+			if strings.ToLower(p.Commits[i].ID) == out.SHA {
 				head = &p.Commits[i]
 			}
 		}
-		if head == nil && len(p.Commits) > 0 {
-			head = &p.Commits[len(p.Commits)-1]
-		}
 	}
 	if head != nil {
+		out.Skip = SkipsDeploy(head.Message)
 		out.Message = clip(head.Message, maxMessage)
 		out.Author = firstNonEmpty(head.Author.Username, head.Author.Name)
 	}

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -323,5 +324,95 @@ func TestSSHPathAndUser(t *testing.T) {
 		if got := sshUser(tc.url); got != tc.user {
 			t.Errorf("%s: user %q, want %q", tc.url, got, tc.user)
 		}
+	}
+}
+
+// An app whose URL carries its credentials (https://user:pass@host/...)
+// kept working before shpyrd read the branch: the listing sends them.
+func TestLsRemoteHTTPWithCredentialsInTheURL(t *testing.T) {
+	srv := smartHTTP(t, func(r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "u" || p != "p" {
+			t.Errorf("basic auth %q %q %v", u, p, ok)
+		}
+	}, pkt("# service=git-upload-pack\n")+"0000"+refLines(sampleRefs...))
+	host := strings.TrimPrefix(srv.URL, "http://")
+	refs, err := LsRemote(context.Background(), "http://u:p@"+host+"/org/repo", Build{})
+	if err != nil || refs["refs/heads/main"] != mainSHA {
+		t.Fatalf("refs %v err %v", refs, err)
+	}
+}
+
+func TestLsRemoteNeverSaysTheURLsPassword(t *testing.T) {
+	const pass = "hunter2secret"
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer failing.Close()
+	gone := httptest.NewServer(http.NotFoundHandler())
+	goneHost := strings.TrimPrefix(gone.URL, "http://")
+	gone.Close()
+	for _, host := range []string{strings.TrimPrefix(failing.URL, "http://"), goneHost} {
+		_, err := LsRemote(context.Background(), "http://u:"+pass+"@"+host+"/org/repo", Build{})
+		if err == nil || strings.Contains(err.Error(), pass) {
+			t.Errorf("err = %v", err)
+		}
+	}
+}
+
+// Lines with a marker are not host keys to trust: a revoked key, or a
+// certificate authority shpyrd does not check certificates against.
+func TestKnownHostsSkipsMarkedLines(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+	other, _ := ssh.NewSignerFromKey(otherPriv)
+	good := knownhosts.Line([]string{"git.example.com"}, signer.PublicKey())
+	revoked := "@revoked " + knownhosts.Line([]string{"git.example.com"}, other.PublicKey())
+	ca := "@cert-authority " + knownhosts.Line([]string{"*"}, other.PublicKey())
+	check, algos, err := knownHostsCheck([]byte(revoked + "\n" + ca + "\n" + good + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(algos) != 1 || algos[0] != ssh.KeyAlgoED25519 {
+		t.Errorf("algorithms %v", algos)
+	}
+	if err := check("git.example.com:22", nil, other.PublicKey()); !errors.Is(err, ErrHostKeyChanged) {
+		t.Errorf("a revoked key was accepted: %v", err)
+	}
+	if err := check("git.example.com:22", nil, signer.PublicKey()); err != nil {
+		t.Errorf("the recorded key: %v", err)
+	}
+	if _, _, err := knownHostsCheck([]byte(revoked + "\n" + ca + "\n")); err == nil {
+		t.Error("only marked lines: no host key was recorded")
+	}
+}
+
+// A listing over SSH stops when its context does, even while the host
+// says nothing.
+func TestLsRemoteSSHStopsWithItsContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepts, and never answers
+		}
+	}()
+	key, _ := GenerateDeployKey("shpyrd shop")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	host, _ := ssh.NewSignerFromKey(priv)
+	line := knownhosts.Line([]string{knownhosts.Normalize(ln.Addr().String())}, host.PublicKey())
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	if _, err := LsRemote(ctx, "ssh://git@"+ln.Addr().String()+"/acme/shop.git", deployKeyBuild(t, line, key)); err == nil {
+		t.Error("want an error")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("returned after %v", d)
 	}
 }

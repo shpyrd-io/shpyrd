@@ -37,7 +37,16 @@ var (
 	ErrTooManyRefs = errors.New("the repository lists more refs than shpyrd reads")
 
 	errMalformed = errors.New("the git host's answer is not a ref advertisement shpyrd can read")
+	// errHostError: the host answered with a status other than refusal.
+	errHostError = errors.New("the git host answered with an error")
 )
+
+// notFound is the host's 404: no such repository, or one this credential
+// may not see (hosts answer 404 for both). It counts as ErrNoAccess.
+type notFound struct{}
+
+func (notFound) Error() string        { return "the repository was not found" }
+func (notFound) Is(target error) bool { return target == ErrNoAccess }
 
 const (
 	// MaxAdvertisement caps what one listing reads.
@@ -45,7 +54,7 @@ const (
 	lsRemoteTimeout  = 20 * time.Second
 )
 
-var httpClient = &http.Client{Timeout: lsRemoteTimeout}
+var httpClient = newHTTPClient()
 
 // LsRemote lists the branches and tags of the repository at cloneURL, as
 // `git ls-remote` does, with the credential b carries: over SSH with a
@@ -63,10 +72,10 @@ func LsRemote(ctx context.Context, cloneURL string, b Build) (map[string]string,
 	}
 	// A token, or nothing (a public repository): HTTPS, whatever form the
 	// URL was given in.
-	return lsRemoteHTTP(ctx, r, b)
+	return lsRemoteHTTP(ctx, strings.TrimSpace(cloneURL), r, b)
 }
 
-func lsRemoteHTTP(ctx context.Context, r Repo, b Build) (map[string]string, error) {
+func lsRemoteHTTP(ctx context.Context, cloneURL string, r Repo, b Build) (map[string]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.HTTPS()+"/info/refs?service=git-upload-pack", nil)
 	if err != nil {
 		return nil, err
@@ -74,17 +83,31 @@ func lsRemoteHTTP(ctx context.Context, r Repo, b Build) (map[string]string, erro
 	req.Header.Set("User-Agent", "git/2.47.0 (shpyrd)")
 	if b.Kind == KindToken && b.Secret != nil {
 		req.SetBasicAuth(string(b.Secret.Data[corev1.BasicAuthUsernameKey]), string(b.Secret.Data[corev1.BasicAuthPasswordKey]))
+	} else if user, pass, ok := urlCredentials(cloneURL); b.Kind == "" && ok {
+		// Credentials written into the app's URL, as builds used them
+		// before shpyrd kept tokens. The request's URL never carries
+		// them, so no error names them.
+		req.SetBasicAuth(user, pass)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if refused := refusal(r.Host, err); refused != nil {
+			return nil, refused
+		}
+		if errors.Is(err, errRedirect) {
+			// A sign-in page on another host, most often.
+			return nil, ErrNoAccess
+		}
 		return nil, fmt.Errorf("could not reach %s: %w", r.Host, err)
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		return nil, ErrNoAccess
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, notFound{}
 	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("%s answered %s", r.Host, resp.Status)
+		return nil, errHostError
 	case strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html"):
 		// A sign-in page the host redirected to.
 		return nil, ErrNoAccess
@@ -102,12 +125,18 @@ func lsRemoteSSH(ctx context.Context, cloneURL string, r Repo, sec *corev1.Secre
 		return nil, err
 	}
 	addr := net.JoinHostPort(r.Host, firstNonEmpty(r.Port, "22"))
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := newDialer().DialContext(ctx, "tcp", addr)
 	if err != nil {
+		if refused := refusal(r.Host, err); refused != nil {
+			return nil, refused
+		}
 		return nil, fmt.Errorf("could not reach %s: %w", addr, err)
 	}
 	defer conn.Close()
+	// The deadline bounds each read; a cancelled context closes the
+	// connection, which ends any read at once.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
@@ -172,12 +201,17 @@ func knownHostsCheck(data []byte) (ssh.HostKeyCallback, []string, error) {
 	var algorithms []string
 	rest := data
 	for {
-		_, hosts, key, _, next, err := ssh.ParseKnownHosts(rest)
+		marker, hosts, key, _, next, err := ssh.ParseKnownHosts(rest)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("the host key recorded with the deploy key does not parse: make a new deploy key with shpyrd git-auth deploy-key: %w", err)
+		}
+		if marker != "" {
+			// @revoked or @cert-authority: not a key to trust as the host's.
+			rest = next
+			continue
 		}
 		entries = append(entries, entry{hosts, key})
 		algorithms = append(algorithms, algorithmsFor(key.Type())...)
@@ -205,6 +239,19 @@ func algorithmsFor(keyType string) []string {
 		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
 	}
 	return []string{keyType}
+}
+
+// urlCredentials is the user and password an http(s) URL carries.
+func urlCredentials(cloneURL string) (string, string, bool) {
+	u, err := url.Parse(cloneURL)
+	if err != nil || u.User == nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", "", false
+	}
+	pass, ok := u.User.Password()
+	if !ok {
+		return "", "", false
+	}
+	return u.User.Username(), pass, true
 }
 
 // sshPath is the repository's path as upload-pack wants it: org/repo.git
