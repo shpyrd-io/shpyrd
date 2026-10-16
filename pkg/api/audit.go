@@ -21,19 +21,9 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 	actor, realm := "anonymous", ""
 	var subject, clientKind string
 	if id, ok := ext.IdentityFrom(c); ok {
-		actor = firstNonEmpty(id.Email, id.Name, id.Subject)
+		actor = actorName(id)
 		realm = realmOf(id)
 		subject, clientKind = s.subjectOf(c, id), clientOf(id)
-		switch id.Provider {
-		case "token":
-			actor = "admin token"
-		case "api-token":
-			// joao@acme.test (token ci): who, and which credential acted.
-			actor = fmt.Sprintf("%s (token %s)", id.Email, id.Name)
-			if id.Email == "" {
-				actor = fmt.Sprintf("admin token (token %s)", id.Name)
-			}
-		}
 	}
 	// Events attach to the App when it exists (RFC-0076: found by slug,
 	// named by id); an action on a project that is gone (destroy) is
@@ -48,6 +38,23 @@ func (s *Server) audit(c *gin.Context, project, action, target, detail string) {
 	if err := audit.Record(c.Request.Context(), s.kube.Kube, ref, entry); err != nil {
 		s.log.Warn("audit: cannot record", "action", action, "error", err)
 	}
+}
+
+// actorName is how the audit log names who acted: the admin token as
+// "admin token", an API token as "email (token name)", anyone else by
+// email, name or subject.
+func actorName(id ext.Identity) string {
+	switch id.Provider {
+	case "token":
+		return "admin token"
+	case "api-token":
+		// joao@acme.test (token ci): who, and which credential acted.
+		if id.Email == "" {
+			return fmt.Sprintf("admin token (token %s)", id.Name)
+		}
+		return fmt.Sprintf("%s (token %s)", id.Email, id.Name)
+	}
+	return firstNonEmpty(id.Email, id.Name, id.Subject)
 }
 
 // subjectOf is the stable id of the person behind a request: the store's

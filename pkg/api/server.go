@@ -284,10 +284,11 @@ type Server struct {
 	gitHookDeliveries *rateLimiter
 	hookRefusals      *rateLimiter
 	// The GitHub App (RFC-0054): its credentials, read from its Secret;
-	// the connect states used; each workspace's repositories, a minute;
-	// and the App webhook's own limiter (Task 5).
+	// the connect states and finish tickets used; each workspace's
+	// repositories, a minute; and the App webhook's own limiter (Task 5).
 	githubApp        *github.Source
 	githubNonces     *nonceSet
+	githubTickets    *nonceSet
 	githubRepos      *githubRepoCache
 	githubDeliveries *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
@@ -395,6 +396,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.gitHookDeliveries = newRateLimiter(gitHooksPerMinute)
 	s.hookRefusals = newRateLimiter(hookRefusalsPerMinute)
 	s.githubNonces = &nonceSet{}
+	s.githubTickets = &nonceSet{}
 	s.githubRepos = &githubRepoCache{}
 	s.githubDeliveries = newRateLimiter(githubHooksPerMinute)
 	s.engine = gin.New()
@@ -681,6 +683,9 @@ func (s *Server) routes() error {
 	api.GET("/workspace/github", s.require(authz.ClusterAdmin), s.githubView) // RFC-0054
 	api.POST("/workspace/github/connect", s.require(authz.ClusterAdmin), s.githubConnect)
 	api.DELETE("/workspace/github/installations/:id", s.require(authz.ClusterAdmin), s.githubDisconnect)
+	// The connect finishes on the workspace's own address, with the
+	// session that started it; a browser without one signs in first.
+	s.engine.GET("/api/workspace/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.require(authz.ClusterAdmin), s.githubFinish)
 	// Who makes projects picks from the repositories (ClusterCreate, the
 	// action of POST /projects).
 	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)

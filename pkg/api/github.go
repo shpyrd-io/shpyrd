@@ -80,7 +80,33 @@ type githubState struct {
 	Nonce     string `json:"n"`
 }
 
-var errGitHubState = errors.New("the link is not one shpyrd made, or it expired")
+var (
+	errGitHubState  = errors.New("the link is not one shpyrd made, or it expired")
+	errGitHubTicket = errors.New("this connection was started by someone else, or has expired")
+)
+
+// githubTicketTTL is how long the browser has, from GitHub's callback, to
+// reach the workspace's own address and finish.
+const githubTicketTTL = 5 * time.Minute
+
+// githubTicket is what the callback hands the workspace's finish page,
+// once GitHub's checks passed: who started, what they connect, and who
+// they are on GitHub.
+type githubTicket struct {
+	Workspace    string `json:"ws"`
+	Actor        string `json:"actor"`
+	Installation int64  `json:"installation"`
+	Account      string `json:"account"`
+	AccountType  string `json:"accountType"`
+	Suspended    bool   `json:"suspended,omitempty"`
+	GitHubLogin  string `json:"githubLogin"`
+	Exp          int64  `json:"exp"`
+	Nonce        string `json:"n"`
+}
+
+// githubTicketPrefix sets a ticket apart from a state: it starts the
+// ticket and is under its tag, so neither passes as the other.
+const githubTicketPrefix = "t."
 
 func githubStateTag(key, body string) []byte {
 	mac := hmac.New(sha256.New, []byte(key))
@@ -88,30 +114,65 @@ func githubStateTag(key, body string) []byte {
 	return mac.Sum(nil)
 }
 
-// signGitHubState is base64url JSON, a dot, and its HMAC-SHA256 keyed by
-// the App's client secret.
-func signGitHubState(key string, st githubState) string {
-	raw, _ := json.Marshal(st)
+// githubSign is base64url JSON, a dot, and the HMAC-SHA256 of prefix and
+// that body, keyed by the App's client secret; the prefix leads.
+func githubSign(key, prefix string, v any) string {
+	raw, _ := json.Marshal(v)
 	body := base64.RawURLEncoding.EncodeToString(raw)
-	return body + "." + base64.RawURLEncoding.EncodeToString(githubStateTag(key, body))
+	return prefix + body + "." + base64.RawURLEncoding.EncodeToString(githubStateTag(key, prefix+body))
 }
+
+// githubRead checks the prefix and the tag, in constant time, and reads
+// the body into v.
+func githubRead(key, prefix, raw string, v any) bool {
+	rest, ok := strings.CutPrefix(raw, prefix)
+	if !ok || key == "" {
+		return false
+	}
+	body, tag, ok := strings.Cut(rest, ".")
+	if !ok {
+		return false
+	}
+	got, err := base64.RawURLEncoding.DecodeString(tag)
+	if err != nil || !hmac.Equal(got, githubStateTag(key, prefix+body)) {
+		return false
+	}
+	js, err := base64.RawURLEncoding.DecodeString(body)
+	return err == nil && json.Unmarshal(js, v) == nil
+}
+
+// signGitHubState signs a state; no prefix.
+func signGitHubState(key string, st githubState) string { return githubSign(key, "", st) }
 
 // readGitHubState checks the tag in constant time, then the time.
 func readGitHubState(key, raw string, now time.Time) (githubState, error) {
-	body, tag, ok := strings.Cut(raw, ".")
-	if !ok || key == "" {
-		return githubState{}, errGitHubState
-	}
-	got, err := base64.RawURLEncoding.DecodeString(tag)
-	if err != nil || !hmac.Equal(got, githubStateTag(key, body)) {
-		return githubState{}, errGitHubState
-	}
-	js, err := base64.RawURLEncoding.DecodeString(body)
 	var st githubState
-	if err != nil || json.Unmarshal(js, &st) != nil || st.Workspace == "" || st.Nonce == "" || now.Unix() > st.Exp {
+	if strings.HasPrefix(raw, githubTicketPrefix) || !githubRead(key, "", raw, &st) || st.Workspace == "" || st.Nonce == "" || now.Unix() > st.Exp {
 		return githubState{}, errGitHubState
 	}
 	return st, nil
+}
+
+func signGitHubTicket(key string, tk githubTicket) string {
+	return githubSign(key, githubTicketPrefix, tk)
+}
+
+// readGitHubTicket checks the tag in constant time, then the time.
+func readGitHubTicket(key, raw string, now time.Time) (githubTicket, error) {
+	var tk githubTicket
+	if !githubRead(key, githubTicketPrefix, raw, &tk) || tk.Workspace == "" || tk.Nonce == "" || tk.Installation <= 0 || now.Unix() > tk.Exp {
+		return githubTicket{}, errGitHubTicket
+	}
+	return tk, nil
+}
+
+// githubActor names who acts, as the audit log does: the state's actor,
+// ConnectedBy and the identity the finish must match.
+func githubActor(c *gin.Context) string {
+	if id, ok := ext.IdentityFrom(c); ok {
+		return firstNonEmpty(actorName(id), "anonymous")
+	}
+	return "anonymous"
 }
 
 // nonceSet remembers the states used until they expire. The server runs
@@ -222,13 +283,7 @@ func (s *Server) githubConnect(c *gin.Context) {
 		return
 	}
 	app := cl.App()
-	// Who started: their email, or the subject (admin-token), as the
-	// console users' AddedBy names them.
-	actor := "anonymous"
-	if id, ok := ext.IdentityFrom(c); ok {
-		actor = firstNonEmpty(id.Email, id.Subject, actor)
-	}
-	st := githubState{Workspace: s.doorWorkspace(c), Actor: actor, Exp: time.Now().Add(githubStateTTL).Unix(), Nonce: nonce}
+	st := githubState{Workspace: s.doorWorkspace(c), Actor: githubActor(c), Exp: time.Now().Add(githubStateTTL).Unix(), Nonce: nonce}
 	c.JSON(http.StatusOK, GitHubConnectView{InstallURL: app.InstallURL() + "?state=" + url.QueryEscape(signGitHubState(app.ClientSecret, st))})
 }
 
@@ -272,11 +327,13 @@ func (s *Server) githubDisconnect(c *gin.Context) {
 	ctx := c.Request.Context()
 	ws := s.doorWorkspace(c)
 	account := ""
-	if list, err := s.store.GitHubInstallations(ctx, ws); err == nil {
-		for _, inst := range list {
-			if inst.ID == id {
-				account = inst.AccountLogin
-			}
+	list, err := s.store.GitHubInstallations(ctx, ws)
+	if err != nil {
+		s.log.Warn("github: could not look up the installation's account", "installation", id, "err", err.Error())
+	}
+	for _, inst := range list {
+		if inst.ID == id {
+			account = inst.AccountLogin
 		}
 	}
 	err = s.store.DeleteGitHubInstallation(ctx, ws, id)
@@ -364,7 +421,9 @@ func (s *Server) githubBranches(c *gin.Context) {
 }
 
 // githubInstalled is GET /api/github/installed, where GitHub sends the
-// browser after an install (public: no session comes back with it).
+// browser after an install (public: no session comes back with it). It
+// makes every check GitHub can answer, then hands a ticket to the
+// workspace's own address, where the session that started must finish.
 func (s *Server) githubInstalled(c *gin.Context) {
 	ctx := c.Request.Context()
 	cl, err := s.githubApp.Client(ctx)
@@ -379,16 +438,14 @@ func (s *Server) githubInstalled(c *gin.Context) {
 	}
 	if c.Query("setup_action") == "update" {
 		// The installation's repositories changed on GitHub: nothing to
-		// connect, and no state comes from GitHub's own settings page.
-		ws := ""
-		if inst, err := s.store.GitHubInstallation(ctx, id); err == nil {
-			ws = inst.Workspace
-		}
-		c.Redirect(http.StatusFound, s.gitSettingsURL(ctx, ws))
+		// connect, and no state comes from GitHub's own settings page. The
+		// generic dashboard: which workspace has it is not said.
+		c.Redirect(http.StatusFound, s.dashboardURLOf(nil))
 		return
 	}
 	now := time.Now()
-	st, err := readGitHubState(cl.App().ClientSecret, c.Query("state"), now)
+	key := cl.App().ClientSecret
+	st, err := readGitHubState(key, c.Query("state"), now)
 	if err != nil {
 		s.githubPage(c, http.StatusBadRequest, "This link has expired", "Nothing was connected. Start again from the workspace's Git settings: Connect GitHub.", "")
 		return
@@ -403,60 +460,176 @@ func (s *Server) githubInstalled(c *gin.Context) {
 		s.githubPage(c, http.StatusBadRequest, "GitHub did not say who you are", "Nothing was connected. Start again from the workspace's Git settings: Connect GitHub.", back)
 		return
 	}
-	mine, err := personsInstallations(ctx, cl, code)
+	who, err := askGitHub(ctx, cl, code, id)
 	if err != nil {
 		s.log.Warn("github: could not check the person's installations", "err", err.Error())
 		s.githubPage(c, http.StatusBadGateway, "GitHub did not answer", "shpyrd could not ask GitHub which installations you can see. Try again from the workspace's Git settings in a minute.", back)
 		return
 	}
-	var inst *github.Installation
-	for i := range mine {
-		if mine[i].ID == id {
-			inst = &mine[i]
-		}
-	}
-	if inst == nil {
+	if who.inst == nil {
 		s.githubPage(c, http.StatusForbidden, "Not an installation you can see",
 			fmt.Sprintf("GitHub says your account cannot see installation %d. Install the App on an account or organisation you manage, then connect it.", id), back)
 		return
 	}
-	moved, err := s.store.AddGitHubInstallation(ctx, st.Workspace, store.GitHubInstallation{
-		ID: id, AccountLogin: inst.Account, AccountType: inst.AccountType, ConnectedBy: st.Actor, SuspendedAt: inst.SuspendedAt,
-	})
+	if !who.owner {
+		s.githubPage(c, http.StatusForbidden, "Not an owner", fmt.Sprintf("Only an owner of %s on GitHub can connect it.", who.inst.Account), back)
+		return
+	}
+	if s.githubHeldElsewhere(c, id, who.inst.Account, st.Workspace, back) {
+		return
+	}
+	nonce, err := randomHex(16)
 	if err != nil {
-		s.log.Warn("github: could not record the installation", "installation", id, "err", err.Error())
+		abort(c, http.StatusInternalServerError, err)
+		return
+	}
+	tk := githubTicket{Workspace: st.Workspace, Actor: st.Actor, Installation: id, Account: who.inst.Account, AccountType: who.inst.AccountType,
+		Suspended: who.inst.SuspendedAt != nil, GitHubLogin: who.login, Exp: now.Add(githubTicketTTL).Unix(), Nonce: nonce}
+	c.Header("Cache-Control", "no-store")
+	c.Redirect(http.StatusFound, s.workspaceDashboardURL(ctx, st.Workspace)+"/api/workspace/github/finish?ticket="+url.QueryEscape(signGitHubTicket(key, tk)))
+}
+
+// githubHeldElsewhere refuses, with a page, an installation another
+// workspace has: it is never moved silently.
+func (s *Server) githubHeldElsewhere(c *gin.Context, id int64, account, ws, back string) bool {
+	held, err := s.store.GitHubInstallation(c.Request.Context(), id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.log.Warn("github: could not look up the installation", "installation", id, "err", err.Error())
+		s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not check the connection. Try again from the workspace's Git settings in a minute.", back)
+		return true
+	}
+	if held != nil && held.Workspace != ws {
+		s.githubPage(c, http.StatusConflict, "Connected elsewhere", fmt.Sprintf("%s is connected to workspace %s: disconnect it there first.", account, held.Workspace), back)
+		return true
+	}
+	return false
+}
+
+// githubFinish is GET /api/workspace/github/finish, on the workspace's
+// own address: the ticket GitHub's callback minted, presented by the
+// session that started the connection, connects the installation.
+func (s *Server) githubFinish(c *gin.Context) {
+	ctx := c.Request.Context()
+	ws := s.doorWorkspace(c)
+	back := s.gitSettingsURL(ctx, ws)
+	refuse := func(status int) {
+		s.githubPage(c, status, "Not connected", "This connection was started by someone else, or has expired; start it again from Workspace settings → Git.", back)
+	}
+	cl, err := s.githubApp.Client(ctx)
+	if err != nil {
+		refuse(http.StatusNotFound)
+		return
+	}
+	now := time.Now()
+	tk, err := readGitHubTicket(cl.App().ClientSecret, c.Query("ticket"), now)
+	if err != nil {
+		refuse(http.StatusBadRequest)
+		return
+	}
+	if tk.Workspace != ws || tk.Actor != githubActor(c) {
+		refuse(http.StatusForbidden)
+		return
+	}
+	// Spent only once the right person presents it.
+	if !s.githubTickets.use(tk.Nonce, time.Unix(tk.Exp, 0), now) {
+		refuse(http.StatusBadRequest)
+		return
+	}
+	if s.githubHeldElsewhere(c, tk.Installation, tk.Account, ws, back) {
+		return
+	}
+	inst := store.GitHubInstallation{ID: tk.Installation, AccountLogin: tk.Account, AccountType: tk.AccountType, ConnectedBy: tk.Actor}
+	if tk.Suspended {
+		inst.SuspendedAt = &now
+	}
+	if _, err := s.store.AddGitHubInstallation(ctx, ws, inst); err != nil {
+		s.log.Warn("github: could not record the installation", "installation", tk.Installation, "err", err.Error())
 		s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not record the connection. Try again from the workspace's Git settings in a minute.", back)
 		return
 	}
-	s.forgetGitHubRepos(st.Workspace)
-	target := githubTarget(id, inst.Account)
-	if moved != "" {
-		s.forgetGitHubRepos(moved)
-		s.auditActor(c, st.Actor, "github.move", target, "from workspace "+moved+" to workspace "+st.Workspace)
-	}
-	s.auditActor(c, st.Actor, "github.connect", target, "workspace "+st.Workspace)
+	s.forgetGitHubRepos(ws)
+	s.audit(c, "", "github.connect", githubTarget(tk.Installation, tk.Account), "workspace "+ws+", by GitHub user "+tk.GitHubLogin)
 	c.Redirect(http.StatusFound, back)
 }
 
-// personsInstallations are the App's installations the person behind the
-// OAuth code can see. Their token only says who they are: it never leaves
-// this function.
-func personsInstallations(ctx context.Context, cl *github.Client, code string) ([]github.Installation, error) {
+// githubSignInFirst sends a browser with no credential through the
+// dashboard's sign-in, back to the same link: the finish page is reached
+// by a redirect from GitHub.
+func (s *Server) githubSignInFirst(c *gin.Context) {
+	if s.opts.Token == "" && !s.opts.TokenDisabled {
+		c.Next() // no authentication on this server
+		return
+	}
+	if c.GetHeader("Authorization") == "" && c.GetHeader("X-Shpyrd-Token") == "" {
+		if ok, _ := s.sessionAuth(c); !ok {
+			c.Redirect(http.StatusFound, "/?next="+url.QueryEscape(c.Request.URL.RequestURI()))
+			c.Abort()
+			return
+		}
+	}
+	c.Next()
+}
+
+// githubPerson is what GitHub says of the person behind an OAuth code:
+// their login, the installation they chose if they can see it, and
+// whether they administer its account.
+type githubPerson struct {
+	login string
+	inst  *github.Installation
+	owner bool
+}
+
+// askGitHub asks GitHub, with the person's own token, who they are and
+// whether they administer the installation's account: an owner of the
+// org, or the user account itself. Their token never leaves this function.
+func askGitHub(ctx context.Context, cl *github.Client, code string, id int64) (githubPerson, error) {
+	var who githubPerson
 	token, err := cl.ExchangeCode(ctx, code)
 	if err != nil {
-		return nil, err
+		return who, err
 	}
-	return cl.UserInstallations(ctx, token)
+	mine, err := cl.UserInstallations(ctx, token)
+	if err != nil {
+		return who, err
+	}
+	for i := range mine {
+		if mine[i].ID == id {
+			who.inst = &mine[i]
+		}
+	}
+	if who.inst == nil {
+		return who, nil
+	}
+	if who.login, err = cl.UserLogin(ctx, token); err != nil {
+		return who, err
+	}
+	switch who.inst.AccountType {
+	case "Organization":
+		role, state, err := cl.OrgMembership(ctx, token, who.inst.Account)
+		if err != nil {
+			return who, err
+		}
+		who.owner = role == "admin" && state == "active"
+	case "User":
+		who.owner = strings.EqualFold(who.login, who.inst.Account)
+	}
+	return who, nil
 }
 
 // gitSettingsURL is the workspace's Git settings page; the console's
 // dashboard when the workspace is unknown.
 func (s *Server) gitSettingsURL(ctx context.Context, slug string) string {
+	return s.workspaceDashboardURL(ctx, slug) + "/workspace/git"
+}
+
+// workspaceDashboardURL is the dashboard of a workspace by slug; the
+// generic one when it is unknown.
+func (s *Server) workspaceDashboardURL(ctx context.Context, slug string) string {
 	var ws *store.Workspace
 	if slug != "" {
 		ws, _ = s.store.Workspace(ctx, slug)
 	}
-	return s.dashboardURLOf(ws) + "/workspace/git"
+	return s.dashboardURLOf(ws)
 }
 
 // githubPage is what the browser GitHub sent back sees when nothing was
