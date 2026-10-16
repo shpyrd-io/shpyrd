@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -162,5 +164,74 @@ func TestProjectGitAuthIgnoresADeployKeyForAnotherHost(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &pv)
 	if pv.Using != gitauth.KindToken || pv.DeployKey == nil || pv.Token == nil {
 		t.Errorf("the token is used, the key still shown: %s", rec.Body.String())
+	}
+}
+
+func TestDeployKeyScanFailuresLookAlike(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("shop", shpyrdv1.PhaseRunning)})
+	var bodies []string
+	for _, cause := range []error{errors.New("dial tcp 10.0.0.1:22: connect: connection refused"), errors.New("ssh: handshake failed: EOF")} {
+		s.scanHostKey = func(context.Context, string, string) (string, string, error) { return "", "", cause }
+		rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"git.internal"}`, true)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		bodies = append(bodies, rec.Body.String())
+	}
+	if bodies[0] != bodies[1] || strings.Contains(bodies[0], "refused") || !strings.Contains(bodies[0], "could not record git.internal's SSH host key: check the host name, and that it accepts SSH on port 22") {
+		t.Errorf("the failures must read the same: %q vs %q", bodies[0], bodies[1])
+	}
+}
+
+func TestDeployKeyReplacesThePreviousOneInPlace(t *testing.T) {
+	app := sampleApp("shop", shpyrdv1.PhaseRunning)
+	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/acme/shop"}}
+	s, k := newTestServer(t, nil, []client.Object{app})
+	s.scanHostKey = func(context.Context, string, string) (string, string, error) {
+		return "github.com ssh-ed25519 AAAAhost", "SHA256:host", nil
+	}
+	deletes := 0
+	s.apps = interceptor.NewClient(s.apps.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes++
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	key := types.NamespacedName{Namespace: app.Namespace, Name: gitauth.DeployKeySecretName}
+	var views [2]DeployKeyView
+	for i := range views {
+		rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{}`, true)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("make %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &views[i])
+		sec := &corev1.Secret{}
+		if err := k.Get(context.Background(), key, sec); err != nil {
+			t.Fatal(err)
+		}
+		if sec.Annotations[gitauth.AnnotationFingerprint] != views[i].Fingerprint || sec.Type != corev1.SecretTypeSSHAuth {
+			t.Errorf("secret %d = %+v", i, sec.ObjectMeta)
+		}
+	}
+	if views[0].Fingerprint == views[1].Fingerprint {
+		t.Error("the second key must replace the first")
+	}
+	if deletes != 0 {
+		t.Errorf("replaced in place, not deleted and created: %d deletes", deletes)
+	}
+}
+
+func TestDeployKeyIsRateLimited(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{sampleApp("shop", shpyrdv1.PhaseRunning)})
+	s.scanHostKey = func(context.Context, string, string) (string, string, error) {
+		return "github.com ssh-ed25519 AAAAhost", "SHA256:host", nil
+	}
+	for i := 0; i < deployKeysPerMinute; i++ {
+		if rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"github.com"}`, true); rec.Code != http.StatusCreated {
+			t.Fatalf("make %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/git-auth/deploy-key", `{"host":"github.com"}`, true); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("over the limit: %d %s", rec.Code, rec.Body.String())
 	}
 }

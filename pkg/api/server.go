@@ -275,6 +275,9 @@ type Server struct {
 	cliDevices *cliDeviceStore
 	// shellMints throttles ticket minting per actor (RFC-0026).
 	shellMints *rateLimiter
+	// deployKeyMints throttles deploy key creation per actor: each one
+	// dials a host the caller names (RFC-0017).
+	deployKeyMints *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -376,6 +379,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.shellPing = shellPingInterval
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
+	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -791,7 +795,7 @@ func (s *Server) routes() error {
 	api.POST("/projects/:slug/drains", s.require(authz.ProjectResource), s.createProjectDrain)
 	api.DELETE("/projects/:slug/drains/:name", s.require(authz.ProjectResource), s.deleteProjectDrain)
 	api.GET("/projects/:slug/git-auth", s.require(authz.ProjectView), s.showProjectGitAuth) // RFC-0017
-	api.POST("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.createDeployKey)
+	api.POST("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.throttleDeployKeys(), s.createDeployKey)
 	api.DELETE("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.deleteDeployKey)
 	api.GET("/projects/:slug/members", s.require(authz.ProjectMembers), s.listMembers)
 	api.POST("/projects/:slug/members", s.require(authz.ProjectMembers), s.addMember)

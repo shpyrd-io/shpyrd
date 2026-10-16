@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
@@ -249,7 +250,10 @@ func (s *Server) createDeployKey(c *gin.Context) {
 	ctx := c.Request.Context()
 	line, hostFP, err := s.scanHostKey(ctx, host, port)
 	if err != nil {
-		abort(c, http.StatusBadGateway, err)
+		// One message whatever went wrong: the route dials a host the
+		// caller names, and must not tell open ports from closed ones.
+		s.log.Warn("deploy key: cannot scan the host key", "host", host, "port", port, "error", err)
+		abort(c, http.StatusBadGateway, fmt.Errorf("could not record %s's SSH host key: check the host name, and that it accepts SSH on port %s", host, firstNonEmpty(port, "22")))
 		return
 	}
 	slug := project.SlugOf(app)
@@ -258,25 +262,28 @@ func (s *Server) createDeployKey(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: gitauth.DeployKeySecretName, Namespace: app.Namespace,
-			Labels: map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", gitauth.LabelCredential: gitauth.KindDeployKey, shpyrdv1.LabelProject: app.Name},
-			Annotations: map[string]string{
-				gitauth.AnnotationHost: host, gitauth.AnnotationPublicKey: key.Public, gitauth.AnnotationFingerprint: key.Fingerprint,
-				gitauth.AnnotationHostKeyFingerprint: hostFP, gitauth.AnnotationUpdatedBy: actorOf(c),
-			},
-		},
-		Type: corev1.SecretTypeSSHAuth,
-		Data: map[string][]byte{corev1.SSHAuthPrivateKey: key.PrivatePEM, gitauth.KeyKnownHosts: []byte(line)},
-	}
-	// A new key replaces the old one: the old public half stops working
-	// once removed from the repository.
-	if err := s.apps.Delete(ctx, sec.DeepCopy()); err != nil && !apierrors.IsNotFound(err) {
+	// A new key replaces the old one in place: the old public half stops
+	// working once removed from the repository.
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: gitauth.DeployKeySecretName, Namespace: app.Namespace}}
+	err = s.apps.Get(ctx, client.ObjectKeyFromObject(sec), sec)
+	if err != nil && !apierrors.IsNotFound(err) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
-	if err := s.apps.Create(ctx, sec); err != nil {
+	exists := err == nil
+	sec.Labels = mergeStringMaps(sec.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", gitauth.LabelCredential: gitauth.KindDeployKey, shpyrdv1.LabelProject: app.Name})
+	sec.Annotations = mergeStringMaps(sec.Annotations, map[string]string{
+		gitauth.AnnotationHost: host, gitauth.AnnotationPublicKey: key.Public, gitauth.AnnotationFingerprint: key.Fingerprint,
+		gitauth.AnnotationHostKeyFingerprint: hostFP, gitauth.AnnotationUpdatedBy: actorOf(c),
+	})
+	sec.Type = corev1.SecretTypeSSHAuth
+	sec.Data = map[string][]byte{corev1.SSHAuthPrivateKey: key.PrivatePEM, gitauth.KeyKnownHosts: []byte(line)}
+	if exists {
+		err = s.apps.Update(ctx, sec)
+	} else {
+		err = s.apps.Create(ctx, sec)
+	}
+	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
@@ -307,4 +314,23 @@ func mergeStringMaps(a, b map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// deployKeysPerMinute is how often one caller may make a deploy key. Each
+// one dials the host the caller names to record its SSH host key; a person
+// makes a key a few times a project, never dozens a minute.
+const deployKeysPerMinute = 10
+
+// throttleDeployKeys refuses a caller making deploy keys faster than that,
+// keyed by actor as the shell tickets are.
+func (s *Server) throttleDeployKeys() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, _ := ext.IdentityFrom(c)
+		if !s.deployKeyMints.allow(actorKey(id)) {
+			c.Header("Retry-After", "60")
+			abort(c, http.StatusTooManyRequests, errors.New("too many deploy keys made; wait a minute before making another"))
+			return
+		}
+		c.Next()
+	}
 }
