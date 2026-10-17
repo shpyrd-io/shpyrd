@@ -70,7 +70,8 @@ func LsRemote(ctx context.Context, cloneURL string, b Build) (map[string]string,
 	if r.Scheme == "ssh" && b.Kind == KindDeployKey && b.Secret != nil {
 		return lsRemoteSSH(ctx, strings.TrimSpace(cloneURL), r, b.Secret)
 	}
-	// A token, or nothing (a public repository): HTTPS, whatever form the
+	// A token (the workspace's or the GitHub App's), or nothing (a public
+	// repository): HTTPS, whatever form the
 	// URL was given in.
 	return lsRemoteHTTP(ctx, strings.TrimSpace(cloneURL), r, b)
 }
@@ -81,7 +82,7 @@ func lsRemoteHTTP(ctx context.Context, cloneURL string, r Repo, b Build) (map[st
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "git/2.47.0 (shpyrd)")
-	if b.Kind == KindToken && b.Secret != nil {
+	if (b.Kind == KindToken || b.Kind == KindGitHubApp) && b.Secret != nil {
 		req.SetBasicAuth(string(b.Secret.Data[corev1.BasicAuthUsernameKey]), string(b.Secret.Data[corev1.BasicAuthPasswordKey]))
 	} else if user, pass, ok := urlCredentials(cloneURL); b.Kind == "" && ok {
 		// Credentials written into the app's URL, as builds used them

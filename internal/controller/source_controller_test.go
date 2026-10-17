@@ -413,11 +413,11 @@ func TestRemoveAnnotationIfUnchangedKeepsANewerValue(t *testing.T) {
 func TestLookupGitBuildIsWhatTheBuildUses(t *testing.T) {
 	app := gitApp("shop", "https://github.com/acme/shop")
 	_, c := newTestReconciler(t, app, workspaceToken("default", "github.com", "ghp_ours"))
-	b, err := lookupGitBuild(context.Background(), c, "shpyrd-system", app)
+	b, err := lookupGitBuild(context.Background(), c, "shpyrd-system", nil, app)
 	if err != nil || b.Kind != gitauth.KindToken || b.Secret == nil || string(b.Secret.Data["password"]) != "ghp_ours" {
 		t.Fatalf("build %+v err %v", b, err)
 	}
-	if _, err := lookupGitBuild(context.Background(), c, "shpyrd-system", gitApp("raw", "git://example.test/x")); err != errGitURL {
+	if _, err := lookupGitBuild(context.Background(), c, "shpyrd-system", nil, gitApp("raw", "git://example.test/x")); err != errGitURL {
 		t.Errorf("err = %v, want errGitURL", err)
 	}
 }
@@ -653,5 +653,26 @@ func TestSourceDropsAPushWithoutACommitAndPolls(t *testing.T) {
 		if ls.calls != 1 || got.PinnedCommit() != otherCommit || sourceRecord(got).Via != "poll" || got.Annotations[shpyrdv1.AnnotationGitPush] != "" {
 			t.Errorf("%q: listings %d pin %q record %+v", sha, ls.calls, got.PinnedCommit(), sourceRecord(got))
 		}
+	}
+}
+
+// Final review I1: a pin carries when it was set, to the second, so the
+// reporter tells the pin's own build failure from an older one.
+func TestSourceStampsWhenItPinsACommit(t *testing.T) {
+	app := withPush(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit), gitauth.Push{
+		Ref: "refs/heads/main", SHA: otherCommit, Message: "fix login", Author: "alice", At: sourceNow,
+	})
+	r, _ := newSourceReconciler(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+	r.Now = func() time.Time { return sourceNow.Add(1500 * time.Millisecond) }
+	_, got := reconcileSource(t, r, app)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != otherCommit || rec.PinnedAt == nil || !rec.PinnedAt.Equal(sourceNow.Add(time.Second)) {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	// Nothing new: the time of the pin stays.
+	r.Now = func() time.Time { return sourceNow.Add(3 * time.Hour) }
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); rec.PinnedAt == nil || !rec.PinnedAt.Equal(sourceNow.Add(time.Second)) {
+		t.Errorf("record %+v", rec)
 	}
 }

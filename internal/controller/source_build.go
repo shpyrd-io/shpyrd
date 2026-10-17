@@ -63,6 +63,8 @@ func sourceStatus(app *shpyrdv1.App) *shpyrdv1.SourceStatus {
 	}
 	st.Latest, st.Message, st.Author, st.Via, st.Skipped, st.Error = rec.Latest, rec.Message, rec.Author, rec.Via, rec.Skipped, rec.Error
 	st.LatestAt, st.LastWebhookAt, st.CheckedAt = metaTime(rec.LatestAt), metaTime(rec.LastWebhookAt), metaTime(rec.CheckedAt)
+	st.Held, st.HeldSince = rec.Held, metaTime(rec.HeldSince)
+	st.NotDeployed, st.NotDeployedReason = rec.NotDeployed, rec.NotDeployedReason
 	return st
 }
 

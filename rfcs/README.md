@@ -95,7 +95,7 @@ implement those proposals.
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
 | [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API; v0.9.61 the browser sign-in, run, pg psql, redis cli and globals over the API; complete) | 0031, 0026 |
 | [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | replaced by 0082 (Core proposal discarded; Accounts/IdP MFA and passkeys shipped) | 0012, 0014 |
-| [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
+| [0054](0054-github-app.md) | GitHub App integration | implemented | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
 | [0056](0056-tracing-backend.md) | Tracing backend (Jaeger) | implementable | 0029, 0015 |
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |

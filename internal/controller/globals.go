@@ -19,6 +19,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 )
 
 // Global config vars (RFC-0016): a workspace's admins keep them in a
@@ -165,6 +166,25 @@ func (r *AppReconciler) secretToApps(ctx context.Context, obj client.Object) []r
 		return out
 	}
 	inSystem := obj.GetNamespace() == r.Config.SystemNamespace
+	if inSystem && obj.GetName() == github.SecretName {
+		// The GitHub App made, changed or removed (shpyrd-ctl github app):
+		// every App on github.com may clone through it, or no longer. The
+		// cached read goes first, so their reconciles see the new Secret.
+		if r.Config.GitHub != nil {
+			r.Config.GitHub.Source.Invalidate()
+		}
+		var apps shpyrdv1.AppList
+		if err := r.List(ctx, &apps); err != nil {
+			return nil
+		}
+		var out []reconcile.Request
+		for i := range apps.Items {
+			if buildsFromGitHub(&apps.Items[i]) {
+				out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&apps.Items[i])})
+			}
+		}
+		return out
+	}
 	ws, globals := shpyrdv1.GlobalEnvWorkspace(obj.GetName())
 	if !globals && !r.registrySecretChanged(obj) {
 		return envSecretToApp(ctx, obj) // "<app>-env"; the global name ends in -env too

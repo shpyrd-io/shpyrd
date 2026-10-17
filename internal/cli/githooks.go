@@ -9,6 +9,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Deploy on push (RFC-0018): `shpyrd git-hooks`, the webhook a git host
@@ -36,12 +37,24 @@ pushes without deploying them: shpyrd deploy --git <url> --no-auto-deploy.`,
 			if err != nil {
 				return err
 			}
-			var v api.GitHooksView
-			if err := gitHooksRequest(g, cmd, "GET", "api/projects/"+url.PathEscape(name)+"/git-hooks", &v); err != nil {
+			var auth api.ProjectGitAuthView
+			if err := gitHooksRequest(g, cmd, "GET", "api/projects/"+url.PathEscape(name)+"/git-auth", &auth); err != nil {
 				return err
 			}
 			var d api.AppDetail
 			if err := gitHooksRequest(g, cmd, "GET", "api/projects/"+url.PathEscape(name), &d); err != nil {
+				return err
+			}
+			if auth.Using == gitauth.KindGitHubApp {
+				// The App's own webhook brings the pushes (RFC-0054): no
+				// hook Secret is made for this project.
+				return g.print(cmd, map[string]string{"through": "github-app", "account": auth.GitHubAccount}, func(w io.Writer) {
+					fmt.Fprintf(w, "Pushes arrive through the GitHub App (%s); nothing to set up.\n", auth.GitHubAccount)
+					printAutoDeploy(w, name, d)
+				})
+			}
+			var v api.GitHooksView
+			if err := gitHooksRequest(g, cmd, "GET", "api/projects/"+url.PathEscape(name)+"/git-hooks", &v); err != nil {
 				return err
 			}
 			return g.print(cmd, v, func(w io.Writer) { printGitHooks(w, name, v, d) })
@@ -82,6 +95,11 @@ func printGitHooks(w io.Writer, name string, v api.GitHooksView, d api.AppDetail
 	fmt.Fprintln(w, "GitLab: the project's Settings, Webhooks, Add new webhook. URL: the URL; Secret token: the secret; Trigger: Push events.")
 	fmt.Fprintln(w, "Gitea: the repository's Settings, Webhooks, Add webhook, Gitea. Target URL: the URL; Content type: application/json; Secret: the secret; Trigger on: Push events.")
 	fmt.Fprintln(w)
+	printAutoDeploy(w, name, d)
+}
+
+// printAutoDeploy says what a push to the project's branch does now.
+func printAutoDeploy(w io.Writer, name string, d api.AppDetail) {
 	var git *shpyrdv1.GitSource
 	if d.Spec.Source != nil {
 		git = d.Spec.Source.Git

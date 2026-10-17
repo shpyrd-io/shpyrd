@@ -86,6 +86,9 @@ type Config struct {
 	// Projects is the store's project registry (RFC-0076): the controller
 	// mirrors every App into it and marks deletions. Nil: no store (tests).
 	Projects store.Projects
+	// GitHub is the GitHub App (RFC-0054): builds of github.com
+	// repositories clone with its tokens first. Nil: never.
+	GitHub *GitHubApp
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.

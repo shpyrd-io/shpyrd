@@ -29,6 +29,8 @@ func runShpyrd(t *testing.T, handler http.HandlerFunc, args ...string) (string, 
 func TestGitHooksShowPrintsTheWebhookAndHowToAddIt(t *testing.T) {
 	out, err := runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
+		case "GET /api/projects/shop/git-auth":
+			_, _ = w.Write([]byte(`{"url":"https://github.com/acme/shop","using":"token"}`))
 		case "GET /api/projects/shop/git-hooks":
 			_, _ = w.Write([]byte(`{"url":"https://acme.shpyrd.app/api/hooks/git/shop/t0k3n","secret":"s3cr3t"}`))
 		case "GET /api/projects/shop":

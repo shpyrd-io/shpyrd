@@ -200,3 +200,96 @@ func TestParsePushGitLabWithoutTheHeadCommit(t *testing.T) {
 		t.Errorf("push = %+v err %v", p, err)
 	}
 }
+
+func TestVerifyGitHubDeliveryTakesOnlyGitHubsSignature(t *testing.T) {
+	body := []byte(`{"zen":"Keep it logically awesome."}`)
+	mac := hmac.New(sha256.New, []byte("whsec"))
+	mac.Write(body)
+	sig := hex.EncodeToString(mac.Sum(nil))
+	h := http.Header{}
+	h.Set("X-Hub-Signature-256", "sha256="+sig)
+	if err := VerifyGitHubDelivery(h, body, "whsec"); err != nil {
+		t.Errorf("GitHub's signature: %v", err)
+	}
+	for name, h := range map[string]http.Header{
+		"GitLab's token":    {"X-Gitlab-Token": {"whsec"}},
+		"Gitea's signature": {"X-Gitea-Signature": {sig}},
+		"none":              {},
+	} {
+		if err := VerifyGitHubDelivery(h, body, "whsec"); !errors.Is(err, ErrBadSignature) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := VerifyGitHubDelivery(h, body, ""); !errors.Is(err, ErrBadSignature) {
+		t.Errorf("no secret: %v", err)
+	}
+}
+
+func TestSourceRecordKeepsHeldAndNotDeployedCommits(t *testing.T) {
+	since := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	in := SourceRecord{Ref: "main", Latest: "89abcdef0123456789abcdef0123456789abcdef",
+		Held: "89abcdef0123456789abcdef0123456789abcdef", HeldSince: &since,
+		NotDeployed: "0123456789abcdef0123456789abcdef01234567", NotDeployedReason: ReasonNoWatchedChanges}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"held":`, `"heldSince":`, `"notDeployed":`, `"notDeployedReason":"No changes in the watch paths"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("%s lacks %s", raw, key)
+		}
+	}
+	out := ReadSourceRecord(string(raw))
+	if out.Held != in.Held || out.HeldSince == nil || !out.HeldSince.Equal(since) || out.NotDeployed != in.NotDeployed || out.NotDeployedReason != in.NotDeployedReason {
+		t.Errorf("read back %+v", out)
+	}
+}
+
+func TestARecordWaitsOnTheCIOfAHeldOrACIFailedCommit(t *testing.T) {
+	const a, b = "89abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef01234567"
+	for _, c := range []struct {
+		name string
+		rec  SourceRecord
+		sha  string
+		want bool
+	}{
+		{"held", SourceRecord{Latest: a, Held: a}, a, true},
+		{"held, named in capitals", SourceRecord{Latest: a, Held: a}, strings.ToUpper(a), true},
+		{"another commit", SourceRecord{Latest: a, Held: a}, b, false},
+		{"CI failed, still the newest", SourceRecord{Latest: a, NotDeployed: a, NotDeployedReason: ReasonCIFailedPrefix + "test"}, a, true},
+		{"CI failed, a newer commit since", SourceRecord{Latest: b, NotDeployed: a, NotDeployedReason: ReasonCIFailedPrefix + "test"}, a, false},
+		{"no change in the watch paths", SourceRecord{Latest: a, NotDeployed: a, NotDeployedReason: ReasonNoWatchedChanges}, a, false},
+		{"CI did not finish", SourceRecord{Latest: a, NotDeployed: a, NotDeployedReason: ReasonCITimeout}, a, false},
+		{"no commit named", SourceRecord{Latest: a, Held: a}, "", false},
+	} {
+		if got := c.rec.WaitsOnCI(c.sha); got != c.want {
+			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+}
+
+func TestACINudgeIsReadBack(t *testing.T) {
+	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	raw, _ := json.Marshal(CINudge{SHA: "89abcdef0123456789abcdef0123456789abcdef", Delivery: "d-1", At: at})
+	n := ReadCINudge(string(raw))
+	if n == nil || n.SHA != "89abcdef0123456789abcdef0123456789abcdef" || n.Delivery != "d-1" || !n.At.Equal(at) {
+		t.Errorf("read back %+v from %s", n, raw)
+	}
+	if ReadCINudge("") != nil || ReadCINudge("{not json") != nil {
+		t.Error("nothing to read is no nudge")
+	}
+}
+
+func TestSourceRecordKeepsWhenTheCommitWasPinned(t *testing.T) {
+	pinned := time.Date(2026, 10, 16, 12, 0, 5, 0, time.UTC)
+	raw, err := json.Marshal(SourceRecord{Ref: "main", PinnedAt: &pinned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"pinnedAt":"2026-10-16T12:00:05Z"`) {
+		t.Errorf("%s", raw)
+	}
+	if out := ReadSourceRecord(string(raw)); out.PinnedAt == nil || !out.PinnedAt.Equal(pinned) {
+		t.Errorf("read back %+v", out)
+	}
+}

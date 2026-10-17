@@ -25,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/pages"
@@ -96,6 +97,11 @@ type Options struct {
 	// MembershipChanged is called after every team or grant write so the
 	// RBAC mirror runs at once; nil when this replica does not run it.
 	MembershipChanged func()
+	// GitHubChanged is called after a workspace's GitHub connections
+	// change (connect, disconnect, an installation event) so its Apps on
+	// github.com take their credential again at once (RFC-0054); nil when
+	// this replica does not run the controllers.
+	GitHubChanged func(workspace string)
 	// Tenancy maps request hosts to workspaces (RFC-0033 phase 6). Defaults
 	// to tenancy.Single: every host is the implicit workspace. The cloud
 	// layer supplies a resolver that knows many.
@@ -282,6 +288,18 @@ type Server struct {
 	// hookRefusals the log lines of refused ones per project (RFC-0018).
 	gitHookDeliveries *rateLimiter
 	hookRefusals      *rateLimiter
+	// The GitHub App (RFC-0054): its credentials, read from its Secret;
+	// the connect states and finish tickets used; each workspace's
+	// repositories, a minute; and the App webhook's own limiter (Task 5).
+	githubApp *github.Source
+	// githubCover keeps GitHub's answers on whether the App covers a
+	// repository, for the projects' views.
+	githubCoverMu    sync.Mutex
+	githubCover      *controller.GitHubApp
+	githubNonces     *nonceSet
+	githubTickets    *nonceSet
+	githubRepos      *githubRepoCache
+	githubDeliveries *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -386,6 +404,10 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
 	s.gitHookDeliveries = newRateLimiter(gitHooksPerMinute)
 	s.hookRefusals = newRateLimiter(hookRefusalsPerMinute)
+	s.githubNonces = &nonceSet{}
+	s.githubTickets = &nonceSet{}
+	s.githubRepos = &githubRepoCache{}
+	s.githubDeliveries = newRateLimiter(githubHooksPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -402,6 +424,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 			systemNS = k.Namespace
 		}
 	}
+	s.githubApp = &github.Source{Reader: opts.Apps, Namespace: systemNS, Options: github.Options{APIURL: opts.Vars(github.EnvAPIURL)}}
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
@@ -584,6 +607,9 @@ func (s *Server) routes() error {
 	// Git hosts deliver pushes here (RFC-0018): no session; the URL's
 	// token and the delivery's signature are the credential.
 	pub.POST("/hooks/git/:slug/:token", s.gitHook)
+	// The GitHub App's webhook (RFC-0054): no session; the App's webhook
+	// secret signs every delivery. 404 while the platform has no App.
+	pub.POST("/github/webhook", s.githubWebhook)
 	// The web terminal (RFC-0026) carries no header and may carry no cookie: a
 	// browser cannot set headers on a WebSocket, and `shpyrd cluster dashboard`
 	// signs in with a token in localStorage. So it skips s.auth() and the
@@ -605,6 +631,9 @@ func (s *Server) routes() error {
 	// and a page where the person approves it, with the dashboard session.
 	pub.POST("/cli/device", login, s.cliDeviceStart)
 	pub.POST("/cli/device/token", login, s.cliDevicePoll)
+	// GitHub sends the browser here after an install (RFC-0054): no
+	// session; the signed state and the person's own GitHub token decide.
+	pub.GET("/github/installed", login, s.githubInstalled)
 	s.engine.GET("/cli/activate", tenant, login, s.cliActivatePage)
 	s.engine.POST("/cli/activate", tenant, login, s.cliActivateDecide)
 
@@ -663,6 +692,16 @@ func (s *Server) routes() error {
 	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens) // RFC-0017
 	api.PUT("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.putGitToken)
 	api.DELETE("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.deleteGitToken)
+	api.GET("/workspace/github", s.require(authz.ClusterAdmin), s.githubView) // RFC-0054
+	api.POST("/workspace/github/connect", s.require(authz.ClusterAdmin), s.githubConnect)
+	api.DELETE("/workspace/github/installations/:id", s.require(authz.ClusterAdmin), s.githubDisconnect)
+	// The connect finishes on the workspace's own address, with the
+	// session that started it; a browser without one signs in first.
+	s.engine.GET("/api/workspace/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.require(authz.ClusterAdmin), s.githubFinish)
+	// Who makes projects picks from the repositories (ClusterCreate, the
+	// action of POST /projects).
+	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)
+	api.GET("/workspace/github/repositories/:owner/:repo/branches", s.require(authz.ClusterCreate), s.githubBranches)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)

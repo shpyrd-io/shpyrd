@@ -82,11 +82,32 @@ type AppReconciler struct {
 	workspaceEvents chan event.GenericEvent
 }
 
+// RequeueGitHub reconciles the Apps of a workspace that build from
+// github.com again: its GitHub connections changed (RFC-0054), and with
+// them the credential <app>-git holds.
+func (r *AppReconciler) RequeueGitHub(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(app *shpyrdv1.App) bool { return buildsFromGitHub(app) })
+}
+
+// buildsFromGitHub says the App's source is a repository on github.com.
+func buildsFromGitHub(app *shpyrdv1.App) bool {
+	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return false
+	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	return err == nil && strings.EqualFold(repo.Host, "github.com")
+}
+
 // RequeueWorkspace reconciles every App of a workspace again: its address
 // or its domains changed, and with them the apps' hosts (RFC-0033 names).
 // The default workspace's include the Apps from before workspaces, which
 // carry no workspace label.
 func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(*shpyrdv1.App) bool { return true })
+}
+
+// requeueApps reconciles the Apps of a workspace that pick says again.
+func (r *AppReconciler) requeueApps(ctx context.Context, slug string, pick func(*shpyrdv1.App) bool) {
 	if r.workspaceEvents == nil {
 		return
 	}
@@ -97,7 +118,7 @@ func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
 	}
 	var picked []client.Object
 	for i := range apps.Items {
-		if workspaceOf(&apps.Items[i]) == slug {
+		if workspaceOf(&apps.Items[i]) == slug && pick(&apps.Items[i]) {
 			picked = append(picked, &apps.Items[i])
 		}
 	}
@@ -278,6 +299,12 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {
 		out.result.RequeueAfter = 30 * time.Second
 	}
+	// A build cloning through the GitHub App gets a new token before the
+	// one in <app>-git is 50 minutes old (RFC-0054); only a reconcile that
+	// wrote <app>-git knows when.
+	if d := out.gitRefresh; d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
+		out.result.RequeueAfter = d
+	}
 	return out.result, nil
 }
 
@@ -289,11 +316,22 @@ type outcome struct {
 	result         ctrl.Result
 	newRelease     *shpyrdv1.Release
 	clearNote      bool
+	// gitRefresh is when <app>-git, written by this reconcile, needs the
+	// GitHub App again (RFC-0054); 0: never.
+	gitRefresh time.Duration
 }
 
 func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{RequeueAfter: d}} }
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	var gitRefresh time.Duration
+	out, err := r.reconcileApp(ctx, app, &gitRefresh)
+	out.gitRefresh = gitRefresh
+	return out, err
+}
+
+// reconcileApp is reconcile; it sets gitRefresh once <app>-git is written.
+func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, gitRefresh *time.Duration) (outcome, error) {
 	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
 		return r.reconcileMaintenance(ctx, app)
 	}
@@ -351,6 +389,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err != nil {
 		return outcome{}, err
 	}
+	*gitRefresh = r.githubRefreshOf(gitBuild)
 	if err := r.ensureBuildServiceAccount(ctx, app, gitBuild); err != nil {
 		return outcome{}, err
 	}

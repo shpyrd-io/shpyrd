@@ -166,6 +166,8 @@ A project's deploy key wins over the workspace's token.
 			}
 			return g.print(cmd, v, func(w io.Writer) {
 				switch {
+				case v.Using == gitauth.KindGitHubApp:
+					fmt.Fprintf(w, "%s clones %s through the GitHub App (%s): a token for this repository alone, renewed before the hour is out.\n", name, v.URL, v.GitHubAccount)
 				case v.Using == "deploy-key" && v.DeployKey != nil:
 					fmt.Fprintf(w, "%s clones %s with its deploy key %s (for %s).\n", name, v.URL, v.DeployKey.Fingerprint, v.DeployKey.Host)
 				case v.Using == "token" && v.Token != nil:

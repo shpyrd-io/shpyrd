@@ -49,6 +49,7 @@ type Memory struct {
 	settings    map[string]string
 	console     map[string]ConsoleUser
 	cost        *costsMemory
+	github      map[int64]*githubRow
 	now         func() time.Time
 }
 

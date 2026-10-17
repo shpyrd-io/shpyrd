@@ -93,3 +93,12 @@ func TestGitAuthShowADeployKeyForAnotherHost(t *testing.T) {
 		t.Errorf("%v: %s", err, out)
 	}
 }
+
+func TestGitAuthShowSaysTheGitHubApp(t *testing.T) {
+	out, err := runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"url":"https://github.com/acme/shop","using":"github-app","githubAccount":"Acme"}`))
+	}, "git-auth", "show", "--project", "shop")
+	if err != nil || !strings.Contains(out, "shop clones https://github.com/acme/shop through the GitHub App (Acme)") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

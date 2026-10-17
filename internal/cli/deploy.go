@@ -35,6 +35,10 @@ func newDeployCmd(g *globalFlags) *cobra.Command {
 		save         bool
 		autoDeploy   bool
 		noAutoDeploy bool
+		watchPaths   []string
+		noWatchPaths bool
+		waitForCI    bool
+		noWaitForCI  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -50,6 +54,7 @@ at https://<app>.<domain>.
   shpyrd deploy --project myapp               archive the committed tree and build in-cluster
   shpyrd deploy --working-tree                archive the directory as is, uncommitted changes included
   shpyrd deploy --git https://github.com/o/r  build from a Git URL; every push to the branch deploys (--no-auto-deploy records them only)
+  shpyrd deploy --git ... --watch-path 'services/api/**' --wait-for-ci   deploy only API changes, once CI passes (GitHub App)
   shpyrd deploy --git ... --dockerfile Dockerfile   build the repository's Dockerfile
   shpyrd deploy --image ghcr.io/o/r:tag       run a prebuilt image (no build)
 
@@ -70,6 +75,12 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			}
 			if autoDeploy && noAutoDeploy {
 				return errors.New("--auto-deploy and --no-auto-deploy contradict each other")
+			}
+			if gitURL == "" && (len(watchPaths) > 0 || noWatchPaths || waitForCI || noWaitForCI) {
+				return errors.New("--watch-path, --no-watch-paths, --wait-for-ci and --no-wait-for-ci go with --git")
+			}
+			if _, _, err := gitSourceSettings(watchPaths, noWatchPaths, waitForCI, noWaitForCI); err != nil {
+				return err
 			}
 			ctx := signalContext()
 			out := g.progress(cmd)
@@ -208,6 +219,7 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 				}
 				fmt.Fprintf(out, "==> Deploying %s @ %s to %s\n", gitURL, src.Revision, name)
 				req.Git = src
+				req.WatchPaths, req.WaitForChecks, _ = gitSourceSettings(watchPaths, noWatchPaths, waitForCI, noWaitForCI)
 			default:
 				archive, ref, err := archiveSource(out, workingTree, workspaceRoot)
 				workspacePackage := ""
@@ -257,6 +269,9 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			var after api.AppDetail
 			if err := json.Unmarshal(raw, &after); err != nil {
 				return fmt.Errorf("deploy: %w", err)
+			}
+			if after.SourceNote != "" {
+				fmt.Fprintf(out, "    %s\n", after.SourceNote)
 			}
 			if noWait {
 				return g.print(cmd, map[string]any{"project": name, "waited": false}, func(w io.Writer) {
@@ -321,7 +336,37 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 	cmd.Flags().BoolVar(&save, "save", false, "write what the build profile or workspace detection inferred into shpyrd.yaml")
 	cmd.Flags().BoolVar(&autoDeploy, "auto-deploy", false, "with --git: deploy every push to the branch (the default; switches it back on)")
 	cmd.Flags().BoolVar(&noAutoDeploy, "no-auto-deploy", false, "with --git: record pushes to the branch without deploying them")
+	cmd.Flags().StringArrayVar(&watchPaths, "watch-path", nil, "with --git: deploy only commits that change a file matching this glob, from the repository root (repeatable; ! excludes, the last match wins; GitHub App only)")
+	cmd.Flags().BoolVar(&noWatchPaths, "no-watch-paths", false, "with --git: remove the watch paths, so every commit deploys")
+	cmd.Flags().BoolVar(&waitForCI, "wait-for-ci", false, "with --git: deploy a commit only once its other checks on GitHub pass (GitHub App only)")
+	cmd.Flags().BoolVar(&noWaitForCI, "no-wait-for-ci", false, "with --git: deploy commits without waiting for CI")
 	return cmd
+}
+
+// gitSourceSettings is what --watch-path, --no-watch-paths, --wait-for-ci
+// and --no-wait-for-ci ask of the server; nil leaves the project's setting.
+func gitSourceSettings(paths []string, noPaths, wait, noWait bool) (*[]string, *bool, error) {
+	if len(paths) > 0 && noPaths {
+		return nil, nil, errors.New("--watch-path and --no-watch-paths contradict each other")
+	}
+	if wait && noWait {
+		return nil, nil, errors.New("--wait-for-ci and --no-wait-for-ci contradict each other")
+	}
+	var watch *[]string
+	switch {
+	case noPaths:
+		none := []string{}
+		watch = &none
+	case len(paths) > 0:
+		given := append([]string(nil), paths...)
+		watch = &given
+	}
+	var waitFor *bool
+	if wait || noWait {
+		v := wait
+		waitFor = &v
+	}
+	return watch, waitFor, nil
 }
 
 // detectDockerfile picks the dockerfile strategy for local deploys when the

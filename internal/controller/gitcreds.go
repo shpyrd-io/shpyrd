@@ -29,12 +29,18 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
 		return gitauth.Build{}, r.deleteSecret(ctx, app.Namespace, name)
 	}
-	b, err := lookupGitBuild(ctx, r.Client, r.Config.SystemNamespace, app)
+	b, err := lookupGitBuild(ctx, r.Client, r.Config.SystemNamespace, r.Config.GitHub, app)
 	if errors.Is(err, errGitURL) {
 		return r.noGitCredential(ctx, app)
 	}
 	if err != nil {
 		return gitauth.Build{}, err
+	}
+	if b.AppRetry {
+		if kept := r.keptAppToken(ctx, app); kept != nil {
+			kept.AppRefused, kept.AppRetry = b.AppRefused, true
+			b = *kept
+		}
 	}
 	if b.Secret == nil {
 		return b, r.deleteSecret(ctx, app.Namespace, name)
@@ -47,6 +53,11 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = mergeMaps(sec.Labels, want.Labels)
+		for _, k := range githubMarks {
+			if _, ok := want.Annotations[k]; !ok {
+				delete(sec.Annotations, k)
+			}
+		}
 		sec.Annotations = mergeMaps(sec.Annotations, want.Annotations)
 		sec.Type = want.Type
 		sec.Data = want.Data
@@ -118,13 +129,18 @@ func (r *AppReconciler) ensureBuildServiceAccount(ctx context.Context, app *shpy
 var errGitURL = errors.New("the git URL is not one shpyrd can parse")
 
 // lookupGitBuild finds the credential a build of the App's repository
-// clones with, and the source watcher lists with: the project's deploy key
-// for the host, else the workspace's token for the host, else none.
-func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, app *shpyrdv1.App) (gitauth.Build, error) {
+// clones with, and the source watcher lists with: the GitHub App's token
+// for the repository (RFC-0054), else the project's deploy key for the
+// host, else the workspace's token for the host, else none.
+func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, gh *GitHubApp, app *shpyrdv1.App) (gitauth.Build, error) {
 	url := app.Spec.Source.Git.URL
 	repo, err := gitauth.Parse(url)
 	if err != nil {
 		return gitauth.Build{}, errGitURL
+	}
+	viaApp, refused, retry := gh.build(ctx, app, repo)
+	if viaApp != nil {
+		return *viaApp, nil
 	}
 	deployKey, err := optionalSecret(ctx, c, app.Namespace, gitauth.DeployKeySecretName)
 	if err != nil {
@@ -138,6 +154,7 @@ func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, app *
 	if err != nil {
 		return gitauth.Build{}, errGitURL
 	}
+	b.AppRefused, b.AppRetry = refused, retry
 	return b, nil
 }
 
