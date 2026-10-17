@@ -219,9 +219,18 @@ type SourceRecord struct {
 	Author   string     `json:"author,omitempty"`
 	Via      string     `json:"via,omitempty"`
 	// Skipped is a commit whose message asked not to deploy it.
-	Skipped       string     `json:"skipped,omitempty"`
-	LastWebhookAt *time.Time `json:"lastWebhookAt,omitempty"`
-	CheckedAt     *time.Time `json:"checkedAt,omitempty"`
+	Skipped string `json:"skipped,omitempty"`
+	// Held is a commit waiting for its CI on GitHub, since HeldSince: the
+	// time the commit was first seen, or the nudge of a re-run (RFC-0054).
+	Held      string     `json:"held,omitempty"`
+	HeldSince *time.Time `json:"heldSince,omitempty"`
+	// NotDeployed is the last commit decided not to deploy, and why:
+	// ReasonNoWatchedChanges, ReasonCIFailedPrefix and the check's name,
+	// or ReasonCITimeout.
+	NotDeployed       string     `json:"notDeployed,omitempty"`
+	NotDeployedReason string     `json:"notDeployedReason,omitempty"`
+	LastWebhookAt     *time.Time `json:"lastWebhookAt,omitempty"`
+	CheckedAt         *time.Time `json:"checkedAt,omitempty"`
 	// Error says why the branch could not be read, in words.
 	Error string `json:"error,omitempty"`
 	// Delivery is the id of the last delivery applied: a host delivering
@@ -241,4 +250,46 @@ func ReadSourceRecord(annotation string) SourceRecord {
 		}
 	}
 	return r
+}
+
+// Why a commit was not deployed (RFC-0054), as SourceRecord's
+// NotDeployedReason says it.
+const (
+	ReasonNoWatchedChanges = "No changes in the watch paths"
+	ReasonCIFailedPrefix   = "CI failed: "
+	ReasonCITimeout        = "CI did not finish within an hour"
+)
+
+// WaitsOnCI says a change of sha's checks matters to the record: sha is
+// held for its CI, or CI failed it and it is still the branch's newest
+// commit, so a re-run may pass.
+func (r SourceRecord) WaitsOnCI(sha string) bool {
+	sha = strings.ToLower(sha)
+	if sha == "" {
+		return false
+	}
+	return r.Held == sha || (r.NotDeployed == sha && r.Latest == sha && strings.HasPrefix(r.NotDeployedReason, ReasonCIFailedPrefix))
+}
+
+// CINudge is a change of a commit's checks or statuses, left by the GitHub
+// App's webhook in the App's shpyrd.io/git-ci annotation for the source
+// watcher.
+type CINudge struct {
+	SHA      string    `json:"sha"`
+	Delivery string    `json:"delivery,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// ReadCINudge reads the git-ci annotation; nil when there is none or it
+// cannot be read.
+func ReadCINudge(annotation string) *CINudge {
+	if annotation == "" {
+		return nil
+	}
+	var n CINudge
+	if err := json.Unmarshal([]byte(annotation), &n); err != nil || n.SHA == "" {
+		return nil
+	}
+	n.SHA = strings.ToLower(n.SHA)
+	return &n
 }

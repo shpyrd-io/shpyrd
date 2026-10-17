@@ -201,3 +201,14 @@ func TestFlippingAutoDeployStartsNoBuild(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceStatusShowsAHeldAndANotDeployedCommit(t *testing.T) {
+	app := pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit)
+	withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Held: otherCommit, HeldSince: at(sourceNow),
+		NotDeployed: testCommit, NotDeployedReason: gitauth.ReasonNoWatchedChanges})
+	st := sourceStatus(app)
+	if st.Held != otherCommit || st.HeldSince == nil || !st.HeldSince.Time.Equal(sourceNow) ||
+		st.NotDeployed != testCommit || st.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
+		t.Errorf("status.source = %+v", st)
+	}
+}

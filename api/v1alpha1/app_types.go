@@ -123,6 +123,13 @@ const (
 	// AnnotationGitSource is what the source watcher last saw of the
 	// branch, as JSON; the App controller copies it into status.source.
 	AnnotationGitSource = "shpyrd.io/git-source"
+	// AnnotationGitCI is a nudge the GitHub App's webhook leaves when a
+	// commit's checks or statuses change (RFC-0054), as JSON: the source
+	// watcher evaluates a held or CI-failed commit again, then drops it.
+	AnnotationGitCI = "shpyrd.io/git-ci"
+	// AnnotationGitHubReport is what the GitHub reporter last sent for the
+	// App, as JSON: the check run and the Deployment (RFC-0054).
+	AnnotationGitHubReport = "shpyrd.io/github-report"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes
@@ -326,6 +333,18 @@ type GitSource struct {
 	// them without deploying. Unset means true.
 	// +optional
 	AutoDeploy *bool `json:"autoDeploy,omitempty"`
+	// WatchPaths are gitignore-style globs from the repository root: a
+	// commit deploys only when a file it changes matches. The last pattern
+	// that matches a file decides it; a leading ! excludes. GitHub App only
+	// (RFC-0054).
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=200
+	WatchPaths []string `json:"watchPaths,omitempty"`
+	// WaitForChecks holds a commit until its other checks and statuses on
+	// GitHub pass. GitHub App only (RFC-0054).
+	// +optional
+	WaitForChecks bool `json:"waitForChecks,omitempty"`
 }
 
 // BlobSource builds from an archive uploaded with `shpyrd deploy`.
@@ -618,6 +637,19 @@ type SourceStatus struct {
 	// Skipped is a commit whose message asked not to deploy it.
 	// +optional
 	Skipped string `json:"skipped,omitempty"`
+	// Held is a commit waiting for its other checks on GitHub, since
+	// HeldSince (RFC-0054).
+	// +optional
+	Held string `json:"held,omitempty"`
+	// +optional
+	HeldSince *metav1.Time `json:"heldSince,omitempty"`
+	// NotDeployed is the last commit the watcher decided not to deploy:
+	// nothing changed in the watch paths, CI failed, or CI did not finish.
+	// NotDeployedReason says which, in words.
+	// +optional
+	NotDeployed string `json:"notDeployed,omitempty"`
+	// +optional
+	NotDeployedReason string `json:"notDeployedReason,omitempty"`
 	// +optional
 	LastWebhookAt *metav1.Time `json:"lastWebhookAt,omitempty"`
 	// +optional
