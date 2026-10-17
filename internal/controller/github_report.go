@@ -393,7 +393,7 @@ func wantLatest(app *shpyrdv1.App) (checkWant, bool) {
 // pinned commit's check is not finished and its code runs, it succeeds. A
 // commit not yet running is Building at once, even while an older release
 // runs or fails: a failure is the pin's only when its own release failed,
-// or its build did (pinFailed).
+// or its build did (pinBuildFailed).
 func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 	pin := app.PinnedCommit()
 	if pin == "" {
