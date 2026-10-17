@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode/utf8"
 )
 
 // Watch paths (RFC-0054): gitignore-style globs from the repository root
 // that say which changes deploy a project. Patterns run in order and the
 // last one that matches a file decides it; a leading ! excludes. `*`
 // matches within one part of a path, `**` any number of parts, and a
-// pattern ending in / everything below it.
+// pattern ending in / everything below it. As in gitignore, a pattern that
+// names a folder (services/api) matches the folder's contents too.
 
 const (
 	MaxWatchPaths      = 20
@@ -21,6 +23,8 @@ const (
 type watchPattern struct {
 	exclude  bool
 	segments []string
+	// below: the pattern also matches everything under what it names.
+	below bool
 }
 
 // parseWatchPath reads a pattern. A leading / is the repository root, as
@@ -34,6 +38,8 @@ func parseWatchPath(p string) (watchPattern, error) {
 	raw = strings.TrimPrefix(raw, "/")
 	if raw != "" && strings.HasSuffix(raw, "/") {
 		raw += "**"
+	} else {
+		w.below = true
 	}
 	if raw == "" {
 		return watchPattern{}, fmt.Errorf("the watch path %q names no file or folder", p)
@@ -51,6 +57,11 @@ func parseWatchPath(p string) (watchPattern, error) {
 			if _, err := path.Match(seg, ""); err != nil {
 				return watchPattern{}, fmt.Errorf("the watch path %q is not a pattern shpyrd can read: check its [ ] and \\", p)
 			}
+		}
+		// Consecutive ** mean what one does; collapsing them keeps the
+		// match from backtracking over every way to split a path.
+		if seg == "**" && len(w.segments) > 0 && w.segments[len(w.segments)-1] == "**" {
+			continue
 		}
 		w.segments = append(w.segments, seg)
 	}
@@ -76,7 +87,7 @@ func ValidWatchPaths(patterns []string) error {
 		return fmt.Errorf("a project takes at most %d watch paths; there are %d", MaxWatchPaths, len(patterns))
 	}
 	for _, p := range patterns {
-		if len(p) > MaxWatchPathLength {
+		if utf8.RuneCountInString(p) > MaxWatchPathLength {
 			return fmt.Errorf("a watch path is at most %d characters; %.40q… is longer", MaxWatchPathLength, p)
 		}
 		if _, err := parseWatchPath(p); err != nil {
@@ -100,7 +111,7 @@ func MatchWatchPaths(patterns, files []string) bool {
 		name := strings.Split(strings.TrimPrefix(f, "/"), "/")
 		in := false
 		for _, w := range ps {
-			if matchSegments(w.segments, name) {
+			if w.matches(name) {
 				in = !w.exclude
 			}
 		}
@@ -111,30 +122,41 @@ func MatchWatchPaths(patterns, files []string) bool {
 	return false
 }
 
-// matchSegments matches a pattern's parts against a path's: ** takes any
-// number of parts, and at the end at least one (a folder's contents, not
-// a file of that name).
-func matchSegments(pat, name []string) bool {
-	for len(pat) > 0 {
-		if pat[0] == "**" {
-			rest := pat[1:]
-			if len(rest) == 0 {
-				return len(name) > 0
+// matches says the pattern covers the path.
+func (w watchPattern) matches(name []string) bool {
+	memo := make(map[[2]int]bool)
+	seen := make(map[[2]int]bool)
+	var match func(i, j int) bool
+	match = func(i, j int) bool {
+		k := [2]int{i, j}
+		if seen[k] {
+			return memo[k]
+		}
+		seen[k] = true
+		memo[k] = func() bool {
+			if i == len(w.segments) {
+				return j == len(name) || w.below
 			}
-			for i := 0; i <= len(name); i++ {
-				if matchSegments(rest, name[i:]) {
-					return true
+			if w.segments[i] == "**" {
+				if i == len(w.segments)-1 {
+					return j < len(name)
 				}
+				for n := j; n <= len(name); n++ {
+					if match(i+1, n) {
+						return true
+					}
+				}
+				return false
 			}
-			return false
-		}
-		if len(name) == 0 {
-			return false
-		}
-		if ok, _ := path.Match(pat[0], name[0]); !ok {
-			return false
-		}
-		pat, name = pat[1:], name[1:]
+			if j == len(name) {
+				return false
+			}
+			if ok, _ := path.Match(w.segments[i], name[j]); !ok {
+				return false
+			}
+			return match(i+1, j+1)
+		}()
+		return memo[k]
 	}
-	return len(name) == 0
+	return match(0, 0)
 }

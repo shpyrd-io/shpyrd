@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWatchPathsMatchFromTheRepositoryRoot(t *testing.T) {
@@ -94,5 +95,48 @@ func TestCleanWatchPathsDropsBlankLines(t *testing.T) {
 	}
 	if CleanWatchPaths([]string{"", " "}) != nil {
 		t.Error("nothing left is nil, so the field is removed")
+	}
+}
+
+func TestRepeatedDoubleStarsDoNotBlowUp(t *testing.T) {
+	pattern := strings.Repeat("**/", 60) + "x"
+	deep := strings.Repeat("d/", 40) + "y"
+	start := time.Now()
+	if MatchWatchPaths([]string{pattern}, []string{deep}) {
+		t.Error("no x at the end: no match")
+	}
+	if !MatchWatchPaths([]string{pattern}, []string{strings.Repeat("d/", 40) + "x"}) {
+		t.Error("x at the end matches")
+	}
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("took %v", d)
+	}
+	for _, f := range []string{"x", "a/x", "a/b/x", "a/y", "x/y"} {
+		if MatchWatchPaths([]string{"**/**/x"}, []string{f}) != MatchWatchPaths([]string{"**/x"}, []string{f}) {
+			t.Errorf("collapsing changed the answer for %s", f)
+		}
+	}
+}
+
+func TestAFolderNameMatchesItsContents(t *testing.T) {
+	for _, c := range []struct {
+		pattern, file string
+		want          bool
+	}{
+		{"services/api", "services/api/x.go", true},
+		{"services/api", "services/api", true},
+		{"services/api", "services/apix/x.go", false},
+		{"services/api/", "services/api/x.go", true},
+		{"services/api/", "services/api", false},
+	} {
+		if got := MatchWatchPaths([]string{c.pattern}, []string{c.file}); got != c.want {
+			t.Errorf("%s on %s: %v", c.pattern, c.file, got)
+		}
+	}
+}
+
+func TestTheLengthLimitCountsCharacters(t *testing.T) {
+	if err := ValidWatchPaths([]string{strings.Repeat("é", 150)}); err != nil {
+		t.Errorf("150 characters: %v", err)
 	}
 }
