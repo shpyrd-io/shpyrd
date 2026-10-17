@@ -204,27 +204,49 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// stoppedReporting is the words of a report closed because shpyrd no
+// longer reports on the project.
+const stoppedReporting = "shpyrd stopped reporting on this project"
+
 // stopReporting ends the reports on an App shpyrd no longer reports on
-// (deleted, or no longer on a branch of github.com): a Deployment still
-// in progress is closed, once, when a token can still be had, else left;
-// what the reporter kept of the App is dropped.
+// (deleted, or no longer on a branch of github.com): unfinished check runs
+// are closed neutral and a Deployment still in progress inactive, once,
+// when a token can still be had, else left. Then the annotation is
+// removed (on a terminating App too, so its finalization never closes
+// them again) and what the reporter kept of the App is dropped; while the
+// removal fails, memory keeps what was closed.
 func (r *GitHubReporter) stopReporting(ctx context.Context, app *shpyrdv1.App) (ctrl.Result, error) {
-	rep := r.lastSent(app.UID, readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport]))
-	r.forget(app.UID)
-	if rep.Deployment != 0 && !deploymentDone(rep.DeploymentState) {
+	saved := readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport])
+	old := r.lastSent(app.UID, saved)
+	rep := old
+	pinned, latest := rep.pinSlot(), rep.latestSlot()
+	if (rep.Deployment != 0 && !deploymentDone(rep.DeploymentState)) || pinned.unfinished() || latest.unfinished() {
 		if ref, ok, err := r.GitHub.coverQuietly(ctx, app); err == nil && ok {
 			// Best effort: a refused close is dropped with the rest.
-			_ = r.retire(ctx, app, ref, &rep, "shpyrd stopped reporting on this project")
+			for _, slot := range []checkSlot{pinned, latest} {
+				if slot.unfinished() {
+					_ = r.close(ctx, app, ref, slot, checkWant{commit: *slot.commit, status: "completed", conclusion: "neutral",
+						label: "stopped", title: stoppedReporting, summary: stoppedReporting + "."})
+				}
+			}
+			_ = r.retire(ctx, app, ref, &rep, stoppedReporting)
 		}
 	}
-	if _, ok := app.Annotations[shpyrdv1.AnnotationGitHubReport]; !ok || !app.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
+	if _, ok := app.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
+		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{shpyrdv1.AnnotationGitHubReport: nil}}})
+		if err == nil {
+			err = r.Patch(ctx, app, client.RawPatch(types.MergePatchType, patch))
+		}
+		if err != nil {
+			if rep != old {
+				rep.Seq = old.Seq + 1
+				r.remember(app.UID, rep)
+			}
+			return ctrl.Result{}, err
+		}
 	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{shpyrdv1.AnnotationGitHubReport: nil}}})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, r.Patch(ctx, app, client.RawPatch(types.MergePatchType, patch))
+	r.forget(app.UID)
+	return ctrl.Result{}, nil
 }
 
 // report sends what changed since old, and says what GitHub now has.
@@ -622,6 +644,11 @@ func wantDeployment(app *shpyrdv1.App) (deployWant, bool) {
 	if deployedByImage(app) {
 		return deployWant{}, false
 	}
+	// The pinned commit's build failed while the newest release runs on:
+	// that release's rollout finishes from Ready, whatever the phase says.
+	runsOn := app.Annotations[shpyrdv1.AnnotationRollbackTo] == "" &&
+		meta.IsStatusConditionFalse(app.Status.Conditions, shpyrdv1.ConditionBuilt) &&
+		meta.IsStatusConditionTrue(app.Status.Conditions, shpyrdv1.ConditionReady)
 	rels := app.Status.Releases
 	for i := len(rels) - 1; i >= 0; i-- {
 		if i > 0 && rels[i].Source == rels[i-1].Source {
@@ -631,6 +658,10 @@ func wantDeployment(app *shpyrdv1.App) (deployWant, bool) {
 			return deployWant{}, false
 		}
 		w := deployWant{release: rels[i].Number, ref: fullCommitOf(app, rels[i].Source), description: firstLine(rels[i].Description)}
+		if runsOn {
+			w.state = "success"
+			return w, true
+		}
 		if newerToCome(app, rels, i) {
 			w.pending = true
 			return w, true

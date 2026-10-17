@@ -1170,3 +1170,120 @@ func TestARedeployThatRunsRepairsAFailedDeployment(t *testing.T) {
 		t.Errorf("a config release failed a success: %+v", d)
 	}
 }
+
+// inactives counts the inactive statuses posted.
+func inactives(fake *githubtest.Server) int {
+	n := 0
+	for _, d := range fake.Deployments() {
+		for _, s := range d.Statuses {
+			if s.State == "inactive" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// Fix round 2: a project shpyrd stops reporting on has its unfinished
+// check runs closed: a held commit's queued run here.
+func TestAnAppNoLongerReportedClosesItsUnfinishedChecks(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Held: otherCommit, HeldSince: at(sourceNow)})
+	})
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) { a.Spec.Source.Git.Revision = testCommit })
+	reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" ||
+		runs[0].Title != "shpyrd stopped reporting on this project" {
+		t.Errorf("the held commit: %+v", runs)
+	}
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Conclusion != "success" {
+		t.Errorf("the finished check: %+v", runs)
+	}
+}
+
+// Fix round 2: an App deleted mid-deploy has its check run and its
+// Deployment closed, once, however many updates its finalization brings.
+func TestAnAppDeletedMidDeployClosesItsReportsOnce(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	app.Finalizers = []string{"shpyrd.io/test"}
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	if err := c.Delete(context.Background(), app); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		reconcileReport(t, r, app)
+	}
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" ||
+		runs[0].Title != "shpyrd stopped reporting on this project" {
+		t.Errorf("the check: %+v", runs)
+	}
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[in_progress inactive]" || inactives(fake) != 1 {
+		t.Errorf("%+v", d)
+	}
+	got := &shpyrdv1.App{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), got); err != nil || got.DeletionTimestamp.IsZero() {
+		t.Fatalf("%v", err)
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
+		t.Errorf("the report is kept on a terminating App: %+v", reportOf(got))
+	}
+}
+
+// Fix round 2: a failed patch of the dropped report never posts inactive
+// twice.
+func TestAFailedPatchWhenReportingStopsNeverClosesTwice(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) { a.Spec.Source.Git.Revision = testCommit })
+	inner := r.Client
+	r.Client = interceptor.NewClient(inner.(client.WithWatch), interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return errors.New("the API server is away")
+		},
+	})
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err == nil {
+		t.Fatal("the failed patch is not an error")
+	}
+	r.Client = inner
+	_, got := reconcileReport(t, r, app)
+	if inactives(fake) != 1 {
+		t.Errorf("%d inactive posts: %+v", inactives(fake), fake.Deployments())
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
+		t.Errorf("the report is kept: %+v", reportOf(got))
+	}
+}
+
+// Fix round 2: B runs on while the pinned commit's build failed: B's
+// Deployment finishes from Ready, never stays in progress.
+func TestAReleaseThatRunsWhileTheNextBuildFailedFinishesItsDeployment(t *testing.T) {
+	b := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, b)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		pinGit(a, otherCommit)
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Message: "again", Author: "alice", Via: "push"})
+	})
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Message = shpyrdv1.PhaseFailed, "The build failed."
+		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionBuilt, Status: metav1.ConditionFalse, Reason: "BuildFailed", Message: "The build failed."})
+	})
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[in_progress]" {
+		t.Fatalf("while B rolls out: %+v", d)
+	}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionReady, Status: metav1.ConditionTrue, Reason: "Running", Message: "web: 1/1"})
+	})
+	_, got := reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[in_progress success]" || reportOf(got).DeploymentState != "success" {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+}
