@@ -90,21 +90,22 @@ type Server struct {
 	// limited is the Retry-After of a rate limit; 0: none.
 	limited time.Duration
 	// forbidden answers 403, not for a rate limit.
-	forbidden      bool
-	repos          map[int64][]Repo
-	branches       map[string][]string // by full name, lower case
-	people         []Installation
-	users          map[string]*User     // by handle: the login in lower case, "default" for the default person
-	codes          map[string]string    // OAuth code -> handle
-	access         map[string]userGrant // user access token -> whose, until when
-	refresh        map[string]string    // live refresh token -> handle
-	revoked        []string
-	issued         int
-	noExpiring     bool
-	public         []Repo
-	orgRoles       map[string][2]string            // by org, lower case: role, state; the default person's
-	userRoles      map[string]map[string][2]string // the others': by handle, then org
-	forbiddenRepos map[string]bool                 // "login|full name", lower case
+	forbidden         bool
+	repos             map[int64][]Repo
+	branches          map[string][]string // by full name, lower case
+	people            []Installation
+	users             map[string]*User     // by handle: the login in lower case, "default" for the default person
+	codes             map[string]string    // OAuth code -> handle
+	access            map[string]userGrant // user access token -> whose, until when
+	refresh           map[string]string    // live refresh token -> handle
+	revoked           []string
+	issued            int
+	noExpiring        bool
+	public            []Repo
+	orgRoles          map[string][2]string            // by org, lower case: role, state; the default person's
+	userRoles         map[string]map[string][2]string // the others': by handle, then org
+	forbiddenInstalls map[string]bool                 // "login|installation id", lower case
+	forbiddenRepos    map[string]bool                 // "login|full name", lower case
 	// membersRefusal is the message of a 403 the memberships call answers;
 	// "": none.
 	membersRefusal string
@@ -138,22 +139,23 @@ func NewServer(t testing.TB) *Server {
 			{FullName: "Acme/shop", Private: true, DefaultBranch: "main"},
 			{FullName: "Acme/site", DefaultBranch: "trunk"},
 		}},
-		branches:       map[string][]string{"acme/shop": {"dev", "main"}, "acme/site": {"trunk"}},
-		people:         []Installation{{ID: 42, Login: "Acme", Type: "Organization"}},
-		users:          map[string]*User{defaultUser: {ID: UserID, Login: UserLogin}},
-		codes:          map[string]string{Code: defaultUser},
-		access:         map[string]userGrant{UserToken: {handle: defaultUser, exp: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)}},
-		refresh:        map[string]string{},
-		userRoles:      map[string]map[string][2]string{},
-		forbiddenRepos: map[string]bool{},
-		orgRoles:       map[string][2]string{"acme": {"admin", "active"}},
-		minted:         map[int64]int{},
-		tokens:         map[string]tokenGrant{},
-		compares:       map[string]Compare{},
-		runs:           map[string][]CheckRun{},
-		statuses:       map[string][]Status{},
-		totals:         map[string]int{},
-		refused:        map[string]bool{},
+		branches:          map[string][]string{"acme/shop": {"dev", "main"}, "acme/site": {"trunk"}},
+		people:            []Installation{{ID: 42, Login: "Acme", Type: "Organization"}},
+		users:             map[string]*User{defaultUser: {ID: UserID, Login: UserLogin}},
+		codes:             map[string]string{Code: defaultUser},
+		access:            map[string]userGrant{UserToken: {handle: defaultUser, exp: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)}},
+		refresh:           map[string]string{},
+		userRoles:         map[string]map[string][2]string{},
+		forbiddenRepos:    map[string]bool{},
+		forbiddenInstalls: map[string]bool{},
+		orgRoles:          map[string][2]string{"acme": {"admin", "active"}},
+		minted:            map[int64]int{},
+		tokens:            map[string]tokenGrant{},
+		compares:          map[string]Compare{},
+		runs:              map[string][]CheckRun{},
+		statuses:          map[string][]Status{},
+		totals:            map[string]int{},
+		refused:           map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Close)
@@ -412,6 +414,9 @@ func (f *Server) branchList(w http.ResponseWriter, r *http.Request, fullName str
 		allowed = grants(f.repos[id], fullName[strings.Index(fullName, "/")+1:])
 	} else if _, ok := f.userOf(r); ok {
 		_, allowed = f.readable(r, fullName)
+	} else {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		return
 	}
 	if !allowed {
 		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})

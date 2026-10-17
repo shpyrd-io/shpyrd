@@ -108,6 +108,14 @@ func (f *Server) ForbidRepo(login, fullName string) {
 	f.mu.Unlock()
 }
 
+// ForbidInstallation makes the repositories of an installation answer 403
+// to the person with login, as for an organisation's SAML enforcement.
+func (f *Server) ForbidInstallation(login string, installation int64) {
+	f.mu.Lock()
+	f.forbiddenInstalls[strings.ToLower(login)+"|"+strconv.FormatInt(installation, 10)] = true
+	f.mu.Unlock()
+}
+
 // SetPublicRepos are public repositories outside the installations:
 // anyone reads them.
 func (f *Server) SetPublicRepos(repos ...Repo) { f.mu.Lock(); f.public = repos; f.mu.Unlock() }
@@ -291,6 +299,10 @@ func (f *Server) userInstallationRepos(w http.ResponseWriter, r *http.Request, i
 	id, _ := strconv.ParseInt(idText, 10, 64)
 	if !f.sees(u, id) {
 		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	if f.forbiddenInstalls[strings.ToLower(u.Login)+"|"+idText] {
+		reply(w, http.StatusForbidden, map[string]string{"message": "Resource protected by organization SAML enforcement."})
 		return
 	}
 	var mine []Repo

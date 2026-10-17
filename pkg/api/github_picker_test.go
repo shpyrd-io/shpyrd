@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -102,7 +103,7 @@ func TestThePickerListsOnlyWhatThePersonCanRead(t *testing.T) {
 	fake.SetDown(true)
 	s.forgetPersonRepos("local", "")
 	s.forgetGitHubRepos(store.DefaultWorkspace)
-	if rec := doCookie(t, s, "GET", "/api/workspace/github/repositories", "", anaSID, ""); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "Acme") {
+	if rec := doCookie(t, s, "GET", "/api/workspace/github/repositories", "", anaSID, ""); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "GitHub did not answer. Try again in a minute") {
 		t.Errorf("GitHub down: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -252,5 +253,87 @@ func TestThePickerDoesNotListThroughTheAdminToken(t *testing.T) {
 	}
 	if len(fake.Calls()) != calls {
 		t.Errorf("GitHub was asked: %v", fake.Calls()[calls:])
+	}
+}
+
+func TestOneInstallationThatRefusesThePersonDoesNotFailTheList(t *testing.T) {
+	s, _, fake := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	if err := s.store.AddGitHubInstallation(t.Context(), store.DefaultWorkspace, store.GitHubInstallation{ID: 43, AccountLogin: "Beta", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetUserInstallations(githubtest.Installation{ID: 42, Login: "Acme", Type: "Organization"}, githubtest.Installation{ID: 43, Login: "Beta", Type: "Organization"})
+	fake.SetRepos(43, githubtest.Repo{FullName: "Beta/app", DefaultBranch: "main"})
+	fake.ForbidInstallation("ana", 43) // the default person's login
+	sid, csrf, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	rec := doCookie(t, s, "GET", "/api/workspace/github/repositories", "", sid, "")
+	var v []GitHubRepositoryView
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil || repoNames(v) != "Acme/shop,Acme/site" {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAGitHubFailureAnswersOneSentenceWithNothingOfGitHub(t *testing.T) {
+	s, _, fake := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, csrf, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	fake.SetDown(true)
+	for _, path := range []string{"/api/workspace/github/accounts", "/api/workspace/github/repositories", "/api/workspace/github/repositories/acme/shop/branches"} {
+		rec := doCookie(t, s, "GET", path, "", sid, "")
+		body := rec.Body.String()
+		if rec.Code != http.StatusBadGateway || !strings.Contains(body, "GitHub did not answer. Try again in a minute") ||
+			strings.Contains(body, "Service unavailable") || strings.Contains(body, "42") || strings.Contains(body, "/user/") {
+			t.Errorf("%s: %d %s", path, rec.Code, body)
+		}
+	}
+}
+
+func TestTheListingsCacheDropsWhatExpired(t *testing.T) {
+	var c githubRepoCache
+	t0 := time.Now()
+	c.put("a", nil, false, t0)
+	c.put("b", nil, false, t0.Add(githubReposTTL/2))
+	c.put("c", nil, false, t0.Add(githubReposTTL+time.Second))
+	if _, has := c.by["a"]; has || len(c.by) != 2 {
+		t.Errorf("kept %d entries, a among them: %v", len(c.by), has)
+	}
+	c.put("d", nil, false, t0.Add(3*githubReposTTL))
+	if len(c.by) != 1 {
+		t.Errorf("kept %d entries, want only d", len(c.by))
+	}
+}
+
+func TestAnUnlinkedPersonCannotProbeWhichInstallationsExist(t *testing.T) {
+	s, _, _ := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, _, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	for _, q := range []string{"?installation=42", "?installation=9999"} {
+		rec := doCookie(t, s, "GET", "/api/workspace/github/repositories"+q, "", sid, "")
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
+			t.Errorf("%s: %d %s", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestAGitHubRefusalOfTheTokenOnBranchesAsksToLinkAgain(t *testing.T) {
+	s, _, _ := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, csrf, sub := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	cl, err := s.githubApp.Client(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.RevokeUserToken(t.Context(), mustHeld(t, s, sub)); err != nil {
+		t.Fatal(err)
+	}
+	rec := doCookie(t, s, "GET", "/api/workspace/github/repositories/acme/shop/branches", "", sid, "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+	if _, held := s.githubUsers.entry(personKey("local", sub)); held {
+		t.Error("the refused token is still held")
 	}
 }

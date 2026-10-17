@@ -264,6 +264,11 @@ func (g *githubRepoCache) put(key string, list []GitHubRepositoryView, truncated
 	if g.by == nil {
 		g.by = map[string]githubRepoEntry{}
 	}
+	for k, e := range g.by {
+		if now.Sub(e.at) >= githubReposTTL {
+			delete(g.by, k)
+		}
+	}
 	g.by[key] = githubRepoEntry{at: now, list: list, truncated: truncated}
 }
 
@@ -463,7 +468,7 @@ func errGitHubCantRead(owner, repo string) error {
 // githubPersonFailed answers a call made with the person's token that
 // failed: a 401 is a token GitHub no longer takes (the person's memory
 // entry and listings are dropped, and they link again: 409); anything else
-// is a 502 saying what was being asked.
+// is a 502 with a fixed sentence (the detail goes to the log).
 func (s *Server) githubPersonFailed(c *gin.Context, provider, subject, what string, err error) {
 	var apiErr *github.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
@@ -472,7 +477,9 @@ func (s *Server) githubPersonFailed(c *gin.Context, provider, subject, what stri
 		githubLinkAnswer(c, errGitHubLinkRequired)
 		return
 	}
-	abort(c, http.StatusBadGateway, fmt.Errorf("GitHub did not list %s: %w. Try again in a minute", what, err))
+	// GitHub's words and addresses stay in the log: the answer is one sentence.
+	s.log.Warn("github: a call with a person's token failed", "asked", what, "err", err.Error())
+	abort(c, http.StatusBadGateway, errors.New("GitHub did not answer. Try again in a minute"))
 }
 
 // githubAccounts is GET /api/workspace/github/accounts: the workspace's
@@ -534,6 +541,17 @@ func (s *Server) githubRepositories(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	if len(insts) == 0 {
+		c.JSON(http.StatusOK, []GitHubRepositoryView{})
+		return
+	}
+	tok, _, err := s.githubPersonToken(c, cl)
+	if err != nil {
+		githubLinkAnswer(c, err)
+		return
+	}
+	// After the link check: someone unlinked cannot probe which installations
+	// the workspace has.
 	var only int64
 	if raw := c.Query("installation"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
@@ -550,15 +568,6 @@ func (s *Server) githubRepositories(c *gin.Context) {
 			return
 		}
 		only = id
-	}
-	if len(insts) == 0 {
-		c.JSON(http.StatusOK, []GitHubRepositoryView{})
-		return
-	}
-	tok, _, err := s.githubPersonToken(c, cl)
-	if err != nil {
-		githubLinkAnswer(c, err)
-		return
 	}
 	provider, subject, _ := githubPersonOf(c)
 	key := githubRepoKey(ws, provider, subject, only)
@@ -581,9 +590,10 @@ func (s *Server) githubRepositories(c *gin.Context) {
 			// The first part is still worth showing.
 			truncated, err = true, nil
 		}
-		if github.IsNotFound(err) {
-			// An installation the person cannot see, or one uninstalled on
-			// GitHub before its webhook arrived: the others still list.
+		if githubCantRead(err) {
+			// An installation the person cannot see, one uninstalled on
+			// GitHub before its webhook arrived, or an organisation that
+			// refuses them (SAML): the others still list.
 			continue
 		}
 		if err != nil {
