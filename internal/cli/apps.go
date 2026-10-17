@@ -460,7 +460,7 @@ func printAppInfo(out io.Writer, app *shpyrdv1.App) {
 				}
 				fmt.Fprintf(out, "Commit:     %s waits for CI%s\n", st.Held[:min(7, len(st.Held))], since)
 			case st.NotDeployed != "" && st.NotDeployed == st.Latest && st.NotDeployed != st.Commit:
-				fmt.Fprintf(out, "Commit:     %s not deployed: %s\n", st.NotDeployed[:min(7, len(st.NotDeployed))], st.NotDeployedReason)
+				fmt.Fprintf(out, "Commit:     %s not deployed: %s\n", st.NotDeployed[:min(7, len(st.NotDeployed))], lowerFirst(st.NotDeployedReason))
 			}
 		}
 	}
@@ -582,6 +582,15 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 func short(s string) string {
 	if len(s) > 12 {
 		return s[:12]
+	}
+	return s
+}
+
+// lowerFirst lowercases the first letter of a sentence that follows a
+// colon ("No changes in ..."), but not an acronym ("CI failed: test").
+func lowerFirst(s string) string {
+	if len(s) > 1 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'a' && s[1] <= 'z' {
+		return strings.ToLower(s[:1]) + s[1:]
 	}
 	return s
 }

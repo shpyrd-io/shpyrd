@@ -221,10 +221,10 @@ With **Wait for CI** on, a pushed commit deploys only once every other check and
 shpyrd deploy --git https://github.com/acme/shop --wait-for-ci      # --no-wait-for-ci switches it off
 ```
 
-The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and so does `shpyrd projects info`. Then:
+The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and `shpyrd projects info` prints `Commit:     a1b2c3d waits for CI (since 2m)`. Then:
 
 - **They pass:** the commit deploys; its release says `Push a1b2c3d by alice: fix login (CI passed)`.
-- **One fails:** the commit is not deployed, and the project says which check failed ("a1b2c3d not deployed: CI failed (test)"). Re-run it on GitHub: if it passes while the commit is still the branch's newest, it deploys.
+- **One fails:** the commit is not deployed, and the project says which check failed: the Source block, "a1b2c3d not deployed: CI failed (test)"; `shpyrd projects info` and the check on GitHub, "CI failed: test". Re-run it on GitHub: if it passes while the commit is still the branch's newest, it deploys.
 - **None reports within a minute:** the commit has no CI, and it deploys (`… (no CI)`). A CI that reports later than a minute after the push may lose that race.
 - **Still pending an hour later:** the commit is not deployed ("CI did not finish within an hour"). It is not tried again by itself.
 - **A newer commit arrives:** it replaces the waiting one at once.
@@ -251,9 +251,9 @@ shpyrd deploy --git https://github.com/acme/monorepo --watch-path 'services/api'
 shpyrd deploy --git https://github.com/acme/monorepo --no-watch-paths     # every commit deploys again
 ```
 
-A commit that changes nothing in them is recorded, not deployed ("a1b2c3d not deployed: no changes in the watch paths"). The files counted are everything changed since the commit that runs, so a commit that was not deployed still counts once a later one matches, and a renamed file counts under its old name and its new one. When GitHub's list of changes cannot be trusted (300 or more files changed, the branch's history was rewritten, GitHub's compare failed, or GitHub is not answering), the commit deploys, and its release ends with "(watch paths not checked: …)", naming the reason.
+A commit that changes nothing in them is recorded, not deployed (the Source block and `shpyrd projects info` say "a1b2c3d not deployed: no changes in the watch paths"; the check on GitHub says "No changes in the watch paths"). The files counted are everything changed since the commit that runs, so a commit that was not deployed still counts once a later one matches, and a renamed file counts under its old name and its new one. When GitHub's list of changes cannot be trusted (300 or more files changed, the branch's history was rewritten, GitHub's compare failed, or GitHub is not answering), the commit deploys, and its release ends with "(watch paths not checked: …)", naming the reason.
 
-Watch paths and wait for CI work through the GitHub App. On any other host they are kept but do nothing: the dashboard disables them with "Needs the GitHub App", and `shpyrd deploy` says so when it sets them.
+Watch paths and wait for CI work through the GitHub App. On a repository the GitHub App doesn't cover (another host, or an owner the workspace hasn't connected) they are kept but do nothing: the dashboard disables them with "Needs the GitHub App", and `shpyrd deploy` says so when it sets them.
 
 <Callout title="Which languages?">
 
