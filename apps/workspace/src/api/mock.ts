@@ -308,19 +308,38 @@ function watchPathsError(paths: string[]): string | undefined {
   }
 }
 
-// A part path.Match refuses: a trailing \, an unclosed [ or an empty one.
+// A part path.Match refuses (a port of Go's matchChunk and getEsc, which
+// check the whole pattern even when nothing is matched): a trailing \, or
+// a class whose elements start with - or ], run out, or are not closed.
 function unreadable(part: string): boolean {
-  for (let i = 0; i < part.length; i++) {
-    if (part[i] === "\\") {
-      if (++i >= part.length) return true;
-    } else if (part[i] === "[") {
-      let j = i + 1;
-      if (part[j] === "^") j++;
-      if (part[j] === "]" || part[j] === undefined) return true;
-      for (; j < part.length && part[j] !== "]"; j++) if (part[j] === "\\") j++;
-      if (j >= part.length) return true;
-      i = j;
-    }
+  const chars = [...part];
+  let i = 0;
+  // One class element: a character, escaped or not; Go needs more after it.
+  const esc = (): boolean => {
+    if (i >= chars.length || chars[i] === "-" || chars[i] === "]") return false;
+    if (chars[i] === "\\" && ++i >= chars.length) return false;
+    i++;
+    return i < chars.length;
+  };
+  while (i < chars.length) {
+    if (chars[i] === "\\") {
+      if (++i >= chars.length) return true;
+      i++;
+    } else if (chars[i] === "[") {
+      i++;
+      if (chars[i] === "^") i++;
+      for (let n = 0; ; n++) {
+        if (chars[i] === "]" && n > 0) {
+          i++;
+          break;
+        }
+        if (!esc()) return true;
+        if (chars[i] === "-") {
+          i++;
+          if (!esc()) return true;
+        }
+      }
+    } else i++;
   }
   return false;
 }
