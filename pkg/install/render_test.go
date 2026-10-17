@@ -1071,3 +1071,36 @@ func TestObjectGatewayAlerts(t *testing.T) {
 		}
 	}
 }
+
+// The WAL-archive alerts read what archiving does, not what an idle
+// database does not: "stale" is a segment waiting in the archive queue,
+// "failing" a failure more recent than the last archive, never the -1 a
+// database that never failed reports.
+func TestWALArchiveAlertsReadTheArchiveQueueAndSkipNeverFailed(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "oci", Vars: map[string]string{VarDomain: "example.test", VarACMEEmail: "ops@example.com"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals, err := loadValues(deploy.FS, valuesFiles(deploy.FS, eng.components["monitoring"], "oci"), eng.vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesMap, _ := vals["additionalPrometheusRulesMap"].(map[string]interface{})
+	groups, _, _ := unstructured.NestedSlice(rulesMap, "shpyrd-storage", "groups")
+	exprs := map[string]string{}
+	for _, g := range groups {
+		rules, _, _ := unstructured.NestedSlice(g.(map[string]interface{}), "rules")
+		for _, r := range rules {
+			rule := r.(map[string]interface{})
+			if name, _ := rule["alert"].(string); name != "" {
+				exprs[name], _ = rule["expr"].(string)
+			}
+		}
+	}
+	if e := exprs["DatabaseWALArchiveStale"]; !strings.Contains(e, `cnpg_collector_pg_wal_archive_status{value="ready"}`) || strings.Contains(e, "seconds_since_last_archival") {
+		t.Errorf("stale reads %q, want the segments waiting in the archive queue", e)
+	}
+	if e := exprs["DatabaseWALArchiveFailing"]; !strings.Contains(e, "seconds_since_last_failure >= 0") {
+		t.Errorf("failing reads %q, want a database that never failed (-1) left out", e)
+	}
+}
