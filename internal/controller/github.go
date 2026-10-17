@@ -342,6 +342,16 @@ func (gh *GitHubApp) installationFor(ctx context.Context, app *shpyrdv1.App, rep
 // reporter work only then. An error is "not known", never "not covered":
 // the callers decide what an unknown cover does (coverFailure words it).
 func (gh *GitHubApp) cover(ctx context.Context, app *shpyrdv1.App) (githubRepoRef, bool, error) {
+	ref, ok, err := gh.coverQuietly(ctx, app)
+	if err != nil {
+		log.FromContext(ctx).Info("could not tell whether the GitHub App covers the repository", "err", err.Error())
+	}
+	return ref, ok, err
+}
+
+// coverQuietly is cover without its log line, for a caller that logs its
+// failures itself (the reporter, once a minute).
+func (gh *GitHubApp) coverQuietly(ctx context.Context, app *shpyrdv1.App) (githubRepoRef, bool, error) {
 	if gh == nil || app.Spec.Source == nil || app.Spec.Source.Git == nil {
 		return githubRepoRef{}, false, nil
 	}
@@ -351,7 +361,6 @@ func (gh *GitHubApp) cover(ctx context.Context, app *shpyrdv1.App) (githubRepoRe
 	}
 	ref, inst, err := gh.installationFor(ctx, app, repo)
 	if err != nil {
-		log.FromContext(ctx).Info("could not tell whether the GitHub App covers the repository", "err", err.Error())
 		return githubRepoRef{}, false, err
 	}
 	if inst == nil || inst.SuspendedAt != nil {

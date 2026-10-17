@@ -16,6 +16,8 @@ type CheckRun struct {
 	Conclusion string
 	// AppID is the App that made it.
 	AppID int64
+	// ExternalID is what the App that made it said it is for.
+	ExternalID string
 }
 
 // CommitStatus is a commit status: a context and its state (pending,

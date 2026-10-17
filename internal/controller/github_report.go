@@ -6,7 +6,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -55,6 +58,9 @@ type GitHubReporter struct {
 
 	mu      sync.Mutex
 	failing map[types.UID]reportFailure
+	// sent is, by App, the report last accepted by GitHub: newer than the
+	// annotation in a stale cache, or after a patch of it failed.
+	sent map[types.UID]githubReport
 }
 
 // reportFailure is an App whose last writes failed: how many in a row,
@@ -65,16 +71,42 @@ type reportFailure struct {
 	logged time.Time
 }
 
-// githubReport is the github-report annotation: the check run sent for a
-// commit and its state ("in_progress/deploying"), and the Deployment of a
-// release and its state.
+// githubReport is the github-report annotation. It keeps two checks: the
+// pinned commit's (Commit) and the newest commit not pinned, one held for
+// its CI, not deployed or skipped (Latest); each its run and its state
+// ("in_progress/deploying"). Then the Deployment of a release and its
+// state. Seq counts the changes, so the newer of two copies is known.
 type githubReport struct {
+	Seq             int64  `json:"seq,omitempty"`
 	Commit          string `json:"commit,omitempty"`
 	CheckRun        int64  `json:"checkRun,omitempty"`
 	Check           string `json:"check,omitempty"`
+	Latest          string `json:"latest,omitempty"`
+	LatestRun       int64  `json:"latestRun,omitempty"`
+	LatestCheck     string `json:"latestCheck,omitempty"`
 	Release         int    `json:"release,omitempty"`
 	Deployment      int64  `json:"deployment,omitempty"`
 	DeploymentState string `json:"deploymentState,omitempty"`
+}
+
+// checkSlot is one of the report's two checks.
+type checkSlot struct {
+	commit *string
+	run    *int64
+	check  *string
+}
+
+func (s checkSlot) clear() { *s.commit, *s.run, *s.check = "", 0, "" }
+
+// unfinished says the slot holds a run that is not completed.
+func (s checkSlot) unfinished() bool { return *s.run != 0 && !checkDone(*s.check) }
+
+func (rep *githubReport) pinSlot() checkSlot {
+	return checkSlot{&rep.Commit, &rep.CheckRun, &rep.Check}
+}
+
+func (rep *githubReport) latestSlot() checkSlot {
+	return checkSlot{&rep.Latest, &rep.LatestRun, &rep.LatestCheck}
 }
 
 // readGitHubReport reads the annotation; an unreadable one is empty.
@@ -116,7 +148,9 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if wait := r.waiting(app.UID); wait > 0 {
 		return ctrl.Result{RequeueAfter: wait}, nil
 	}
-	ref, ok, err := r.GitHub.cover(ctx, app)
+	// cover's own log line would come every retry: failed() logs once a
+	// minute instead.
+	ref, ok, err := r.GitHub.coverQuietly(ctx, app)
 	if err != nil {
 		// Not known is not "not covered": wait through the backoff, and
 		// keep what was sent.
@@ -128,10 +162,17 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		r.forget(app.UID)
 		return ctrl.Result{}, nil
 	}
-	old := readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport])
+	saved := readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport])
+	old := r.lastSent(app.UID, saved)
 	next, err := r.report(ctx, app, ref, old)
 	if next != old {
-		// What GitHub accepted is kept, also when a later write failed.
+		// What GitHub accepted is kept, also when a later write failed:
+		// in memory first, so a failed patch or a stale cache never
+		// posts it again.
+		next.Seq = old.Seq + 1
+		r.remember(app.UID, next)
+	}
+	if next != saved {
 		if perr := r.saveReport(ctx, app, next); perr != nil {
 			return ctrl.Result{}, perr
 		}
@@ -139,14 +180,14 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err != nil {
 		return ctrl.Result{RequeueAfter: r.failed(ctx, app, err)}, nil
 	}
-	r.forget(app.UID)
+	r.recovered(app.UID)
 	return ctrl.Result{}, nil
 }
 
 // report sends what changed since old, and says what GitHub now has.
 func (r *GitHubReporter) report(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, old githubReport) (githubReport, error) {
 	next := old
-	if err := r.reportCheck(ctx, app, ref, &next); err != nil {
+	if err := r.reportChecks(ctx, app, ref, &next); err != nil {
 		return next, err
 	}
 	return next, nil
@@ -166,68 +207,113 @@ func (w checkWant) key() string { return w.status + "/" + w.label }
 // checkDone says a kept check is completed.
 func checkDone(key string) bool { return strings.HasPrefix(key, "completed/") }
 
-// wantCheck is the check the App's state calls for, and false when it
-// calls for none: nothing pinned yet; a release of config or sizes, or a
-// rollback (the commit's check stays as it was); or an older release still
-// running before the commit's build starts.
-func wantCheck(app *shpyrdv1.App) (checkWant, bool) {
+// deployFailedSummary is a failed check's summary when the App's message
+// is not a build's, which is in words and masked: any other message may
+// carry what must not reach GitHub.
+const deployFailedSummary = "The deploy failed: see the project on shpyrd."
+
+// sourceRecordOf is the watcher's record of the branch the App follows.
+func sourceRecordOf(app *shpyrdv1.App) gitauth.SourceRecord {
 	rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
 	if rec.Ref != app.GitRevision() {
-		rec = gitauth.SourceRecord{}
+		return gitauth.SourceRecord{}
 	}
+	return rec
+}
+
+// wantLatest is the check of the newest commit on the branch when it is
+// not the pinned one: held for its CI, not deployed, or skipped. False
+// when there is none.
+func wantLatest(app *shpyrdv1.App) (checkWant, bool) {
+	rec := sourceRecordOf(app)
+	latest := rec.Latest
+	if latest == "" || latest == app.PinnedCommit() {
+		return checkWant{}, false
+	}
+	note := commitNote(latest, rec)
+	switch latest {
+	case rec.Held:
+		return checkWant{commit: latest, status: "queued", label: "waiting", title: "Waiting for CI",
+			summary: note + "\n\nshpyrd deploys this commit once its other checks pass, and gives up an hour after it was pushed."}, true
+	case rec.NotDeployed:
+		return checkWant{commit: latest, status: "completed", conclusion: "neutral", label: "not-deployed", title: rec.NotDeployedReason,
+			summary: note + "\n\nNot deployed: " + rec.NotDeployedReason + "."}, true
+	case rec.Skipped:
+		return checkWant{commit: latest, status: "completed", conclusion: "neutral", label: "skipped", title: "Skipped: [skip deploy]",
+			summary: note + "\n\nThe commit message asked not to deploy it."}, true
+	}
+	return checkWant{}, false
+}
+
+// wantCheck is the pinned commit's check, given what rep says was sent
+// for it, and false when it calls for none. A finished check is never
+// reopened. A release of config or sizes, or a rollback, never changes a
+// finished check and never fails one; while the pinned commit's check is
+// not finished and its code runs, it succeeds. A commit not yet running
+// is Building at once, even while an older release runs.
+func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 	pin := app.PinnedCommit()
-	if latest := rec.Latest; latest != "" && latest != pin {
-		note := commitNote(latest, rec)
-		switch latest {
-		case rec.Held:
-			return checkWant{commit: latest, status: "queued", label: "waiting", title: "Waiting for CI",
-				summary: note + "\n\nshpyrd deploys this commit once its other checks pass, and gives up an hour after it was pushed."}, true
-		case rec.NotDeployed:
-			return checkWant{commit: latest, status: "completed", conclusion: "neutral", label: "not-deployed", title: rec.NotDeployedReason,
-				summary: note + "\n\nNot deployed: " + rec.NotDeployedReason + "."}, true
-		case rec.Skipped:
-			return checkWant{commit: latest, status: "completed", conclusion: "neutral", label: "skipped", title: "Skipped: [skip deploy]",
-				summary: note + "\n\nThe commit message asked not to deploy it."}, true
-		}
-	}
 	if pin == "" {
 		return checkWant{}, false
 	}
+	done := rep.Commit == pin && rep.CheckRun != 0 && checkDone(rep.Check)
 	cur := app.CurrentRelease()
 	onPin := releaseIs(cur, pin)
-	// code: the current release is the pinned commit's code release, not a
-	// release of config or sizes after it.
-	code := onPin && !configRelease(app)
-	w := checkWant{commit: pin, summary: commitNote(pin, rec)}
+	w := checkWant{commit: pin, summary: commitNote(pin, sourceRecordOf(app))}
 	if onPin && cur.Description != "" {
 		w.summary = cur.Description
 	}
-	switch phase := app.Status.Phase; {
-	case !code && deployedBefore(app, pin) &&
-		(phase == shpyrdv1.PhaseRunning || phase == shpyrdv1.PhaseFailed || phase == shpyrdv1.PhaseDeploying):
-		// A release of config or sizes, or a rollback, rolls out, runs or
-		// fails: the commit's check stays as it was.
-		return checkWant{}, false
-	case phase == shpyrdv1.PhaseFailed:
-		w.status, w.conclusion, w.label, w.title = "completed", "failure", "failure", "Failed"
-		if msg := lastLines(app.Status.Message, checkSummaryLines, checkSummaryMax); msg != "" {
-			w.summary += "\n\n```\n" + msg + "\n```"
-		}
-	case phase == shpyrdv1.PhaseRunning && code:
+	phase := app.Status.Phase
+	success := func() (checkWant, bool) {
 		w.status, w.conclusion, w.label, w.title = "completed", "success", "success", "Running"
 		if app.Status.URL != "" {
 			w.title = "Running at " + app.Status.URL
 		}
-	case phase == shpyrdv1.PhaseRunning:
-		// Still running an older release: the commit is not built yet, and
-		// its check waits for the build.
-		return checkWant{}, false
-	case phase == shpyrdv1.PhaseDeploying && code:
-		w.status, w.label, w.title = "in_progress", "deploying", "Deploying"
-	default:
-		w.status, w.label, w.title = "in_progress", "building", "Building"
+		return w, true
 	}
-	return w, true
+	building := func() (checkWant, bool) {
+		if done {
+			return checkWant{}, false
+		}
+		w.status, w.label, w.title = "in_progress", "building", "Building"
+		return w, true
+	}
+	switch {
+	case onPin && configRelease(app):
+		// A release of config or sizes: the commit's code runs on.
+		if done || (phase != shpyrdv1.PhaseRunning && phase != shpyrdv1.PhaseFailed) {
+			return checkWant{}, false
+		}
+		return success()
+	case !onPin && deployedBefore(app, pin):
+		// A rollback runs older code: the commit's check stays.
+		return checkWant{}, false
+	case phase == shpyrdv1.PhaseFailed:
+		w.status, w.conclusion, w.label, w.title = "completed", "failure", "failure", "Failed"
+		if msg := lastLines(app.Status.Message, checkSummaryLines, checkSummaryMax); msg != "" && failedInBuild(app) {
+			w.summary += "\n\n```\n" + msg + "\n```"
+		} else {
+			w.summary += "\n\n" + deployFailedSummary
+		}
+		return w, true
+	case onPin && phase == shpyrdv1.PhaseRunning:
+		return success()
+	case onPin && phase == shpyrdv1.PhaseDeploying:
+		if done {
+			return checkWant{}, false
+		}
+		w.status, w.label, w.title = "in_progress", "deploying", "Deploying"
+		return w, true
+	default:
+		return building()
+	}
+}
+
+// failedInBuild says the App failed in its build: its message is then the
+// build's failure in words, already masked (build_failure.go).
+func failedInBuild(app *shpyrdv1.App) bool {
+	c := meta.FindStatusCondition(app.Status.Conditions, shpyrdv1.ConditionReady)
+	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "BuildFailed"
 }
 
 // commitNote names a commit as its release would: "Push a1b2c3d by
@@ -263,47 +349,119 @@ func configRelease(app *shpyrdv1.App) bool {
 	return n >= 2 && rels[n-1].Source == rels[n-2].Source
 }
 
-// lastLines is the end of a message: at most n lines and max bytes.
+// lastLines is the end of a message: at most n lines and max bytes, cut
+// at a character's start.
 func lastLines(msg string, n, maxBytes int) string {
 	lines := strings.Split(strings.TrimSpace(msg), "\n")
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
 	out := strings.Join(lines, "\n")
-	if r := []rune(out); len(out) > maxBytes {
-		for len(string(r)) > maxBytes {
-			r = r[1:]
+	if len(out) > maxBytes {
+		cut := len(out) - maxBytes
+		for cut < len(out) && !utf8.RuneStart(out[cut]) {
+			cut++
 		}
-		out = string(r)
+		out = out[cut:]
 	}
 	return out
 }
 
-// reportCheck brings the commit's check run to what the App's state calls
-// for: a new run for a new commit (an unfinished one for the commit before
-// is marked replaced), or the same run updated. A completed run is never
-// taken back: a new state that is not completed is a new run. A run
-// deleted on GitHub (404) is made again.
-func (r *GitHubReporter) reportCheck(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, rep *githubReport) error {
-	want, ok := wantCheck(app)
-	if !ok || (want.commit == rep.Commit && want.key() == rep.Check) {
-		return nil
+// reportChecks brings the two checks to what the App's state calls for.
+// When the pin moves on, the old pin's unfinished check is marked
+// replaced, and the newest commit's unfinished check, when that commit is
+// the new pin, goes on as the pin's. A non-pinned commit's unfinished
+// check that a newer commit overtakes is marked superseded.
+func (r *GitHubReporter) reportChecks(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, rep *githubReport) error {
+	pinned, latest := rep.pinSlot(), rep.latestSlot()
+	if pin := app.PinnedCommit(); pin != "" && rep.Commit != pin {
+		if pinned.unfinished() {
+			replaced := checkWant{commit: rep.Commit, status: "completed", conclusion: "neutral", label: "replaced",
+				title: "Replaced by " + shortCommit(pin), summary: "shpyrd moved on to " + shortCommit(pin) + " before this commit was deployed."}
+			if err := r.close(ctx, app, ref, pinned, replaced); err != nil {
+				return err
+			}
+		}
+		pinned.clear()
+		if rep.Latest == pin {
+			if latest.unfinished() {
+				rep.Commit, rep.CheckRun, rep.Check = rep.Latest, rep.LatestRun, rep.LatestCheck
+			}
+			latest.clear()
+		}
 	}
-	now := r.now()
-	cl := ref.client
-	if rep.Commit != "" && rep.Commit != want.commit && rep.CheckRun != 0 && !checkDone(rep.Check) {
-		replaced := checkWant{commit: rep.Commit, status: "completed", conclusion: "neutral", label: "replaced",
-			title: "Replaced by " + shortCommit(want.commit), summary: "shpyrd moved on to " + shortCommit(want.commit) + " before this commit was deployed."}
-		if err := cl.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, rep.CheckRun, r.checkRun(app, replaced, now)); err != nil && !github.IsNotFound(err) {
+	lw, lok := wantLatest(app)
+	if rep.Latest != "" && (!lok || rep.Latest != lw.commit) {
+		if newer := firstNonEmpty(lw.commit, app.PinnedCommit()); latest.unfinished() && newer != "" {
+			superseded := checkWant{commit: rep.Latest, status: "completed", conclusion: "neutral", label: "superseded",
+				title: "Superseded by " + shortCommit(newer), summary: "A newer commit, " + shortCommit(newer) + ", came before this one was deployed."}
+			if err := r.close(ctx, app, ref, latest, superseded); err != nil {
+				return err
+			}
+		}
+		latest.clear()
+	}
+	if w, ok := wantCheck(app, *rep); ok {
+		if err := r.sendCheck(ctx, app, ref, pinned, w); err != nil {
 			return err
 		}
-		rep.Check = replaced.key()
 	}
+	if lok {
+		if err := r.sendCheck(ctx, app, ref, latest, lw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// close completes the slot's unfinished run as w says; a run deleted on
+// GitHub needs nothing.
+func (r *GitHubReporter) close(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, slot checkSlot, w checkWant) error {
+	err := ref.client.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, *slot.run, r.checkRun(app, w, r.now()))
+	if err != nil && !github.IsNotFound(err) {
+		return err
+	}
+	*slot.check = w.key()
+	return nil
+}
+
+// sendCheck brings the slot's run to w: the same run updated, else one
+// shpyrd already made on the commit (found by name and the App's UID),
+// else a new one. A completed run is never taken back: a new state that is
+// not completed is a new run. A run deleted on GitHub (404) is made again.
+func (r *GitHubReporter) sendCheck(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, slot checkSlot, want checkWant) error {
+	if *slot.commit == want.commit && *slot.check == want.key() && *slot.run != 0 {
+		return nil
+	}
+	cl, now := ref.client, r.now()
 	w := r.checkRun(app, want, now)
-	if rep.Commit == want.commit && rep.CheckRun != 0 && (!checkDone(rep.Check) || checkDone(want.key())) {
-		err := cl.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, rep.CheckRun, w)
+	reopens := func(check string) bool { return checkDone(check) && !checkDone(want.key()) }
+	if *slot.commit == want.commit && *slot.run != 0 && !reopens(*slot.check) {
+		err := cl.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, *slot.run, w)
 		if err == nil {
-			rep.Check = want.key()
+			*slot.check = want.key()
+			return nil
+		}
+		if !github.IsNotFound(err) {
+			return err
+		}
+	}
+	// A run made before the annotation said so (a patch that failed, a
+	// restart) is found, not made twice.
+	runs, err := cl.ReportCheckRuns(ctx, ref.installation, ref.owner, ref.name, want.commit, w.Name)
+	if err != nil {
+		return err
+	}
+	var own *github.CheckRun
+	for i := range runs {
+		if runs[i].ExternalID == w.ExternalID && runs[i].ID != *slot.run && (own == nil || runs[i].ID > own.ID) {
+			own = &runs[i]
+		}
+	}
+	if own != nil && !(own.Status == "completed" && !checkDone(want.key())) {
+		err := cl.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, own.ID, w)
+		if err == nil {
+			*slot.commit, *slot.run, *slot.check = want.commit, own.ID, want.key()
 			return nil
 		}
 		if !github.IsNotFound(err) {
@@ -314,7 +472,7 @@ func (r *GitHubReporter) reportCheck(ctx context.Context, app *shpyrdv1.App, ref
 	if err != nil {
 		return err
 	}
-	rep.Commit, rep.CheckRun, rep.Check = want.commit, id, want.key()
+	*slot.commit, *slot.run, *slot.check = want.commit, id, want.key()
 	return nil
 }
 
@@ -385,10 +543,39 @@ func (r *GitHubReporter) waiting(uid types.UID) time.Duration {
 	return max(f.until.Sub(r.now()), 0)
 }
 
+// forget drops all the reporter keeps of an App it no longer reports.
 func (r *GitHubReporter) forget(uid types.UID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.failing, uid)
+	delete(r.sent, uid)
+}
+
+// recovered ends an App's backoff: its writes went through.
+func (r *GitHubReporter) recovered(uid types.UID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.failing, uid)
+}
+
+// remember keeps the report GitHub accepted for the App.
+func (r *GitHubReporter) remember(uid types.UID, rep githubReport) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sent == nil {
+		r.sent = map[types.UID]githubReport{}
+	}
+	r.sent[uid] = rep
+}
+
+// lastSent is the newer of the annotation and what was last accepted.
+func (r *GitHubReporter) lastSent(uid types.UID, saved githubReport) githubReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if mem, ok := r.sent[uid]; ok && mem.Seq > saved.Seq {
+		return mem
+	}
+	return saved
 }
 
 func (r *GitHubReporter) now() time.Time {

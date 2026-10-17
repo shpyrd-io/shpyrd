@@ -278,13 +278,22 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 			return
 		}
 		runs := f.runs[strings.ToLower(seg[1])]
+		if name := r.URL.Query().Get("check_name"); name != "" {
+			var named []CheckRun
+			for _, run := range runs {
+				if run.Name == name {
+					named = append(named, run)
+				}
+			}
+			runs = named
+		}
 		out := []map[string]any{}
 		for _, run := range pageOf(runs, r) {
 			var conclusion any
 			if run.Conclusion != "" {
 				conclusion = run.Conclusion
 			}
-			out = append(out, map[string]any{"id": run.ID, "name": run.Name, "status": run.Status, "conclusion": conclusion, "app": map[string]any{"id": run.AppID}})
+			out = append(out, map[string]any{"id": run.ID, "name": run.Name, "status": run.Status, "conclusion": conclusion, "external_id": run.ExternalID, "app": map[string]any{"id": run.AppID}})
 		}
 		reply(w, http.StatusOK, map[string]any{"total_count": f.total("runs", seg[1], len(runs)), "check_runs": out})
 	case r.Method == "GET" && len(seg) == 3 && seg[0] == "commits" && seg[2] == "status":

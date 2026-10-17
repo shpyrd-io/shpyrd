@@ -241,3 +241,16 @@ func rawPost(fake *githubtest.Server, token, path, body string) (int, error) {
 	defer resp.Body.Close()
 	return resp.StatusCode, nil
 }
+
+func TestTheReporterListsItsOwnCheckRunsWithItsToken(t *testing.T) {
+	c, fake := newClient(t)
+	fake.SetCheckRuns("bbb222", githubtest.CheckRun{Name: "test", Status: "completed", Conclusion: "success"},
+		githubtest.CheckRun{Name: "shpyrd / shop", Status: "in_progress", ExternalID: "uid-1"})
+	got, err := c.ReportCheckRuns(context.Background(), 42, "acme", "shop", "bbb222", "shpyrd / shop")
+	if err != nil || len(got) != 1 || got[0].Name != "shpyrd / shop" || got[0].ExternalID != "uid-1" {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if perms := fake.LastTokenRequest()["permissions"]; fmt.Sprint(perms) != "map[checks:write deployments:write]" {
+		t.Errorf("token %v", perms)
+	}
+}

@@ -69,9 +69,24 @@ func (c *Client) Compare(ctx context.Context, installation int64, owner, repo, b
 
 // CheckRuns are the check runs on a commit, every App's.
 func (c *Client) CheckRuns(ctx context.Context, installation int64, owner, repo, sha string) ([]CheckRun, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead())
+	return c.checkRuns(ctx, installation, owner, repo, sha, "", WatchRead())
+}
+
+// ReportCheckRuns are the check runs named name on a commit, read with the
+// reporter's token (checks write reads them too): the reporter finds a run
+// it made before it makes another.
+func (c *Client) ReportCheckRuns(ctx context.Context, installation int64, owner, repo, sha, name string) ([]CheckRun, error) {
+	return c.checkRuns(ctx, installation, owner, repo, sha, name, ReportWrite())
+}
+
+func (c *Client) checkRuns(ctx context.Context, installation int64, owner, repo, sha, name string, perms Permissions) ([]CheckRun, error) {
+	tok, err := c.InstallationToken(ctx, installation, repo, perms)
 	if err != nil {
 		return nil, err
+	}
+	filter := ""
+	if name != "" {
+		filter = "&check_name=" + url.QueryEscape(name)
 	}
 	out := []CheckRun{}
 	total := 0
@@ -83,18 +98,19 @@ func (c *Client) CheckRuns(ctx context.Context, installation int64, owner, repo,
 				Name       string `json:"name"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
+				ExternalID string `json:"external_id"`
 				App        struct {
 					ID int64 `json:"id"`
 				} `json:"app"`
 			} `json:"check_runs"`
 		}
-		endpoint := c.repoURL(owner, repo, fmt.Sprintf("commits/%s/check-runs?per_page=%d&page=%d", url.PathEscape(sha), perPage, page))
+		endpoint := c.repoURL(owner, repo, fmt.Sprintf("commits/%s/check-runs?per_page=%d&page=%d%s", url.PathEscape(sha), perPage, page, filter))
 		if err := c.call(ctx, "GET", endpoint, tok.Value, nil, &res); err != nil {
 			return nil, err
 		}
 		total = res.Total
 		for _, r := range res.Runs {
-			out = append(out, CheckRun{ID: r.ID, Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, AppID: r.App.ID})
+			out = append(out, CheckRun{ID: r.ID, Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, AppID: r.App.ID, ExternalID: r.ExternalID})
 		}
 		if len(res.Runs) == 0 || len(out) >= res.Total {
 			break
