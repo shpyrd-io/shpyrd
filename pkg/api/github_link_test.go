@@ -16,6 +16,6 @@ func TestTheServerMakesTheTokenKey(t *testing.T) {
 	}
 	sec, err := s.kube.Kube.CoreV1().Secrets("shpyrd-system").Get(context.Background(), tokenseal.SecretName, metav1.GetOptions{})
 	if err != nil || len(sec.Data[tokenseal.KeyName]) != 32 {
-		t.Fatalf("secret %v", err)
+		t.Fatalf("secret: err %v, key length %d, want 32", err, len(sec.Data[tokenseal.KeyName]))
 	}
 }

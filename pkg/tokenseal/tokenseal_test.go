@@ -7,8 +7,11 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestASealedValueOpensWithItsKeyAndRowOnly(t *testing.T) {
@@ -82,5 +85,39 @@ func TestABrokenKeySecretIsAnError(t *testing.T) {
 		Data: map[string][]byte{KeyName: []byte("short")}})
 	if _, err := LoadOrCreate(context.Background(), cs, "shpyrd-system"); err == nil || !strings.Contains(err.Error(), SecretName) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAConflictingCreateIsReadOnceNotRetriedForever(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset()
+	gr := corev1.Resource("secrets")
+	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(gr, SecretName)
+	})
+	cs.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewAlreadyExists(gr, SecretName)
+	})
+	if _, err := LoadOrCreate(context.Background(), cs, "shpyrd-system"); err == nil {
+		t.Error("no error")
+	}
+}
+
+func TestTheVersionLabelIsAuthenticated(t *testing.T) {
+	box, _ := Generate()
+	sealed, _ := box.Seal("x", "r")
+	if _, err := box.Open("v2."+strings.TrimPrefix(sealed, "v1."), "r"); !errors.Is(err, ErrCannotOpen) {
+		t.Errorf("relabelled value opened: %v", err)
+	}
+}
+
+func TestRowPartsAreUnambiguous(t *testing.T) {
+	a, b := Row("a\x00b", "c"), Row("a", "b\x00c")
+	if a == b {
+		t.Fatal("two rows alike")
+	}
+	box, _ := Generate()
+	sealed, _ := box.Seal("x", a)
+	if _, err := box.Open(sealed, b); !errors.Is(err, ErrCannotOpen) {
+		t.Errorf("another row's value opened: %v", err)
 	}
 }

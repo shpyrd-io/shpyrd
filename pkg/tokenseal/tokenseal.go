@@ -12,6 +12,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,7 +29,8 @@ const (
 	// KeyName is the key's entry in it: 32 random bytes.
 	KeyName = "key"
 	keySize = 32
-	prefix  = "v1."
+	version = "v1"
+	prefix  = version + "."
 )
 
 // ErrCannotOpen: the value was sealed under another key, for another row,
@@ -72,7 +74,18 @@ func newKey() ([]byte, error) {
 }
 
 // Row names what a value belongs to, as its additional data.
-func Row(parts ...string) string { return strings.Join(parts, "\x00") }
+// Each part is length-prefixed, so no two different rows give the same bytes.
+func Row(parts ...string) string {
+	var b []byte
+	for _, p := range parts {
+		b = binary.AppendUvarint(b, uint64(len(p)))
+		b = append(b, p...)
+	}
+	return string(b)
+}
+
+// aad binds the format version and the row.
+func aad(row string) []byte { return []byte(version + "\x00" + row) }
 
 // Seal encrypts plain for row: "v1." and base64 of the nonce and the
 // ciphertext.
@@ -81,7 +94,7 @@ func (b *Box) Seal(plain, row string) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	return prefix + base64.RawStdEncoding.EncodeToString(b.aead.Seal(nonce, nonce, []byte(plain), []byte(row))), nil
+	return prefix + base64.RawStdEncoding.EncodeToString(b.aead.Seal(nonce, nonce, []byte(plain), aad(row))), nil
 }
 
 // Open decrypts a value sealed for row; ErrCannotOpen when it does not.
@@ -95,7 +108,7 @@ func (b *Box) Open(sealed, row string) (string, error) {
 	if err != nil || len(data) < n {
 		return "", ErrCannotOpen
 	}
-	plain, err := b.aead.Open(nil, data[:n], data[n:], []byte(row))
+	plain, err := b.aead.Open(nil, data[:n], data[n:], aad(row))
 	if err != nil {
 		return "", ErrCannotOpen
 	}
@@ -117,13 +130,18 @@ func LoadOrCreate(ctx context.Context, kube kubernetes.Interface, namespace stri
 			Data:       map[string][]byte{KeyName: key},
 		}
 		created, cerr := kube.CoreV1().Secrets(namespace).Create(ctx, sec, metav1.CreateOptions{})
-		if apierrors.IsAlreadyExists(cerr) {
-			return LoadOrCreate(ctx, kube, namespace)
-		}
-		if cerr != nil {
+		switch {
+		case apierrors.IsAlreadyExists(cerr):
+			// Another replica won: read its key once, never retry the create.
+			sec, err = kube.CoreV1().Secrets(namespace).Get(ctx, SecretName, metav1.GetOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("could not read the Secret %s another replica made: %w", SecretName, err)
+			}
+		case cerr != nil:
 			return nil, fmt.Errorf("could not create the Secret %s: %w", SecretName, cerr)
+		default:
+			sec = created
 		}
-		sec = created
 	} else if err != nil {
 		return nil, fmt.Errorf("could not read the Secret %s: %w", SecretName, err)
 	}
