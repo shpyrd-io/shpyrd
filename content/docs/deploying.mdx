@@ -205,13 +205,13 @@ On shpyrd cloud the App is already set up; on a self-hosted platform an operator
 
 ### Checks and Deployments on GitHub
 
-For a repository the GitHub App covers, GitHub shows what shpyrd does with each commit. A check named `shpyrd / <project>` appears on the commit: **Building**, then **Deploying**, then **Running at** the app's address, or **Failed** with the last lines of the reason. Its **Details** link opens the project in the dashboard. A commit that waits for CI shows **Waiting for CI**. A commit that was not deployed, that asked to be skipped, that a newer commit overtook, or that a newer pin replaced shows a neutral check that says why ("Replaced by a1b2c3d", "Superseded by a1b2c3d").
+For a repository the GitHub App covers, GitHub shows what shpyrd does with each commit. A check named `shpyrd / <project>` appears on the commit: **Building**, then **Deploying**, then **Running at** the app's address, or **Failed** with the last lines of the reason. Its **Details** link opens the project in the dashboard. A commit that waits for CI shows **Waiting for CI**. A commit that was not deployed, that asked to be skipped, that a newer commit overtook, that a newer pin replaced, or that a rollback or a deploy by image overtook before it was deployed shows a neutral check that says why ("Replaced by a1b2c3d", "Superseded by a1b2c3d", "Not deployed: rolled back to release 3").
 
 Each release that changes the code is also a GitHub **Deployment**, in an environment named after the project, with a link to the app once it runs. A rollback to an older commit is a Deployment too. A Deployment that was still unfinished when a newer release replaced it is marked inactive. A release that only changes config vars or sizes gets no Deployment, and never changes a check that is finished. Two projects on one repository each get their own check and their own environment.
 
-The check and the Deployment never hold a deploy back: when GitHub is down or refuses a write, shpyrd deploys as usual and sends what it owes later. A suspended or removed installation reports nothing. When shpyrd stops reporting on a project (it no longer follows a branch on github.com, for one), its unfinished checks and its unfinished Deployment are closed.
+The check and the Deployment never hold a deploy back: when GitHub is down or refuses a write, shpyrd deploys as usual and sends what it owes later. A suspended or removed installation reports nothing. When shpyrd stops reporting on a project (it no longer follows a branch on github.com, for one), its unfinished checks and its unfinished Deployment are closed. When the App stops covering the repository, they are closed too while shpyrd still holds a token for it; otherwise they stay as they were.
 
-An installation made before the App asked for checks, statuses and Deployments has to accept the App's updated permissions on GitHub; until it does, nothing is reported and wait for CI cannot read the commit's checks.
+An installation made before the App asked for checks, statuses and Deployments has to accept the App's updated permissions on GitHub; until it does, nothing is reported, and a commit that would wait for CI is not deployed (below).
 
 ### Wait for CI
 
@@ -220,6 +220,8 @@ With **Wait for CI** on, a pushed commit deploys only once every other check and
 ```shell
 shpyrd deploy --git https://github.com/acme/shop --wait-for-ci      # --no-wait-for-ci switches it off
 ```
+
+That command is your own deploy, and yours never waits: it deploys the branch's head now, and the setting applies from the next push. To switch it on without deploying, use the switch in the Source block.
 
 The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and `shpyrd projects info` prints `Commit:     a1b2c3d waits for CI (since 2m)`. Then:
 
@@ -230,6 +232,7 @@ The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and `
 - **A newer commit arrives:** it replaces the waiting one at once.
 - **GitHub does not answer:** the commit keeps waiting, and the hour keeps counting. It is never deployed unchecked.
 - **The App stops covering the repository:** a waiting commit stays held and ends "CI could not be read: the GitHub App no longer covers the repository".
+- **The installation has not accepted the App's updated permissions:** the commit is not deployed, at once: "CI could not be read: accept the GitHub App's updated permissions on GitHub". Accept them on GitHub; the next push waits for its CI again.
 
 shpyrd learns of results through the App's webhook, and checks a waiting commit every 30 seconds in case a delivery is missed. A deploy by a person (`shpyrd deploy`, Redeploy, a rollback) and the first commit of a new project do not wait. Turning auto-deploy back on sends the commit that was waiting through watch paths and wait for CI like any other.
 
@@ -253,7 +256,7 @@ shpyrd deploy --git https://github.com/acme/monorepo --no-watch-paths     # ever
 
 A commit that changes nothing in them is recorded, not deployed (the Source block and `shpyrd projects info` say "a1b2c3d not deployed: no changes in the watch paths"; the check on GitHub says "No changes in the watch paths"). The files counted are everything changed since the commit that runs, so a commit that was not deployed still counts once a later one matches, and a renamed file counts under its old name and its new one. When GitHub's list of changes cannot be trusted (300 or more files changed, the branch's history was rewritten, GitHub's compare failed, or GitHub is not answering), the commit deploys, and its release ends with "(watch paths not checked: …)", naming the reason.
 
-Watch paths and wait for CI work through the GitHub App. On a repository the GitHub App doesn't cover (another host, or an owner the workspace hasn't connected) they are kept but do nothing: the dashboard disables them with "Needs the GitHub App", and `shpyrd deploy` says so when it sets them.
+Watch paths and wait for CI work through the GitHub App. On a repository the GitHub App doesn't cover (another host, an owner the workspace hasn't connected, or a repository the installation doesn't include) they are kept but do nothing: the dashboard says "Needs the GitHub App" and lets you only switch wait for CI off and clear the watch paths, and `shpyrd deploy` says so when it sets them.
 
 <Callout title="Which languages?">
 
