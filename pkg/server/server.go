@@ -583,6 +583,13 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := source.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("source watcher: %w", err)
 	}
+	// The GitHub reporter (RFC-0054): check runs and Deployments on GitHub
+	// for the Apps its App covers; the dashboard's address from the App
+	// controller's Config.
+	reporter := &controller.GitHubReporter{Client: mgr.GetClient(), GitHub: githubApp, Config: rec.Config}
+	if err := reporter.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("github reporter: %w", err)
+	}
 	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace, Kube: k.Kube}
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
