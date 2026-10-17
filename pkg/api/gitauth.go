@@ -56,6 +56,9 @@ type ProjectGitAuthView struct {
 	Using     string         `json:"using"`
 	DeployKey *DeployKeyView `json:"deployKey,omitempty"`
 	Token     *GitTokenView  `json:"token,omitempty"`
+	// GitHubAccount is the account whose GitHub App installation builds
+	// clone through, when Using is github-app (RFC-0054).
+	GitHubAccount string `json:"githubAccount,omitempty"`
 }
 
 // A token is for a host name, without a port: the controller looks it up
@@ -212,9 +215,18 @@ func (s *Server) showProjectGitAuth(c *gin.Context) {
 		tv := gitTokenView(tk)
 		view.Token = &tv
 	}
+	// What builds clone with: the controller marks <app>-git when it
+	// holds the GitHub App's token.
+	viaApp := ""
+	build := &corev1.Secret{}
+	if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: app.Namespace, Name: gitauth.BuildSecretName(app.Name)}, build); err == nil {
+		viaApp = build.Annotations[gitauth.AnnotationGitHubAccount]
+	}
 	// Using is what builds really clone with: a deploy key made for
 	// another host is shown, but not used.
 	switch {
+	case viaApp != "":
+		view.Using, view.GitHubAccount = gitauth.KindGitHubApp, viaApp
 	case host != "" && gitauth.DeployKeyFits(dk, host):
 		view.Using = gitauth.KindDeployKey
 	case tk != nil:

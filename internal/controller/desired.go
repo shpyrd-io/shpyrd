@@ -86,6 +86,9 @@ type Config struct {
 	// Projects is the store's project registry (RFC-0076): the controller
 	// mirrors every App into it and marks deletions. Nil: no store (tests).
 	Projects store.Projects
+	// GitHub is the GitHub App (RFC-0054): builds of github.com
+	// repositories clone with its tokens first. Nil: never.
+	GitHub *GitHubApp
 	// DashboardURL is where the implicit workspace's dashboard answers:
 	// the issuer of its apps' JWTs (RFC-0033). Explicit workspaces issue
 	// from https://<address>.
@@ -589,12 +592,9 @@ func (c Config) desiredKpackImage(app *shpyrdv1.App, git gitauth.Build) (*unstru
 		if git.CloneURL != "" {
 			url = git.CloneURL
 		}
-		gitSrc := map[string]interface{}{"url": url}
-		rev := app.Spec.Source.Git.Revision
-		if rev == "" {
-			rev = "main"
-		}
-		gitSrc["revision"] = rev
+		// A branch builds the commit the source watcher pinned, so kpack
+		// does not poll it (RFC-0018); a commit builds as given.
+		gitSrc := map[string]interface{}{"url": url, "revision": app.BuildRevision()}
 		source["git"] = gitSrc
 	case app.Spec.Source.Blob != nil:
 		source["blob"] = map[string]interface{}{"url": c.sourceURL(app.Spec.Source.Blob.URL)}

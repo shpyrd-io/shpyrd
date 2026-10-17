@@ -277,6 +277,16 @@ export const backend: Api = {
     ),
   updateProject: async (slug, body) =>
     toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
+  projectGitHooks: (slug) => request(`${project(slug)}/git-hooks`),
+  projectGitAuth: (slug) => request(`${project(slug)}/git-auth`),
+  github: () => request("/api/workspace/github"),
+  connectGitHub: () => request("/api/workspace/github/connect", json("POST", {})),
+  disconnectGitHub: (id) => request(`/api/workspace/github/installations/${id}`, gone),
+  githubRepositories: () => request("/api/workspace/github/repositories"),
+  githubBranches: (fullName) => {
+    const [owner, repo] = fullName.split("/");
+    return request(`/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`);
+  },
   setProjectIcon: async (slug, dataUrl) =>
     toProject(
       await request<DetailAnswer>(

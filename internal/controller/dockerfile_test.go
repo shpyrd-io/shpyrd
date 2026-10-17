@@ -2,6 +2,12 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,12 +177,12 @@ func TestDockerfileGitFetchAndProcesses(t *testing.T) {
 	app := dockerfileApp()
 	app.Spec.Source = &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://github.com/o/r.git", Revision: "v1.2"}, SubPath: "services/api"}
 	app.Spec.Processes = map[string]shpyrdv1.Process{"web": {}, "worker": {}}
-	r, c := newTestReconciler(t, app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
 
 	got := runReconcile(t, r, app)
 	job := getJob(t, c, "app-dk", "dk-build-1")
 	fetch := job.Spec.Template.Spec.InitContainers[0].Command[2]
-	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='v1.2'") {
+	if !strings.Contains(fetch, "git clone --quiet --depth 1 --branch \"$rev\"") || !strings.Contains(fetch, "rev='"+testCommit+"'") {
 		t.Errorf("git fetch script: %s", fetch)
 	}
 	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--local context=/workspace/src/services/api") {
@@ -405,5 +411,105 @@ func TestStopBuildDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	got := getJob(t, c, app.Namespace, stale.Name)
 	if ptr.Deref(got.Spec.Suspend, false) || got.Annotations[shpyrdv1.AnnotationBuildFailure] != "" {
 		t.Fatalf("completed build was stopped: %+v", got)
+	}
+}
+
+// githubAppBuild is the App's credential for url, as the controller makes
+// it: a token Secret, marked as the App's.
+func githubAppBuild(t *testing.T, url, token string) gitauth.Build {
+	t.Helper()
+	tok := &corev1.Secret{Data: map[string][]byte{gitauth.KeyToken: []byte(token), gitauth.KeyUsername: []byte("x-access-token")}}
+	b, err := gitauth.Resolve(url, "dk", "app-dk", nil, tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Kind = gitauth.KindGitHubApp
+	return b
+}
+
+func TestFetchScriptOfTheGitHubAppWritesNetrc(t *testing.T) {
+	app := dockerfileGitApp("https://github.com/acme/dk")
+	script := Config{}.fetchScript(app, githubAppBuild(t, app.Spec.Source.Git.URL, "ghs_s3cret"))
+	if !strings.Contains(script, ".netrc") || !strings.Contains(script, "machine %s login %s password %s") || !strings.Contains(script, gitAuthDir+"/password") {
+		t.Errorf("the App's token is not given to git:\n%s", script)
+	}
+	if strings.Contains(script, "ghs_s3cret") {
+		t.Errorf("the token is inlined:\n%s", script)
+	}
+}
+
+// TestFetchScriptClonesThroughTheGitHubApp runs the fetch script with git
+// against a git host that answers only the App's token.
+func TestFetchScriptClonesThroughTheGitHubApp(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	out, err := exec.Command(gitBin, "--exec-path").Output()
+	if err != nil {
+		t.Skip("no git exec path")
+	}
+	backend := filepath.Join(strings.TrimSpace(string(out)), "git-http-backend")
+	if _, err := os.Stat(backend); err != nil {
+		t.Skip("no git-http-backend")
+	}
+	root := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+		"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@a", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@a")
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(gitBin, args...)
+		cmd.Dir, cmd.Env = dir, env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	work := filepath.Join(root, "work")
+	run(root, "init", "--quiet", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(work, "add", "Dockerfile")
+	run(work, "commit", "--quiet", "-m", "first")
+	run(root, "clone", "--quiet", "--bare", work, filepath.Join(root, "srv", "acme", "dk.git"))
+
+	git := &cgi.Handler{Path: backend, Env: []string{"GIT_PROJECT_ROOT=" + filepath.Join(root, "srv"), "GIT_HTTP_EXPORT_ALL=1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if u, p, ok := req.BasicAuth(); !ok || u != "x-access-token" || p != "ghs_s3cret" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		git.ServeHTTP(w, req)
+	}))
+	defer srv.Close()
+
+	app := dockerfileGitApp(srv.URL + "/acme/dk.git")
+	delete(app.Annotations, shpyrdv1.AnnotationGitCommit) // not pinned: clone the branch
+	b := githubAppBuild(t, app.Spec.Source.Git.URL, "ghs_s3cret")
+	script := Config{}.fetchScript(app, b)
+
+	// The script's fixed paths, moved under the test's directory.
+	tmp, auth, ws := filepath.Join(root, "tmp"), filepath.Join(root, "git-auth"), filepath.Join(root, "workspace")
+	for _, d := range []string{tmp, auth, ws} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for k, v := range b.Secret.Data {
+		if err := os.WriteFile(filepath.Join(auth, k), v, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script = strings.ReplaceAll(script, "/tmp", tmp)
+	script = strings.ReplaceAll(script, gitAuthDir, auth)
+	script = strings.ReplaceAll(script, workspaceDir, ws)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fetch: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "src", "Dockerfile")); err != nil {
+		t.Errorf("not cloned: %v", err)
 	}
 }

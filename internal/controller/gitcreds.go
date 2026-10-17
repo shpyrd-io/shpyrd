@@ -2,12 +2,14 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -27,22 +29,18 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
 		return gitauth.Build{}, r.deleteSecret(ctx, app.Namespace, name)
 	}
-	url := app.Spec.Source.Git.URL
-	repo, err := gitauth.Parse(url)
-	if err != nil {
+	b, err := lookupGitBuild(ctx, r.Client, r.Config.SystemNamespace, r.Config.GitHub, app)
+	if errors.Is(err, errGitURL) {
 		return r.noGitCredential(ctx, app)
 	}
-	deployKey, err := r.optionalSecret(ctx, app.Namespace, gitauth.DeployKeySecretName)
 	if err != nil {
 		return gitauth.Build{}, err
 	}
-	token, err := r.optionalSecret(ctx, r.Config.SystemNamespace, gitauth.TokenSecretName(workspaceOf(app), repo.Host))
-	if err != nil {
-		return gitauth.Build{}, err
-	}
-	b, err := gitauth.Resolve(url, app.Name, app.Namespace, deployKey, token)
-	if err != nil {
-		return r.noGitCredential(ctx, app)
+	if b.AppRetry {
+		if kept := r.keptAppToken(ctx, app); kept != nil {
+			kept.AppRefused, kept.AppRetry = b.AppRefused, true
+			b = *kept
+		}
 	}
 	if b.Secret == nil {
 		return b, r.deleteSecret(ctx, app.Namespace, name)
@@ -55,6 +53,11 @@ func (r *AppReconciler) reconcileGitCredentials(ctx context.Context, app *shpyrd
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sec, func() error {
 		sec.Labels = mergeMaps(sec.Labels, want.Labels)
+		for _, k := range githubMarks {
+			if _, ok := want.Annotations[k]; !ok {
+				delete(sec.Annotations, k)
+			}
+		}
 		sec.Annotations = mergeMaps(sec.Annotations, want.Annotations)
 		sec.Type = want.Type
 		sec.Data = want.Data
@@ -121,9 +124,43 @@ func (r *AppReconciler) ensureBuildServiceAccount(ctx context.Context, app *shpy
 	return nil
 }
 
-func (r *AppReconciler) optionalSecret(ctx context.Context, ns, name string) (*corev1.Secret, error) {
+// errGitURL: the App's git URL is not one shpyrd can parse; it builds
+// without credentials, as before credentials existed.
+var errGitURL = errors.New("the git URL is not one shpyrd can parse")
+
+// lookupGitBuild finds the credential a build of the App's repository
+// clones with, and the source watcher lists with: the GitHub App's token
+// for the repository (RFC-0054), else the project's deploy key for the
+// host, else the workspace's token for the host, else none.
+func lookupGitBuild(ctx context.Context, c client.Reader, systemNS string, gh *GitHubApp, app *shpyrdv1.App) (gitauth.Build, error) {
+	url := app.Spec.Source.Git.URL
+	repo, err := gitauth.Parse(url)
+	if err != nil {
+		return gitauth.Build{}, errGitURL
+	}
+	viaApp, refused, retry := gh.build(ctx, app, repo)
+	if viaApp != nil {
+		return *viaApp, nil
+	}
+	deployKey, err := optionalSecret(ctx, c, app.Namespace, gitauth.DeployKeySecretName)
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	token, err := optionalSecret(ctx, c, systemNS, gitauth.TokenSecretName(workspaceOf(app), repo.Host))
+	if err != nil {
+		return gitauth.Build{}, err
+	}
+	b, err := gitauth.Resolve(url, app.Name, app.Namespace, deployKey, token)
+	if err != nil {
+		return gitauth.Build{}, errGitURL
+	}
+	b.AppRefused, b.AppRetry = refused, retry
+	return b, nil
+}
+
+func optionalSecret(ctx context.Context, c client.Reader, ns, name string) (*corev1.Secret, error) {
 	sec := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}

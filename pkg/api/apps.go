@@ -26,6 +26,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
@@ -143,6 +144,11 @@ type AppDetail struct {
 	Spec        AppDetailSpec                     `json:"spec"`
 	Status      AppDetailStatus                   `json:"status"`
 	Processes   map[string]shpyrdv1.ProcessStatus `json:"processes,omitempty"`
+	// GitHubFeatures: the GitHub App covers the repository, so watch paths
+	// and wait for CI apply (RFC-0054). SourceNote says when they are set
+	// and do not.
+	GitHubFeatures bool   `json:"githubFeatures"`
+	SourceNote     string `json:"sourceNote,omitempty"`
 }
 
 type AppDetailSpec struct {
@@ -181,6 +187,9 @@ type AppDetailStatus struct {
 	// state of the release command for the release rolling out.
 	ProcessTypes []string                     `json:"processTypes,omitempty"`
 	Release      *shpyrdv1.ReleasePhaseStatus `json:"release,omitempty"`
+	// Source is what the source watcher knows of the branch and the
+	// commit pinned for it (RFC-0018).
+	Source *shpyrdv1.SourceStatus `json:"source,omitempty"`
 }
 
 // ReleaseView is a release with the image reduced to its digest and linked
@@ -247,6 +256,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Releases:   []ReleaseView{},
 			Conditions: a.Status.Conditions,
 			Domains:    a.Status.Domains,
+			Source:     a.Status.Source,
 		},
 		Processes: a.Status.Processes,
 	}
@@ -411,7 +421,7 @@ func (s *Server) getApp(c *gin.Context) {
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, detail(app, s.buildsByDigest(c.Request.Context(), app)))
+	c.JSON(http.StatusOK, s.projectDetail(c.Request.Context(), app))
 }
 
 // CreateAppRequest creates a project: namespace app-<slug> plus the App.
@@ -550,6 +560,14 @@ type UpdateAppRequest struct {
 	// IconColor its colour; "" removes either.
 	Icon      *string `json:"icon,omitempty"`
 	IconColor *string `json:"iconColor,omitempty"`
+	// AutoDeploy switches whether a push to the project's branch deploys
+	// (spec.source.git.autoDeploy, RFC-0018).
+	AutoDeploy *bool `json:"autoDeploy,omitempty"`
+	// WatchPaths replaces the git source's watch paths; [] removes them.
+	// WaitForChecks switches wait for CI. Both need the GitHub App
+	// (RFC-0054); set without it, the view's sourceNote says so.
+	WatchPaths    *[]string `json:"watchPaths,omitempty"`
+	WaitForChecks *bool     `json:"waitForChecks,omitempty"`
 }
 
 // updateApp changes a project's display name, description, featured flag,
@@ -561,8 +579,12 @@ func (s *Server) updateApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if req.Name == nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
-		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description, featured, icon or iconColor"))
+	if req.Name == nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil && req.AutoDeploy == nil &&
+		req.WatchPaths == nil && req.WaitForChecks == nil {
+		abort(c, http.StatusBadRequest, errors.New("nothing to update: give name, description, featured, icon, iconColor, autoDeploy, watchPaths or waitForChecks"))
+		return
+	}
+	if !cleanWatchPaths(c, &req.WatchPaths) {
 		return
 	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
@@ -596,17 +618,38 @@ func (s *Server) updateApp(c *gin.Context) {
 			}
 			changes = append(changes, "icon colour")
 		}
+		if req.AutoDeploy != nil {
+			if a.Spec.Source == nil || a.Spec.Source.Git == nil {
+				return errors.New("the project does not deploy from a git repository: auto-deploy follows a git branch")
+			}
+			on := *req.AutoDeploy
+			a.Spec.Source.Git.AutoDeploy = &on
+			changes = append(changes, fmt.Sprintf("auto-deploy %v", on))
+		}
+		if req.WatchPaths != nil || req.WaitForChecks != nil {
+			if a.Spec.Source == nil || a.Spec.Source.Git == nil {
+				return errors.New("the project does not deploy from a git repository: watch paths and wait for CI follow a git branch")
+			}
+			if req.WatchPaths != nil {
+				a.Spec.Source.Git.WatchPaths = *req.WatchPaths
+				changes = append(changes, fmt.Sprintf("watch paths %q", *req.WatchPaths))
+			}
+			if req.WaitForChecks != nil {
+				a.Spec.Source.Git.WaitForChecks = *req.WaitForChecks
+				changes = append(changes, fmt.Sprintf("wait for CI %v", *req.WaitForChecks))
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return
 	}
 	action := "project.update"
-	if req.Name != nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil {
+	if req.Name != nil && req.Description == nil && req.Featured == nil && req.Icon == nil && req.IconColor == nil && req.AutoDeploy == nil && req.WatchPaths == nil && req.WaitForChecks == nil {
 		action = "project.rename"
 	}
 	s.audit(c, project.SlugOf(app), action, project.Label(app), strings.Join(changes, ", "))
-	c.JSON(http.StatusOK, detail(app, s.buildsByDigest(c.Request.Context(), app)))
+	c.JSON(http.StatusOK, s.projectDetail(c.Request.Context(), app))
 }
 
 // deployDetail summarises a deploy request for the audit trail.
@@ -652,6 +695,27 @@ type DeployRequest struct {
 	Allow    []shpyrdv1.AllowEntry `json:"allow,omitempty"`
 	// Note is the release description ("Deploy image x", a commit line).
 	Note string `json:"note,omitempty"`
+	// WatchPaths and WaitForChecks set the git source's (RFC-0054); left
+	// out, the project's stay. The git source's own fields of those names
+	// are not read: a bool cannot say "keep".
+	WatchPaths    *[]string `json:"watchPaths,omitempty"`
+	WaitForChecks *bool     `json:"waitForChecks,omitempty"`
+}
+
+// cleanWatchPaths cleans and checks the watch paths a request sets, and
+// answers 422 with the validator's sentence when they cannot be read. It
+// reports whether the request goes on. Nil is left alone.
+func cleanWatchPaths(c *gin.Context, paths **[]string) bool {
+	if *paths == nil {
+		return true
+	}
+	cleaned := gitauth.CleanWatchPaths(**paths)
+	if err := gitauth.ValidWatchPaths(cleaned); err != nil {
+		abort(c, http.StatusUnprocessableEntity, err)
+		return false
+	}
+	*paths = &cleaned
+	return true
 }
 
 func (s *Server) deployApp(c *gin.Context) {
@@ -684,6 +748,13 @@ func (s *Server) deployApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	if (req.WatchPaths != nil || req.WaitForChecks != nil) && !hasGit {
+		abort(c, http.StatusBadRequest, errors.New("watchPaths and waitForChecks go with git"))
+		return
+	}
+	if !cleanWatchPaths(c, &req.WatchPaths) {
+		return
+	}
 	if req.Allow != nil {
 		if err := s.validateAllow(c, c.Param("slug"), req.Allow); err != nil {
 			abort(c, http.StatusBadRequest, err)
@@ -699,7 +770,26 @@ func (s *Server) deployApp(c *gin.Context) {
 			if req.Git.Revision == "" {
 				req.Git.Revision = "main"
 			}
+			// Auto-deploy is the project's setting: a deploy that does not
+			// say keeps it (RFC-0018).
+			if req.Git.AutoDeploy == nil && a.Spec.Source != nil && a.Spec.Source.Git != nil {
+				req.Git.AutoDeploy = a.Spec.Source.Git.AutoDeploy
+			}
+			// Watch paths and wait for CI are the project's settings too.
+			req.Git.WatchPaths, req.Git.WaitForChecks = nil, false
+			if a.Spec.Source != nil && a.Spec.Source.Git != nil {
+				req.Git.WatchPaths, req.Git.WaitForChecks = a.Spec.Source.Git.WatchPaths, a.Spec.Source.Git.WaitForChecks
+			}
+			if req.WatchPaths != nil {
+				req.Git.WatchPaths = *req.WatchPaths
+			}
+			if req.WaitForChecks != nil {
+				req.Git.WaitForChecks = *req.WaitForChecks
+			}
 			a.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
+			// The source watcher reads the branch's commit again at once.
+			delete(a.Annotations, shpyrdv1.AnnotationGitCommit)
+			delete(a.Annotations, shpyrdv1.AnnotationGitCommitRef)
 		case hasBlob:
 			a.Spec.Image = ""
 			a.Spec.Source = &shpyrdv1.Source{Blob: req.Blob, SubPath: req.SubPath}
@@ -777,7 +867,7 @@ func (s *Server) deployApp(c *gin.Context) {
 		return
 	}
 	s.audit(c, project.SlugOf(app), "deploy", project.SlugOf(app), deployDetail(req))
-	c.JSON(http.StatusAccepted, detail(app, s.buildsByDigest(c.Request.Context(), app)))
+	c.JSON(http.StatusAccepted, s.projectDetail(c.Request.Context(), app))
 }
 
 // validateAllow checks an allow list: each entry names exactly a project or

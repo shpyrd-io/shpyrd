@@ -43,6 +43,7 @@ func NewCtl(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newGlobalsCmd(g))
 	root.AddCommand(newConsoleUsersCmd(g))
 	root.AddCommand(newCtlWorkspaceCmd(g))
+	root.AddCommand(newCtlGitHubCmd(g)) // RFC-0054: the cluster's GitHub App
 	// The operator's extension commands (users, auth, object-storage);
 	// project resources (pg, redis) are the developer's, in `shpyrd`.
 	addExtensionCommands(root, g, ext.AudienceOperator, extra...)

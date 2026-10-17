@@ -25,6 +25,7 @@ import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Skeleton } from "@shpyrd/ui/components/skeleton";
 import { Stack } from "@shpyrd/ui/components/stack";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { api, ApiError } from "@/api/api";
 import type { Exposure, ProjectSummary } from "@/api/types";
@@ -34,6 +35,7 @@ import { usePerms, useUserOnly } from "@/lib/perms";
 import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
 import { lookOf } from "@/lib/tile";
 import { PersonMenu, ThemeButton } from "@/shell/person";
+import { GitHubPicker, type Picked, slugFromRepo } from "./github-picker";
 
 // Where everyone lands: the applications of the workspace, one card
 // each. Who operates sees the gear of each and the way to make one more;
@@ -129,7 +131,7 @@ function Card({ project, operator }: { project: ProjectSummary; operator: boolea
 
 // The dialog that makes a project. It is the "+" at the top, or the
 // button of the empty page.
-function NewProject({ asButton = false }: { asButton?: boolean }) {
+export function NewProject({ asButton = false }: { asButton?: boolean }) {
   const queries = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -141,6 +143,17 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
   const [git, setGit] = useState("");
   const [ref, setRef] = useState("");
   const [path, setPath] = useState("");
+  // From GitHub (RFC-0054): offered when the workspace's connections reach
+  // a repository, or when GitHub failed, so the error shows; asked only
+  // while the dialog is open.
+  const [from, setFrom] = useState<"github" | "url">("github");
+  const [picked, setPicked] = useState<Picked>();
+  const repos = useQuery({ queryKey: ["github-repositories"], queryFn: api.githubRepositories, enabled: open, retry: false, staleTime: 60_000 });
+  const githubShown = repos.isSuccess ? repos.data.length > 0 : repos.error instanceof ApiError && repos.error.status === 502;
+  const fromGitHub = githubShown && from === "github";
+  // A repository the list no longer has is not picked: GitHub took it
+  // away from the connection meanwhile.
+  if (picked && repos.data && !repos.data.some((r) => r.fullName === picked.fullName)) setPicked(undefined);
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   // The app's address around the slug: acme-<slug>.shpyrd.app, or
   // <slug>.<domain> where the server gives no pattern.
@@ -155,8 +168,13 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
         exposure,
         displayName: name.trim() || undefined,
         description: description.trim() || undefined,
-        git: git.trim() ? { url: git.trim(), revision: ref.trim() || "main" } : undefined,
-        subPath: path.trim() || undefined,
+        git: fromGitHub
+          ? picked && { url: `https://github.com/${picked.fullName}`, revision: picked.branch }
+          : git.trim()
+            ? { url: git.trim(), revision: ref.trim() || "main" }
+            : undefined,
+        // The directory is a field of the Git URL tab alone.
+        subPath: fromGitHub ? undefined : path.trim() || undefined,
       }),
     onSuccess: (p) => {
       queries.invalidateQueries({ queryKey: ["projects"] });
@@ -167,6 +185,23 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
     onError: (e: Error) => toast.error(e instanceof ApiError ? e.message : "Could not create the project"),
   });
   const validSlug = /^[a-z0-9-]{2,}$/.test(slug.trim());
+  const gitURLFields = (
+    <>
+      <Field label="Git repository" hint="Optional: it is built and released right away. Without one, deploy later, from Git or from a checkout with the CLI.">
+        <Input value={git} onChange={(e) => setGit(e.target.value)} placeholder="https://github.com/acme/hello-world" className="font-mono text-xs" />
+      </Field>
+      {git.trim() && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Branch, tag or commit">
+            <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" className="font-mono text-xs" />
+          </Field>
+          <Field label="Directory">
+            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="services/api" className="font-mono text-xs" />
+          </Field>
+        </div>
+      )}
+    </>
+  );
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -205,25 +240,41 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
             </Field>
           )}
           {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
-          <Field label="Git repository" hint="Optional: it is built and released right away. Without one, deploy later, from Git or from a checkout with the CLI.">
-            <Input value={git} onChange={(e) => setGit(e.target.value)} placeholder="https://github.com/acme/hello-world" className="font-mono text-xs" />
-          </Field>
-          {git.trim() && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Branch, tag or commit">
-                <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" className="font-mono text-xs" />
-              </Field>
-              <Field label="Directory">
-                <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="services/api" className="font-mono text-xs" />
-              </Field>
-            </div>
+          {githubShown ? (
+            <Tabs value={from} onValueChange={(v) => setFrom(v as "github" | "url")}>
+              <TabsList>
+                <TabsTrigger value="github">From GitHub</TabsTrigger>
+                <TabsTrigger value="url">Git URL</TabsTrigger>
+              </TabsList>
+              <TabsContent value="github">
+                {repos.error ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>{repos.error.message}</AlertDescription>
+                  </Alert>
+                ) : (
+                  <GitHubPicker
+                    repositories={repos.data ?? []}
+                    value={picked}
+                    onChange={(p) => {
+                      setPicked(p);
+                      if (!slug.trim()) setSlug(slugFromRepo(p.fullName));
+                    }}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="url" className="grid gap-4">
+                {gitURLFields}
+              </TabsContent>
+            </Tabs>
+          ) : (
+            gitURLFields
           )}
         </Stack>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal)} onClick={() => create.mutate()}>
+          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal) || (fromGitHub && !picked)} onClick={() => create.mutate()}>
             Create
           </Button>
         </DialogFooter>

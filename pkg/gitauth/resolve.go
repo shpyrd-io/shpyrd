@@ -14,6 +14,9 @@ import (
 const (
 	KindToken     = "token"
 	KindDeployKey = "deploy-key"
+	// KindGitHubApp is a token the GitHub App minted for the one
+	// repository (RFC-0054).
+	KindGitHubApp = "github-app"
 )
 
 // Labels, annotations and keys of the credential Secrets.
@@ -30,6 +33,15 @@ const (
 	AnnotationHostKeyFingerprint = "shpyrd.io/git-host-key-fingerprint"
 	// AnnotationUpdatedBy is who set the credential, for people to read.
 	AnnotationUpdatedBy = "shpyrd.io/updated-by"
+	// AnnotationGitHubAccount is, on <app>-git, the account whose GitHub
+	// App installation minted its token, and AnnotationTokenMintedAt when
+	// (RFC3339). Only a GitHub App credential carries them (RFC-0054).
+	AnnotationGitHubAccount = "shpyrd.io/github-account"
+	AnnotationTokenMintedAt = "shpyrd.io/github-token-minted-at"
+	// AnnotationTokenExpiresAt is when GitHub said the token expires
+	// (RFC3339), and AnnotationGitHubRepo the owner/name it is for.
+	AnnotationTokenExpiresAt = "shpyrd.io/github-token-expires-at"
+	AnnotationGitHubRepo     = "shpyrd.io/github-repo"
 
 	// DeployKeySecretName is a project's deploy key, in its namespace.
 	DeployKeySecretName = "shpyrd-git-deploy-key"
@@ -72,8 +84,8 @@ func DefaultUsername(host string) string {
 
 // Build is what a build needs to clone a project's repository.
 type Build struct {
-	// Kind is KindDeployKey, KindToken, or "" when the clone goes without
-	// credentials (a public repository).
+	// Kind is KindGitHubApp, KindDeployKey, KindToken, or "" when the clone
+	// goes without credentials (a public repository).
 	Kind string
 	// CloneURL is the URL the build clones: the app's own URL when its form
 	// fits the credential, converted only when it does not (an ssh URL with
@@ -84,6 +96,13 @@ type Build struct {
 	Host string
 	// Secret is <app>-git for the project namespace; nil without a credential.
 	Secret *corev1.Secret
+	// AppRefused says why the GitHub App could not give access, when it
+	// was tried and the build fell through to another credential.
+	AppRefused string
+	// AppRetry says the GitHub App failed for a reason that may pass (GitHub
+	// down, slow or rate-limiting): an App token already written that has
+	// not expired may be kept, and the App is tried again soon.
+	AppRetry bool
 }
 
 // Resolve chooses the credential a build of gitURL clones with: the

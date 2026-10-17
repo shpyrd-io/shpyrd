@@ -189,6 +189,9 @@ func sourceID(app *shpyrdv1.App, build *unstructured.Unstructured) string {
 			return short(rev)
 		}
 	}
+	if pin := app.PinnedCommit(); pin != "" {
+		return short(pin)
+	}
 	if app.Spec.Source != nil && app.Spec.Source.Git != nil {
 		return app.Spec.Source.Git.Revision
 	}

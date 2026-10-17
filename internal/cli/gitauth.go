@@ -166,6 +166,8 @@ A project's deploy key wins over the workspace's token.
 			}
 			return g.print(cmd, v, func(w io.Writer) {
 				switch {
+				case v.Using == gitauth.KindGitHubApp:
+					fmt.Fprintf(w, "%s clones %s through the GitHub App (%s): a token for this repository alone, renewed before the hour is out.\n", name, v.URL, v.GitHubAccount)
 				case v.Using == "deploy-key" && v.DeployKey != nil:
 					fmt.Fprintf(w, "%s clones %s with its deploy key %s (for %s).\n", name, v.URL, v.DeployKey.Fingerprint, v.DeployKey.Host)
 				case v.Using == "token" && v.Token != nil:
@@ -190,13 +192,19 @@ A project's deploy key wins over the workspace's token.
 // gitAuthRequest calls the API signed in; git credentials are not managed
 // over a kubeconfig.
 func gitAuthRequest(g *globalFlags, cmd *cobra.Command, method, path string, body []byte, out any) error {
+	return signedInRequest(g, cmd, "git credentials are managed signed in: run shpyrd login first", method, path, body, out)
+}
+
+// signedInRequest calls the API with the signed-in session; over a
+// kubeconfig it refuses with refusal.
+func signedInRequest(g *globalFlags, cmd *cobra.Command, refusal, method, path string, body []byte, out any) error {
 	ctx := signalContext()
 	ac, err := newAppClient(g, g.progress(cmd))
 	if err != nil {
 		return err
 	}
 	if !ac.session {
-		return errors.New("git credentials are managed signed in: run shpyrd login first")
+		return errors.New(refusal)
 	}
 	ct := ""
 	if body != nil {

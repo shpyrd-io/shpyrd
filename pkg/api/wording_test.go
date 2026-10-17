@@ -28,8 +28,10 @@ import (
 func TestCustomerMessagesNameNoInternals(t *testing.T) {
 	ctx := context.Background()
 	app := &shpyrdv1.App{
-		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Generation: 1},
-		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/shop.git"}}},
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Generation: 1,
+			// The commit the source watcher pinned for main (RFC-0018).
+			Annotations: map[string]string{shpyrdv1.AnnotationGitCommit: "0123456789abcdef0123456789abcdef01234567", shpyrdv1.AnnotationGitCommitRef: "main"}},
+		Spec: shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/shop.git"}}},
 	}
 	kpackSentence := "Error:  Container build terminated with error ERROR: failed to build: exit status 1: For more info use `kubectl logs -n app-shop shop-build-1-build-pod -c build`"
 	build := &unstructured.Unstructured{}

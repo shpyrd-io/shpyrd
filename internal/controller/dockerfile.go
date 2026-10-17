@@ -236,7 +236,8 @@ func buildKey(app *shpyrdv1.App) string {
 		case src.Blob != nil:
 			h.Write([]byte("blob:" + firstNonEmpty(src.Blob.SHA256, src.Blob.URL)))
 		case src.Git != nil:
-			h.Write([]byte("git:" + src.Git.URL + "#" + src.Git.Revision))
+			// The pinned commit: a new commit of the branch is a new build.
+			h.Write([]byte("git:" + src.Git.URL + "#" + app.BuildRevision()))
 		}
 		h.Write([]byte("subpath:" + src.SubPath))
 	}
@@ -496,7 +497,7 @@ echo "source ready"`, dst, shellQuote(c.sourceURL(src.Blob.URL)), shellQuote(src
 		}
 		auth := ""
 		switch git.Kind {
-		case gitauth.KindToken:
+		case gitauth.KindToken, gitauth.KindGitHubApp:
 			auth = fmt.Sprintf(`export HOME=/tmp
 printf 'machine %%s login %%s password %%s\n' %[1]s "$(cat %[2]s/username)" "$(cat %[2]s/password)" > "$HOME/.netrc"
 chmod 600 "$HOME/.netrc"
@@ -515,7 +516,9 @@ export GIT_SSH_COMMAND="ssh -i /tmp/deploy-key -o IdentitiesOnly=yes -o StrictHo
 			hostKey = fmt.Sprintf(`    if grep -q 'Host key verification failed' /tmp/clone.err; then echo %s >&2; fi
 `, shellQuote(hostKeyChangedMarker))
 		}
-		rev := firstNonEmpty(src.Git.Revision, "main")
+		// The pinned commit of a branch; the script already fetches a
+		// commit that is not a branch or tag.
+		rev := app.BuildRevision()
 		return auth + fmt.Sprintf(`url=%[1]s
 rev=%[2]s
 if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/tmp/clone.err; then :; else

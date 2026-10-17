@@ -68,7 +68,7 @@ func TestKpackBuildFailureInWords(t *testing.T) {
 			{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 51}}},
 		}},
 	}
-	r, c := newTestReconciler(t, app, build, pod)
+	r, c := newTestReconciler(t, pinGit(app, testCommit), build, pod)
 	r.Kube = kubefake.NewSimpleClientset() // its logs answer "fake logs"
 	runReconcile(t, r, app)
 	img := &unstructured.Unstructured{}

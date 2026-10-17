@@ -53,7 +53,7 @@ func TestFirstDeployWaitsForTheProjectsBuilder(t *testing.T) {
 			if tc.builder != nil {
 				_ = unstructured.SetNestedSlice(b.Object, tc.builder, "status", "conditions")
 			}
-			r, c := newTestReconciler(t, app, b)
+			r, c := newTestReconciler(t, pinGit(app, testCommit), b)
 			r.Kube = k8sfake.NewSimpleClientset()
 			var heard []audit.Entry
 			audit.Sink = func(_ audit.Ref, e audit.Entry) { heard = append(heard, e) }
