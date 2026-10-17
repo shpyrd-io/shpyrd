@@ -474,7 +474,7 @@ func (s *Server) githubPersonFailed(c *gin.Context, provider, subject, what stri
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
 		s.githubUsers.forget(provider, subject)
 		s.forgetPersonRepos(provider, subject)
-		githubLinkAnswer(c, errGitHubLinkRequired)
+		s.githubLinkAnswer(c, errGitHubLinkRequired)
 		return
 	}
 	// GitHub's words and addresses stay in the log: the answer is one sentence.
@@ -503,7 +503,7 @@ func (s *Server) githubAccounts(c *gin.Context) {
 	}
 	tok, _, err := s.githubPersonToken(c, cl)
 	if err != nil {
-		githubLinkAnswer(c, err)
+		s.githubLinkAnswer(c, err)
 		return
 	}
 	provider, subject, _ := githubPersonOf(c)
@@ -547,7 +547,7 @@ func (s *Server) githubRepositories(c *gin.Context) {
 	}
 	tok, _, err := s.githubPersonToken(c, cl)
 	if err != nil {
-		githubLinkAnswer(c, err)
+		s.githubLinkAnswer(c, err)
 		return
 	}
 	// After the link check: someone unlinked cannot probe which installations
@@ -636,7 +636,7 @@ func (s *Server) githubBranches(c *gin.Context) {
 	}
 	tok, _, err := s.githubPersonToken(c, cl)
 	if err != nil {
-		githubLinkAnswer(c, err)
+		s.githubLinkAnswer(c, err)
 		return
 	}
 	names, err := cl.UserBranches(ctx, tok, owner, repo)

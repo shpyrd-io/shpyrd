@@ -56,6 +56,12 @@ func (s *Server) restoreProjectArchive(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
+	// An archive that moves the project to another GitHub repository: the
+	// same check as a deploy to it (RFC-0054).
+	linked, ok := s.archiveGitHubAccess(c, app, m)
+	if !ok {
+		return
+	}
 	original, err := s.projectArchiveMetadata(ctx, app)
 	if err != nil {
 		abort(c, http.StatusConflict, err)
@@ -74,7 +80,7 @@ func (s *Server) restoreProjectArchive(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
-	if err := s.runProjectRestore(ctx, app, op, b, m); err != nil {
+	if err := s.runProjectRestore(ctx, app, op, b, m, linked); err != nil {
 		recovery, stop := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 		defer stop()
 		var recoveryErr error
@@ -330,7 +336,25 @@ func (s *Server) importArchiveAssets(ctx context.Context, app *shpyrdv1.App, op 
 	return nil
 }
 
-func (s *Server) applyArchiveConfiguration(ctx context.Context, app *shpyrdv1.App, m *projectArchiveMetadata, portable bool) error {
+// archiveGitHubAccess runs the GitHub access check for an archive whose
+// source is a git repository other than the project's. linked is what the
+// restored App records of who linked it: nil leaves the record as it is
+// (the same repository), "" removes it (no GitHub repository, or none
+// checked).
+func (s *Server) archiveGitHubAccess(c *gin.Context, app *shpyrdv1.App, m *projectArchiveMetadata) (*string, bool) {
+	src := m.Spec.Source
+	if m.SourceEntry != "" || src == nil || src.Git == nil || src.Git.URL == "" {
+		none := ""
+		return &none, true
+	}
+	if cur := app.Spec.Source; cur != nil && cur.Git != nil && cur.Git.URL != "" && sameRepository(cur.Git.URL, src.Git.URL) {
+		return nil, true
+	}
+	login, ok := s.githubAccess(c, src.Git.URL)
+	return &login, ok
+}
+
+func (s *Server) applyArchiveConfiguration(ctx context.Context, app *shpyrdv1.App, m *projectArchiveMetadata, portable bool, linked *string) error {
 	current := &shpyrdv1.App{}
 	if err := s.apps.Get(ctx, client.ObjectKeyFromObject(app), current); err != nil {
 		return err
@@ -369,6 +393,9 @@ func (s *Server) applyArchiveConfiguration(ctx context.Context, app *shpyrdv1.Ap
 		return err
 	}
 	current.Spec = spec
+	if linked != nil {
+		markGitHubLinkedBy(current, *linked)
+	}
 	if portable {
 		release := 0
 		if len(m.Status.Releases) > 0 {
@@ -379,7 +406,7 @@ func (s *Server) applyArchiveConfiguration(ctx context.Context, app *shpyrdv1.Ap
 	return s.apps.Update(ctx, current)
 }
 
-func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, b *projectarchive.Bundle, m *projectArchiveMetadata) error {
+func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, b *projectarchive.Bundle, m *projectArchiveMetadata, linked *string) error {
 	if err := s.importArchiveAssets(ctx, app, op, b, m); err != nil {
 		return err
 	}
@@ -400,7 +427,7 @@ func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *p
 	if err := projectarchive.RestoreTransaction(ctx, resources, save); err != nil {
 		return err
 	}
-	if err := s.applyArchiveConfiguration(ctx, app, m, true); err != nil {
+	if err := s.applyArchiveConfiguration(ctx, app, m, true, linked); err != nil {
 		return err
 	}
 	if err := s.resumeProjectArchive(ctx, app, op); err != nil {
@@ -436,7 +463,7 @@ func (s *Server) rollbackProjectArchive(ctx context.Context, app *shpyrdv1.App, 
 	if err := projectarchive.RollbackTransaction(ctx, resources, save); err != nil {
 		return err
 	}
-	if err := s.applyArchiveConfiguration(ctx, app, &op.Original, false); err != nil {
+	if err := s.applyArchiveConfiguration(ctx, app, &op.Original, false, nil); err != nil {
 		return err
 	}
 	if err := s.removeCreatedArchiveResources(ctx, app, op); err != nil {

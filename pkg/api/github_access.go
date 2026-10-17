@@ -48,13 +48,17 @@ func (s *Server) githubAccess(c *gin.Context, gitURL string) (string, bool) {
 	}
 	insts, err := s.store.GitHubInstallations(ctx, s.doorWorkspace(c))
 	if err != nil {
-		abort(c, http.StatusBadGateway, err)
+		s.log.Warn("github: could not read the workspace's GitHub connections to check a repository", "err", err.Error())
+		abort(c, http.StatusBadGateway, errors.New("shpyrd could not read the workspace's GitHub connections. Try again in a minute"))
 		return "", false
 	}
+	// The first live installation on the owner, as the controller picks
+	// its credential (installationFor).
 	var inst *store.GitHubInstallation
 	for i := range insts {
 		if strings.EqualFold(insts[i].AccountLogin, owner) && insts[i].SuspendedAt == nil {
 			inst = &insts[i]
+			break
 		}
 	}
 	if inst == nil {
@@ -64,13 +68,16 @@ func (s *Server) githubAccess(c *gin.Context, gitURL string) (string, bool) {
 	if !person {
 		return "", true
 	}
+	// One deadline for every call: the App's read, a renewal of the
+	// person's token, and the person's read.
 	callCtx, cancel := context.WithTimeout(ctx, githubAccessTimeout)
 	defer cancel()
 	info, err := cl.RepositoryAsApp(callCtx, inst.ID, owner, name)
+	outside := github.IsNotFound(err)
 	switch {
-	case github.IsNotFound(err):
-		abort(c, http.StatusUnprocessableEntity, fmt.Errorf("The GitHub App's installation on %s does not include %s/%s, or it does not exist: add it to the installation on GitHub, or give shpyrd a deploy key (shpyrd git-auth deploy-key)", inst.AccountLogin, owner, name))
-		return "", false
+	case outside:
+		// Not said yet: whether the installation includes a repository is
+		// told only to someone linked who can read it.
 	case err != nil:
 		// GitHub's words stay in the log: the answer is one sentence.
 		s.log.Warn("github: the App could not read a repository to check it", "repository", owner+"/"+name, "err", err.Error())
@@ -79,13 +86,9 @@ func (s *Server) githubAccess(c *gin.Context, gitURL string) (string, bool) {
 	case !info.Private:
 		return "", true
 	}
-	tok, login, err := s.githubPersonToken(c, cl)
+	tok, login, err := s.githubPersonTokenIn(callCtx, c, cl)
 	if err != nil {
-		if errors.Is(err, errGitHubLinkRequired) || errors.Is(err, errGitHubLinkBusy) {
-			githubLinkAnswer(c, err)
-		} else {
-			s.githubPersonFailed(c, provider, subject, "your GitHub authorization", err)
-		}
+		s.githubLinkAnswer(c, err)
 		return "", false
 	}
 	_, err = cl.UserRepository(callCtx, tok, owner, name)
@@ -95,6 +98,10 @@ func (s *Server) githubAccess(c *gin.Context, gitURL string) (string, bool) {
 	}
 	if err != nil {
 		s.githubPersonFailed(c, provider, subject, owner+"/"+name, err)
+		return "", false
+	}
+	if outside {
+		abort(c, http.StatusUnprocessableEntity, fmt.Errorf("The GitHub App's installation on %s does not include %s/%s: add it to the installation on GitHub, or give shpyrd a deploy key (shpyrd git-auth deploy-key)", inst.AccountLogin, owner, name))
 		return "", false
 	}
 	return login, true

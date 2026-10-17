@@ -730,6 +730,10 @@ func cleanWatchPaths(c *gin.Context, paths **[]string) bool {
 	return true
 }
 
+// errRepositoryChanged: the project moved to another repository between
+// a deploy's access check and its write.
+var errRepositoryChanged = errors.New("The project's repository changed while you deployed. Deploy again.")
+
 func (s *Server) deployApp(c *gin.Context) {
 	var req DeployRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -775,14 +779,17 @@ func (s *Server) deployApp(c *gin.Context) {
 	}
 	// Moving the project to another repository: someone who can read it
 	// (RFC-0054). A redeploy of the same repository is not checked.
-	var linkedBy string
+	var linkedBy, readURL string
 	moved := false
 	if hasGit {
 		cur, ok := s.loadApp(c)
 		if !ok {
 			return
 		}
-		if cur.Spec.Source == nil || cur.Spec.Source.Git == nil || !sameRepository(cur.Spec.Source.Git.URL, req.Git.URL) {
+		if cur.Spec.Source != nil && cur.Spec.Source.Git != nil {
+			readURL = cur.Spec.Source.Git.URL
+		}
+		if readURL == "" || !sameRepository(readURL, req.Git.URL) {
 			if linkedBy, ok = s.githubAccess(c, req.Git.URL); !ok {
 				return
 			}
@@ -794,6 +801,16 @@ func (s *Server) deployApp(c *gin.Context) {
 		case req.Image != "":
 			a.Spec.Image = req.Image
 		case hasGit:
+			if !moved {
+				// Not checked, as the same repository: it must still be.
+				stored := ""
+				if a.Spec.Source != nil && a.Spec.Source.Git != nil {
+					stored = a.Spec.Source.Git.URL
+				}
+				if stored == "" || !sameRepository(stored, readURL) {
+					return errRepositoryChanged
+				}
+			}
 			a.Spec.Image = ""
 			if req.Git.Revision == "" {
 				req.Git.Revision = "main"
@@ -824,6 +841,10 @@ func (s *Server) deployApp(c *gin.Context) {
 		case hasBlob:
 			a.Spec.Image = ""
 			a.Spec.Source = &shpyrdv1.Source{Blob: req.Blob, SubPath: req.SubPath}
+		}
+		if a.Spec.Source == nil || a.Spec.Source.Git == nil {
+			// No GitHub repository any more: nobody's access picked it.
+			markGitHubLinkedBy(a, "")
 		}
 		if req.Build != nil {
 			a.Spec.Build = req.Build
@@ -1303,7 +1324,7 @@ func (s *Server) mutateApp(c *gin.Context, mutate func(*shpyrdv1.App) error) (*s
 		beforeExposure := app.Spec.Exposure
 		if err := mutate(app); err != nil {
 			status := http.StatusBadRequest
-			if strings.Contains(err.Error(), "rolling out") {
+			if strings.Contains(err.Error(), "rolling out") || errors.Is(err, errRepositoryChanged) {
 				status = http.StatusConflict
 			}
 			abort(c, status, err)

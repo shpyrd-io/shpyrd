@@ -624,7 +624,7 @@ func TestALinkThatNoLongerOpensIsRemovedAndAsksForALinkAgain(t *testing.T) {
 	if !errors.Is(err, errGitHubLinkRequired) {
 		t.Fatalf("err = %v", err)
 	}
-	githubLinkAnswer(c, err)
+	s.githubLinkAnswer(c, err)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +12,14 @@ import (
 	"time"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
+	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func createBody(slug, url string) string {
@@ -31,11 +39,20 @@ func TestCreatingAProjectFromAPrivateRepositoryNeedsSomeoneWhoCanReadIt(t *testi
 	s, _, fake := githubServer(t)
 	connectAcme(t, s, store.DefaultWorkspace)
 	fake.AddUser("bob-code", githubtest.User{ID: 1002, Login: "bob", Installations: []int64{42}, Repos: []string{"Acme/site"}})
+	// Acme/vault is in another installation of the App, one ana sees on
+	// GitHub and the workspace has not connected.
+	fake.SetRepos(43, githubtest.Repo{FullName: "Acme/vault", Private: true, DefaultBranch: "main"})
+	fake.SetUserInstallations(githubtest.Installation{ID: 42, Login: "Acme", Type: "Organization"}, githubtest.Installation{ID: 43, Login: "Acme", Type: "Organization"})
 	anaSID, anaCSRF, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
 	bobSID, bobCSRF, _ := signInPerson(t, s, "bob@example.test", store.WorkspaceRoleMember)
 	if rec := doCookie(t, s, "POST", "/api/projects", createBody("shop", "https://github.com/acme/shop"), anaSID, anaCSRF); rec.Code != http.StatusConflict ||
 		!strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
 		t.Fatalf("no link: %d %s", rec.Code, rec.Body.String())
+	}
+	// Unlinked, nothing is said of what the installation includes.
+	if rec := doCookie(t, s, "POST", "/api/projects", createBody("vault", "https://github.com/acme/vault"), anaSID, anaCSRF); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
+		t.Errorf("vault, no link: %d %s", rec.Code, rec.Body.String())
 	}
 	linkAs(t, s, anaSID, anaCSRF, githubtest.Code)
 	linkAs(t, s, bobSID, bobCSRF, "bob-code")
@@ -46,6 +63,10 @@ func TestCreatingAProjectFromAPrivateRepositoryNeedsSomeoneWhoCanReadIt(t *testi
 	if rec := doCookie(t, s, "POST", "/api/projects", createBody("vault", "https://github.com/acme/vault"), anaSID, anaCSRF); rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "does not include acme/vault") {
 		t.Errorf("a repository outside the installation: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doCookie(t, s, "POST", "/api/projects", createBody("vault", "https://github.com/acme/vault"), bobSID, bobCSRF); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "You can't read acme/vault on GitHub") {
+		t.Errorf("vault, bob: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := doCookie(t, s, "POST", "/api/projects", createBody("shop", "git@github.com:Acme/shop.git"), anaSID, anaCSRF); rec.Code != http.StatusCreated {
 		t.Fatalf("ana: %d %s", rec.Code, rec.Body.String())
@@ -182,7 +203,21 @@ func TestTheMakerLeavingDoesNotStopDeploys(t *testing.T) {
 	if rec := doCookie(t, s, "POST", "/api/projects/shop/deploy", deploy, bobSID, bobCSRF); rec.Code != http.StatusAccepted {
 		t.Errorf("bob redeploys: %d %s", rec.Code, rec.Body.String())
 	}
-	// So does the operator.
+	// So do bob's agent and the operator.
+	// An admin's token carries no workspace role (tokenCaller): it is made
+	// a deployer of the project, by its grant key.
+	shop, err := s.findApp(context.Background(), store.DefaultWorkspace, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := doCookie(t, s, "POST", "/api/tokens", fmt.Sprintf(`{"name":"agent","projectRoles":{%q:"developer"}}`, shop.Name), bobSID, bobCSRF)
+	var agent TokenCreateView
+	if err := json.Unmarshal(made.Body.Bytes(), &agent); err != nil || agent.Token == "" {
+		t.Fatalf("token: %d %s", made.Code, made.Body.String())
+	}
+	if rec := doBearer(t, s, "POST", "/api/projects/shop/deploy", deploy, agent.Token); rec.Code != http.StatusAccepted {
+		t.Errorf("bob's agent redeploys: %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := do(t, s, "POST", "/api/projects/shop/deploy", deploy, true); rec.Code != http.StatusAccepted {
 		t.Errorf("the admin token redeploys: %d %s", rec.Code, rec.Body.String())
 	}
@@ -203,5 +238,150 @@ func TestTheCheckAnswersAGitHubFailureInOneSentence(t *testing.T) {
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "GitHub did not answer. Try again in a minute") ||
 		strings.Contains(rec.Body.String(), "GitHub answered") {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A deploy whose project moved to another repository between the read
+// and the write is refused: the check was made for the old one.
+func TestADeployRacingARepositoryChangeIsRefused(t *testing.T) {
+	s, _, _ := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	bobSID, bobCSRF, _ := signInPerson(t, s, "bob@example.test", store.WorkspaceRoleAdmin)
+	if rec := do(t, s, "POST", "/api/projects", createBody("shop", "https://github.com/acme/shop"), true); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	cur, err := s.findApp(context.Background(), store.DefaultWorkspace, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := types.NamespacedName{Namespace: cur.Namespace, Name: cur.Name}
+	armed := false
+	s.apps = interceptor.NewClient(s.apps.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, isApp := obj.(*shpyrdv1.App); isApp && armed && k == key {
+				// Someone moves the project meanwhile.
+				armed = false
+				moved := &shpyrdv1.App{}
+				if err := c.Get(ctx, k, moved); err != nil {
+					return err
+				}
+				moved.Spec.Source.Git.URL = "https://github.com/acme/elsewhere"
+				if err := c.Update(ctx, moved); err != nil {
+					return err
+				}
+			}
+			return c.Get(ctx, k, obj, opts...)
+		},
+	})
+	armed = true
+	rec := doCookie(t, s, "POST", "/api/projects/shop/deploy", `{"git":{"url":"https://github.com/acme/shop","revision":"main"}}`, bobSID, bobCSRF)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "The project's repository changed while you deployed. Deploy again.") {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+	app, _ := s.findApp(context.Background(), store.DefaultWorkspace, "shop")
+	if got := app.Spec.Source.Git.URL; got != "https://github.com/acme/elsewhere" {
+		t.Errorf("the deploy wrote over the move: %s", got)
+	}
+}
+
+// A deploy that leaves GitHub drops the record of who linked it.
+func TestABlobDeployDropsTheLinkRecord(t *testing.T) {
+	s, _, _ := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, csrf, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	if rec := doCookie(t, s, "POST", "/api/projects", createBody("shop", "https://github.com/acme/shop"), sid, csrf); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	// An image deploy keeps the repository as the source: the record stays.
+	if rec := doCookie(t, s, "POST", "/api/projects/shop/deploy", `{"image":"registry.example.test/shop:1"}`, sid, csrf); rec.Code != http.StatusAccepted {
+		t.Fatalf("image: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := linkedBy(t, s, "shop"); got != githubtest.UserLogin {
+		t.Errorf("after an image deploy: %q", got)
+	}
+	if rec := doCookie(t, s, "POST", "/api/projects/shop/deploy", `{"blob":{"url":"https://files.example.test/shop.tgz"}}`, sid, csrf); rec.Code != http.StatusAccepted {
+		t.Fatalf("blob: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := linkedBy(t, s, "shop"); got != "" {
+		t.Errorf("after a blob deploy: %q", got)
+	}
+}
+
+// A refresh GitHub refuses with its own words leaves them in the log: the
+// picker answers one sentence.
+func TestARefusedRefreshDoesNotReachThePickersBody(t *testing.T) {
+	s, cr, fake := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, csrf, sub := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	// The access token is gone from memory, and the App's client secret
+	// changed: GitHub refuses the renewal, with a description.
+	s.githubUsers.forget("local", sub)
+	sec := &corev1.Secret{}
+	if err := cr.Get(context.Background(), types.NamespacedName{Namespace: "shpyrd-system", Name: github.SecretName}, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data[github.KeyClientSecret] = []byte("rotated")
+	if err := cr.Update(context.Background(), sec); err != nil {
+		t.Fatal(err)
+	}
+	s.githubApp = fake.Source(cr, "shpyrd-system")
+	for _, path := range []string{"/api/workspace/github/accounts", "/api/workspace/github/repositories", "/api/workspace/github/repositories/acme/shop/branches"} {
+		rec := doCookie(t, s, "GET", path, "", sid, csrf)
+		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "GitHub did not answer. Try again in a minute") ||
+			strings.Contains(rec.Body.String(), "client_secret") || strings.Contains(rec.Body.String(), "refused to renew") {
+			t.Errorf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// gitArchive is an uploaded archive whose project is built from url: no
+// source carried, so the restore keeps the repository.
+func gitArchive(t *testing.T, url string) string {
+	t.Helper()
+	ctx := context.Background()
+	b, err := projectarchive.New(t.TempDir(), projectarchive.DefaultLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	m := projectArchiveMetadata{Name: "crafted", Spec: shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: url, Revision: "main"}}}, Config: map[string][]byte{}}
+	raw, _ := json.Marshal(m)
+	if err := b.Add(ctx, "project.json", bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := b.Write(ctx, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+// Restoring an archive that names a private repository is the same check
+// as a deploy to it.
+func TestRestoringAnArchiveOfAPrivateRepositoryNeedsSomeoneWhoCanReadIt(t *testing.T) {
+	site := onGitHub("site", "https://github.com/acme/site", "main", "")
+	site.Status.Image, site.Status.URL = "", ""
+	s, _, _ := githubServer(t, site)
+	connectAcme(t, s, store.DefaultWorkspace)
+	sid, csrf, _ := signInPerson(t, s, "cleo@example.test", store.WorkspaceRoleAdmin)
+	archive := gitArchive(t, "https://github.com/acme/shop")
+	restore := func() *httptest.ResponseRecorder {
+		return doCookie(t, s, "POST", "/api/project-archives/site/restore", archive, sid, csrf)
+	}
+	if rec := restore(); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "github_link_required") {
+		t.Fatalf("cleo, unlinked: %d %s", rec.Code, rec.Body.String())
+	}
+	app, _ := s.findApp(context.Background(), store.DefaultWorkspace, "site")
+	if got := app.Spec.Source.Git.URL; got != "https://github.com/acme/site" {
+		t.Errorf("the refused restore moved site to %s", got)
+	}
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	if rec := restore(); rec.Code != http.StatusOK {
+		t.Fatalf("cleo, linked: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := linkedBy(t, s, "site"); got != githubtest.UserLogin {
+		t.Errorf("linked by %q after the restore", got)
 	}
 }

@@ -649,27 +649,39 @@ func (s *Server) githubAccessToken(ctx context.Context, cl *github.Client, link 
 // and their login; errGitHubLinkRequired when they have no link (or are no
 // person).
 func (s *Server) githubPersonToken(c *gin.Context, cl *github.Client) (string, string, error) {
+	return s.githubPersonTokenIn(c.Request.Context(), c, cl)
+}
+
+// githubPersonTokenIn is githubPersonToken under ctx: the store's read and
+// any renewal answer within its deadline.
+func (s *Server) githubPersonTokenIn(ctx context.Context, c *gin.Context, cl *github.Client) (string, string, error) {
 	provider, subject, ok := githubPersonOf(c)
 	if !ok {
 		return "", "", errGitHubLinkRequired
 	}
-	link, err := s.store.GitHubUserLink(c.Request.Context(), provider, subject)
+	link, err := s.store.GitHubUserLink(ctx, provider, subject)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", "", errGitHubLinkRequired
 	}
 	if err != nil {
 		return "", "", err
 	}
-	tok, err := s.githubAccessToken(c.Request.Context(), cl, link)
+	tok, err := s.githubAccessToken(ctx, cl, link)
 	return tok, link.GitHubLogin, err
 }
 
-// githubLinkAnswer answers a request that needed the person's GitHub: 409
-// github_link_required, or 502.
-func githubLinkAnswer(c *gin.Context, err error) {
-	if errors.Is(err, errGitHubLinkRequired) {
+// githubLinkAnswer answers a request whose person's GitHub token could not
+// be had: 409 github_link_required with no link; 502 with shpyrd's own
+// sentence when the link kept changing; anything else (GitHub's words on a
+// refused renewal, a store error) is logged and answered in one sentence.
+func (s *Server) githubLinkAnswer(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, errGitHubLinkRequired):
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error(), "code": githubLinkRequiredCode})
-		return
+	case errors.Is(err, errGitHubLinkBusy):
+		abort(c, http.StatusBadGateway, errGitHubLinkBusy)
+	default:
+		provider, subject, _ := githubPersonOf(c)
+		s.githubPersonFailed(c, provider, subject, "your GitHub authorization", err)
 	}
-	abort(c, http.StatusBadGateway, fmt.Errorf("shpyrd could not reach GitHub with your account: %w. Try again in a minute", err))
 }
