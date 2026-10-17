@@ -729,7 +729,7 @@ export const mock: Api = {
       });
       await thingsOf.set(all);
     }
-    return { installURL: "/workspace/git" };
+    return { installURL: "/workspace/git", authorizeURL: "/workspace/git" };
   },
   disconnectGitHub: async (id) => {
     const all = await thingsOf.get();

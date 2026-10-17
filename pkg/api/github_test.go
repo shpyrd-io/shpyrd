@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -611,5 +613,177 @@ func TestGitHubRoutesNeedTheirRoles(t *testing.T) {
 	}
 	if list, _ := s.store.GitHubInstallations(ctx, store.DefaultWorkspace); len(list) != 1 {
 		t.Errorf("a member's disconnect went through: %+v", list)
+	}
+}
+
+// chose is GitHub sending the browser back from the authorize step: a
+// code and the state, no installation.
+func chose(t *testing.T, s *Server, code, state string) *httptest.ResponseRecorder {
+	t.Helper()
+	q := url.Values{"code": {code}, "state": {state}}
+	return do(t, s, "GET", "/api/github/installed?"+q.Encode(), "", false)
+}
+
+// pageLinks are a page's links, label to address.
+func pageLinks(t *testing.T, body string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, m := range regexp.MustCompile(`<a href="([^"]*)"[^>]*>([^<]*)</a>`).FindAllStringSubmatch(body, -1) {
+		out[html.UnescapeString(m[2])] = html.UnescapeString(m[1])
+	}
+	return out
+}
+
+func TestGitHubConnectAlsoGivesTheAuthorizeURL(t *testing.T) {
+	s, _, fake := githubServer(t)
+	rec := do(t, s, "POST", "/api/workspace/github/connect", "", true)
+	var v GitHubConnectView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	install, _ := url.Parse(v.InstallURL)
+	u, err := url.Parse(v.AuthorizeURL)
+	if err != nil || u.Scheme+"://"+u.Host != fake.URL || u.Path != "/login/oauth/authorize" {
+		t.Fatalf("authorize URL %q", v.AuthorizeURL)
+	}
+	q := u.Query()
+	if q.Get("client_id") != githubtest.ClientID || q.Get("state") == "" || q.Get("state") != install.Query().Get("state") ||
+		q.Get("redirect_uri") != s.dashboardURLOf(nil)+"/api/github/installed" {
+		t.Errorf("authorize URL %q (install %q)", v.AuthorizeURL, v.InstallURL)
+	}
+}
+
+func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
+	s, _, fake := githubServer(t)
+	ctx := context.Background()
+	fake.SetUserInstallations(
+		githubtest.Installation{ID: 42, Login: "Acme", Type: "Organization"},
+		githubtest.Installation{ID: 7, Login: "ana", Type: "User"},
+		githubtest.Installation{ID: 8, Login: "bob", Type: "User"},
+		githubtest.Installation{ID: 9, Login: "Other", Type: "Organization"},
+		githubtest.Installation{ID: 10, Login: "Beta", Type: "Organization"},
+		githubtest.Installation{ID: 11, Login: "Mine", Type: "Organization"},
+	)
+	fake.SetOrgRole("Other", "member", "active")
+	fake.SetOrgRole("Beta", "admin", "active")
+	fake.SetOrgRole("Mine", "admin", "active")
+	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 10, AccountLogin: "Beta", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 11, AccountLogin: "Mine", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
+		t.Fatal(err)
+	}
+	heard := githubAudits(t)
+	state := connectState(t, s)
+	started, _ := readGitHubState(githubtest.ClientSecret, state, time.Now())
+	rec := chose(t, s, githubtest.Code, state)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Connect an installation") || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	for _, says := range []string{"Beta (organisation): connected to another workspace: disconnect it there first.", "Mine (organisation): connected."} {
+		if !strings.Contains(body, says) {
+			t.Errorf("does not say %q: %s", says, body)
+		}
+	}
+	for _, not := range []string{"bob", "Other", githubtest.UserToken, githubtest.ClientSecret} {
+		if strings.Contains(body, not) {
+			t.Errorf("says %q: %s", not, body)
+		}
+	}
+	links := pageLinks(t, body)
+	finishes := map[int64]string{}
+	for label, href := range links {
+		u, _ := url.Parse(href)
+		if u.Path != "/api/workspace/github/finish" {
+			continue
+		}
+		tk, err := readGitHubTicket(githubtest.ClientSecret, u.Query().Get("ticket"), time.Now())
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if tk.Workspace != store.DefaultWorkspace || tk.Actor != started.Actor || tk.Provider != started.Provider || tk.Subject != started.Subject ||
+			tk.GitHubLogin != githubtest.UserLogin || tk.Exp > time.Now().Add(githubTicketTTL).Unix() {
+			t.Errorf("%s: ticket %+v", label, tk)
+		}
+		finishes[tk.Installation] = u.RequestURI()
+		if want := map[int64]string{42: "Connect Acme (organisation)", 7: "Connect ana (personal account)"}[tk.Installation]; label != want {
+			t.Errorf("installation %d labelled %q", tk.Installation, label)
+		}
+	}
+	if len(finishes) != 2 || finishes[42] == "" || finishes[7] == "" {
+		t.Fatalf("connectable %v; links %v", finishes, links)
+	}
+	install, err := url.Parse(links["Install the App on another account"])
+	if err != nil || !strings.HasSuffix(install.Path, "/apps/"+githubtest.Slug+"/installations/new") || install.Query().Get("state") == state {
+		t.Errorf("install link %v", links)
+	} else if fresh, err := readGitHubState(githubtest.ClientSecret, install.Query().Get("state"), time.Now()); err != nil || fresh.Workspace != store.DefaultWorkspace || fresh.Subject != started.Subject {
+		t.Errorf("install link's state %+v %v", fresh, err)
+	}
+	if list, _ := s.store.GitHubInstallations(ctx, store.DefaultWorkspace); len(list) != 1 || len(*heard) != 0 {
+		t.Fatalf("the page alone connects nothing: %+v %+v", list, *heard)
+	}
+	// Each finishes on its own, once.
+	for _, id := range []int64{42, 7} {
+		if rec := do(t, s, "GET", finishes[id], "", true); rec.Code != http.StatusFound || !strings.HasSuffix(rec.Header().Get("Location"), "/workspace/git") {
+			t.Errorf("finish %d: %d %s", id, rec.Code, rec.Body.String())
+		}
+		if got, _ := s.store.GitHubInstallation(ctx, id); got == nil || got.Workspace != store.DefaultWorkspace {
+			t.Errorf("stored %d: %+v", id, got)
+		}
+	}
+	if rec := do(t, s, "GET", finishes[42], "", true); rec.Code != http.StatusBadRequest {
+		t.Errorf("a ticket spent twice: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := s.store.GitHubInstallation(ctx, 10); got == nil || got.Workspace != "beta" {
+		t.Errorf("beta keeps it: %+v", got)
+	}
+}
+
+func TestGitHubAuthorizeStateIsUsedOnce(t *testing.T) {
+	s, _, _ := githubServer(t)
+	state := connectState(t, s)
+	if rec := chose(t, s, githubtest.Code, state); rec.Code != http.StatusOK {
+		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := chose(t, s, githubtest.Code, state); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This link was used already") {
+		t.Errorf("replay: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := chose(t, s, githubtest.Code, "forged"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This link has expired") {
+		t.Errorf("forged: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := chose(t, s, "stale-code", connectState(t, s)); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "Try again") {
+		t.Errorf("a code GitHub refuses: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubAuthorizeWithNothingOwnedSaysToInstallFirst(t *testing.T) {
+	s, _, fake := githubServer(t)
+	fake.SetUserInstallations(githubtest.Installation{ID: 8, Login: "bob", Type: "User"})
+	rec := chose(t, s, githubtest.Code, connectState(t, s))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "You don&#39;t own an installation of this App yet: install it first") || strings.Contains(body, "bob") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	links := pageLinks(t, body)
+	install, err := url.Parse(links["Install the App on another account"])
+	if err != nil || !strings.HasSuffix(install.Path, "/installations/new") || install.Query().Get("state") == "" {
+		t.Errorf("links %v", links)
+	}
+	for _, href := range links {
+		if strings.Contains(href, "/finish") {
+			t.Errorf("a finish link: %v", links)
+		}
+	}
+}
+
+func TestGitHubAuthorizeSaysWhyAnOrgCannotBeChecked(t *testing.T) {
+	s, _, fake := githubServer(t)
+	fake.SetNoMembersPermission(true)
+	rec := chose(t, s, githubtest.Code, connectState(t, s))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "an owner of the App must accept its new Members permission on GitHub") ||
+		strings.Contains(rec.Body.String(), "/finish") {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
 }

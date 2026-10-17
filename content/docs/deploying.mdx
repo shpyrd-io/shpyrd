@@ -179,7 +179,7 @@ shows them.
 
 A workspace connects GitHub once. Then anyone who makes projects picks a repository from a list: private ones build without deploy keys or tokens, and every push to a project's branch deploys, with no webhook to add.
 
-**Connect an account or organisation** (workspace admins): in the dashboard, Workspace settings, **Git**, **Connect GitHub**. GitHub asks where to install shpyrd's App and which repositories it may read, then sends you back to the workspace's page. From a terminal, `shpyrd github connect` opens that Git page and waits until the new connection appears; you press the button there.
+**Connect an account or organisation** (workspace admins): in the dashboard, Workspace settings, **Git**, **Connect GitHub**. GitHub asks who you are, then shpyrd lists the installations of its App you own: **Connect** the one you want, and you are back on the workspace's page. To put the App on an account it is not on yet, use **Install the App on another account**, on the Git page or under that list: GitHub asks where to install it and which repositories it may read, then sends you back. From a terminal, `shpyrd github connect` opens that Git page and waits until the new connection appears; you press the button there.
 
 ```shell
 shpyrd github connect            # opens the Git page, waits for the connection

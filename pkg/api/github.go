@@ -25,9 +25,10 @@ import (
 )
 
 // Connect GitHub (RFC-0054): a workspace admin sends the browser to
-// GitHub's install page with a signed state; GitHub sends it back to
-// /api/github/installed, where the person's own OAuth token says which
-// installations they can see, and the one they chose is connected to the
+// GitHub with a signed state, to its authorize page (the App may be
+// installed already) or its install page (a new account); GitHub sends it
+// back to /api/github/installed, where the person's own OAuth token says
+// which installations they own, and the one they chose is connected to the
 // workspace the state names. Then anyone who makes projects lists its
 // repositories and branches.
 
@@ -56,6 +57,9 @@ type GitHubInstallationView struct {
 // GitHubConnectView is where to send the browser.
 type GitHubConnectView struct {
 	InstallURL string `json:"installURL"`
+	// AuthorizeURL asks GitHub who the person is, then lists the
+	// installations they own to connect: one that exists already.
+	AuthorizeURL string `json:"authorizeURL"`
 }
 
 // GitHubRepositoryView is a repository a connection reaches.
@@ -291,15 +295,34 @@ func (s *Server) githubConnect(c *gin.Context) {
 	if !ok {
 		return
 	}
-	nonce, err := randomHex(16)
+	app := cl.App()
+	actor, provider, subject := githubWho(c)
+	state, err := newGitHubState(app, githubState{Workspace: s.doorWorkspace(c), Actor: actor, Provider: provider, Subject: subject}, time.Now())
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
-	app := cl.App()
-	actor, provider, subject := githubWho(c)
-	st := githubState{Workspace: s.doorWorkspace(c), Actor: actor, Provider: provider, Subject: subject, Exp: time.Now().Add(githubStateTTL).Unix(), Nonce: nonce}
-	c.JSON(http.StatusOK, GitHubConnectView{InstallURL: app.InstallURL() + "?state=" + url.QueryEscape(signGitHubState(app.ClientSecret, st))})
+	authorize := url.Values{"client_id": {app.ClientID}, "state": {state}, "redirect_uri": {s.dashboardURLOf(nil) + "/api/github/installed"}}
+	c.JSON(http.StatusOK, GitHubConnectView{
+		InstallURL:   githubInstallURL(app, state),
+		AuthorizeURL: app.WebURL() + "/login/oauth/authorize?" + authorize.Encode(),
+	})
+}
+
+// newGitHubState signs a fresh state for who started: a new nonce, and
+// the state's time from now.
+func newGitHubState(app github.App, who githubState, now time.Time) (string, error) {
+	nonce, err := randomHex(16)
+	if err != nil {
+		return "", err
+	}
+	who.Exp, who.Nonce = now.Add(githubStateTTL).Unix(), nonce
+	return signGitHubState(app.ClientSecret, who), nil
+}
+
+// githubInstallURL is GitHub's install page, carrying a state.
+func githubInstallURL(app github.App, state string) string {
+	return app.InstallURL() + "?state=" + url.QueryEscape(state)
 }
 
 // githubView is GET /api/workspace/github.
@@ -457,6 +480,11 @@ func (s *Server) githubInstalled(c *gin.Context) {
 		// A member asked an organisation's owners to install the App:
 		// GitHub sends no installation until one approves.
 		s.githubPage(c, http.StatusOK, "Waiting for an owner", "An owner of the organisation must approve the request on GitHub; then connect it from Workspace settings → Git.", "")
+		return
+	}
+	if c.Query("installation_id") == "" && c.Query("code") != "" && c.Query("state") != "" {
+		// Back from the authorize step: an installation that exists already.
+		s.githubChoose(c, cl)
 		return
 	}
 	id, err := strconv.ParseInt(c.Query("installation_id"), 10, 64)
@@ -639,6 +667,12 @@ func (s *Server) githubSignInFirst(c *gin.Context) {
 type githubPerson struct {
 	login string
 	inst  *github.Installation
+	githubOwnership
+}
+
+// githubOwnership is whether the person administers an installation's
+// account, or why GitHub would not say.
+type githubOwnership struct {
 	owner bool
 	// noMembers: the App cannot read org memberships, registered before
 	// it asked members: read.
@@ -672,27 +706,153 @@ func askGitHub(ctx context.Context, cl *github.Client, code string, id int64) (g
 	if who.login, err = cl.UserLogin(ctx, token); err != nil {
 		return who, err
 	}
-	switch who.inst.AccountType {
+	who.githubOwnership, err = githubOwns(ctx, cl, token, who.login, *who.inst)
+	return who, err
+}
+
+// githubOwned is one of the person's installations and whether they own it.
+type githubOwned struct {
+	inst github.Installation
+	githubOwnership
+}
+
+// askGitHubOwned asks GitHub, with the person's own token, who they are
+// and which of the App's installations they can see they administer: the
+// ones they own, and the ones GitHub would not say of. Their token never
+// leaves this function.
+func askGitHubOwned(ctx context.Context, cl *github.Client, code string) (string, []githubOwned, error) {
+	token, err := cl.ExchangeCode(ctx, code)
+	if err != nil {
+		return "", nil, err
+	}
+	mine, err := cl.UserInstallations(ctx, token)
+	if err != nil {
+		return "", nil, err
+	}
+	login, err := cl.UserLogin(ctx, token)
+	if err != nil {
+		return "", nil, err
+	}
+	var out []githubOwned
+	for _, inst := range mine {
+		own, err := githubOwns(ctx, cl, token, login, inst)
+		if err != nil {
+			return "", nil, err
+		}
+		if own.owner || own.noMembers || own.refused {
+			out = append(out, githubOwned{inst: inst, githubOwnership: own})
+		}
+	}
+	return login, out, nil
+}
+
+// githubOwns asks whether login administers the installation's account:
+// an owner of the org, or the user account itself.
+func githubOwns(ctx context.Context, cl *github.Client, token, login string, inst github.Installation) (githubOwnership, error) {
+	var own githubOwnership
+	switch inst.AccountType {
 	case "Organization":
-		role, state, err := cl.OrgMembership(ctx, token, who.inst.Account)
+		role, state, err := cl.OrgMembership(ctx, token, inst.Account)
 		var apiErr *github.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited {
 			// GitHub says which refusal it is only in the message.
 			if strings.Contains(apiErr.Message, "Resource not accessible by integration") {
-				who.noMembers = true
+				own.noMembers = true
 			} else {
-				who.refused = true
+				own.refused = true
 			}
-			return who, nil
+			return own, nil
 		}
 		if err != nil {
-			return who, err
+			return own, err
 		}
-		who.owner = role == "admin" && state == "active"
+		own.owner = role == "admin" && state == "active"
 	case "User":
-		who.owner = strings.EqualFold(who.login, who.inst.Account)
+		own.owner = strings.EqualFold(login, inst.Account)
 	}
-	return who, nil
+	return own, nil
+}
+
+// githubChoose is the callback back from the authorize step, with no
+// installation: the App may be installed already, and GitHub then never
+// calls back from its install page. It checks the state, asks GitHub
+// which installations the person owns, and lists them, each available one
+// with its own ticket to the workspace's finish.
+func (s *Server) githubChoose(c *gin.Context, cl *github.Client) {
+	ctx := c.Request.Context()
+	now := time.Now()
+	app := cl.App()
+	st, err := readGitHubState(app.ClientSecret, c.Query("state"), now)
+	if err != nil {
+		s.githubPage(c, http.StatusBadRequest, "This link has expired", "Nothing was connected. Start again from the workspace's Git settings: Connect GitHub.", "")
+		return
+	}
+	back := s.gitSettingsURL(ctx, st.Workspace)
+	if !s.githubNonces.use(st.Nonce, time.Unix(st.Exp, 0), now) {
+		s.githubPage(c, http.StatusBadRequest, "This link was used already", "Each Connect GitHub link connects once. Start again from the workspace's Git settings.", back)
+		return
+	}
+	login, mine, err := askGitHubOwned(ctx, cl, c.Query("code"))
+	if err != nil {
+		s.log.Warn("github: could not list the person's installations", "err", err.Error())
+		s.githubPage(c, http.StatusBadGateway, "GitHub did not answer", "shpyrd could not ask GitHub which installations you own. Try again from the workspace's Git settings in a minute.", back)
+		return
+	}
+	state, err := newGitHubState(app, githubState{Workspace: st.Workspace, Actor: st.Actor, Provider: st.Provider, Subject: st.Subject}, now)
+	if err != nil {
+		abort(c, http.StatusInternalServerError, err)
+		return
+	}
+	install := pages.Link{Label: "Install the App on another account", URL: githubInstallURL(app, state)}
+	if len(mine) == 0 {
+		s.githubLinksPage(c, "Connect an installation", "You don't own an installation of this App yet: install it first.", []pages.Link{install})
+		return
+	}
+	finish := s.workspaceDashboardURL(ctx, st.Workspace) + "/api/workspace/github/finish?ticket="
+	var links []pages.Link
+	says := []string{"The installations of the App you own on GitHub. Connect one to this workspace."}
+	for _, o := range mine {
+		name := fmt.Sprintf("%s (%s)", o.inst.Account, githubKind(o.inst.AccountType))
+		if o.noMembers {
+			says = append(says, name+": shpyrd can't check who owns it yet: an owner of the App must accept its new Members permission on GitHub.")
+			continue
+		}
+		if o.refused {
+			says = append(says, name+": GitHub refused to say whether you own it. If the organisation requires SAML single sign-on, authorize your GitHub session for it, then connect again.")
+			continue
+		}
+		held, err := s.store.GitHubInstallation(ctx, o.inst.ID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("github: could not look up the installation", "installation", o.inst.ID, "err", err.Error())
+			s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not check the connections. Try again from the workspace's Git settings in a minute.", back)
+			return
+		}
+		switch {
+		case held != nil && held.Workspace == st.Workspace:
+			says = append(says, name+": connected.")
+		case held != nil:
+			says = append(says, name+": connected to another workspace: disconnect it there first.")
+		default:
+			nonce, err := randomHex(16)
+			if err != nil {
+				abort(c, http.StatusInternalServerError, err)
+				return
+			}
+			tk := githubTicket{Workspace: st.Workspace, Actor: st.Actor, Provider: st.Provider, Subject: st.Subject, Installation: o.inst.ID, Account: o.inst.Account,
+				AccountType: o.inst.AccountType, Suspended: o.inst.SuspendedAt != nil, GitHubLogin: login, Exp: now.Add(githubTicketTTL).Unix(), Nonce: nonce}
+			links = append(links, pages.Link{Label: "Connect " + name, URL: finish + url.QueryEscape(signGitHubTicket(app.ClientSecret, tk))})
+		}
+	}
+	links = append(links, install, pages.Link{Label: "Back to the Git settings", URL: back})
+	s.githubLinksPage(c, "Connect an installation", strings.Join(says, " "), links)
+}
+
+// githubKind is an account's type, in words.
+func githubKind(accountType string) string {
+	if accountType == "Organization" {
+		return "organisation"
+	}
+	return "personal account"
 }
 
 // gitSettingsURL is the workspace's Git settings page; the console's
@@ -724,6 +884,13 @@ func (s *Server) githubPage(c *gin.Context, status int, title, text, back string
 	}
 	c.Header("Cache-Control", "no-store")
 	c.Data(status, "text/html; charset=utf-8", []byte(pages.HTML(kind, pages.Page{Title: title, Text: text, Links: links})))
+}
+
+// githubLinksPage is a page of choices: 200, never cached (its links
+// carry tickets).
+func (s *Server) githubLinksPage(c *gin.Context, title, text string, links []pages.Link) {
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(pages.HTML(pages.Nothing, pages.Page{Title: title, Text: text, Links: links})))
 }
 
 // githubHooksPerMinute is how many App webhook deliveries one address may

@@ -23,10 +23,12 @@ export function Git() {
   const perms = usePerms();
   const queries = useQueryClient();
   const github = useQuery({ queryKey: ["github"], queryFn: api.github });
+  // One connect call gives both: GitHub's authorize page, which says who
+  // the person is so the server lists the installations they own (one may
+  // exist already), and its install page, for a new account.
   const connect = useMutation({
-    mutationFn: api.connectGitHub,
-    // GitHub asks where to install, then sends the browser back here.
-    onSuccess: ({ installURL }) => go(installURL),
+    mutationFn: async (to: "authorize" | "install") => ({ to, ...(await api.connectGitHub()) }),
+    onSuccess: ({ to, authorizeURL, installURL }) => go(to === "install" ? installURL : authorizeURL),
     onError: (e: Error) => toast.error(e.message),
   });
   const disconnect = useMutation({
@@ -57,9 +59,12 @@ export function Git() {
         ) : (
           <>
             {perms.admin && (
-              <div>
-                <Button onClick={() => connect.mutate()} disabled={connect.isPending}>
+              <div className="flex flex-wrap items-center gap-4">
+                <Button onClick={() => connect.mutate("authorize")} disabled={connect.isPending}>
                   Connect GitHub
+                </Button>
+                <Button variant="link" size="sm" className="px-0" onClick={() => connect.mutate("install")} disabled={connect.isPending}>
+                  Install the App on another account
                 </Button>
               </div>
             )}

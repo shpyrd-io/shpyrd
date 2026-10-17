@@ -52,11 +52,26 @@ it("lists each connection with its kind, who connected it, whether it is suspend
   expect(manage[0].getAttribute("href")).toBe("https://github.com/organizations/acme/settings/installations/42");
 });
 
-it("sends an admin's browser to GitHub's install page from Connect GitHub", async () => {
-  fake.connectGitHub.mockResolvedValue({ installURL: "https://github.com/apps/shpyrd-acme/installations/new?state=s" });
+const urls = {
+  installURL: "https://github.com/apps/shpyrd-acme/installations/new?state=s",
+  authorizeURL: "https://github.com/login/oauth/authorize?client_id=Iv1.acme&state=s",
+};
+
+it("sends an admin's browser to GitHub's authorize page from Connect GitHub", async () => {
+  fake.connectGitHub.mockResolvedValue(urls);
   show();
   fireEvent.click(await screen.findByRole("button", { name: "Connect GitHub" }));
-  await waitFor(() => expect(went.go).toHaveBeenCalledWith("https://github.com/apps/shpyrd-acme/installations/new?state=s"));
+  await waitFor(() => expect(went.go).toHaveBeenCalledWith(urls.authorizeURL));
+  expect(went.go).toHaveBeenCalledTimes(1);
+});
+
+it("sends an admin's browser to GitHub's install page from Install the App on another account", async () => {
+  fake.connectGitHub.mockResolvedValue(urls);
+  show();
+  fireEvent.click(await screen.findByRole("button", { name: "Install the App on another account" }));
+  await waitFor(() => expect(went.go).toHaveBeenCalledWith(urls.installURL));
+  expect(fake.connectGitHub).toHaveBeenCalledTimes(1);
+  expect(went.go).toHaveBeenCalledTimes(1);
 });
 
 it("asks before disconnecting, then disconnects", async () => {
@@ -90,5 +105,6 @@ it("shows someone who is not an admin the connections without Connect or Disconn
   show();
   expect(await screen.findByText("acme")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Connect GitHub" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Install the App on another account" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Disconnect acme" })).toBeNull();
 });

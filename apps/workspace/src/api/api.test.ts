@@ -75,8 +75,9 @@ describe("the api picks the Mock when asked to", () => {
   it("connects GitHub in the Mock, lists what it reaches and forgets a connection", async () => {
     const before = await api.github();
     expect(before.configured).toBe(true);
-    const { installURL } = await api.connectGitHub();
+    const { installURL, authorizeURL } = await api.connectGitHub();
     expect(installURL).toBe("/workspace/git");
+    expect(authorizeURL).toBe("/workspace/git");
     const after = await api.github();
     expect(after.installations.length).toBe(before.installations.length + 1);
     const repos = await api.githubRepositories();
