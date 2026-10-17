@@ -152,6 +152,10 @@ export type Api = {
       iconColor?: string;
       // Whether a push to the project's branch deploys.
       autoDeploy?: boolean;
+      // The commits a push deploys: only those that change these globs,
+      // and only once their other checks pass (the GitHub App's).
+      watchPaths?: string[];
+      waitForChecks?: boolean;
     },
   ) => Promise<Project>;
   // The project's webhook for deploy on push: its URL and secret.

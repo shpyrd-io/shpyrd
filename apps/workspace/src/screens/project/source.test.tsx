@@ -23,7 +23,7 @@ const newer = "b2c3d4e5f60718293a4b5c6d7e8f901234567890";
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
 function projectWith(
-  git: { url: string; revision?: string; autoDeploy?: boolean } | undefined,
+  git: { url: string; revision?: string; autoDeploy?: boolean; watchPaths?: string[]; waitForChecks?: boolean } | undefined,
   source?: SourceStatus,
 ): Project {
   const p = structuredClone(seed[0]) as unknown as Project;
@@ -154,4 +154,68 @@ it("says pushes arrive through the GitHub App and offers no webhook to set up", 
   show(projectWith(repo, { commit, latest: commit, via: "push", checkedAt: minutesAgo(1) }));
   expect(await screen.findByText("Through the GitHub App (acme): every push arrives by itself, nothing to set up.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Deploy on push" })).toBeNull();
+});
+
+it("says a commit waits for CI, and since when", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, held: newer, heldSince: minutesAgo(2), via: "push", checkedAt: minutesAgo(2) }));
+  expect(screen.getByText("Waiting for CI on b2c3d4e (since 2 min)")).toBeTruthy();
+});
+
+it("says why a commit was not deployed, in the Source block's words", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI failed: test", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI failed (test)")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, watchPaths: ["services/api/**"] }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "No changes in the watch paths", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: no changes in the watch paths")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI did not finish within an hour", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI did not finish within an hour")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI could not be read: the GitHub App no longer covers the repository", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI could not be read: the GitHub App no longer covers the repository")).toBeTruthy();
+});
+
+it("switches wait for CI through the api", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockResolvedValue(projectWith({ ...repo, waitForChecks: true }, project.status.source));
+  show(project);
+  fireEvent.click(screen.getByRole("switch", { name: "Wait for CI" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { waitForChecks: true }));
+  await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Each commit waits for its other checks"));
+});
+
+it("saves the watch paths, one pattern per line", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockResolvedValue(projectWith({ ...repo, watchPaths: ["services/api/**", "!**/*.md"] }, project.status.source));
+  show(project);
+  const field = screen.getByLabelText("Watch paths") as HTMLTextAreaElement;
+  expect(field.placeholder).toBe("services/api/**\n!**/*.md");
+  fireEvent.change(field, { target: { value: " services/api/**\n\n!**/*.md " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { watchPaths: ["services/api/**", "!**/*.md"] }));
+});
+
+it("shows a pattern the server refused under the field", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockRejectedValue(new Error('in the watch path "a**", ** stands alone between slashes, as in services/**/api'));
+  show(project);
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a**" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  expect(await screen.findByText(/stands alone between slashes/)).toBeTruthy();
+});
+
+it("disables wait for CI and watch paths where the GitHub App does not reach", () => {
+  const project = projectWith({ url: "https://gitlab.example.test/acme/shop", revision: "main" }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  project.githubFeatures = false;
+  show(project);
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.getAllByText("Needs the GitHub App").length).toBe(2);
+});
+
+it("lets only those who may change the project change the two settings", () => {
+  show(projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) }), { config: false });
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Save watch paths" })).toBeNull();
 });
