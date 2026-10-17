@@ -232,3 +232,91 @@ func TestGitHubUserLinks(t *testing.T) {
 		})
 	}
 }
+
+func TestGitHubUserLinksConditionalWrites(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			exp := time.Now().Add(184 * 24 * time.Hour).UTC().Truncate(time.Second)
+			next := GitHubUserLink{GitHubUserID: 1001, GitHubLogin: "ana2", RefreshToken: "v1.sealed-2", RefreshExpiresAt: exp.Add(time.Hour)}
+			// A missing row: nothing replaced, nothing deleted.
+			if ok, err := s.ReplaceGitHubUserLinkToken(ctx, "local", "p-1", "v1.sealed-1", next); err != nil || ok {
+				t.Fatalf("replace on a missing row: %v %v", ok, err)
+			}
+			if ok, err := s.DeleteGitHubUserLinkIf(ctx, "local", "p-1", "v1.sealed-1"); err != nil || ok {
+				t.Fatalf("delete-if on a missing row: %v %v", ok, err)
+			}
+			if err := s.PutGitHubUserLink(ctx, GitHubUserLink{Provider: "local", Subject: "p-1", GitHubUserID: 1001, GitHubLogin: "ana",
+				RefreshToken: "v1.sealed-1", RefreshExpiresAt: exp}); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := s.GitHubUserLink(ctx, "local", "p-1")
+			time.Sleep(5 * time.Millisecond)
+			// A stale old value changes nothing.
+			if ok, err := s.ReplaceGitHubUserLinkToken(ctx, "local", "p-1", "v1.stale", next); err != nil || ok {
+				t.Fatalf("stale replace: %v %v", ok, err)
+			}
+			if got, _ := s.GitHubUserLink(ctx, "local", "p-1"); got.RefreshToken != "v1.sealed-1" || got.GitHubLogin != "ana" || !got.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Errorf("stale replace changed the row: %+v", got)
+			}
+			if ok, err := s.DeleteGitHubUserLinkIf(ctx, "local", "p-1", "v1.stale"); err != nil || ok {
+				t.Fatalf("stale delete-if: %v %v", ok, err)
+			}
+			if _, err := s.GitHubUserLink(ctx, "local", "p-1"); err != nil {
+				t.Fatalf("stale delete-if removed the row: %v", err)
+			}
+			// The right old value replaces; linked_at stays, updated_at moves.
+			if ok, err := s.ReplaceGitHubUserLinkToken(ctx, "local", "p-1", "v1.sealed-1", next); err != nil || !ok {
+				t.Fatalf("replace: %v %v", ok, err)
+			}
+			got, _ := s.GitHubUserLink(ctx, "local", "p-1")
+			if got.RefreshToken != "v1.sealed-2" || got.GitHubLogin != "ana2" || got.GitHubUserID != 1001 || !got.RefreshExpiresAt.Equal(exp.Add(time.Hour)) ||
+				!got.LinkedAt.Equal(before.LinkedAt) || !got.UpdatedAt.After(before.UpdatedAt) {
+				t.Errorf("replaced: %+v", got)
+			}
+			// The old value no longer matches; the new one deletes.
+			if ok, err := s.DeleteGitHubUserLinkIf(ctx, "local", "p-1", "v1.sealed-1"); err != nil || ok {
+				t.Fatalf("delete-if with the replaced value: %v %v", ok, err)
+			}
+			if ok, err := s.DeleteGitHubUserLinkIf(ctx, "local", "p-1", "v1.sealed-2"); err != nil || !ok {
+				t.Fatalf("delete-if: %v %v", ok, err)
+			}
+			if _, err := s.GitHubUserLink(ctx, "local", "p-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("after delete-if: %v", err)
+			}
+		})
+	}
+}
+
+func TestGitHubUserLinksAnotherAccountResetsLinkedAt(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+			put := func(id int64, tok string) *GitHubUserLink {
+				t.Helper()
+				if err := s.PutGitHubUserLink(ctx, GitHubUserLink{Provider: "local", Subject: "p-1", GitHubUserID: id, GitHubLogin: "x", RefreshToken: tok, RefreshExpiresAt: exp}); err != nil {
+					t.Fatal(err)
+				}
+				l, err := s.GitHubUserLink(ctx, "local", "p-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return l
+			}
+			first := put(1001, "a")
+			time.Sleep(5 * time.Millisecond)
+			same := put(1001, "b")
+			if !same.LinkedAt.Equal(first.LinkedAt) || !same.UpdatedAt.After(first.UpdatedAt) {
+				t.Errorf("same account: linked %v -> %v, updated %v -> %v", first.LinkedAt, same.LinkedAt, first.UpdatedAt, same.UpdatedAt)
+			}
+			time.Sleep(5 * time.Millisecond)
+			other := put(2002, "c")
+			if !other.LinkedAt.After(first.LinkedAt) {
+				t.Errorf("another account kept LinkedAt: %v -> %v", first.LinkedAt, other.LinkedAt)
+			}
+		})
+	}
+}

@@ -128,6 +128,7 @@ func (m *Memory) PutGitHubUserLink(_ context.Context, l GitHubUserLink) error {
 	now := m.now()
 	key := githubLinkKey(l.Provider, l.Subject)
 	l.LinkedAt, l.UpdatedAt = now, now
+	l.RefreshExpiresAt = l.RefreshExpiresAt.UTC()
 	if prev, ok := m.githubLinks[key]; ok && prev.GitHubUserID == l.GitHubUserID {
 		l.LinkedAt = prev.LinkedAt
 	}
@@ -154,4 +155,33 @@ func (m *Memory) DeleteGitHubUserLink(_ context.Context, provider, subject strin
 	}
 	delete(m.githubLinks, key)
 	return nil
+}
+
+func (m *Memory) ReplaceGitHubUserLinkToken(_ context.Context, provider, subject, oldSealed string, l GitHubUserLink) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := githubLinkKey(provider, subject)
+	prev, ok := m.githubLinks[key]
+	if !ok || prev.RefreshToken != oldSealed {
+		return false, nil
+	}
+	l.Provider, l.Subject = provider, subject
+	l.LinkedAt, l.UpdatedAt = m.now(), m.now()
+	if prev.GitHubUserID == l.GitHubUserID {
+		l.LinkedAt = prev.LinkedAt
+	}
+	l.RefreshExpiresAt = l.RefreshExpiresAt.UTC()
+	m.githubLinks[key] = l
+	return true, nil
+}
+
+func (m *Memory) DeleteGitHubUserLinkIf(_ context.Context, provider, subject, sealed string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := githubLinkKey(provider, subject)
+	if prev, ok := m.githubLinks[key]; !ok || prev.RefreshToken != sealed {
+		return false, nil
+	}
+	delete(m.githubLinks, key)
+	return true, nil
 }

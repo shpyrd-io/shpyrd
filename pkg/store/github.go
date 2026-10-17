@@ -81,4 +81,15 @@ type GitHub interface {
 	GitHubUserLink(ctx context.Context, provider, subject string) (*GitHubUserLink, error)
 	// DeleteGitHubUserLink unlinks; ErrNotFound when there is no link.
 	DeleteGitHubUserLink(ctx context.Context, provider, subject string) error
+	// ReplaceGitHubUserLinkToken is the refresh's write: it replaces the
+	// token, login, user id and expiry of l only if the stored refresh token
+	// (the sealed value, as stored) still equals oldSealed. It returns false,
+	// without error, when it changed or the row is gone: another replica
+	// rotated it, so a stale refresher never overwrites. LinkedAt stays as
+	// in PutGitHubUserLink; UpdatedAt moves.
+	ReplaceGitHubUserLinkToken(ctx context.Context, provider, subject, oldSealed string, l GitHubUserLink) (bool, error)
+	// DeleteGitHubUserLinkIf unlinks only if the stored refresh token (the
+	// sealed value, as stored) still equals sealed; false, without error,
+	// when it changed or the row is gone.
+	DeleteGitHubUserLinkIf(ctx context.Context, provider, subject, sealed string) (bool, error)
 }

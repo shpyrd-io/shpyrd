@@ -160,3 +160,23 @@ func (p *Postgres) DeleteGitHubUserLink(ctx context.Context, provider, subject s
 	}
 	return nil
 }
+
+func (p *Postgres) ReplaceGitHubUserLinkToken(ctx context.Context, provider, subject, oldSealed string, l GitHubUserLink) (bool, error) {
+	tag, err := p.pool.Exec(ctx, `UPDATE github_user_links SET
+		 linked_at = CASE WHEN github_user_id = $4 THEN linked_at ELSE now() END,
+		 github_user_id = $4, github_login = $5, refresh_token = $6, refresh_expires_at = $7, updated_at = now()
+		WHERE provider = $1 AND subject = $2 AND refresh_token = $3`,
+		provider, subject, oldSealed, l.GitHubUserID, l.GitHubLogin, l.RefreshToken, l.RefreshExpiresAt)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (p *Postgres) DeleteGitHubUserLinkIf(ctx context.Context, provider, subject, sealed string) (bool, error) {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM github_user_links WHERE provider = $1 AND subject = $2 AND refresh_token = $3`, provider, subject, sealed)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
