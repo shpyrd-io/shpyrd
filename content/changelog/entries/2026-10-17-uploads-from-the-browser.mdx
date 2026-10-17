@@ -1,0 +1,9 @@
+---
+title: "Uploads and downloads straight from the browser"
+description: "Presigned addresses through the public door, the bucket's own CORS rules, and public read for a bucket that wants it."
+date: "2026-10-17"
+type: feature
+draft: false
+---
+
+On shpyrd cloud a bucket is reachable from outside the cluster: the app signs an address for one object and one method with a client pointed at `BUCKET_PUBLIC_ENDPOINT_URL`, hands it to the page, and the browser uploads or downloads without the app in the middle. Set the bucket's CORS rules once from the app, naming the origins it allows. A bucket created with `--public` lets anyone read an object by its address; listing and writing still need the key.

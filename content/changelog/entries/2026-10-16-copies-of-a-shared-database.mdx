@@ -1,0 +1,9 @@
+---
+title: "Nightly copies of a shared database"
+description: "A copy every night, 7, 14 or 30 kept, one on demand, and any of them restored as a new database."
+date: "2026-10-16"
+type: feature
+draft: false
+---
+
+A shared database gets a copy every night, and the newest 7, 14 or 30 stay (`shpyrd pg backups enable --retention 14d`). `shpyrd pg backup` takes one now. `shpyrd pg restore <database> --as <new>` brings the newest copy, or the one you name, back as a new database, so the one you have keeps running while you look.

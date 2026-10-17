@@ -1,0 +1,9 @@
+---
+title: "A cap on every bucket"
+description: "A bucket holds up to the plan's cap per bucket, or less if you ask; past it, an upload is refused with the numbers."
+date: "2026-10-17"
+type: feature
+draft: false
+---
+
+Every bucket has a cap: the plan's per bucket unless you ask for less (`--size 500Mi`), 1 GB on the free workspace. An upload that would pass it is refused with the numbers ("This bucket holds up to 1 GB; this upload would bring it to 1.2 GB."), and what you delete is room again at once. Buckets count against the workspace's plan by number and by their caps together, and the resources page shows each bucket's use against its cap.

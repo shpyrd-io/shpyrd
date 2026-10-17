@@ -1,0 +1,9 @@
+---
+title: "A shared database says where it stands"
+description: "The resources page shows a shared database's use against its cap; it warns at 80 % and pauses at 150 %."
+date: "2026-10-16"
+type: improvement
+draft: false
+---
+
+The resources page draws what a shared database holds against its cap. At 80 % of the cap its status warns; at 150 % connections pause until it is back under 95 %, and the page says so in the database's row. `shpyrd pg info` prints the same.
