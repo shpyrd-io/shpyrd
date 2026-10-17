@@ -141,7 +141,7 @@ func actAsTheBrowser(t *testing.T, page string, hold secretHold, wantTarget stri
 			t.Errorf("permission %s = %q", k, m.DefaultPermissions[k])
 		}
 	}
-	if strings.Join(m.DefaultEvents, ",") != "push,installation_repositories,check_suite,status" {
+	if strings.Join(m.DefaultEvents, ",") != "push,check_suite,status" {
 		t.Errorf("events = %v", m.DefaultEvents)
 	}
 	for _, path := range []string{"/", "/created?code=" + githubtest.ConversionCode + "&state=" + state} {

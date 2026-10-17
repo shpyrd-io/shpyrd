@@ -52,7 +52,7 @@ Out of scope:
      - `setup_url` and `callback_urls[0]` are `<dashboard>/api/github/installed`.
    - **Flags:** `request_oauth_on_install: true`, `setup_on_update: true`, and `public: <--public>`, default false.
    - **Permissions:** `contents: read`, `metadata: read`, `members: read`, `checks: write`, `deployments: write` and `statuses: read`. `members: read` lets shpyrd check that the person connecting an org is one of its owners.
-   - **Events:** `push`, `installation_repositories`, `check_suite` and `status`. The `installation` events are always sent.
+   - **Events:** `push`, `check_suite` and `status`. GitHub always sends `installation` and `installation_repositories`, and refuses them as default events.
    - All of part 4's permissions are requested now, so installations never have to re-approve.
 4. GitHub redirects to `127.0.0.1:<port>/created?code&state`. The CLI checks the state, calls `POST https://api.github.com/app-manifests/{code}/conversions` (no auth needed), writes the Secret through the kubeconfig, shows "Registered" in the browser, and prints the App's URL and the install link.
 5. A timeout of 10 minutes; Ctrl-C stops the local server.
