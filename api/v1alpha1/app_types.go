@@ -130,6 +130,10 @@ const (
 	// AnnotationGitHubReport is what the GitHub reporter last sent for the
 	// App, as JSON: the check run and the Deployment (RFC-0054).
 	AnnotationGitHubReport = "shpyrd.io/github-report"
+	// AnnotationGitHubLinkedBy is the GitHub login whose access picked the
+	// App's repository (RFC-0054, GitHub access by person): for the trail
+	// and the dashboard ("Connected by …"); nothing depends on it.
+	AnnotationGitHubLinkedBy = "shpyrd.io/github-linked-by"
 	// DefaultWebPort is the port web processes listen on ($PORT).
 	DefaultWebPort int32 = 8080
 	// DefaultProcessType is the process an App runs when spec.processes

@@ -45,5 +45,6 @@ func (s *Server) projectDetail(ctx context.Context, app *shpyrdv1.App) AppDetail
 	if src := app.Spec.Source; src != nil && src.Git != nil && !d.GitHubFeatures && (len(src.Git.WatchPaths) > 0 || src.Git.WaitForChecks) {
 		d.SourceNote = githubSourceNote
 	}
+	d.GitHubLinkedBy = app.Annotations[shpyrdv1.AnnotationGitHubLinkedBy]
 	return d
 }

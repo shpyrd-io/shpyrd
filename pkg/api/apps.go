@@ -149,6 +149,9 @@ type AppDetail struct {
 	// and do not.
 	GitHubFeatures bool   `json:"githubFeatures"`
 	SourceNote     string `json:"sourceNote,omitempty"`
+	// GitHubLinkedBy is the GitHub account whose access picked the
+	// repository (RFC-0054): "Connected by …".
+	GitHubLinkedBy string `json:"githubLinkedBy,omitempty"`
 }
 
 type AppDetailSpec struct {
@@ -493,6 +496,14 @@ func (s *Server) createApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("access must be public, authenticated or identified"))
 		return
 	}
+	// From a GitHub repository: someone who can read it (RFC-0054).
+	var linkedBy string
+	if req.Git != nil && req.Git.URL != "" {
+		var ok bool
+		if linkedBy, ok = s.githubAccess(c, req.Git.URL); !ok {
+			return
+		}
+	}
 	// Identity (RFC-0076): a UUID, the App named by its short form in its
 	// own namespace p-<short id>; the slug and workspace are labels.
 	id := uuid.NewString()
@@ -507,6 +518,7 @@ func (s *Server) createApp(c *gin.Context) {
 		Spec:       shpyrdv1.AppSpec{Exposure: req.Exposure, ID: id, Slug: slug, Domains: req.Domains, Processes: req.Processes, Access: access},
 	}
 	project.SetDisplayName(app, req.Name)
+	markGitHubLinkedBy(app, linkedBy)
 	if req.Git != nil && req.Git.URL != "" {
 		app.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
 	}
@@ -761,6 +773,22 @@ func (s *Server) deployApp(c *gin.Context) {
 			return
 		}
 	}
+	// Moving the project to another repository: someone who can read it
+	// (RFC-0054). A redeploy of the same repository is not checked.
+	var linkedBy string
+	moved := false
+	if hasGit {
+		cur, ok := s.loadApp(c)
+		if !ok {
+			return
+		}
+		if cur.Spec.Source == nil || cur.Spec.Source.Git == nil || !sameRepository(cur.Spec.Source.Git.URL, req.Git.URL) {
+			if linkedBy, ok = s.githubAccess(c, req.Git.URL); !ok {
+				return
+			}
+			moved = true
+		}
+	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		switch {
 		case req.Image != "":
@@ -787,6 +815,9 @@ func (s *Server) deployApp(c *gin.Context) {
 				req.Git.WaitForChecks = *req.WaitForChecks
 			}
 			a.Spec.Source = &shpyrdv1.Source{Git: req.Git, SubPath: req.SubPath}
+			if moved {
+				markGitHubLinkedBy(a, linkedBy)
+			}
 			// The source watcher reads the branch's commit again at once.
 			delete(a.Annotations, shpyrdv1.AnnotationGitCommit)
 			delete(a.Annotations, shpyrdv1.AnnotationGitCommitRef)
