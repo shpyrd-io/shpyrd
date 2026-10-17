@@ -252,3 +252,23 @@ it("says nothing of a held or not-deployed commit that is not the latest, or tha
   show(projectWith(repo, { commit, latest: commit, notDeployed: commit, notDeployedReason: "CI failed: test", checkedAt: minutesAgo(1) }));
   expect(screen.queryByText(/not deployed/)).toBeNull();
 });
+
+it("lets wait for CI be switched off and the watch paths cleared where the GitHub App does not reach, never on or added", async () => {
+  const project = projectWith({ ...repo, waitForChecks: true, watchPaths: ["services/api/**"] }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  project.githubFeatures = false;
+  fake.updateProject.mockResolvedValue(projectWith(repo, project.status.source));
+  show(project);
+  const wait = screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement;
+  expect(wait.disabled).toBe(false);
+  fireEvent.click(wait);
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { waitForChecks: false }));
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Save watch paths" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Clear watch paths" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { watchPaths: [] }));
+  expect(screen.getAllByText("Needs the GitHub App").length).toBe(2);
+  cleanup();
+  show(project, { config: false });
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Clear watch paths" })).toBeNull();
+});

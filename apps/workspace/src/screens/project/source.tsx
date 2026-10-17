@@ -165,7 +165,8 @@ function AutoDeploySwitch({ slug, on, allowed }: { slug: string; on: boolean; al
 }
 
 // Wait for CI (RFC-0054): a commit deploys once its other checks on
-// GitHub pass. Only through the GitHub App.
+// GitHub pass. Only through the GitHub App: where it does not reach, the
+// switch can be turned off, never on.
 function WaitForCISwitch({ slug, on, allowed, available }: { slug: string; on: boolean; allowed: boolean; available: boolean }) {
   const queries = useQueryClient();
   const set = useMutation({
@@ -181,7 +182,7 @@ function WaitForCISwitch({ slug, on, allowed, available }: { slug: string; on: b
       <Switch
         size="sm"
         checked={on}
-        disabled={!allowed || !available || set.isPending}
+        disabled={!allowed || (!available && !on) || set.isPending}
         loading={set.isPending}
         onCheckedChange={(v) => set.mutate(v)}
         aria-label="Wait for CI"
@@ -192,7 +193,8 @@ function WaitForCISwitch({ slug, on, allowed, available }: { slug: string; on: b
 }
 
 // Watch paths (RFC-0054): globs from the repository root, one per line;
-// a commit that changes none of them is not deployed.
+// a commit that changes none of them is not deployed. Where the GitHub App
+// does not reach, saved ones can be cleared, never added.
 function WatchPaths({ slug, paths, allowed, available }: { slug: string; paths: string[]; allowed: boolean; available: boolean }) {
   const saved = paths.join("\n");
   const [text, setText] = useState(saved);
@@ -213,6 +215,7 @@ function WatchPaths({ slug, paths, allowed, available }: { slug: string; paths: 
     onError: (e: Error) => setError(e.message),
   });
   const editable = allowed && available;
+  const clearable = allowed && !available && saved !== "";
   return (
     <form
       className="grid gap-2"
@@ -245,6 +248,11 @@ function WatchPaths({ slug, paths, allowed, available }: { slug: string; paths: 
       {editable && lines.join("\n") !== saved && (
         <Button type="submit" size="sm" className="justify-self-start" disabled={save.isPending}>
           Save watch paths
+        </Button>
+      )}
+      {clearable && (
+        <Button type="button" variant="outline" size="sm" className="justify-self-start" disabled={save.isPending} onClick={() => save.mutate([])}>
+          Clear watch paths
         </Button>
       )}
     </form>
