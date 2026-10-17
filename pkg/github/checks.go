@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -219,9 +220,13 @@ func (c *Client) UpdateCheckRun(ctx context.Context, installation int64, owner, 
 }
 
 // DeploymentWrite is a Deployment as shpyrd makes it: shpyrd decided to
-// deploy, so GitHub merges nothing and waits for no context.
+// deploy, so GitHub merges nothing and waits for no context. App and
+// Release go in its payload, so the reporter finds the Deployment it made
+// for a release before it makes another.
 type DeploymentWrite struct {
 	Ref, Environment, Description string
+	App                           string
+	Release                       int
 }
 
 // CreateDeployment makes a Deployment of d.Ref and gives its id.
@@ -232,6 +237,9 @@ func (c *Client) CreateDeployment(ctx context.Context, installation int64, owner
 	}
 	body := map[string]any{"ref": d.Ref, "environment": d.Environment, "description": d.Description,
 		"auto_merge": false, "required_contexts": []string{}, "transient_environment": false}
+	if d.App != "" {
+		body["payload"] = map[string]any{"app": d.App, "release": d.Release}
+	}
 	var res struct {
 		ID      int64  `json:"id"`
 		Message string `json:"message"`
@@ -243,6 +251,76 @@ func (c *Client) CreateDeployment(ctx context.Context, installation int64, owner
 		return 0, fmt.Errorf("GitHub made no Deployment: %s", firstNonEmpty(res.Message, "it gave no id"))
 	}
 	return res.ID, nil
+}
+
+// Deployment is a Deployment as the reporter finds it: the App that made
+// it, and what its payload says it is for.
+type Deployment struct {
+	ID          int64
+	Ref         string
+	Environment string
+	AppID       int64
+	App         string
+	Release     int
+}
+
+// ReportDeployments are an environment's newest Deployments (one page,
+// newest first), read with the reporter's token.
+func (c *Client) ReportDeployments(ctx context.Context, installation int64, owner, repo, environment string) ([]Deployment, error) {
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
+	if err != nil {
+		return nil, err
+	}
+	var res []struct {
+		ID          int64           `json:"id"`
+		Ref         string          `json:"ref"`
+		Environment string          `json:"environment"`
+		Payload     json.RawMessage `json:"payload"`
+		Via         *struct {
+			ID int64 `json:"id"`
+		} `json:"performed_via_github_app"`
+	}
+	endpoint := c.repoURL(owner, repo, fmt.Sprintf("deployments?environment=%s&per_page=%d", url.QueryEscape(environment), perPage))
+	if err := c.call(ctx, "GET", endpoint, tok.Value, nil, &res); err != nil {
+		return nil, err
+	}
+	out := make([]Deployment, 0, len(res))
+	for _, d := range res {
+		dep := Deployment{ID: d.ID, Ref: d.Ref, Environment: d.Environment}
+		if d.Via != nil {
+			dep.AppID = d.Via.ID
+		}
+		// A payload that is not shpyrd's (a string, another shape) says
+		// nothing.
+		var p struct {
+			App     string `json:"app"`
+			Release int    `json:"release"`
+		}
+		if json.Unmarshal(d.Payload, &p) == nil {
+			dep.App, dep.Release = p.App, p.Release
+		}
+		out = append(out, dep)
+	}
+	return out, nil
+}
+
+// DeploymentState is a Deployment's newest state; "" when it has none. A
+// deleted one is IsNotFound.
+func (c *Client) DeploymentState(ctx context.Context, installation int64, owner, repo string, id int64) (string, error) {
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
+	if err != nil {
+		return "", err
+	}
+	var res []struct {
+		State string `json:"state"`
+	}
+	if err := c.call(ctx, "GET", c.repoURL(owner, repo, fmt.Sprintf("deployments/%d/statuses?per_page=1", id)), tok.Value, nil, &res); err != nil {
+		return "", err
+	}
+	if len(res) == 0 {
+		return "", nil
+	}
+	return res[0].State, nil
 }
 
 // DeploymentStatusWrite is a Deployment's new state: in_progress, success

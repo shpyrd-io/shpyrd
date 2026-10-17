@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -190,6 +191,9 @@ func (r *GitHubReporter) report(ctx context.Context, app *shpyrdv1.App, ref gith
 	if err := r.reportChecks(ctx, app, ref, &next); err != nil {
 		return next, err
 	}
+	if err := r.reportDeployment(ctx, app, ref, &next); err != nil {
+		return next, err
+	}
 	return next, nil
 }
 
@@ -285,8 +289,10 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 			return checkWant{}, false
 		}
 		return success()
-	case !onPin && deployedBefore(app, pin):
-		// A rollback runs older code: the commit's check stays.
+	case !onPin && deployedBefore(app, pin), rolledBack(app):
+		// A rollback runs older code: the commit's check stays, and a
+		// rollback that fails never fails it, also when the commit never
+		// ran.
 		return checkWant{}, false
 	case phase == shpyrdv1.PhaseFailed:
 		w.status, w.conclusion, w.label, w.title = "completed", "failure", "failure", "Failed"
@@ -307,6 +313,13 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 	default:
 		return building()
 	}
+}
+
+// rolledBack says the App rolls out, or runs, a release it was rolled
+// back to: the rollback is asked for, or its image is pinned. No build of
+// the pinned commit is under way then.
+func rolledBack(app *shpyrdv1.App) bool {
+	return app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" || (app.HasSource() && app.Spec.Image != "")
 }
 
 // failedInBuild says the App failed in its build: its message is then the
@@ -371,7 +384,8 @@ func lastLines(msg string, n, maxBytes int) string {
 // When the pin moves on, the old pin's unfinished check is marked
 // replaced, and the newest commit's unfinished check, when that commit is
 // the new pin, goes on as the pin's. A non-pinned commit's unfinished
-// check that a newer commit overtakes is marked superseded.
+// check shpyrd no longer waits for is always closed: superseded when a
+// newer commit overtook it, else with why.
 func (r *GitHubReporter) reportChecks(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, rep *githubReport) error {
 	pinned, latest := rep.pinSlot(), rep.latestSlot()
 	if pin := app.PinnedCommit(); pin != "" && rep.Commit != pin {
@@ -392,10 +406,8 @@ func (r *GitHubReporter) reportChecks(ctx context.Context, app *shpyrdv1.App, re
 	}
 	lw, lok := wantLatest(app)
 	if rep.Latest != "" && (!lok || rep.Latest != lw.commit) {
-		if newer := firstNonEmpty(lw.commit, app.PinnedCommit()); latest.unfinished() && newer != "" {
-			superseded := checkWant{commit: rep.Latest, status: "completed", conclusion: "neutral", label: "superseded",
-				title: "Superseded by " + shortCommit(newer), summary: "A newer commit, " + shortCommit(newer) + ", came before this one was deployed."}
-			if err := r.close(ctx, app, ref, latest, superseded); err != nil {
+		if latest.unfinished() {
+			if err := r.close(ctx, app, ref, latest, stoppedWaiting(app, rep.Latest)); err != nil {
 				return err
 			}
 		}
@@ -414,6 +426,33 @@ func (r *GitHubReporter) reportChecks(ctx context.Context, app *shpyrdv1.App, re
 	return nil
 }
 
+// stoppedWaiting is how a held commit's check ends when shpyrd no longer
+// waits for it: superseded when a newer commit overtook it on the branch,
+// else neutral with why.
+func stoppedWaiting(app *shpyrdv1.App, sha string) checkWant {
+	w := checkWant{commit: sha, status: "completed", conclusion: "neutral", label: "superseded"}
+	raw := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+	if newer := sourceRecordOf(app).Latest; newer != "" && newer != sha {
+		w.title, w.summary = "Superseded by "+shortCommit(newer), "A newer commit, "+shortCommit(newer)+", came before this one was deployed."
+		return w
+	}
+	w.label = "stopped"
+	why := ""
+	switch {
+	case raw.Ref != "" && raw.Ref != app.GitRevision():
+		why = "the project follows " + app.GitRevision() + " now"
+	case !app.AutoDeploys():
+		why = "auto-deploy is off"
+	case app.Spec.Source != nil && app.Spec.Source.Git != nil && !app.Spec.Source.Git.WaitForChecks:
+		why = "wait for CI is off"
+	default:
+		w.title, w.summary = "No longer waiting for CI", "shpyrd stopped waiting for this commit's CI before it was deployed."
+		return w
+	}
+	w.title, w.summary = "No longer waiting: "+why, "shpyrd stopped waiting for this commit's CI before it was deployed: "+why+"."
+	return w
+}
+
 // close completes the slot's unfinished run as w says; a run deleted on
 // GitHub needs nothing.
 func (r *GitHubReporter) close(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, slot checkSlot, w checkWant) error {
@@ -426,7 +465,8 @@ func (r *GitHubReporter) close(ctx context.Context, app *shpyrdv1.App, ref githu
 }
 
 // sendCheck brings the slot's run to w: the same run updated, else one
-// shpyrd already made on the commit (found by name and the App's UID),
+// shpyrd already made on the commit (found by name, the App's UID and
+// shpyrd's GitHub App),
 // else a new one. A completed run is never taken back: a new state that is
 // not completed is a new run. A run deleted on GitHub (404) is made again.
 func (r *GitHubReporter) sendCheck(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, slot checkSlot, want checkWant) error {
@@ -453,8 +493,9 @@ func (r *GitHubReporter) sendCheck(ctx context.Context, app *shpyrdv1.App, ref g
 		return err
 	}
 	var own *github.CheckRun
+	appID := cl.App().ID
 	for i := range runs {
-		if runs[i].ExternalID == w.ExternalID && runs[i].ID != *slot.run && (own == nil || runs[i].ID > own.ID) {
+		if runs[i].AppID == appID && runs[i].ExternalID == w.ExternalID && runs[i].ID != *slot.run && (own == nil || runs[i].ID > own.ID) {
 			own = &runs[i]
 		}
 	}
@@ -474,6 +515,143 @@ func (r *GitHubReporter) sendCheck(ctx context.Context, app *shpyrdv1.App, ref g
 	}
 	*slot.commit, *slot.run, *slot.check = want.commit, id, want.key()
 	return nil
+}
+
+// commitSource is a release's source when it is a commit (Release.Source
+// keeps 12 characters of it).
+var commitSource = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// deployWant is the Deployment of the newest release that changed the
+// code: the release, the commit, and the state of its rollout ("" says
+// nothing new: a build of the next commit, or a build that failed).
+type deployWant struct {
+	release     int
+	ref         string
+	description string
+	state       string
+}
+
+// wantDeployment is the Deployment the App's history calls for; false
+// when its newest code is not a commit. A rollback is a release of other
+// code, so it has its own; a release of config or sizes has none.
+func wantDeployment(app *shpyrdv1.App) (deployWant, bool) {
+	rels := app.Status.Releases
+	for i := len(rels) - 1; i >= 0; i-- {
+		if i > 0 && rels[i].Source == rels[i-1].Source {
+			continue // the same code: config vars, sizes, a restart
+		}
+		if !commitSource.MatchString(rels[i].Source) {
+			return deployWant{}, false
+		}
+		w := deployWant{release: rels[i].Number, ref: fullCommitOf(app, rels[i].Source), description: firstLine(rels[i].Description)}
+		switch app.Status.Phase {
+		case shpyrdv1.PhaseDeploying:
+			w.state = "in_progress"
+		case shpyrdv1.PhaseRunning:
+			w.state = "success"
+		case shpyrdv1.PhaseFailed:
+			if !meta.IsStatusConditionFalse(app.Status.Conditions, shpyrdv1.ConditionBuilt) {
+				w.state = "failure"
+			}
+		}
+		return w, true
+	}
+	return deployWant{}, false
+}
+
+// fullCommitOf is the full SHA a release's 12 characters name, when the
+// pin or the watcher's record knows it; else the 12 characters, which
+// GitHub resolves.
+func fullCommitOf(app *shpyrdv1.App, src string) string {
+	rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+	for _, sha := range []string{app.PinnedCommit(), rec.Latest, rec.Held, rec.NotDeployed, rec.Skipped} {
+		if sha != "" && strings.HasPrefix(sha, src) {
+			return sha
+		}
+	}
+	return src
+}
+
+// deploymentDone says a Deployment state is final; a config release
+// rolling out after it does not take it back to in progress.
+func deploymentDone(state string) bool { return state == "success" || state == "failure" }
+
+// reportDeployment makes the newest code release's Deployment, once, and
+// moves its state on. One deleted on GitHub (404) is made again. rep
+// changes only by what GitHub accepted.
+func (r *GitHubReporter) reportDeployment(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, rep *githubReport) error {
+	want, ok := wantDeployment(app)
+	if !ok {
+		return nil
+	}
+	if want.release != rep.Release || rep.Deployment == 0 {
+		if err := r.newDeployment(ctx, app, ref, want, rep); err != nil {
+			return err
+		}
+	}
+	if want.state == "" || want.state == rep.DeploymentState || (want.state == "in_progress" && deploymentDone(rep.DeploymentState)) {
+		return nil
+	}
+	cl := ref.client
+	err := cl.CreateDeploymentStatus(ctx, ref.installation, ref.owner, ref.name, rep.Deployment, r.deploymentStatus(app, want.state))
+	if github.IsNotFound(err) {
+		if err = r.newDeployment(ctx, app, ref, want, rep); err == nil {
+			if want.state == rep.DeploymentState || (want.state == "in_progress" && deploymentDone(rep.DeploymentState)) {
+				return nil // found, already there
+			}
+			err = cl.CreateDeploymentStatus(ctx, ref.installation, ref.owner, ref.name, rep.Deployment, r.deploymentStatus(app, want.state))
+		}
+	}
+	if err != nil {
+		return err
+	}
+	rep.DeploymentState = want.state
+	return nil
+}
+
+// newDeployment gives the release its Deployment: one shpyrd already made
+// for it (a patch of the annotation that failed, a restart), found by the
+// App's UID, the release and shpyrd's GitHub App, with its state; else a
+// new one, environment the project, shpyrd having decided to deploy (no
+// merge, no required contexts).
+func (r *GitHubReporter) newDeployment(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, want deployWant, rep *githubReport) error {
+	cl, env := ref.client, project.SlugOf(app)
+	found, err := cl.ReportDeployments(ctx, ref.installation, ref.owner, ref.name, env)
+	if err != nil {
+		return err
+	}
+	appID := cl.App().ID
+	for _, d := range found {
+		if d.AppID != appID || d.App != string(app.UID) || d.Release != want.release || d.ID == rep.Deployment {
+			continue
+		}
+		state, err := cl.DeploymentState(ctx, ref.installation, ref.owner, ref.name, d.ID)
+		if github.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		rep.Release, rep.Deployment, rep.DeploymentState = want.release, d.ID, state
+		return nil
+	}
+	id, err := cl.CreateDeployment(ctx, ref.installation, ref.owner, ref.name,
+		github.DeploymentWrite{Ref: want.ref, Environment: env, Description: want.description, App: string(app.UID), Release: want.release})
+	if err != nil {
+		return err
+	}
+	rep.Release, rep.Deployment, rep.DeploymentState = want.release, id, ""
+	return nil
+}
+
+// deploymentStatus is a Deployment's state, with the app's URL once it
+// runs and the project's page for its log.
+func (r *GitHubReporter) deploymentStatus(app *shpyrdv1.App, state string) github.DeploymentStatusWrite {
+	s := github.DeploymentStatusWrite{State: state, LogURL: r.projectPage(app)}
+	if state == "success" {
+		s.EnvironmentURL = app.Status.URL
+	}
+	return s
 }
 
 // checkRun is what GitHub is sent for a check.

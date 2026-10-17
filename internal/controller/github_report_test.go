@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-logr/logr/funcr"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -359,14 +360,14 @@ func TestAConfigReleaseOrARollbackLeavesTheCommitsCheck(t *testing.T) {
 		app := shopAt(testCommit, shpyrdv1.PhaseRunning, code)
 		r, c, fake, _ := githubReporter(t, app)
 		reconcileReport(t, r, app)
-		writes := len(fake.Writes())
+		writes := checkWrites(fake)
 		for _, phase := range []string{shpyrdv1.PhaseDeploying, shpyrdv1.PhaseFailed, shpyrdv1.PhaseRunning} {
 			setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
 				st.Phase, st.Releases, st.Message = phase, []shpyrdv1.Release{code, config}, "the config release failed"
 			})
 			_, got := reconcileReport(t, r, app)
-			if runs := fake.CheckRunsOn(testCommit); len(fake.Writes()) != writes || len(runs) != 1 || runs[0].Conclusion != "success" || reportOf(got).Check != "completed/success" {
-				t.Errorf("%s: %d writes, %+v", phase, len(fake.Writes())-writes, runs)
+			if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "success" || reportOf(got).Check != "completed/success" {
+				t.Errorf("%s: %d writes, %+v", phase, checkWrites(fake)-writes, runs)
 			}
 		}
 	})
@@ -376,15 +377,15 @@ func TestAConfigReleaseOrARollbackLeavesTheCommitsCheck(t *testing.T) {
 		app := shopAt(testCommit, shpyrdv1.PhaseRunning, older, newest)
 		r, c, fake, _ := githubReporter(t, app)
 		reconcileReport(t, r, app)
-		writes := len(fake.Writes())
+		writes := checkWrites(fake)
 		back := release(3, otherCommit, "Rollback to v1")
 		for _, phase := range []string{shpyrdv1.PhaseDeploying, shpyrdv1.PhaseRunning, shpyrdv1.PhaseFailed} {
 			setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
 				st.Phase, st.Releases, st.Message = phase, []shpyrdv1.Release{older, newest, back}, "the rollback failed"
 			})
 			reconcileReport(t, r, app)
-			if runs := fake.CheckRunsOn(testCommit); len(fake.Writes()) != writes || len(runs) != 1 || runs[0].Conclusion != "success" {
-				t.Errorf("%s: %d writes, %+v", phase, len(fake.Writes())-writes, runs)
+			if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "success" {
+				t.Errorf("%s: %d writes, %+v", phase, checkWrites(fake)-writes, runs)
 			}
 		}
 	})
@@ -430,6 +431,18 @@ func TestPermissionsNotGrantedBackOffTheReporterAndAreLoggedOnceAMinute(t *testi
 	if why, ok := r.GitHub.refusedLately(42, "shop"); ok {
 		t.Errorf("the clone is refused: %s", why)
 	}
+}
+
+// checkWrites are the writes of check runs; the Deployments' are not
+// counted.
+func checkWrites(fake *githubtest.Server) int {
+	n := 0
+	for _, w := range fake.Writes() {
+		if strings.Contains(w.Path, "/check-runs") {
+			n++
+		}
+	}
+	return n
 }
 
 // creates counts the check runs made through the API.
@@ -523,12 +536,12 @@ func TestANewPinsCheckIsBuildingWhileTheOlderReleaseRuns(t *testing.T) {
 	}
 	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase, st.Message = shpyrdv1.PhaseFailed, "boom" })
 	reconcileReport(t, r, app)
-	writes := len(fake.Writes())
+	writes := checkWrites(fake)
 	for _, phase := range []string{shpyrdv1.PhaseRunning, shpyrdv1.PhaseBuilding, shpyrdv1.PhaseDeploying} {
 		setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = phase })
 		_, got := reconcileReport(t, r, app)
-		if runs := fake.CheckRunsOn(testCommit); len(fake.Writes()) != writes || len(runs) != 1 || runs[0].Conclusion != "failure" || reportOf(got).Check != "completed/failure" {
-			t.Errorf("%s: %d writes, %+v", phase, len(fake.Writes())-writes, runs)
+		if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "failure" || reportOf(got).Check != "completed/failure" {
+			t.Errorf("%s: %d writes, %+v", phase, checkWrites(fake)-writes, runs)
 		}
 	}
 }
@@ -566,13 +579,13 @@ func TestAConfigReleaseFinishesAnUnfinishedCheckAsASuccess(t *testing.T) {
 		app := shopAt(testCommit, shpyrdv1.PhaseFailed, code)
 		r, c, fake, _ := githubReporter(t, app)
 		reconcileReport(t, r, app)
-		writes := len(fake.Writes())
+		writes := checkWrites(fake)
 		setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
 			st.Phase, st.Releases = shpyrdv1.PhaseRunning, []shpyrdv1.Release{code, config}
 		})
 		reconcileReport(t, r, app)
-		if runs := fake.CheckRunsOn(testCommit); len(fake.Writes()) != writes || len(runs) != 1 || runs[0].Conclusion != "failure" {
-			t.Errorf("%d writes, %+v", len(fake.Writes())-writes, runs)
+		if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "failure" {
+			t.Errorf("%d writes, %+v", checkWrites(fake)-writes, runs)
 		}
 	})
 }
@@ -683,5 +696,253 @@ func TestTheCheckLinksToTheProjectOnItsWorkspacesDashboard(t *testing.T) {
 	reconcileReport(t, r, app)
 	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].DetailsURL != "https://acme.example.test/projects/shop" {
 		t.Errorf("%+v", runs)
+	}
+}
+
+func TestAReleaseOfANewCommitIsAGitHubDeployment(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	_, got := reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 1 || d[0].Ref != testCommit || d[0].Environment != "shop" || d[0].AutoMerge || d[0].Transient ||
+		d[0].RequiredContexts == nil || len(d[0].RequiredContexts) != 0 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "in_progress" {
+		t.Fatalf("%+v", d)
+	}
+	if rep := reportOf(got); rep.Release != 1 || rep.Deployment != d[0].ID || rep.DeploymentState != "in_progress" {
+		t.Errorf("annotation %+v", rep)
+	}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	reconcileReport(t, r, app)
+	d = fake.Deployments()
+	if len(d) != 1 || len(d[0].Statuses) != 2 || d[0].Statuses[1].State != "success" || d[0].Statuses[1].EnvironmentURL != "https://shop.example.test" ||
+		d[0].Statuses[1].LogURL != "https://acme.shpyrd.test/projects/shop" {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestAReleaseThatOnlyChangesConfigMakesNoDeployment(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase = shpyrdv1.PhaseDeploying
+		st.Releases = append(st.Releases, release(2, testCommit, "Set LOG_LEVEL"))
+	})
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 1 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" {
+		t.Errorf("a config release neither makes a Deployment nor takes one back to in progress: %+v", d)
+	}
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Conclusion != "success" {
+		t.Errorf("a config release leaves the commit's check as it was: %+v", runs)
+	}
+}
+
+func TestARollbackKeepsTheCheckAndIsADeployment(t *testing.T) {
+	app := shopAt(otherCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456"), release(2, otherCommit, "Push 89abcde by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Releases = append(st.Releases, release(3, testCommit, "Rollback to v1"))
+	})
+	_, got := reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Conclusion != "success" {
+		t.Errorf("the newest commit's check stays: %+v", runs)
+	}
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 0 {
+		t.Errorf("no check for the rolled-back commit: %+v", runs)
+	}
+	d := fake.Deployments()
+	if len(d) != 2 || d[1].Ref != short(testCommit) || d[1].Description != "Rollback to v1" || d[1].Statuses[0].State != "success" || reportOf(got).Release != 3 {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+}
+
+func TestAFailedRolloutFailsTheDeploymentAndAFailedBuildLeavesIt(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	// The next commit's build fails: the running release's Deployment stays.
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Message = shpyrdv1.PhaseFailed, "The build failed."
+		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionBuilt, Status: metav1.ConditionFalse, Reason: "BuildFailed", Message: "The build failed."})
+	})
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d[0].Statuses) != 1 {
+		t.Errorf("a failed build is not a failed rollout: %+v", d)
+	}
+	// The rollout of the release fails.
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Message = "web: CrashLoopBackOff"
+		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionBuilt, Status: metav1.ConditionTrue, Reason: "Built", Message: "built"})
+	})
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d[0].Statuses) != 2 || d[0].Statuses[1].State != "failure" {
+		t.Errorf("%+v", d)
+	}
+}
+
+func TestADeletedDeploymentStartsANewOne(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	_, got := reconcileReport(t, r, app)
+	fake.DeleteDeployment(reportOf(got).Deployment)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	_, got = reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 1 || d[0].Ref != testCommit || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" || reportOf(got).Deployment != d[0].ID {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+}
+
+// A Deployment made whose annotation patch failed is never made twice:
+// memory knows it, and after a restart it is found on GitHub by its
+// release, never another App's.
+func TestAFailedReportPatchAndARestartNeverPostADeploymentTwice(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	fake.AddDeployment(githubtest.Deployment{Ref: testCommit, Environment: "shop", AppID: 999, App: string(app.UID), Release: 1})
+	inner := r.Client
+	r.Client = interceptor.NewClient(inner.(client.WithWatch), interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return errors.New("the API server is away")
+		},
+	})
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err == nil {
+			t.Fatal("the failed patch is not an error")
+		}
+	}
+	ours := func() []githubtest.Deployment {
+		var out []githubtest.Deployment
+		for _, d := range fake.Deployments() {
+			if d.AppID == githubtest.AppID {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	if d := ours(); len(d) != 1 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "in_progress" || d[0].App != string(app.UID) || d[0].Release != 1 {
+		t.Fatalf("memory: %+v", fake.Deployments())
+	}
+	// A restart: nothing in memory, and no annotation.
+	again := &GitHubReporter{Client: inner, GitHub: &GitHubApp{Source: fake.Source(inner, "shpyrd-system"), Installations: r.GitHub.Installations}, Config: r.Config, Now: fake.Time}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	_, got := reconcileReport(t, again, app)
+	d := ours()
+	if len(d) != 1 || len(d[0].Statuses) != 2 || d[0].Statuses[1].State != "success" {
+		t.Errorf("after a restart: %+v", fake.Deployments())
+	}
+	if rep := reportOf(got); len(d) != 1 || rep.Release != 1 || rep.Deployment != d[0].ID || rep.DeploymentState != "success" {
+		t.Errorf("annotation %+v", rep)
+	}
+	if foreign := fake.Deployments()[0]; foreign.AppID != 999 || len(foreign.Statuses) != 0 {
+		t.Errorf("another App's Deployment was used: %+v", foreign)
+	}
+}
+
+// Re-review c: a run of the same name and external_id made by another
+// App is not shpyrd's.
+func TestARunOfAnotherAppIsNeverAdopted(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, _, fake, _ := githubReporter(t, app)
+	fake.SetCheckRuns(testCommit, githubtest.CheckRun{Name: "shpyrd / shop", Status: "in_progress", ExternalID: string(app.UID), AppID: 999})
+	_, got := reconcileReport(t, r, app)
+	runs := fake.CheckRunsOn(testCommit)
+	if creates(fake) != 1 || len(runs) != 2 || runs[0].Title != "" || runs[1].AppID != githubtest.AppID || runs[1].Title != "Deploying" || reportOf(got).CheckRun != runs[1].ID {
+		t.Errorf("%d creates, %+v, annotation %+v", creates(fake), runs, reportOf(got))
+	}
+}
+
+// Re-review a: a held commit a newer one overtook is superseded by it.
+func TestAHeldCommitOvertakenByANewerOneIsSuperseded(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Held: otherCommit, HeldSince: at(sourceNow)})
+	})
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: thirdCommit, Via: "push", Held: thirdCommit, HeldSince: at(sourceNow)})
+	})
+	_, got := reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" || runs[0].Title != "Superseded by fedcba9" {
+		t.Errorf("the overtaken commit: %+v", runs)
+	}
+	if runs := fake.CheckRunsOn(thirdCommit); len(runs) != 1 || runs[0].Status != "queued" || reportOf(got).Latest != thirdCommit {
+		t.Errorf("the newer one: %+v, annotation %+v", runs, reportOf(got))
+	}
+}
+
+// Re-review a: a held commit shpyrd stops waiting for, with no newer
+// commit, is closed with why, never left queued, never "superseded".
+func TestAHeldCommitNoLongerWaitedForIsClosedWithWhy(t *testing.T) {
+	held := gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Held: otherCommit, HeldSince: at(sourceNow)}
+	released := held
+	released.Held, released.HeldSince = "", nil
+	for name, tc := range map[string]struct {
+		change func(*shpyrdv1.App)
+		title  string
+	}{
+		"auto-deploy off": {func(a *shpyrdv1.App) {
+			off := false
+			a.Spec.Source.Git.AutoDeploy = &off
+			withRecord(a, released)
+		}, "No longer waiting: auto-deploy is off"},
+		"wait for CI off": {func(a *shpyrdv1.App) {
+			a.Spec.Source.Git.WaitForChecks = false
+			withRecord(a, released)
+		}, "No longer waiting: wait for CI is off"},
+		"another branch, no pin": {func(a *shpyrdv1.App) { a.Spec.Source.Git.Revision = "develop" }, "No longer waiting: the project follows develop now"},
+		"anything else":          {func(a *shpyrdv1.App) { withRecord(a, released) }, "No longer waiting for CI"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+			app.Spec.Source.Git.WaitForChecks = true
+			r, c, fake, _ := githubReporter(t, app)
+			reconcileReport(t, r, app)
+			setAnnotations(t, c, app, func(a *shpyrdv1.App) { withRecord(a, held) })
+			reconcileReport(t, r, app)
+			setAnnotations(t, c, app, tc.change)
+			_, got := reconcileReport(t, r, app)
+			if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" || runs[0].Title != tc.title {
+				t.Errorf("%+v", runs)
+			}
+			if rep := reportOf(got); rep.Latest != "" || rep.LatestRun != 0 {
+				t.Errorf("annotation %+v", rep)
+			}
+		})
+	}
+}
+
+// Re-review b, ruling (a): a rollback never fails the pinned commit's
+// check, also when that commit never ran.
+func TestAFailedRollbackNeverFailsThePinsCheck(t *testing.T) {
+	v1, v2 := release(1, otherCommit, "Push 89abcde by alice: before"), release(2, thirdCommit, "Push fedcba9 by alice: later")
+	back := release(3, otherCommit, "Rollback to v1")
+	for name, tc := range map[string]struct {
+		rels     []shpyrdv1.Release
+		annotate bool
+	}{
+		"rolling out": {[]shpyrdv1.Release{v1, v2}, true},
+		"rolled back": {[]shpyrdv1.Release{v1, v2, back}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := shopAt(testCommit, shpyrdv1.PhaseFailed, tc.rels...)
+			app.Status.Message = "web: CrashLoopBackOff"
+			app.Spec.Image = v1.Image
+			if tc.annotate {
+				app.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+			}
+			r, _, fake, _ := githubReporter(t, app)
+			reconcileReport(t, r, app)
+			if runs := fake.CheckRunsOn(testCommit); len(runs) != 0 {
+				t.Errorf("the pin's check: %+v", runs)
+			}
+		})
 	}
 }

@@ -254,3 +254,32 @@ func TestTheReporterListsItsOwnCheckRunsWithItsToken(t *testing.T) {
 		t.Errorf("token %v", perms)
 	}
 }
+
+func TestShpyrdsDeploymentIsFoundWithItsReleaseAndState(t *testing.T) {
+	c, fake := newClient(t)
+	ctx := context.Background()
+	fake.AddDeployment(githubtest.Deployment{Ref: "aaa111", Environment: "shop", AppID: 999, App: "uid-1", Release: 3})
+	fake.AddDeployment(githubtest.Deployment{Ref: "ccc333", Environment: "blog"})
+	id, err := c.CreateDeployment(ctx, 42, "acme", "shop", github.DeploymentWrite{Ref: "bbb222", Environment: "shop", App: "uid-1", Release: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, err := c.DeploymentState(ctx, 42, "acme", "shop", id); err != nil || state != "" {
+		t.Errorf("no status yet: %q, %v", state, err)
+	}
+	if err := c.CreateDeploymentStatus(ctx, 42, "acme", "shop", id, github.DeploymentStatusWrite{State: "in_progress"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.ReportDeployments(ctx, 42, "acme", "shop", "shop")
+	if err != nil || len(got) != 2 || got[0] != (github.Deployment{ID: id, Ref: "bbb222", Environment: "shop", AppID: githubtest.AppID, App: "uid-1", Release: 3}) || got[1].AppID != 999 {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if state, err := c.DeploymentState(ctx, 42, "acme", "shop", id); err != nil || state != "in_progress" {
+		t.Errorf("%q, %v", state, err)
+	}
+	for _, w := range fake.Writes() {
+		if fmt.Sprint(w.Permissions) != "map[checks:write deployments:write]" {
+			t.Errorf("%s %s with %v", w.Method, w.Path, w.Permissions)
+		}
+	}
+}

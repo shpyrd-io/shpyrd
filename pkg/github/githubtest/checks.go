@@ -36,12 +36,17 @@ type CheckRun struct {
 // Status is a commit status.
 type Status struct{ Context, State string }
 
-// Deployment is one made through the API, with its statuses in order.
+// Deployment is one made through the API (AppID is then AppID), or added
+// with AddDeployment, with its statuses in order. App and Release are
+// what its payload says it is for.
 type Deployment struct {
 	ID                            int64
 	Ref, Environment, Description string
 	AutoMerge, Transient          bool
 	RequiredContexts              []string
+	AppID                         int64
+	App                           string
+	Release                       int
 	Statuses                      []DeploymentStatus
 }
 
@@ -124,6 +129,17 @@ func (f *Server) Deployments() []Deployment {
 		out[i] = d
 	}
 	return out
+}
+
+// AddDeployment adds a Deployment made elsewhere (another App's, or one
+// made before) and gives its id.
+func (f *Server) AddDeployment(d Deployment) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	d.ID = f.nextID
+	f.deployments = append(f.deployments, d)
+	return d.ID
 }
 
 // DeleteDeployment forgets a Deployment, as when it is deleted on GitHub.
@@ -357,12 +373,51 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 			AutoMerge        bool     `json:"auto_merge"`
 			RequiredContexts []string `json:"required_contexts"`
 			Transient        bool     `json:"transient_environment"`
+			Payload          struct {
+				App     string `json:"app"`
+				Release int    `json:"release"`
+			} `json:"payload"`
 		}
 		_ = json.Unmarshal(raw, &in)
 		f.nextID++
 		f.deployments = append(f.deployments, Deployment{ID: f.nextID, Ref: in.Ref, Environment: in.Environment, Description: in.Description,
-			AutoMerge: in.AutoMerge, Transient: in.Transient, RequiredContexts: in.RequiredContexts})
+			AutoMerge: in.AutoMerge, Transient: in.Transient, RequiredContexts: in.RequiredContexts, AppID: AppID, App: in.Payload.App, Release: in.Payload.Release})
 		reply(w, http.StatusCreated, map[string]any{"id": f.nextID})
+	case r.Method == "GET" && rest == "deployments":
+		if !need("deployments", "read") {
+			return
+		}
+		// Newest first, as GitHub lists them.
+		env := r.URL.Query().Get("environment")
+		out := []map[string]any{}
+		for i := len(f.deployments) - 1; i >= 0; i-- {
+			d := f.deployments[i]
+			if env != "" && d.Environment != env {
+				continue
+			}
+			m := map[string]any{"id": d.ID, "ref": d.Ref, "environment": d.Environment, "payload": map[string]any{"app": d.App, "release": d.Release}}
+			if d.AppID != 0 {
+				m["performed_via_github_app"] = map[string]any{"id": d.AppID}
+			}
+			out = append(out, m)
+		}
+		reply(w, http.StatusOK, out)
+	case r.Method == "GET" && len(seg) == 3 && seg[0] == "deployments" && seg[2] == "statuses":
+		if !need("deployments", "read") {
+			return
+		}
+		id, _ := strconv.ParseInt(seg[1], 10, 64)
+		for _, d := range f.deployments {
+			if d.ID == id {
+				out := []map[string]string{}
+				for i := len(d.Statuses) - 1; i >= 0; i-- {
+					out = append(out, map[string]string{"state": d.Statuses[i].State})
+				}
+				reply(w, http.StatusOK, out)
+				return
+			}
+		}
+		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 	case r.Method == "POST" && len(seg) == 3 && seg[0] == "deployments" && seg[2] == "statuses":
 		if !need("deployments", "write") {
 			return
