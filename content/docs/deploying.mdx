@@ -203,6 +203,58 @@ shpyrd deploy --git https://github.com/acme/shop --ref main --project shop
 
 On shpyrd cloud the App is already set up; on a self-hosted platform an operator registers it once: see [Installation](/docs/installation#connect-github).
 
+### Checks and Deployments on GitHub
+
+For a repository the GitHub App covers, GitHub shows what shpyrd does with each commit. A check named `shpyrd / <project>` appears on the commit: **Building**, then **Deploying**, then **Running at** the app's address, or **Failed** with the last lines of the reason. Its **Details** link opens the project in the dashboard. A commit that waits for CI shows **Waiting for CI**. A commit that was not deployed, that asked to be skipped, that a newer commit overtook, or that a newer pin replaced shows a neutral check that says why ("Replaced by a1b2c3d", "Superseded by a1b2c3d").
+
+Each release that changes the code is also a GitHub **Deployment**, in an environment named after the project, with a link to the app once it runs. A rollback to an older commit is a Deployment too. A Deployment that was still unfinished when a newer release replaced it is marked inactive. A release that only changes config vars or sizes gets no Deployment, and never changes a check that is finished. Two projects on one repository each get their own check and their own environment.
+
+The check and the Deployment never hold a deploy back: when GitHub is down or refuses a write, shpyrd deploys as usual and sends what it owes later. A suspended or removed installation reports nothing. When shpyrd stops reporting on a project (it no longer follows a branch on github.com, for one), its unfinished checks and its unfinished Deployment are closed.
+
+An installation made before the App asked for checks, statuses and Deployments has to accept the App's updated permissions on GitHub; until it does, nothing is reported and wait for CI cannot read the commit's checks.
+
+### Wait for CI
+
+With **Wait for CI** on, a pushed commit deploys only once every other check and commit status on it passes, all except shpyrd's own. Switch it on under the project's overview, in the Source block, or:
+
+```shell
+shpyrd deploy --git https://github.com/acme/shop --wait-for-ci      # --no-wait-for-ci switches it off
+```
+
+The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and so does `shpyrd projects info`. Then:
+
+- **They pass:** the commit deploys; its release says `Push a1b2c3d by alice: fix login (CI passed)`.
+- **One fails:** the commit is not deployed, and the project says which check failed ("a1b2c3d not deployed: CI failed (test)"). Re-run it on GitHub: if it passes while the commit is still the branch's newest, it deploys.
+- **None reports within a minute:** the commit has no CI, and it deploys (`… (no CI)`). A CI that reports later than a minute after the push may lose that race.
+- **Still pending an hour later:** the commit is not deployed ("CI did not finish within an hour"). It is not tried again by itself.
+- **A newer commit arrives:** it replaces the waiting one at once.
+- **GitHub does not answer:** the commit keeps waiting, and the hour keeps counting. It is never deployed unchecked.
+- **The App stops covering the repository:** a waiting commit stays held and ends "CI could not be read: the GitHub App no longer covers the repository".
+
+shpyrd learns of results through the App's webhook, and checks a waiting commit every 30 seconds in case a delivery is missed. A deploy by a person (`shpyrd deploy`, Redeploy, a rollback) and the first commit of a new project do not wait. Turning auto-deploy back on sends the commit that was waiting through watch paths and wait for CI like any other.
+
+### Watch paths
+
+**Watch paths** deploy only the commits that change certain files: in a repository that holds several services, each project deploys its own. They are patterns from the repository root, one per line:
+
+```text
+services/api
+!**/*.md
+```
+
+`*` matches within one folder and `**` across any number of folders. Patterns start at the repository root, with or without a leading `/`: `*.md` matches only Markdown files in the root, and `**/*.md` matches them anywhere. A pattern that names a folder (`services/api`) covers everything below it; `services/api/` matches only what is below it. Character classes such as `[a-z]` work. A leading `!` excludes. Patterns run in order and the last one that matches a file decides it: the two above deploy any change under `services/api` except Markdown. A project takes up to 20 patterns of up to 200 characters; a pattern shpyrd cannot read is refused when it is set.
+
+Set them under the project's overview, in the Source block, or:
+
+```shell
+shpyrd deploy --git https://github.com/acme/monorepo --watch-path 'services/api' --watch-path '!**/*.md'
+shpyrd deploy --git https://github.com/acme/monorepo --no-watch-paths     # every commit deploys again
+```
+
+A commit that changes nothing in them is recorded, not deployed ("a1b2c3d not deployed: no changes in the watch paths"). The files counted are everything changed since the commit that runs, so a commit that was not deployed still counts once a later one matches, and a renamed file counts under its old name and its new one. When GitHub's list of changes cannot be trusted (300 or more files changed, the branch's history was rewritten, GitHub's compare failed, or GitHub is not answering), the commit deploys, and its release ends with "(watch paths not checked: …)", naming the reason.
+
+Watch paths and wait for CI work through the GitHub App. On any other host they are kept but do nothing: the dashboard disables them with "Needs the GitHub App", and `shpyrd deploy` says so when it sets them.
+
 <Callout title="Which languages?">
 
 Anything the Paketo buildpacks understand: Go, Node.js, Java, Python, Ruby, PHP, .NET Core and static sites served by nginx or httpd. Repositories with a `Dockerfile` are built with BuildKit instead (below), and `--image` runs anything already built.
