@@ -78,7 +78,7 @@ release that can be rolled back.
 				}
 				p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(k)))
 				return g.print(cmd, map[string]string{"project": name, "kind": k, "name": args[0], "prefix": p}, func(w io.Writer) {
-					fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", k, args[0], name, p, p)
+					fmt.Fprintf(w, "Attached %s %s to %s: config vars %s (values are never shown)\n", k, args[0], name, varsOf(k, p))
 					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
 				})
 			}
@@ -109,7 +109,7 @@ release that can be rolled back.
 			ac.audit(ctx, name, "attach", t.Kind+" "+args[0], prefix)
 			p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(t.Kind)))
 			return g.print(cmd, map[string]string{"project": name, "kind": t.Kind, "name": args[0], "prefix": p}, func(w io.Writer) {
-				fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", t.Kind, args[0], name, p, p)
+				fmt.Fprintf(w, "Attached %s %s to %s: config vars %s (values are never shown)\n", t.Kind, args[0], name, varsOf(t.Kind, p))
 				if app.Status.Image != "" {
 					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
 				}
@@ -237,6 +237,14 @@ func (a *appClient) findResource(ctx context.Context, namespace, name, kind stri
 		}
 		return ext.ResourceType{}, fmt.Errorf("%q exists as %s: pass --kind", name, strings.Join(kinds, " and "))
 	}
+}
+
+// varsOf names the first variables a binding of a kind gives the app.
+func varsOf(kind, prefix string) string {
+	if kind == "ObjectBucket" {
+		return prefix + "_ACCESS_KEY_ID, " + prefix + "_SECRET_ACCESS_KEY, " + prefix + "_ENDPOINT_URL, " + prefix + "_BUCKET, ..."
+	}
+	return prefix + "_URL, " + prefix + "_HOST, ..."
 }
 
 func defaultPrefix(kind string) string {
