@@ -451,6 +451,18 @@ func printAppInfo(out io.Writer, app *shpyrdv1.App) {
 		if app.Spec.Source.SubPath != "" {
 			fmt.Fprintf(out, "Path:       %s\n", app.Spec.Source.SubPath)
 		}
+		if st := app.Status.Source; st != nil {
+			switch {
+			case st.Held != "" && st.Held == st.Latest:
+				since := ""
+				if st.HeldSince != nil {
+					since = " (since " + age(*st.HeldSince) + ")"
+				}
+				fmt.Fprintf(out, "Commit:     %s waits for CI%s\n", st.Held[:min(7, len(st.Held))], since)
+			case st.NotDeployed != "" && st.NotDeployed == st.Latest && st.NotDeployed != st.Commit:
+				fmt.Fprintf(out, "Commit:     %s not deployed: %s\n", st.NotDeployed[:min(7, len(st.NotDeployed))], st.NotDeployedReason)
+			}
+		}
 	}
 	if len(app.Status.ProcessTypes) > 0 {
 		types := strings.Join(app.Status.ProcessTypes, ", ")

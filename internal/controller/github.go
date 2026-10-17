@@ -369,6 +369,14 @@ func (gh *GitHubApp) coverQuietly(ctx context.Context, app *shpyrdv1.App) (githu
 	return ref, true, nil
 }
 
+// Covers says the GitHub App covers the App's repository, for the API's
+// view of a project: coverQuietly, where a cover that could not be read is
+// "no".
+func (gh *GitHubApp) Covers(ctx context.Context, app *shpyrdv1.App) bool {
+	_, ok, _ := gh.coverQuietly(ctx, app)
+	return ok
+}
+
 // coverFailure is cover's error in a person's words, for a release note.
 func coverFailure(err error) string {
 	if errors.Is(err, errGitHubConnections) {
