@@ -858,7 +858,10 @@ func TestAKeptNudgeWaitsForTheTimeSinceTheLastRead(t *testing.T) {
 	fake.SetDown(true)
 	advance(fake, time.Minute)
 	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
-	_, got = reconcileSource(t, r, got)
+	res, got := reconcileSource(t, r, got)
+	if res.RequeueAfter <= ciNudgeEvery {
+		t.Errorf("a nudge whose read failed waits for the next due pass, not 5 s: %v", res.RequeueAfter)
+	}
 	calls := len(fake.Calls())
 	for range 4 {
 		advance(fake, time.Second)

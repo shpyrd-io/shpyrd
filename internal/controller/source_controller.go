@@ -265,6 +265,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 			nudge = nil
 		}
+		// A nudge held back by ciNudgeEvery is read once it is due.
 		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, nudge != nil, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
@@ -294,14 +295,14 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
 	}
 	r.dropPush(ctx, app, rawPush)
-	kept := nudge != nil && nudge.SHA != ev.ciRead && u.record.WaitsOnCI(nudge.SHA)
-	if !kept {
+	if nudge == nil || nudge.SHA == ev.ciRead || !u.record.WaitsOnCI(nudge.SHA) {
 		// Read, or of a commit no longer waiting; else kept for the next
-		// pass.
+		// pass (one whose read failed waits for the next due pass, as
+		// before).
 		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 	}
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, kept, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, false, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -681,7 +682,7 @@ func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
 
 // requeue is the wait until the next pass: the next check of the branch,
 // or sooner, the next read of a held commit's checks, or of the commit a
-// nudge kept (nudged) is about.
+// nudge held back by ciNudgeEvery (nudged) is about.
 func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, nudged bool, now time.Time) time.Duration {
 	d := r.untilDue(rec, now)
 	held := rec.Held != "" && rec.Held == rec.Latest
