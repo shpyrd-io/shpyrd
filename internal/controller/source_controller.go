@@ -24,6 +24,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 )
 
 // The source watcher (RFC-0018). For each App that follows a git branch
@@ -101,6 +102,13 @@ type SourceReconciler struct {
 	ciChecked map[types.UID]time.Time
 	// ciLogged is when each App's unreadable checks were last logged.
 	ciLogged map[types.UID]time.Time
+	// compared keeps GitHub's compares, which never change, by repository
+	// and commits; at most maxCompares.
+	compared map[compareKey]github.Comparison
+	// ciShared is what GitHub last said of a commit's checks and
+	// statuses, by installation, repository and commit: the Apps on one
+	// repository share it for ciShareFor.
+	ciShared map[ciKey]ciInputs
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -152,6 +160,9 @@ type sourceEvent struct {
 	fromRecord bool
 	// ciRead is the commit whose checks gather read (GitHub answered).
 	ciRead string
+	// nudge is the webhook's word that a commit's checks changed, when
+	// there is one: a shared read older than it is not used.
+	nudge *gitauth.CINudge
 }
 
 // readBranch says the event is a check of the branch: a push, or a
@@ -218,7 +229,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	last := rec
 	var remembered bool
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
-	var ev sourceEvent
+	ev := sourceEvent{nudge: nudge}
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push
@@ -236,11 +247,12 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			ev.recheck = true
 		}
 	case rec.Held != "" && rec.Held == rec.Latest && rec.Held != r.lastPinned(app.UID, rev) &&
-		((nudge != nil && nudge.SHA == rec.Held) || r.ciDue(app.UID, now)):
+		((nudge != nil && nudge.SHA == rec.Held && r.nudgeDue(app.UID, now)) || r.ciDue(app.UID, now)):
 		// A held commit: its checks are read again. One this watcher
-		// pinned already is a stale read of the App.
+		// pinned already is a stale read of the App. Nudges read at most
+		// once every ciNudgeEvery.
 		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
-	case nudge != nil && nudge.SHA == rec.Latest && rec.WaitsOnCI(nudge.SHA) && rec.Latest != r.lastPinned(app.UID, rev):
+	case nudge != nil && nudge.SHA == rec.Latest && rec.WaitsOnCI(nudge.SHA) && rec.Latest != r.lastPinned(app.UID, rev) && r.nudgeDue(app.UID, now):
 		// A commit CI failed: its checks changed (a re-run), read again.
 		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
 	case waitingCommit(app, rec) != "" && waitingCommit(app, rec) != r.lastPinned(app.UID, rev):
@@ -251,8 +263,9 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.dropPush(ctx, app, rawPush)
 		if nudge == nil || !rec.WaitsOnCI(nudge.SHA) {
 			r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+			nudge = nil
 		}
-		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, now)}, nil
+		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, nudge != nil, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
 	// Watch paths and wait for CI need GitHub's answers: asked, then the
@@ -281,13 +294,14 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
 	}
 	r.dropPush(ctx, app, rawPush)
-	if nudge == nil || nudge.SHA == ev.ciRead || !u.record.WaitsOnCI(nudge.SHA) {
+	kept := nudge != nil && nudge.SHA != ev.ciRead && u.record.WaitsOnCI(nudge.SHA)
+	if !kept {
 		// Read, or of a commit no longer waiting; else kept for the next
 		// pass.
 		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 	}
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, kept, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -402,6 +416,16 @@ func (r *SourceReconciler) forget(uid types.UID) {
 	delete(r.checked, uid)
 	delete(r.ciChecked, uid)
 	delete(r.ciLogged, uid)
+}
+
+// nudgeDue says a nudge may read the App's commit's checks now: none was
+// read in the last ciNudgeEvery. A burst of webhook deliveries, or a nudge
+// kept while the checks cannot be read, reads at most that often.
+func (r *SourceReconciler) nudgeDue(uid types.UID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, ok := r.ciChecked[uid]
+	return !ok || now.Sub(last) >= ciNudgeEvery
 }
 
 // decideSource turns what was learnt into what is written: the record
@@ -656,18 +680,24 @@ func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
 }
 
 // requeue is the wait until the next pass: the next check of the branch,
-// or sooner, the next read of a held commit's checks.
-func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, now time.Time) time.Duration {
+// or sooner, the next read of a held commit's checks, or of the commit a
+// nudge kept (nudged) is about.
+func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, nudged bool, now time.Time) time.Duration {
 	d := r.untilDue(rec, now)
-	if rec.Held == "" || rec.Held != rec.Latest {
+	held := rec.Held != "" && rec.Held == rec.Latest
+	if !held && !nudged {
 		return d
 	}
 	r.mu.Lock()
 	last, ok := r.ciChecked[uid]
 	r.mu.Unlock()
-	wait := heldRecheck
+	every := heldRecheck
+	if nudged {
+		every = ciNudgeEvery
+	}
+	wait := every
 	if ok {
-		wait = max(heldRecheck-now.Sub(last), time.Second)
+		wait = max(every-now.Sub(last), time.Second)
 	}
 	return min(d, wait)
 }

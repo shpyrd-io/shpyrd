@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -64,6 +65,39 @@ func (a githubAsk) any() bool { return a.changed || a.ci }
 // heldRecheck is how often a held commit's checks are read when no
 // webhook says they changed: the net under missed deliveries, two reads.
 const heldRecheck = 30 * time.Second
+
+// The rate budget of one installation (5,000 calls an hour), which every
+// project on its repositories shares, a monorepo's many:
+//   - ciNudgeEvery: an App's nudges read its commit's checks at most this
+//     often;
+//   - ciShareFor: a commit's checks and statuses, read for one App, serve
+//     the others on the repository this long (a nudge newer than the read
+//     is not served from it);
+//   - maxCompares: compares kept (they never change).
+const (
+	ciNudgeEvery = 5 * time.Second
+	ciShareFor   = 25 * time.Second
+	maxCompares  = 512
+)
+
+// compareKey is a compare: the repository (owner/name, lower case), base
+// and head.
+type compareKey struct{ repo, base, head string }
+
+// ciKey is a commit of a repository through an installation.
+type ciKey struct {
+	installation int64
+	repo, sha    string
+}
+
+// ciInputs is what GitHub said of a commit's checks, and when.
+type ciInputs struct {
+	runs     []github.CheckRun
+	statuses []github.CommitStatus
+	at       time.Time
+}
+
+func repoKey(ref githubRepoRef) string { return strings.ToLower(ref.owner + "/" + ref.name) }
 
 // hasGates says the App sets watch paths or wait for CI.
 func hasGates(app *shpyrdv1.App) bool {
@@ -208,7 +242,11 @@ func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *so
 		g.changed = &c
 	}
 	if ask.ci {
-		v, read := r.ciVerdict(ctx, app.UID, g.ref, ask.sha, ask.since, now)
+		var fresh time.Time
+		if ev.nudge != nil && ev.nudge.SHA == ask.sha {
+			fresh = ev.nudge.At
+		}
+		v, read := r.ciVerdict(ctx, app.UID, g.ref, ask.sha, ask.since, now, fresh)
 		g.ci = &v
 		if read {
 			// A nudge for the commit is used up; one whose checks could
@@ -220,16 +258,24 @@ func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *so
 
 // changedFiles is GitHub's compare of the pinned commit with head: every
 // file changed since what runs, so a commit not deployed earlier counts
-// once a later one matches. A list that cannot be trusted says why.
+// once a later one matches. A list that cannot be trusted says why. A
+// compare GitHub gave is kept: base...head never changes.
 //
 // A failure here is the watcher's own: it neither backs the clone off nor
 // records a refusal. A clone backing off (GitHub limiting the
 // installation's rate) is respected, not asked again.
 func (r *SourceReconciler) changedFiles(ctx context.Context, ref githubRepoRef, base, head string) changedFiles {
-	if r.GitHub.backingOff(ref.installation) {
-		return changedFiles{untrusted: "GitHub is not answering"}
+	key := compareKey{repoKey(ref), base, head}
+	cmp, known := r.comparedBefore(key)
+	var err error
+	if !known {
+		if r.GitHub.backingOff(ref.installation) {
+			return changedFiles{untrusted: "GitHub is not answering"}
+		}
+		if cmp, err = ref.client.Compare(ctx, ref.installation, ref.owner, ref.name, base, head); err == nil {
+			r.keepCompare(key, cmp)
+		}
 	}
-	cmp, err := ref.client.Compare(ctx, ref.installation, ref.owner, ref.name, base, head)
 	switch {
 	case err != nil:
 		log.FromContext(ctx).Info("could not compare the commits on GitHub; deploying without checking the watch paths", "commit", shortCommit(head), "err", err.Error())
@@ -254,8 +300,17 @@ const ciNoPermission = "no-permission"
 // changedFiles, a failure here is the watcher's own: the clone's backoff
 // is read, never written.
 //
+// GitHub's answer is shared by the Apps on the repository for ciShareFor,
+// unless it is older than fresh (a nudge said the checks changed since);
+// each App judges it from its own since. A failure is not shared.
+//
 // read says GitHub answered.
-func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now time.Time) (_ github.CIVerdict, read bool) {
+func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now, fresh time.Time) (_ github.CIVerdict, read bool) {
+	key := ciKey{ref.installation, repoKey(ref), sha}
+	appID := ref.client.App().ID
+	if in, ok := r.sharedCI(key, now); ok && !in.at.Before(fresh) {
+		return github.Verdict(in.runs, in.statuses, appID, since, now), true
+	}
 	if r.GitHub.backingOff(ref.installation) {
 		return github.Unanswered(since, now), false
 	}
@@ -263,7 +318,8 @@ func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref git
 	if err == nil {
 		var statuses []github.CommitStatus
 		if statuses, err = ref.client.CommitStatuses(ctx, ref.installation, ref.owner, ref.name, sha); err == nil {
-			return github.Verdict(runs, statuses, ref.client.App().ID, since, now), true
+			r.shareCI(key, ciInputs{runs: runs, statuses: statuses, at: now})
+			return github.Verdict(runs, statuses, appID, since, now), true
 		}
 	}
 	if errors.Is(err, github.ErrPermissionsNotGranted) {
@@ -294,4 +350,57 @@ func (r *SourceReconciler) logCI(uid types.UID, now time.Time) bool {
 	}
 	r.ciLogged[uid] = now
 	return true
+}
+
+// comparedBefore is the compare kept for key, when there is one.
+func (r *SourceReconciler) comparedBefore(key compareKey) (github.Comparison, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.compared[key]
+	return c, ok
+}
+
+// keepCompare keeps a compare GitHub gave; one kept makes room when there
+// are maxCompares.
+func (r *SourceReconciler) keepCompare(key compareKey, c github.Comparison) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.compared == nil {
+		r.compared = map[compareKey]github.Comparison{}
+	}
+	if _, ok := r.compared[key]; !ok && len(r.compared) >= maxCompares {
+		for k := range r.compared {
+			delete(r.compared, k)
+			break
+		}
+	}
+	r.compared[key] = c
+}
+
+// sharedCI is what GitHub said of the commit's checks less than ciShareFor
+// ago.
+func (r *SourceReconciler) sharedCI(key ciKey, now time.Time) (ciInputs, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	in, ok := r.ciShared[key]
+	if !ok || now.Sub(in.at) >= ciShareFor || now.Before(in.at) {
+		return ciInputs{}, false
+	}
+	return in, true
+}
+
+// shareCI keeps GitHub's answer for the other Apps, and drops the ones
+// that aged.
+func (r *SourceReconciler) shareCI(key ciKey, in ciInputs) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ciShared == nil {
+		r.ciShared = map[ciKey]ciInputs{}
+	}
+	for k, old := range r.ciShared {
+		if in.at.Sub(old.at) >= ciShareFor {
+			delete(r.ciShared, k)
+		}
+	}
+	r.ciShared[key] = in
 }

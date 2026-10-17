@@ -471,8 +471,10 @@ func TestAutoDeploySwitchedOnWaitsForTheCommitsCI(t *testing.T) {
 	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.NotDeployed != otherCommit || rec.NotDeployedReason != "CI failed: test" {
 		t.Fatalf("CI red: pin %s, record %+v", got.PinnedCommit(), rec)
 	}
-	// Green after a re-run: it deploys, as auto-deploy switched on.
+	// Green after a re-run: it deploys, as auto-deploy switched on (a
+	// nudge reads at most once every 5 s).
 	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, ciNudgeEvery)
 	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
 	_, got = reconcileSource(t, r, got)
 	if got.PinnedCommit() != otherCommit {
@@ -767,5 +769,107 @@ func TestPermissionsNotAcceptedAreNotDeployedAtOnce(t *testing.T) {
 	}
 	if gitauth.ReasonCIPermissions != "CI could not be read: accept the GitHub App's updated permissions on GitHub" {
 		t.Errorf("reason %q", gitauth.ReasonCIPermissions)
+	}
+}
+
+// Final review I2: the rate budget of one installation.
+
+// secondShop is another project on github.com/acme/shop, as app is,
+// added to the watcher's cluster.
+func secondShop(t *testing.T, r *SourceReconciler, app *shpyrdv1.App) *shpyrdv1.App {
+	t.Helper()
+	two := app.DeepCopy()
+	two.Name, two.UID, two.ResourceVersion = "shop-two", "default/shop-two", ""
+	if err := r.Create(context.Background(), two); err != nil {
+		t.Fatal(err)
+	}
+	return two
+}
+
+func TestTwoProjectsOnOneRepositoryShareTheirCommitsChecks(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	two := secondShop(t, r, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	advance(fake, 10*time.Second)
+	_, gotTwo := reconcileSource(t, r, two)
+	if sourceRecord(got).Held != otherCommit || sourceRecord(gotTwo).Held != otherCommit {
+		t.Fatalf("records %+v, %+v", sourceRecord(got), sourceRecord(gotTwo))
+	}
+	if n, m := calledGitHub(fake, "GET /repos/acme/shop/commits/"+otherCommit+"/check-runs"), calledGitHub(fake, "GET /repos/acme/shop/commits/"+otherCommit+"/status"); n != 1 || m != 1 {
+		t.Errorf("%d check-runs and %d statuses calls: %v", n, m, fake.Calls())
+	}
+	// Each decides from its own hold: the shared answer is read again
+	// once it is 25 seconds old.
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, 20*time.Second)
+	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != otherCommit {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
+	}
+	if n := calledGitHub(fake, "GET /repos/acme/shop/commits/"+otherCommit+"/check-runs"); n != 2 {
+		t.Errorf("%d check-runs calls", n)
+	}
+}
+
+func TestACompareOfTheSameCommitsIsAskedOnce(t *testing.T) {
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}}), otherCommit, testCommit, "docs", sourceNow)
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	two := secondShop(t, r, app)
+	fake.SetCompare("acme/shop", testCommit, otherCommit, githubtest.Compare{Status: "ahead", Files: []githubtest.File{{Name: "README.md"}}})
+	_, got := reconcileSource(t, r, app)
+	_, gotTwo := reconcileSource(t, r, two)
+	for _, a := range []*shpyrdv1.App{got, gotTwo} {
+		if rec := sourceRecord(a); a.PinnedCommit() != testCommit || rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
+			t.Errorf("%s: pin %s, record %+v", a.Name, a.PinnedCommit(), rec)
+		}
+	}
+	if n := calledGitHub(fake, "GET /repos/acme/shop/compare/"); n != 1 {
+		t.Errorf("%d compares: %v", n, fake.Calls())
+	}
+}
+
+func TestNudgesEverySecondReadTheChecksAtMostOnceEveryFiveSeconds(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	for i := 1; i <= 10; i++ {
+		advance(fake, time.Second)
+		nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+		var res ctrl.Result
+		res, got = reconcileSource(t, r, got)
+		if _, kept := got.Annotations[shpyrdv1.AnnotationGitCI]; kept && (res.RequeueAfter <= 0 || res.RequeueAfter > 5*time.Second) {
+			t.Errorf("%d s: a nudge kept is read within 5 s: requeue %v", i, res.RequeueAfter)
+		}
+	}
+	if n := calledGitHub(fake, "GET /repos/acme/shop/commits/"+otherCommit+"/check-runs"); n != 3 {
+		t.Errorf("%d reads in 10 s: %v", n, fake.Calls())
+	}
+}
+
+// A nudge of a commit CI failed, kept while its checks are unreadable,
+// waits for the time since the last read too.
+func TestAKeptNudgeWaitsForTheTimeSinceTheLastRead(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "failure"))
+	_, got := reconcileSource(t, r, app)
+	fake.SetDown(true)
+	advance(fake, time.Minute)
+	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+	_, got = reconcileSource(t, r, got)
+	calls := len(fake.Calls())
+	for range 4 {
+		advance(fake, time.Second)
+		if _, got = reconcileSource(t, r, got); len(fake.Calls()) != calls {
+			t.Fatalf("read again within 5 s: %v", fake.Calls()[calls:])
+		}
+	}
+	fake.SetDown(false)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, time.Second)
+	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != otherCommit {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
 	}
 }
