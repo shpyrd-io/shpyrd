@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -287,5 +288,92 @@ func TestGitHubWebhookIsNotThereWithoutTheApp(t *testing.T) {
 	s.githubApp = githubtest.NewServer(t).Source(cr, "shpyrd-system")
 	if rec := deliverApp(t, s, "ping", "d-1", []byte(`{}`), githubtest.WebhookSecret); rec.Code != http.StatusNotFound {
 		t.Errorf("%d", rec.Code)
+	}
+}
+func ciEvent(event string, installation int64, fullName, sha, action string) []byte {
+	if event == "status" {
+		return []byte(fmt.Sprintf(`{"sha":%q,"state":"success","context":"ci/test","installation":{"id":%d},"repository":{"full_name":%q}}`, sha, installation, fullName))
+	}
+	return []byte(fmt.Sprintf(`{"action":%q,"check_suite":{"head_sha":%q,"status":"completed","conclusion":"success"},"installation":{"id":%d},"repository":{"full_name":%q}}`,
+		action, sha, installation, fullName))
+}
+
+// recordOn leaves the source watcher's record on app.
+func recordOn(app *shpyrdv1.App, rec gitauth.SourceRecord) *shpyrdv1.App {
+	raw, _ := json.Marshal(rec)
+	if app.Annotations == nil {
+		app.Annotations = map[string]string{}
+	}
+	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
+	return app
+}
+
+func TestGitHubWebhookNudgesOnlyTheAppsWaitingOnThatCommit(t *testing.T) {
+	const older = "0123456789abcdef0123456789abcdef01234567"
+	held := gitauth.SourceRecord{Ref: "main", Latest: hookCommit, Held: hookCommit}
+	failed := gitauth.SourceRecord{Ref: "main", Latest: hookCommit, NotDeployed: hookCommit, NotDeployedReason: gitauth.ReasonCIFailedPrefix + "test"}
+	ignored := gitauth.SourceRecord{Ref: "main", Latest: hookCommit, NotDeployed: hookCommit, NotDeployedReason: gitauth.ReasonNoWatchedChanges}
+	another := gitauth.SourceRecord{Ref: "main", Latest: older, Held: older}
+	s, cr, _ := githubServer(t,
+		recordOn(onGitHub("shop", "https://github.com/acme/shop", "main", ""), held),
+		recordOn(onGitHub("shopci", "https://github.com/Acme/Shop", "main", ""), failed),
+		recordOn(onGitHub("shopdocs", "https://github.com/acme/shop", "main", ""), ignored),
+		recordOn(onGitHub("shopnext", "https://github.com/acme/shop", "main", ""), another),
+		recordOn(onGitHub("site", "https://github.com/acme/site", "main", ""), held),
+		recordOn(onGitHub("theirs", "https://github.com/acme/shop", "main", "beta"), held),
+	)
+	connectAcme(t, s, store.DefaultWorkspace)
+	rec := deliverApp(t, s, "status", "d-5", ciEvent("status", 42, "Acme/shop", strings.ToUpper(hookCommit), ""), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["shop","shopci"]`) {
+		t.Fatalf("status: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, slug := range []string{"shop", "shopci"} {
+		if n := gitauth.ReadCINudge(appNamed(t, cr, slug).Annotations[shpyrdv1.AnnotationGitCI]); n == nil || n.SHA != hookCommit || n.Delivery != "d-5" {
+			t.Errorf("%s: %+v", slug, n)
+		}
+	}
+	for _, slug := range []string{"shopdocs", "shopnext", "site", "theirs"} {
+		if v, ok := appNamed(t, cr, slug).Annotations[shpyrdv1.AnnotationGitCI]; ok {
+			t.Errorf("%s was nudged: %s", slug, v)
+		}
+	}
+}
+
+func TestGitHubWebhookTakesACheckSuiteOnlyWhenItCompletes(t *testing.T) {
+	s, cr, _ := githubServer(t, recordOn(onGitHub("shop", "https://github.com/acme/shop", "main", ""), gitauth.SourceRecord{Ref: "main", Latest: hookCommit, Held: hookCommit}))
+	connectAcme(t, s, store.DefaultWorkspace)
+	if rec := deliverApp(t, s, "check_suite", "d-6", ciEvent("check_suite", 42, "Acme/shop", hookCommit, "requested"), githubtest.WebhookSecret); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "ignored") {
+		t.Errorf("requested: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := appNamed(t, cr, "shop").Annotations[shpyrdv1.AnnotationGitCI]; ok {
+		t.Fatal("a suite just requested nudges nothing")
+	}
+	if rec := deliverApp(t, s, "check_suite", "d-7", ciEvent("check_suite", 42, "Acme/shop", hookCommit, "completed"), githubtest.WebhookSecret); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["shop"]`) {
+		t.Errorf("completed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubWebhookRefusesACIEventWithABadSignature(t *testing.T) {
+	s, cr, _ := githubServer(t, recordOn(onGitHub("shop", "https://github.com/acme/shop", "main", ""), gitauth.SourceRecord{Ref: "main", Latest: hookCommit, Held: hookCommit}))
+	connectAcme(t, s, store.DefaultWorkspace)
+	if rec := deliverApp(t, s, "status", "d-8", ciEvent("status", 42, "Acme/shop", hookCommit, ""), "not-the-secret"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("bad signature: %d", rec.Code)
+	}
+	if _, ok := appNamed(t, cr, "shop").Annotations[shpyrdv1.AnnotationGitCI]; ok {
+		t.Error("nudged on a forged delivery")
+	}
+}
+
+func TestGitHubWebhookIgnoresTheCIOfASuspendedOrUnknownInstallation(t *testing.T) {
+	s, _, _ := githubServer(t, recordOn(onGitHub("shop", "https://github.com/acme/shop", "main", ""), gitauth.SourceRecord{Ref: "main", Latest: hookCommit, Held: hookCommit}))
+	if rec := deliverApp(t, s, "status", "d-9", ciEvent("status", 42, "Acme/shop", hookCommit, ""), githubtest.WebhookSecret); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "no workspace") {
+		t.Errorf("unknown: %d %s", rec.Code, rec.Body.String())
+	}
+	connectAcme(t, s, store.DefaultWorkspace)
+	if err := s.store.SetGitHubInstallationState(context.Background(), 42, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if rec := deliverApp(t, s, "status", "d-10", ciEvent("status", 42, "Acme/shop", hookCommit, ""), githubtest.WebhookSecret); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "suspended") {
+		t.Errorf("suspended: %d %s", rec.Code, rec.Body.String())
 	}
 }

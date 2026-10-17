@@ -97,6 +97,8 @@ type SourceReconciler struct {
 	// restart it is empty, and the record's checkedAt stands in.
 	mu      sync.Mutex
 	checked map[types.UID]sourceCheck
+	// ciChecked is when each App's held commit's checks were last read.
+	ciChecked map[types.UID]time.Time
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -137,7 +139,18 @@ type sourceEvent struct {
 	err    error
 	// gates are GitHub's answers for watch paths and wait for CI.
 	gates sourceGates
+	// recheck: only a held or CI-failed commit's checks are read again,
+	// not the branch; its watch paths passed already.
+	recheck bool
+	// resume: auto-deploy switched back on, the commit that waited is
+	// decided from the record, through watch paths and wait for CI; the
+	// branch is not read.
+	resume bool
 }
+
+// readBranch says the event is a check of the branch: a push, or a
+// listing (failed or not); not a commit decided again from the record.
+func (ev sourceEvent) readBranch() bool { return !ev.recheck && !ev.resume }
 
 // sourceUpdate is what one reconcile writes on the App.
 type sourceUpdate struct {
@@ -180,6 +193,8 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if push != nil && push.Ref != "refs/heads/"+rev {
 		push = nil // another branch's, or a tag's: dropped below
 	}
+	rawCI := app.Annotations[shpyrdv1.AnnotationGitCI]
+	nudge := gitauth.ReadCINudge(rawCI)
 	if rawPush != "" && rawPush == r.consumedPush(app.UID) {
 		// Already applied: this App is a stale read.
 		push = nil
@@ -210,28 +225,22 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// (its words, author, a skip) holds.
 			ev.push, ev.latest = push, ""
 		}
+	case rec.Held != "" && rec.Held == rec.Latest && rec.Held != r.lastPinned(app.UID, rev) &&
+		((nudge != nil && nudge.SHA == rec.Held) || r.ciDue(app.UID, now)):
+		// A held commit: its checks are read again. One this watcher
+		// pinned already is a stale read of the App.
+		ev.latest, ev.recheck = rec.Latest, true
+	case nudge != nil && nudge.SHA == rec.Latest && rec.WaitsOnCI(nudge.SHA) && rec.Latest != r.lastPinned(app.UID, rev):
+		// A commit CI failed: its checks changed (a re-run), read again.
+		ev.latest, ev.recheck = rec.Latest, true
+	case waitingCommit(app, rec) != "" && waitingCommit(app, rec) != r.lastPinned(app.UID, rev):
+		// Auto-deploy switched back on: the commit that waited is decided
+		// now, from the record, through its watch paths and wait for CI.
+		ev.latest, ev.resume = rec.Latest, true
 	default:
-		if sha := waitingCommit(app, rec); sha != "" && sha != r.lastPinned(app.UID, rev) {
-			// Auto-deploy switched back on: the commit that waited
-			// deploys now, from the record.
-			u := sourceUpdate{record: written, pin: sha, note: "Commit " + shortCommit(sha) + " (auto-deploy on)",
-				deployedBy: "git", client: "auto-deploy", audit: "git.push", actor: "git"}
-			if err := r.apply(ctx, app, u); err != nil {
-				return ctrl.Result{}, err
-			}
-			r.notePinned(app.UID, rev, sha, last.CheckedAt)
-			r.dropPush(ctx, app, rawPush)
-			r.auditUpdate(ctx, app, u)
-			return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
-		}
 		r.dropPush(ctx, app, rawPush)
-		return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
-	}
-	if hasGates(app) && ev.err == nil {
-		var err error
-		if _, ev.gates.covered, err = r.GitHub.cover(ctx, app); err != nil {
-			ev.gates.unknown = coverFailure(err)
-		}
+		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
 	// Watch paths and wait for CI need GitHub's answers: asked, then the
@@ -254,10 +263,15 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// App, it is only dropped.
 		consumed = rawPush
 	}
-	r.remember(app.UID, rev, now, consumed, u.pin)
+	if ev.readBranch() {
+		r.remember(app.UID, rev, now, consumed, u.pin)
+	} else if u.pin != "" {
+		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
+	}
 	r.dropPush(ctx, app, rawPush)
+	r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.untilDue(u.record, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -272,7 +286,7 @@ func pushFollows(p *gitauth.Push, rec gitauth.SourceRecord) bool {
 func waitingCommit(app *shpyrdv1.App, rec gitauth.SourceRecord) string {
 	pin := app.PinnedCommit()
 	if !app.AutoDeploys() || rec.Ref != app.GitRevision() || rec.Failures != 0 || rec.Latest == "" || pin == "" ||
-		rec.Latest == pin || rec.Latest == rec.Skipped || rec.Latest == rec.NotDeployed {
+		rec.Latest == pin || rec.Latest == rec.Skipped || rec.Latest == rec.NotDeployed || rec.Latest == rec.Held {
 		return ""
 	}
 	return rec.Latest
@@ -370,6 +384,7 @@ func (r *SourceReconciler) forget(uid types.UID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.checked, uid)
+	delete(r.ciChecked, uid)
 }
 
 // decideSource turns what was learnt into what is written: the record
@@ -380,13 +395,20 @@ func (r *SourceReconciler) forget(uid types.UID) {
 func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, now time.Time) sourceUpdate {
 	u := sourceUpdate{record: rec}
 	u.record.Ref = app.GitRevision()
-	u.record.CheckedAt = &now
+	if ev.readBranch() {
+		// Reading a held commit's checks is no check of the branch.
+		u.record.CheckedAt = &now
+	}
 	if ev.err != nil {
 		u.record.Error = describeSourceError(ev.err, app)
 		u.record.Failures = min(u.record.Failures+1, maxFailures)
 		return u
 	}
-	u.record.Error, u.record.Failures = "", 0
+	if ev.readBranch() {
+		u.record.Error, u.record.Failures = "", 0
+	}
+	// A hold lasts while the gate holds the commit again.
+	u.record.Held, u.record.HeldSince = "", nil
 	sha, via, message, author := ev.latest, "poll", "", ""
 	// seen is when the commit was seen: the push's own time, else now.
 	seen := now
@@ -430,8 +452,9 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 		// Nothing new, a commit that asked not to deploy (now, or when a
 		// push said so before this poll found it), or pushes recorded only.
 		return u
-	case sha == rec.NotDeployed:
-		// Decided before: no change in the watch paths, or its CI.
+	case sha == rec.NotDeployed && !ev.recheck:
+		// Decided before: no change in the watch paths, or its CI. Only a
+		// change of its checks reopens it.
 		return u
 	default:
 		var stop bool
@@ -442,9 +465,14 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 	u.pin, u.record.Skipped, u.audit = sha, "", "git.push"
 	u.record.NotDeployed, u.record.NotDeployedReason = "", ""
 	u.deployedBy, u.client = u.actor, u.record.Via
-	if u.record.Via == "push" {
+	switch {
+	case ev.resume:
+		// The commit that waited while auto-deploy was off.
+		u.actor, u.deployedBy, u.client = "git", "git", "auto-deploy"
+		u.note = "Commit " + shortCommit(sha) + " (auto-deploy on)"
+	case u.record.Via == "push":
 		u.note = pushNote(sha, u.record.Author, u.record.Message)
-	} else {
+	default:
 		u.note = "Commit " + shortCommit(sha) + " (polled)"
 	}
 	u.note += suffix
@@ -570,9 +598,54 @@ func (r *SourceReconciler) dropPush(ctx context.Context, app *shpyrdv1.App, raw 
 	if raw == "" {
 		return
 	}
-	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, shpyrdv1.AnnotationGitPush, raw); err != nil {
-		logRemoveAnnotation(ctx, err, "kept a newer push for the next pass", "the push")
+	r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitPush, raw)
+}
+
+// dropAnnotation removes an annotation this reconcile read, unless it
+// changed meanwhile: the newer one is read next.
+func (r *SourceReconciler) dropAnnotation(ctx context.Context, app *shpyrdv1.App, key, raw string) {
+	if raw == "" {
+		return
 	}
+	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, key, raw); err != nil {
+		logRemoveAnnotation(ctx, err, "kept a newer one for the next pass", "an annotation", "annotation", key)
+	}
+}
+
+// noteCI keeps when the App's held commit's checks were read.
+func (r *SourceReconciler) noteCI(uid types.UID, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ciChecked == nil {
+		r.ciChecked = map[types.UID]time.Time{}
+	}
+	r.ciChecked[uid] = now
+}
+
+// ciDue says a held commit's checks are to be read again: never read by
+// this watcher, or 90 % of heldRecheck ago (requeues are spread).
+func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, ok := r.ciChecked[uid]
+	return !ok || now.Sub(last) >= heldRecheck*9/10
+}
+
+// requeue is the wait until the next pass: the next check of the branch,
+// or sooner, the next read of a held commit's checks.
+func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, now time.Time) time.Duration {
+	d := r.untilDue(rec, now)
+	if rec.Held == "" || rec.Held != rec.Latest {
+		return d
+	}
+	r.mu.Lock()
+	last, ok := r.ciChecked[uid]
+	r.mu.Unlock()
+	wait := heldRecheck
+	if ok {
+		wait = max(heldRecheck-now.Sub(last), time.Second)
+	}
+	return min(d, wait)
 }
 
 func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) {

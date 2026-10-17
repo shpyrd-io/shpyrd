@@ -2,14 +2,20 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -97,7 +103,7 @@ func TestWatchPathsAreNotCheckedWhenGitHubsListCannotBeTrusted(t *testing.T) {
 		note    string
 	}{
 		{"a commit GitHub does not know", nil, "GitHub's compare failed"},
-		{"300 files", &githubtest.Compare{Status: "ahead", Files: many}, "more than 300 files changed"},
+		{"300 files", &githubtest.Compare{Status: "ahead", Files: many}, "300 or more files changed"},
 		{"a rewritten history", &githubtest.Compare{Status: "diverged", Files: []githubtest.File{{Name: "README.md"}}}, "the branch's history was rewritten"},
 		{"a branch moved back", &githubtest.Compare{Status: "behind"}, "the branch's history was rewritten"},
 	} {
@@ -204,5 +210,287 @@ func TestACloneFallsBackToTheOtherCredentialsWhenTheConnectionsCannotBeRead(t *t
 	b, err := lookupGitBuild(context.Background(), c, "shpyrd-system", r.Config.GitHub, app)
 	if err != nil || b.Kind != gitauth.KindToken || b.AppRefused != "" {
 		t.Errorf("build = %+v, %v", b, err)
+	}
+}
+
+// nudgeCI leaves on app what the webhook leaves when sha's checks change.
+func nudgeCI(t *testing.T, c client.Client, app *shpyrdv1.App, sha string, when time.Time) {
+	t.Helper()
+	raw, _ := json.Marshal(gitauth.CINudge{SHA: sha, Delivery: "d-ci", At: when})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{shpyrdv1.AnnotationGitCI: string(raw)}}})
+	if err := c.Patch(context.Background(), app, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ciRun(name, status, conclusion string) githubtest.CheckRun {
+	return githubtest.CheckRun{Name: name, Status: status, Conclusion: conclusion, AppID: 99}
+}
+
+func waitingShop() *shpyrdv1.App {
+	return pushed(shopWith(shpyrdv1.GitSource{WaitForChecks: true}), otherCommit, testCommit, "fix login", sourceNow)
+}
+
+func TestAHeldCommitDeploysOnceItsCIPasses(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	// shpyrd's own queued check is on the commit too: it is left out.
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""), githubtest.CheckRun{Name: "shpyrd / shop", Status: "queued", AppID: githubtest.AppID})
+	res, got := reconcileSource(t, r, app)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != testCommit || rec.Held != otherCommit || rec.HeldSince == nil || !rec.HeldSince.Equal(sourceNow) {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > heldRecheck {
+		t.Errorf("a held commit is read again within 30 s: %v", res.RequeueAfter)
+	}
+	// Too soon: GitHub is not asked again.
+	reads := calledGitHub(fake, "GET /repos/acme/shop/commits/")
+	advance(fake, 5*time.Second)
+	if _, again := reconcileSource(t, r, got); again.PinnedCommit() != testCommit || calledGitHub(fake, "GET /repos/acme/shop/commits/") != reads {
+		t.Errorf("read again after 5 s: %v", fake.Calls())
+	}
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"), githubtest.CheckRun{Name: "shpyrd / shop", Status: "queued", AppID: githubtest.AppID})
+	advance(fake, 25*time.Second)
+	_, got = reconcileSource(t, r, got)
+	rec = sourceRecord(got)
+	if got.PinnedCommit() != otherCommit || rec.Held != "" || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (CI passed)" {
+		t.Fatalf("pin %s, note %q, record %+v", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote], rec)
+	}
+	if rec.CheckedAt == nil || !rec.CheckedAt.Equal(sourceNow) {
+		t.Errorf("reading the checks is no check of the branch: %v", rec.CheckedAt)
+	}
+}
+
+func TestACommitCIFailedDeploysWhenARerunPasses(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	heard := heardAudits(t)
+	fake.SetCheckRuns(otherCommit, ciRun("lint", "completed", "success"), ciRun("test", "completed", "failure"))
+	_, got := reconcileSource(t, r, app)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != "CI failed: test" {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if len(*heard) != 1 || (*heard)[0].Action != "git.skip" || (*heard)[0].Detail != "CI failed: test" {
+		t.Errorf("audited %+v", *heard)
+	}
+	// Without a change of its checks, the failed commit is not read again.
+	reads := calledGitHub(fake, "GET /repos/acme/shop/commits/")
+	advance(fake, time.Minute)
+	if _, got = reconcileSource(t, r, got); calledGitHub(fake, "GET /repos/acme/shop/commits/") != reads {
+		t.Errorf("read again without a nudge: %v", fake.Calls())
+	}
+	// Re-run on GitHub: green; the webhook nudges.
+	fake.SetCheckRuns(otherCommit, ciRun("lint", "completed", "success"), ciRun("test", "completed", "success"))
+	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+	_, got = reconcileSource(t, r, got)
+	if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (CI passed)" {
+		t.Fatalf("pin %s, note %q, record %+v", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote], sourceRecord(got))
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitCI]; ok {
+		t.Error("the nudge is dropped once read")
+	}
+}
+
+func TestAHeldCommitIsGivenUpAfterAnHour(t *testing.T) {
+	app := waitingShop()
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	r, fake := gatedWatcher(t, ls, app)
+	heard := heardAudits(t)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	advance(fake, 59*time.Minute)
+	if _, got = reconcileSource(t, r, got); sourceRecord(got).Held != otherCommit {
+		t.Fatalf("59 minutes: %+v", sourceRecord(got))
+	}
+	advance(fake, time.Minute)
+	_, got = reconcileSource(t, r, got)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCITimeout {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if n := len(*heard); n != 1 || (*heard)[0].Detail != gitauth.ReasonCITimeout {
+		t.Errorf("audited %+v", *heard)
+	}
+}
+
+func TestANewerPushReplacesAHeldCommitAtOnce(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	fake.SetCheckRuns(thirdCommit, ciRun("test", "completed", "success"))
+	got = pushed(got, thirdCommit, otherCommit, "fix it again", sourceNow.Add(10*time.Second))
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	advance(fake, 10*time.Second)
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != thirdCommit || rec.Held != "" || rec.Latest != thirdCommit {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+}
+
+func TestACommitWithNoCIDeploysAfterAMinute(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	_, got := reconcileSource(t, r, app)
+	if sourceRecord(got).Held != otherCommit {
+		t.Fatalf("held first: %+v", sourceRecord(got))
+	}
+	advance(fake, 30*time.Second)
+	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != testCommit {
+		t.Fatal("30 s: CI may still report")
+	}
+	advance(fake, 30*time.Second)
+	_, got = reconcileSource(t, r, got)
+	if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (no CI)" {
+		t.Errorf("pin %s, note %q", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote])
+	}
+}
+
+func TestAHeldCommitStaysHeldWhileGitHubIsDown(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	fake.SetDown(true)
+	for range 4 {
+		advance(fake, 30*time.Second)
+		_, got = reconcileSource(t, r, got)
+	}
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != otherCommit || rec.NotDeployed != "" {
+		t.Fatalf("two minutes of GitHub down is not 'no CI': pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	fake.SetDown(false)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, 2*time.Minute)
+	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != otherCommit {
+		t.Errorf("green once GitHub answers: pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
+	}
+}
+
+func TestWaitForCIComesAfterTheWatchPaths(t *testing.T) {
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}, WaitForChecks: true}), otherCommit, testCommit, "docs", sourceNow)
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCompare("acme/shop", testCommit, otherCommit, githubtest.Compare{Status: "ahead", Files: []githubtest.File{{Name: "README.md"}}})
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges || calledGitHub(fake, "GET /repos/acme/shop/commits/") != 0 {
+		t.Errorf("record %+v, calls %v", rec, fake.Calls())
+	}
+}
+
+func TestAHeldCommitStaysHeldWhenShpyrdCannotTellWhetherTheAppCoversTheRepository(t *testing.T) {
+	// The workspace's connections cannot be read: a new commit is held, not
+	// deployed as "no CI".
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+	st := r.GitHub.Installations
+	r.GitHub.Installations = unreadableInstallations{st}
+	_, got := reconcileSource(t, r, app)
+	for range 3 {
+		advance(fake, 30*time.Second)
+		_, got = reconcileSource(t, r, got)
+	}
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != otherCommit || rec.NotDeployed != "" {
+		t.Fatalf("an unreadable store is not 'no CI': pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if calledGitHub(fake, "GET /repos/") != 0 {
+		t.Errorf("calls %v", fake.Calls())
+	}
+
+	// The store answers again, then the App's Secret breaks: still held.
+	r.GitHub.Installations = st
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	advance(fake, 30*time.Second)
+	if _, got = reconcileSource(t, r, got); sourceRecord(got).Held != otherCommit {
+		t.Fatalf("pending: %+v", sourceRecord(got))
+	}
+	sec := &corev1.Secret{}
+	key := client.ObjectKeyFromObject(fake.Secret("shpyrd-system"))
+	if err := r.Get(context.Background(), key, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data[github.KeyPrivateKey] = []byte("not a key")
+	if err := r.Update(context.Background(), sec); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, github.Recheck+time.Second)
+	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != testCommit || sourceRecord(got).Held != otherCommit {
+		t.Fatalf("a broken Secret is not 'CI passed': pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
+	}
+
+	// The hour still runs.
+	advance(fake, time.Hour)
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCITimeout {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+}
+
+func TestAHeldCommitStaysHeldWhenItsChecksAreTooManyToRead(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	// GitHub says there are more runs than its pages give: the listing is
+	// cut short.
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	fake.SetCheckRunsTotal(otherCommit, 5000)
+	_, got := reconcileSource(t, r, app)
+	advance(fake, 2*time.Minute)
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != otherCommit {
+		t.Errorf("a listing cut short is not 'CI passed': pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if r.GitHub.backingOff(42) {
+		t.Error("the watcher's failure backs the clone off")
+	}
+}
+
+func TestAutoDeploySwitchedOnWaitsForTheCommitsCI(t *testing.T) {
+	off := false
+	app := waitingShop()
+	app.Spec.Source.Git.AutoDeploy = &off
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "failure"))
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Latest != otherCommit || rec.Held != "" {
+		t.Fatalf("auto-deploy off: pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	on := true
+	got.Spec.Source.Git.AutoDeploy = &on
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	advance(fake, 10*time.Second)
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.NotDeployed != otherCommit || rec.NotDeployedReason != "CI failed: test" {
+		t.Fatalf("CI red: pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	// Green after a re-run: it deploys, as auto-deploy switched on.
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+	_, got = reconcileSource(t, r, got)
+	if got.PinnedCommit() != otherCommit {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
+	}
+}
+
+func TestAutoDeploySwitchedOnChecksTheWatchPaths(t *testing.T) {
+	off := false
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}}), otherCommit, testCommit, "docs", sourceNow)
+	app.Spec.Source.Git.AutoDeploy = &off
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCompare("acme/shop", testCommit, otherCommit, githubtest.Compare{Status: "ahead", Files: []githubtest.File{{Name: "README.md"}}})
+	_, got := reconcileSource(t, r, app)
+	on := true
+	got.Spec.Source.Git.AutoDeploy = &on
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
 	}
 }
