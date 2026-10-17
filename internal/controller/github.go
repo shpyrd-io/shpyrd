@@ -216,36 +216,17 @@ var githubMarks = []string{gitauth.AnnotationGitHubAccount, gitauth.AnnotationTo
 // the watcher's message, and retry that the reason may pass. A failure is
 // logged, never returned: the other credentials are tried.
 func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.Repo) (_ *gitauth.Build, refused string, retry bool) {
-	if gh == nil || gh.Source == nil || gh.Installations == nil || !strings.EqualFold(repo.Host, "github.com") {
-		return nil, "", false
-	}
-	owner, name, ok := strings.Cut(repo.Path, "/")
-	if !ok || strings.Contains(name, "/") {
-		return nil, "", false
-	}
-	logger := log.FromContext(ctx)
-	cl, err := gh.Source.Client(ctx)
+	ref, inst, err := gh.installationFor(ctx, app, repo)
 	if err != nil {
-		// A bare ErrNotConfigured is no Secret at all, the usual case on a
-		// platform without the App; a broken Secret or a failed read is
-		// worth a line.
-		if err != github.ErrNotConfigured { //nolint:errorlint // identity, not a wrapped error, is the point
+		if errors.Is(err, errGitHubConnections) {
+			log.FromContext(ctx).Info("building with the other credentials", "err", err.Error())
+		} else {
 			gh.logBroken(ctx, err)
 		}
 		return nil, "", false
 	}
-	ws := workspaceOf(app)
-	list, err := gh.Installations.GitHubInstallations(ctx, ws)
-	if err != nil {
-		logger.Info("could not read the workspace's GitHub connections; building with the other credentials", "err", err.Error())
-		return nil, "", false
-	}
-	var inst *store.GitHubInstallation
-	for i := range list {
-		if strings.EqualFold(list[i].AccountLogin, owner) {
-			inst = &list[i]
-		}
-	}
+	logger := log.FromContext(ctx)
+	cl, name, ws := ref.client, ref.name, workspaceOf(app)
 	switch {
 	case inst == nil:
 		return nil, "", false
@@ -301,6 +282,90 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	}
 	b.Secret.Annotations[gitauth.AnnotationGitHubRepo] = repo.Path
 	return &b, "", false
+}
+
+// githubRepoRef is a repository the GitHub App reaches: the App's client,
+// the installation, and the repository's owner and name.
+type githubRepoRef struct {
+	client       *github.Client
+	installation int64
+	owner, name  string
+}
+
+// errGitHubConnections: the workspace's GitHub connections could not be
+// read.
+var errGitHubConnections = errors.New("could not read the workspace's GitHub connections")
+
+// installationFor is the GitHub App's hold on the repository, without a
+// call to GitHub: a github.com URL, the App configured, and the App's
+// workspace's installation on the repository's owner (an unsuspended one
+// first). inst is nil when the App does not reach the repository. err is
+// an App Secret that makes no App, or the connections unread
+// (errGitHubConnections): it is not known then, never "no". The clone's
+// credential (build) and cover are this one test.
+func (gh *GitHubApp) installationFor(ctx context.Context, app *shpyrdv1.App, repo gitauth.Repo) (githubRepoRef, *store.GitHubInstallation, error) {
+	if gh == nil || gh.Source == nil || gh.Installations == nil || !strings.EqualFold(repo.Host, "github.com") {
+		return githubRepoRef{}, nil, nil
+	}
+	owner, name, ok := strings.Cut(repo.Path, "/")
+	if !ok || strings.Contains(name, "/") {
+		return githubRepoRef{}, nil, nil
+	}
+	cl, err := gh.Source.Client(ctx)
+	if err == github.ErrNotConfigured { //nolint:errorlint // identity, not a wrapped error, is the point
+		// A bare ErrNotConfigured is no Secret at all, the usual case on a
+		// platform without the App; a broken Secret wraps it, and is an
+		// error.
+		return githubRepoRef{}, nil, nil
+	}
+	if err != nil {
+		return githubRepoRef{}, nil, err
+	}
+	list, err := gh.Installations.GitHubInstallations(ctx, workspaceOf(app))
+	if err != nil {
+		return githubRepoRef{}, nil, fmt.Errorf("%w: %w", errGitHubConnections, err)
+	}
+	var inst *store.GitHubInstallation
+	for i := range list {
+		if strings.EqualFold(list[i].AccountLogin, owner) && (inst == nil || inst.SuspendedAt != nil) {
+			inst = &list[i]
+		}
+	}
+	if inst == nil {
+		return githubRepoRef{}, nil, nil
+	}
+	return githubRepoRef{client: cl, installation: inst.ID, owner: owner, name: name}, inst, nil
+}
+
+// cover says the GitHub App covers the App's repository: installationFor
+// finds a live, unsuspended installation. Watch paths, wait for CI and the
+// reporter work only then. An error is "not known", never "not covered":
+// the callers decide what an unknown cover does (coverFailure words it).
+func (gh *GitHubApp) cover(ctx context.Context, app *shpyrdv1.App) (githubRepoRef, bool, error) {
+	if gh == nil || app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return githubRepoRef{}, false, nil
+	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	if err != nil {
+		return githubRepoRef{}, false, nil
+	}
+	ref, inst, err := gh.installationFor(ctx, app, repo)
+	if err != nil {
+		log.FromContext(ctx).Info("could not tell whether the GitHub App covers the repository", "err", err.Error())
+		return githubRepoRef{}, false, err
+	}
+	if inst == nil || inst.SuspendedAt != nil {
+		return githubRepoRef{}, false, nil
+	}
+	return ref, true, nil
+}
+
+// coverFailure is cover's error in a person's words, for a release note.
+func coverFailure(err error) string {
+	if errors.Is(err, errGitHubConnections) {
+		return "shpyrd could not read the workspace's GitHub connections"
+	}
+	return "shpyrd could not read the GitHub App's settings"
 }
 
 // githubTokenRefresh is how long until <app>-git must be written again:

@@ -135,6 +135,8 @@ type sourceEvent struct {
 	push   *gitauth.Push
 	latest string
 	err    error
+	// gates are GitHub's answers for watch paths and wait for CI.
+	gates sourceGates
 }
 
 // sourceUpdate is what one reconcile writes on the App.
@@ -146,6 +148,11 @@ type sourceUpdate struct {
 	note, deployedBy, client string
 	// audit is "git.push" or "git.skip", in the name of actor.
 	audit, actor string
+	// target and reason are the commit and the words of a git.skip for a
+	// commit not deployed.
+	target, reason string
+	// ask is what decideSource needs from GitHub before it decides.
+	ask githubAsk
 }
 
 var errNoSuchRevision = errors.New("no such branch or tag")
@@ -220,7 +227,19 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.dropPush(ctx, app, rawPush)
 		return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
 	}
+	if hasGates(app) && ev.err == nil {
+		var err error
+		if _, ev.gates.covered, err = r.GitHub.cover(ctx, app); err != nil {
+			ev.gates.unknown = coverFailure(err)
+		}
+	}
 	u := decideSource(app, rec, ev, now)
+	// Watch paths and wait for CI need GitHub's answers: asked, then the
+	// commit is decided again.
+	for i := 0; i < 2 && u.ask.any(); i++ {
+		r.gather(ctx, app, &ev, u.ask, now)
+		u = decideSource(app, rec, ev, now)
+	}
 	if ev.err != nil && u.record.Error == sourceUnreadable {
 		log.FromContext(ctx).Info("could not read the branch", "revision", rev, "err", ev.err.Error())
 	}
@@ -253,7 +272,7 @@ func pushFollows(p *gitauth.Push, rec gitauth.SourceRecord) bool {
 func waitingCommit(app *shpyrdv1.App, rec gitauth.SourceRecord) string {
 	pin := app.PinnedCommit()
 	if !app.AutoDeploys() || rec.Ref != app.GitRevision() || rec.Failures != 0 || rec.Latest == "" || pin == "" ||
-		rec.Latest == pin || rec.Latest == rec.Skipped {
+		rec.Latest == pin || rec.Latest == rec.Skipped || rec.Latest == rec.NotDeployed {
 		return ""
 	}
 	return rec.Latest
@@ -354,7 +373,10 @@ func (r *SourceReconciler) forget(uid types.UID) {
 }
 
 // decideSource turns what was learnt into what is written: the record
-// (Reconcile writes it when it changed), a pin when the branch moved and the App deploys it.
+// (Reconcile writes it when it changed), a pin when the branch moved and
+// the App deploys it. The order: the branch, auto-deploy, [skip deploy],
+// watch paths, wait for CI, the pin. A person's deploy and the first
+// commit of a branch skip watch paths and wait for CI.
 func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, now time.Time) sourceUpdate {
 	u := sourceUpdate{record: rec}
 	u.record.Ref = app.GitRevision()
@@ -393,27 +415,39 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 		}
 		u.record.Skipped = sha
 	}
+	suffix := ""
 	switch {
 	case pin == "":
 		// Nothing pinned for this revision yet (a new app, a deploy, a
-		// changed branch): its commit, whatever auto-deploy says. A
-		// person's deploy keeps their note and name.
+		// changed branch): its commit, whatever auto-deploy, watch paths
+		// and wait for CI say. A person's deploy keeps their note and name.
 		if by := app.Annotations[shpyrdv1.AnnotationDeployedBy]; by != "" && by != "git" && !strings.HasPrefix(by, "git:") {
 			u.pin, u.record.Via, u.record.Skipped, u.audit = sha, "deploy", "", ""
+			u.record.NotDeployed, u.record.NotDeployedReason = "", ""
 			return u
 		}
 	case sha == pin, skip, sha == rec.Skipped, !app.AutoDeploys():
 		// Nothing new, a commit that asked not to deploy (now, or when a
 		// push said so before this poll found it), or pushes recorded only.
 		return u
+	case sha == rec.NotDeployed:
+		// Decided before: no change in the watch paths, or its CI.
+		return u
+	default:
+		var stop bool
+		if suffix, stop = gateCommit(app, &u, rec, sha, ev, now); stop {
+			return u
+		}
 	}
 	u.pin, u.record.Skipped, u.audit = sha, "", "git.push"
+	u.record.NotDeployed, u.record.NotDeployedReason = "", ""
 	u.deployedBy, u.client = u.actor, u.record.Via
 	if u.record.Via == "push" {
 		u.note = pushNote(sha, u.record.Author, u.record.Message)
 	} else {
 		u.note = "Commit " + shortCommit(sha) + " (polled)"
 	}
+	u.note += suffix
 	return u
 }
 
@@ -546,8 +580,8 @@ func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u
 		return
 	}
 	entry := audit.Entry{
-		Actor: u.actor, Action: u.audit, Target: shortCommit(firstNonEmpty(u.pin, u.record.Skipped)),
-		Detail: firstLine(u.record.Message), Via: "controller", Client: u.record.Via, Realm: "workspace",
+		Actor: u.actor, Action: u.audit, Target: shortCommit(firstNonEmpty(u.target, u.pin, u.record.Skipped)),
+		Detail: firstNonEmpty(u.reason, firstLine(u.record.Message)), Via: "controller", Client: u.record.Via, Realm: "workspace",
 	}
 	if err := audit.Record(ctx, r.Kube, audit.AppRefIn(app.Namespace, app.Name), entry); err != nil {
 		log.FromContext(ctx).Info("could not audit the push", "err", err.Error())
