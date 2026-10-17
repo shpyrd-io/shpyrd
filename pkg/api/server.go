@@ -982,6 +982,9 @@ func (s *Server) auth() gin.HandlerFunc {
 			abort(c, http.StatusUnauthorized, errors.New("missing or invalid token"))
 			return
 		}
+		// Who came with the session cookie, and nothing else: only they
+		// link a GitHub account (RFC-0054).
+		c.Set(sessionAuthKey, true)
 		c.Next()
 	}
 }

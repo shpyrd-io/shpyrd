@@ -50,11 +50,18 @@ const (
 	githubUserTokenMargin = 5 * time.Minute
 	// tokenOwnerKey is where identifyWithToken leaves the token's maker.
 	tokenOwnerKey = "shpyrd.tokenOwner"
+	// sessionAuthKey is set by auth when the identity came from the
+	// session cookie: a browser the person signed in to.
+	sessionAuthKey = "shpyrd.sessionAuth"
 )
 
 var (
 	errGitHubLinkRequired = errors.New("Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link")
 	errGitHubNoPerson     = errors.New("the admin token is no person and has no GitHub account: sign in as yourself to link GitHub")
+	// errGitHubLinkInBrowser: a token (an API token, an assistant's) may
+	// read and remove the link, never make one: whoever holds a leaked
+	// token would otherwise link their own GitHub account to the person.
+	errGitHubLinkInBrowser = errors.New("Link GitHub from the dashboard, or with shpyrd github link, which opens a browser")
 	// errGitHubLinkBusy: the link kept changing under a renewal (other
 	// replicas renewing, or the person linking again): nothing is removed.
 	errGitHubLinkBusy = errors.New("your GitHub authorization changed while shpyrd renewed it")
@@ -106,6 +113,15 @@ func githubPersonOf(c *gin.Context) (provider, subject string, ok bool) {
 	return id.Provider, id.Subject, true
 }
 
+// githubBrowserSession says the request's identity came from the session
+// cookie, not from a token: a link starts and finishes only there.
+func githubBrowserSession(c *gin.Context) bool {
+	if _, byToken := c.Get(tokenOwnerKey); byToken {
+		return false
+	}
+	return c.GetBool(sessionAuthKey)
+}
+
 // githubLinkRow binds a sealed refresh token to its link.
 func githubLinkRow(provider, subject string) string {
 	return tokenseal.Row("github-user-link", provider, subject)
@@ -136,6 +152,10 @@ func (s *Server) githubLinkURL(c *gin.Context, ret string) (string, bool) {
 	provider, subject, ok := githubPersonOf(c)
 	if !ok {
 		abort(c, http.StatusBadRequest, errGitHubNoPerson)
+		return "", false
+	}
+	if !githubBrowserSession(c) {
+		abort(c, http.StatusForbidden, errGitHubLinkInBrowser)
 		return "", false
 	}
 	cl, ok := s.githubClient(c)
@@ -205,6 +225,10 @@ func (s *Server) githubLinkFinish(c *gin.Context) {
 		refuse(http.StatusForbidden)
 		return
 	}
+	if !githubBrowserSession(c) {
+		s.githubPage(c, http.StatusForbidden, "Not linked", errGitHubLinkInBrowser.Error()+".", "")
+		return
+	}
 	// Spent only once the right person presents it.
 	if !s.githubTickets.use(tk.Nonce, time.Unix(tk.Exp, 0), now) {
 		refuse(http.StatusBadRequest)
@@ -220,25 +244,44 @@ func (s *Server) githubLinkFinish(c *gin.Context) {
 		s.githubPage(c, http.StatusBadGateway, "GitHub did not answer", "shpyrd could not finish linking your GitHub account. Start again in a minute.", "")
 		return
 	}
+	// From here, a token GitHub gave that is not kept is revoked.
 	who, err := cl.UserProfile(ctx, tok.Access)
 	if err != nil {
+		s.githubUsers.revoke(ctx, cl, tok.Access)
 		s.log.Warn("github: could not ask GitHub who linked", "err", err.Error())
 		s.githubPage(c, http.StatusBadGateway, "GitHub did not answer", "shpyrd could not finish linking your GitHub account. Start again in a minute.", "")
 		return
 	}
 	sealed, err := s.githubBox.Seal(tok.Refresh, githubLinkRow(provider, subject))
 	if err != nil {
+		s.githubUsers.revoke(ctx, cl, tok.Access)
 		abort(c, http.StatusInternalServerError, err)
 		return
+	}
+	// A link made again replaces the earlier one, whose token is revoked
+	// once the new one is stored.
+	earlier := ""
+	if prev, err := s.store.GitHubUserLink(ctx, provider, subject); err == nil {
+		if access, err := s.githubAccessToken(ctx, cl, prev); err == nil {
+			earlier = access
+		}
 	}
 	link := store.GitHubUserLink{Provider: provider, Subject: subject, GitHubUserID: who.ID, GitHubLogin: who.Login,
 		RefreshToken: sealed, RefreshExpiresAt: tok.RefreshExpiresAt}
 	if err := s.store.PutGitHubUserLink(ctx, link); err != nil {
+		s.githubUsers.revoke(ctx, cl, tok.Access)
 		s.log.Warn("github: could not record a link", "err", err.Error())
 		s.githubPage(c, http.StatusBadGateway, "Not linked", "shpyrd could not record the link. Start again in a minute.", "")
 		return
 	}
-	s.githubUsers.keep(provider, subject, who.ID, tok)
+	if earlier != "" && earlier != tok.Access {
+		s.githubUsers.revoke(ctx, cl, earlier)
+	}
+	// Kept for the link as stored: its LinkedAt is the store's.
+	s.githubUsers.forget(provider, subject)
+	if stored, err := s.store.GitHubUserLink(ctx, provider, subject); err == nil && stored.RefreshToken == sealed {
+		s.githubUsers.keep(stored, tok)
+	}
 	s.audit(c, "", "github.link", "github user "+who.Login, "")
 	s.githubLinkedPage(c, who.Login, firstNonEmpty(tk.Return, "/"))
 }
@@ -359,9 +402,12 @@ type githubUserTokens struct {
 // githubUserEntry is one person's access token in memory, for the GitHub
 // account it belongs to.
 type githubUserEntry struct {
-	userID  int64
-	access  string
-	expires time.Time
+	// userID and linkedAt name the link: linkedAt stays across renewals
+	// and changes when the person unlinks and links again.
+	userID   int64
+	linkedAt time.Time
+	access   string
+	expires  time.Time
 	// pending is a renewal the store has not taken yet: written on the
 	// next use, so the rotated refresh token is never lost.
 	pending *githubPendingWrite
@@ -380,10 +426,14 @@ func newGitHubUserTokens(st githubLinkStore, box *tokenseal.Box, log *slog.Logge
 
 func personKey(provider, subject string) string { return provider + "\x00" + subject }
 
-// usable says the entry's access token serves the link's GitHub account
-// for 5 minutes more.
-func (e githubUserEntry) usable(userID int64, now time.Time) bool {
-	return e.access != "" && e.userID == userID && now.Add(githubUserTokenMargin).Before(e.expires)
+// usable says the entry's access token is the link's, for 5 minutes more.
+func (e githubUserEntry) usable(link *store.GitHubUserLink, now time.Time) bool {
+	return e.access != "" && e.userID == link.GitHubUserID && e.linkedAt.Equal(link.LinkedAt) && now.Add(githubUserTokenMargin).Before(e.expires)
+}
+
+// entryFor is a renewal's entry, for the link it renewed.
+func entryFor(link *store.GitHubUserLink, t github.UserToken) githubUserEntry {
+	return githubUserEntry{userID: link.GitHubUserID, linkedAt: link.LinkedAt, access: t.Access, expires: t.AccessExpiresAt}
 }
 
 func (g *githubUserTokens) entry(key string) (githubUserEntry, bool) {
@@ -402,11 +452,21 @@ func (g *githubUserTokens) put(key string, e githubUserEntry) {
 	g.by[key] = e
 }
 
-// keep holds a freshly linked person's access token.
-func (g *githubUserTokens) keep(provider, subject string, userID int64, t github.UserToken) {
-	g.put(personKey(provider, subject), githubUserEntry{userID: userID, access: t.Access, expires: t.AccessExpiresAt})
+// keep holds a freshly linked person's access token, for the link stored.
+func (g *githubUserTokens) keep(link *store.GitHubUserLink, t github.UserToken) {
+	g.put(personKey(link.Provider, link.Subject), entryFor(link, t))
 }
 
+// revoke revokes, best effort, an access token shpyrd drops: one never
+// kept stays usable at GitHub until it expires otherwise.
+func (g *githubUserTokens) revoke(ctx context.Context, cl *github.Client, access string) {
+	if err := cl.RevokeUserToken(ctx, access); err != nil {
+		g.log.Warn("github: could not revoke a person's GitHub token shpyrd no longer keeps", "err", err.Error())
+	}
+}
+
+// forget drops the person's access token from memory, unrevoked: for a
+// token GitHub refused (401), or a link removed. The next use renews.
 func (g *githubUserTokens) forget(provider, subject string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -432,7 +492,7 @@ func (g *githubUserTokens) lock(key string) *sync.Mutex {
 // key changed): the link is then removed. Any other error removes nothing.
 func (g *githubUserTokens) access(ctx context.Context, cl *github.Client, link *store.GitHubUserLink) (string, error) {
 	key := personKey(link.Provider, link.Subject)
-	if e, ok := g.entry(key); ok && e.pending == nil && e.usable(link.GitHubUserID, g.now()) {
+	if e, ok := g.entry(key); ok && e.pending == nil && e.usable(link, g.now()) {
 		return e.access, nil
 	}
 	mu := g.lock(key)
@@ -451,10 +511,11 @@ func (g *githubUserTokens) access(ctx context.Context, cl *github.Client, link *
 			// The row changed meanwhile (unlinked, or linked again): this
 			// renewal is no longer the link's.
 			g.forget(link.Provider, link.Subject)
+			g.revoke(ctx, cl, e.access)
 			e, has = githubUserEntry{}, false
 		}
 	}
-	if has && e.usable(link.GitHubUserID, g.now()) {
+	if has && e.usable(link, g.now()) {
 		return e.access, nil
 	}
 	return g.renew(ctx, cl, link.Provider, link.Subject, e.pending)
@@ -552,20 +613,22 @@ func (g *githubUserTokens) renew(ctx context.Context, cl *github.Client, provide
 		next.RefreshToken, next.RefreshExpiresAt = sealed, tok.RefreshExpiresAt
 		// In memory first: if the write fails, the renewed refresh token is
 		// still here, and written on the next use.
-		g.put(key, githubUserEntry{userID: cur.GitHubUserID, access: tok.Access, expires: tok.AccessExpiresAt,
-			pending: &githubPendingWrite{old: cur.RefreshToken, link: next}})
+		pend := entryFor(cur, tok)
+		pend.pending = &githubPendingWrite{old: cur.RefreshToken, link: next}
+		g.put(key, pend)
 		done, err := g.store.ReplaceGitHubUserLinkToken(ctx, provider, subject, cur.RefreshToken, next)
 		if err != nil {
 			g.log.Warn("github: could not record a person's renewed GitHub authorization; it is kept in memory and written on the next use", "login", cur.GitHubLogin, "err", err.Error())
 			return tok.Access, nil
 		}
 		if done {
-			g.put(key, githubUserEntry{userID: cur.GitHubUserID, access: tok.Access, expires: tok.AccessExpiresAt})
+			g.put(key, entryFor(cur, tok))
 			return tok.Access, nil
 		}
 		// Another replica's write won (or the person linked again): the
-		// stored token is the link's.
+		// stored token is the link's, and this one is dropped.
 		g.forget(provider, subject)
+		g.revoke(ctx, cl, tok.Access)
 		if retried {
 			return "", errGitHubLinkBusy
 		}

@@ -70,8 +70,11 @@ func linkTicket(t *testing.T, s *Server, sid, csrf, code string) string {
 	if cb.Code != http.StatusFound || err != nil || loc.Path != "/api/me/github/finish" || loc.Query().Get("ticket") == "" {
 		t.Fatalf("callback: %d %q %s", cb.Code, cb.Header().Get("Location"), cb.Body.String())
 	}
-	if strings.Contains(loc.RawQuery, code) {
-		t.Errorf("GitHub's code is in the clear in the finish link: %s", loc.RawQuery)
+	// GitHub's code travels inside the ticket (signed, not encrypted: its
+	// protection is that it is single use and spent only by the session
+	// that started), never as a parameter of its own.
+	if loc.Query().Get("code") != "" {
+		t.Errorf("GitHub's code is a parameter of the finish link: %s", loc.RawQuery)
 	}
 	return loc.RequestURI()
 }
@@ -525,6 +528,9 @@ func TestAReplicaWhoseWriteLosesUsesTheStoredToken(t *testing.T) {
 	if after.RefreshToken == relinked || after.RefreshToken == original.RefreshToken {
 		t.Fatal("b did not renew with the stored token")
 	}
+	if got := r.fake.Revoked(); len(got) != 1 || got[0] == tok || !strings.HasPrefix(got[0], "ghu_") {
+		t.Errorf("the token b dropped is not revoked: %v (b uses %q)", got, tok)
+	}
 	if _, err := r.replica(r.s.store).access(ctx, r.cl, after); err != nil {
 		t.Errorf("the stored token: %v", err)
 	}
@@ -651,5 +657,142 @@ func TestAConnectStateDoesNotLinkAndALinkStateDoesNotConnect(t *testing.T) {
 	}
 	if _, err := s.store.GitHubUserLink(ctx, "local", sub); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("linked: %v", err)
+	}
+}
+
+// tokenIdentifier is an extension's identifier (as the MCP's OAuth tokens
+// are): a request with X-Test-Person acts as that person.
+func tokenIdentifier(s *Server, sub, email string) {
+	s.identifiers = append(s.identifiers, func(c *gin.Context) bool {
+		if c.GetHeader("X-Test-Person") != sub {
+			return false
+		}
+		ext.SetIdentity(c, ext.Identity{Subject: sub, Email: email, Provider: "local"})
+		return true
+	})
+}
+
+func TestALinkStartsAndFinishesOnlyInABrowserSession(t *testing.T) {
+	s, _, _ := githubServer(t)
+	ctx := context.Background()
+	sid, csrf, sub := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	token := personToken(t, s, sid, csrf)
+	tokenIdentifier(s, sub, "ana@example.test")
+	const says = "Link GitHub from the dashboard, or with shpyrd github link, which opens a browser"
+	refused := func(name string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), says) {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	viaExtension := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Authorization", "Bearer mcp-token")
+		req.Header.Set("X-Test-Person", sub)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	refused("the token's start", doBearer(t, s, "POST", "/api/me/github/link", `{}`, token))
+	refused("the token's browser start", doBearer(t, s, "GET", "/api/me/github/link", "", token))
+	refused("the extension's start", viaExtension("POST", "/api/me/github/link", `{}`))
+	refused("the extension's browser start", viaExtension("GET", "/api/me/github/link", ""))
+	// A valid ticket for ana herself, presented with her token: refused,
+	// and not spent.
+	finish := linkTicket(t, s, sid, csrf, githubtest.Code)
+	refused("the token's finish", doBearer(t, s, "GET", finish, "", token))
+	refused("the extension's finish", viaExtension("GET", finish, ""))
+	if _, err := s.store.GitHubUserLink(ctx, "local", sub); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("linked by token: %v", err)
+	}
+	// Reading and unlinking by token stay allowed.
+	if rec := doCookie(t, s, "GET", finish, "", sid, ""); rec.Code != http.StatusOK {
+		t.Fatalf("ana's session: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doBearer(t, s, "GET", "/api/me/github", "", token); rec.Code != http.StatusOK {
+		t.Errorf("read by token: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doBearer(t, s, "DELETE", "/api/me/github", "", token); rec.Code != http.StatusNoContent {
+		t.Errorf("unlink by token: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAReplicaDoesNotUseItsTokenForALinkMadeAgain(t *testing.T) {
+	r := replicas(t)
+	ctx := context.Background()
+	b := r.replica(r.s.store)
+	old, err := b.access(ctx, r.cl, r.stored(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ana unlinks and links the same GitHub account again elsewhere.
+	sid, csrf, _ := signInPerson(t, r.s, "ana@example.test", store.WorkspaceRoleMember)
+	if rec := doCookie(t, r.s, "DELETE", "/api/me/github", "", sid, csrf); rec.Code != http.StatusNoContent {
+		t.Fatalf("unlink: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := linkAs(t, r.s, sid, csrf, githubtest.Code); rec.Code != http.StatusOK {
+		t.Fatalf("link: %d %s", rec.Code, rec.Body.String())
+	}
+	again, err := b.access(ctx, r.cl, r.stored(t))
+	if err != nil || again == old {
+		t.Errorf("b after the new link: %q %v (before %q)", again, err, old)
+	}
+}
+
+func TestAPendingRenewalThatLostItsRowIsRevoked(t *testing.T) {
+	r := replicas(t)
+	ctx := context.Background()
+	race := &racingLinks{githubLinkStore: r.s.store, failReplace: 1}
+	b := r.replica(race)
+	kept, err := b.access(ctx, r.cl, r.stored(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.relink(t)
+	tok, err := b.access(ctx, r.cl, r.stored(t))
+	if err != nil || tok == kept {
+		t.Fatalf("b: %q %v", tok, err)
+	}
+	if got := r.fake.Revoked(); len(got) != 1 || got[0] != kept {
+		t.Errorf("revoked %v, want %q", got, kept)
+	}
+}
+
+// failingLinks is a store whose link writes fail.
+type failingLinks struct{ store.Store }
+
+func (failingLinks) PutGitHubUserLink(context.Context, store.GitHubUserLink) error {
+	return errors.New("the database is away")
+}
+
+func TestAFinishThatFailsRevokesTheTokenGitHubGave(t *testing.T) {
+	s, _, fake := githubServer(t)
+	sid, csrf, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	s.store = failingLinks{s.store}
+	if rec := linkAs(t, s, sid, csrf, githubtest.Code); rec.Code != http.StatusBadGateway {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := fake.Revoked(); len(got) != 1 || got[0] != githubtest.UserToken {
+		t.Errorf("revoked %v", got)
+	}
+}
+
+func TestALinkMadeAgainRevokesTheEarlierToken(t *testing.T) {
+	s, _, fake := githubServer(t)
+	ctx := context.Background()
+	fake.AddUser("bea-code", githubtest.User{ID: 2002, Login: "bea"})
+	sid, csrf, sub := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, sid, csrf, githubtest.Code)
+	if rec := linkAs(t, s, sid, csrf, "bea-code"); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := fake.Revoked(); len(got) != 1 || got[0] != githubtest.UserToken {
+		t.Errorf("revoked %v", got)
+	}
+	if l, err := s.store.GitHubUserLink(ctx, "local", sub); err != nil || l.GitHubLogin != "bea" {
+		t.Errorf("link %+v %v", l, err)
 	}
 }
