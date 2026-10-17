@@ -1,14 +1,14 @@
 # RFC-0017 Git credentials for private repositories
 
-**Status:** provisional
+**Status:** implemented
 
-**Owner:** unassigned
+**Owner:** Marcelo Paez Sequeira
 
 **Depends on:** RFC-0004 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-16
 
 ## Summary
 
@@ -57,3 +57,5 @@ cluster-wide), used by kpack (buildpacks) and by the BuildKit source fetch (Dock
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-16: tokens per host per workspace and deploy keys per project, as labelled Secrets; <app>-git for kpack and BuildKit; shpyrd git-auth. A cluster-wide default token, from the Proposal, is not built: a workspace token covers it. See docs/superpowers/specs/2026-10-16-private-git-repositories-design.md.
+- 2026-10-16: verified end to end on a kind cluster against a private Gitea (HTTP token, SSH deploy key on port 2222, buildpacks and Dockerfile, a changed host key).

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 )
 
@@ -46,7 +47,7 @@ func TestSourcePortMoveDoesNotRebuild(t *testing.T) {
 	r, c := newTestReconciler(t, app)
 	r.Config.SystemNamespace = "shpyrd-system"
 	// The Image as an older platform left it.
-	img, err := r.Config.desiredKpackImage(app)
+	img, err := r.Config.desiredKpackImage(app, gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestWorkspaceBuildVariable(t *testing.T) {
 	r, _ := newTestReconciler(t, app)
 	r.Config.RegistryHost = "10.96.0.50:5000"
 	env := func() map[string]string {
-		img, err := r.Config.desiredKpackImage(app)
+		img, err := r.Config.desiredKpackImage(app, gitauth.Build{})
 		if err != nil {
 			t.Fatal(err)
 		}

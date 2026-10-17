@@ -22,6 +22,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Dockerfile builds run as Kubernetes Jobs: an init container fetches the
@@ -49,7 +50,7 @@ type buildResult struct {
 
 // reconcileDockerfileBuild makes sure a Job exists for the current source and
 // build settings and reports its state.
-func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App) (buildState, error) {
+func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (buildState, error) {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {
 		return buildState{}, fmt.Errorf("list builds: %w", err)
@@ -66,7 +67,7 @@ func (r *AppReconciler) reconcileDockerfileBuild(ctx context.Context, app *shpyr
 		if latest != nil {
 			n = buildNumber(latest) + 1
 		}
-		job, err := r.Config.desiredBuildJob(app, n, key)
+		job, err := r.Config.desiredBuildJob(app, n, key, git)
 		if err != nil {
 			return buildState{}, err
 		}
@@ -339,7 +340,7 @@ func (r *AppReconciler) pruneBuildJobs(ctx context.Context, builds []batchv1.Job
 func buildJobName(app *shpyrdv1.App, n int) string { return fmt.Sprintf("%s-build-%d", app.Name, n) }
 
 // desiredBuildJob builds the Job for build number n.
-func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string) (*batchv1.Job, error) {
+func (c Config) desiredBuildJob(app *shpyrdv1.App, n int, key string, git gitauth.Build) (*batchv1.Job, error) {
 	name := buildJobName(app, n)
 	labels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuildNumber: strconv.Itoa(n)})
 	podLabels := mergeMaps(commonLabels(app), map[string]string{shpyrdv1.LabelBuild: name})
@@ -418,7 +419,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 					InitContainers: []corev1.Container{{
 						Name:    fetchContainer,
 						Image:   c.BuildKitImage,
-						Command: []string{"sh", "-ec", c.fetchScript(app)},
+						Command: []string{"sh", "-ec", c.fetchScript(app, git)},
 						// The build container asks for resources, so a workspace's
 						// quota covers the pod and refuses it unless this one asks
 						// too (#117). Small requests, no limit: a shallow clone of a
@@ -428,7 +429,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 							corev1.ResourceMemory: resource.MustParse("64Mi"),
 						}},
 						SecurityContext:          &corev1.SecurityContext{RunAsUser: uid, RunAsGroup: uid, AllowPrivilegeEscalation: ptr.To(false)},
-						VolumeMounts:             []corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}},
+						VolumeMounts:             append([]corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}}, gitAuthMounts(git)...),
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 					}},
 					Containers: []corev1.Container{{
@@ -455,7 +456,7 @@ echo "pushed $IMAGE_REPO@$digest"`
 					Volumes: append(append([]corev1.Volume{
 						{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 						{Name: "buildkit", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-					}, c.buildKitAuthVolumes()...), c.trustVolumes()...),
+					}, c.buildKitAuthVolumes()...), append(c.trustVolumes(), gitAuthVolumes(git)...)...),
 				},
 			},
 		},
@@ -471,9 +472,14 @@ func dockerfilePath(app *shpyrdv1.App) string {
 	return "Dockerfile"
 }
 
+// gitAuthDir is where the fetch container finds <app>-git.
+const gitAuthDir = "/git-auth"
+
 // fetchScript downloads the uploaded archive or clones the git revision
-// into the workspace and records the resolved revision.
-func (c Config) fetchScript(app *shpyrdv1.App) string {
+// into the workspace and records the resolved revision. With a credential
+// it reads it from gitAuthDir: never inlined, so a value with quotes or a
+// newline cannot change the script.
+func (c Config) fetchScript(app *shpyrdv1.App, git gitauth.Build) string {
 	src := app.Spec.Source
 	dst := workspaceDir + "/src"
 	switch {
@@ -484,17 +490,46 @@ tar xzf /tmp/source.tgz -C %[1]s
 printf '%%s' %[3]s > %[4]s/revision
 echo "source ready"`, dst, shellQuote(c.sourceURL(src.Blob.URL)), shellQuote(src.Blob.Ref), workspaceDir)
 	case src.Git != nil:
+		url := src.Git.URL
+		if git.CloneURL != "" {
+			url = git.CloneURL
+		}
+		auth := ""
+		switch git.Kind {
+		case gitauth.KindToken:
+			auth = fmt.Sprintf(`export HOME=/tmp
+printf 'machine %%s login %%s password %%s\n' %[1]s "$(cat %[2]s/username)" "$(cat %[2]s/password)" > "$HOME/.netrc"
+chmod 600 "$HOME/.netrc"
+`, shellQuote(git.Host), gitAuthDir)
+		case gitauth.KindDeployKey:
+			auth = fmt.Sprintf(`cp %[1]s/ssh-privatekey /tmp/deploy-key
+chmod 600 /tmp/deploy-key
+export GIT_SSH_COMMAND="ssh -i /tmp/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%[1]s/known_hosts"
+`, gitAuthDir)
+		}
+		// Only with a deploy key is there a recorded host key for ssh to
+		// refuse: git's output is the same without one, so the marker
+		// says which it was (describeBuildFailure).
+		hostKey := ""
+		if git.Kind == gitauth.KindDeployKey {
+			hostKey = fmt.Sprintf(`    if grep -q 'Host key verification failed' /tmp/clone.err; then echo %s >&2; fi
+`, shellQuote(hostKeyChangedMarker))
+		}
 		rev := firstNonEmpty(src.Git.Revision, "main")
-		return fmt.Sprintf(`url=%[1]s
+		return auth + fmt.Sprintf(`url=%[1]s
 rev=%[2]s
-if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/dev/null; then :; else
+if git clone --quiet --depth 1 --branch "$rev" "$url" %[3]s 2>/tmp/clone.err; then :; else
+  if grep -qiE 'authentication|could not read|permission denied|repository not found|host key verification' /tmp/clone.err; then
+    cat /tmp/clone.err >&2
+%[5]s    exit 1
+  fi
   # not a branch or tag: fetch the commit
   git init --quiet %[3]s
   git -C %[3]s fetch --quiet --depth 1 "$url" "$rev"
   git -C %[3]s checkout --quiet FETCH_HEAD
 fi
 git -C %[3]s rev-parse HEAD > %[4]s/revision
-echo "source ready at $(cat %[4]s/revision)"`, shellQuote(src.Git.URL), shellQuote(rev), dst, workspaceDir)
+echo "source ready at $(cat %[4]s/revision)"`, shellQuote(url), shellQuote(rev), dst, workspaceDir, hostKey)
 	}
 	return "echo 'no source'; exit 1"
 }
@@ -502,6 +537,26 @@ echo "source ready at $(cat %[4]s/revision)"`, shellQuote(src.Git.URL), shellQuo
 // shellQuote single-quotes s for POSIX sh.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// The project's git credential for the fetch container only: the build's
+// RUN steps never see it.
+func gitAuthMounts(git gitauth.Build) []corev1.VolumeMount {
+	if git.Secret == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: "git-auth", MountPath: gitAuthDir, ReadOnly: true}}
+}
+
+func gitAuthVolumes(git gitauth.Build) []corev1.Volume {
+	if git.Secret == nil {
+		return nil
+	}
+	// Optional: a credential removed between the Job and its pod fails the
+	// clone at once rather than holding the pod in ContainerCreating.
+	return []corev1.Volume{{Name: "git-auth", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+		SecretName: git.Secret.Name, DefaultMode: ptr.To[int32](0o440), Optional: ptr.To(true),
+	}}}}
 }
 
 // Registry credentials for BuildKit: the mirrored dockerconfigjson Secret

@@ -24,6 +24,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/pages"
@@ -245,6 +246,9 @@ type Server struct {
 	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
 	// REST mapper (tests inject one).
 	sleepAvailable func() bool
+	// scanHostKey records a git host's SSH key for a deploy key
+	// (RFC-0017); a field so tests need no network.
+	scanHostKey func(ctx context.Context, host, port string) (line, fingerprint string, err error)
 	// sleepGate says whether things may sleep by themselves; nil asks the
 	// extensions (ext.SleepGate). Tests inject one.
 	sleepGate func() bool
@@ -270,6 +274,9 @@ type Server struct {
 	cliDevices *cliDeviceStore
 	// shellMints throttles ticket minting per actor (RFC-0026).
 	shellMints *rateLimiter
+	// deployKeyMints throttles deploy key creation per actor: each one
+	// dials a host the caller names (RFC-0017).
+	deployKeyMints *rateLimiter
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -364,12 +371,14 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.execStream = s.streamExec
 	s.attachStream = s.streamAttach
 	s.runPoll = time.Second
+	s.scanHostKey = gitauth.ScanHostKey
 	s.probeShell = s.resolveShell
 	s.execRun = s.runKexec
 	s.shellIdle = shellIdleTimeout
 	s.shellPing = shellPingInterval
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
+	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -641,6 +650,9 @@ func (s *Server) routes() error {
 	api.GET("/workspace/drains", s.require(authz.ClusterAdmin), s.listWorkspaceDrains) // RFC-0023: the workspace's own
 	api.POST("/workspace/drains", s.require(authz.ClusterAdmin), s.createWorkspaceDrain)
 	api.DELETE("/workspace/drains/:name", s.require(authz.ClusterAdmin), s.deleteWorkspaceDrain)
+	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens) // RFC-0017
+	api.PUT("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.putGitToken)
+	api.DELETE("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.deleteGitToken)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)
@@ -783,6 +795,9 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/drains", s.require(authz.ProjectView), s.listProjectDrains)
 	api.POST("/projects/:slug/drains", s.require(authz.ProjectResource), s.createProjectDrain)
 	api.DELETE("/projects/:slug/drains/:name", s.require(authz.ProjectResource), s.deleteProjectDrain)
+	api.GET("/projects/:slug/git-auth", s.require(authz.ProjectView), s.showProjectGitAuth) // RFC-0017
+	api.POST("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.throttleDeployKeys(), s.createDeployKey)
+	api.DELETE("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.deleteDeployKey)
 	api.GET("/projects/:slug/members", s.require(authz.ProjectMembers), s.listMembers)
 	api.POST("/projects/:slug/members", s.require(authz.ProjectMembers), s.addMember)
 	api.DELETE("/projects/:slug/members/:name", s.require(authz.ProjectMembers), s.removeMember)

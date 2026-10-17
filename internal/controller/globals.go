@@ -18,6 +18,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // Global config vars (RFC-0016): a workspace's admins keep them in a
@@ -135,6 +136,34 @@ func globalsDisabled(app *shpyrdv1.App) bool {
 // project's mirror to the Apps of that namespace (so a tampered mirror is
 // repaired), the registry credential to every App.
 func (r *AppReconciler) secretToApps(ctx context.Context, obj client.Object) []reconcile.Request {
+	switch obj.GetLabels()[gitauth.LabelCredential] {
+	case gitauth.KindDeployKey:
+		var apps shpyrdv1.AppList
+		if err := r.List(ctx, &apps, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		out := make([]reconcile.Request, 0, len(apps.Items))
+		for _, a := range apps.Items {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+		}
+		return out
+	case gitauth.KindToken:
+		if obj.GetNamespace() != r.Config.SystemNamespace {
+			return nil
+		}
+		ws := obj.GetLabels()[shpyrdv1.LabelWorkspace]
+		var apps shpyrdv1.AppList
+		if err := r.List(ctx, &apps); err != nil {
+			return nil
+		}
+		var out []reconcile.Request
+		for _, a := range apps.Items {
+			if a.Spec.Source != nil && a.Spec.Source.Git != nil && workspaceOf(&a) == ws {
+				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+			}
+		}
+		return out
+	}
 	inSystem := obj.GetNamespace() == r.Config.SystemNamespace
 	ws, globals := shpyrdv1.GlobalEnvWorkspace(obj.GetName())
 	if !globals && !r.registrySecretChanged(obj) {

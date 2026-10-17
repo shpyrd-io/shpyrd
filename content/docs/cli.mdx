@@ -99,6 +99,18 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd drains list [--project \| --workspace \| --cluster]` | Drains with delivery status and last delivery. |
 | `shpyrd drains remove <name> [--project \| --workspace \| --cluster]` | Remove a drain and its stored headers. |
 
+## Git credentials
+
+Give builds access to private git repositories. Signed in only. See [Private repositories](/docs/deploying#private-repositories).
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd git-auth set --host <host> --token <token\|-> [--username <user>]` | Set the workspace's token for a git host (workspace admins). `-` reads the token from stdin. Default user: `x-access-token`, `oauth2` on gitlab.com, `x-token-auth` on bitbucket.org. |
+| `shpyrd git-auth unset --host <host>` | Remove the workspace's token for a host. |
+| `shpyrd git-auth list` | The workspace's tokens: host, user and who set it. Never the values. |
+| `shpyrd git-auth deploy-key [--project <name>] [--host <host>] [--remove]` | Make a deploy key for the project and print its public half; add it to the repository as read-only. A project with no git repository yet needs `--host`. `--remove` deletes it. |
+| `shpyrd git-auth show [--project <name>]` | Which credential the project's builds clone with: deploy key, token, or none. |
+
 ## Global config vars
 
 | Command | What it does |

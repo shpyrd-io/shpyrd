@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 const testDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -240,7 +241,7 @@ func TestBuildKeyAndFailureSummary(t *testing.T) {
 // both.
 func TestBuildJobDeclaresRequestsInEveryContainer(t *testing.T) {
 	r, _ := newTestReconciler(t)
-	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k")
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k", gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +319,7 @@ func TestDockerfileSupersededBuilds(t *testing.T) {
 			ctx := context.Background()
 			app := dockerfileApp()
 			r, c := newTestReconciler(t, app)
-			if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+			if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 				t.Fatal(err)
 			}
 			old := getJob(t, c, app.Namespace, "dk-build-1")
@@ -338,7 +339,7 @@ func TestDockerfileSupersededBuilds(t *testing.T) {
 			}
 			app.Spec.Source.Blob.SHA256 = "new-source"
 			for pass := 0; pass < 2; pass++ {
-				got, err := r.reconcileDockerfileBuild(ctx, app)
+				got, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -370,7 +371,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 	app := dockerfileApp()
 	r, c := newTestReconciler(t, app)
 	for n := 1; n <= 2; n++ {
-		job, err := r.Config.desiredBuildJob(app, n, buildKey(app))
+		job, err := r.Config.desiredBuildJob(app, n, buildKey(app), gitauth.Build{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -381,7 +382,7 @@ func TestDockerfileOldFailureIsAnnotated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+	if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := getJob(t, c, app.Namespace, "dk-build-1").Annotations[shpyrdv1.AnnotationBuildFailure]; got != "The build did not finish within 30 minutes." {
@@ -393,7 +394,7 @@ func TestStopBuildDoesNotOverwriteConcurrentCompletion(t *testing.T) {
 	ctx := context.Background()
 	app := dockerfileApp()
 	r, c := newTestReconciler(t, app)
-	if _, err := r.reconcileDockerfileBuild(ctx, app); err != nil {
+	if _, err := r.reconcileDockerfileBuild(ctx, app, gitauth.Build{}); err != nil {
 		t.Fatal(err)
 	}
 	stale := getJob(t, c, app.Namespace, "dk-build-1")
