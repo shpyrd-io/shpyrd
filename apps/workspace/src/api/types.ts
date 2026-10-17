@@ -204,7 +204,7 @@ export type ProjectSummary = {
 export type Project = ProjectSummary & {
   spec: {
     source?: {
-      git?: { url: string; revision?: string; autoDeploy?: boolean };
+      git?: { url: string; revision?: string; autoDeploy?: boolean; watchPaths?: string[]; waitForChecks?: boolean };
       blob?: { sha256?: string; ref?: string };
       subPath?: string;
     };
@@ -247,6 +247,10 @@ export type Project = ProjectSummary & {
       message?: string;
     }[];
   };
+  // The GitHub App covers the repository: watch paths and wait for CI
+  // apply (RFC-0054). sourceNote says when they are set and do not.
+  githubFeatures?: boolean;
+  sourceNote?: string;
 };
 
 // What the source watcher knows of the branch a project follows
@@ -260,6 +264,13 @@ export type SourceStatus = {
   via?: "push" | "poll" | "deploy";
   // A commit whose message asked not to deploy it.
   skipped?: string;
+  // A commit waiting for its other checks on GitHub, since heldSince.
+  held?: string;
+  heldSince?: string;
+  // The last commit not deployed, and why ("No changes in the watch
+  // paths", "CI failed: test", "CI did not finish within an hour").
+  notDeployed?: string;
+  notDeployedReason?: string;
   lastWebhookAt?: string;
   checkedAt?: string;
   // Why the branch cannot be read, in words.

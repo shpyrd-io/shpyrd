@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,8 +75,9 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		s.githubInstallationEvent(c, body)
 	case "installation_repositories":
 		s.githubRepositoriesEvent(c, body)
+	case "check_suite", "status":
+		s.githubCIEvent(c, event, body, c.GetHeader("X-GitHub-Delivery"))
 	default:
-		// check_suite, status: part 4.
 		c.JSON(http.StatusAccepted, gin.H{"ignored": event})
 	}
 }
@@ -96,20 +98,8 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		abort(c, http.StatusBadRequest, errors.New("the push names no installation or no repository"))
 		return
 	}
-	inst, err := s.store.GitHubInstallation(ctx, meta.Installation.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		// Before the setup callback, or never connected here.
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
-		return
-	}
-	if err != nil {
-		s.log.Warn("github webhook: could not look up the installation", "installation", meta.Installation.ID, "err", err.Error())
-		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
-		return
-	}
-	if inst.SuspendedAt != nil {
-		// A delivery queued before the suspension, or redelivered by hand.
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "the installation is suspended"})
+	inst, ok := s.githubLiveInstallation(c, meta.Installation.ID)
+	if !ok {
 		return
 	}
 	push, err := gitauth.ParsePush(body)
@@ -118,23 +108,16 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		return
 	}
 	push.Delivery, push.At = delivery, time.Now().UTC()
-	// The installation's workspace's Apps; the default workspace's include
-	// the Apps from before workspaces, which carry no label. The filter
-	// below checks the workspace again.
-	var list shpyrdv1.AppList
-	var opts []client.ListOption
-	if inst.Workspace != store.DefaultWorkspace {
-		opts = append(opts, client.MatchingLabels{shpyrdv1.LabelWorkspace: inst.Workspace})
-	}
-	if err := s.apps.List(ctx, &list, opts...); err != nil {
+	list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
+	if err != nil {
 		s.githubPushUnavailable(c, "could not list the apps", err)
 		return
 	}
 	raw, _ := json.Marshal(push)
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{shpyrdv1.AnnotationGitPush: string(raw)}}})
 	accepted := []string{}
-	for i := range list.Items {
-		app := &list.Items[i]
+	for i := range list {
+		app := &list[i]
 		if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, meta.Repository.FullName) || ignoredPush(app, push) != "" {
 			continue
 		}
@@ -146,6 +129,107 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 	}
 	sort.Strings(accepted)
 	c.JSON(http.StatusAccepted, gin.H{"accepted": push.SHA, "projects": accepted})
+}
+
+// githubLiveInstallation is the connected, unsuspended installation a
+// delivery names. Without one it has answered the delivery, and ok is
+// false.
+func (s *Server) githubLiveInstallation(c *gin.Context, id int64) (_ *store.GitHubInstallation, ok bool) {
+	inst, err := s.store.GitHubInstallation(c.Request.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		// Before the setup callback, or never connected here.
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
+		return nil, false
+	}
+	if err != nil {
+		s.log.Warn("github webhook: could not look up the installation", "installation", id, "err", err.Error())
+		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
+		return nil, false
+	}
+	if inst.SuspendedAt != nil {
+		// A delivery queued before the suspension, or redelivered by hand.
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the installation is suspended"})
+		return nil, false
+	}
+	return inst, true
+}
+
+// githubWorkspaceApps are the Apps of an installation's workspace; the
+// default workspace's include the Apps from before workspaces, which carry
+// no label. Callers check workspaceOf again.
+func (s *Server) githubWorkspaceApps(ctx context.Context, workspace string) ([]shpyrdv1.App, error) {
+	var list shpyrdv1.AppList
+	var opts []client.ListOption
+	if workspace != store.DefaultWorkspace {
+		opts = append(opts, client.MatchingLabels{shpyrdv1.LabelWorkspace: workspace})
+	}
+	if err := s.apps.List(ctx, &list, opts...); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// githubCIEvent is a commit's checks or statuses changing (a check suite
+// completed, a status set): every App of the installation's workspace on
+// the repository that waits on that commit's CI is nudged, through the
+// git-ci annotation, to read it again.
+func (s *Server) githubCIEvent(c *gin.Context, event string, body []byte, delivery string) {
+	ctx := c.Request.Context()
+	var ev struct {
+		Action     string `json:"action"`
+		SHA        string `json:"sha"`
+		CheckSuite struct {
+			HeadSHA string `json:"head_sha"`
+		} `json:"check_suite"`
+		Installation struct {
+			ID int64 `json:"id"`
+		} `json:"installation"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil || ev.Installation.ID == 0 || ev.Repository.FullName == "" {
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the event names no installation or no repository"})
+		return
+	}
+	if event == "check_suite" && ev.Action != "completed" {
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "check_suite " + ev.Action})
+		return
+	}
+	sha := strings.ToLower(firstNonEmpty(ev.SHA, ev.CheckSuite.HeadSHA))
+	if sha == "" {
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the event names no commit"})
+		return
+	}
+	inst, ok := s.githubLiveInstallation(c, ev.Installation.ID)
+	if !ok {
+		return
+	}
+	list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
+	if err != nil {
+		s.githubPushUnavailable(c, "could not list the apps", err)
+		return
+	}
+	raw, _ := json.Marshal(gitauth.CINudge{SHA: sha, Delivery: delivery, At: time.Now().UTC()})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{shpyrdv1.AnnotationGitCI: string(raw)}}})
+	nudged := []string{}
+	for i := range list {
+		app := &list[i]
+		if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, ev.Repository.FullName) || !gitauth.Watched(app) {
+			continue
+		}
+		rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+		if rec.Ref != app.GitRevision() || !rec.WaitsOnCI(sha) {
+			continue
+		}
+		if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
+			s.githubPushUnavailable(c, "could not nudge "+project.SlugOf(app), err)
+			return
+		}
+		nudged = append(nudged, project.SlugOf(app))
+	}
+	sort.Strings(nudged)
+	c.JSON(http.StatusAccepted, gin.H{"nudged": sha, "projects": nudged})
 }
 
 // githubPushUnavailable answers a push shpyrd could not apply: the real

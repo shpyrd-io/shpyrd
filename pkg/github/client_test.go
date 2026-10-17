@@ -51,7 +51,7 @@ func TestTheAppsJWTIsSignedWithItsKeyAndLastsNineMinutes(t *testing.T) {
 func TestAnInstallationTokenIsForOneRepositoryAndKeptUntilItAges(t *testing.T) {
 	c, fake := newClient(t)
 	ctx := context.Background()
-	tok, err := c.InstallationToken(ctx, 42, "shop")
+	tok, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead())
 	if err != nil || tok.Value != "ghs_42_1" || !tok.MintedAt.Equal(t0) || !tok.ExpiresAt.Equal(t0.Add(time.Hour)) {
 		t.Fatalf("token = %+v, %v", tok, err)
 	}
@@ -60,21 +60,21 @@ func TestAnInstallationTokenIsForOneRepositoryAndKeptUntilItAges(t *testing.T) {
 		t.Errorf("asked for %v", body)
 	}
 	fake.SetNow(t0.Add(49 * time.Minute))
-	if again, _ := c.InstallationToken(ctx, 42, "Shop"); again.Value != "ghs_42_1" || fake.MintedFor(42) != 1 {
+	if again, _ := c.InstallationToken(ctx, 42, "Shop", github.ContentsRead()); again.Value != "ghs_42_1" || fake.MintedFor(42) != 1 {
 		t.Errorf("a token 49 minutes old is kept, whatever the name's case: %+v, minted %d", again, fake.MintedFor(42))
 	}
 	fake.SetNow(t0.Add(50 * time.Minute))
-	if fresh, _ := c.InstallationToken(ctx, 42, "shop"); fresh.Value != "ghs_42_2" {
+	if fresh, _ := c.InstallationToken(ctx, 42, "shop", github.ContentsRead()); fresh.Value != "ghs_42_2" {
 		t.Errorf("a token 50 minutes old is renewed: %+v", fresh)
 	}
 }
 
 func TestARepositoryTheInstallationDoesNotGrantIsSaidSo(t *testing.T) {
 	c, _ := newClient(t)
-	if _, err := c.InstallationToken(context.Background(), 42, "vault"); !errors.Is(err, github.ErrRepoNotGranted) {
+	if _, err := c.InstallationToken(context.Background(), 42, "vault", github.ContentsRead()); !errors.Is(err, github.ErrRepoNotGranted) {
 		t.Errorf("not granted: %v", err)
 	}
-	_, err := c.InstallationToken(context.Background(), 7, "")
+	_, err := c.InstallationToken(context.Background(), 7, "", github.ContentsRead())
 	var apiErr *github.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 404 {
 		t.Errorf("an unknown installation: %v", err)
@@ -146,7 +146,7 @@ func TestCallsRefuseLoopbackWithoutAnInjectedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.InstallationToken(context.Background(), 42, "shop"); !errors.Is(err, gitauth.ErrRefusedAddress) {
+	if _, err := c.InstallationToken(context.Background(), 42, "shop", github.ContentsRead()); !errors.Is(err, gitauth.ErrRefusedAddress) {
 		t.Errorf("err = %v", err)
 	}
 	if calls := fake.Calls(); len(calls) != 0 {
@@ -158,12 +158,12 @@ func TestA404MeansTheInstallationIsGoneAndA422ThatTheRepositoryIsNotGranted(t *t
 	c, _ := newClient(t)
 	ctx := context.Background()
 	for _, repo := range []string{"shop", ""} {
-		_, err := c.InstallationToken(ctx, 7, repo)
+		_, err := c.InstallationToken(ctx, 7, repo, github.ContentsRead())
 		if !errors.Is(err, github.ErrInstallationGone) || errors.Is(err, github.ErrRepoNotGranted) {
 			t.Errorf("installation 7, repo %q: %v", repo, err)
 		}
 	}
-	_, err := c.InstallationToken(ctx, 42, "vault")
+	_, err := c.InstallationToken(ctx, 42, "vault", github.ContentsRead())
 	if !errors.Is(err, github.ErrRepoNotGranted) || errors.Is(err, github.ErrInstallationGone) {
 		t.Errorf("a repository not granted: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestWhoThePersonIsAndTheirRoleInAnOrg(t *testing.T) {
 func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
 	c, fake := newClient(t)
 	fake.SetRateLimited(2 * time.Minute)
-	_, err := c.InstallationToken(context.Background(), 42, "shop")
+	_, err := c.InstallationToken(context.Background(), 42, "shop", github.ContentsRead())
 	var apiErr *github.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != 2*time.Minute || !apiErr.RateLimited {
 		t.Errorf("Retry-After: %v", err)
@@ -219,7 +219,7 @@ func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c2.InstallationToken(context.Background(), 42, "shop")
+	_, err = c2.InstallationToken(context.Background(), 42, "shop", github.ContentsRead())
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RetryAfter != 7*time.Minute || !apiErr.RateLimited {
 		t.Errorf("X-RateLimit-Reset: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestARateLimitSaysWhenToTryAgain(t *testing.T) {
 func TestAForbiddenCallIsNotARateLimit(t *testing.T) {
 	c, fake := newClient(t)
 	fake.SetForbidden(true)
-	_, err := c.InstallationToken(context.Background(), 42, "shop")
+	_, err := c.InstallationToken(context.Background(), 42, "shop", github.ContentsRead())
 	var apiErr *github.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden || apiErr.RateLimited {
 		t.Errorf("%v", err)
@@ -237,19 +237,19 @@ func TestAForbiddenCallIsNotARateLimit(t *testing.T) {
 
 func TestCachedInstallationTokenNeverCallsGitHub(t *testing.T) {
 	c, fake := newClient(t)
-	if _, ok := c.CachedInstallationToken(42, "shop"); ok {
+	if _, ok := c.CachedInstallationToken(42, "shop", github.ContentsRead()); ok {
 		t.Error("nothing is cached yet")
 	}
-	tok, err := c.InstallationToken(context.Background(), 42, "shop")
+	tok, err := c.InstallationToken(context.Background(), 42, "shop", github.ContentsRead())
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake.SetDown(true)
-	if got, ok := c.CachedInstallationToken(42, "Shop"); !ok || got.Value != tok.Value {
+	if got, ok := c.CachedInstallationToken(42, "Shop", github.ContentsRead()); !ok || got.Value != tok.Value {
 		t.Errorf("cached %+v %v", got, ok)
 	}
 	fake.SetNow(t0.Add(50 * time.Minute))
-	if _, ok := c.CachedInstallationToken(42, "shop"); ok {
+	if _, ok := c.CachedInstallationToken(42, "shop", github.ContentsRead()); ok {
 		t.Error("a token due for renewal is not given")
 	}
 	if n := len(fake.Calls()); n != 1 {

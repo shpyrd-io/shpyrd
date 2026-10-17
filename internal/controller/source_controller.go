@@ -24,6 +24,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 )
 
 // The source watcher (RFC-0018). For each App that follows a git branch
@@ -97,6 +98,17 @@ type SourceReconciler struct {
 	// restart it is empty, and the record's checkedAt stands in.
 	mu      sync.Mutex
 	checked map[types.UID]sourceCheck
+	// ciChecked is when each App's held commit's checks were last read.
+	ciChecked map[types.UID]time.Time
+	// ciLogged is when each App's unreadable checks were last logged.
+	ciLogged map[types.UID]time.Time
+	// compared keeps GitHub's compares, which never change, by repository
+	// and commits; at most maxCompares.
+	compared map[compareKey]github.Comparison
+	// ciShared is what GitHub last said of a commit's checks and
+	// statuses, by installation, repository and commit: the Apps on one
+	// repository share it for ciShareFor.
+	ciShared map[ciKey]ciInputs
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -135,7 +147,27 @@ type sourceEvent struct {
 	push   *gitauth.Push
 	latest string
 	err    error
+	// gates are GitHub's answers for watch paths and wait for CI.
+	gates sourceGates
+	// recheck: a held or CI-failed commit's checks are read again; a
+	// commit CI failed is reopened.
+	recheck bool
+	// resume: auto-deploy switched back on, the commit that waited is
+	// decided, through watch paths and wait for CI.
+	resume bool
+	// fromRecord: the commit is the record's, the branch was not read (a
+	// recheck or a resume without a listing).
+	fromRecord bool
+	// ciRead is the commit whose checks gather read (GitHub answered).
+	ciRead string
+	// nudge is the webhook's word that a commit's checks changed, when
+	// there is one: a shared read older than it is not used.
+	nudge *gitauth.CINudge
 }
+
+// readBranch says the event is a check of the branch: a push, or a
+// listing (failed or not); not a commit decided again from the record.
+func (ev sourceEvent) readBranch() bool { return !ev.fromRecord }
 
 // sourceUpdate is what one reconcile writes on the App.
 type sourceUpdate struct {
@@ -146,6 +178,11 @@ type sourceUpdate struct {
 	note, deployedBy, client string
 	// audit is "git.push" or "git.skip", in the name of actor.
 	audit, actor string
+	// target and reason are the commit and the words of a git.skip for a
+	// commit not deployed.
+	target, reason string
+	// ask is what decideSource needs from GitHub before it decides.
+	ask githubAsk
 }
 
 var errNoSuchRevision = errors.New("no such branch or tag")
@@ -173,6 +210,8 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if push != nil && push.Ref != "refs/heads/"+rev {
 		push = nil // another branch's, or a tag's: dropped below
 	}
+	rawCI := app.Annotations[shpyrdv1.AnnotationGitCI]
+	nudge := gitauth.ReadCINudge(rawCI)
 	if rawPush != "" && rawPush == r.consumedPush(app.UID) {
 		// Already applied: this App is a stale read.
 		push = nil
@@ -190,7 +229,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	last := rec
 	var remembered bool
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
-	var ev sourceEvent
+	ev := sourceEvent{nudge: nudge}
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push
@@ -203,24 +242,39 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// (its words, author, a skip) holds.
 			ev.push, ev.latest = push, ""
 		}
-	default:
-		if sha := waitingCommit(app, rec); sha != "" && sha != r.lastPinned(app.UID, rev) {
-			// Auto-deploy switched back on: the commit that waited
-			// deploys now, from the record.
-			u := sourceUpdate{record: written, pin: sha, note: "Commit " + shortCommit(sha) + " (auto-deploy on)",
-				deployedBy: "git", client: "auto-deploy", audit: "git.push", actor: "git"}
-			if err := r.apply(ctx, app, u); err != nil {
-				return ctrl.Result{}, err
-			}
-			r.notePinned(app.UID, rev, sha, last.CheckedAt)
-			r.dropPush(ctx, app, rawPush)
-			r.auditUpdate(ctx, app, u)
-			return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
+		if ev.err == nil && ev.push == nil && nudge != nil && ev.latest == nudge.SHA && rec.WaitsOnCI(nudge.SHA) {
+			// The head is a commit whose checks changed: read them again.
+			ev.recheck = true
 		}
+	case rec.Held != "" && rec.Held == rec.Latest && rec.Held != r.lastPinned(app.UID, rev) &&
+		((nudge != nil && nudge.SHA == rec.Held && r.nudgeDue(app.UID, now)) || r.ciDue(app.UID, now)):
+		// A held commit: its checks are read again. One this watcher
+		// pinned already is a stale read of the App. Nudges read at most
+		// once every ciNudgeEvery.
+		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
+	case nudge != nil && nudge.SHA == rec.Latest && rec.WaitsOnCI(nudge.SHA) && rec.Latest != r.lastPinned(app.UID, rev) && r.nudgeDue(app.UID, now):
+		// A commit CI failed: its checks changed (a re-run), read again.
+		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
+	case waitingCommit(app, rec) != "" && waitingCommit(app, rec) != r.lastPinned(app.UID, rev):
+		// Auto-deploy switched back on: the commit that waited is decided
+		// now, from the record, through its watch paths and wait for CI.
+		ev.latest, ev.resume, ev.fromRecord = rec.Latest, true, true
+	default:
 		r.dropPush(ctx, app, rawPush)
-		return ctrl.Result{RequeueAfter: r.untilDue(last, now)}, nil
+		if nudge == nil || !rec.WaitsOnCI(nudge.SHA) {
+			r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+			nudge = nil
+		}
+		// A nudge held back by ciNudgeEvery is read once it is due.
+		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, nudge != nil, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
+	// Watch paths and wait for CI need GitHub's answers: asked, then the
+	// commit is decided again.
+	for i := 0; i < 2 && u.ask.any(); i++ {
+		r.gather(ctx, app, &ev, u.ask, now)
+		u = decideSource(app, rec, ev, now)
+	}
 	if ev.err != nil && u.record.Error == sourceUnreadable {
 		log.FromContext(ctx).Info("could not read the branch", "revision", rev, "err", ev.err.Error())
 	}
@@ -235,10 +289,20 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// App, it is only dropped.
 		consumed = rawPush
 	}
-	r.remember(app.UID, rev, now, consumed, u.pin)
+	if ev.readBranch() {
+		r.remember(app.UID, rev, now, consumed, u.pin)
+	} else if u.pin != "" {
+		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
+	}
 	r.dropPush(ctx, app, rawPush)
+	if nudge == nil || nudge.SHA == ev.ciRead || !u.record.WaitsOnCI(nudge.SHA) {
+		// Read, or of a commit no longer waiting; else kept for the next
+		// pass (one whose read failed waits for the next due pass, as
+		// before).
+		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+	}
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.untilDue(u.record, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, false, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -253,7 +317,7 @@ func pushFollows(p *gitauth.Push, rec gitauth.SourceRecord) bool {
 func waitingCommit(app *shpyrdv1.App, rec gitauth.SourceRecord) string {
 	pin := app.PinnedCommit()
 	if !app.AutoDeploys() || rec.Ref != app.GitRevision() || rec.Failures != 0 || rec.Latest == "" || pin == "" ||
-		rec.Latest == pin || rec.Latest == rec.Skipped {
+		rec.Latest == pin || rec.Latest == rec.Skipped || rec.Latest == rec.NotDeployed || rec.Latest == rec.Held {
 		return ""
 	}
 	return rec.Latest
@@ -351,20 +415,42 @@ func (r *SourceReconciler) forget(uid types.UID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.checked, uid)
+	delete(r.ciChecked, uid)
+	delete(r.ciLogged, uid)
+}
+
+// nudgeDue says a nudge may read the App's commit's checks now: none was
+// read in the last ciNudgeEvery. A burst of webhook deliveries, or a nudge
+// kept while the checks cannot be read, reads at most that often.
+func (r *SourceReconciler) nudgeDue(uid types.UID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, ok := r.ciChecked[uid]
+	return !ok || now.Sub(last) >= ciNudgeEvery
 }
 
 // decideSource turns what was learnt into what is written: the record
-// (Reconcile writes it when it changed), a pin when the branch moved and the App deploys it.
+// (Reconcile writes it when it changed), a pin when the branch moved and
+// the App deploys it. The order: the branch, auto-deploy, [skip deploy],
+// watch paths, wait for CI, the pin. A person's deploy and the first
+// commit of a branch skip watch paths and wait for CI.
 func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, now time.Time) sourceUpdate {
 	u := sourceUpdate{record: rec}
 	u.record.Ref = app.GitRevision()
-	u.record.CheckedAt = &now
+	if ev.readBranch() {
+		// Reading a held commit's checks is no check of the branch.
+		u.record.CheckedAt = &now
+	}
 	if ev.err != nil {
 		u.record.Error = describeSourceError(ev.err, app)
 		u.record.Failures = min(u.record.Failures+1, maxFailures)
 		return u
 	}
-	u.record.Error, u.record.Failures = "", 0
+	if ev.readBranch() {
+		u.record.Error, u.record.Failures = "", 0
+	}
+	// A hold lasts while the gate holds the commit again.
+	u.record.Held, u.record.HeldSince = "", nil
 	sha, via, message, author := ev.latest, "poll", "", ""
 	// seen is when the commit was seen: the push's own time, else now.
 	seen := now
@@ -393,27 +479,45 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 		}
 		u.record.Skipped = sha
 	}
+	suffix := ""
 	switch {
 	case pin == "":
 		// Nothing pinned for this revision yet (a new app, a deploy, a
-		// changed branch): its commit, whatever auto-deploy says. A
-		// person's deploy keeps their note and name.
+		// changed branch): its commit, whatever auto-deploy, watch paths
+		// and wait for CI say. A person's deploy keeps their note and name.
 		if by := app.Annotations[shpyrdv1.AnnotationDeployedBy]; by != "" && by != "git" && !strings.HasPrefix(by, "git:") {
 			u.pin, u.record.Via, u.record.Skipped, u.audit = sha, "deploy", "", ""
+			u.record.NotDeployed, u.record.NotDeployedReason = "", ""
 			return u
 		}
 	case sha == pin, skip, sha == rec.Skipped, !app.AutoDeploys():
 		// Nothing new, a commit that asked not to deploy (now, or when a
 		// push said so before this poll found it), or pushes recorded only.
 		return u
+	case sha == rec.NotDeployed && !ev.recheck:
+		// Decided before: no change in the watch paths, or its CI. Only a
+		// change of its checks reopens it.
+		return u
+	default:
+		var stop bool
+		if suffix, stop = gateCommit(app, &u, rec, sha, ev, now); stop {
+			return u
+		}
 	}
 	u.pin, u.record.Skipped, u.audit = sha, "", "git.push"
+	u.record.NotDeployed, u.record.NotDeployedReason = "", ""
 	u.deployedBy, u.client = u.actor, u.record.Via
-	if u.record.Via == "push" {
+	switch {
+	case ev.resume:
+		// The commit that waited while auto-deploy was off.
+		u.actor, u.deployedBy, u.client = "git", "git", "auto-deploy"
+		u.note = "Commit " + shortCommit(sha) + " (auto-deploy on)"
+	case u.record.Via == "push":
 		u.note = pushNote(sha, u.record.Author, u.record.Message)
-	} else {
+	default:
 		u.note = "Commit " + shortCommit(sha) + " (polled)"
 	}
+	u.note += suffix
 	return u
 }
 
@@ -503,9 +607,16 @@ func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string,
 	return "", errNoSuchRevision
 }
 
-// apply writes the record, and the pin with its note and attribution, in
-// one merge patch: the App controller's own writes are not touched.
+// apply writes the record, and the pin with its note, attribution and
+// time, in one merge patch: the App controller's own writes are not
+// touched.
 func (r *SourceReconciler) apply(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) error {
+	if u.pin != "" {
+		// When the pin was set: a build that failed before it is not the
+		// pin's (the reporter reads it).
+		at := r.now().Truncate(time.Second)
+		u.record.PinnedAt = &at
+	}
 	raw, err := json.Marshal(u.record)
 	if err != nil {
 		return err
@@ -536,9 +647,60 @@ func (r *SourceReconciler) dropPush(ctx context.Context, app *shpyrdv1.App, raw 
 	if raw == "" {
 		return
 	}
-	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, shpyrdv1.AnnotationGitPush, raw); err != nil {
-		logRemoveAnnotation(ctx, err, "kept a newer push for the next pass", "the push")
+	r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitPush, raw)
+}
+
+// dropAnnotation removes an annotation this reconcile read, unless it
+// changed meanwhile: the newer one is read next.
+func (r *SourceReconciler) dropAnnotation(ctx context.Context, app *shpyrdv1.App, key, raw string) {
+	if raw == "" {
+		return
 	}
+	if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, key, raw); err != nil {
+		logRemoveAnnotation(ctx, err, "kept a newer one for the next pass", "an annotation", "annotation", key)
+	}
+}
+
+// noteCI keeps when the App's held commit's checks were read.
+func (r *SourceReconciler) noteCI(uid types.UID, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ciChecked == nil {
+		r.ciChecked = map[types.UID]time.Time{}
+	}
+	r.ciChecked[uid] = now
+}
+
+// ciDue says a held commit's checks are to be read again: never read by
+// this watcher, or 90 % of heldRecheck ago (requeues are spread).
+func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, ok := r.ciChecked[uid]
+	return !ok || now.Sub(last) >= heldRecheck*9/10
+}
+
+// requeue is the wait until the next pass: the next check of the branch,
+// or sooner, the next read of a held commit's checks, or of the commit a
+// nudge held back by ciNudgeEvery (nudged) is about.
+func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, nudged bool, now time.Time) time.Duration {
+	d := r.untilDue(rec, now)
+	held := rec.Held != "" && rec.Held == rec.Latest
+	if !held && !nudged {
+		return d
+	}
+	r.mu.Lock()
+	last, ok := r.ciChecked[uid]
+	r.mu.Unlock()
+	every := heldRecheck
+	if nudged {
+		every = ciNudgeEvery
+	}
+	wait := every
+	if ok {
+		wait = max(every-now.Sub(last), time.Second)
+	}
+	return min(d, wait)
 }
 
 func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) {
@@ -546,8 +708,8 @@ func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u
 		return
 	}
 	entry := audit.Entry{
-		Actor: u.actor, Action: u.audit, Target: shortCommit(firstNonEmpty(u.pin, u.record.Skipped)),
-		Detail: firstLine(u.record.Message), Via: "controller", Client: u.record.Via, Realm: "workspace",
+		Actor: u.actor, Action: u.audit, Target: shortCommit(firstNonEmpty(u.target, u.pin, u.record.Skipped)),
+		Detail: firstNonEmpty(u.reason, firstLine(u.record.Message)), Via: "controller", Client: u.record.Via, Realm: "workspace",
 	}
 	if err := audit.Record(ctx, r.Kube, audit.AppRefIn(app.Namespace, app.Name), entry); err != nil {
 		log.FromContext(ctx).Info("could not audit the push", "err", err.Error())

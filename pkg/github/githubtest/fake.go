@@ -1,7 +1,8 @@
 // Package githubtest is a fake GitHub for shpyrd's tests: the App's token
 // endpoint (which checks the App's JWT), an installation's repositories and
 // branches, the OAuth exchange, a person's installations and the manifest
-// conversion. Its state is read and set through methods, under its lock.
+// conversion, a repository's compare, check runs, statuses and Deployments.
+// Its state is read and set through methods, under its lock.
 package githubtest
 
 import (
@@ -98,9 +99,26 @@ type Server struct {
 	// "": none.
 	membersRefusal string
 	minted         map[int64]int
-	tokens         map[string]int64 // installation token -> installation
+	tokens         map[string]tokenGrant // installation token -> what it may do
 	lastBody       map[string]any
 	calls          []string
+	compares       map[string]Compare
+	runs           map[string][]CheckRun // by commit, lower case
+	statuses       map[string][]Status   // by commit, lower case
+	deployments    []Deployment
+	nextID         int64
+	writes         []Write
+	totals         map[string]int  // reported total_count by kind and commit
+	refused        map[string]bool // permissions a token request is refused for
+	compareQuery   string
+}
+
+// tokenGrant is an installation token: its installation, the repositories
+// it was asked for (none: all of the installation's) and its permissions.
+type tokenGrant struct {
+	installation int64
+	repos        []string
+	perms        map[string]string
 }
 
 // NewServer starts the fake with installation 42 on Acme.
@@ -115,7 +133,12 @@ func NewServer(t testing.TB) *Server {
 		login:    UserLogin,
 		orgRoles: map[string][2]string{"acme": {"admin", "active"}},
 		minted:   map[int64]int{},
-		tokens:   map[string]int64{},
+		tokens:   map[string]tokenGrant{},
+		compares: map[string]Compare{},
+		runs:     map[string][]CheckRun{},
+		statuses: map[string][]Status{},
+		totals:   map[string]int{},
+		refused:  map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Close)
@@ -269,6 +292,8 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		f.repositories(w, r)
 	case r.Method == "GET" && strings.HasPrefix(p, "/repos/") && strings.HasSuffix(p, "/branches"):
 		f.branchList(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/branches"))
+	case strings.HasPrefix(p, "/repos/"):
+		f.repoCall(w, r, p)
 	case r.Method == "POST" && p == "/login/oauth/access_token":
 		f.exchange(w, r)
 	case r.Method == "GET" && p == "/user/installations":
@@ -301,11 +326,18 @@ func (f *Server) accessToken(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	raw, _ := io.ReadAll(r.Body)
 	var body struct {
-		Repositories []string `json:"repositories"`
+		Repositories []string          `json:"repositories"`
+		Permissions  map[string]string `json:"permissions"`
 	}
 	_ = json.Unmarshal(raw, &body)
 	f.lastBody = map[string]any{}
 	_ = json.Unmarshal(raw, &f.lastBody)
+	for perm := range body.Permissions {
+		if f.refused[perm] {
+			reply(w, http.StatusUnprocessableEntity, map[string]string{"message": "The permissions requested are not granted to this installation."})
+			return
+		}
+	}
 	for _, name := range body.Repositories {
 		if !grants(repos, name) {
 			reply(w, http.StatusUnprocessableEntity, map[string]string{"message": "There is at least one repository that does not exist or is not accessible to the parent installation."})
@@ -314,7 +346,7 @@ func (f *Server) accessToken(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	f.minted[installation]++
 	tok := fmt.Sprintf("ghs_%d_%d", installation, f.minted[installation])
-	f.tokens[tok] = installation
+	f.tokens[tok] = tokenGrant{installation: installation, repos: body.Repositories, perms: body.Permissions}
 	reply(w, http.StatusCreated, map[string]any{"token": tok, "expires_at": f.clock().Add(time.Hour).UTC().Format(time.RFC3339)})
 }
 
@@ -329,8 +361,8 @@ func grants(repos []Repo, name string) bool {
 
 // installationOf is the installation an installation token is of.
 func (f *Server) installationOf(r *http.Request) (int64, bool) {
-	id, ok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
-	return id, ok
+	g, ok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	return g.installation, ok
 }
 
 func (f *Server) repositories(w http.ResponseWriter, r *http.Request) {

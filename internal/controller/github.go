@@ -84,30 +84,64 @@ type githubRefusal struct {
 	workspace string
 	why       string
 	until     time.Time
+	// notCovered: the installation does not include the repository, or is
+	// gone. The GitHub App does not cover it (cover).
+	notCovered bool
 }
 
 // refusedLately is GitHub's refusal of the repository, while it is kept.
 func (gh *GitHubApp) refusedLately(id int64, repo string) (string, bool) {
+	r, ok := gh.refusalOf(id, repo)
+	return r.why, ok
+}
+
+// refusalOf is the refusal kept for the repository.
+func (gh *GitHubApp) refusalOf(id int64, repo string) (githubRefusal, bool) {
 	gh.mu.Lock()
 	defer gh.mu.Unlock()
 	key := githubRepoKey{id, strings.ToLower(repo)}
 	r, ok := gh.refused[key]
 	if ok && !gh.now().Before(r.until) {
 		delete(gh.refused, key)
-		return "", false
+		return githubRefusal{}, false
 	}
-	return r.why, ok
+	return r, ok
 }
 
 // keepRefusal keeps GitHub's refusal of the repository for
 // githubRefusalLife.
-func (gh *GitHubApp) keepRefusal(ws string, id int64, repo, why string) {
+func (gh *GitHubApp) keepRefusal(ws string, id int64, repo, why string, notCovered bool) {
 	gh.mu.Lock()
 	defer gh.mu.Unlock()
 	if gh.refused == nil {
 		gh.refused = map[githubRepoKey]githubRefusal{}
 	}
-	gh.refused[githubRepoKey{id, strings.ToLower(repo)}] = githubRefusal{workspace: ws, why: why, until: gh.now().Add(githubRefusalLife)}
+	gh.refused[githubRepoKey{id, strings.ToLower(repo)}] = githubRefusal{workspace: ws, why: why, until: gh.now().Add(githubRefusalLife), notCovered: notCovered}
+}
+
+// refuse keeps GitHub's definite refusal of a token for the repository's
+// clone scope (ContentsRead), and says why in a person's words: the
+// repository not in the installation, the installation gone, a 403 that
+// does not limit the rate. false: err is no refusal (none, or one that
+// may pass), and nothing is kept. The clone and cover share it.
+func (gh *GitHubApp) refuse(ctx context.Context, ws string, inst *store.GitHubInstallation, name string, err error) (string, bool) {
+	var apiErr *github.APIError
+	switch {
+	case errors.Is(err, github.ErrRepoNotGranted):
+		why := fmt.Sprintf("The GitHub App's installation on %s does not include %s: add the repository to it on GitHub.", inst.AccountLogin, name)
+		gh.keepRefusal(ws, inst.ID, name, why, true)
+		return why, true
+	case errors.Is(err, github.ErrInstallationGone):
+		why := fmt.Sprintf("The GitHub App is no longer installed on %s: an owner of %s installs it again, then a workspace admin connects it from Workspace settings → Git.", inst.AccountLogin, inst.AccountLogin)
+		gh.keepRefusal(ws, inst.ID, name, why, true)
+		return why, true
+	case errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited:
+		log.FromContext(ctx).Info("GitHub refused the App a token for the repository; builds use the other credentials", "installation", inst.ID, "repository", name, "err", err.Error())
+		why := fmt.Sprintf("GitHub refused the GitHub App a token for %s on %s: check the App's permissions and repository access on GitHub.", name, inst.AccountLogin)
+		gh.keepRefusal(ws, inst.ID, name, why, false)
+		return why, true
+	}
+	return "", false
 }
 
 // Forget drops the refusals kept for a workspace's repositories: its
@@ -216,36 +250,16 @@ var githubMarks = []string{gitauth.AnnotationGitHubAccount, gitauth.AnnotationTo
 // the watcher's message, and retry that the reason may pass. A failure is
 // logged, never returned: the other credentials are tried.
 func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.Repo) (_ *gitauth.Build, refused string, retry bool) {
-	if gh == nil || gh.Source == nil || gh.Installations == nil || !strings.EqualFold(repo.Host, "github.com") {
-		return nil, "", false
-	}
-	owner, name, ok := strings.Cut(repo.Path, "/")
-	if !ok || strings.Contains(name, "/") {
-		return nil, "", false
-	}
-	logger := log.FromContext(ctx)
-	cl, err := gh.Source.Client(ctx)
+	ref, inst, err := gh.installationFor(ctx, app, repo)
 	if err != nil {
-		// A bare ErrNotConfigured is no Secret at all, the usual case on a
-		// platform without the App; a broken Secret or a failed read is
-		// worth a line.
-		if err != github.ErrNotConfigured { //nolint:errorlint // identity, not a wrapped error, is the point
+		if errors.Is(err, errGitHubConnections) {
+			log.FromContext(ctx).Info("building with the other credentials", "err", err.Error())
+		} else {
 			gh.logBroken(ctx, err)
 		}
 		return nil, "", false
 	}
-	ws := workspaceOf(app)
-	list, err := gh.Installations.GitHubInstallations(ctx, ws)
-	if err != nil {
-		logger.Info("could not read the workspace's GitHub connections; building with the other credentials", "err", err.Error())
-		return nil, "", false
-	}
-	var inst *store.GitHubInstallation
-	for i := range list {
-		if strings.EqualFold(list[i].AccountLogin, owner) {
-			inst = &list[i]
-		}
-	}
+	cl, name, ws := ref.client, ref.name, workspaceOf(app)
 	switch {
 	case inst == nil:
 		return nil, "", false
@@ -259,33 +273,21 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	}
 	// A token GitHub already gave is used without asking; the backoff
 	// only holds back a call.
-	tok, cached := cl.CachedInstallationToken(inst.ID, name)
+	tok, cached := cl.CachedInstallationToken(inst.ID, name, github.ContentsRead())
 	if !cached && gh.backingOff(inst.ID) {
 		return nil, githubTransient, true
 	}
 	if !cached {
 		callCtx, cancel := context.WithTimeout(ctx, githubCallTimeout)
 		defer cancel()
-		tok, err = cl.InstallationToken(callCtx, inst.ID, name)
+		tok, err = cl.InstallationToken(callCtx, inst.ID, name, github.ContentsRead())
 	}
-	var apiErr *github.APIError
-	switch {
-	case errors.Is(err, github.ErrRepoNotGranted):
-		why := fmt.Sprintf("The GitHub App's installation on %s does not include %s: add the repository to it on GitHub.", inst.AccountLogin, name)
-		gh.keepRefusal(ws, inst.ID, name, why)
+	if why, refused := gh.refuse(ctx, ws, inst, name, err); refused {
 		return nil, why, false
-	case errors.Is(err, github.ErrInstallationGone):
-		why := fmt.Sprintf("The GitHub App is no longer installed on %s: an owner of %s installs it again, then a workspace admin connects it from Workspace settings → Git.", inst.AccountLogin, inst.AccountLogin)
-		gh.keepRefusal(ws, inst.ID, name, why)
-		return nil, why, false
-	case errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited:
-		logger.Info("GitHub refused the App a token; building with the other credentials", "installation", inst.ID, "err", err.Error())
-		why := fmt.Sprintf("GitHub refused the GitHub App a token for %s on %s: check the App's permissions and repository access on GitHub.", name, inst.AccountLogin)
-		gh.keepRefusal(ws, inst.ID, name, why)
-		return nil, why, false
-	case err != nil:
+	}
+	if err != nil {
 		gh.remember(inst.ID, err)
-		logger.Info("GitHub gave no token; building with the other credentials", "installation", inst.ID, "err", err.Error())
+		log.FromContext(ctx).Info("GitHub gave no token; building with the other credentials", "installation", inst.ID, "err", err.Error())
 		return nil, githubTransient, true
 	}
 	sec := &corev1.Secret{Data: map[string][]byte{gitauth.KeyToken: []byte(tok.Value), gitauth.KeyUsername: []byte("x-access-token")}}
@@ -301,6 +303,134 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	}
 	b.Secret.Annotations[gitauth.AnnotationGitHubRepo] = repo.Path
 	return &b, "", false
+}
+
+// githubRepoRef is a repository the GitHub App reaches: the App's client,
+// the installation, and the repository's owner and name.
+type githubRepoRef struct {
+	client       *github.Client
+	installation int64
+	owner, name  string
+}
+
+// errGitHubConnections: the workspace's GitHub connections could not be
+// read.
+var errGitHubConnections = errors.New("could not read the workspace's GitHub connections")
+
+// installationFor is the GitHub App's hold on the repository, without a
+// call to GitHub: a github.com URL, the App configured, and the App's
+// workspace's installation on the repository's owner (an unsuspended one
+// first). inst is nil when the App does not reach the repository. err is
+// an App Secret that makes no App, or the connections unread
+// (errGitHubConnections): it is not known then, never "no". The clone's
+// credential (build) and cover are this one test.
+func (gh *GitHubApp) installationFor(ctx context.Context, app *shpyrdv1.App, repo gitauth.Repo) (githubRepoRef, *store.GitHubInstallation, error) {
+	if gh == nil || gh.Source == nil || gh.Installations == nil || !strings.EqualFold(repo.Host, "github.com") {
+		return githubRepoRef{}, nil, nil
+	}
+	owner, name, ok := strings.Cut(repo.Path, "/")
+	if !ok || strings.Contains(name, "/") {
+		return githubRepoRef{}, nil, nil
+	}
+	cl, err := gh.Source.Client(ctx)
+	if err == github.ErrNotConfigured { //nolint:errorlint // identity, not a wrapped error, is the point
+		// A bare ErrNotConfigured is no Secret at all, the usual case on a
+		// platform without the App; a broken Secret wraps it, and is an
+		// error.
+		return githubRepoRef{}, nil, nil
+	}
+	if err != nil {
+		return githubRepoRef{}, nil, err
+	}
+	list, err := gh.Installations.GitHubInstallations(ctx, workspaceOf(app))
+	if err != nil {
+		return githubRepoRef{}, nil, fmt.Errorf("%w: %w", errGitHubConnections, err)
+	}
+	var inst *store.GitHubInstallation
+	for i := range list {
+		if strings.EqualFold(list[i].AccountLogin, owner) && (inst == nil || inst.SuspendedAt != nil) {
+			inst = &list[i]
+		}
+	}
+	if inst == nil {
+		return githubRepoRef{}, nil, nil
+	}
+	return githubRepoRef{client: cl, installation: inst.ID, owner: owner, name: name}, inst, nil
+}
+
+// cover says the GitHub App covers the App's repository: installationFor
+// finds a live, unsuspended installation, and it includes the repository
+// (selected). Watch paths, wait for CI and the reporter work only then. An
+// error is "not known", never "not covered": the callers decide what an
+// unknown cover does (coverFailure words it). The ref is the installation's
+// whenever it is live and unsuspended, also when it does not cover the
+// repository.
+func (gh *GitHubApp) cover(ctx context.Context, app *shpyrdv1.App) (githubRepoRef, bool, error) {
+	ref, ok, err := gh.coverQuietly(ctx, app)
+	if err != nil {
+		log.FromContext(ctx).Info("could not tell whether the GitHub App covers the repository", "err", err.Error())
+	}
+	return ref, ok, err
+}
+
+// coverQuietly is cover without its log line, for a caller that logs its
+// failures itself (the reporter, once a minute).
+func (gh *GitHubApp) coverQuietly(ctx context.Context, app *shpyrdv1.App) (githubRepoRef, bool, error) {
+	if gh == nil || app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return githubRepoRef{}, false, nil
+	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	if err != nil {
+		return githubRepoRef{}, false, nil
+	}
+	ref, inst, err := gh.installationFor(ctx, app, repo)
+	if err != nil {
+		return githubRepoRef{}, false, err
+	}
+	if inst == nil || inst.SuspendedAt != nil {
+		return githubRepoRef{}, false, nil
+	}
+	return ref, gh.selected(ctx, app, ref, inst), nil
+}
+
+// selected says the installation includes the repository, as the clone's
+// scope (ContentsRead) answers: a refusal kept, else the token kept, else
+// a token asked of GitHub. Only a definite "not included" (or "gone") is
+// no; an answer that may pass (GitHub down, the clone backing off) is yes,
+// and what is asked next says GitHub is not answering. The clone's backoff
+// is read, never written; a definite refusal is kept as the clone keeps
+// it.
+func (gh *GitHubApp) selected(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef, inst *store.GitHubInstallation) bool {
+	if r, ok := gh.refusalOf(inst.ID, ref.name); ok {
+		return !r.notCovered
+	}
+	if _, ok := ref.client.CachedInstallationToken(inst.ID, ref.name, github.ContentsRead()); ok || gh.backingOff(inst.ID) {
+		return true
+	}
+	callCtx, cancel := context.WithTimeout(ctx, githubCallTimeout)
+	defer cancel()
+	_, err := ref.client.InstallationToken(callCtx, inst.ID, ref.name, github.ContentsRead())
+	if _, refused := gh.refuse(ctx, workspaceOf(app), inst, ref.name, err); refused {
+		r, _ := gh.refusalOf(inst.ID, ref.name)
+		return !r.notCovered
+	}
+	return true
+}
+
+// Covers says the GitHub App covers the App's repository, for the API's
+// view of a project: coverQuietly, where a cover that could not be read is
+// "no".
+func (gh *GitHubApp) Covers(ctx context.Context, app *shpyrdv1.App) bool {
+	_, ok, _ := gh.coverQuietly(ctx, app)
+	return ok
+}
+
+// coverFailure is cover's error in a person's words, for a release note.
+func coverFailure(err error) string {
+	if errors.Is(err, errGitHubConnections) {
+		return "shpyrd could not read the workspace's GitHub connections"
+	}
+	return "shpyrd could not read the GitHub App's settings"
 }
 
 // githubTokenRefresh is how long until <app>-git must be written again:

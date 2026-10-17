@@ -38,6 +38,9 @@ var (
 	ErrNotConfigured = errors.New("GitHub is not set up on this platform")
 	// ErrRepoNotGranted: the installation does not include the repository.
 	ErrRepoNotGranted = errors.New("the GitHub App's installation does not include this repository")
+	// ErrPermissionsNotGranted: the installation has not approved the
+	// checks, statuses or Deployments permissions.
+	ErrPermissionsNotGranted = errors.New("the GitHub App installation has not approved the checks, statuses or Deployments permissions: accept the App's updated permissions on GitHub")
 	// ErrInstallationGone: GitHub no longer knows the installation, most
 	// likely because the App was uninstalled.
 	ErrInstallationGone = errors.New("the GitHub App's installation is gone: the App was uninstalled")

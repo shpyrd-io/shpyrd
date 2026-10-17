@@ -1,6 +1,6 @@
 # RFC-0054 GitHub App integration
 
-**Status:** in progress
+**Status:** implemented
 
 **Owner:** Marcelo Paez Sequeira
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-10-16
+**Last update:** 2026-10-17
 
 ## Summary
 
@@ -50,5 +50,7 @@ credentials; developers then only "Connect GitHub".
 ## Implementation History
 
 - 2026-09-22: RFC written.
-- 2026-10-16: part 3, Connect GitHub: `shpyrd-ctl github app create` registers the cluster's App from a manifest; workspaces connect installations (only an owner of the GitHub account can connect it) from the dashboard's Git settings, and `shpyrd github connect` opens that page and waits; From GitHub in New project; builds and the source watcher clone with repository-scoped installation tokens before deploy keys and tokens; the App's webhook routes pushes; installation suspensions and removals are recorded. See docs/superpowers/specs/2026-10-16-github-app-connect-design.md. Part 4 (checks, Deployments, watch paths, wait-for-CI) follows.
-- 2026-10-16: part 3 (Connect GitHub) verified end to end on a kind cluster against a real GitHub App on a personal account: registration with shpyrd-ctl, connect (fresh install and an installation that already existed), the repository picker, private builds through the App (kpack and Dockerfile), pushes through the App's webhook deploying two projects at once, a repository not granted refused, suspend and unsuspend. Part 4 (checks, Deployments, watch paths, wait for CI) is next.
+- 2026-10-16: part 3, Connect GitHub: `shpyrd-ctl github app create` registers the cluster's App from a manifest; workspaces connect installations (only an owner of the GitHub account can connect it) from the dashboard's Git settings, and `shpyrd github connect` opens that page and waits; From GitHub in New project; builds and the source watcher clone with repository-scoped installation tokens before deploy keys and tokens; the App's webhook routes pushes; installation suspensions and removals are recorded. See docs/superpowers/specs/2026-10-16-github-app-connect-design.md. Part 4 (checks, Deployments, watch paths, wait for CI) is the entry below.
+- 2026-10-16: part 3 (Connect GitHub) verified end to end on a kind cluster against a real GitHub App on a personal account: registration with shpyrd-ctl, connect (fresh install and an installation that already existed), the repository picker, private builds through the App (kpack and Dockerfile), pushes through the App's webhook deploying two projects at once, a repository not granted refused, suspend and unsuspend. Part 4 (checks, Deployments, watch paths, wait for CI) is the entry below.
+- 2026-10-17: part 4, checks and Deployments: a `shpyrd / <project>` check run on each commit (building, deploying, running at the URL or failed; waiting for CI; not deployed; skipped; superseded or replaced) and a GitHub Deployment per release that changes the code, written by a reporter loop that keeps what it sent in an annotation and never holds up a deploy; wait for CI (every check run and status except shpyrd's own; no CI after a minute; given up after an hour; a re-run of a failed head commit deploys) through `check_suite` and `status` webhooks with a 30-second fallback; watch paths (gitignore-style globs from the repository root, last match wins, GitHub's compare from the running commit); per-scope installation tokens. RFC-0054 is implemented. See docs/superpowers/specs/2026-10-16-github-checks-design.md.
+- 2026-10-17: part 4 verified end to end on a kind cluster against the test GitHub App and paezao/shpyrd-e2e-hello, webhooks through an ngrok tunnel limited to POST /api/github/webhook: the check and the Deployment of a push, wait for CI with a GitHub Actions workflow (pass, fail, green re-run), watch paths (a README push ignored, the next matching push deployed), and a GitHub outage leaving the deploy untouched.

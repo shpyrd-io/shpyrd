@@ -770,6 +770,22 @@ spec:
                         type: string
                       url:
                         type: string
+                      waitForChecks:
+                        description: |-
+                          WaitForChecks holds a commit until its other checks and statuses on
+                          GitHub pass. GitHub App only (RFC-0054).
+                        type: boolean
+                      watchPaths:
+                        description: |-
+                          WatchPaths are gitignore-style globs from the repository root: a
+                          commit deploys only when a file it changes matches. The last pattern
+                          that matches a file decides it; a leading ! excludes. GitHub App only
+                          (RFC-0054).
+                        items:
+                          maxLength: 200
+                          type: string
+                        maxItems: 20
+                        type: array
                     required:
                     - url
                     type: object
@@ -1112,6 +1128,14 @@ spec:
                   error:
                     description: Error says why the branch could not be read, in words.
                     type: string
+                  held:
+                    description: |-
+                      Held is a commit waiting for its other checks on GitHub, since
+                      HeldSince (RFC-0054).
+                    type: string
+                  heldSince:
+                    format: date-time
+                    type: string
                   lastWebhookAt:
                     format: date-time
                     type: string
@@ -1124,6 +1148,14 @@ spec:
                   message:
                     description: Message and Author describe Latest when a push said
                       them.
+                    type: string
+                  notDeployed:
+                    description: |-
+                      NotDeployed is the last commit the watcher decided not to deploy:
+                      nothing changed in the watch paths, CI failed, or CI did not finish.
+                      NotDeployedReason says which, in words.
+                    type: string
+                  notDeployedReason:
                     type: string
                   skipped:
                     description: Skipped is a commit whose message asked not to deploy

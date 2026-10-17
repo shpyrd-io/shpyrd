@@ -65,6 +65,33 @@ describe("the api picks the Mock when asked to", () => {
     expect((await api.projectGitHooks("billing")).url).toContain("/api/hooks/git/billing/");
   });
 
+  it("keeps watch paths and wait for CI on a project on a branch, and refuses a pattern it cannot read", async () => {
+    const hello = await api.updateProject("hello-world", { watchPaths: ["services/api/**", "!**/*.md"], waitForChecks: true });
+    expect(hello.spec.source?.git?.watchPaths).toEqual(["services/api/**", "!**/*.md"]);
+    expect(hello.spec.source?.git?.waitForChecks).toBe(true);
+    expect(hello.githubFeatures).toBe(true);
+    await expect(api.updateProject("hello-world", { watchPaths: ["a**"] })).rejects.toThrow(/stands alone/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["é".repeat(201)] })).rejects.toThrow(/at most 200 characters/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["é".repeat(200)] })).resolves.toBeTruthy();
+    await expect(api.updateProject("hello-world", { watchPaths: Array.from({ length: 21 }, (_, i) => `d${i}/**`) })).rejects.toThrow(/at most 20 watch paths; there are 21/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/[a"] })).rejects.toThrow(
+      'the watch path "src/[a" is not a pattern shpyrd can read: check its [ ] and \\',
+    );
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/a\\"] })).rejects.toThrow(/not a pattern shpyrd can read/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/[ab]*"] })).resolves.toBeTruthy();
+    await expect(api.updateProject("dash-tv", { waitForChecks: true })).rejects.toThrow(/git repository/);
+  });
+
+  it("reads a character class in a watch path as Go's path.Match does, and trims a pattern before checking it", async () => {
+    // What Go's path.Match answers for each (checked with go run).
+    for (const bad of ["src/[a-]", "src/[-a]", "src/[a-b-c]", "src/[--a]"])
+      await expect(api.updateProject("hello-world", { watchPaths: [bad] })).rejects.toThrow(/not a pattern shpyrd can read/);
+    for (const good of ["src/[a-z]", "src/[\\]]", "src/[^a]", "src/[\\-a]"])
+      await expect(api.updateProject("hello-world", { watchPaths: [good] })).resolves.toBeTruthy();
+    // Trimmed as the server does, before the check.
+    expect((await api.updateProject("hello-world", { watchPaths: [" a/** "] })).spec.source?.git?.watchPaths).toEqual(["a/**"]);
+  });
+
   it("knows the source of the projects on a branch: pinned, skipped, recorded only, unreadable", async () => {
     expect((await api.project("hello-world")).status.source?.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await api.project("docs")).status.source?.skipped).toBeTruthy();

@@ -86,7 +86,7 @@ type Things = {
 
 // The shape of the files changes with the application: what a browser
 // kept from an older shape is left behind under the older name.
-const shape = "6";
+const shape = "7";
 const projectsOf = collection<Project>(
   `projects${shape}`,
   projects as Project[],
@@ -285,6 +285,64 @@ const admitDisk = async (
       );
   }
 };
+
+// The server's check of watch paths (pkg/gitauth/watchpaths.go), in its
+// words: at most 20 patterns of up to 200 characters, each one readable.
+function watchPathsError(paths: string[]): string | undefined {
+  if (paths.length > 20)
+    return `a project takes at most 20 watch paths; there are ${paths.length}`;
+  for (const p of paths) {
+    // Characters, as the server counts them, not UTF-16 units.
+    const chars = [...p];
+    if (chars.length > 200)
+      return `a watch path is at most 200 characters; ${JSON.stringify(chars.slice(0, 40).join(""))}… is longer`;
+    const raw = p.replace(/^!/, "").replace(/^\//, "");
+    if (raw === "") return `the watch path ${JSON.stringify(p)} names no file or folder`;
+    const parts = raw.endsWith("/") ? raw.slice(0, -1).split("/") : raw.split("/");
+    if (parts.some((s) => s === ""))
+      return `the watch path ${JSON.stringify(p)} has an empty part (//)`;
+    if (parts.some((s) => s !== "**" && s.includes("**")))
+      return `in the watch path ${JSON.stringify(p)}, ** stands alone between slashes, as in services/**/api`;
+    if (parts.some(unreadable))
+      return `the watch path ${JSON.stringify(p)} is not a pattern shpyrd can read: check its [ ] and \\`;
+  }
+}
+
+// A part path.Match refuses (a port of Go's matchChunk and getEsc, which
+// check the whole pattern even when nothing is matched): a trailing \, or
+// a class whose elements start with - or ], run out, or are not closed.
+function unreadable(part: string): boolean {
+  const chars = [...part];
+  let i = 0;
+  // One class element: a character, escaped or not; Go needs more after it.
+  const esc = (): boolean => {
+    if (i >= chars.length || chars[i] === "-" || chars[i] === "]") return false;
+    if (chars[i] === "\\" && ++i >= chars.length) return false;
+    i++;
+    return i < chars.length;
+  };
+  while (i < chars.length) {
+    if (chars[i] === "\\") {
+      if (++i >= chars.length) return true;
+      i++;
+    } else if (chars[i] === "[") {
+      i++;
+      if (chars[i] === "^") i++;
+      for (let n = 0; ; n++) {
+        if (chars[i] === "]" && n > 0) {
+          i++;
+          break;
+        }
+        if (!esc()) return true;
+        if (chars[i] === "-") {
+          i++;
+          if (!esc()) return true;
+        }
+      }
+    } else i++;
+  }
+  return false;
+}
 
 export const mock: Api = {
   ...mockProjectArchives("workspace"),
@@ -695,6 +753,22 @@ export const mock: Api = {
           "the project does not deploy from a git repository: auto-deploy follows a git branch",
         );
       git.autoDeploy = body.autoDeploy;
+    }
+    if (body.watchPaths !== undefined || body.waitForChecks !== undefined) {
+      const git = p.spec.source?.git;
+      if (!git)
+        throw new ApiError(
+          400,
+          "the project does not deploy from a git repository: watch paths and wait for CI follow a git branch",
+        );
+      if (body.watchPaths !== undefined) {
+        const paths = body.watchPaths.map((l) => l.trim()).filter(Boolean);
+        const bad = watchPathsError(paths);
+        if (bad) throw new ApiError(422, bad);
+        git.watchPaths = paths.length ? paths : undefined;
+      }
+      if (body.waitForChecks !== undefined)
+        git.waitForChecks = body.waitForChecks || undefined;
     }
     return projectsOf.set(p);
   },

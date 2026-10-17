@@ -291,7 +291,11 @@ type Server struct {
 	// The GitHub App (RFC-0054): its credentials, read from its Secret;
 	// the connect states and finish tickets used; each workspace's
 	// repositories, a minute; and the App webhook's own limiter (Task 5).
-	githubApp        *github.Source
+	githubApp *github.Source
+	// githubCover keeps GitHub's answers on whether the App covers a
+	// repository, for the projects' views.
+	githubCoverMu    sync.Mutex
+	githubCover      *controller.GitHubApp
 	githubNonces     *nonceSet
 	githubTickets    *nonceSet
 	githubRepos      *githubRepoCache

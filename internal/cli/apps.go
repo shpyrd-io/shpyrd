@@ -451,6 +451,18 @@ func printAppInfo(out io.Writer, app *shpyrdv1.App) {
 		if app.Spec.Source.SubPath != "" {
 			fmt.Fprintf(out, "Path:       %s\n", app.Spec.Source.SubPath)
 		}
+		if st := app.Status.Source; st != nil {
+			switch {
+			case st.Held != "" && st.Held == st.Latest:
+				since := ""
+				if st.HeldSince != nil {
+					since = " (since " + age(*st.HeldSince) + ")"
+				}
+				fmt.Fprintf(out, "Commit:     %s waits for CI%s\n", st.Held[:min(7, len(st.Held))], since)
+			case st.NotDeployed != "" && st.NotDeployed == st.Latest && st.NotDeployed != st.Commit:
+				fmt.Fprintf(out, "Commit:     %s not deployed: %s\n", st.NotDeployed[:min(7, len(st.NotDeployed))], lowerFirst(st.NotDeployedReason))
+			}
+		}
 	}
 	if len(app.Status.ProcessTypes) > 0 {
 		types := strings.Join(app.Status.ProcessTypes, ", ")
@@ -570,6 +582,15 @@ func newAppsDestroyCmd(g *globalFlags) *cobra.Command {
 func short(s string) string {
 	if len(s) > 12 {
 		return s[:12]
+	}
+	return s
+}
+
+// lowerFirst lowercases the first letter of a sentence that follows a
+// colon ("No changes in ..."), but not an acronym ("CI failed: test").
+func lowerFirst(s string) string {
+	if len(s) > 1 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'a' && s[1] <= 'z' {
+		return strings.ToLower(s[:1]) + s[1:]
 	}
 	return s
 }
