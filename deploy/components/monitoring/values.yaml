@@ -272,12 +272,14 @@ additionalPrometheusRulesMap:
       - name: shpyrd-storage
         rules:
           # The database's WAL archive is what makes its backups recoverable
-          # to a point in time. A quiet database still archives a segment
-          # every few minutes, so none for 30 minutes means archiving broke.
+          # to a point in time. A segment the database finished sits in its
+          # archive queue until the archiver ships it: one waiting for 30
+          # minutes means archiving broke. (Time since the last archive says
+          # nothing: an idle database writes no WAL and has nothing to ship.)
           - alert: DatabaseWALArchiveStale
             expr: |
-              cnpg_pg_stat_archiver_seconds_since_last_archival > 1800
-            for: 10m
+              max by (namespace, cluster) (cnpg_collector_pg_wal_archive_status{value="ready"}) > 0
+            for: 30m
             labels:
               severity: critical
               shpyrd_component: postgres
@@ -289,9 +291,13 @@ additionalPrometheusRulesMap:
                 backups cannot restore past the last archived segment. The
                 database's page in the console shows the archive's last error;
                 the object storage behind it is the usual cause.
-          # The last archive attempt failed and nothing succeeded since.
+          # The last archive attempt failed and nothing succeeded since. A
+          # database that never failed reports -1 for the time since its last
+          # failure, which is not a failure a moment ago.
           - alert: DatabaseWALArchiveFailing
             expr: |
+              cnpg_pg_stat_archiver_seconds_since_last_failure >= 0
+              and
               cnpg_pg_stat_archiver_seconds_since_last_failure < cnpg_pg_stat_archiver_seconds_since_last_archival
             for: 15m
             labels:
