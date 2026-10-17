@@ -14,12 +14,12 @@ import (
 )
 
 // The test servers listen on 127.0.0.1, which production refuses.
-func init() { allowLoopbackForTests = true }
+func init() { allowLoopbackForTests.Store(true) }
 
 func refuseLoopback(t *testing.T) {
 	t.Helper()
-	allowLoopbackForTests = false
-	t.Cleanup(func() { allowLoopbackForTests = true })
+	allowLoopbackForTests.Store(false)
+	t.Cleanup(func() { allowLoopbackForTests.Store(true) })
 }
 
 func TestRefusedAddresses(t *testing.T) {

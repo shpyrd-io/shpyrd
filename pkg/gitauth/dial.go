@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -27,7 +28,7 @@ func (e *addressRefused) Is(target error) bool { return target == ErrRefusedAddr
 
 // allowLoopbackForTests lets the package's tests reach their servers on
 // 127.0.0.1. Only a _test.go file sets it.
-var allowLoopbackForTests bool
+var allowLoopbackForTests atomic.Bool
 
 var metadataV6 = net.ParseIP("fd00:ec2::254")
 
@@ -41,7 +42,7 @@ func refusedIP(ip net.IP) bool {
 	}
 	switch {
 	case ip.IsLoopback():
-		return !allowLoopbackForTests
+		return !allowLoopbackForTests.Load()
 	case ip.IsUnspecified(), ip.IsLinkLocalUnicast(), ip.Equal(metadataV6):
 		return true
 	}
