@@ -316,10 +316,30 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 }
 
 // rolledBack says the App rolls out, or runs, a release it was rolled
-// back to: the rollback is asked for, or its image is pinned. No build of
-// the pinned commit is under way then.
+// back to: the rollback is asked for, or its image is pinned to the image
+// of an earlier release. No build of the pinned commit is under way then.
 func rolledBack(app *shpyrdv1.App) bool {
-	return app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" || (app.HasSource() && app.Spec.Image != "")
+	if app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" {
+		return true
+	}
+	if !app.HasSource() || app.Spec.Image == "" {
+		return false
+	}
+	rels := app.Status.Releases
+	for i := range rels {
+		// The newest release is the pinned image's own; an earlier one
+		// with it is what was rolled back to.
+		if rels[i].Image == app.Spec.Image && i < len(rels)-1 {
+			return true
+		}
+	}
+	return false
+}
+
+// deployedByImage says a git App runs an image given to it, not one
+// rolled back to: no commit of the repository is deployed.
+func deployedByImage(app *shpyrdv1.App) bool {
+	return app.HasSource() && app.Spec.Image != "" && !rolledBack(app)
 }
 
 // failedInBuild says the App failed in its build: its message is then the
@@ -523,18 +543,28 @@ var commitSource = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 // deployWant is the Deployment of the newest release that changed the
 // code: the release, the commit, and the state of its rollout ("" says
-// nothing new: a build of the next commit, or a build that failed).
+// nothing new: a build of the next commit, or a build that failed). config
+// says a release of config or sizes rolls out on top of it: it never
+// changes a finished state.
 type deployWant struct {
 	release     int
 	ref         string
 	description string
 	state       string
+	config      bool
 }
 
 // wantDeployment is the Deployment the App's history calls for; false
-// when its newest code is not a commit. A rollback is a release of other
-// code, so it has its own; a release of config or sizes has none.
+// when its newest code is not a commit, or the App runs an image given to
+// it. A rollback is a release of other code, so it has its own; a release
+// of config or sizes has none. A Deployment's states are only ever its
+// own release's: while a newer release is still to come (a rollback asked
+// for, a build that failed, the pinned commit not yet released), nothing
+// new is said.
 func wantDeployment(app *shpyrdv1.App) (deployWant, bool) {
+	if deployedByImage(app) {
+		return deployWant{}, false
+	}
 	rels := app.Status.Releases
 	for i := len(rels) - 1; i >= 0; i-- {
 		if i > 0 && rels[i].Source == rels[i-1].Source {
@@ -543,20 +573,48 @@ func wantDeployment(app *shpyrdv1.App) (deployWant, bool) {
 		if !commitSource.MatchString(rels[i].Source) {
 			return deployWant{}, false
 		}
-		w := deployWant{release: rels[i].Number, ref: fullCommitOf(app, rels[i].Source), description: firstLine(rels[i].Description)}
+		w := deployWant{release: rels[i].Number, ref: fullCommitOf(app, rels[i].Source), description: firstLine(rels[i].Description), config: i < len(rels)-1}
+		if newerToCome(app, rels, i) {
+			return w, true
+		}
 		switch app.Status.Phase {
 		case shpyrdv1.PhaseDeploying:
-			w.state = "in_progress"
+			if !w.config {
+				w.state = "in_progress"
+			}
 		case shpyrdv1.PhaseRunning:
 			w.state = "success"
 		case shpyrdv1.PhaseFailed:
-			if !meta.IsStatusConditionFalse(app.Status.Conditions, shpyrdv1.ConditionBuilt) {
-				w.state = "failure"
+			// A release of config or sizes that fails leaves the code
+			// running: it finishes an unfinished Deployment as a success.
+			w.state = "failure"
+			if w.config {
+				w.state = "success"
 			}
 		}
 		return w, true
 	}
 	return deployWant{}, false
+}
+
+// newerToCome says a release newer than rels[i] is under way and has no
+// Deployment yet: a rollback asked for, a build that failed, or a pinned
+// commit not yet released (rels[i] neither runs it nor is a rollback to
+// older code).
+func newerToCome(app *shpyrdv1.App, rels []shpyrdv1.Release, i int) bool {
+	if app.Annotations[shpyrdv1.AnnotationRollbackTo] != "" || meta.IsStatusConditionFalse(app.Status.Conditions, shpyrdv1.ConditionBuilt) {
+		return true
+	}
+	pin := app.PinnedCommit()
+	if pin == "" || releaseIs(&rels[i], pin) {
+		return false
+	}
+	for j := range i {
+		if rels[j].Source == rels[i].Source {
+			return false // a rollback to older code
+		}
+	}
+	return true
 }
 
 // fullCommitOf is the full SHA a release's 12 characters name, when the
@@ -576,6 +634,13 @@ func fullCommitOf(app *shpyrdv1.App, src string) string {
 // rolling out after it does not take it back to in progress.
 func deploymentDone(state string) bool { return state == "success" || state == "failure" }
 
+// settled says the Deployment's state have needs no new status: it is the
+// one wanted, or final while the rollout is only starting or is a release
+// of config or sizes.
+func (w deployWant) settled(have string) bool {
+	return w.state == have || (deploymentDone(have) && (w.state == "in_progress" || w.config))
+}
+
 // reportDeployment makes the newest code release's Deployment, once, and
 // moves its state on. One deleted on GitHub (404) is made again. rep
 // changes only by what GitHub accepted.
@@ -589,14 +654,14 @@ func (r *GitHubReporter) reportDeployment(ctx context.Context, app *shpyrdv1.App
 			return err
 		}
 	}
-	if want.state == "" || want.state == rep.DeploymentState || (want.state == "in_progress" && deploymentDone(rep.DeploymentState)) {
+	if want.state == "" || want.settled(rep.DeploymentState) {
 		return nil
 	}
 	cl := ref.client
 	err := cl.CreateDeploymentStatus(ctx, ref.installation, ref.owner, ref.name, rep.Deployment, r.deploymentStatus(app, want.state))
 	if github.IsNotFound(err) {
 		if err = r.newDeployment(ctx, app, ref, want, rep); err == nil {
-			if want.state == rep.DeploymentState || (want.state == "in_progress" && deploymentDone(rep.DeploymentState)) {
+			if want.settled(rep.DeploymentState) {
 				return nil // found, already there
 			}
 			err = cl.CreateDeploymentStatus(ctx, ref.installation, ref.owner, ref.name, rep.Deployment, r.deploymentStatus(app, want.state))

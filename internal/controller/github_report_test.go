@@ -924,6 +924,7 @@ func TestAHeldCommitNoLongerWaitedForIsClosedWithWhy(t *testing.T) {
 func TestAFailedRollbackNeverFailsThePinsCheck(t *testing.T) {
 	v1, v2 := release(1, otherCommit, "Push 89abcde by alice: before"), release(2, thirdCommit, "Push fedcba9 by alice: later")
 	back := release(3, otherCommit, "Rollback to v1")
+	back.Image = v1.Image
 	for name, tc := range map[string]struct {
 		rels     []shpyrdv1.Release
 		annotate bool
@@ -944,5 +945,64 @@ func TestAFailedRollbackNeverFailsThePinsCheck(t *testing.T) {
 				t.Errorf("the pin's check: %+v", runs)
 			}
 		})
+	}
+}
+
+// Ruling on concern 3: a release of config or sizes that fails never
+// changes the code release's finished Deployment, as with the check.
+func TestAFailedConfigReleaseLeavesTheDeployment(t *testing.T) {
+	code := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, code)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Message, st.Releases = shpyrdv1.PhaseFailed, "web: CrashLoopBackOff", []shpyrdv1.Release{code, release(2, testCommit, "Set LOG_LEVEL")}
+	})
+	_, got := reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" || reportOf(got).DeploymentState != "success" {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+}
+
+// Ruling on concern 4: a newer release that fails before it has its own
+// Deployment (here a rollback still pending) never touches an older one.
+func TestAPendingRollbackThatFailsLeavesThePreviousDeployment(t *testing.T) {
+	v1, v2 := release(1, testCommit, "Push 0123456 by alice: before"), release(2, otherCommit, "Push 89abcde by alice: fix login")
+	app := shopAt(otherCommit, shpyrdv1.PhaseRunning, v1, v2)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		a.Spec.Image = v1.Image
+		a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+	})
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase, st.Message = shpyrdv1.PhaseFailed, "web: CrashLoopBackOff" })
+	_, got := reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" || reportOf(got).Release != 2 {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+	if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Conclusion != "success" {
+		t.Errorf("the pin's check: %+v", runs)
+	}
+}
+
+// Ruling on concern 5: a git App deployed by image gets no Deployment,
+// and is no rollback.
+func TestAGitAppDeployedByImageGetsNoDeployment(t *testing.T) {
+	code := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, code)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	byImage := release(2, otherCommit, "Deploy")
+	byImage.Image = "registry.example.test/shop:2"
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) { a.Spec.Image = byImage.Image })
+	for _, phase := range []string{shpyrdv1.PhaseDeploying, shpyrdv1.PhaseFailed, shpyrdv1.PhaseRunning} {
+		setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase, st.Releases = phase, []shpyrdv1.Release{code, byImage} })
+		_, got := reconcileReport(t, r, app)
+		if d := fake.Deployments(); len(d) != 1 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" {
+			t.Errorf("%s: %+v", phase, d)
+		}
+		if rolledBack(got) {
+			t.Errorf("%s: a deploy by image is taken for a rollback", phase)
+		}
 	}
 }
