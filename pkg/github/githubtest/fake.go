@@ -108,6 +108,9 @@ type Server struct {
 	deployments    []Deployment
 	nextID         int64
 	writes         []Write
+	totals         map[string]int  // reported total_count by kind and commit
+	refused        map[string]bool // permissions a token request is refused for
+	compareQuery   string
 }
 
 // tokenGrant is an installation token: its installation, the repositories
@@ -134,6 +137,8 @@ func NewServer(t testing.TB) *Server {
 		compares: map[string]Compare{},
 		runs:     map[string][]CheckRun{},
 		statuses: map[string][]Status{},
+		totals:   map[string]int{},
+		refused:  map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Close)
@@ -327,6 +332,12 @@ func (f *Server) accessToken(w http.ResponseWriter, r *http.Request, id string) 
 	_ = json.Unmarshal(raw, &body)
 	f.lastBody = map[string]any{}
 	_ = json.Unmarshal(raw, &f.lastBody)
+	for perm := range body.Permissions {
+		if f.refused[perm] {
+			reply(w, http.StatusUnprocessableEntity, map[string]string{"message": "The permissions requested are not granted to this installation."})
+			return
+		}
+	}
 	for _, name := range body.Repositories {
 		if !grants(repos, name) {
 			reply(w, http.StatusUnprocessableEntity, map[string]string{"message": "There is at least one repository that does not exist or is not accessible to the parent installation."})

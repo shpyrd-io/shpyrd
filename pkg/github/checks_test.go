@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,11 +15,11 @@ import (
 func TestEachScopeHasItsOwnToken(t *testing.T) {
 	c, fake := newClient(t)
 	ctx := context.Background()
-	clone, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead)
+	clone, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead())
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := c.InstallationToken(ctx, 42, "shop", github.ReportWrite)
+	report, err := c.InstallationToken(ctx, 42, "shop", github.ReportWrite())
 	if err != nil || report.Value == clone.Value || fake.MintedFor(42) != 2 {
 		t.Fatalf("report token %+v, %v; minted %d", report, err, fake.MintedFor(42))
 	}
@@ -28,7 +29,7 @@ func TestEachScopeHasItsOwnToken(t *testing.T) {
 	if again, _ := c.InstallationToken(ctx, 42, "shop", github.Permissions{"contents": "read"}); again.Value != clone.Value || fake.MintedFor(42) != 2 {
 		t.Errorf("the clone scope keeps its own token: %+v", again)
 	}
-	if _, ok := c.CachedInstallationToken(42, "shop", github.WatchRead); ok {
+	if _, ok := c.CachedInstallationToken(42, "shop", github.WatchRead()); ok {
 		t.Error("no watch token was asked for")
 	}
 }
@@ -42,7 +43,10 @@ func TestACompareListsARenamedFileUnderBothNames(t *testing.T) {
 	if err != nil || got.Status != "ahead" || got.Capped || strings.Join(got.Files, ",") != "services/api/main.go,web/new.ts,web/old.ts" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if body := fake.LastTokenRequest(); fmt.Sprint(body["permissions"]) != "map[checks:read contents:read statuses:read]" {
+	if q := fake.LastCompareQuery(); q != "per_page=1" {
+		t.Errorf("a compare must stay small: %q", q)
+	}
+	if body := fake.LastTokenRequest(); fmt.Sprint(body["permissions"]) != "map[checks:read contents:read statuses:read]" || fmt.Sprint(body["repositories"]) != "[shop]" {
 		t.Errorf("the watcher's scope: %v", body)
 	}
 }
@@ -86,7 +90,7 @@ func TestTheChecksAndStatusesOfACommitAreRead(t *testing.T) {
 func TestACheckRunIsWrittenWithTheReportTokenAndUpdated(t *testing.T) {
 	c, fake := newClient(t)
 	ctx := context.Background()
-	if _, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead); err != nil {
+	if _, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead()); err != nil {
 		t.Fatal(err)
 	}
 	id, err := c.CreateCheckRun(ctx, 42, "acme", "shop", github.CheckRunWrite{Name: "shpyrd / shop", HeadSHA: "bbb222", Status: "in_progress",
@@ -143,7 +147,7 @@ func TestAWriteWithTheCloneTokenIsRefusedAndRecorded(t *testing.T) {
 	// the attempt, so the controller's tests can say none happens.
 	c, fake := newClient(t)
 	ctx := context.Background()
-	tok, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead)
+	tok, err := c.InstallationToken(ctx, 42, "shop", github.ContentsRead())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +155,75 @@ func TestAWriteWithTheCloneTokenIsRefusedAndRecorded(t *testing.T) {
 	writes := fake.Writes()
 	if status != 403 || len(writes) != 1 || fmt.Sprint(writes[0].Permissions) != "map[contents:read]" {
 		t.Errorf("status %d, writes %+v", status, writes)
+	}
+}
+
+func TestACompareOfTwoHundredNinetyNineFilesIsNotCapped(t *testing.T) {
+	c, fake := newClient(t)
+	var files []githubtest.File
+	for i := range 299 {
+		files = append(files, githubtest.File{Name: fmt.Sprintf("f%03d.txt", i)})
+	}
+	fake.SetCompare("Acme/shop", "aaa111", "bbb222", githubtest.Compare{Status: "ahead", Files: files})
+	got, err := c.Compare(context.Background(), 42, "acme", "shop", "aaa111", "bbb222")
+	if err != nil || got.Capped || len(got.Files) != 299 {
+		t.Errorf("%d files, capped %v, %v", len(got.Files), got.Capped, err)
+	}
+}
+
+func TestMoreThanAHundredCheckRunsAreAllRead(t *testing.T) {
+	c, fake := newClient(t)
+	var runs []githubtest.CheckRun
+	for i := range 150 {
+		runs = append(runs, githubtest.CheckRun{Name: fmt.Sprintf("job-%03d", i), Status: "completed", Conclusion: "success"})
+	}
+	fake.SetCheckRuns("bbb222", runs...)
+	got, err := c.CheckRuns(context.Background(), 42, "acme", "shop", "bbb222")
+	if err != nil || len(got) != 150 || got[149].Name != "job-149" {
+		t.Errorf("%d runs, %v", len(got), err)
+	}
+}
+
+func TestAListingGitHubHasMoreOfThanShpyrdReadsIsAnError(t *testing.T) {
+	// A failing run beyond what was read must never read as "passed".
+	c, fake := newClient(t)
+	ctx := context.Background()
+	fake.SetCheckRuns("bbb222", githubtest.CheckRun{Name: "test", Status: "completed", Conclusion: "success"})
+	fake.SetCheckRunsTotal("bbb222", 1500)
+	if _, err := c.CheckRuns(ctx, 42, "acme", "shop", "bbb222"); !errors.Is(err, github.ErrTooManyChecks) {
+		t.Errorf("check runs: %v", err)
+	}
+	fake.SetStatuses("bbb222", githubtest.Status{Context: "ci", State: "success"})
+	fake.SetStatusesTotal("bbb222", 1500)
+	if _, err := c.CommitStatuses(ctx, 42, "acme", "shop", "bbb222"); !errors.Is(err, github.ErrTooManyChecks) {
+		t.Errorf("statuses: %v", err)
+	}
+}
+
+func TestTheScopesAreFreshMapsEachTime(t *testing.T) {
+	github.ContentsRead()["checks"] = "write"
+	if got := fmt.Sprint(github.ContentsRead()); got != "map[contents:read]" {
+		t.Errorf("a caller widened the clone scope: %s", got)
+	}
+	github.WatchRead()["contents"] = "write"
+	github.ReportWrite()["contents"] = "write"
+	if fmt.Sprint(github.WatchRead()) != "map[checks:read contents:read statuses:read]" || fmt.Sprint(github.ReportWrite()) != "map[checks:write deployments:write]" {
+		t.Error("the shared scopes changed")
+	}
+}
+
+func TestAnUnapprovedPermissionIsNotAMissingRepository(t *testing.T) {
+	c, fake := newClient(t)
+	ctx := context.Background()
+	fake.RefusePermission("checks")
+	if _, err := c.CheckRuns(ctx, 42, "acme", "shop", "bbb222"); !errors.Is(err, github.ErrPermissionsNotGranted) || errors.Is(err, github.ErrRepoNotGranted) {
+		t.Errorf("a scope with checks: %v", err)
+	}
+	if !strings.Contains(github.ErrPermissionsNotGranted.Error(), "accept the App's updated permissions on GitHub") {
+		t.Errorf("the message: %v", github.ErrPermissionsNotGranted)
+	}
+	if _, err := c.InstallationToken(ctx, 42, "vault", github.ContentsRead()); !errors.Is(err, github.ErrRepoNotGranted) || errors.Is(err, github.ErrPermissionsNotGranted) {
+		t.Errorf("the clone scope keeps its mapping: %v", err)
 	}
 }
 

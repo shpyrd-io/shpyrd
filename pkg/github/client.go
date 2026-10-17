@@ -67,20 +67,26 @@ type tokenKey struct {
 }
 
 // Permissions are what an installation token may do, as GitHub names
-// them. The values below are shared: never change them.
+// them.
 type Permissions map[string]string
 
 // The scopes shpyrd asks for (RFC-0054). Each has its own tokens, so a
 // build's clone token is never widened.
-var (
-	// ContentsRead clones, lists branches and repositories.
-	ContentsRead = Permissions{"contents": "read"}
-	// WatchRead compares commits and reads their checks and statuses: the
-	// source watcher.
-	WatchRead = Permissions{"contents": "read", "checks": "read", "statuses": "read"}
-	// ReportWrite writes check runs and Deployments: the reporter.
-	ReportWrite = Permissions{"checks": "write", "deployments": "write"}
-)
+//
+// They are functions: a map handed out is the caller's to change, and one
+// shared map written into would widen every clone token.
+
+// ContentsRead clones, lists branches and repositories.
+func ContentsRead() Permissions { return Permissions{"contents": "read"} }
+
+// WatchRead compares commits and reads their checks and statuses: the
+// source watcher.
+func WatchRead() Permissions {
+	return Permissions{"contents": "read", "checks": "read", "statuses": "read"}
+}
+
+// ReportWrite writes check runs and Deployments: the reporter.
+func ReportWrite() Permissions { return Permissions{"checks": "write", "deployments": "write"} }
 
 // key is the scope as a cache key: "checks=read,contents=read".
 func (p Permissions) key() string {
@@ -185,7 +191,7 @@ func (c *Client) AppJWT() (string, error) {
 // installation GitHub no longer knows is ErrInstallationGone.
 func (c *Client) InstallationToken(ctx context.Context, installation int64, repo string, perms Permissions) (Token, error) {
 	if len(perms) == 0 {
-		perms = ContentsRead
+		perms = ContentsRead()
 	}
 	key := tokenKey{installation, strings.ToLower(repo), perms.key()}
 	c.mu.Lock()
@@ -213,8 +219,12 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 		switch {
 		case apiErr.Status == http.StatusNotFound:
 			return Token{}, fmt.Errorf("%w: %w", ErrInstallationGone, apiErr)
-		case apiErr.Status == http.StatusUnprocessableEntity && repo != "":
+		case apiErr.Status == http.StatusUnprocessableEntity && repo != "" && perms.key() == ContentsRead().key():
 			return Token{}, ErrRepoNotGranted
+		case apiErr.Status == http.StatusUnprocessableEntity:
+			// Beyond the clone scope, 422 is the permissions the
+			// installation has not approved.
+			return Token{}, ErrPermissionsNotGranted
 		}
 	}
 	if err != nil {
@@ -236,7 +246,7 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 // the scope without calling GitHub: one kept and not yet due for renewal.
 func (c *Client) CachedInstallationToken(installation int64, repo string, perms Permissions) (Token, bool) {
 	if len(perms) == 0 {
-		perms = ContentsRead
+		perms = ContentsRead()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -249,7 +259,7 @@ func (c *Client) CachedInstallationToken(installation int64, repo string, perms 
 
 // Repositories pages through everything the installation grants.
 func (c *Client) Repositories(ctx context.Context, installation int64) ([]Repository, error) {
-	tok, err := c.InstallationToken(ctx, installation, "", ContentsRead)
+	tok, err := c.InstallationToken(ctx, installation, "", ContentsRead())
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +288,7 @@ func (c *Client) Repositories(ctx context.Context, installation int64) ([]Reposi
 
 // Branches are a repository's branch names, as GitHub orders them.
 func (c *Client) Branches(ctx context.Context, installation int64, owner, repo string) ([]string, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, ContentsRead)
+	tok, err := c.InstallationToken(ctx, installation, repo, ContentsRead())
 	if err != nil {
 		return nil, err
 	}

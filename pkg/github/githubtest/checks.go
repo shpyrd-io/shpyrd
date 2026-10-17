@@ -145,6 +145,43 @@ func (f *Server) Writes() []Write {
 	return append([]Write(nil), f.writes...)
 }
 
+// SetCheckRunsTotal makes the check-runs listing of sha report a total_count
+// above what it serves, as GitHub does for a commit with more runs.
+func (f *Server) SetCheckRunsTotal(sha string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.totals["runs "+strings.ToLower(sha)] = n
+}
+
+// SetStatusesTotal is SetCheckRunsTotal for the commit status listing.
+func (f *Server) SetStatusesTotal(sha string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.totals["statuses "+strings.ToLower(sha)] = n
+}
+
+// RefusePermission makes token requests that ask for the permission answer
+// 422, as GitHub does while the installation has not approved it.
+func (f *Server) RefusePermission(perm string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refused[perm] = true
+}
+
+// LastCompareQuery is the query string of the last compare.
+func (f *Server) LastCompareQuery() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.compareQuery
+}
+
+func (f *Server) total(kind, sha string, n int) int {
+	if t, ok := f.totals[kind+" "+strings.ToLower(sha)]; ok {
+		return t
+	}
+	return n
+}
+
 // may says the token has the permission at the level (write covers read).
 func may(g tokenGrant, perm, level string) bool {
 	v := g.perms[perm]
@@ -220,6 +257,7 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 		if !need("contents", "read") {
 			return
 		}
+		f.compareQuery = r.URL.RawQuery
 		base, head, _ := strings.Cut(seg[1], "...")
 		c, ok := f.compares[compareKey(fullName, base, head)]
 		if !ok {
@@ -248,7 +286,7 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 			}
 			out = append(out, map[string]any{"id": run.ID, "name": run.Name, "status": run.Status, "conclusion": conclusion, "app": map[string]any{"id": run.AppID}})
 		}
-		reply(w, http.StatusOK, map[string]any{"total_count": len(runs), "check_runs": out})
+		reply(w, http.StatusOK, map[string]any{"total_count": f.total("runs", seg[1], len(runs)), "check_runs": out})
 	case r.Method == "GET" && len(seg) == 3 && seg[0] == "commits" && seg[2] == "status":
 		if !need("statuses", "read") {
 			return
@@ -270,7 +308,7 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 		for _, s := range pageOf(all, r) {
 			out = append(out, map[string]string{"context": s.Context, "state": s.State})
 		}
-		reply(w, http.StatusOK, map[string]any{"state": state, "total_count": len(all), "statuses": out})
+		reply(w, http.StatusOK, map[string]any{"state": state, "total_count": f.total("statuses", seg[1], len(all)), "statuses": out})
 	case r.Method == "POST" && rest == "check-runs":
 		if !need("checks", "write") {
 			return

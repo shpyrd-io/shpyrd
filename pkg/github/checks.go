@@ -16,6 +16,10 @@ import (
 // maxCompareFiles is how many files GitHub's compare lists at most.
 const maxCompareFiles = 300
 
+// ErrTooManyChecks: a commit has more check runs or statuses than shpyrd
+// reads. A partial list could hide a failure, so it is never used.
+var ErrTooManyChecks = errors.New("more checks than shpyrd reads")
+
 // IsNotFound says GitHub answered 404: a check run or Deployment deleted
 // on GitHub, or a commit it does not know.
 func IsNotFound(err error) bool {
@@ -39,7 +43,7 @@ type Comparison struct {
 
 // Compare compares base with head (base...head).
 func (c *Client) Compare(ctx context.Context, installation int64, owner, repo, base, head string) (Comparison, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead)
+	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead())
 	if err != nil {
 		return Comparison{}, err
 	}
@@ -50,7 +54,7 @@ func (c *Client) Compare(ctx context.Context, installation int64, owner, repo, b
 			Previous string `json:"previous_filename"`
 		} `json:"files"`
 	}
-	if err := c.call(ctx, "GET", c.repoURL(owner, repo, "compare/"+url.PathEscape(base)+"..."+url.PathEscape(head)), tok.Value, nil, &res); err != nil {
+	if err := c.call(ctx, "GET", c.repoURL(owner, repo, "compare/"+url.PathEscape(base)+"..."+url.PathEscape(head)+"?per_page=1"), tok.Value, nil, &res); err != nil {
 		return Comparison{}, err
 	}
 	out := Comparison{Status: res.Status, Capped: len(res.Files) >= maxCompareFiles}
@@ -65,11 +69,12 @@ func (c *Client) Compare(ctx context.Context, installation int64, owner, repo, b
 
 // CheckRuns are the check runs on a commit, every App's.
 func (c *Client) CheckRuns(ctx context.Context, installation int64, owner, repo, sha string) ([]CheckRun, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead)
+	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead())
 	if err != nil {
 		return nil, err
 	}
 	out := []CheckRun{}
+	total := 0
 	for page := 1; page <= 10; page++ {
 		var res struct {
 			Total int `json:"total_count"`
@@ -87,12 +92,16 @@ func (c *Client) CheckRuns(ctx context.Context, installation int64, owner, repo,
 		if err := c.call(ctx, "GET", endpoint, tok.Value, nil, &res); err != nil {
 			return nil, err
 		}
+		total = res.Total
 		for _, r := range res.Runs {
 			out = append(out, CheckRun{ID: r.ID, Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, AppID: r.App.ID})
 		}
 		if len(res.Runs) == 0 || len(out) >= res.Total {
 			break
 		}
+	}
+	if len(out) < total {
+		return nil, ErrTooManyChecks
 	}
 	return out, nil
 }
@@ -101,11 +110,12 @@ func (c *Client) CheckRuns(ctx context.Context, installation int64, owner, repo,
 // come from the individual statuses, never the combined state, which reads
 // pending when there are none.
 func (c *Client) CommitStatuses(ctx context.Context, installation int64, owner, repo, sha string) ([]CommitStatus, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead)
+	tok, err := c.InstallationToken(ctx, installation, repo, WatchRead())
 	if err != nil {
 		return nil, err
 	}
 	out := []CommitStatus{}
+	total := 0
 	for page := 1; page <= 10; page++ {
 		var res struct {
 			Total    int `json:"total_count"`
@@ -118,12 +128,16 @@ func (c *Client) CommitStatuses(ctx context.Context, installation int64, owner, 
 		if err := c.call(ctx, "GET", endpoint, tok.Value, nil, &res); err != nil {
 			return nil, err
 		}
+		total = res.Total
 		for _, s := range res.Statuses {
 			out = append(out, CommitStatus{Context: s.Context, State: s.State})
 		}
 		if len(res.Statuses) == 0 || len(out) >= res.Total {
 			break
 		}
+	}
+	if len(out) < total {
+		return nil, ErrTooManyChecks
 	}
 	return out, nil
 }
@@ -163,7 +177,7 @@ func (w CheckRunWrite) body(create bool) map[string]any {
 
 // CreateCheckRun makes a check run on w.HeadSHA and gives its id.
 func (c *Client) CreateCheckRun(ctx context.Context, installation int64, owner, repo string, w CheckRunWrite) (int64, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite)
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
 	if err != nil {
 		return 0, err
 	}
@@ -181,7 +195,7 @@ func (c *Client) CreateCheckRun(ctx context.Context, installation int64, owner, 
 
 // UpdateCheckRun changes a check run; a deleted one is IsNotFound.
 func (c *Client) UpdateCheckRun(ctx context.Context, installation int64, owner, repo string, id int64, w CheckRunWrite) error {
-	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite)
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
 	if err != nil {
 		return err
 	}
@@ -196,7 +210,7 @@ type DeploymentWrite struct {
 
 // CreateDeployment makes a Deployment of d.Ref and gives its id.
 func (c *Client) CreateDeployment(ctx context.Context, installation int64, owner, repo string, d DeploymentWrite) (int64, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite)
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
 	if err != nil {
 		return 0, err
 	}
@@ -224,7 +238,7 @@ type DeploymentStatusWrite struct {
 // CreateDeploymentStatus adds a status to a Deployment; a deleted one is
 // IsNotFound.
 func (c *Client) CreateDeploymentStatus(ctx context.Context, installation int64, owner, repo string, id int64, s DeploymentStatusWrite) error {
-	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite)
+	tok, err := c.InstallationToken(ctx, installation, repo, ReportWrite())
 	if err != nil {
 		return err
 	}
