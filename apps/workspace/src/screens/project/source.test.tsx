@@ -219,3 +219,33 @@ it("lets only those who may change the project change the two settings", () => {
   expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "Save watch paths" })).toBeNull();
 });
+
+it("shows the saved watch paths again when they change under it", () => {
+  const source = { commit, latest: commit, checkedAt: minutesAgo(1) };
+  const view = show(projectWith({ ...repo, watchPaths: ["a/**"] }, source));
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).value).toBe("a/**");
+  view.rerender(
+    <QueryClientProvider client={queries}>
+      <GitSource project={projectWith({ ...repo, watchPaths: ["b/**", "!c"] }, source)} perms={{ config: true } as Perms} />
+    </QueryClientProvider>,
+  );
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).value).toBe("b/**\n!c");
+});
+
+it("clears the refused pattern's message when the field is edited", async () => {
+  fake.updateProject.mockRejectedValue(new Error("in the watch path \"a**\", ** stands alone between slashes"));
+  show(projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) }));
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a**" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  expect(await screen.findByText(/stands alone between slashes/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a/**" } });
+  expect(screen.queryByText(/stands alone between slashes/)).toBeNull();
+});
+
+it("says nothing of a held or not-deployed commit that is not the latest, or that runs", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, held: commit, heldSince: minutesAgo(2), checkedAt: minutesAgo(1) }));
+  expect(screen.queryByText(/Waiting for CI/)).toBeNull();
+  cleanup();
+  show(projectWith(repo, { commit, latest: commit, notDeployed: commit, notDeployedReason: "CI failed: test", checkedAt: minutesAgo(1) }));
+  expect(screen.queryByText(/not deployed/)).toBeNull();
+});

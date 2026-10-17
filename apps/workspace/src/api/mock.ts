@@ -303,7 +303,26 @@ function watchPathsError(paths: string[]): string | undefined {
       return `the watch path ${JSON.stringify(p)} has an empty part (//)`;
     if (parts.some((s) => s !== "**" && s.includes("**")))
       return `in the watch path ${JSON.stringify(p)}, ** stands alone between slashes, as in services/**/api`;
+    if (parts.some(unreadable))
+      return `the watch path ${JSON.stringify(p)} is not a pattern shpyrd can read: check its [ ] and \\`;
   }
+}
+
+// A part path.Match refuses: a trailing \, an unclosed [ or an empty one.
+function unreadable(part: string): boolean {
+  for (let i = 0; i < part.length; i++) {
+    if (part[i] === "\\") {
+      if (++i >= part.length) return true;
+    } else if (part[i] === "[") {
+      let j = i + 1;
+      if (part[j] === "^") j++;
+      if (part[j] === "]" || part[j] === undefined) return true;
+      for (; j < part.length && part[j] !== "]"; j++) if (part[j] === "\\") j++;
+      if (j >= part.length) return true;
+      i = j;
+    }
+  }
+  return false;
 }
 
 export const mock: Api = {

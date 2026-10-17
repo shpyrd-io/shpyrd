@@ -74,6 +74,11 @@ describe("the api picks the Mock when asked to", () => {
     await expect(api.updateProject("hello-world", { watchPaths: ["é".repeat(201)] })).rejects.toThrow(/at most 200 characters/);
     await expect(api.updateProject("hello-world", { watchPaths: ["é".repeat(200)] })).resolves.toBeTruthy();
     await expect(api.updateProject("hello-world", { watchPaths: Array.from({ length: 21 }, (_, i) => `d${i}/**`) })).rejects.toThrow(/at most 20 watch paths; there are 21/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/[a"] })).rejects.toThrow(
+      'the watch path "src/[a" is not a pattern shpyrd can read: check its [ ] and \\',
+    );
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/a\\"] })).rejects.toThrow(/not a pattern shpyrd can read/);
+    await expect(api.updateProject("hello-world", { watchPaths: ["src/[ab]*"] })).resolves.toBeTruthy();
     await expect(api.updateProject("dash-tv", { waitForChecks: true })).rejects.toThrow(/git repository/);
   });
 

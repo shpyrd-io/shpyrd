@@ -119,7 +119,7 @@ export function GitSource({ project, perms }: { project: Project; perms: Perms }
           <AlertDescription>{source.error}</AlertDescription>
         </Alert>
       )}
-      <WatchPaths slug={project.slug} paths={git.watchPaths ?? []} allowed={perms.config} available={github} />
+      <WatchPaths key={(git.watchPaths ?? []).join("\n")} slug={project.slug} paths={git.watchPaths ?? []} allowed={perms.config} available={github} />
       <SourceAccess slug={project.slug} canConfig={perms.config} />
     </div>
   );
@@ -232,7 +232,10 @@ function WatchPaths({ slug, paths, allowed, available }: { slug: string; paths: 
       >
         <Textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setError(undefined);
+          }}
           placeholder={"services/api/**\n!**/*.md"}
           disabled={!editable || save.isPending}
           rows={3}
