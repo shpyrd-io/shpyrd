@@ -259,9 +259,9 @@ jobs:
           ./bin/shpyrd projects create "Hello World" --public --context kind-ci
           # Running from a prebuilt image (no build on this cluster): an app
           # with nothing to run renders no bindings, and the bucket step
-          # below attaches one.
-          ./bin/shpyrd env set WHOAMI_PORT_NUMBER=8080 --project hello-world --context kind-ci
-          ./bin/shpyrd deploy --image traefik/whoami:v1.11.0 --project hello-world --context kind-ci
+          # below attaches one. The image runs as a non-root user on 8080,
+          # as the platform requires.
+          ./bin/shpyrd deploy --image nginxinc/nginx-unprivileged:1.27-alpine --project hello-world --context kind-ci
           NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
           for i in $(seq 1 60); do
             kubectl --context kind-ci -n "$NS" get app hello-world -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running && break
