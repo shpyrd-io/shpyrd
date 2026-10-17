@@ -168,7 +168,11 @@ func (r *AppReconciler) secretToApps(ctx context.Context, obj client.Object) []r
 	inSystem := obj.GetNamespace() == r.Config.SystemNamespace
 	if inSystem && obj.GetName() == github.SecretName {
 		// The GitHub App made, changed or removed (shpyrd-ctl github app):
-		// every App on github.com may clone through it, or no longer.
+		// every App on github.com may clone through it, or no longer. The
+		// cached read goes first, so their reconciles see the new Secret.
+		if r.Config.GitHub != nil {
+			r.Config.GitHub.Source.Invalidate()
+		}
 		var apps shpyrdv1.AppList
 		if err := r.List(ctx, &apps); err != nil {
 			return nil

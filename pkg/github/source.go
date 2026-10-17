@@ -84,3 +84,15 @@ func (s *Source) Client(ctx context.Context) (*Client, error) {
 	s.client, s.version = c, sec.ResourceVersion
 	return c, nil
 }
+
+// Invalidate drops the last read, so the next Client reads the Secret
+// again: the Secret's own event says it changed, and the 30 s must not
+// hide that from the reconcile it queues.
+func (s *Source) Invalidate() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.checked = time.Time{}
+	s.mu.Unlock()
+}

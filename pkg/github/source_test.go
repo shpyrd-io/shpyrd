@@ -129,3 +129,32 @@ func TestABrokenSecretIsNotReadAgainWithinTheRecheck(t *testing.T) {
 		t.Errorf("after the recheck: %d reads, err %v", reads, err)
 	}
 }
+
+func TestInvalidateReadsTheSecretAgainAtOnce(t *testing.T) {
+	fake := githubtest.NewServer(t)
+	fake.SetNow(t0)
+	c := crfake.NewClientBuilder().WithObjects(fake.Secret("shpyrd-system")).Build()
+	src := fake.Source(c, "shpyrd-system")
+	ctx := context.Background()
+	first, err := src.Client(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := types.NamespacedName{Namespace: "shpyrd-system", Name: github.SecretName}
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, key, sec); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := src.Client(ctx); again != first {
+		t.Fatal("within 30 s the cached client stands")
+	}
+	src.Invalidate()
+	if _, err := src.Client(ctx); !errors.Is(err, github.ErrNotConfigured) {
+		t.Errorf("after Invalidate the deleted Secret is seen at once: %v", err)
+	}
+	var nilSource *github.Source
+	nilSource.Invalidate() // no panic
+}

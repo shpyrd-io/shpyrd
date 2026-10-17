@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -597,6 +598,28 @@ func TestTheGitHubAppsSecretMapsToTheAppsOnGitHub(t *testing.T) {
 		if req.Name == "shop" || req.Name == "beta-shop" {
 			t.Errorf("a Secret of that name in a project maps to %v", req)
 		}
+	}
+}
+
+func TestTheGitHubAppsSecretEventDropsTheCachedApp(t *testing.T) {
+	shop := gitApp("shop", "https://github.com/acme/shop")
+	r, c, _, _ := githubReconciler(t, shop)
+	ctx := context.Background()
+	if _, err := r.Config.GitHub.Source.Client(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: r.Config.SystemNamespace, Name: github.SecretName}, sec); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := r.secretToApps(ctx, sec); len(reqs) != 1 || reqs[0].Name != "shop" {
+		t.Fatalf("requeued %v", reqs)
+	}
+	if _, err := r.Config.GitHub.Source.Client(ctx); !errors.Is(err, github.ErrNotConfigured) {
+		t.Errorf("the requeued reconcile sees the deleted App at once: %v", err)
 	}
 }
 
