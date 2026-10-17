@@ -90,11 +90,13 @@ type ciKey struct {
 	repo, sha    string
 }
 
-// ciInputs is what GitHub said of a commit's checks, and when.
+// ciInputs is what GitHub said of a commit's checks, when, and for which
+// App.
 type ciInputs struct {
 	runs     []github.CheckRun
 	statuses []github.CommitStatus
 	at       time.Time
+	by       types.UID
 }
 
 func repoKey(ref githubRepoRef) string { return strings.ToLower(ref.owner + "/" + ref.name) }
@@ -302,14 +304,16 @@ const ciNoPermission = "no-permission"
 //
 // GitHub's answer is shared by the Apps on the repository for ciShareFor,
 // unless it is older than fresh (a nudge said the checks changed since);
-// each App judges it from its own since. A failure is not shared.
+// each App judges it from its own since, at the time it was read, so an
+// older read never turns into "no CI" later. A read that saw no check and
+// no status serves only the App that made it. A failure is not shared.
 //
 // read says GitHub answered.
 func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now, fresh time.Time) (_ github.CIVerdict, read bool) {
 	key := ciKey{ref.installation, repoKey(ref), sha}
 	appID := ref.client.App().ID
-	if in, ok := r.sharedCI(key, now); ok && !in.at.Before(fresh) {
-		return github.Verdict(in.runs, in.statuses, appID, since, now), true
+	if in, ok := r.sharedCI(key, now, uid); ok && !in.at.Before(fresh) {
+		return github.Verdict(in.runs, in.statuses, appID, since, in.at), true
 	}
 	if r.GitHub.backingOff(ref.installation) {
 		return github.Unanswered(since, now), false
@@ -318,7 +322,7 @@ func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref git
 	if err == nil {
 		var statuses []github.CommitStatus
 		if statuses, err = ref.client.CommitStatuses(ctx, ref.installation, ref.owner, ref.name, sha); err == nil {
-			r.shareCI(key, ciInputs{runs: runs, statuses: statuses, at: now})
+			r.shareCI(key, ciInputs{runs: runs, statuses: statuses, at: now}, uid)
 			return github.Verdict(runs, statuses, appID, since, now), true
 		}
 	}
@@ -378,20 +382,24 @@ func (r *SourceReconciler) keepCompare(key compareKey, c github.Comparison) {
 }
 
 // sharedCI is what GitHub said of the commit's checks less than ciShareFor
-// ago.
-func (r *SourceReconciler) sharedCI(key ciKey, now time.Time) (ciInputs, bool) {
+// ago, for the App uid: a read that saw nothing only for the App that made
+// it.
+func (r *SourceReconciler) sharedCI(key ciKey, now time.Time, uid types.UID) (ciInputs, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	in, ok := r.ciShared[key]
 	if !ok || now.Sub(in.at) >= ciShareFor || now.Before(in.at) {
 		return ciInputs{}, false
 	}
+	if len(in.runs) == 0 && len(in.statuses) == 0 && in.by != uid {
+		return ciInputs{}, false
+	}
 	return in, true
 }
 
-// shareCI keeps GitHub's answer for the other Apps, and drops the ones
-// that aged.
-func (r *SourceReconciler) shareCI(key ciKey, in ciInputs) {
+// shareCI keeps GitHub's answer, read for the App uid, for the other Apps,
+// and drops the ones that aged.
+func (r *SourceReconciler) shareCI(key ciKey, in ciInputs, uid types.UID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.ciShared == nil {
@@ -402,5 +410,6 @@ func (r *SourceReconciler) shareCI(key ciKey, in ciInputs) {
 			delete(r.ciShared, k)
 		}
 	}
+	in.by = uid
 	r.ciShared[key] = in
 }

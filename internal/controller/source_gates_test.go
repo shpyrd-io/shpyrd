@@ -876,3 +876,59 @@ func TestAKeptNudgeWaitsForTheTimeSinceTheLastRead(t *testing.T) {
 		t.Errorf("pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
 	}
 }
+
+// Residual fix 1: a shared read that saw nothing is never served to
+// another App, and a shared read is judged at its own time: no App
+// deploys "(no CI)" from another's empty, older read.
+func TestAnEmptySharedReadIsNeverAnotherProjectsNoCI(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	two := secondShop(t, r, app)
+	advance(fake, 50*time.Second)
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.Held != otherCommit {
+		t.Fatalf("pending at 50 s: %+v", rec)
+	}
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	advance(fake, 20*time.Second)
+	_, gotTwo := reconcileSource(t, r, two)
+	if rec := sourceRecord(gotTwo); gotTwo.PinnedCommit() != testCommit || rec.Held != otherCommit {
+		t.Errorf("deployed from another's empty read: pin %s, note %q, record %+v", gotTwo.PinnedCommit(), gotTwo.Annotations[shpyrdv1.AnnotationReleaseNote], rec)
+	}
+	if n := calledGitHub(fake, "GET /repos/acme/shop/commits/"+otherCommit+"/check-runs"); n != 2 {
+		t.Errorf("%d check-runs calls: the second App reads GitHub itself", n)
+	}
+}
+
+// Residual fix 1: a shared read is judged at the time it was read.
+func TestASharedReadIsJudgedAtItsOwnTime(t *testing.T) {
+	in := ciInputs{statuses: []github.CommitStatus{{Context: "ci", State: "pending"}}, at: sourceNow.Add(50 * time.Second)}
+	r := &SourceReconciler{}
+	r.shareCI(ciKey{42, "acme/shop", otherCommit}, in, "default/shop")
+	got, ok := r.sharedCI(ciKey{42, "acme/shop", otherCommit}, sourceNow.Add(70*time.Second), "default/shop-two")
+	if !ok || len(got.statuses) != 1 {
+		t.Fatalf("a read that saw a status is shared: %+v %v", got, ok)
+	}
+	r.shareCI(ciKey{42, "acme/shop", thirdCommit}, ciInputs{at: sourceNow}, "default/shop")
+	if _, ok := r.sharedCI(ciKey{42, "acme/shop", thirdCommit}, sourceNow.Add(time.Second), "default/shop-two"); ok {
+		t.Error("an empty read is served to another App")
+	}
+	if _, ok := r.sharedCI(ciKey{42, "acme/shop", thirdCommit}, sourceNow.Add(time.Second), "default/shop"); !ok {
+		t.Error("an empty read is not served to the App that made it")
+	}
+
+	// Its own empty read, 50 s after the push, serves the App 20 s later:
+	// judged at 50 s it is pending, never "no CI".
+	app := waitingShop()
+	w, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	ref, ok, err := w.GitHub.cover(context.Background(), app)
+	if err != nil || !ok {
+		t.Fatalf("cover %v %v", ok, err)
+	}
+	w.shareCI(ciKey{42, "acme/shop", otherCommit}, ciInputs{at: sourceNow.Add(50 * time.Second)}, app.UID)
+	calls := len(fake.Calls())
+	v, read := w.ciVerdict(context.Background(), app.UID, ref, otherCommit, sourceNow, sourceNow.Add(70*time.Second), time.Time{})
+	if !read || v.State != github.CIPending || len(fake.Calls()) != calls {
+		t.Errorf("verdict %+v, read %v, calls %v", v, read, fake.Calls()[calls:])
+	}
+}
