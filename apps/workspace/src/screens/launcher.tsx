@@ -211,65 +211,71 @@ export function NewProject({ asButton = false }: { asButton?: boolean }) {
           <Button size="icon-lg" icon={<Plus />} aria-label="New project" className="ml-2" />
         )}
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader divider>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
             It answers at its address within a minute, with its certificate. The name may change later; the slug may not.
           </DialogDescription>
         </DialogHeader>
-        <Stack gap="normal">
-          <Field label="Slug" hint="Lowercase letters, digits and dashes." required error={slug && !validSlug ? "Only lowercase letters, digits and dashes." : undefined}>
-            <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" prefix={prefix} suffix={suffix} autoFocus />
-          </Field>
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hello World" />
-          </Field>
-          <Field label="What it is" hint="One line, on its card.">
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A small API that answers the mobile app." />
-          </Field>
-          {supportsInternal && (
-            <Field label="Network" hint="Internal apps are reachable only through this workspace's private network.">
-              <Select value={exposure} onValueChange={(v) => setExposure(v as Exposure)}>
-                <SelectTrigger aria-label="Network"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="external">Public internet</SelectItem>
-                  <SelectItem value="internal">Internal network</SelectItem>
-                </SelectContent>
-              </Select>
+        <div className="grid gap-6 md:grid-cols-2">
+          {/* The project: its address, its name and where it answers. */}
+          <Stack gap="normal">
+            <Field label="Slug" hint="Lowercase letters, digits and dashes." required error={slug && !validSlug ? "Only lowercase letters, digits and dashes." : undefined}>
+              <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" prefix={prefix} suffix={suffix} autoFocus />
             </Field>
-          )}
-          {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
-          {githubShown ? (
-            <Tabs value={from} onValueChange={(v) => setFrom(v as "github" | "url")}>
-              <TabsList>
-                <TabsTrigger value="github">From GitHub</TabsTrigger>
-                <TabsTrigger value="url">Git URL</TabsTrigger>
-              </TabsList>
-              <TabsContent value="github">
-                {repos.error ? (
-                  <Alert variant="destructive">
-                    <AlertDescription>{repos.error.message}</AlertDescription>
-                  </Alert>
-                ) : (
-                  <GitHubPicker
-                    repositories={repos.data ?? []}
-                    value={picked}
-                    onChange={(p) => {
-                      setPicked(p);
-                      if (!slug.trim()) setSlug(slugFromRepo(p.fullName));
-                    }}
-                  />
-                )}
-              </TabsContent>
-              <TabsContent value="url" className="grid gap-4">
-                {gitURLFields}
-              </TabsContent>
-            </Tabs>
-          ) : (
-            gitURLFields
-          )}
-        </Stack>
+            <Field label="Name">
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hello World" />
+            </Field>
+            <Field label="What it is" hint="One line, on its card.">
+              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A small API that answers the mobile app." />
+            </Field>
+            {supportsInternal && (
+              <Field label="Network" hint="Internal apps are reachable only through this workspace's private network.">
+                <Select value={exposure} onValueChange={(v) => setExposure(v as Exposure)}>
+                  <SelectTrigger aria-label="Network" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="external">Public internet</SelectItem>
+                    <SelectItem value="internal">Internal network</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
+          </Stack>
+          {/* Its code: a repository from GitHub, or any git URL. */}
+          <Stack gap="normal">
+            {githubShown ? (
+              <Tabs value={from} onValueChange={(v) => setFrom(v as "github" | "url")}>
+                <TabsList>
+                  <TabsTrigger value="github">From GitHub</TabsTrigger>
+                  <TabsTrigger value="url">Git URL</TabsTrigger>
+                </TabsList>
+                <TabsContent value="github">
+                  {repos.error ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>{repos.error.message}</AlertDescription>
+                    </Alert>
+                  ) : (
+                    <GitHubPicker
+                      repositories={repos.data ?? []}
+                      value={picked}
+                      onChange={(p) => {
+                        setPicked(p);
+                        if (!slug.trim()) setSlug(slugFromRepo(p.fullName));
+                      }}
+                    />
+                  )}
+                </TabsContent>
+                <TabsContent value="url" className="grid gap-4">
+                  {gitURLFields}
+                </TabsContent>
+              </Tabs>
+            ) : (
+              gitURLFields
+            )}
+          </Stack>
+        </div>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
