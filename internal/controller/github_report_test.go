@@ -388,6 +388,16 @@ func TestAConfigReleaseOrARollbackLeavesTheCommitsCheck(t *testing.T) {
 				t.Errorf("%s: %d writes, %+v", phase, checkWrites(fake)-writes, runs)
 			}
 		}
+		// The rollback is its own release: one new Deployment, through
+		// in progress, success and failure; release 2's is left alone.
+		d := fake.Deployments()
+		if len(d) != 2 || d[0].Release != 2 || len(d[0].Statuses) != 1 || d[0].Statuses[0].State != "success" {
+			t.Errorf("release 2's Deployment: %+v", d)
+		}
+		if len(d) != 2 || d[1].Release != 3 || len(d[1].Statuses) != 3 || d[1].Statuses[0].State != "in_progress" ||
+			d[1].Statuses[1].State != "success" || d[1].Statuses[2].State != "failure" {
+			t.Errorf("the rollback's Deployment: %+v", d)
+		}
 	})
 }
 
@@ -1004,5 +1014,159 @@ func TestAGitAppDeployedByImageGetsNoDeployment(t *testing.T) {
 		if rolledBack(got) {
 			t.Errorf("%s: a deploy by image is taken for a rollback", phase)
 		}
+	}
+}
+
+// states lists a Deployment's states in order.
+func states(d githubtest.Deployment) []string {
+	var out []string
+	for _, s := range d.Statuses {
+		out = append(out, s.State)
+	}
+	return out
+}
+
+// Fix round 1: a push during a rollout never leaves the replaced release's
+// Deployment in progress: it is inactive once the newer release appears,
+// and no Deployment is made while the newer one is to come.
+func TestAPushDuringARolloutLeavesTheReplacedDeploymentInactive(t *testing.T) {
+	b := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, b)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		pinGit(a, otherCommit)
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Message: "again", Author: "alice", Via: "push"})
+	})
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseBuilding })
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[in_progress]" {
+		t.Fatalf("while C builds: %+v", d)
+	}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Releases = shpyrdv1.PhaseDeploying, []shpyrdv1.Release{b, release(2, otherCommit, "Push 89abcde by alice: again")}
+	})
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	_, got := reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 2 || fmt.Sprint(states(d[0])) != "[in_progress inactive]" || d[0].Statuses[1].Description != "Replaced by release 2" {
+		t.Errorf("B: %+v", d)
+	}
+	if len(d) != 2 || d[1].Release != 2 || fmt.Sprint(states(d[1])) != "[in_progress success]" || reportOf(got).Deployment != d[1].ID {
+		t.Errorf("C: %+v, annotation %+v", d, reportOf(got))
+	}
+}
+
+// Fix round 1: an outage that skips past a release in progress closes it
+// once GitHub answers again.
+func TestAnOutageThatSkipsAReleaseInProgressClosesIt(t *testing.T) {
+	b := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, b)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	fake.SetDown(true)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		pinGit(a, otherCommit)
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Message: "again", Author: "alice", Via: "push"})
+	})
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Releases = shpyrdv1.PhaseRunning, []shpyrdv1.Release{b, release(2, otherCommit, "Push 89abcde by alice: again")}
+	})
+	if res, _ := reconcileReport(t, r, app); res.RequeueAfter == 0 {
+		t.Fatal("the outage is not waited out")
+	}
+	fake.SetDown(false)
+	advance(fake, time.Minute)
+	reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 2 || fmt.Sprint(states(d[0])) != "[in_progress inactive]" || d[0].Statuses[1].Description != "Replaced by release 2" ||
+		fmt.Sprint(states(d[1])) != "[success]" {
+		t.Errorf("%+v", d)
+	}
+}
+
+// Fix round 1: no Deployment, not even one without a status, is made for
+// an older release while a newer one is to come.
+func TestNoDeploymentForAnOlderReleaseWhileANewerOneIsToCome(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseBuilding, release(1, otherCommit, "Push 89abcde by alice: before"))
+	r, _, fake, _ := githubReporter(t, app)
+	_, got := reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 0 || reportOf(got).Deployment != 0 {
+		t.Errorf("%+v, annotation %+v", d, reportOf(got))
+	}
+}
+
+// Fix round 1: a project shpyrd stops reporting on (a deploy of a fixed
+// commit) has its Deployment in progress closed, and its report dropped.
+func TestAnAppNoLongerReportedClosesItsDeploymentInProgress(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseDeploying, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) { a.Spec.Source.Git.Revision = testCommit })
+	before := &shpyrdv1.App{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), before); err != nil {
+		t.Fatal(err)
+	}
+	if !githubReportWatched(before) {
+		t.Error("an App with a report is not watched")
+	}
+	_, got := reconcileReport(t, r, app)
+	d := fake.Deployments()
+	if len(d) != 1 || fmt.Sprint(states(d[0])) != "[in_progress inactive]" || d[0].Statuses[1].Description != "shpyrd stopped reporting on this project" {
+		t.Errorf("%+v", d)
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
+		t.Errorf("the report is kept: %+v", reportOf(got))
+	}
+	if githubReportWatched(got) {
+		t.Error("an App with no report, not on a branch, is watched")
+	}
+}
+
+// Fix round 1: a held commit's check after a branch switch the watcher
+// already recorded is not "superseded" by the new branch's commit.
+func TestAHeldCommitAfterABranchSwitchIsNotSuperseded(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", Held: otherCommit, HeldSince: at(sourceNow)})
+	})
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		a.Spec.Source.Git.Revision = "develop"
+		withRecord(a, gitauth.SourceRecord{Ref: "develop", Latest: thirdCommit, Via: "poll"})
+	})
+	reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(otherCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Title != "No longer waiting: the project follows develop now" {
+		t.Errorf("%+v", runs)
+	}
+}
+
+// Fix round 1: the same commit redeployed and running repairs a failed
+// Deployment; a release of config or sizes never fails a successful one.
+func TestARedeployThatRunsRepairsAFailedDeployment(t *testing.T) {
+	code := release(1, testCommit, "Push 0123456 by alice: fix login")
+	app := shopAt(testCommit, shpyrdv1.PhaseFailed, code)
+	app.Status.Message = "web: CrashLoopBackOff"
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	again := release(2, testCommit, "Restart")
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Releases = shpyrdv1.PhaseDeploying, []shpyrdv1.Release{code, again}
+	})
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[failure success]" {
+		t.Errorf("repaired: %+v", d)
+	}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Releases = shpyrdv1.PhaseFailed, []shpyrdv1.Release{code, again, release(3, testCommit, "Set LOG_LEVEL")}
+	})
+	reconcileReport(t, r, app)
+	if d := fake.Deployments(); len(d) != 1 || fmt.Sprint(states(d[0])) != "[failure success]" {
+		t.Errorf("a config release failed a success: %+v", d)
 	}
 }

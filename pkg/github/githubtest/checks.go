@@ -51,7 +51,7 @@ type Deployment struct {
 }
 
 // DeploymentStatus is one status of a Deployment.
-type DeploymentStatus struct{ State, EnvironmentURL, LogURL string }
+type DeploymentStatus struct{ State, EnvironmentURL, LogURL, Description string }
 
 // Write is a call that would change something, refused or not, with the
 // permissions of the token that made it (nil without one).
@@ -427,11 +427,12 @@ func (f *Server) repoCall(w http.ResponseWriter, r *http.Request, p string) {
 			State          string `json:"state"`
 			EnvironmentURL string `json:"environment_url"`
 			LogURL         string `json:"log_url"`
+			Description    string `json:"description"`
 		}
 		_ = json.Unmarshal(raw, &in)
 		for i := range f.deployments {
 			if f.deployments[i].ID == id {
-				f.deployments[i].Statuses = append(f.deployments[i].Statuses, DeploymentStatus{State: in.State, EnvironmentURL: in.EnvironmentURL, LogURL: in.LogURL})
+				f.deployments[i].Statuses = append(f.deployments[i].Statuses, DeploymentStatus{State: in.State, EnvironmentURL: in.EnvironmentURL, LogURL: in.LogURL, Description: in.Description})
 				f.nextID++
 				reply(w, http.StatusCreated, map[string]any{"id": f.nextID})
 				return
