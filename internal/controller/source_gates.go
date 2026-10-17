@@ -84,11 +84,15 @@ func gateCommit(app *shpyrdv1.App, u *sourceUpdate, rec gitauth.SourceRecord, sh
 	git := app.Spec.Source.Git
 	g := ev.gates
 	// lost: the App does not cover the repository. Its settings do
-	// nothing then, but a commit held for its CI stays held: it is never
-	// deployed unchecked, and is given up at the hour.
+	// nothing then, but a commit the record waits on stays as it is: held
+	// (given up at the hour), or CI failed. It is never deployed unchecked.
 	lost := g.known && !g.covered && g.unknown == ""
-	if lost && (rec.Held != sha || !git.WaitForChecks) {
+	if lost && (!rec.WaitsOnCI(sha) || !git.WaitForChecks) {
 		return "", false
+	}
+	if lost && rec.Held != sha {
+		// CI failed, its re-run unreadable: still not deployed, as recorded.
+		return "", true
 	}
 	note := ""
 	// Checked on every decision, a held commit's again too: the pin may
@@ -178,9 +182,7 @@ func notDeploy(u *sourceUpdate, rec gitauth.SourceRecord, sha, reason string) {
 func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *sourceEvent, ask githubAsk, now time.Time) {
 	if ask.ci {
 		// Read, or found unreadable: either way not again before
-		// heldRecheck, unless a nudge says the checks changed. A nudge for
-		// the commit is used up.
-		ev.ciRead = ask.sha
+		// heldRecheck, unless a nudge says the checks changed.
 		defer r.noteCI(app.UID, now)
 	}
 	g := &ev.gates
@@ -201,8 +203,13 @@ func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *so
 		g.changed = &c
 	}
 	if ask.ci {
-		v := r.ciVerdict(ctx, app.UID, g.ref, ask.sha, ask.since, now)
+		v, read := r.ciVerdict(ctx, app.UID, g.ref, ask.sha, ask.since, now)
 		g.ci = &v
+		if read {
+			// A nudge for the commit is used up; one whose checks could
+			// not be read is kept for the next pass.
+			ev.ciRead = ask.sha
+		}
 	}
 }
 
@@ -235,21 +242,23 @@ func (r *SourceReconciler) changedFiles(ctx context.Context, ref githubRepoRef, 
 // keeps the commit held, and the hour still counts: an empty answer is
 // never taken for "no CI". Like changedFiles, a failure here is the
 // watcher's own: the clone's backoff is read, never written.
-func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now time.Time) github.CIVerdict {
+//
+// read says GitHub answered.
+func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now time.Time) (_ github.CIVerdict, read bool) {
 	if r.GitHub.backingOff(ref.installation) {
-		return github.Unanswered(since, now)
+		return github.Unanswered(since, now), false
 	}
 	runs, err := ref.client.CheckRuns(ctx, ref.installation, ref.owner, ref.name, sha)
 	if err == nil {
 		var statuses []github.CommitStatus
 		if statuses, err = ref.client.CommitStatuses(ctx, ref.installation, ref.owner, ref.name, sha); err == nil {
-			return github.Verdict(runs, statuses, ref.client.App().ID, since, now)
+			return github.Verdict(runs, statuses, ref.client.App().ID, since, now), true
 		}
 	}
 	if r.logCI(uid, now) {
 		log.FromContext(ctx).Info("could not read the commit's checks on GitHub; it stays held", "commit", shortCommit(sha), "err", err.Error())
 	}
-	return github.Unanswered(since, now)
+	return github.Unanswered(since, now), false
 }
 
 // ciLogEvery: GitHub unreadable is logged at most this often per App, not

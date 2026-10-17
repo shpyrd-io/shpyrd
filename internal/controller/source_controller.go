@@ -150,7 +150,7 @@ type sourceEvent struct {
 	// fromRecord: the commit is the record's, the branch was not read (a
 	// recheck or a resume without a listing).
 	fromRecord bool
-	// ciRead is the commit whose checks gather asked for.
+	// ciRead is the commit whose checks gather read (GitHub answered).
 	ciRead string
 }
 

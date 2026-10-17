@@ -638,3 +638,55 @@ func TestUnreadableChecksAreLoggedAtMostOnceAMinute(t *testing.T) {
 		t.Errorf("%d lines in two minutes:\n%s", n, buf.String())
 	}
 }
+
+// Fix round 2.
+
+func TestACommitCIFailedStaysNotDeployedWhileTheAppNoLongerCoversTheRepository(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+	heard := heardAudits(t)
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "failure"))
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.NotDeployed != otherCommit {
+		t.Fatalf("record %+v", rec)
+	}
+	ctx := context.Background()
+	if err := r.GitHub.Installations.SetGitHubInstallationState(ctx, 42, true, false); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+	check := func(when string) {
+		t.Helper()
+		rec := sourceRecord(got)
+		if got.PinnedCommit() != testCommit || rec.NotDeployed != otherCommit || rec.NotDeployedReason != "CI failed: test" || rec.Held != "" {
+			t.Fatalf("%s: deployed unchecked: pin %s, record %+v", when, got.PinnedCommit(), rec)
+		}
+		if len(*heard) != 1 {
+			t.Errorf("%s: audited again %+v", when, *heard)
+		}
+	}
+	// The nudge path.
+	advance(fake, time.Minute)
+	_, got = reconcileSource(t, r, got)
+	check("nudged")
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitCI]; !ok {
+		t.Fatal("a nudge whose checks were not read is kept")
+	}
+	// The poll due, the nudge still there.
+	advance(fake, 2*time.Hour)
+	_, got = reconcileSource(t, r, got)
+	check("polled")
+	// Covered again: the kept nudge is read, and the green re-run deploys.
+	if err := r.GitHub.Installations.SetGitHubInstallationState(ctx, 42, false, false); err != nil {
+		t.Fatal(err)
+	}
+	advance(fake, time.Minute)
+	_, got = reconcileSource(t, r, got)
+	if got.PinnedCommit() != otherCommit {
+		t.Errorf("covered again: pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitCI]; ok {
+		t.Error("the nudge is dropped once read")
+	}
+}
