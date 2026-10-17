@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -82,12 +83,17 @@ func gateCommit(app *shpyrdv1.App, u *sourceUpdate, rec gitauth.SourceRecord, sh
 	}
 	git := app.Spec.Source.Git
 	g := ev.gates
-	if g.known && !g.covered && g.unknown == "" {
+	// lost: the App does not cover the repository. Its settings do
+	// nothing then, but a commit held for its CI stays held: it is never
+	// deployed unchecked, and is given up at the hour.
+	lost := g.known && !g.covered && g.unknown == ""
+	if lost && (rec.Held != sha || !git.WaitForChecks) {
 		return "", false
 	}
 	note := ""
-	// A commit held, or CI failed and read again, passed its watch paths.
-	if len(git.WatchPaths) > 0 && rec.Held != sha && !ev.recheck {
+	// Checked on every decision, a held commit's again too: the pin may
+	// have moved, and the note goes with the deploy.
+	if len(git.WatchPaths) > 0 && !lost {
 		c := g.changed
 		switch {
 		case g.unknown != "":
@@ -109,9 +115,9 @@ func gateCommit(app *shpyrdv1.App, u *sourceUpdate, rec gitauth.SourceRecord, sh
 	since := heldSince(rec, sha, ev, u.record, now)
 	v := g.ci
 	switch {
-	case g.unknown != "":
-		// Whether the App covers the repository is not known: never an
-		// unverified deploy; the hour still counts.
+	case g.unknown != "" || lost:
+		// Whether the App covers the repository is not known, or it no
+		// longer does: never an unverified deploy; the hour still counts.
 		uv := github.Unanswered(since, now)
 		v = &uv
 	case v == nil:
@@ -127,7 +133,11 @@ func gateCommit(app *shpyrdv1.App, u *sourceUpdate, rec gitauth.SourceRecord, sh
 		notDeploy(u, rec, sha, gitauth.ReasonCIFailedPrefix+v.Failing)
 		return "", true
 	case github.CITimedOut:
-		notDeploy(u, rec, sha, gitauth.ReasonCITimeout)
+		reason := gitauth.ReasonCITimeout
+		if lost {
+			reason = gitauth.ReasonCINotCovered
+		}
+		notDeploy(u, rec, sha, reason)
 		return "", true
 	}
 	// Pending: held, nothing pinned; a newer commit replaces it at once.
@@ -168,7 +178,9 @@ func notDeploy(u *sourceUpdate, rec gitauth.SourceRecord, sha, reason string) {
 func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *sourceEvent, ask githubAsk, now time.Time) {
 	if ask.ci {
 		// Read, or found unreadable: either way not again before
-		// heldRecheck, unless a nudge says the checks changed.
+		// heldRecheck, unless a nudge says the checks changed. A nudge for
+		// the commit is used up.
+		ev.ciRead = ask.sha
 		defer r.noteCI(app.UID, now)
 	}
 	g := &ev.gates
@@ -189,7 +201,7 @@ func (r *SourceReconciler) gather(ctx context.Context, app *shpyrdv1.App, ev *so
 		g.changed = &c
 	}
 	if ask.ci {
-		v := r.ciVerdict(ctx, g.ref, ask.sha, ask.since, now)
+		v := r.ciVerdict(ctx, app.UID, g.ref, ask.sha, ask.since, now)
 		g.ci = &v
 	}
 }
@@ -223,7 +235,7 @@ func (r *SourceReconciler) changedFiles(ctx context.Context, ref githubRepoRef, 
 // keeps the commit held, and the hour still counts: an empty answer is
 // never taken for "no CI". Like changedFiles, a failure here is the
 // watcher's own: the clone's backoff is read, never written.
-func (r *SourceReconciler) ciVerdict(ctx context.Context, ref githubRepoRef, sha string, since, now time.Time) github.CIVerdict {
+func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now time.Time) github.CIVerdict {
 	if r.GitHub.backingOff(ref.installation) {
 		return github.Unanswered(since, now)
 	}
@@ -234,6 +246,26 @@ func (r *SourceReconciler) ciVerdict(ctx context.Context, ref githubRepoRef, sha
 			return github.Verdict(runs, statuses, ref.client.App().ID, since, now)
 		}
 	}
-	log.FromContext(ctx).Info("could not read the commit's checks on GitHub; it stays held", "commit", shortCommit(sha), "err", err.Error())
+	if r.logCI(uid, now) {
+		log.FromContext(ctx).Info("could not read the commit's checks on GitHub; it stays held", "commit", shortCommit(sha), "err", err.Error())
+	}
 	return github.Unanswered(since, now)
+}
+
+// ciLogEvery: GitHub unreadable is logged at most this often per App, not
+// on each read of a held commit.
+const ciLogEvery = time.Minute
+
+// logCI says a failed read of the App's checks is logged now.
+func (r *SourceReconciler) logCI(uid types.UID, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if last, ok := r.ciLogged[uid]; ok && now.Sub(last) < ciLogEvery {
+		return false
+	}
+	if r.ciLogged == nil {
+		r.ciLogged = map[types.UID]time.Time{}
+	}
+	r.ciLogged[uid] = now
+	return true
 }

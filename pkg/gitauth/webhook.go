@@ -258,6 +258,9 @@ const (
 	ReasonNoWatchedChanges = "No changes in the watch paths"
 	ReasonCIFailedPrefix   = "CI failed: "
 	ReasonCITimeout        = "CI did not finish within an hour"
+	// ReasonCINotCovered: a commit held for its CI when the GitHub App
+	// stopped covering the repository, not read again within the hour.
+	ReasonCINotCovered = "CI could not be read: the GitHub App no longer covers the repository"
 )
 
 // WaitsOnCI says a change of sha's checks matters to the record: sha is

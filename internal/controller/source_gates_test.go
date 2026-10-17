@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
@@ -492,5 +495,146 @@ func TestAutoDeploySwitchedOnChecksTheWatchPaths(t *testing.T) {
 	_, got = reconcileSource(t, r, got)
 	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
 		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+}
+
+// Fix round 1.
+
+func TestARerunsNudgeIsReadWhenTheBranchIsDue(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		wait func(r *SourceReconciler, fake *githubtest.Server)
+	}{
+		{"the poll interval passed", func(_ *SourceReconciler, fake *githubtest.Server) { advance(fake, 2*time.Hour) }},
+		{"the controller restarted", func(r *SourceReconciler, fake *githubtest.Server) {
+			advance(fake, time.Minute)
+			r.checked, r.ciChecked = nil, nil
+		}},
+	} {
+		app := waitingShop()
+		r, fake := gatedWatcher(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+		fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "failure"))
+		_, got := reconcileSource(t, r, app)
+		if rec := sourceRecord(got); rec.NotDeployed != otherCommit {
+			t.Fatalf("%s: record %+v", c.name, rec)
+		}
+		fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+		nudgeCI(t, r.Client, got, otherCommit, fake.Time())
+		c.wait(r, fake)
+		_, got = reconcileSource(t, r, got)
+		if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (CI passed)" {
+			t.Errorf("%s: pin %s, note %q, record %+v", c.name, got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote], sourceRecord(got))
+		}
+		if _, ok := got.Annotations[shpyrdv1.AnnotationGitCI]; ok {
+			t.Errorf("%s: the nudge is dropped once read", c.name)
+		}
+	}
+}
+
+func TestAHeldCommitKeepsItsWatchPathsNoteWhenItDeploys(t *testing.T) {
+	var many []githubtest.File
+	for i := range 300 {
+		many = append(many, githubtest.File{Name: fmt.Sprintf("docs/%03d.md", i)})
+	}
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}, WaitForChecks: true}), otherCommit, testCommit, "fix login", sourceNow)
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetCompare("acme/shop", testCommit, otherCommit, githubtest.Compare{Status: "ahead", Files: many})
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.Held != otherCommit {
+		t.Fatalf("record %+v", rec)
+	}
+	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+	advance(fake, 30*time.Second)
+	_, got = reconcileSource(t, r, got)
+	want := "Push 89abcde by alice: fix login (watch paths not checked: 300 or more files changed) (CI passed)"
+	if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != want {
+		t.Errorf("pin %s, note %q", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote])
+	}
+}
+
+func TestAHeldCommitsWatchPathsAreCheckedOnceTheCoverIsKnown(t *testing.T) {
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}, WaitForChecks: true}), otherCommit, testCommit, "docs", sourceNow)
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	st := r.GitHub.Installations
+	r.GitHub.Installations = unreadableInstallations{st}
+	fake.SetCompare("acme/shop", testCommit, otherCommit, githubtest.Compare{Status: "ahead", Files: []githubtest.File{{Name: "README.md"}}})
+	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.Held != otherCommit {
+		t.Fatalf("held while the cover is unknown: %+v", rec)
+	}
+	r.GitHub.Installations = st
+	advance(fake, 30*time.Second)
+	_, got = reconcileSource(t, r, got)
+	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
+		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+}
+
+func TestAHeldCommitStaysHeldWhenTheAppNoLongerCoversTheRepository(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		lose func(r *SourceReconciler, fake *githubtest.Server)
+	}{
+		{"the installation is suspended", func(r *SourceReconciler, _ *githubtest.Server) {
+			if err := r.GitHub.Installations.SetGitHubInstallationState(context.Background(), 42, true, false); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the App's Secret is deleted", func(r *SourceReconciler, fake *githubtest.Server) {
+			if err := r.Delete(context.Background(), fake.Secret("shpyrd-system")); err != nil {
+				t.Fatal(err)
+			}
+			advance(fake, github.Recheck)
+		}},
+	} {
+		app := waitingShop()
+		r, fake := gatedWatcher(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+		heard := heardAudits(t)
+		fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
+		_, got := reconcileSource(t, r, app)
+		c.lose(r, fake)
+		fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
+		advance(fake, 30*time.Second)
+		if _, got = reconcileSource(t, r, got); got.PinnedCommit() != testCommit || sourceRecord(got).Held != otherCommit {
+			t.Fatalf("%s: deployed unchecked: pin %s, record %+v", c.name, got.PinnedCommit(), sourceRecord(got))
+		}
+		advance(fake, time.Hour)
+		_, got = reconcileSource(t, r, got)
+		rec := sourceRecord(got)
+		if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCINotCovered {
+			t.Fatalf("%s: pin %s, record %+v", c.name, got.PinnedCommit(), rec)
+		}
+		if n := len(*heard); n != 1 || (*heard)[0].Action != "git.skip" || (*heard)[0].Detail != gitauth.ReasonCINotCovered {
+			t.Errorf("%s: audited %+v", c.name, *heard)
+		}
+		// A commit pushed after the App stopped covering the repository
+		// deploys: the settings do nothing.
+		got = pushed(got, thirdCommit, otherCommit, "next", fake.Time())
+		if err := r.Update(context.Background(), got); err != nil {
+			t.Fatal(err)
+		}
+		_, got = reconcileSource(t, r, got)
+		if got.PinnedCommit() != thirdCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push fedcba9 by alice: next" {
+			t.Errorf("%s: pin %s, note %q", c.name, got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote])
+		}
+	}
+}
+
+func TestUnreadableChecksAreLoggedAtMostOnceAMinute(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetDown(true)
+	var buf strings.Builder
+	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) { buf.WriteString(prefix + args + "\n") }, funcr.Options{}))
+	for range 5 {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
+			t.Fatal(err)
+		}
+		advance(fake, 30*time.Second)
+	}
+	if n := strings.Count(buf.String(), "could not read the commit's checks"); n != 3 {
+		t.Errorf("%d lines in two minutes:\n%s", n, buf.String())
 	}
 }

@@ -99,6 +99,8 @@ type SourceReconciler struct {
 	checked map[types.UID]sourceCheck
 	// ciChecked is when each App's held commit's checks were last read.
 	ciChecked map[types.UID]time.Time
+	// ciLogged is when each App's unreadable checks were last logged.
+	ciLogged map[types.UID]time.Time
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -139,18 +141,22 @@ type sourceEvent struct {
 	err    error
 	// gates are GitHub's answers for watch paths and wait for CI.
 	gates sourceGates
-	// recheck: only a held or CI-failed commit's checks are read again,
-	// not the branch; its watch paths passed already.
+	// recheck: a held or CI-failed commit's checks are read again; a
+	// commit CI failed is reopened.
 	recheck bool
 	// resume: auto-deploy switched back on, the commit that waited is
-	// decided from the record, through watch paths and wait for CI; the
-	// branch is not read.
+	// decided, through watch paths and wait for CI.
 	resume bool
+	// fromRecord: the commit is the record's, the branch was not read (a
+	// recheck or a resume without a listing).
+	fromRecord bool
+	// ciRead is the commit whose checks gather asked for.
+	ciRead string
 }
 
 // readBranch says the event is a check of the branch: a push, or a
 // listing (failed or not); not a commit decided again from the record.
-func (ev sourceEvent) readBranch() bool { return !ev.recheck && !ev.resume }
+func (ev sourceEvent) readBranch() bool { return !ev.fromRecord }
 
 // sourceUpdate is what one reconcile writes on the App.
 type sourceUpdate struct {
@@ -225,21 +231,27 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// (its words, author, a skip) holds.
 			ev.push, ev.latest = push, ""
 		}
+		if ev.err == nil && ev.push == nil && nudge != nil && ev.latest == nudge.SHA && rec.WaitsOnCI(nudge.SHA) {
+			// The head is a commit whose checks changed: read them again.
+			ev.recheck = true
+		}
 	case rec.Held != "" && rec.Held == rec.Latest && rec.Held != r.lastPinned(app.UID, rev) &&
 		((nudge != nil && nudge.SHA == rec.Held) || r.ciDue(app.UID, now)):
 		// A held commit: its checks are read again. One this watcher
 		// pinned already is a stale read of the App.
-		ev.latest, ev.recheck = rec.Latest, true
+		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
 	case nudge != nil && nudge.SHA == rec.Latest && rec.WaitsOnCI(nudge.SHA) && rec.Latest != r.lastPinned(app.UID, rev):
 		// A commit CI failed: its checks changed (a re-run), read again.
-		ev.latest, ev.recheck = rec.Latest, true
+		ev.latest, ev.recheck, ev.fromRecord = rec.Latest, true, true
 	case waitingCommit(app, rec) != "" && waitingCommit(app, rec) != r.lastPinned(app.UID, rev):
 		// Auto-deploy switched back on: the commit that waited is decided
 		// now, from the record, through its watch paths and wait for CI.
-		ev.latest, ev.resume = rec.Latest, true
+		ev.latest, ev.resume, ev.fromRecord = rec.Latest, true, true
 	default:
 		r.dropPush(ctx, app, rawPush)
-		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+		if nudge == nil || !rec.WaitsOnCI(nudge.SHA) {
+			r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+		}
 		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
@@ -269,7 +281,11 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
 	}
 	r.dropPush(ctx, app, rawPush)
-	r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+	if nudge == nil || nudge.SHA == ev.ciRead || !u.record.WaitsOnCI(nudge.SHA) {
+		// Read, or of a commit no longer waiting; else kept for the next
+		// pass.
+		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
+	}
 	r.auditUpdate(ctx, app, u)
 	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, now)}, nil
 }
@@ -385,6 +401,7 @@ func (r *SourceReconciler) forget(uid types.UID) {
 	defer r.mu.Unlock()
 	delete(r.checked, uid)
 	delete(r.ciChecked, uid)
+	delete(r.ciLogged, uid)
 }
 
 // decideSource turns what was learnt into what is written: the record
