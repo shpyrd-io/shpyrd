@@ -582,9 +582,16 @@ func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string,
 	return "", errNoSuchRevision
 }
 
-// apply writes the record, and the pin with its note and attribution, in
-// one merge patch: the App controller's own writes are not touched.
+// apply writes the record, and the pin with its note, attribution and
+// time, in one merge patch: the App controller's own writes are not
+// touched.
 func (r *SourceReconciler) apply(ctx context.Context, app *shpyrdv1.App, u sourceUpdate) error {
+	if u.pin != "" {
+		// When the pin was set: a build that failed before it is not the
+		// pin's (the reporter reads it).
+		at := r.now().Truncate(time.Second)
+		u.record.PinnedAt = &at
+	}
 	raw, err := json.Marshal(u.record)
 	if err != nil {
 		return err

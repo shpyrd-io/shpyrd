@@ -148,8 +148,10 @@ func TestAFailedBuildFailsTheCheckWithTheLastLinesOfItsMessage(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	app.Status.Message = strings.Join(lines, "\n")
-	// The build's failure, in words and masked (build_failure.go).
+	// The build's failure, in words and masked (build_failure.go). A record
+	// written before pins carried their time: Built=False is the pin's.
 	setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", app.Status.Message)
+	setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", app.Status.Message)
 	r, _, fake, _ := githubReporter(t, app)
 	reconcileReport(t, r, app)
 	runs := fake.CheckRunsOn(testCommit)
@@ -535,7 +537,8 @@ func TestAHeldCommitPinnedIsBuildingOnTheSameCheckRun(t *testing.T) {
 }
 
 // Ruling (b): a new pin with no finished check is Building while the
-// older release runs; a finished one is never reopened.
+// older release runs. Final review I1: the older release failing is not
+// the pin's failure: the pin stays Building.
 func TestANewPinsCheckIsBuildingWhileTheOlderReleaseRuns(t *testing.T) {
 	older := release(1, otherCommit, "Push 89abcde by alice: before")
 	app := shopAt(testCommit, shpyrdv1.PhaseRunning, older)
@@ -544,15 +547,72 @@ func TestANewPinsCheckIsBuildingWhileTheOlderReleaseRuns(t *testing.T) {
 	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Status != "in_progress" || runs[0].Title != "Building" {
 		t.Fatalf("new pin: %+v", runs)
 	}
-	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase, st.Message = shpyrdv1.PhaseFailed, "boom" })
-	reconcileReport(t, r, app)
 	writes := checkWrites(fake)
-	for _, phase := range []string{shpyrdv1.PhaseRunning, shpyrdv1.PhaseBuilding, shpyrdv1.PhaseDeploying} {
-		setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = phase })
+	for _, phase := range []string{shpyrdv1.PhaseFailed, shpyrdv1.PhaseRunning, shpyrdv1.PhaseBuilding} {
+		setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase, st.Message = phase, "boom" })
 		_, got := reconcileReport(t, r, app)
-		if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "failure" || reportOf(got).Check != "completed/failure" {
+		if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Status != "in_progress" || reportOf(got).Check != "in_progress/building" {
 			t.Errorf("%s: %d writes, %+v", phase, checkWrites(fake)-writes, runs)
 		}
+	}
+}
+
+// builtAt sets the Built condition as the App controller leaves it, its
+// transition at when.
+func builtAt(st *shpyrdv1.AppStatus, status metav1.ConditionStatus, when time.Time) {
+	meta.RemoveStatusCondition(&st.Conditions, shpyrdv1.ConditionBuilt)
+	meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionBuilt, Status: status, Reason: "BuildFailed",
+		Message: "The build failed.", LastTransitionTime: metav1.NewTime(when)})
+}
+
+// Final review I1: a release that failed before the pin, or a build that
+// failed before it, is not the new pin's: Building. The pin's own build
+// failing after the pin was set is a failure.
+func TestAFailureBeforeThePinNeverFailsTheNewPin(t *testing.T) {
+	older := release(1, otherCommit, "Push 89abcde by alice: before")
+	app := shopAt(testCommit, shpyrdv1.PhaseFailed, older)
+	app.Status.Message = "web: CrashLoopBackOff"
+	withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Message: "fix login", Author: "alice", Via: "push", PinnedAt: at(sourceNow)})
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Status != "in_progress" || runs[0].Title != "Building" {
+		t.Fatalf("the older release failed: %+v", runs)
+	}
+	writes := checkWrites(fake)
+	// The build before the pin failed (the pin's has not started).
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { builtAt(st, metav1.ConditionFalse, sourceNow.Add(-time.Minute)) })
+	if _, got := reconcileReport(t, r, app); checkWrites(fake) != writes || reportOf(got).Check != "in_progress/building" {
+		t.Fatalf("an older build failed: %d writes, %+v", checkWrites(fake)-writes, fake.CheckRunsOn(testCommit))
+	}
+	// The pin's own build fails, after the pin was set.
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Message = "The build failed."
+		builtAt(st, metav1.ConditionFalse, sourceNow.Add(2*time.Minute))
+	})
+	_, got := reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Conclusion != "failure" || runs[0].Title != "Failed" || reportOf(got).Check != "completed/failure" {
+		t.Errorf("the pin's build failed: %+v", runs)
+	}
+}
+
+// Final review I1: a running release's transient error (a reconcile that
+// failed for a reason of its own) never changes its finished check.
+func TestATransientErrorOfARunningReleaseLeavesItsCheck(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	writes := checkWrites(fake)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Message = shpyrdv1.PhaseFailed, "could not update the Deployment: the API server is away"
+		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: shpyrdv1.ConditionReady, Status: metav1.ConditionFalse, Reason: "ReconcileError", Message: st.Message})
+	})
+	_, got := reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(testCommit); checkWrites(fake) != writes || len(runs) != 1 || runs[0].Conclusion != "success" || reportOf(got).Check != "completed/success" {
+		t.Errorf("%d writes, %+v", checkWrites(fake)-writes, runs)
+	}
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+	if reconcileReport(t, r, app); checkWrites(fake) != writes {
+		t.Errorf("back to running: %d writes", checkWrites(fake)-writes)
 	}
 }
 
@@ -679,7 +739,8 @@ func TestARunAlreadyOnGitHubIsAdopted(t *testing.T) {
 
 // Review 3: only a build's failure, in words and masked, reaches GitHub.
 func TestAFailedCheckSaysOnlyThatTheDeployFailedUnlessTheBuildFailed(t *testing.T) {
-	app := shopAt(testCommit, shpyrdv1.PhaseFailed)
+	// The pin's own release fails in its rollout.
+	app := shopAt(testCommit, shpyrdv1.PhaseFailed, release(1, testCommit, "Push 0123456 by alice: fix login"))
 	app.Status.Message = "render env: secret shop-env: password=hunter2"
 	setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReconcileError", app.Status.Message)
 	r, _, fake, _ := githubReporter(t, app)

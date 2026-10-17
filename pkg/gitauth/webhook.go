@@ -220,6 +220,9 @@ type SourceRecord struct {
 	Via      string     `json:"via,omitempty"`
 	// Skipped is a commit whose message asked not to deploy it.
 	Skipped string `json:"skipped,omitempty"`
+	// PinnedAt is when the watcher last pinned a commit (RFC 3339, to the
+	// second): a build that failed before it is not the pin's.
+	PinnedAt *time.Time `json:"pinnedAt,omitempty"`
 	// Held is a commit waiting for its CI on GitHub, since HeldSince: the
 	// time the commit was first seen, or the nudge of a re-run (RFC-0054).
 	Held      string     `json:"held,omitempty"`

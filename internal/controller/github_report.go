@@ -321,10 +321,12 @@ func wantLatest(app *shpyrdv1.App) (checkWant, bool) {
 
 // wantCheck is the pinned commit's check, given what rep says was sent
 // for it, and false when it calls for none. A finished check is never
-// reopened. A release of config or sizes, or a rollback, never changes a
-// finished check and never fails one; while the pinned commit's check is
-// not finished and its code runs, it succeeds. A commit not yet running
-// is Building at once, even while an older release runs.
+// reopened, and never failed. A release of config or sizes, or a
+// rollback, never changes a finished check and never fails one; while the
+// pinned commit's check is not finished and its code runs, it succeeds. A
+// commit not yet running is Building at once, even while an older release
+// runs or fails: a failure is the pin's only when its own release failed,
+// or its build did (pinFailed).
 func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 	pin := app.PinnedCommit()
 	if pin == "" {
@@ -364,7 +366,7 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 		// rollback that fails never fails it, also when the commit never
 		// ran.
 		return checkWant{}, false
-	case phase == shpyrdv1.PhaseFailed:
+	case phase == shpyrdv1.PhaseFailed && !done && (onPin || pinBuildFailed(app)):
 		w.status, w.conclusion, w.label, w.title = "completed", "failure", "failure", "Failed"
 		if msg := lastLines(app.Status.Message, checkSummaryLines, checkSummaryMax); msg != "" && failedInBuild(app) {
 			w.summary += "\n\n```\n" + msg + "\n```"
@@ -383,6 +385,19 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 	default:
 		return building()
 	}
+}
+
+// pinBuildFailed says the pinned commit's own build failed: Built is False
+// since the watcher pinned it (Built's time is to the second, as is the
+// pin's). A record from before pins carried their time takes Built=False
+// alone.
+func pinBuildFailed(app *shpyrdv1.App) bool {
+	c := meta.FindStatusCondition(app.Status.Conditions, shpyrdv1.ConditionBuilt)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		return false
+	}
+	pinned := sourceRecordOf(app).PinnedAt
+	return pinned == nil || !c.LastTransitionTime.Time.Before(pinned.Truncate(time.Second))
 }
 
 // rolledBack says the App rolls out, or runs, a release it was rolled

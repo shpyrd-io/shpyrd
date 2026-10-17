@@ -279,3 +279,17 @@ func TestACINudgeIsReadBack(t *testing.T) {
 		t.Error("nothing to read is no nudge")
 	}
 }
+
+func TestSourceRecordKeepsWhenTheCommitWasPinned(t *testing.T) {
+	pinned := time.Date(2026, 10, 16, 12, 0, 5, 0, time.UTC)
+	raw, err := json.Marshal(SourceRecord{Ref: "main", PinnedAt: &pinned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"pinnedAt":"2026-10-16T12:00:05Z"`) {
+		t.Errorf("%s", raw)
+	}
+	if out := ReadSourceRecord(string(raw)); out.PinnedAt == nil || !out.PinnedAt.Equal(pinned) {
+		t.Errorf("read back %+v", out)
+	}
+}
