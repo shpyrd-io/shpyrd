@@ -1,0 +1,9 @@
+---
+title: "A new key for a bucket on request"
+description: "`shpyrd buckets rotate` revokes the key a bucket has and issues another; the attached apps restart with it."
+date: "2026-10-17"
+type: improvement
+draft: false
+---
+
+`shpyrd buckets rotate <name>`, or "New key" on the resources page, revokes the key a bucket has and writes a new one in its place. The apps attached to the bucket restart with it within a minute; anything else that held the old key needs the new one.

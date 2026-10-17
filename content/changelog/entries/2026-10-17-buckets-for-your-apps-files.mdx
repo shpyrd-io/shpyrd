@@ -1,0 +1,9 @@
+---
+title: "Buckets for your app's files"
+description: "S3 storage for uploads, images and exports, created in a project and attached to the app as config vars."
+date: "2026-10-17"
+type: feature
+draft: false
+---
+
+A bucket holds an app's files: anything several instances write and read. `shpyrd buckets create uploads` (or Add › A bucket on the resources page) makes one with a key that opens that bucket and nothing else. Attached, the app reads `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`, `BUCKET_ENDPOINT_URL`, `BUCKET_REGION`, `BUCKET_BUCKET` and `BUCKET_URL`; `shpyrd attach uploads --prefix AWS` gives the names the AWS SDKs read with no code. The docs show the few lines for Node, Python, Go and Rails.

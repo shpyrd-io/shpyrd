@@ -1,0 +1,9 @@
+---
+title: "Shared databases"
+description: "A PostgreSQL database on a platform server: always on, capped, with pgvector, and the kind the free workspace includes."
+date: "2026-10-16"
+type: feature
+draft: false
+---
+
+`shpyrd pg create --type shared` (or the Kind choice on the resources page) makes a PostgreSQL 17 database on a server the platform runs: always on, with no instance to size and no disk to pay for, and a cap on what it holds (1 GB on the free workspace). pgvector is installed and PostgreSQL's trusted extensions are yours to create. `shpyrd pg psql` opens a shell into it, and `DATABASE_URL` has the shape it always had; `DATABASE_DIRECT_URL` reaches the primary straight when the server's pooler is in front.

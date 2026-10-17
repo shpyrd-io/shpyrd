@@ -1,0 +1,9 @@
+---
+title: "Backups on for every database"
+description: "Continuous archiving and a daily base backup, with point-in-time recovery, for every PostgreSQL database."
+date: "2026-10-10"
+type: feature
+draft: false
+---
+
+Every dedicated PostgreSQL database now has backups on by default: continuous archiving and a daily base backup, kept 14 days unless you choose otherwise. `shpyrd pg restore` brings any point in that window back into a new database, and `shpyrd pg backups` shows the base backups and the recovery window.

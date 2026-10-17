@@ -1,0 +1,9 @@
+---
+title: "Convert a database between shared and dedicated"
+description: "A database moves to a cluster of its own, or onto the shared server, and keeps its address."
+date: "2026-10-16"
+type: feature
+draft: false
+---
+
+`shpyrd pg convert <name> --to dedicated` gives a shared database a cluster of its own, with a disk and up to three instances; `--to shared` moves a dedicated one onto the platform's server when it fits the cap. The apps attached keep working through the same address, and the resources page offers the same with its Convert button.
