@@ -691,7 +691,7 @@ func TestBucketsAreMeteredByWhatTheyHold(t *testing.T) {
 	ctx := context.Background()
 	scheme, _ := kube.Scheme()
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p-shop", Labels: project.NamespaceLabels("acme", "shop")}}
-	uploads := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: "p-shop"}, Status: shpyrdv1.ObjectBucketStatus{UsedBytes: 2 << 30}}
+	uploads := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: "p-shop", Labels: map[string]string{shpyrdv1.LabelProject: "shop"}}, Status: shpyrdv1.ObjectBucketStatus{UsedBytes: 2 << 30}}
 	backups := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "db-backups", Namespace: "p-shop", Labels: map[string]string{"shpyrd.io/postgres": "db"}}, Status: shpyrdv1.ObjectBucketStatus{UsedBytes: 5 << 30}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, uploads, backups).Build()
 	m := &MeteringLoop{Store: store.NewMemory(), Client: c}

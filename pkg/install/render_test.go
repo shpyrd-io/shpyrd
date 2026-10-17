@@ -993,6 +993,10 @@ func TestObjectGatewayRendersItsDoorAndMetrics(t *testing.T) {
 					apps = true
 				}
 			}
+			// The ServiceMonitor selects the Service by this label.
+			if o.GetLabels()["app.kubernetes.io/name"] != "object-storage" {
+				t.Errorf("the gateway's Service carries labels %v; the monitor selects app.kubernetes.io/name=object-storage", o.GetLabels())
+			}
 		case o.GetKind() == "ServiceMonitor" && o.GetName() == "object-storage":
 			endpoints, _, _ := unstructured.NestedSlice(o.Object, "spec", "endpoints")
 			path, _, _ := unstructured.NestedString(endpoints[0].(map[string]interface{}), "path")
