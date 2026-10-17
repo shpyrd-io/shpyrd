@@ -729,6 +729,7 @@ func (s *Server) routes() error {
 	s.engine.GET("/api/me/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.githubLinkFinish)
 	// Who makes projects picks from the repositories (ClusterCreate, the
 	// action of POST /projects).
+	api.GET("/workspace/github/accounts", s.require(authz.ClusterCreate), s.githubAccounts)
 	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)
 	api.GET("/workspace/github/repositories/:owner/:repo/branches", s.require(authz.ClusterCreate), s.githubBranches)
 	// Cluster log drains: every project's lines (RFC-0023).

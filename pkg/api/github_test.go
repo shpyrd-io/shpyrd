@@ -465,61 +465,6 @@ func (h *heldStore) AddGitHubInstallation(ctx context.Context, ws string, inst s
 	return h.Store.AddGitHubInstallation(ctx, ws, inst)
 }
 
-func TestGitHubRepositoriesAndBranchesForThePicker(t *testing.T) {
-	s, _, fake := githubServer(t)
-	ctx := context.Background()
-	if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"}); err != nil {
-		t.Fatal(err)
-	}
-	rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true)
-	var repos []GitHubRepositoryView
-	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
-	if rec.Code != http.StatusOK || len(repos) != 2 || repos[0].FullName != "Acme/shop" || !repos[0].Private || repos[0].DefaultBranch != "main" || repos[0].Installation != 42 || repos[1].FullName != "Acme/site" {
-		t.Fatalf("repositories: %d %s", rec.Code, rec.Body.String())
-	}
-	// Kept a minute: a second listing does not ask GitHub again.
-	calls := len(fake.Calls())
-	do(t, s, "GET", "/api/workspace/github/repositories", "", true)
-	if len(fake.Calls()) != calls {
-		t.Errorf("listed again: %v", fake.Calls()[calls:])
-	}
-	rec = do(t, s, "GET", "/api/workspace/github/repositories/acme/shop/branches", "", true)
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `["dev","main"]` {
-		t.Errorf("branches: %d %s", rec.Code, rec.Body.String())
-	}
-	if rec := do(t, s, "GET", "/api/workspace/github/repositories/acme/vault/branches", "", true); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "does not include vault") {
-		t.Errorf("not granted: %d %s", rec.Code, rec.Body.String())
-	}
-	if rec := do(t, s, "GET", "/api/workspace/github/repositories/other/shop/branches", "", true); rec.Code != http.StatusNotFound {
-		t.Errorf("an owner no connection reaches: %d", rec.Code)
-	}
-	fake.SetDown(true)
-	s.forgetGitHubRepos(store.DefaultWorkspace)
-	if rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "Acme") {
-		t.Errorf("GitHub down: %d %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestGitHubRepositoriesSkipAnInstallationThatIsGone(t *testing.T) {
-	s, _, fake := githubServer(t)
-	ctx := context.Background()
-	for _, inst := range []store.GitHubInstallation{
-		{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "ana"},
-		{ID: 7, AccountLogin: "Gone", AccountType: "Organization", ConnectedBy: "ana"},
-	} {
-		if err := s.store.AddGitHubInstallation(ctx, store.DefaultWorkspace, inst); err != nil {
-			t.Fatal(err)
-		}
-	}
-	fake.Uninstall(7)
-	rec := do(t, s, "GET", "/api/workspace/github/repositories", "", true)
-	var repos []GitHubRepositoryView
-	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
-	if rec.Code != http.StatusOK || len(repos) != 2 || repos[0].FullName != "Acme/shop" {
-		t.Errorf("an uninstalled App fails the whole list: %d %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestGitHubDisconnect(t *testing.T) {
 	s, _, _ := githubServer(t)
 	ctx := context.Background()

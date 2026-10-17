@@ -70,6 +70,25 @@ type GitHubRepositoryView struct {
 	DefaultBranch string `json:"defaultBranch"`
 }
 
+// GitHubAccountView is an account of the workspace's GitHub that the
+// person sees on GitHub: the picker's account switcher (RFC-0054).
+type GitHubAccountView struct {
+	Installation int64  `json:"installation"`
+	Account      string `json:"account"`
+	Type         string `json:"type"`
+	Suspended    bool   `json:"suspended"`
+	// ManageURL is the installation's settings on GitHub, where
+	// repositories are added: "Can't find a repository?".
+	ManageURL string `json:"manageURL"`
+}
+
+// GitHubAccountsView is the person's accounts, and how many installations
+// the workspace has: none, and New project offers no GitHub.
+type GitHubAccountsView struct {
+	Accounts  []GitHubAccountView `json:"accounts"`
+	Connected int                 `json:"connected"`
+}
+
 const (
 	githubStateTTL = 15 * time.Minute
 	githubReposTTL = 60 * time.Second
@@ -217,8 +236,9 @@ func (n *nonceSet) use(nonce string, until, now time.Time) bool {
 	return true
 }
 
-// githubRepoCache keeps each workspace's listing a minute: the picker
-// asks on every keystroke's render, GitHub counts every call.
+// githubRepoCache keeps each person's listings a minute, by workspace,
+// person and installation: the picker asks on every render, GitHub counts
+// every call.
 type githubRepoCache struct {
 	mu sync.Mutex
 	by map[string]githubRepoEntry
@@ -227,29 +247,54 @@ type githubRepoCache struct {
 type githubRepoEntry struct {
 	at   time.Time
 	list []GitHubRepositoryView
+	// truncated: GitHub has more than shpyrd lists; the list is the first part.
+	truncated bool
 }
 
-func (g *githubRepoCache) get(ws string, now time.Time) ([]GitHubRepositoryView, bool) {
+func (g *githubRepoCache) get(key string, now time.Time) (githubRepoEntry, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	e, ok := g.by[ws]
-	return e.list, ok && now.Sub(e.at) < githubReposTTL
+	e, ok := g.by[key]
+	return e, ok && now.Sub(e.at) < githubReposTTL
 }
 
-func (g *githubRepoCache) put(ws string, list []GitHubRepositoryView, now time.Time) {
+func (g *githubRepoCache) put(key string, list []GitHubRepositoryView, truncated bool, now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.by == nil {
 		g.by = map[string]githubRepoEntry{}
 	}
-	g.by[ws] = githubRepoEntry{at: now, list: list}
+	g.by[key] = githubRepoEntry{at: now, list: list, truncated: truncated}
 }
 
-// forgetGitHubRepos drops a workspace's listing: its connections changed.
+// githubRepoKey is a person's listing in a workspace: one installation,
+// or 0 for all they see.
+func githubRepoKey(ws, provider, subject string, installation int64) string {
+	return strings.Join([]string{ws, provider, subject, strconv.FormatInt(installation, 10)}, "\x00")
+}
+
+// forgetGitHubRepos drops a workspace's listings: its connections changed.
 func (s *Server) forgetGitHubRepos(ws string) {
 	s.githubRepos.mu.Lock()
-	delete(s.githubRepos.by, ws)
-	s.githubRepos.mu.Unlock()
+	defer s.githubRepos.mu.Unlock()
+	for k := range s.githubRepos.by {
+		if strings.HasPrefix(k, ws+"\x00") {
+			delete(s.githubRepos.by, k)
+		}
+	}
+}
+
+// forgetPersonRepos drops a person's listings: they linked or unlinked.
+// An empty subject drops every listing of the provider's people.
+func (s *Server) forgetPersonRepos(provider, subject string) {
+	s.githubRepos.mu.Lock()
+	defer s.githubRepos.mu.Unlock()
+	for k := range s.githubRepos.by {
+		parts := strings.Split(k, "\x00")
+		if len(parts) == 4 && parts[1] == provider && (subject == "" || parts[2] == subject) {
+			delete(s.githubRepos.by, k)
+		}
+	}
 }
 
 // githubChanged tells the controllers a workspace's connections changed.
@@ -398,8 +443,85 @@ func (s *Server) githubDisconnect(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// githubTruncatedHeader says a listing was cut at the most shpyrd reads:
+// the body is the first part, and the picker says "Showing the first N;
+// filter to narrow". The body stays the plain list.
+const githubTruncatedHeader = "X-Shpyrd-Truncated"
+
+// githubCantRead says GitHub refused the person a repository: they cannot
+// read it (404, or 403 that is no rate limit). Shared by the branches and
+// the create and deploy check.
+func githubCantRead(err error) bool {
+	return github.IsNotFound(err) || github.IsForbidden(err)
+}
+
+// errGitHubCantRead names the repository the person cannot read.
+func errGitHubCantRead(owner, repo string) error {
+	return fmt.Errorf("You can't read %s/%s on GitHub, or the GitHub App's installation on %s does not include it", owner, repo, owner)
+}
+
+// githubPersonFailed answers a call made with the person's token that
+// failed: a 401 is a token GitHub no longer takes (the person's memory
+// entry and listings are dropped, and they link again: 409); anything else
+// is a 502 saying what was being asked.
+func (s *Server) githubPersonFailed(c *gin.Context, provider, subject, what string, err error) {
+	var apiErr *github.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized {
+		s.githubUsers.forget(provider, subject)
+		s.forgetPersonRepos(provider, subject)
+		githubLinkAnswer(c, errGitHubLinkRequired)
+		return
+	}
+	abort(c, http.StatusBadGateway, fmt.Errorf("GitHub did not list %s: %w. Try again in a minute", what, err))
+}
+
+// githubAccounts is GET /api/workspace/github/accounts: the workspace's
+// installations the person sees on GitHub, with their own token. A
+// workspace without installations answers without asking for a link.
+func (s *Server) githubAccounts(c *gin.Context) {
+	cl, ok := s.githubClient(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	insts, err := s.store.GitHubInstallations(ctx, s.doorWorkspace(c))
+	if err != nil {
+		abort(c, http.StatusBadGateway, err)
+		return
+	}
+	view := GitHubAccountsView{Accounts: []GitHubAccountView{}, Connected: len(insts)}
+	if len(insts) == 0 {
+		c.JSON(http.StatusOK, view)
+		return
+	}
+	tok, _, err := s.githubPersonToken(c, cl)
+	if err != nil {
+		githubLinkAnswer(c, err)
+		return
+	}
+	provider, subject, _ := githubPersonOf(c)
+	mine, err := cl.UserInstallations(ctx, tok)
+	if err != nil {
+		s.githubPersonFailed(c, provider, subject, "your accounts", err)
+		return
+	}
+	sees := map[int64]bool{}
+	for _, m := range mine {
+		sees[m.ID] = true
+	}
+	web := cl.App().WebURL()
+	for _, inst := range insts {
+		if sees[inst.ID] {
+			view.Accounts = append(view.Accounts, GitHubAccountView{Installation: inst.ID, Account: inst.AccountLogin, Type: inst.AccountType,
+				Suspended: inst.SuspendedAt != nil, ManageURL: githubManageURL(web, inst)})
+		}
+	}
+	c.JSON(http.StatusOK, view)
+}
+
 // githubRepositories is GET /api/workspace/github/repositories: what the
-// workspace's live connections reach, merged, sorted, kept a minute.
+// person can read in the workspace's live installations (one, with
+// ?installation=, or all they see), merged, sorted, kept a minute.
 func (s *Server) githubRepositories(c *gin.Context) {
 	cl, ok := s.githubClient(c)
 	if !ok {
@@ -407,30 +529,65 @@ func (s *Server) githubRepositories(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	ws := s.doorWorkspace(c)
-	now := time.Now()
-	if list, ok := s.githubRepos.get(ws, now); ok {
-		c.JSON(http.StatusOK, list)
-		return
-	}
 	insts, err := s.store.GitHubInstallations(ctx, ws)
 	if err != nil {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	var only int64
+	if raw := c.Query("installation"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			abort(c, http.StatusBadRequest, errors.New("installation is a number: an account's installation from /api/workspace/github/accounts"))
+			return
+		}
+		found := false
+		for _, inst := range insts {
+			found = found || inst.ID == id
+		}
+		if !found {
+			abort(c, http.StatusNotFound, fmt.Errorf("this workspace has no GitHub connection %d", id))
+			return
+		}
+		only = id
+	}
+	if len(insts) == 0 {
+		c.JSON(http.StatusOK, []GitHubRepositoryView{})
+		return
+	}
+	tok, _, err := s.githubPersonToken(c, cl)
+	if err != nil {
+		githubLinkAnswer(c, err)
+		return
+	}
+	provider, subject, _ := githubPersonOf(c)
+	key := githubRepoKey(ws, provider, subject, only)
+	now := time.Now()
+	if e, ok := s.githubRepos.get(key, now); ok {
+		if e.truncated {
+			c.Header(githubTruncatedHeader, "true")
+		}
+		c.JSON(http.StatusOK, e.list)
+		return
+	}
 	out := []GitHubRepositoryView{}
+	truncated := false
 	for _, inst := range insts {
-		if inst.SuspendedAt != nil {
+		if inst.SuspendedAt != nil || (only != 0 && inst.ID != only) {
 			continue
 		}
-		repos, err := cl.Repositories(ctx, inst.ID)
-		if errors.Is(err, github.ErrInstallationGone) {
-			// Uninstalled on GitHub, the webhook not yet heard: the other
-			// connections still list.
-			s.log.Warn("github: the installation is gone; listing the others", "installation", inst.ID, "account", inst.AccountLogin)
+		repos, err := cl.UserRepositories(ctx, tok, inst.ID)
+		if errors.Is(err, github.ErrTruncated) {
+			// The first part is still worth showing.
+			truncated, err = true, nil
+		}
+		if github.IsNotFound(err) {
+			// An installation the person cannot see, or one uninstalled on
+			// GitHub before its webhook arrived: the others still list.
 			continue
 		}
 		if err != nil {
-			abort(c, http.StatusBadGateway, fmt.Errorf("GitHub did not list the repositories of %s: %w. Try again in a minute", inst.AccountLogin, err))
+			s.githubPersonFailed(c, provider, subject, "the repositories of "+inst.AccountLogin, err)
 			return
 		}
 		for _, r := range repos {
@@ -438,11 +595,15 @@ func (s *Server) githubRepositories(c *gin.Context) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].FullName) < strings.ToLower(out[j].FullName) })
-	s.githubRepos.put(ws, out, now)
+	s.githubRepos.put(key, out, truncated, now)
+	if truncated {
+		c.Header(githubTruncatedHeader, "true")
+	}
 	c.JSON(http.StatusOK, out)
 }
 
-// githubBranches is GET /api/workspace/github/repositories/:owner/:repo/branches.
+// githubBranches is GET /api/workspace/github/repositories/:owner/:repo/branches,
+// read with the person's token.
 func (s *Server) githubBranches(c *gin.Context) {
 	cl, ok := s.githubClient(c)
 	if !ok {
@@ -455,23 +616,34 @@ func (s *Server) githubBranches(c *gin.Context) {
 		abort(c, http.StatusBadGateway, err)
 		return
 	}
+	reaches := false
 	for _, inst := range insts {
-		if inst.SuspendedAt != nil || !strings.EqualFold(inst.AccountLogin, owner) {
-			continue
-		}
-		names, err := cl.Branches(ctx, inst.ID, owner, repo)
-		if errors.Is(err, github.ErrRepoNotGranted) {
-			abort(c, http.StatusNotFound, fmt.Errorf("the GitHub connection on %s does not include %s: add it to the installation on GitHub", inst.AccountLogin, repo))
-			return
-		}
-		if err != nil {
-			abort(c, http.StatusBadGateway, fmt.Errorf("GitHub did not list the branches of %s/%s: %w", owner, repo, err))
-			return
-		}
-		c.JSON(http.StatusOK, names)
+		reaches = reaches || (inst.SuspendedAt == nil && strings.EqualFold(inst.AccountLogin, owner))
+	}
+	if !reaches {
+		abort(c, http.StatusNotFound, fmt.Errorf("no GitHub connection of this workspace reaches %s", owner))
 		return
 	}
-	abort(c, http.StatusNotFound, fmt.Errorf("no GitHub connection of this workspace reaches %s", owner))
+	tok, _, err := s.githubPersonToken(c, cl)
+	if err != nil {
+		githubLinkAnswer(c, err)
+		return
+	}
+	names, err := cl.UserBranches(ctx, tok, owner, repo)
+	if errors.Is(err, github.ErrTruncated) {
+		c.Header(githubTruncatedHeader, "true")
+		err = nil
+	}
+	if githubCantRead(err) {
+		abort(c, http.StatusNotFound, errGitHubCantRead(owner, repo))
+		return
+	}
+	if err != nil {
+		provider, subject, _ := githubPersonOf(c)
+		s.githubPersonFailed(c, provider, subject, "the branches of "+owner+"/"+repo, err)
+		return
+	}
+	c.JSON(http.StatusOK, names)
 }
 
 // githubInstalled is GET /api/github/installed, where GitHub sends the

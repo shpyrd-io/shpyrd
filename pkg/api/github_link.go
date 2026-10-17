@@ -279,6 +279,7 @@ func (s *Server) githubLinkFinish(c *gin.Context) {
 	}
 	// Kept for the link as stored: its LinkedAt is the store's.
 	s.githubUsers.forget(provider, subject)
+	s.forgetPersonRepos(provider, subject)
 	if stored, err := s.store.GitHubUserLink(ctx, provider, subject); err == nil && stored.RefreshToken == sealed {
 		s.githubUsers.keep(stored, tok)
 	}
@@ -373,6 +374,7 @@ func (s *Server) githubUnlink(c *gin.Context) {
 		return
 	}
 	s.githubUsers.forget(provider, subject)
+	s.forgetPersonRepos(provider, subject)
 	s.audit(c, "", "github.unlink", "github user "+link.GitHubLogin, "")
 	c.Status(http.StatusNoContent)
 }
