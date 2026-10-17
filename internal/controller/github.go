@@ -259,14 +259,14 @@ func (gh *GitHubApp) build(ctx context.Context, app *shpyrdv1.App, repo gitauth.
 	}
 	// A token GitHub already gave is used without asking; the backoff
 	// only holds back a call.
-	tok, cached := cl.CachedInstallationToken(inst.ID, name)
+	tok, cached := cl.CachedInstallationToken(inst.ID, name, github.ContentsRead)
 	if !cached && gh.backingOff(inst.ID) {
 		return nil, githubTransient, true
 	}
 	if !cached {
 		callCtx, cancel := context.WithTimeout(ctx, githubCallTimeout)
 		defer cancel()
-		tok, err = cl.InstallationToken(callCtx, inst.ID, name)
+		tok, err = cl.InstallationToken(callCtx, inst.ID, name, github.ContentsRead)
 	}
 	var apiErr *github.APIError
 	switch {

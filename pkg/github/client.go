@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,33 @@ type Client struct {
 type tokenKey struct {
 	installation int64
 	repo         string
+	perms        string
+}
+
+// Permissions are what an installation token may do, as GitHub names
+// them. The values below are shared: never change them.
+type Permissions map[string]string
+
+// The scopes shpyrd asks for (RFC-0054). Each has its own tokens, so a
+// build's clone token is never widened.
+var (
+	// ContentsRead clones, lists branches and repositories.
+	ContentsRead = Permissions{"contents": "read"}
+	// WatchRead compares commits and reads their checks and statuses: the
+	// source watcher.
+	WatchRead = Permissions{"contents": "read", "checks": "read", "statuses": "read"}
+	// ReportWrite writes check runs and Deployments: the reporter.
+	ReportWrite = Permissions{"checks": "write", "deployments": "write"}
+)
+
+// key is the scope as a cache key: "checks=read,contents=read".
+func (p Permissions) key() string {
+	keys := make([]string, 0, len(p))
+	for k, v := range p {
+		keys = append(keys, k+"="+v)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // Token is an installation token: for one repository, or for the whole
@@ -152,10 +180,14 @@ func (c *Client) AppJWT() (string, error) {
 // InstallationToken is a token of the installation that reads one
 // repository (by its name, without the owner), or lists the whole
 // installation when repo is "". It is kept and given again until it ages.
-// A repository the installation does not include is ErrRepoNotGranted; an
+// It has the permissions perms (ContentsRead when empty), each scope kept
+// apart. A repository the installation does not include is ErrRepoNotGranted; an
 // installation GitHub no longer knows is ErrInstallationGone.
-func (c *Client) InstallationToken(ctx context.Context, installation int64, repo string) (Token, error) {
-	key := tokenKey{installation, strings.ToLower(repo)}
+func (c *Client) InstallationToken(ctx context.Context, installation int64, repo string, perms Permissions) (Token, error) {
+	if len(perms) == 0 {
+		perms = ContentsRead
+	}
+	key := tokenKey{installation, strings.ToLower(repo), perms.key()}
 	c.mu.Lock()
 	if t, ok := c.tokens[key]; ok && c.now().Before(t.renewAt()) {
 		c.mu.Unlock()
@@ -166,7 +198,7 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 	if err != nil {
 		return Token{}, err
 	}
-	body := map[string]any{"permissions": map[string]string{"contents": "read"}}
+	body := map[string]any{"permissions": map[string]string(perms)}
 	if repo != "" {
 		body["repositories"] = []string{repo}
 	}
@@ -200,12 +232,15 @@ func (c *Client) InstallationToken(ctx context.Context, installation int64, repo
 	return t, nil
 }
 
-// CachedInstallationToken is the token InstallationToken would give
-// without calling GitHub: one kept and not yet due for renewal.
-func (c *Client) CachedInstallationToken(installation int64, repo string) (Token, bool) {
+// CachedInstallationToken is the token InstallationToken would give for
+// the scope without calling GitHub: one kept and not yet due for renewal.
+func (c *Client) CachedInstallationToken(installation int64, repo string, perms Permissions) (Token, bool) {
+	if len(perms) == 0 {
+		perms = ContentsRead
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	t, ok := c.tokens[tokenKey{installation, strings.ToLower(repo)}]
+	t, ok := c.tokens[tokenKey{installation, strings.ToLower(repo), perms.key()}]
 	if !ok || !c.now().Before(t.renewAt()) {
 		return Token{}, false
 	}
@@ -214,7 +249,7 @@ func (c *Client) CachedInstallationToken(installation int64, repo string) (Token
 
 // Repositories pages through everything the installation grants.
 func (c *Client) Repositories(ctx context.Context, installation int64) ([]Repository, error) {
-	tok, err := c.InstallationToken(ctx, installation, "")
+	tok, err := c.InstallationToken(ctx, installation, "", ContentsRead)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +278,7 @@ func (c *Client) Repositories(ctx context.Context, installation int64) ([]Reposi
 
 // Branches are a repository's branch names, as GitHub orders them.
 func (c *Client) Branches(ctx context.Context, installation int64, owner, repo string) ([]string, error) {
-	tok, err := c.InstallationToken(ctx, installation, repo)
+	tok, err := c.InstallationToken(ctx, installation, repo, ContentsRead)
 	if err != nil {
 		return nil, err
 	}
