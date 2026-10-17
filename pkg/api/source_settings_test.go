@@ -109,3 +109,18 @@ func TestADeployKeepsTheProjectsWatchPathsUnlessItSays(t *testing.T) {
 		t.Errorf("with an image: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Final review I3: a repository the connected installation does not
+// include is not covered; GitHub's answer is kept, not asked on each view.
+func TestTheSettingsSaySoForARepositoryTheInstallationDoesNotInclude(t *testing.T) {
+	s, _, fake := githubServer(t, onGitHub("vault", "https://github.com/acme/vault", "main", ""))
+	connectAcme(t, s, store.DefaultWorkspace)
+	rec := do(t, s, "PATCH", "/api/projects/vault", `{"waitForChecks":true}`, true)
+	if d := detailOf(t, rec.Body.Bytes()); rec.Code != http.StatusOK || d.GitHubFeatures || d.SourceNote != githubSourceNote {
+		t.Fatalf("%d: features %v, note %q", rec.Code, d.GitHubFeatures, d.SourceNote)
+	}
+	minted := len(fake.Calls())
+	if rec := do(t, s, "GET", "/api/projects/vault", "", true); detailOf(t, rec.Body.Bytes()).GitHubFeatures || len(fake.Calls()) != minted {
+		t.Errorf("view: %s, calls %v", rec.Body.String(), fake.Calls())
+	}
+}

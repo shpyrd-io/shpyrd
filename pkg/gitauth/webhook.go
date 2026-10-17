@@ -229,7 +229,7 @@ type SourceRecord struct {
 	HeldSince *time.Time `json:"heldSince,omitempty"`
 	// NotDeployed is the last commit decided not to deploy, and why:
 	// ReasonNoWatchedChanges, ReasonCIFailedPrefix and the check's name,
-	// or ReasonCITimeout.
+	// ReasonCITimeout, ReasonCINotCovered or ReasonCIPermissions.
 	NotDeployed       string     `json:"notDeployed,omitempty"`
 	NotDeployedReason string     `json:"notDeployedReason,omitempty"`
 	LastWebhookAt     *time.Time `json:"lastWebhookAt,omitempty"`
@@ -264,6 +264,10 @@ const (
 	// ReasonCINotCovered: a commit held for its CI when the GitHub App
 	// stopped covering the repository, not read again within the hour.
 	ReasonCINotCovered = "CI could not be read: the GitHub App no longer covers the repository"
+	// ReasonCIPermissions: the installation has not accepted the App's
+	// permissions to read checks and statuses; a definite answer, given at
+	// once.
+	ReasonCIPermissions = "CI could not be read: accept the GitHub App's updated permissions on GitHub"
 )
 
 // WaitsOnCI says a change of sha's checks matters to the record: sha is

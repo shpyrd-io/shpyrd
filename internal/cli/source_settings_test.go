@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 func TestGitSourceSettings(t *testing.T) {
@@ -67,9 +69,10 @@ func TestWatchPathFlagsGoWithGit(t *testing.T) {
 func TestProjectsInfoShowsAHeldAndANotDeployedCommit(t *testing.T) {
 	since := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	for source, want := range map[string]string{
-		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","held":"89abcdef0123456789abcdef0123456789abcdef","heldSince":"` + since + `"}`:                                "Commit:     89abcde waits for CI (since 2m)",
-		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","notDeployed":"89abcdef0123456789abcdef0123456789abcdef","notDeployedReason":"CI failed: test"}`:               "Commit:     89abcde not deployed: CI failed: test",
-		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","notDeployed":"89abcdef0123456789abcdef0123456789abcdef","notDeployedReason":"No changes in the watch paths"}`: "Commit:     89abcde not deployed: no changes in the watch paths",
+		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","held":"89abcdef0123456789abcdef0123456789abcdef","heldSince":"` + since + `"}`:                                      "Commit:     89abcde waits for CI (since 2m)",
+		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","notDeployed":"89abcdef0123456789abcdef0123456789abcdef","notDeployedReason":"CI failed: test"}`:                     "Commit:     89abcde not deployed: CI failed: test",
+		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","notDeployed":"89abcdef0123456789abcdef0123456789abcdef","notDeployedReason":"No changes in the watch paths"}`:       "Commit:     89abcde not deployed: no changes in the watch paths",
+		`{"commit":"0123456789abcdef0123456789abcdef01234567","latest":"89abcdef0123456789abcdef0123456789abcdef","notDeployed":"89abcdef0123456789abcdef0123456789abcdef","notDeployedReason":"` + gitauth.ReasonCIPermissions + `"}`: "Commit:     89abcde not deployed: CI could not be read: accept the GitHub App's updated permissions on GitHub",
 	} {
 		out, err := runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method+" "+r.URL.Path != "GET /api/projects/shop" {

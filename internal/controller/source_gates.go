@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -143,6 +144,10 @@ func gateCommit(app *shpyrdv1.App, u *sourceUpdate, rec gitauth.SourceRecord, sh
 		}
 		notDeploy(u, rec, sha, reason)
 		return "", true
+	case ciNoPermission:
+		// A definite answer: no wait for the hour.
+		notDeploy(u, rec, sha, gitauth.ReasonCIPermissions)
+		return "", true
 	}
 	// Pending: held, nothing pinned; a newer commit replaces it at once.
 	u.record.Held, u.record.HeldSince = sha, &since
@@ -237,11 +242,17 @@ func (r *SourceReconciler) changedFiles(ctx context.Context, ref githubRepoRef, 
 	return changedFiles{files: cmp.Files}
 }
 
+// ciNoPermission is the verdict when the installation has not accepted
+// the App's permissions to read checks and statuses: a definite answer,
+// the commit is not deployed at once.
+const ciNoPermission = "no-permission"
+
 // ciVerdict reads the commit's check runs and statuses. GitHub not
-// answering (a listing cut short, a permission not granted, an outage)
-// keeps the commit held, and the hour still counts: an empty answer is
-// never taken for "no CI". Like changedFiles, a failure here is the
-// watcher's own: the clone's backoff is read, never written.
+// answering (a listing cut short, an outage) keeps the commit held, and
+// the hour still counts: an empty answer is never taken for "no CI". The
+// permissions not accepted are an answer (ciNoPermission). Like
+// changedFiles, a failure here is the watcher's own: the clone's backoff
+// is read, never written.
 //
 // read says GitHub answered.
 func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref githubRepoRef, sha string, since, now time.Time) (_ github.CIVerdict, read bool) {
@@ -254,6 +265,12 @@ func (r *SourceReconciler) ciVerdict(ctx context.Context, uid types.UID, ref git
 		if statuses, err = ref.client.CommitStatuses(ctx, ref.installation, ref.owner, ref.name, sha); err == nil {
 			return github.Verdict(runs, statuses, ref.client.App().ID, since, now), true
 		}
+	}
+	if errors.Is(err, github.ErrPermissionsNotGranted) {
+		if r.logCI(uid, now) {
+			log.FromContext(ctx).Info("could not read the commit's checks on GitHub: the installation has not accepted the App's permissions; the commit is not deployed", "commit", shortCommit(sha))
+		}
+		return github.CIVerdict{State: ciNoPermission}, true
 	}
 	if r.logCI(uid, now) {
 		log.FromContext(ctx).Info("could not read the commit's checks on GitHub; it stays held", "commit", shortCommit(sha), "err", err.Error())

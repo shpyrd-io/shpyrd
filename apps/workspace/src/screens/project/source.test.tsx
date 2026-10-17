@@ -173,6 +173,9 @@ it("says why a commit was not deployed, in the Source block's words", () => {
   cleanup();
   show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI could not be read: the GitHub App no longer covers the repository", via: "push", checkedAt: minutesAgo(1) }));
   expect(screen.getByText("b2c3d4e not deployed: CI could not be read: the GitHub App no longer covers the repository")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI could not be read: accept the GitHub App's updated permissions on GitHub", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI could not be read: accept the GitHub App's updated permissions on GitHub")).toBeTruthy();
 });
 
 it("switches wait for CI through the api", async () => {

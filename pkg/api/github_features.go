@@ -13,10 +13,27 @@ const githubSourceNote = "Watch paths and wait for CI work through the GitHub Ap
 
 // githubCovers says the GitHub App covers the App's repository, by the
 // controller's own test (GitHubApp.Covers, shared with the watcher and the
-// reporter) and without a call to GitHub.
+// reporter). Whether the installation includes the repository is asked of
+// GitHub once, then kept: the token while it lasts, a refusal ten minutes
+// or until the workspace's connections change.
 func (s *Server) githubCovers(ctx context.Context, app *shpyrdv1.App) bool {
-	gh := &controller.GitHubApp{Source: s.githubApp, Installations: s.store}
+	s.githubCoverMu.Lock()
+	gh := s.githubCover
+	if gh == nil || gh.Source != s.githubApp {
+		gh = &controller.GitHubApp{Source: s.githubApp, Installations: s.store}
+		s.githubCover = gh
+	}
+	s.githubCoverMu.Unlock()
 	return gh.Covers(ctx, app)
+}
+
+// forgetGitHubCover drops what the API kept of a workspace's repositories:
+// its connections changed.
+func (s *Server) forgetGitHubCover(ws string) {
+	s.githubCoverMu.Lock()
+	gh := s.githubCover
+	s.githubCoverMu.Unlock()
+	gh.Forget(ws)
 }
 
 // projectDetail is a project's view with what the GitHub App adds: whether

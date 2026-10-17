@@ -249,6 +249,7 @@ func (s *Server) forgetGitHubRepos(ws string) {
 
 // githubChanged tells the controllers a workspace's connections changed.
 func (s *Server) githubChanged(ws string) {
+	s.forgetGitHubCover(ws)
 	if s.opts.GitHubChanged != nil {
 		s.opts.GitHubChanged(ws)
 	}

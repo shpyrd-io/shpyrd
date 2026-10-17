@@ -690,3 +690,82 @@ func TestACommitCIFailedStaysNotDeployedWhileTheAppNoLongerCoversTheRepository(t
 		t.Error("the nudge is dropped once read")
 	}
 }
+
+// Final review I3.
+
+// A repository the installation does not include is not covered: watch
+// paths and wait for CI do nothing, and a new commit deploys at once.
+func TestARepositoryTheInstallationDoesNotIncludeIsNotCovered(t *testing.T) {
+	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}, WaitForChecks: true}), otherCommit, testCommit, "docs", sourceNow)
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.SetRepos(42, githubtest.Repo{FullName: "Acme/site", DefaultBranch: "trunk"})
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: docs" || rec.Held != "" || rec.NotDeployed != "" {
+		t.Fatalf("pin %s, note %q, record %+v", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote], rec)
+	}
+	if calledGitHub(fake, "GET /repos/") != 0 {
+		t.Errorf("calls %v", fake.Calls())
+	}
+	if r.GitHub.Covers(context.Background(), got) {
+		t.Error("the project's view says the App covers it")
+	}
+	if r.GitHub.backingOff(42) {
+		t.Error("the watcher backs the clone off")
+	}
+	// The answer is kept, as the clone keeps it: GitHub is not asked again.
+	minted := calledGitHub(fake, "POST /app/installations/42/access_tokens")
+	r.GitHub.Covers(context.Background(), got)
+	if calledGitHub(fake, "POST /app/installations/42/access_tokens") != minted {
+		t.Errorf("asked again: %v", fake.Calls())
+	}
+}
+
+// Permissions not accepted on GitHub are an answer, not an outage: a held
+// commit ends at once, not at the hour.
+func TestPermissionsNotAcceptedEndAHeldCommitAtOnce(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}, app)
+	heard := heardAudits(t)
+	fake.SetDown(true)
+	_, got := reconcileSource(t, r, app)
+	if rec := sourceRecord(got); rec.Held != otherCommit {
+		t.Fatalf("held while GitHub is down: %+v", rec)
+	}
+	fake.SetDown(false)
+	fake.RefusePermission("checks")
+	advance(fake, 30*time.Second)
+	_, got = reconcileSource(t, r, got)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCIPermissions {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if len(*heard) != 1 || (*heard)[0].Action != "git.skip" || (*heard)[0].Detail != gitauth.ReasonCIPermissions {
+		t.Errorf("audited %+v", *heard)
+	}
+}
+
+// ErrPermissionsNotGranted on the watcher's scope: a new commit is not
+// deployed at once, with the reason that says what to do; the clone's
+// caches are left alone.
+func TestPermissionsNotAcceptedAreNotDeployedAtOnce(t *testing.T) {
+	app := waitingShop()
+	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
+	fake.RefusePermission("statuses")
+	res, got := reconcileSource(t, r, app)
+	rec := sourceRecord(got)
+	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCIPermissions {
+		t.Fatalf("pin %s, record %+v", got.PinnedCommit(), rec)
+	}
+	if res.RequeueAfter < time.Hour {
+		t.Errorf("nothing is held: requeue %v", res.RequeueAfter)
+	}
+	if r.GitHub.backingOff(42) {
+		t.Error("the clone backs off")
+	}
+	if why, ok := r.GitHub.refusedLately(42, "shop"); ok {
+		t.Errorf("the clone is refused: %s", why)
+	}
+	if gitauth.ReasonCIPermissions != "CI could not be read: accept the GitHub App's updated permissions on GitHub" {
+		t.Errorf("reason %q", gitauth.ReasonCIPermissions)
+	}
+}
