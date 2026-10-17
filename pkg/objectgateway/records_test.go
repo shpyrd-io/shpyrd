@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/minio/minio-go/v7"
 	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	"github.com/versity/versitygw/auth"
@@ -36,6 +39,13 @@ type fakeS3 struct {
 	ignoreIfMatch bool
 	batches       []int // sizes of each multi-object delete
 	singleDeles   int
+	uploads       []fakeUpload // unfinished multipart uploads
+	aborted       []string     // upload ids aborted
+}
+
+type fakeUpload struct {
+	key, id   string
+	initiated time.Time
 }
 
 func newFakeS3() *fakeS3 {
@@ -86,6 +96,28 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.WriteString("</ListBucketResult>")
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, b.String())
+	case r.Method == http.MethodGet && q.Has("uploads"):
+		var b strings.Builder
+		b.WriteString(`<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>test</Bucket><IsTruncated>false</IsTruncated>`)
+		for _, u := range f.uploads {
+			if strings.HasPrefix(u.key, q.Get("prefix")) {
+				fmt.Fprintf(&b, `<Upload><Key>%s</Key><UploadId>%s</UploadId><Initiated>%s</Initiated></Upload>`, u.key, u.id, u.initiated.UTC().Format("2006-01-02T15:04:05.000Z"))
+			}
+		}
+		b.WriteString("</ListMultipartUploadsResult>")
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, b.String())
+	case r.Method == http.MethodDelete && q.Has("uploadId"):
+		id := q.Get("uploadId")
+		kept := f.uploads[:0]
+		for _, u := range f.uploads {
+			if u.id != id {
+				kept = append(kept, u)
+			}
+		}
+		f.uploads = kept
+		f.aborted = append(f.aborted, id)
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && q.Has("delete"):
 		var in struct {
 			Objects []struct{ Key string } `xml:"Object"`
@@ -475,5 +507,141 @@ func TestSingleWriterSerializesDescriptorUpdates(t *testing.T) {
 	rec, err := records.Get(ctx, "consumer-a")
 	if err != nil || rec.Disabled != (rec.Secret == "") || rec.RetentionDays < 1 || rec.RetentionDays > 8 {
 		t.Fatalf("final descriptor %+v, %v", rec, err)
+	}
+}
+
+// The sweep measures every bucket (the listing corrects what a lost
+// flush left), applies retention and aborts the multipart uploads nobody
+// will finish; a measured bucket's usage comes from its counter.
+func TestTheSweepMeasuresBucketsAndAbortsStaleUploads(t *testing.T) {
+	records, fake := testRecords(t)
+	ctx := context.Background()
+	if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a", MaxBytes: 100}); err != nil {
+		t.Fatal(err)
+	}
+	// An older descriptor, never measured: its usage is a listing until
+	// the sweep.
+	fake.put(descriptorKey("consumer-old"), `{"Name":"consumer-old","Created":"2024-01-01T00:00:00Z"}`)
+	fake.put("buckets/consumer-old/a", "12345")
+	fake.put("buckets/consumer-old/b", "123")
+	usage, err := records.Usage(ctx, "consumer-old")
+	if err != nil || usage.Buckets["consumer-old"].Bytes != 8 || usage.Buckets["consumer-old"].Objects != 2 {
+		t.Fatalf("an unmeasured bucket's usage = %+v, %v", usage, err)
+	}
+	// A lost flush: the record says 0, the prefix holds 10.
+	fake.put("buckets/consumer-a/x", "1234567890")
+	records.Add("consumer-a", 3, 1) // a write this replica has not flushed
+	fake.mu.Lock()
+	fake.uploads = []fakeUpload{
+		{key: "buckets/consumer-a/stale", id: "old-1", initiated: time.Now().Add(-8 * 24 * time.Hour)},
+		{key: "buckets/consumer-a/fresh", id: "new-1", initiated: time.Now().Add(-time.Hour)},
+	}
+	fake.mu.Unlock()
+	records.client = s3ClientFor(t, fake)
+	if err := records.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"consumer-a", "consumer-old"} {
+		rec, err := records.Get(ctx, name)
+		if err != nil || rec.MeasuredAt.IsZero() {
+			t.Fatalf("%s after the sweep = %+v, %v", name, rec, err)
+		}
+		want := map[string][2]int64{"consumer-a": {10, 1}, "consumer-old": {8, 2}}[name]
+		if rec.UsedBytes != want[0] || rec.Objects != want[1] {
+			t.Errorf("%s measured %d bytes in %d objects, want %v", name, rec.UsedBytes, rec.Objects, want)
+		}
+	}
+	if d := records.pendingDelta("consumer-a"); d != (delta{}) {
+		t.Errorf("the measurement left a pending delta %+v", d)
+	}
+	fake.mu.Lock()
+	aborted, left := fake.aborted, len(fake.uploads)
+	fake.mu.Unlock()
+	if len(aborted) != 1 || aborted[0] != "old-1" || left != 1 {
+		t.Errorf("aborted %v, %d uploads left; want the stale one gone and the fresh one kept", aborted, left)
+	}
+	// The cap judges from the measurement now.
+	if err := records.Allow(ctx, "consumer-a", 91); err == nil {
+		t.Error("101 of 100 bytes allowed")
+	}
+	if err := records.Allow(ctx, "consumer-a", 90); err != nil {
+		t.Errorf("100 of 100 bytes refused: %v", err)
+	}
+}
+
+// s3ClientFor is the conditional-delete client the sweep uses, pointed at
+// the fake.
+func s3ClientFor(t *testing.T, fake *fakeS3) *s3.Client {
+	t.Helper()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	return s3.New(s3.Options{BaseEndpoint: aws.String(srv.URL), Region: "us-east-1", UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("test", "test-secret", ""), Retryer: aws.NopRetryer{}, RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired, ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired})
+}
+
+// Two flushes add up: a replica's increment goes onto the record as it
+// is, not as it was read before the other replica's flush.
+func TestFlushesAddUp(t *testing.T) {
+	records, _ := testRecords(t)
+	other, _ := testRecords(t)
+	other.Store = records.Store // the same provider bucket
+	ctx := context.Background()
+	if err := records.Ensure(ctx, objectstore.BucketSpec{Name: "consumer-a"}); err != nil {
+		t.Fatal(err)
+	}
+	records.Add("consumer-a", 5, 1)
+	other.Add("consumer-a", 7, 1)
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := records.Get(ctx, "consumer-a")
+	if err != nil || rec.UsedBytes != 12 || rec.Objects != 2 {
+		t.Errorf("after two replicas' flushes = %+v, %v", rec, err)
+	}
+	// A delta of a bucket deleted meanwhile is dropped, not kept forever.
+	records.Add("consumer-a", 1, 0)
+	if err := records.Delete(ctx, "consumer-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := records.pendingDelta("consumer-a"); d != (delta{}) {
+		t.Errorf("a deleted bucket keeps a pending delta %+v", d)
+	}
+}
+
+// Each bucket's delta reaches its own record and no other's.
+func TestAFlushKeepsEachBucketsDeltaWithItsRecord(t *testing.T) {
+	records, _ := testRecords(t)
+	ctx := context.Background()
+	for _, name := range []string{"consumer-a", "consumer-b", "consumer-c"} {
+		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records.Add("consumer-a", 5, 1)
+	records.Add("consumer-b", 4, 1)
+	records.Add("consumer-a", 295, 0)
+	records.Add("consumer-c", 6, 1)
+	records.Add("consumer-c", -6, -1)
+	records.Add("consumer-c", 6, 1)
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]int64{"consumer-a": {300, 1}, "consumer-b": {4, 1}, "consumer-c": {6, 1}}
+	for name, w := range want {
+		rec, err := records.Get(ctx, name)
+		if err != nil || rec.UsedBytes != w[0] || rec.Objects != w[1] {
+			t.Errorf("%s = %d bytes %d objects, want %v (%v)", name, rec.UsedBytes, rec.Objects, w, err)
+		}
+	}
+	if err := records.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := records.Get(ctx, "consumer-a"); rec.UsedBytes != 300 {
+		t.Errorf("a second flush with nothing pending changed consumer-a to %d", rec.UsedBytes)
 	}
 }

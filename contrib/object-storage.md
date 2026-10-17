@@ -166,3 +166,62 @@ and gateway multipart, followed by two simultaneous multipart transfers of
 the same size. It verifies every byte with SHA-256 and samples the gateway
 process's RSS independently of the client and storage backend. See the
 [measured local results](object-gateway-benchmark.md) and their limitations.
+
+## Buckets for apps (storage plan step 5)
+
+The gateway serves two listeners from one process. Port 3900 is the
+platform's own consumers' (registry, sources, platform backups, a
+database's backups), signing with `garage` as before. Port 3901 is the
+projects' buckets' (`ObjectBucket` resources with the project label and
+without `shpyrd.io/postgres`): it signs with `us-east-1`, limits each
+logical bucket to `SHPYRD_GATEWAY_BUCKET_RATE` requests a second (1000
+unless set, a backstop against a runaway client; `SlowDown` with
+`Retry-After` past it), and is the one the public door reaches.
+The bucket controller hands a project's bucket the 3901 endpoint and the
+`us-east-1` region, and `AWS_PUBLIC_ENDPOINT_URL` when the cluster has a
+door.
+
+**The door** is the `object-gateway-door` component, rendered when
+`SHPYRD_BUCKETS_HOST` is set (`buckets.<SHPYRD_DOMAIN>` by default on a
+cluster with the gateway; name another host in the vars file to choose,
+outside the domain it gets the cluster issuer): a Certificate and an
+Ingress on the platform's front door to port 3901, bodies streamed
+unbuffered up to 5 GB. Presigned addresses are signed against that host;
+a public bucket (`spec.public`) answers a bucket policy allowing
+`GetObject` to anyone and nothing else; CORS is the consumer's own
+(`PutBucketCors`), kept on the descriptor. Bucket policies, ACL writes,
+website hosting, object lock and versioning stay refused.
+
+**The cap and the counter.** `spec.maxBytes` (the plan's cap per bucket
+when the API fills it in) lands on the descriptor as `MaxBytes`. The
+descriptor also counts: every data operation adds its bytes and objects
+to the replica's pending delta, a flush a minute applies the deltas as
+increments onto the re-read record (two replicas' flushes add up; on OCI
+the single writer serialises them), and the hourly sweep lists each
+bucket, makes the listing the counter (`MeasuredAt`), applies retention
+and aborts multipart uploads older than seven days. `PutObject`,
+`UploadPart`, `CopyObject` and `UploadPartCopy` refuse what would pass
+the cap before a byte reaches the provider, with the sentence the SDK
+shows; a delete counts its object out at once; an overwrite counts as new
+bytes until the sweep measures. The admin route `GET /v1/usage?bucket=`
+answers from the counter once a bucket is measured (a new bucket is; an
+older descriptor or an alias after its first sweep). An alias
+(`spec.alias`, set by a project restore into another namespace, never by
+hand) serves another logical bucket's prefix; deleting an aliased bucket
+takes only its key.
+
+**Metrics** are on the admin port at `/metrics` (a ServiceMonitor
+scrapes them; the NetworkPolicy lets the monitoring namespace in):
+`shpyrd_gateway_requests_total{listener,method,status}`,
+`shpyrd_gateway_request_duration_seconds`,
+`shpyrd_gateway_provider_request_duration_seconds{operation}`,
+`shpyrd_gateway_provider_errors_total`, `shpyrd_gateway_cap_refusals_total`,
+`shpyrd_gateway_slowdowns_total`, `shpyrd_gateway_stale_uploads_aborted_total`.
+Three alerts read them (`ObjectGatewayDown`, `ObjectGatewayErrors`,
+`ObjectGatewayProviderSlow`). Nothing is labelled by bucket.
+
+**Soft delete** comes from the provider, not the gateway: versioning on
+the provider bucket with a seven-day lifecycle for noncurrent versions
+(the Terraform of `contrib/oci/terraform/backups`), so an overwrite or a
+delete through the gateway has a week of undo at the cost of a week of
+deleted bytes.

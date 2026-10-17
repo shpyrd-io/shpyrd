@@ -153,10 +153,10 @@ export const backend: Api = {
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,
     ).status(),
-  backupProject: (slug) =>
+  backupProject: (slug, options) =>
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,
-    ).backup(),
+    ).backup(options),
   restoreProject: (slug, file) =>
     projectArchiveActions(
       `/api/project-archives/${encodeURIComponent(slug)}`,
@@ -359,6 +359,11 @@ export const backend: Api = {
     request(
       `${project(slug)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/resize`,
       json("POST", { size }),
+    ),
+  rotateBucket: (slug, name) =>
+    request(
+      `/api/projects/${encodeURIComponent(slug)}/resources/objectbucket/${encodeURIComponent(name)}/rotate`,
+      { method: "POST" },
     ),
   convertPostgres: (slug, name, body) =>
     request(

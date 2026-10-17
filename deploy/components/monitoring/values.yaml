@@ -210,6 +210,61 @@ additionalPrometheusRulesMap:
                 old, or none has completed yet. The Backups page of the operator
                 console shows the schedule and the recent runs; start a backup
                 from there and check that it completes.
+  # The object gateway (storage plan step 5): the projects' buckets and
+  # the platform's own consumers go through it; when it fails or the
+  # provider behind it is slow, uploads and backups fail with it.
+  shpyrd-object-storage:
+    groups:
+      - name: shpyrd-object-storage
+        rules:
+          # No gateway pod available: every bucket is unreachable.
+          - alert: ObjectGatewayDown
+            expr: |
+              max by (deployment) (kube_deployment_status_replicas_available{namespace="shpyrd-system", deployment="object-storage"}) == 0
+            for: 5m
+            labels:
+              severity: critical
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object gateway has no instance running
+              description: >-
+                No instance of the object gateway has been available for 5
+                minutes: the projects' buckets, the registry, uploaded sources
+                and database backups cannot be read or written. The Storage
+                page of the operator console shows the gateway's state; its
+                instance may be waiting for a machine after a node loss.
+          # One request in twenty fails on the gateway's side.
+          - alert: ObjectGatewayErrors
+            expr: |
+              sum(rate(shpyrd_gateway_requests_total{status="5xx"}[5m]))
+              /
+              sum(rate(shpyrd_gateway_requests_total[5m])) > 0.05
+            for: 10m
+            labels:
+              severity: warning
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object gateway is failing requests
+              description: >-
+                More than one request in twenty to the object gateway has
+                failed on the gateway's side for 10 minutes. The provider
+                behind it is the usual cause; the gateway's log says which
+                calls fail.
+          # The provider answers slowly: every upload and download waits.
+          - alert: ObjectGatewayProviderSlow
+            expr: |
+              histogram_quantile(0.95, sum by (le) (rate(shpyrd_gateway_provider_request_duration_seconds_bucket[5m]))) > 2
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object storage provider is slow
+              description: >-
+                One call in twenty to the object storage provider has taken
+                more than 2 seconds for 15 minutes. Uploads, downloads and
+                backups wait on it; check the provider's status for the region
+                the data lives in.
   # Storage and databases (RFC-0060, the storage plan): what an operator
   # must act on when a disk, a database or a node is not where it should be.
   shpyrd-storage:

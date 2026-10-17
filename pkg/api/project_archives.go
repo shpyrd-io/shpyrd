@@ -62,6 +62,14 @@ func (s *Server) exportProjectArchive(c *gin.Context) {
 		abort(c, http.StatusConflict, err)
 		return
 	}
+	// With files (storage plan step 5): the buckets' objects come along,
+	// measured and refused past the cap before anything is touched.
+	if c.Query("files") == "true" {
+		if err := s.measureArchiveBuckets(ctx, app, m); err != nil {
+			abort(c, http.StatusConflict, err)
+			return
+		}
+	}
 	b, err := projectarchive.New("", projectarchive.DefaultLimit)
 	if err != nil {
 		abort(c, http.StatusInsufficientStorage, err)
@@ -122,6 +130,15 @@ func (s *Server) buildProjectArchive(ctx context.Context, app *shpyrdv1.App, op 
 	}
 	if err := s.exportProjectGit(ctx, app, op, b, m); err != nil {
 		return "", err
+	}
+	// Objects need no pause: copied before the drain.
+	if err := s.exportArchiveBuckets(ctx, app, b, m); err != nil {
+		return "", err
+	}
+	for _, bucket := range m.Buckets {
+		if !bucket.Files {
+			op.warn(bucketReferenceNote(bucket.Name))
+		}
 	}
 	if err := s.drainProjectArchive(ctx, app, op, true); err != nil {
 		return "", err

@@ -97,6 +97,9 @@ spec:
               value: "${SHPYRD_PUBLIC_API_HOST}"
             - name: SHPYRD_PUBLIC_API_ISSUER
               value: "${SHPYRD_PUBLIC_API_ISSUER}"
+            # The buckets' public door (storage plan step 5), "" without one.
+            - name: SHPYRD_BUCKETS_HOST
+              value: "${SHPYRD_BUCKETS_HOST}"
             - name: SHPYRD_AUTH_URL
               value: "${SHPYRD_AUTH_URL}"
             - name: SHPYRD_EXTENSIONS

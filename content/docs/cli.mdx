@@ -5,7 +5,7 @@ description: Every shpyrd command and its flags.
 
 <Lead>
 
-`shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.cloud` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg` and `redis` (a project's resources) live in `shpyrd`; `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`.
+`shpyrd` is the CLI for people who deploy and run projects: it signs in to your workspace with `shpyrd login` - on shpyrd cloud, `https://acme.shpyrd.cloud` - and needs no kubeconfig: every developer command speaks the workspace API. `shpyrd-ctl`, installed alongside it, is for running shpyrd yourself: the operator who installs and runs the platform (the cluster, extensions, accounts, backups). With a kubeconfig named on the command line (`--context`, `--kubeconfig`) it goes through the cluster instead, as `shpyrd-ctl` always does. Project commands take `--project <slug>` or read `project:` from `shpyrd.yaml` in the current directory; `-v` prints verbose output. Commands contributed by extensions explain themselves when the extension is not enabled: `pg`, `redis` and `buckets` (a project's resources) live in `shpyrd`; `users`, `auth` and `object-storage` (the platform's) in `shpyrd-ctl`.
 
 </Lead>
 
@@ -132,7 +132,7 @@ Self-hosted: the operator's, in `shpyrd-ctl`.
 | `shpyrd-ctl costs [--from YYYY-MM-DD --to YYYY-MM-DD] [--kind estimated\|real\|usage] [--by workspace\|project\|workload\|process\|resourceType\|resource\|service]` | Explore cluster costs (enterprise): OpenCost estimates, provider-reported costs (`costs oci set`), or measured usage. Filter with `--workspace` and `--search`; choose `--currency` for sorting. `--sort cost_desc\|cost_asc\|name`, `--limit` (default 50, max 200), and `--offset` control the page; totals cover all matching groups. |
 | `shpyrd-ctl costs drains add <name> <url> [--header "Name=value"]...` / `list` / `remove <name>` | Send every cost line, as it is written or revised, to an HTTPS receiver: by workspace and project (their UUIDs, with the project's name), process and resource. |
 | `shpyrd-ctl opencost` | Whether the OpenCost extension is installed and answering. |
-| `shpyrd-ctl object-storage list` | Buckets of the platform's object store with usage (extension `object-storage`; alias `buckets`). |
+| `shpyrd-ctl object-storage list` | Every bucket of the platform's object store with usage (extension `object-storage`); a project's own buckets are `shpyrd buckets`. |
 | `shpyrd-ctl costs oci set --tenancy … --user … --fingerprint … --region … --key @oci.pem` / `status` / `remove` | Read the real bill from Oracle Cloud's Usage API, resource by resource. |
 
 ## Email
@@ -192,7 +192,9 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd redis create <name> --project <p>` | Create a Valkey or Redis store (extension `redis`): `--engine`, `--version`, `--size` (a Redis size; the smallest when omitted), `--persistent`, `--storage`. |
 | `shpyrd redis resize <name> <size> --project <p>` | Give a store another Redis size; it restarts (a cache comes back empty). |
 | `shpyrd redis list\|info\|cli\|delete` | Manage stores; `cli <name> -- <args>` runs valkey-cli or redis-cli. |
-| `shpyrd attach <resource>` | Attach a database or store to the app as config vars (`--kind` when ambiguous, `--prefix`). A release. |
+| `shpyrd buckets create <name> --project <p>` | Create a bucket for the app's files (extension `object-storage`): `--size` caps what it holds, within the plan's cap per bucket (the plan's cap when omitted); `--public` lets anyone read an object by its address; `--retention` expires objects after so many days. |
+| `shpyrd buckets list\|info\|rotate\|delete` | Manage buckets; `rotate <name>` issues a new key and the apps bound to the bucket restart with it. |
+| `shpyrd attach <resource>` | Attach a database, store or bucket to the app as config vars (`--kind` when ambiguous, `--prefix`; `--prefix AWS` on a bucket gives the names the SDKs read). A release. |
 | `shpyrd detach <resource>` | Remove the attachment (a release). |
 | `shpyrd logs` | Tail logs of every instance (`web.1`, `worker.2`...). `-f` follow, `-p <process>`, `-n <lines>` per instance (100 by default, `-1` for all), `--build` for the latest build output. `--json` prints the JSON lines as the app wrote them; `--pretty` renders them readably (the default at a terminal). |
 | `shpyrd releases` | Release history with digests and descriptions. |

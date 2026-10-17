@@ -257,6 +257,19 @@ jobs:
         run: |
           set -euo pipefail
           ./bin/shpyrd projects create "Hello World" --public --context kind-ci
+          # Running from a prebuilt image (no build on this cluster): an app
+          # with nothing to run renders no bindings, and the bucket step
+          # below attaches one. The image runs as a non-root user on 8080,
+          # as the platform requires.
+          ./bin/shpyrd deploy --image nginxinc/nginx-unprivileged:1.27-alpine --project hello-world --context kind-ci
+          # The App is named after the project's id, not its slug.
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
+          for i in $(seq 1 60); do
+            kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running && break
+            sleep 3
+          done
+          kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase} {.status.message}{"\n"}'
           ./bin/shpyrd cluster status --context kind-ci
           kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
       - name: The workspace's ceilings refuse in words
@@ -268,12 +281,41 @@ jobs:
           # the plan's words, before anything exists (a durable store is the
           # same refusal, in the API's tests: this suite has no redis); the
           # ceilings are then cleared so the rest of the suite runs.
-          ./bin/shpyrd-ctl workspace limits --disks=false --database-kinds shared --database-default shared --databases 1 --context kind-ci
+          ./bin/shpyrd-ctl workspace limits --disks=false --database-kinds shared --database-default shared --databases 1 --buckets 1 --bucket-cap 1Gi --context kind-ci
           ./bin/shpyrd-ctl workspace status --context kind-ci
           if ./bin/shpyrd volumes create files --size 1Gi --project hello-world --context kind-ci 2>refused.txt; then echo "a disk was admitted on a plan without disks" >&2; exit 1; fi
           grep -q "Disks are not included in the free workspace; use a bucket for files, or upgrade." refused.txt || { echo "the disk was refused with other words:"; cat refused.txt; exit 1; }
           if ./bin/shpyrd pg create own --type dedicated --project hello-world --context kind-ci 2>refused.txt; then echo "a dedicated database was admitted on a plan with shared ones" >&2; exit 1; fi
           grep -q "Your plan includes a shared database. A dedicated database comes with a paid plan." refused.txt || { echo "the database was refused with other words:"; cat refused.txt; exit 1; }
+          # Step 5: the one bucket the plan includes gets the plan's cap; a
+          # bigger one and a second one are refused in words; its key is
+          # rotated on request and its binding gives the SDKs their names.
+          ./bin/shpyrd buckets create files --project hello-world --context kind-ci | tee created.txt
+          grep -q "Your bucket can hold up to 1 GB." created.txt
+          ./bin/shpyrd buckets list --project hello-world --context kind-ci | grep -E "^files\s" | grep -q "1.0 GiB"
+          if ./bin/shpyrd buckets create big --size 5Gi --project hello-world --context kind-ci 2>refused.txt; then echo "a bucket above the plan's cap was admitted" >&2; exit 1; fi
+          grep -q "A bucket holds up to 1 GB." refused.txt || { echo "the bucket was refused with other words:"; cat refused.txt; exit 1; }
+          if ./bin/shpyrd buckets create more --project hello-world --context kind-ci 2>refused.txt; then echo "a second bucket was admitted on a plan with one" >&2; exit 1; fi
+          grep -q "This would bring the workspace to 2 of 1 buckets." refused.txt || { echo "the second bucket was refused with other words:"; cat refused.txt; exit 1; }
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          KEY=$(kubectl --context kind-ci -n "$NS" get secret files-object-storage -o jsonpath='{.data.AWS_ACCESS_KEY_ID}')
+          ./bin/shpyrd buckets rotate files --project hello-world --context kind-ci
+          for i in $(seq 1 30); do
+            NEWKEY=$(kubectl --context kind-ci -n "$NS" get secret files-object-storage -o jsonpath='{.data.AWS_ACCESS_KEY_ID}')
+            [ "$NEWKEY" != "$KEY" ] && break
+            sleep 2
+          done
+          [ "$NEWKEY" != "$KEY" ]
+          ./bin/shpyrd attach files --prefix AWS --project hello-world --context kind-ci
+          # The bindings Secret is named after the App, which carries the project's id.
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
+          for i in $(seq 1 30); do
+            kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' 2>/dev/null | grep -q AWS_BUCKET && break
+            sleep 2
+          done
+          kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' | grep -q AWS_ENDPOINT_URL
+          ./bin/shpyrd detach files --project hello-world --context kind-ci
+          ./bin/shpyrd buckets delete files --yes --project hello-world --context kind-ci
           ./bin/shpyrd-ctl workspace limits --none --context kind-ci
           ./bin/shpyrd-ctl workspace status --context kind-ci | grep "limits: none" >/dev/null
       - name: A shared database on the platform's server

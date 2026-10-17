@@ -124,6 +124,26 @@
           "message": "PostgreSQL 16, 1/1 instance(s) ready"
         },
         {
+          "kind": "ObjectBucket",
+          "name": "uploads",
+          "phase": "Ready",
+          "endpoint": "http://object-storage.shpyrd-system.svc:3901",
+          "attachedTo": ["hello-world"],
+          "data": true,
+          "createdAt": "2026-10-12T10:00:00Z",
+          "details": {
+            "capBytes": "10737418240",
+            "usedBytes": "3650722201",
+            "objects": "1284",
+            "bucket": "shpyrd-4f3c9a1e2b7d6c5a8e9f0b1c2d3e4f5a6b7c8d9e",
+            "publicEndpoint": "https://buckets.shpyrd.cloud",
+            "region": "us-east-1",
+            "public": "false",
+            "retentionDays": "0"
+          },
+          "bindable": true
+        },
+        {
           "kind": "Redis",
           "name": "cache",
           "phase": "Ready",

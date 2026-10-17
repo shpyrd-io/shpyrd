@@ -36,14 +36,16 @@ func newAttachCmd(g *globalFlags) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <resource>",
-		Short: "Attach a project resource (Postgres, Redis...) to the app as config vars",
+		Short: "Attach a project resource (Postgres, Redis, a bucket...) to the app as config vars",
 		Long: `Attach a resource of the project to its app. The resource's connection
 details are injected as config vars named after a prefix (DATABASE_URL,
-DATABASE_HOST... for Postgres; REDIS_URL... for Redis) and every attach or
-detach is a release that can be rolled back.
+DATABASE_HOST... for Postgres; REDIS_URL... for Redis; BUCKET_ACCESS_KEY_ID,
+BUCKET_ENDPOINT_URL... for a bucket) and every attach or detach is a
+release that can be rolled back.
 
   shpyrd attach db                       # Postgres db -> DATABASE_*
   shpyrd attach cache --prefix SESSIONS  # Redis cache -> SESSIONS_URL, SESSIONS_HOST...
+  shpyrd attach uploads --prefix AWS     # bucket uploads -> AWS_ACCESS_KEY_ID, AWS_ENDPOINT_URL... (what the SDKs read)
   shpyrd detach db`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -76,7 +78,7 @@ detach is a release that can be rolled back.
 				}
 				p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(k)))
 				return g.print(cmd, map[string]string{"project": name, "kind": k, "name": args[0], "prefix": p}, func(w io.Writer) {
-					fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", k, args[0], name, p, p)
+					fmt.Fprintf(w, "Attached %s %s to %s: config vars %s (values are never shown)\n", k, args[0], name, varsOf(k, p))
 					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
 				})
 			}
@@ -107,7 +109,7 @@ detach is a release that can be rolled back.
 			ac.audit(ctx, name, "attach", t.Kind+" "+args[0], prefix)
 			p := strings.ToUpper(firstNonEmpty(prefix, defaultPrefix(t.Kind)))
 			return g.print(cmd, map[string]string{"project": name, "kind": t.Kind, "name": args[0], "prefix": p}, func(w io.Writer) {
-				fmt.Fprintf(w, "Attached %s %s to %s: config vars %s_URL, %s_HOST, ... (values are never shown)\n", t.Kind, args[0], name, p, p)
+				fmt.Fprintf(w, "Attached %s %s to %s: config vars %s (values are never shown)\n", t.Kind, args[0], name, varsOf(t.Kind, p))
 				if app.Status.Image != "" {
 					fmt.Fprintln(w, "Releasing with the new configuration (the app waits while the resource is still provisioning).")
 				}
@@ -115,7 +117,7 @@ detach is a release that can be rolled back.
 		},
 	}
 	appFlag(cmd, &appName)
-	cmd.Flags().StringVar(&kind, "kind", "", "resource kind when the name is ambiguous (Postgres, Redis)")
+	cmd.Flags().StringVar(&kind, "kind", "", "resource kind when the name is ambiguous (Postgres, Redis, ObjectBucket)")
 	cmd.Flags().StringVar(&prefix, "prefix", "", "config var prefix (default per kind: DATABASE, REDIS)")
 	return cmd
 }
@@ -237,12 +239,22 @@ func (a *appClient) findResource(ctx context.Context, namespace, name, kind stri
 	}
 }
 
+// varsOf names the first variables a binding of a kind gives the app.
+func varsOf(kind, prefix string) string {
+	if kind == "ObjectBucket" {
+		return prefix + "_ACCESS_KEY_ID, " + prefix + "_SECRET_ACCESS_KEY, " + prefix + "_ENDPOINT_URL, " + prefix + "_BUCKET, ..."
+	}
+	return prefix + "_URL, " + prefix + "_HOST, ..."
+}
+
 func defaultPrefix(kind string) string {
 	switch kind {
 	case "Postgres":
 		return "DATABASE"
 	case "Redis":
 		return "REDIS"
+	case "ObjectBucket":
+		return "BUCKET"
 	}
 	return strings.ToUpper(kind)
 }

@@ -43,7 +43,10 @@ export function mockProjectArchives(scope: string) {
   return {
     projectArchiveStatus: status,
     simulateMove: (id: string) => run(id, "move"),
-    backupProject: (id: string) => run(id, "export"),
+    backupProject: async (id: string, options?: { files?: boolean }) => {
+      await run(id, "export");
+      return options?.files ? [] : ["bucket uploads travels by reference: its files stay in the store and a restore in this cluster finds them; export with files to carry them in the archive"];
+    },
     restoreProject: (id: string, _file: File) => run(id, "restore"),
     recoverProject: (id: string) => run(id, "restore"),
   };

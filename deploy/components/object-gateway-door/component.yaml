@@ -1,0 +1,14 @@
+name: object-gateway-door
+description: The buckets' public door, one TLS host through the front door to the gateway's listener for the projects' buckets (presigned addresses, public objects; storage plan step 5)
+namespace: shpyrd-system
+requiredVar: SHPYRD_BUCKETS_HOST
+kustomize:
+  path: base
+wait:
+  - condition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      namespace: shpyrd-system
+      name: buckets-tls
+      type: Ready
+timeout: 15m

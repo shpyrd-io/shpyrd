@@ -91,6 +91,15 @@ func Main(opts Options) {
 		}
 		return
 	}
+	// `shpyrd-server object-gateway-load`: the load test of the storage
+	// plan's step 5, run as a Job with a bucket's credential.
+	if len(os.Args) > 1 && os.Args[1] == "object-gateway-load" {
+		if err := objectgateway.LoadMain(os.Stdout); err != nil {
+			slog.Error("object gateway load test failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// `shpyrd-server ui-export <dir>`: write the applications built into
 	// this binary to a directory, then exit. The server's init container
 	// runs it, so the server reads its applications from a directory in

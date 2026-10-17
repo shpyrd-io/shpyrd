@@ -8,13 +8,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
-	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
+	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -170,49 +175,115 @@ func TestProjectArchiveRecoveryOnlyClearsItsOwnDatabaseMaintenance(t *testing.T)
 	}
 }
 
-// The "<db>-backups" bucket the platform creates for a database with backups
-// (RFC-0038) lives in the project's namespace, owned by its Postgres. It is
-// the database's own archive, not project data, so it must not stop a
-// portable export or a move; a bucket the project created itself still does,
-// in words (#52).
-func TestProjectArchiveIgnoresDatabaseBackupsBucket(t *testing.T) {
+// The platform-created backups bucket of a database never blocks an
+// archive; a bucket of the project's own travels by reference (storage
+// plan step 5): the manifest names it with its cap and its logical name,
+// never a credential, and the platform's is not among them.
+func TestProjectArchiveCarriesBucketsByReference(t *testing.T) {
 	ctx := context.Background()
-	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
-	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: app.Namespace, UID: "db-uid"}, Spec: shpyrdv1.PostgresSpec{Backups: &shpyrdv1.PostgresBackups{}}}
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Image: "ghcr.io/o/shop@sha256:" + strings.Repeat("a", 64)}}
+	db := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: app.Namespace, UID: "db-uid"}}
 	owned := true
 	backups := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{
-		Name: controller.BackupsBucketName(db.Name), Namespace: app.Namespace,
-		Labels:          map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": db.Name},
+		Name: "db-backups", Namespace: app.Namespace,
+		Labels:          map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelBucketPostgres: db.Name},
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: shpyrdv1.GroupVersion.String(), Kind: "Postgres", Name: db.Name, UID: db.UID, Controller: &owned, BlockOwnerDeletion: &owned}},
 	}}
-	s, _ := newTestServer(t, nil, []client.Object{app, db, backups})
+	cap := resource.MustParse("1Gi")
+	uploads := &shpyrdv1.ObjectBucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: app.Namespace, Labels: map[string]string{shpyrdv1.LabelProject: "shop"}},
+		Spec:       shpyrdv1.ObjectBucketSpec{MaxBytes: &cap, Public: true, SecretName: "uploads-key"},
+		Status:     shpyrdv1.ObjectBucketStatus{Phase: shpyrdv1.BucketReady, Bucket: "shpyrd-0123", SecretName: "uploads-key"},
+	}
+	s, _ := newTestServer(t, nil, []client.Object{app, db, backups, uploads})
 	m, err := s.projectArchiveMetadata(ctx, app)
 	if err != nil {
-		t.Fatalf("the database's backups bucket blocked the portable export: %v", err)
+		t.Fatalf("the buckets blocked the portable export: %v", err)
 	}
 	if len(m.Databases) != 1 || m.Databases[0].Name != "db" {
 		t.Fatalf("databases: %+v", m.Databases)
 	}
-	if _, err := s.projectMetadata(ctx, app, false); err != nil {
-		t.Fatalf("the database's backups bucket blocked a move: %v", err)
+	if len(m.Buckets) != 1 || m.Buckets[0].Name != "uploads" || m.Buckets[0].Logical != "shpyrd-0123" || m.Buckets[0].Files || !m.Buckets[0].Spec.Public || m.Buckets[0].Spec.MaxBytes == nil || m.Buckets[0].Spec.SecretName != "" {
+		t.Fatalf("buckets: %+v", m.Buckets)
 	}
+	if _, err := s.projectMetadata(ctx, app, false); err != nil {
+		t.Fatalf("a move: %v", err)
+	}
+	raw, _ := json.Marshal(m)
+	if strings.Contains(string(raw), "AWS_") || strings.Contains(string(raw), "secretAccessKey") {
+		t.Error("the manifest carries a credential")
+	}
+}
 
-	// A bucket of the project's own, even one named like a backups bucket
-	// and labelled like one, is still refused: nothing the project does can
-	// give its bucket a database for an owner.
-	own := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads-backups", Namespace: app.Namespace, Labels: backups.Labels}}
-	s, _ = newTestServer(t, nil, []client.Object{app, db, backups, own})
-	_, err = s.projectArchiveMetadata(ctx, app)
-	if err == nil {
-		t.Fatal("archive implied the project's own bucket data was exported")
+// A restore makes the buckets the archive names (storage plan step 5):
+// in another namespace on the gateway the bucket serves the objects
+// under their first name through an alias; a binding to it is accepted
+// and counted against the workspace's buckets; a rollback takes the
+// bucket but never the objects.
+func TestProjectRestoreRebindsBucketsByReference(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop")}, Spec: shpyrdv1.AppSpec{Slug: "shop", Image: "ghcr.io/o/shop@sha256:" + strings.Repeat("a", 64)}}
+	s, cr := newTestServer(t, nil, []client.Object{app})
+	s.opts.Vars = func(key string) string { return map[string]string{install.VarGatewayBucket: "shpyrd-objects"}[key] }
+	cap := resource.MustParse("1Gi")
+	m := &projectArchiveMetadata{Name: "shop", Spec: shpyrdv1.AppSpec{Image: app.Spec.Image, Bindings: []shpyrdv1.Binding{{Kind: "ObjectBucket", Name: "uploads", Prefix: "AWS"}}}, Buckets: []archivedBucket{{Name: "uploads", Spec: shpyrdv1.ObjectBucketSpec{MaxBytes: &cap}, Logical: objectstore.LogicalBucketName("app-shop", "uploads")}}}
+	original := &projectArchiveMetadata{Name: "shop", Spec: app.Spec}
+	if err := s.checkArchiveCompatibility(ctx, app, original, m); err != nil {
+		t.Fatalf("a binding to an archived bucket: %v", err)
 	}
-	if !strings.Contains(err.Error(), "object buckets of its own") {
-		t.Fatalf("refusal does not name the project's own buckets: %v", err)
+	missing := *m
+	missing.Buckets = nil
+	if err := s.checkArchiveCompatibility(ctx, app, original, &missing); err == nil || !strings.Contains(err.Error(), "missing bucket binding uploads") {
+		t.Errorf("a binding to a bucket the archive does not name = %v", err)
 	}
-	if bad := controller.PlatformWordingFault(err.Error()); bad != "" {
-		t.Fatalf("refusal %q names %q", err, bad)
+	// The operation's record, which beginProjectArchive writes, holds
+	// what the restore created.
+	for ns, id := range map[string]string{app.Namespace: "op-1", "app-shop": "op-2"} {
+		if err := cr.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: projectOperationSecret, Namespace: ns, Labels: map[string]string{projectOperationLabel: id}}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := s.projectMetadata(ctx, app, false); err != nil {
-		t.Fatalf("the project's own bucket blocked a move, which does not claim to carry it: %v", err)
+	op := &projectArchiveOperation{ID: "op-1", Kind: "restore", Original: *original}
+	if err := s.createArchiveResources(ctx, app, op, m); err != nil {
+		t.Fatal(err)
+	}
+	b := &shpyrdv1.ObjectBucket{}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: "uploads"}, b); err != nil {
+		t.Fatal(err)
+	}
+	if b.Spec.Alias != objectstore.LogicalBucketName("app-shop", "uploads") || b.Labels[shpyrdv1.LabelProject] != "shop" || b.Labels[projectOperationLabel] != "op-1" || b.CapBytes() != 1<<30 {
+		t.Errorf("the restored bucket = %+v", b)
+	}
+	if len(op.CreatedBuckets) != 1 || op.CreatedBuckets[0] != "uploads" {
+		t.Errorf("created = %v", op.CreatedBuckets)
+	}
+	// The same namespace needs no alias: the objects are under its own name.
+	same := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Slug: "shop"}}
+	if err := cr.Create(ctx, same); err != nil {
+		t.Fatal(err)
+	}
+	op2 := &projectArchiveOperation{ID: "op-2", Kind: "restore"}
+	if err := s.createArchiveResources(ctx, same, op2, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "uploads"}, b); err != nil || b.Spec.Alias != "" {
+		t.Errorf("a bucket restored into its own namespace = %+v, %v", b.Spec, err)
+	}
+	if !slices.Contains(op2.Warnings, bucketReferenceNote("uploads")) {
+		t.Errorf("the report does not say the bucket travels by reference: %v", op2.Warnings)
+	}
+	// Rollback: the bucket goes with Retain, so nothing under it is emptied.
+	if err := s.removeCreatedArchiveResources(ctx, app, op); err != nil {
+		t.Fatal(err)
+	}
+	if err := cr.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: "uploads"}, b); err == nil {
+		if b.DeletionTimestamp.IsZero() || b.Spec.DeletionPolicy != "Retain" {
+			t.Errorf("after the rollback the bucket = %+v", b)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		t.Fatal(err)
+	}
+	if op.CreatedBuckets != nil {
+		t.Errorf("created after the rollback = %v", op.CreatedBuckets)
 	}
 }

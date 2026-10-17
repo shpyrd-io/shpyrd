@@ -66,7 +66,7 @@ export type LogQuery = { process?: string; tail?: number; follow?: boolean };
 
 export type Api = {
   projectArchiveStatus: (slug: string) => Promise<ProjectArchiveStatus>;
-  backupProject: (slug: string) => Promise<void>;
+  backupProject: (slug: string, options?: { files?: boolean }) => Promise<string[]>;
   restoreProject: (slug: string, file: File) => Promise<void>;
   recoverProject: (slug: string) => Promise<void>;
   config: () => Promise<PublicConfig>;
@@ -203,6 +203,9 @@ export type Api = {
   ) => Promise<ResourceInfo>;
   // A database moved between the shared server and a cluster of its own,
   // under its name; the note says what follows.
+  // A new key for a bucket (storage plan step 5): the apps attached to it
+  // restart with it.
+  rotateBucket: (slug: string, name: string) => Promise<{ note?: string }>;
   convertPostgres: (
     slug: string,
     name: string,
