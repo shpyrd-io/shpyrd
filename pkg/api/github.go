@@ -84,8 +84,13 @@ type githubState struct {
 	// matches them, never the name (two identities may share an email).
 	Provider string `json:"prov"`
 	Subject  string `json:"sub"`
-	Exp      int64  `json:"exp"`
-	Nonce    string `json:"n"`
+	// Link: the state starts a link of the person's own GitHub account
+	// (RFC-0054), not a connection; Return is the dashboard path the
+	// person was on.
+	Link   bool   `json:"link,omitempty"`
+	Return string `json:"ret,omitempty"`
+	Exp    int64  `json:"exp"`
+	Nonce  string `json:"n"`
 }
 
 var (
@@ -157,7 +162,7 @@ func signGitHubState(key string, st githubState) string { return githubSign(key,
 // readGitHubState checks the tag in constant time, then the time.
 func readGitHubState(key, raw string, now time.Time) (githubState, error) {
 	var st githubState
-	if strings.HasPrefix(raw, githubTicketPrefix) || !githubRead(key, "", raw, &st) || st.Workspace == "" || st.Nonce == "" || now.Unix() > st.Exp {
+	if strings.HasPrefix(raw, githubTicketPrefix) || strings.HasPrefix(raw, githubLinkTicketPrefix) || !githubRead(key, "", raw, &st) || st.Workspace == "" || st.Nonce == "" || now.Unix() > st.Exp {
 		return githubState{}, errGitHubState
 	}
 	return st, nil
@@ -478,6 +483,12 @@ func (s *Server) githubInstalled(c *gin.Context) {
 	cl, err := s.githubApp.Client(ctx)
 	if err != nil {
 		s.githubPage(c, http.StatusNotFound, "GitHub is not set up here", "This platform has no GitHub App, so nothing was connected.", "")
+		return
+	}
+	// A link of a person's GitHub account comes back here too: its state
+	// says so (RFC-0054).
+	if st, err := readGitHubState(cl.App().ClientSecret, c.Query("state"), time.Now()); err == nil && st.Link {
+		s.githubLinkCallback(c, cl, st)
 		return
 	}
 	if c.Query("setup_action") == "request" {

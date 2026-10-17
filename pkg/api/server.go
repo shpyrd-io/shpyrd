@@ -304,6 +304,8 @@ type Server struct {
 	// githubBox seals the people's GitHub refresh tokens (RFC-0054): its
 	// key is the Secret shpyrd-token-key, made at start when absent.
 	githubBox *tokenseal.Box
+	// githubUsers keeps the people's GitHub access tokens in memory.
+	githubUsers *githubUserTokens
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -442,6 +444,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		}
 		s.githubBox = box
 	}
+	s.githubUsers = newGitHubUserTokens(s.store, s.githubBox, s.log)
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
@@ -663,6 +666,10 @@ func (s *Server) routes() error {
 		return err
 	}
 	api.GET("/me", s.me)
+	// The person's own GitHub account (RFC-0054).
+	api.GET("/me/github", s.githubMe)
+	api.POST("/me/github/link", s.githubLinkStart)
+	api.DELETE("/me/github", s.githubUnlink)
 	api.GET("/links", s.links)
 	api.POST("/auth/logout", s.authLogout)
 	// The cluster is the operator's (RFC-0033 phase 6): a workspace's
@@ -715,6 +722,11 @@ func (s *Server) routes() error {
 	// The connect finishes on the workspace's own address, with the
 	// session that started it; a browser without one signs in first.
 	s.engine.GET("/api/workspace/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.require(authz.ClusterAdmin), s.githubFinish)
+	// A link of the person's GitHub: the CLI opens its start in the
+	// browser, and it finishes on the workspace's own address with the
+	// session that started it; a browser without one signs in first.
+	s.engine.GET("/api/me/github/link", tenant, login, s.githubSignInFirst, s.auth(), s.githubLinkBrowser)
+	s.engine.GET("/api/me/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.githubLinkFinish)
 	// Who makes projects picks from the repositories (ClusterCreate, the
 	// action of POST /projects).
 	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)
