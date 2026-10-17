@@ -1,6 +1,7 @@
 // Package githubtest is a fake GitHub for shpyrd's tests: the App's token
 // endpoint (which checks the App's JWT), an installation's repositories and
-// branches, the OAuth exchange, a person's installations and the manifest
+// branches, people with GitHub App user tokens (exchanged, refreshed, revoked) and
+// what each may read, a person's installations and the manifest
 // conversion, a repository's compare, check runs, statuses and Deployments.
 // Its state is read and set through methods, under its lock.
 package githubtest
@@ -89,12 +90,19 @@ type Server struct {
 	// limited is the Retry-After of a rate limit; 0: none.
 	limited time.Duration
 	// forbidden answers 403, not for a rate limit.
-	forbidden bool
-	repos     map[int64][]Repo
-	branches  map[string][]string // by full name, lower case
-	people    []Installation
-	login     string
-	orgRoles  map[string][2]string // by org, lower case: role, state
+	forbidden  bool
+	repos      map[int64][]Repo
+	branches   map[string][]string // by full name, lower case
+	people     []Installation
+	users      map[string]*User     // by handle: the login in lower case, "default" for the default person
+	codes      map[string]string    // OAuth code -> handle
+	access     map[string]userGrant // user access token -> whose, until when
+	refresh    map[string]string    // live refresh token -> handle
+	revoked    []string
+	issued     int
+	noExpiring bool
+	public     []Repo
+	orgRoles   map[string][2]string // by org, lower case: role, state
 	// membersRefusal is the message of a 403 the memberships call answers;
 	// "": none.
 	membersRefusal string
@@ -130,7 +138,10 @@ func NewServer(t testing.TB) *Server {
 		}},
 		branches: map[string][]string{"acme/shop": {"dev", "main"}, "acme/site": {"trunk"}},
 		people:   []Installation{{ID: 42, Login: "Acme", Type: "Organization"}},
-		login:    UserLogin,
+		users:    map[string]*User{defaultUser: {ID: UserID, Login: UserLogin}},
+		codes:    map[string]string{Code: defaultUser},
+		access:   map[string]userGrant{UserToken: {handle: defaultUser, exp: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)}},
+		refresh:  map[string]string{},
 		orgRoles: map[string][2]string{"acme": {"admin", "active"}},
 		minted:   map[int64]int{},
 		tokens:   map[string]tokenGrant{},
@@ -206,7 +217,11 @@ func (f *Server) SetUserInstallations(list ...Installation) {
 }
 
 // SetUserLogin is who the person's token says they are.
-func (f *Server) SetUserLogin(login string) { f.mu.Lock(); f.login = login; f.mu.Unlock() }
+func (f *Server) SetUserLogin(login string) {
+	f.mu.Lock()
+	f.users[defaultUser].Login = login
+	f.mu.Unlock()
+}
 
 // SetOrgRole sets the person's membership of org; role "" is none.
 func (f *Server) SetOrgRole(org, role, state string) {
@@ -290,6 +305,12 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		f.accessToken(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/app/installations/"), "/access_tokens"))
 	case r.Method == "GET" && p == "/installation/repositories":
 		f.repositories(w, r)
+	case r.Method == "GET" && strings.HasPrefix(p, "/repos/") && strings.Count(p, "/") == 3:
+		f.repoInfo(w, r, strings.TrimPrefix(p, "/repos/"))
+	case r.Method == "GET" && strings.HasPrefix(p, "/user/installations/") && strings.HasSuffix(p, "/repositories"):
+		f.userInstallationRepos(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/user/installations/"), "/repositories"))
+	case r.Method == "DELETE" && p == "/applications/"+ClientID+"/token":
+		f.revoke(w, r)
 	case r.Method == "GET" && strings.HasPrefix(p, "/repos/") && strings.HasSuffix(p, "/branches"):
 		f.branchList(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/branches"))
 	case strings.HasPrefix(p, "/repos/"):
@@ -379,8 +400,13 @@ func (f *Server) repositories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Server) branchList(w http.ResponseWriter, r *http.Request, fullName string) {
-	id, ok := f.installationOf(r)
-	if !ok || !grants(f.repos[id], fullName[strings.Index(fullName, "/")+1:]) {
+	allowed := false
+	if id, ok := f.installationOf(r); ok {
+		allowed = grants(f.repos[id], fullName[strings.Index(fullName, "/")+1:])
+	} else if _, ok := f.userOf(r); ok {
+		_, allowed = f.readable(r, fullName)
+	}
+	if !allowed {
 		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 		return
 	}
@@ -391,49 +417,8 @@ func (f *Server) branchList(w http.ResponseWriter, r *http.Request, fullName str
 	reply(w, http.StatusOK, out)
 }
 
-func (f *Server) exchange(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ClientID     string `json:"client_id"`
-		ClientSecret string `json:"client_secret"`
-		Code         string `json:"code"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
-	switch {
-	case in.ClientID != ClientID || in.ClientSecret != ClientSecret:
-		reply(w, http.StatusOK, map[string]string{"error": "incorrect_client_credentials", "error_description": "The client_id and/or client_secret passed are incorrect."})
-	case in.Code != Code:
-		reply(w, http.StatusOK, map[string]string{"error": "bad_verification_code", "error_description": "The code passed is incorrect or expired."})
-	default:
-		reply(w, http.StatusOK, map[string]string{"access_token": UserToken, "token_type": "bearer"})
-	}
-}
-
-func (f *Server) userInstallations(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+UserToken {
-		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
-		return
-	}
-	var out []map[string]any
-	for _, i := range pageOf(f.people, r) {
-		var suspended any
-		if i.Suspended {
-			suspended = f.clock().UTC().Format(time.RFC3339)
-		}
-		out = append(out, map[string]any{"id": i.ID, "account": map[string]string{"login": i.Login, "type": i.Type}, "suspended_at": suspended})
-	}
-	reply(w, http.StatusOK, map[string]any{"total_count": len(f.people), "installations": out})
-}
-
-func (f *Server) user(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+UserToken {
-		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
-		return
-	}
-	reply(w, http.StatusOK, map[string]any{"login": f.login, "type": "User"})
-}
-
 func (f *Server) membership(w http.ResponseWriter, r *http.Request, org string) {
-	if r.Header.Get("Authorization") != "Bearer "+UserToken {
+	if _, ok := f.userOf(r); !ok {
 		reply(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
 		return
 	}

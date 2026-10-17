@@ -263,6 +263,12 @@ func (c *Client) Repositories(ctx context.Context, installation int64) ([]Reposi
 	if err != nil {
 		return nil, err
 	}
+	return c.repositoryPages(ctx, c.api+"/installation/repositories", tok.Value, installation)
+}
+
+// repositoryPages pages through a list of an installation's repositories:
+// the installation's own, or what a person reads of it.
+func (c *Client) repositoryPages(ctx context.Context, endpoint, token string, installation int64) ([]Repository, error) {
 	out := []Repository{}
 	for page := 1; page <= maxPages; page++ {
 		var res struct {
@@ -273,7 +279,7 @@ func (c *Client) Repositories(ctx context.Context, installation int64) ([]Reposi
 				DefaultBranch string `json:"default_branch"`
 			} `json:"repositories"`
 		}
-		if err := c.call(ctx, "GET", fmt.Sprintf("%s/installation/repositories?per_page=%d&page=%d", c.api, perPage, page), tok.Value, nil, &res); err != nil {
+		if err := c.call(ctx, "GET", fmt.Sprintf("%s?per_page=%d&page=%d", endpoint, perPage, page), token, nil, &res); err != nil {
 			return nil, err
 		}
 		for _, r := range res.Repositories {
@@ -292,13 +298,17 @@ func (c *Client) Branches(ctx context.Context, installation int64, owner, repo s
 	if err != nil {
 		return nil, err
 	}
+	return c.branches(ctx, tok.Value, owner, repo)
+}
+
+func (c *Client) branches(ctx context.Context, token, owner, repo string) ([]string, error) {
 	out := []string{}
 	for page := 1; page <= 10; page++ {
 		var res []struct {
 			Name string `json:"name"`
 		}
 		endpoint := fmt.Sprintf("%s/repos/%s/%s/branches?per_page=%d&page=%d", c.api, url.PathEscape(owner), url.PathEscape(repo), perPage, page)
-		if err := c.call(ctx, "GET", endpoint, tok.Value, nil, &res); err != nil {
+		if err := c.call(ctx, "GET", endpoint, token, nil, &res); err != nil {
 			return nil, err
 		}
 		for _, b := range res {
@@ -312,29 +322,11 @@ func (c *Client) Branches(ctx context.Context, installation int64, owner, repo s
 }
 
 // ExchangeCode turns the code GitHub gave the browser into the person's
-// own token, which only says who they are: the caller drops it once it has
-// asked.
+// own access token, which Connect only asks who they are with: the caller
+// drops it once it has asked.
 func (c *Client) ExchangeCode(ctx context.Context, code string) (string, error) {
-	raw, _ := json.Marshal(map[string]string{"client_id": c.app.ClientID, "client_secret": c.app.ClientSecret, "code": code})
-	req, err := http.NewRequestWithContext(ctx, "POST", c.web+"/login/oauth/access_token", bytes.NewReader(raw))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "shpyrd")
-	var res struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
-	}
-	if err := c.send(req, &res); err != nil {
-		return "", err
-	}
-	if res.AccessToken == "" {
-		return "", fmt.Errorf("GitHub did not accept the sign-in: %s", firstNonEmpty(res.Description, res.Error, "it gave no token"))
-	}
-	return res.AccessToken, nil
+	t, err := c.ExchangeUserCode(ctx, code)
+	return t.Access, err
 }
 
 // UserInstallations are the installations of the App the person behind
@@ -368,16 +360,8 @@ func (c *Client) UserInstallations(ctx context.Context, userToken string) ([]Ins
 
 // UserLogin is the login of the person behind userToken (GET /user).
 func (c *Client) UserLogin(ctx context.Context, userToken string) (string, error) {
-	var res struct {
-		Login string `json:"login"`
-	}
-	if err := c.call(ctx, "GET", c.api+"/user", userToken, nil, &res); err != nil {
-		return "", err
-	}
-	if res.Login == "" {
-		return "", errors.New("GitHub did not say who the person is")
-	}
-	return res.Login, nil
+	u, err := c.UserProfile(ctx, userToken)
+	return u.Login, err
 }
 
 // OrgMembership is the person's role (admin or member) and the state
@@ -441,17 +425,23 @@ func ConvertManifest(ctx context.Context, apiURL string, hc *http.Client, code s
 
 // call sends a JSON request to GitHub's API.
 func (c *Client) call(ctx context.Context, method, endpoint, bearer string, in, out any) error {
+	_, err := c.callHeaders(ctx, method, endpoint, bearer, in, out)
+	return err
+}
+
+// callHeaders is call, with the answer's headers: a page's Link.
+func (c *Client) callHeaders(ctx context.Context, method, endpoint, bearer string, in, out any) (http.Header, error) {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -462,20 +452,25 @@ func (c *Client) call(ctx context.Context, method, endpoint, bearer string, in, 
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	return c.send(req, out)
+	return c.sendHeaders(req, out)
 }
 
 // send makes the call and reads the answer; a status that is not 2xx is
 // an APIError with GitHub's words.
 func (c *Client) send(req *http.Request, out any) error {
+	_, err := c.sendHeaders(req, out)
+	return err
+}
+
+func (c *Client) sendHeaders(req *http.Request, out any) (http.Header, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
 		var e struct {
@@ -485,12 +480,12 @@ func (c *Client) send(req *http.Request, out any) error {
 		apiErr := &APIError{Status: resp.StatusCode, Message: firstNonEmpty(e.Message, http.StatusText(resp.StatusCode)), RetryAfter: c.retryAfter(resp.Header)}
 		apiErr.RateLimited = resp.StatusCode == http.StatusTooManyRequests || apiErr.RetryAfter > 0 ||
 			(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-RateLimit-Remaining") == "0" || strings.Contains(strings.ToLower(e.Message), "rate limit")))
-		return apiErr
+		return resp.Header, apiErr
 	}
-	if out == nil {
-		return nil
+	if out == nil || len(raw) == 0 {
+		return resp.Header, nil
 	}
-	return json.Unmarshal(raw, out)
+	return resp.Header, json.Unmarshal(raw, out)
 }
 
 // retryAfter reads Retry-After (seconds), else X-RateLimit-Reset when
