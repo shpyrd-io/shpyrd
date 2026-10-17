@@ -31,6 +31,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
+	"github.com/shpyrd-io/shpyrd/pkg/tokenseal"
 )
 
 // Options configures the server.
@@ -300,6 +301,9 @@ type Server struct {
 	githubTickets    *nonceSet
 	githubRepos      *githubRepoCache
 	githubDeliveries *rateLimiter
+	// githubBox seals the people's GitHub refresh tokens (RFC-0054): its
+	// key is the Secret shpyrd-token-key, made at start when absent.
+	githubBox *tokenseal.Box
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -425,6 +429,19 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		}
 	}
 	s.githubApp = &github.Source{Reader: opts.Apps, Namespace: systemNS, Options: github.Options{APIURL: opts.Vars(github.EnvAPIURL)}}
+	if kubeIface != nil {
+		box, err := tokenseal.LoadOrCreate(context.Background(), kubeIface, systemNS)
+		if err != nil {
+			return nil, fmt.Errorf("token key: %w", err)
+		}
+		s.githubBox = box
+	} else {
+		box, err := tokenseal.Generate()
+		if err != nil {
+			return nil, err
+		}
+		s.githubBox = box
+	}
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
