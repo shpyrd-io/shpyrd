@@ -38,6 +38,21 @@ type GitHubInstallation struct {
 	DeletedAt   *time.Time `json:"deletedAt,omitempty"`
 }
 
+// GitHubUserLink is a person's GitHub account, linked through the GitHub
+// App's user authorization (RFC-0054): one per shpyrd identity, its
+// provider and subject. RefreshToken is sealed (pkg/tokenseal); the access
+// token is never stored.
+type GitHubUserLink struct {
+	Provider         string    `json:"provider"`
+	Subject          string    `json:"subject"`
+	GitHubUserID     int64     `json:"githubUserId"`
+	GitHubLogin      string    `json:"githubLogin"`
+	RefreshToken     string    `json:"-"`
+	RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
+	LinkedAt         time.Time `json:"linkedAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
 // GitHub is the GitHub App part of the Store.
 type GitHub interface {
 	// AddGitHubInstallation connects an installation to a workspace (slug
@@ -58,4 +73,12 @@ type GitHub interface {
 	// DeleteGitHubInstallation disconnects one from a workspace;
 	// ErrNotFound when the workspace does not have it.
 	DeleteGitHubInstallation(ctx context.Context, ws string, id int64) error
+	// PutGitHubUserLink links an identity, or links it again: the refresh
+	// token rotated, the login renamed, or another GitHub account.
+	// LinkedAt stays while the GitHub account (its id) is the same.
+	PutGitHubUserLink(ctx context.Context, l GitHubUserLink) error
+	// GitHubUserLink is the identity's link; ErrNotFound when it has none.
+	GitHubUserLink(ctx context.Context, provider, subject string) (*GitHubUserLink, error)
+	// DeleteGitHubUserLink unlinks; ErrNotFound when there is no link.
+	DeleteGitHubUserLink(ctx context.Context, provider, subject string) error
 }

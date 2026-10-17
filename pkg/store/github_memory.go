@@ -116,3 +116,42 @@ func (m *Memory) DeleteGitHubInstallation(_ context.Context, ws string, id int64
 	delete(m.github, id)
 	return nil
 }
+
+func githubLinkKey(provider, subject string) string { return provider + "\x00" + subject }
+
+func (m *Memory) PutGitHubUserLink(_ context.Context, l GitHubUserLink) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.githubLinks == nil {
+		m.githubLinks = map[string]GitHubUserLink{}
+	}
+	now := m.now()
+	key := githubLinkKey(l.Provider, l.Subject)
+	l.LinkedAt, l.UpdatedAt = now, now
+	if prev, ok := m.githubLinks[key]; ok && prev.GitHubUserID == l.GitHubUserID {
+		l.LinkedAt = prev.LinkedAt
+	}
+	m.githubLinks[key] = l
+	return nil
+}
+
+func (m *Memory) GitHubUserLink(_ context.Context, provider, subject string) (*GitHubUserLink, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.githubLinks[githubLinkKey(provider, subject)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &l, nil
+}
+
+func (m *Memory) DeleteGitHubUserLink(_ context.Context, provider, subject string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := githubLinkKey(provider, subject)
+	if _, ok := m.githubLinks[key]; !ok {
+		return ErrNotFound
+	}
+	delete(m.githubLinks, key)
+	return nil
+}

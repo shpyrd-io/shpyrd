@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 func acme(id int64, by string) GitHubInstallation {
@@ -181,6 +182,52 @@ func TestOneWorkspaceSeesOnlyItsGitHubInstallations(t *testing.T) {
 			}
 			if got, err := one.GitHubInstallation(ctx, 42); err != nil || got.ID != 42 {
 				t.Errorf("the default one's: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestGitHubUserLinks(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := open(t)
+			if _, err := s.GitHubUserLink(ctx, "local", "p-1"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("before: %v", err)
+			}
+			exp := time.Now().Add(184 * 24 * time.Hour).UTC().Truncate(time.Second)
+			if err := s.PutGitHubUserLink(ctx, GitHubUserLink{Provider: "local", Subject: "p-1", GitHubUserID: 1001, GitHubLogin: "ana",
+				RefreshToken: "v1.sealed-1", RefreshExpiresAt: exp}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.GitHubUserLink(ctx, "local", "p-1")
+			if err != nil || got.GitHubUserID != 1001 || got.GitHubLogin != "ana" || got.RefreshToken != "v1.sealed-1" ||
+				!got.RefreshExpiresAt.Equal(exp) || got.LinkedAt.IsZero() || got.UpdatedAt.IsZero() {
+				t.Fatalf("got %+v %v", got, err)
+			}
+			// The same subject under another provider is someone else.
+			if _, err := s.GitHubUserLink(ctx, "okta", "p-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("another provider: %v", err)
+			}
+			// A refresh rotates the token, and a rename on GitHub shows; the
+			// link keeps its time while the GitHub account is the same.
+			if err := s.PutGitHubUserLink(ctx, GitHubUserLink{Provider: "local", Subject: "p-1", GitHubUserID: 1001, GitHubLogin: "ana-renamed",
+				RefreshToken: "v1.sealed-2", RefreshExpiresAt: exp.Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			again, err := s.GitHubUserLink(ctx, "local", "p-1")
+			if err != nil || again.RefreshToken != "v1.sealed-2" || again.GitHubLogin != "ana-renamed" || !again.LinkedAt.Equal(got.LinkedAt) ||
+				!again.RefreshExpiresAt.Equal(exp.Add(time.Hour)) {
+				t.Errorf("rotated: %+v %v", again, err)
+			}
+			if err := s.DeleteGitHubUserLink(ctx, "local", "p-1"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.GitHubUserLink(ctx, "local", "p-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("after delete: %v", err)
+			}
+			if err := s.DeleteGitHubUserLink(ctx, "local", "p-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("deleted twice: %v", err)
 			}
 		})
 	}

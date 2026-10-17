@@ -124,3 +124,39 @@ func (p *Postgres) DeleteGitHubInstallation(ctx context.Context, ws string, id i
 	}
 	return nil
 }
+
+func (p *Postgres) PutGitHubUserLink(ctx context.Context, l GitHubUserLink) error {
+	_, err := p.pool.Exec(ctx, `INSERT INTO github_user_links (provider, subject, github_user_id, github_login, refresh_token, refresh_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (provider, subject) DO UPDATE SET
+		 linked_at = CASE WHEN github_user_links.github_user_id = EXCLUDED.github_user_id THEN github_user_links.linked_at ELSE now() END,
+		 github_user_id = EXCLUDED.github_user_id, github_login = EXCLUDED.github_login,
+		 refresh_token = EXCLUDED.refresh_token, refresh_expires_at = EXCLUDED.refresh_expires_at, updated_at = now()`,
+		l.Provider, l.Subject, l.GitHubUserID, l.GitHubLogin, l.RefreshToken, l.RefreshExpiresAt)
+	return err
+}
+
+func (p *Postgres) GitHubUserLink(ctx context.Context, provider, subject string) (*GitHubUserLink, error) {
+	l := GitHubUserLink{Provider: provider, Subject: subject}
+	err := p.pool.QueryRow(ctx, `SELECT github_user_id, github_login, refresh_token, refresh_expires_at, linked_at, updated_at
+		FROM github_user_links WHERE provider = $1 AND subject = $2`, provider, subject).
+		Scan(&l.GitHubUserID, &l.GitHubLogin, &l.RefreshToken, &l.RefreshExpiresAt, &l.LinkedAt, &l.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+func (p *Postgres) DeleteGitHubUserLink(ctx context.Context, provider, subject string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM github_user_links WHERE provider = $1 AND subject = $2`, provider, subject)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
