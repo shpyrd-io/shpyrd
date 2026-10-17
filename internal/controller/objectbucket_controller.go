@@ -193,7 +193,7 @@ func (r *ObjectBucketReconciler) reconcile(ctx context.Context, store BucketStor
 	// the gateway's door for apps, the platform's own through the one the
 	// platform has always used.
 	endpoint, region, public := r.Endpoint, objectstore.Region, ""
-	if r.UseGateway && !b.PlatformBucket() && r.AppsEndpoint != "" {
+	if r.UseGateway && b.ProjectBucket() && r.AppsEndpoint != "" {
 		endpoint, region, public = r.AppsEndpoint, objectstore.AppsRegion, r.PublicEndpoint
 	}
 	// Keep the credential stable across reconciles: reuse what the Secret

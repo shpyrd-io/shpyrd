@@ -305,7 +305,7 @@ func TestMigrationRequiresOptInBeforePausing(t *testing.T) {
 // it; a Redis still blocks a portable export.
 func TestMigrationMetadataAllowsUnrelatedResourcesWithoutExportingThem(t *testing.T) {
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
-	bucket := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: app.Namespace}}
+	bucket := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: app.Namespace, Labels: map[string]string{shpyrdv1.LabelProject: "shop"}}}
 	s, _ := newTestServer(t, nil, []client.Object{app, bucket})
 	m, err := s.projectArchiveMetadata(context.Background(), app)
 	if err != nil {

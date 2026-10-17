@@ -130,10 +130,18 @@ type ObjectBucketList struct {
 // which is unique across the cluster and valid for S3 (lowercase, dashes).
 func (b *ObjectBucket) BucketName() string { return "shpyrd-" + b.Namespace + "-" + b.Name }
 
-// PlatformBucket says the platform made this bucket for itself (a
-// database's backups): it is not listed, counted, attached or archived
-// as the project's.
-func (b *ObjectBucket) PlatformBucket() bool { return b.Labels[LabelBucketPostgres] != "" }
+// ProjectBucket says a project made this bucket for its app (the API
+// labels it with the project): it is listed, counted, attached and
+// archived as the project's, and reached through the gateway's door for
+// apps. Everything else is the platform's own: a database's backups, a
+// shared server's backups and dumps, whatever an operator made by hand.
+func (b *ObjectBucket) ProjectBucket() bool {
+	return b.Labels[LabelProject] != "" && b.Labels[LabelBucketPostgres] == ""
+}
+
+// PlatformBucket says the platform made this bucket for itself: not the
+// project's, and on the endpoint the platform has always used.
+func (b *ObjectBucket) PlatformBucket() bool { return !b.ProjectBucket() }
 
 // CapBytes is the bucket's cap in bytes, 0 when it has none.
 func (b *ObjectBucket) CapBytes() int64 {
