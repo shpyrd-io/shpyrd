@@ -28,6 +28,13 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
+// IsForbidden says GitHub refused (403) and did not merely limit the rate:
+// a person who may not read a repository, an organisation's SAML enforcement.
+func IsForbidden(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && !apiErr.RateLimited
+}
+
 // repoURL is the API's address of a repository's path.
 func (c *Client) repoURL(owner, repo, path string) string {
 	return fmt.Sprintf("%s/repos/%s/%s/%s", c.api, url.PathEscape(owner), url.PathEscape(repo), path)

@@ -24,6 +24,16 @@ type UserToken struct {
 	RefreshExpiresAt time.Time
 }
 
+// String shows whether each token is set and when each expires, never a
+// token: a UserToken in a log line or a test failure leaks nothing.
+func (t UserToken) String() string {
+	return fmt.Sprintf("UserToken{access set: %t, expires %s; refresh set: %t, expires %s}",
+		t.Access != "", t.AccessExpiresAt.Format(time.RFC3339), t.Refresh != "", t.RefreshExpiresAt.Format(time.RFC3339))
+}
+
+// GoString is String, for %#v.
+func (t UserToken) GoString() string { return t.String() }
+
 // User is who a user token belongs to.
 type User struct {
 	ID    int64
@@ -38,6 +48,9 @@ var (
 	// expired after six months unused, was used already, or the person
 	// revoked the App's authorization.
 	ErrUserTokenRefused = errors.New("GitHub no longer accepts this GitHub authorization: it expired or was revoked")
+	// ErrTruncated: a list was cut at the most pages shpyrd reads; the
+	// list returned with it is the part that was read.
+	ErrTruncated = errors.New("GitHub has more than shpyrd lists: the list is cut short")
 )
 
 // ExchangeUserCode turns the code GitHub gave the browser into the
@@ -72,11 +85,16 @@ func (c *Client) userToken(ctx context.Context, grant map[string]string) (UserTo
 	if err := c.send(req, &res); err != nil {
 		return UserToken{}, err
 	}
+	_, refreshing := grant["refresh_token"]
 	switch {
 	case res.Error == "bad_refresh_token":
 		return UserToken{}, ErrUserTokenRefused
+	case res.Error != "" && refreshing:
+		return UserToken{}, fmt.Errorf("GitHub refused to renew the GitHub sign-in: %s", firstNonEmpty(res.Description, res.Error))
+	case res.Error != "":
+		return UserToken{}, fmt.Errorf("GitHub did not accept the sign-in: %s", firstNonEmpty(res.Description, res.Error))
 	case res.AccessToken == "":
-		return UserToken{}, fmt.Errorf("GitHub did not accept the sign-in: %s", firstNonEmpty(res.Description, res.Error, "it gave no token"))
+		return UserToken{}, errors.New("GitHub did not accept the sign-in: it gave no token")
 	}
 	now := c.now()
 	t := UserToken{Access: res.AccessToken, Refresh: res.RefreshToken}

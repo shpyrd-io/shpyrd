@@ -35,6 +35,8 @@ type User struct {
 type userGrant struct {
 	handle string
 	exp    time.Time
+	// forever: the App's user tokens did not expire when it was issued.
+	forever bool
 }
 
 // AddUser makes a person whose OAuth code is code.
@@ -55,6 +57,9 @@ func (f *Server) ExpireUserTokens() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for tok, g := range f.access {
+		if g.forever {
+			continue
+		}
 		g.exp = f.clock()
 		f.access[tok] = g
 	}
@@ -72,18 +77,68 @@ func (f *Server) Revoked() []string {
 	return append([]string(nil), f.revoked...)
 }
 
+// SetBranches are a repository's branches, in the order GitHub lists them.
+func (f *Server) SetBranches(fullName string, names ...string) {
+	f.mu.Lock()
+	f.branches[strings.ToLower(fullName)] = names
+	f.mu.Unlock()
+}
+
+// SetUserOrgRole sets the membership of org of the person with login (the
+// default person's are SetOrgRole's); role "" is none.
+func (f *Server) SetUserOrgRole(login, org, role, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	handle := strings.ToLower(login)
+	if f.userRoles[handle] == nil {
+		f.userRoles[handle] = map[string][2]string{}
+	}
+	if role == "" {
+		delete(f.userRoles[handle], strings.ToLower(org))
+		return
+	}
+	f.userRoles[handle][strings.ToLower(org)] = [2]string{role, state}
+}
+
+// ForbidRepo makes a repository answer 403 to the person with login, as
+// for an organisation's SAML enforcement, whatever else they may read.
+func (f *Server) ForbidRepo(login, fullName string) {
+	f.mu.Lock()
+	f.forbiddenRepos[strings.ToLower(login)+"|"+strings.ToLower(fullName)] = true
+	f.mu.Unlock()
+}
+
 // SetPublicRepos are public repositories outside the installations:
 // anyone reads them.
 func (f *Server) SetPublicRepos(repos ...Repo) { f.mu.Lock(); f.public = repos; f.mu.Unlock() }
 
 // userOf is the person whose live user token the request carries.
 func (f *Server) userOf(r *http.Request) (*User, bool) {
-	g, ok := f.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
-	if !ok || !f.clock().Before(g.exp) {
+	g, ok := f.grantOf(r)
+	if !ok {
 		return nil, false
 	}
 	u, ok := f.users[g.handle]
 	return u, ok
+}
+
+// grantOf is the live user access token the request carries.
+func (f *Server) grantOf(r *http.Request) (userGrant, bool) {
+	g, ok := f.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	if !ok || (!g.forever && !f.clock().Before(g.exp)) {
+		return userGrant{}, false
+	}
+	return g, true
+}
+
+// repoRefused answers 403 when the request's person is refused the repository.
+func (f *Server) repoRefused(w http.ResponseWriter, r *http.Request, fullName string) bool {
+	u, ok := f.userOf(r)
+	if !ok || !f.forbiddenRepos[strings.ToLower(u.Login)+"|"+strings.ToLower(fullName)] {
+		return false
+	}
+	reply(w, http.StatusForbidden, map[string]string{"message": "Resource protected by organization SAML enforcement."})
+	return true
 }
 
 func (f *Server) installationsOf(u *User) []Installation {
@@ -130,12 +185,21 @@ func (f *Server) publicRepo(fullName string) (Repo, bool) {
 	return Repo{}, false
 }
 
+// covers says whether an installation token, asked for some repositories,
+// reads this one.
+func (g tokenGrant) covers(fullName string) bool {
+	return len(g.repos) == 0 || slices.ContainsFunc(g.repos, func(n string) bool {
+		_, name, _ := strings.Cut(fullName, "/")
+		return strings.EqualFold(n, name)
+	})
+}
+
 // readable is the repository as the request's token reads it: an
 // installation token, one its installation has; a user token, one of an
 // installation they see that they may read; either, a public one.
 func (f *Server) readable(r *http.Request, fullName string) (Repo, bool) {
 	if g, ok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]; ok {
-		if repo, ok := repoNamed(f.repos[g.installation], fullName); ok {
+		if repo, ok := repoNamed(f.repos[g.installation], fullName); ok && g.covers(fullName) {
 			return repo, true
 		}
 		return f.publicRepo(fullName)
@@ -189,7 +253,7 @@ func (f *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	if handle == defaultUser && in.GrantType == "" {
 		access = UserToken
 	}
-	f.access[access] = userGrant{handle: handle, exp: f.clock().Add(8 * time.Hour)}
+	f.access[access] = userGrant{handle: handle, exp: f.clock().Add(8 * time.Hour), forever: f.noExpiring}
 	out := map[string]any{"access_token": access, "token_type": "bearer"}
 	if !f.noExpiring {
 		refresh := fmt.Sprintf("ghr_%s_%d", handle, f.issued)
@@ -253,6 +317,9 @@ func (f *Server) user(w http.ResponseWriter, r *http.Request) {
 
 // repoInfo is GET /repos/{owner}/{repo}.
 func (f *Server) repoInfo(w http.ResponseWriter, r *http.Request, fullName string) {
+	if f.repoRefused(w, r, fullName) {
+		return
+	}
 	repo, ok := f.readable(r, fullName)
 	if !ok {
 		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})

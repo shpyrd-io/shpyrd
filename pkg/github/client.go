@@ -24,9 +24,8 @@ import (
 const (
 	callTimeout = 20 * time.Second
 	// maxBody caps what one answer of GitHub may be.
-	maxBody  = 8 << 20
-	perPage  = 100
-	maxPages = 100
+	maxBody = 8 << 20
+	perPage = 100
 	// A token is kept until 10 minutes before it expires, or 50 minutes
 	// after it was minted, whichever comes first: a build reading it
 	// never gets one in its last 10 minutes.
@@ -270,6 +269,7 @@ func (c *Client) Repositories(ctx context.Context, installation int64) ([]Reposi
 // the installation's own, or what a person reads of it.
 func (c *Client) repositoryPages(ctx context.Context, endpoint, token string, installation int64) ([]Repository, error) {
 	out := []Repository{}
+	total := 0
 	for page := 1; page <= maxPages; page++ {
 		var res struct {
 			Total        int `json:"total_count"`
@@ -282,12 +282,16 @@ func (c *Client) repositoryPages(ctx context.Context, endpoint, token string, in
 		if err := c.call(ctx, "GET", fmt.Sprintf("%s?per_page=%d&page=%d", endpoint, perPage, page), token, nil, &res); err != nil {
 			return nil, err
 		}
+		total = res.Total
 		for _, r := range res.Repositories {
 			out = append(out, Repository{Installation: installation, FullName: r.FullName, Private: r.Private, DefaultBranch: r.DefaultBranch})
 		}
 		if len(res.Repositories) == 0 || len(out) >= res.Total {
 			break
 		}
+	}
+	if len(out) < total {
+		return out, ErrTruncated
 	}
 	return out, nil
 }
@@ -303,7 +307,8 @@ func (c *Client) Branches(ctx context.Context, installation int64, owner, repo s
 
 func (c *Client) branches(ctx context.Context, token, owner, repo string) ([]string, error) {
 	out := []string{}
-	for page := 1; page <= 10; page++ {
+	more := false
+	for page := 1; page <= maxBranchPages; page++ {
 		var res []struct {
 			Name string `json:"name"`
 		}
@@ -314,9 +319,13 @@ func (c *Client) branches(ctx context.Context, token, owner, repo string) ([]str
 		for _, b := range res {
 			out = append(out, b.Name)
 		}
-		if len(res) < perPage {
+		more = len(res) == perPage
+		if !more {
 			break
 		}
+	}
+	if more {
+		return out, ErrTruncated
 	}
 	return out, nil
 }
@@ -423,6 +432,13 @@ func ConvertManifest(ctx context.Context, apiURL string, hc *http.Client, code s
 	return Registration{App: app, Name: res.Name, Owner: res.Owner.Login}, nil
 }
 
+// The most pages of a repository list and of a branch list that are read;
+// variables so tests can lower them.
+var (
+	maxPages       = 100
+	maxBranchPages = 10
+)
+
 // call sends a JSON request to GitHub's API.
 func (c *Client) call(ctx context.Context, method, endpoint, bearer string, in, out any) error {
 	_, err := c.callHeaders(ctx, method, endpoint, bearer, in, out)
@@ -482,7 +498,7 @@ func (c *Client) sendHeaders(req *http.Request, out any) (http.Header, error) {
 			(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-RateLimit-Remaining") == "0" || strings.Contains(strings.ToLower(e.Message), "rate limit")))
 		return resp.Header, apiErr
 	}
-	if out == nil || len(raw) == 0 {
+	if out == nil || resp.StatusCode == http.StatusNoContent {
 		return resp.Header, nil
 	}
 	return resp.Header, json.Unmarshal(raw, out)
