@@ -645,8 +645,10 @@ func TestGitHubConnectAlsoGivesTheAuthorizeURL(t *testing.T) {
 		t.Fatalf("authorize URL %q", v.AuthorizeURL)
 	}
 	q := u.Query()
+	// No redirect_uri: GitHub uses the App's first callback URL, where the
+	// install path lands too, whatever the dashboard's URL is now.
 	if q.Get("client_id") != githubtest.ClientID || q.Get("state") == "" || q.Get("state") != install.Query().Get("state") ||
-		q.Get("redirect_uri") != s.dashboardURLOf(nil)+"/api/github/installed" {
+		q.Has("redirect_uri") {
 		t.Errorf("authorize URL %q (install %q)", v.AuthorizeURL, v.InstallURL)
 	}
 }
@@ -682,7 +684,7 @@ func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(body, "Connect an installation") || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("%d %s", rec.Code, body)
 	}
-	for _, says := range []string{"Beta (organisation): connected to another workspace: disconnect it there first.", "Mine (organisation): connected."} {
+	for _, says := range []string{"Beta is connected to workspace beta: disconnect it there first.", "Mine (organisation): connected."} {
 		if !strings.Contains(body, says) {
 			t.Errorf("does not say %q: %s", says, body)
 		}
@@ -718,7 +720,9 @@ func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
 	install, err := url.Parse(links["Install the App on another account"])
 	if err != nil || !strings.HasSuffix(install.Path, "/apps/"+githubtest.Slug+"/installations/new") || install.Query().Get("state") == state {
 		t.Errorf("install link %v", links)
-	} else if fresh, err := readGitHubState(githubtest.ClientSecret, install.Query().Get("state"), time.Now()); err != nil || fresh.Workspace != store.DefaultWorkspace || fresh.Subject != started.Subject {
+	} else if fresh, err := readGitHubState(githubtest.ClientSecret, install.Query().Get("state"), time.Now()); err != nil || fresh.Workspace != store.DefaultWorkspace || fresh.Subject != started.Subject ||
+		fresh.Nonce == started.Nonce || fresh.Exp != started.Exp {
+		// A new nonce, the original's time: a state is never chained past it.
 		t.Errorf("install link's state %+v %v", fresh, err)
 	}
 	if list, _ := s.store.GitHubInstallations(ctx, store.DefaultWorkspace); len(list) != 1 || len(*heard) != 0 {
@@ -747,7 +751,8 @@ func TestGitHubAuthorizeStateIsUsedOnce(t *testing.T) {
 	if rec := chose(t, s, githubtest.Code, state); rec.Code != http.StatusOK {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := chose(t, s, githubtest.Code, state); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This link was used already") {
+	if rec := chose(t, s, githubtest.Code, state); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This link was used already") ||
+		!strings.Contains(rec.Body.String(), "Connect GitHub again from Workspace settings → Git.") {
 		t.Errorf("replay: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := chose(t, s, githubtest.Code, "forged"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "This link has expired") {
@@ -785,5 +790,32 @@ func TestGitHubAuthorizeSaysWhyAnOrgCannotBeChecked(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "an owner of the App must accept its new Members permission on GitHub") ||
 		strings.Contains(rec.Body.String(), "/finish") {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubAuthorizeEscapesTheAccountName(t *testing.T) {
+	s, _, fake := githubServer(t)
+	name := `<b>x&"y</b>`
+	fake.SetUserInstallations(githubtest.Installation{ID: 7, Login: name, Type: "User"})
+	fake.SetUserLogin(name)
+	rec := chose(t, s, githubtest.Code, connectState(t, s))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || strings.Contains(body, name) || !strings.Contains(body, "Connect &lt;b&gt;x&amp;&#34;y&lt;/b&gt; (personal account)") {
+		t.Errorf("%d %s", rec.Code, body)
+	}
+}
+
+func TestGitHubAuthorizeInstallLinkKeepsTheOriginalTime(t *testing.T) {
+	s, _, _ := githubServer(t)
+	started, _ := readGitHubState(githubtest.ClientSecret, connectState(t, s), time.Now())
+	started.Exp, started.Nonce = time.Now().Add(time.Minute).Unix(), "short"
+	rec := chose(t, s, githubtest.Code, signGitHubState(githubtest.ClientSecret, started))
+	install, err := url.Parse(pageLinks(t, rec.Body.String())["Install the App on another account"])
+	if rec.Code != http.StatusOK || err != nil {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	fresh, err := readGitHubState(githubtest.ClientSecret, install.Query().Get("state"), time.Now())
+	if err != nil || fresh.Exp != started.Exp || fresh.Nonce == started.Nonce {
+		t.Errorf("the install link's state %+v %v: a state is never chained past %d", fresh, err, started.Exp)
 	}
 }

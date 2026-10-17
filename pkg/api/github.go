@@ -297,26 +297,29 @@ func (s *Server) githubConnect(c *gin.Context) {
 	}
 	app := cl.App()
 	actor, provider, subject := githubWho(c)
-	state, err := newGitHubState(app, githubState{Workspace: s.doorWorkspace(c), Actor: actor, Provider: provider, Subject: subject}, time.Now())
+	state, err := newGitHubState(app, githubState{Workspace: s.doorWorkspace(c), Actor: actor, Provider: provider, Subject: subject}, time.Now().Add(githubStateTTL))
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
-	authorize := url.Values{"client_id": {app.ClientID}, "state": {state}, "redirect_uri": {s.dashboardURLOf(nil) + "/api/github/installed"}}
+	// No redirect_uri: GitHub uses the App's first callback URL, the one
+	// registered, where a fresh install lands too; the dashboard's URL now
+	// may differ from the one the App was registered with.
+	authorize := url.Values{"client_id": {app.ClientID}, "state": {state}}
 	c.JSON(http.StatusOK, GitHubConnectView{
 		InstallURL:   githubInstallURL(app, state),
 		AuthorizeURL: app.WebURL() + "/login/oauth/authorize?" + authorize.Encode(),
 	})
 }
 
-// newGitHubState signs a fresh state for who started: a new nonce, and
-// the state's time from now.
-func newGitHubState(app github.App, who githubState, now time.Time) (string, error) {
+// newGitHubState signs a fresh state for who started: a new nonce, valid
+// until exp.
+func newGitHubState(app github.App, who githubState, exp time.Time) (string, error) {
 	nonce, err := randomHex(16)
 	if err != nil {
 		return "", err
 	}
-	who.Exp, who.Nonce = now.Add(githubStateTTL).Unix(), nonce
+	who.Exp, who.Nonce = exp.Unix(), nonce
 	return signGitHubState(app.ClientSecret, who), nil
 }
 
@@ -563,21 +566,39 @@ func (s *Server) githubInstalled(c *gin.Context) {
 // githubHeldElsewhere refuses, with a page, an installation another
 // workspace has: it is never moved silently.
 func (s *Server) githubHeldElsewhere(c *gin.Context, id int64, account, ws, back string) bool {
-	held, err := s.store.GitHubInstallation(c.Request.Context(), id)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		s.log.Warn("github: could not look up the installation", "installation", id, "err", err.Error())
-		s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not check the connection. Try again from the workspace's Git settings in a minute.", back)
+	holder, ok := s.githubHolder(c, id, back)
+	if !ok {
 		return true
 	}
-	if held != nil && held.Workspace != ws {
-		s.githubHeldPage(c, account, held.Workspace, back)
+	if holder != "" && holder != ws {
+		s.githubHeldPage(c, account, holder, back)
 		return true
 	}
 	return false
 }
 
+// githubHolder is the workspace that has the installation, "" for none;
+// not ok, with a page, when the store cannot say.
+func (s *Server) githubHolder(c *gin.Context, id int64, back string) (string, bool) {
+	held, err := s.store.GitHubInstallation(c.Request.Context(), id)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && held == nil) {
+		return "", true
+	}
+	if err != nil {
+		s.log.Warn("github: could not look up the installation", "installation", id, "err", err.Error())
+		s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not check the connection. Try again from the workspace's Git settings in a minute.", back)
+		return "", false
+	}
+	return held.Workspace, true
+}
+
+// githubHeldText says an installation is another workspace's.
+func githubHeldText(account, ws string) string {
+	return fmt.Sprintf("%s is connected to workspace %s: disconnect it there first.", account, ws)
+}
+
 func (s *Server) githubHeldPage(c *gin.Context, account, ws, back string) {
-	s.githubPage(c, http.StatusConflict, "Connected elsewhere", fmt.Sprintf("%s is connected to workspace %s: disconnect it there first.", account, ws), back)
+	s.githubPage(c, http.StatusConflict, "Connected elsewhere", githubHeldText(account, ws), back)
 }
 
 // githubFinish is GET /api/workspace/github/finish, on the workspace's
@@ -789,7 +810,7 @@ func (s *Server) githubChoose(c *gin.Context, cl *github.Client) {
 	}
 	back := s.gitSettingsURL(ctx, st.Workspace)
 	if !s.githubNonces.use(st.Nonce, time.Unix(st.Exp, 0), now) {
-		s.githubPage(c, http.StatusBadRequest, "This link was used already", "Each Connect GitHub link connects once. Start again from the workspace's Git settings.", back)
+		s.githubPage(c, http.StatusBadRequest, "This link was used already", "Each Connect GitHub link connects once. Connect GitHub again from Workspace settings → Git.", back)
 		return
 	}
 	login, mine, err := askGitHubOwned(ctx, cl, c.Query("code"))
@@ -798,7 +819,9 @@ func (s *Server) githubChoose(c *gin.Context, cl *github.Client) {
 		s.githubPage(c, http.StatusBadGateway, "GitHub did not answer", "shpyrd could not ask GitHub which installations you own. Try again from the workspace's Git settings in a minute.", back)
 		return
 	}
-	state, err := newGitHubState(app, githubState{Workspace: st.Workspace, Actor: st.Actor, Provider: st.Provider, Subject: st.Subject}, now)
+	// A new nonce, the original's time: the install link's state is valid
+	// here too, and is never chained past the first one's expiry.
+	state, err := newGitHubState(app, githubState{Workspace: st.Workspace, Actor: st.Actor, Provider: st.Provider, Subject: st.Subject}, time.Unix(st.Exp, 0))
 	if err != nil {
 		abort(c, http.StatusInternalServerError, err)
 		return
@@ -821,18 +844,16 @@ func (s *Server) githubChoose(c *gin.Context, cl *github.Client) {
 			says = append(says, name+": GitHub refused to say whether you own it. If the organisation requires SAML single sign-on, authorize your GitHub session for it, then connect again.")
 			continue
 		}
-		held, err := s.store.GitHubInstallation(ctx, o.inst.ID)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			s.log.Warn("github: could not look up the installation", "installation", o.inst.ID, "err", err.Error())
-			s.githubPage(c, http.StatusBadGateway, "Not connected", "shpyrd could not check the connections. Try again from the workspace's Git settings in a minute.", back)
+		holder, ok := s.githubHolder(c, o.inst.ID, back)
+		if !ok {
 			return
 		}
-		switch {
-		case held != nil && held.Workspace == st.Workspace:
+		switch holder {
+		case st.Workspace:
 			says = append(says, name+": connected.")
-		case held != nil:
-			says = append(says, name+": connected to another workspace: disconnect it there first.")
 		default:
+			says = append(says, githubHeldText(o.inst.Account, holder))
+		case "":
 			nonce, err := randomHex(16)
 			if err != nil {
 				abort(c, http.StatusInternalServerError, err)
