@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -139,12 +141,51 @@ func readGitHubReport(annotation string) githubReport {
 func (r *GitHubReporter) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("github-report").
-		For(&shpyrdv1.App{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
-			app, ok := o.(*shpyrdv1.App)
-			return ok && githubReportWatched(app)
-		}))).
+		For(&shpyrdv1.App{}, builder.WithPredicates(githubReportPredicate())).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
 		Complete(r)
+}
+
+// githubReportPredicate wakes the reporter for the Apps it watches, and on
+// an update only for what it reports on: its report, the pin, the
+// watcher's record, a rollback, the spec, a deletion, the phase, the
+// releases, and the Built and Ready conditions. An App's other writes
+// (instances, messages) do not.
+func githubReportPredicate() predicate.Funcs {
+	watched := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		app, ok := o.(*shpyrdv1.App)
+		return ok && githubReportWatched(app)
+	})
+	watched.UpdateFunc = func(e event.UpdateEvent) bool {
+		old, okOld := e.ObjectOld.(*shpyrdv1.App)
+		app, ok := e.ObjectNew.(*shpyrdv1.App)
+		return ok && okOld && githubReportWatched(app) && reportChanged(old, app)
+	}
+	return watched
+}
+
+// reportedAnnotations are the annotations the reporter reads.
+var reportedAnnotations = []string{shpyrdv1.AnnotationGitHubReport, shpyrdv1.AnnotationGitCommit, shpyrdv1.AnnotationGitCommitRef,
+	shpyrdv1.AnnotationGitSource, shpyrdv1.AnnotationRollbackTo}
+
+// reportChanged says an update changes what the reporter reports.
+func reportChanged(old, app *shpyrdv1.App) bool {
+	if old.Generation != app.Generation || !old.DeletionTimestamp.Equal(app.DeletionTimestamp) ||
+		old.Status.Phase != app.Status.Phase || !reflect.DeepEqual(old.Status.Releases, app.Status.Releases) {
+		return true
+	}
+	for _, k := range reportedAnnotations {
+		if old.Annotations[k] != app.Annotations[k] {
+			return true
+		}
+	}
+	for _, t := range []string{shpyrdv1.ConditionBuilt, shpyrdv1.ConditionReady} {
+		a, b := meta.FindStatusCondition(old.Status.Conditions, t), meta.FindStatusCondition(app.Status.Conditions, t)
+		if (a == nil) != (b == nil) || (a != nil && (a.Status != b.Status || a.Reason != b.Reason || !a.LastTransitionTime.Equal(&b.LastTransitionTime))) {
+			return true
+		}
+	}
+	return false
 }
 
 // githubReportWatched says the reporter reconciles the App: one it reports

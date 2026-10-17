@@ -17,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -1407,5 +1408,59 @@ func TestARollbackOrADeployByImageClosesThePinsUnfinishedCheck(t *testing.T) {
 				t.Errorf("reopened: %+v", fake.CheckRunsOn(testCommit))
 			}
 		})
+	}
+}
+
+// Final review minor 9: the reporter is woken only by what it reports on.
+func TestTheReporterIsWokenOnlyByWhatItReports(t *testing.T) {
+	old := shopAt(testCommit, shpyrdv1.PhaseRunning, release(1, testCommit, "Push 0123456 by alice: fix login"))
+	setCondition(old, shpyrdv1.ConditionReady, metav1.ConditionTrue, "Running", "web: 1/1")
+	p := githubReportPredicate()
+	for name, tc := range map[string]struct {
+		change func(*shpyrdv1.App)
+		wakes  bool
+	}{
+		"nothing":                 {func(*shpyrdv1.App) {}, false},
+		"instances and a message": {func(a *shpyrdv1.App) { a.Status.Message = "web: 2/2"; a.Status.ObservedGeneration++ }, false},
+		"Ready's message":         {func(a *shpyrdv1.App) { a.Status.Conditions[0].Message = "web: 2/2" }, false},
+		"another annotation":      {func(a *shpyrdv1.App) { a.Annotations["shpyrd.io/other"] = "x" }, false},
+		"the phase":               {func(a *shpyrdv1.App) { a.Status.Phase = shpyrdv1.PhaseFailed }, true},
+		"the releases": {func(a *shpyrdv1.App) {
+			a.Status.Releases = append(a.Status.Releases, release(2, testCommit, "Set LOG_LEVEL"))
+		}, true},
+		"Ready": {func(a *shpyrdv1.App) {
+			setCondition(a, shpyrdv1.ConditionReady, metav1.ConditionFalse, "ReconcileError", "boom")
+		}, true},
+		"Built": {func(a *shpyrdv1.App) {
+			setCondition(a, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", "boom")
+		}, true},
+		"the pin": {func(a *shpyrdv1.App) { pinGit(a, otherCommit) }, true},
+		"the record": {func(a *shpyrdv1.App) {
+			withRecord(a, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Held: otherCommit})
+		}, true},
+		"the report": {func(a *shpyrdv1.App) { a.Annotations[shpyrdv1.AnnotationGitHubReport] = `{"seq":2}` }, true},
+		"a rollback": {func(a *shpyrdv1.App) { a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1" }, true},
+		"the spec":   {func(a *shpyrdv1.App) { a.Spec.Image = "registry.example.test/shop:2"; a.Generation++ }, true},
+		"leaving the branch with a report": {func(a *shpyrdv1.App) {
+			a.Spec.Source.Git.Revision, a.Annotations[shpyrdv1.AnnotationGitHubReport] = testCommit, `{"seq":1}`
+			a.Generation++
+		}, true},
+		"a deletion": {func(a *shpyrdv1.App) { now := metav1.NewTime(sourceNow); a.DeletionTimestamp = &now }, true},
+	} {
+		next := old.DeepCopy()
+		tc.change(next)
+		if got := p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: next}); got != tc.wakes {
+			t.Errorf("%s: wakes %v", name, got)
+		}
+	}
+	// An App that is not reported, and has no report left, never wakes it.
+	lab := pinGit(gitApp("lab", "https://gitlab.example.test/acme/lab"), testCommit)
+	next := lab.DeepCopy()
+	next.Status.Phase = shpyrdv1.PhaseFailed
+	if p.Update(event.UpdateEvent{ObjectOld: lab, ObjectNew: next}) || p.Create(event.CreateEvent{Object: lab}) {
+		t.Error("an App on another host wakes the reporter")
+	}
+	if !p.Create(event.CreateEvent{Object: old}) {
+		t.Error("a reported App's create does not wake it")
 	}
 }
