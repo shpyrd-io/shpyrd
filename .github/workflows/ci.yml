@@ -262,12 +262,14 @@ jobs:
           # below attaches one. The image runs as a non-root user on 8080,
           # as the platform requires.
           ./bin/shpyrd deploy --image nginxinc/nginx-unprivileged:1.27-alpine --project hello-world --context kind-ci
+          # The App is named after the project's id, not its slug.
           NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
           for i in $(seq 1 60); do
-            kubectl --context kind-ci -n "$NS" get app hello-world -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running && break
+            kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running && break
             sleep 3
           done
-          kubectl --context kind-ci -n "$NS" get app hello-world -o jsonpath='{.status.phase} {.status.message}{"\n"}'
+          kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase} {.status.message}{"\n"}'
           ./bin/shpyrd cluster status --context kind-ci
           kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
       - name: The workspace's ceilings refuse in words
@@ -305,11 +307,13 @@ jobs:
           done
           [ "$NEWKEY" != "$KEY" ]
           ./bin/shpyrd attach files --prefix AWS --project hello-world --context kind-ci
+          # The bindings Secret is named after the App, which carries the project's id.
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
           for i in $(seq 1 30); do
-            kubectl --context kind-ci -n "$NS" get secret hello-world-bindings -o jsonpath='{.data}' 2>/dev/null | grep -q AWS_BUCKET && break
+            kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' 2>/dev/null | grep -q AWS_BUCKET && break
             sleep 2
           done
-          kubectl --context kind-ci -n "$NS" get secret hello-world-bindings -o jsonpath='{.data}' | grep -q AWS_ENDPOINT_URL
+          kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' | grep -q AWS_ENDPOINT_URL
           ./bin/shpyrd detach files --project hello-world --context kind-ci
           ./bin/shpyrd buckets delete files --yes --project hello-world --context kind-ci
           ./bin/shpyrd-ctl workspace limits --none --context kind-ci
