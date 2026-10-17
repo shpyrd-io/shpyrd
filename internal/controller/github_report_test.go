@@ -1464,3 +1464,32 @@ func TestTheReporterIsWokenOnlyByWhatItReports(t *testing.T) {
 		t.Error("a reported App's create does not wake it")
 	}
 }
+
+// Residual fix 2: a pin whose check was closed "Not deployed" by a
+// rollback, then deployed again, is reported on a new run.
+func TestAPinRedeployedAfterARollbackGetsANewCheckRun(t *testing.T) {
+	v1 := release(1, otherCommit, "Push 89abcde by alice: before")
+	app := shopAt(testCommit, shpyrdv1.PhaseBuilding, v1)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		a.Spec.Image = v1.Image
+		a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+	})
+	reconcileReport(t, r, app)
+	setAnnotations(t, c, app, func(a *shpyrdv1.App) {
+		a.Spec.Image = ""
+		delete(a.Annotations, shpyrdv1.AnnotationRollbackTo)
+	})
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseBuilding })
+	reconcileReport(t, r, app)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) {
+		st.Phase, st.Releases = shpyrdv1.PhaseRunning, []shpyrdv1.Release{v1, release(2, testCommit, "Push 0123456 by alice: fix login")}
+	})
+	_, got := reconcileReport(t, r, app)
+	runs := fake.CheckRunsOn(testCommit)
+	if len(runs) != 2 || runs[0].Conclusion != "neutral" || runs[0].Title != "Not deployed: rolled back to release 1" ||
+		runs[1].Status != "completed" || runs[1].Conclusion != "success" || reportOf(got).CheckRun != runs[1].ID || reportOf(got).Check != "completed/success" {
+		t.Errorf("%+v, annotation %+v", runs, reportOf(got))
+	}
+}

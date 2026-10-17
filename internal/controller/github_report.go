@@ -337,6 +337,10 @@ type checkWant struct {
 	title, summary     string
 }
 
+// notDeployedCheck is the pin's check closed by a rollback or a deploy by
+// image.
+const notDeployedCheck = "completed/not-deployed"
+
 // key is what the annotation keeps of it: "in_progress/deploying".
 func (w checkWant) key() string { return w.status + "/" + w.label }
 
@@ -611,6 +615,12 @@ func (r *GitHubReporter) reportChecks(ctx context.Context, app *shpyrdv1.App, re
 			latest.clear()
 		}
 	}
+	if rep.Commit == app.PinnedCommit() && rep.Check == notDeployedCheck && !rolledBack(app) && !deployedByImage(app) {
+		// Closed "Not deployed" by a rollback or a deploy by image, and
+		// deployed again: a completed run is never reopened, the pin gets
+		// a new one.
+		pinned.clear()
+	}
 	lw, lok := wantLatest(app)
 	if rep.Latest != "" && (!lok || rep.Latest != lw.commit) {
 		if latest.unfinished() {
@@ -710,7 +720,9 @@ func (r *GitHubReporter) sendCheck(ctx context.Context, app *shpyrdv1.App, ref g
 			own = &runs[i]
 		}
 	}
-	if own != nil && !(own.Status == "completed" && !checkDone(want.key())) {
+	// A completed run is taken only for a completed state, and a neutral
+	// one (replaced, stopped, not deployed) only for another neutral one.
+	if own != nil && !(own.Status == "completed" && (!checkDone(want.key()) || (own.Conclusion == "neutral" && want.conclusion != "neutral"))) {
 		err := cl.UpdateCheckRun(ctx, ref.installation, ref.owner, ref.name, own.ID, w)
 		if err == nil {
 			slot.set(want.commit, own.ID, want.key(), want.ref)
