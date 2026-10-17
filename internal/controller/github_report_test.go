@@ -1348,3 +1348,64 @@ func TestAReleaseThatRunsWhileTheNextBuildFailedFinishesItsDeployment(t *testing
 		t.Errorf("%+v, annotation %+v", d, reportOf(got))
 	}
 }
+
+// Final review minor 4: an App the GitHub App stops covering has its
+// unfinished checks closed while a token is still kept; without one,
+// they are left, as before.
+func TestLosingTheCoverClosesTheUnfinishedChecksWhileATokenIsKept(t *testing.T) {
+	app := shopAt(testCommit, shpyrdv1.PhaseBuilding)
+	r, c, fake, _ := githubReporter(t, app)
+	reconcileReport(t, r, app)
+	// A restart, then the installation no longer includes the repository:
+	// no token is kept, nothing is sent.
+	again := &GitHubReporter{Client: r.Client, GitHub: &GitHubApp{Source: fake.Source(r.Client, "shpyrd-system"), Installations: r.GitHub.Installations}, Config: r.Config, Now: fake.Time}
+	again.GitHub.keepRefusal(store.DefaultWorkspace, 42, "shop", "not included", true)
+	writes := checkWrites(fake)
+	setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Message = "still building" })
+	if _, got := reconcileReport(t, again, app); checkWrites(fake) != writes || reportOf(got).Check != "in_progress/building" {
+		t.Fatalf("no token: %d writes, annotation %+v", checkWrites(fake)-writes, reportOf(got))
+	}
+	// The reporter that holds a token closes the check.
+	r.GitHub.keepRefusal(store.DefaultWorkspace, 42, "shop", "not included", true)
+	_, got := reconcileReport(t, r, app)
+	if runs := fake.CheckRunsOn(testCommit); len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" || runs[0].Title != stoppedReporting {
+		t.Errorf("%+v", runs)
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
+		t.Errorf("the report is kept: %+v", reportOf(got))
+	}
+}
+
+// Final review minor 5: the pin's unfinished check ends when the App is
+// rolled back, or deployed by image, before the pin deployed.
+func TestARollbackOrADeployByImageClosesThePinsUnfinishedCheck(t *testing.T) {
+	v1 := release(1, otherCommit, "Push 89abcde by alice: before")
+	for name, tc := range map[string]struct {
+		change func(*shpyrdv1.App)
+		title  string
+	}{
+		"rollback": {func(a *shpyrdv1.App) {
+			a.Spec.Image = v1.Image
+			a.Annotations[shpyrdv1.AnnotationRollbackTo] = "1"
+		}, "Not deployed: rolled back to release 1"},
+		"image": {func(a *shpyrdv1.App) { a.Spec.Image = "registry.example.test/shop:2" }, "Not deployed: deployed from an image"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := shopAt(testCommit, shpyrdv1.PhaseBuilding, v1)
+			r, c, fake, _ := githubReporter(t, app)
+			reconcileReport(t, r, app)
+			setAnnotations(t, c, app, tc.change)
+			_, got := reconcileReport(t, r, app)
+			runs := fake.CheckRunsOn(testCommit)
+			if len(runs) != 1 || runs[0].Status != "completed" || runs[0].Conclusion != "neutral" || runs[0].Title != tc.title ||
+				!strings.Contains(runs[0].Summary, tc.title+".") || reportOf(got).Check != "completed/not-deployed" {
+				t.Fatalf("%+v, annotation %+v", runs, reportOf(got))
+			}
+			writes := checkWrites(fake)
+			setStatus(t, c, app, func(st *shpyrdv1.AppStatus) { st.Phase = shpyrdv1.PhaseRunning })
+			if reconcileReport(t, r, app); checkWrites(fake) != writes {
+				t.Errorf("reopened: %+v", fake.CheckRunsOn(testCommit))
+			}
+		})
+	}
+}

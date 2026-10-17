@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -178,7 +179,14 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	if !ok {
 		// Not covered, suspended or removed: nothing is reported, and
-		// nothing is queued.
+		// nothing is queued. While the reporter still holds a token for the
+		// repository, the unfinished reports are closed as when reporting
+		// stops; without one, they are left.
+		if ref.client != nil && r.unfinished(app) {
+			if _, held := ref.client.CachedInstallationToken(ref.installation, ref.name, github.ReportWrite()); held {
+				return r.endReports(ctx, app, ref)
+			}
+		}
 		r.forget(app.UID)
 		return ctrl.Result{}, nil
 	}
@@ -209,28 +217,45 @@ func (r *GitHubReporter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 const stoppedReporting = "shpyrd stopped reporting on this project"
 
 // stopReporting ends the reports on an App shpyrd no longer reports on
-// (deleted, or no longer on a branch of github.com): unfinished check runs
-// are closed neutral and a Deployment still in progress inactive, once,
-// when a token can still be had, else left. Then the annotation is
-// removed (on a terminating App too, so its finalization never closes
-// them again) and what the reporter kept of the App is dropped; while the
-// removal fails, memory keeps what was closed.
+// (deleted, or no longer on a branch of github.com): endReports, when a
+// token can still be had.
 func (r *GitHubReporter) stopReporting(ctx context.Context, app *shpyrdv1.App) (ctrl.Result, error) {
+	var ref githubRepoRef
+	if r.unfinished(app) {
+		if got, ok, err := r.GitHub.coverQuietly(ctx, app); err == nil && ok {
+			ref = got
+		}
+	}
+	return r.endReports(ctx, app, ref)
+}
+
+// unfinished says the App's report holds an unfinished check run or
+// Deployment.
+func (r *GitHubReporter) unfinished(app *shpyrdv1.App) bool {
+	rep := r.lastSent(app.UID, readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport]))
+	return (rep.Deployment != 0 && !deploymentDone(rep.DeploymentState)) || rep.pinSlot().unfinished() || rep.latestSlot().unfinished()
+}
+
+// endReports closes the App's reports, through ref when it has a client:
+// unfinished check runs neutral and a Deployment still in progress
+// inactive, once, best effort. Then the annotation is removed (on a
+// terminating App too, so its finalization never closes them again) and
+// what the reporter kept of the App is dropped; while the removal fails,
+// memory keeps what was closed.
+func (r *GitHubReporter) endReports(ctx context.Context, app *shpyrdv1.App, ref githubRepoRef) (ctrl.Result, error) {
 	saved := readGitHubReport(app.Annotations[shpyrdv1.AnnotationGitHubReport])
 	old := r.lastSent(app.UID, saved)
 	rep := old
 	pinned, latest := rep.pinSlot(), rep.latestSlot()
-	if (rep.Deployment != 0 && !deploymentDone(rep.DeploymentState)) || pinned.unfinished() || latest.unfinished() {
-		if ref, ok, err := r.GitHub.coverQuietly(ctx, app); err == nil && ok {
-			// Best effort: a refused close is dropped with the rest.
-			for _, slot := range []checkSlot{pinned, latest} {
-				if slot.unfinished() {
-					_ = r.close(ctx, app, ref, slot, checkWant{commit: *slot.commit, status: "completed", conclusion: "neutral",
-						label: "stopped", title: stoppedReporting, summary: stoppedReporting + "."})
-				}
+	if ref.client != nil {
+		// Best effort: a refused close is dropped with the rest.
+		for _, slot := range []checkSlot{pinned, latest} {
+			if slot.unfinished() {
+				_ = r.close(ctx, app, ref, slot, checkWant{commit: *slot.commit, status: "completed", conclusion: "neutral",
+					label: "stopped", title: stoppedReporting, summary: stoppedReporting + "."})
 			}
-			_ = r.retire(ctx, app, ref, &rep, stoppedReporting)
 		}
+		_ = r.retire(ctx, app, ref, &rep, stoppedReporting)
 	}
 	if _, ok := app.Annotations[shpyrdv1.AnnotationGitHubReport]; ok {
 		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{shpyrdv1.AnnotationGitHubReport: nil}}})
@@ -322,7 +347,8 @@ func wantLatest(app *shpyrdv1.App) (checkWant, bool) {
 // wantCheck is the pinned commit's check, given what rep says was sent
 // for it, and false when it calls for none. A finished check is never
 // reopened, and never failed. A release of config or sizes, or a
-// rollback, never changes a finished check and never fails one; while the
+// rollback, never changes a finished check and never fails one; a
+// rollback or a deploy by image ends an unfinished one neutral; while the
 // pinned commit's check is not finished and its code runs, it succeeds. A
 // commit not yet running is Building at once, even while an older release
 // runs or fails: a failure is the pin's only when its own release failed,
@@ -361,10 +387,26 @@ func wantCheck(app *shpyrdv1.App, rep githubReport) (checkWant, bool) {
 			return checkWant{}, false
 		}
 		return success()
-	case !onPin && deployedBefore(app, pin), rolledBack(app):
-		// A rollback runs older code: the commit's check stays, and a
-		// rollback that fails never fails it, also when the commit never
-		// ran.
+	case rolledBack(app), deployedByImage(app):
+		// A rollback runs older code, a deploy by image no commit: the
+		// commit's finished check stays, and a rollback that fails never
+		// fails it, also when the commit never ran. Its unfinished check
+		// ends: the commit is not deployed.
+		if rep.Commit != pin || rep.CheckRun == 0 || done {
+			return checkWant{}, false
+		}
+		why := "Not deployed: deployed from an image"
+		if rolledBack(app) {
+			why = "Not deployed: rolled back"
+			if n := rollbackTarget(app); n > 0 {
+				why += fmt.Sprintf(" to release %d", n)
+			}
+		}
+		w.status, w.conclusion, w.label, w.title = "completed", "neutral", "not-deployed", why
+		w.summary += "\n\n" + why + "."
+		return w, true
+	case !onPin && deployedBefore(app, pin):
+		// A rollback runs older code: the commit's check stays.
 		return checkWant{}, false
 	case phase == shpyrdv1.PhaseFailed && !done && (onPin || pinBuildFailed(app)):
 		w.status, w.conclusion, w.label, w.title = "completed", "failure", "failure", "Failed"
@@ -422,6 +464,22 @@ func rolledBack(app *shpyrdv1.App) bool {
 		}
 	}
 	return false
+}
+
+// rollbackTarget is the release the App is rolled back to: the one asked
+// for, else the newest earlier release with its pinned image; 0 when not
+// known.
+func rollbackTarget(app *shpyrdv1.App) int {
+	if n, err := strconv.Atoi(app.Annotations[shpyrdv1.AnnotationRollbackTo]); err == nil && n > 0 {
+		return n
+	}
+	rels := app.Status.Releases
+	for i := len(rels) - 2; i >= 0; i-- {
+		if app.Spec.Image != "" && rels[i].Image == app.Spec.Image {
+			return rels[i].Number
+		}
+	}
+	return 0
 }
 
 // deployedByImage says a git App runs an image given to it, not one
