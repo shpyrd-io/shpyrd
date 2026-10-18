@@ -144,6 +144,21 @@ type sourceCheck struct {
 	// pinned is the last commit this watcher pinned for ref: a stale App
 	// that does not show it yet is not pinned again.
 	pinned string
+	// watch is the watch mode stored with it (WatchMode).
+	watch string
+}
+
+// storedWatch is how the branch's pushes last arrived: the mode of the
+// check remembered when it is later than the record's (the App may be a
+// stale read), else the record's.
+func (r *SourceReconciler) storedWatch(uid types.UID, rev string, rec gitauth.SourceRecord) string {
+	r.mu.Lock()
+	seen, ok := r.checked[uid]
+	r.mu.Unlock()
+	if ok && seen.ref == rev && seen.watch != "" && (rec.CheckedAt == nil || seen.at.After(*rec.CheckedAt)) {
+		return seen.watch
+	}
+	return rec.Watch
 }
 
 // SetupWithManager registers the watcher on the Apps that follow a branch.
@@ -253,11 +268,17 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var remembered bool
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
 	ev := sourceEvent{nudge: nudge}
-	covered := r.covered(ctx, app)
+	covered, known := r.covered(ctx, app)
+	// A change in how pushes arrive reads the branch once (the first pass
+	// after an upgrade, with no mode stored, counts as one). A cover that
+	// cannot be told is no change.
+	stored := r.storedWatch(app.UID, rev, rec)
+	// (A project's own webhook delivering is no change: its push is read.)
+	modeChanged := known && (stored == "" || (stored == WatchGitHubApp) != covered)
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push
-	case push != nil || badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, covered, now):
+	case push != nil || badPush || modeChanged || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, covered, now):
 		// A push that does not follow the commit last seen may be late,
 		// or delivered again: the branch says what its head is.
 		ev.latest, ev.err = r.poll(ctx, app)
@@ -302,6 +323,13 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if ev.err != nil && u.record.Error == sourceUnreadable {
 		log.FromContext(ctx).Info("could not read the branch", "revision", rev, "err", ev.err.Error())
 	}
+	mode := ""
+	if ev.readBranch() && ev.err == nil {
+		if mode = stored; known {
+			mode = WatchMode(covered, u.record)
+		}
+		u.record.Watch = mode
+	}
 	if u.pin != "" || sourceChanged(written, u.record) || written.CheckedAt == nil || now.Sub(*written.CheckedAt) >= recordRefresh {
 		if err := r.apply(ctx, app, u); err != nil {
 			return ctrl.Result{}, err
@@ -314,7 +342,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		consumed = rawPush
 	}
 	if ev.readBranch() {
-		r.remember(app.UID, rev, now, consumed, u.pin)
+		r.remember(app.UID, rev, now, consumed, u.pin, mode)
 	} else if u.pin != "" {
 		r.notePinned(app.UID, rev, u.pin, last.CheckedAt)
 	}
@@ -374,7 +402,7 @@ func (r *SourceReconciler) lastChecked(uid types.UID, rev string, rec gitauth.So
 // seen for a while.
 // A push consumed by this check is kept with it; without one, the last
 // one consumed stays. So does the last commit pinned, for the revision.
-func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, push, pinned string) {
+func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, push, pinned, watch string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.checked == nil {
@@ -392,7 +420,10 @@ func (r *SourceReconciler) remember(uid types.UID, rev string, now time.Time, pu
 	if pinned == "" && prev.ref == rev {
 		pinned = prev.pinned
 	}
-	r.checked[uid] = sourceCheck{at: now, ref: rev, push: push, pinned: pinned}
+	if watch == "" && prev.ref == rev {
+		watch = prev.watch
+	}
+	r.checked[uid] = sourceCheck{at: now, ref: rev, push: push, pinned: pinned, watch: watch}
 }
 
 // notePinned keeps a commit pinned without a check: the check remembered
@@ -745,13 +776,13 @@ func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u
 
 // covered says the GitHub App covers the App's repository: cover's own
 // test, an answer it cannot give being "no" (such a branch is listed, as
-// before).
-func (r *SourceReconciler) covered(ctx context.Context, app *shpyrdv1.App) bool {
+// before) and not known (no change of mode is seen).
+func (r *SourceReconciler) covered(ctx context.Context, app *shpyrdv1.App) (covered, known bool) {
 	if r.GitHub == nil {
-		return false
+		return false, true
 	}
-	_, ok, _ := r.GitHub.coverQuietly(ctx, app)
-	return ok
+	_, ok, err := r.GitHub.coverQuietly(ctx, app)
+	return ok, err == nil
 }
 
 // deployAsked says a person deployed after the last check.

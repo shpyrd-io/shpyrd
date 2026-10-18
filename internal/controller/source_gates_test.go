@@ -45,7 +45,7 @@ func shopWith(git shpyrdv1.GitSource) *shpyrdv1.App {
 	git.URL = "https://github.com/acme/shop"
 	app.Spec.Source.Git = &git
 	pinGit(app, testCommit)
-	return withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "push",
+	return withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "push", Watch: WatchGitHubApp,
 		CheckedAt: at(sourceNow.Add(-time.Minute)), LastWebhookAt: at(sourceNow.Add(-time.Minute))})
 }
 
@@ -507,13 +507,13 @@ func TestAutoDeploySwitchedOnChecksTheWatchPaths(t *testing.T) {
 
 // Fix round 1.
 
-func TestARerunsNudgeIsReadWhenTheBranchIsDue(t *testing.T) {
+func TestARerunsNudgeIsReadOnTheNudgePass(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		wait func(r *SourceReconciler, fake *githubtest.Server)
 	}{
 		{"two hours passed", func(_ *SourceReconciler, fake *githubtest.Server) { advance(fake, 2*time.Hour) }},
-		{"the controller restarted", func(r *SourceReconciler, fake *githubtest.Server) {
+		{"the controller restarted and the shared read aged", func(r *SourceReconciler, fake *githubtest.Server) {
 			advance(fake, ciShareFor)
 			r.checked, r.ciChecked = nil, nil
 		}},

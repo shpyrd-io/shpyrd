@@ -246,6 +246,10 @@ type SourceRecord struct {
 	// repository the GitHub App does not cover is then no longer listed on
 	// a timer.
 	ProjectHook bool `json:"projectHook,omitempty"`
+	// Watch is how the branch's pushes last arrived ("github-app",
+	// "webhook" or "poll"; empty: not known yet). A change of it reads the
+	// branch once, so a push missed while the mode changed is found.
+	Watch string `json:"watch,omitempty"`
 	// Failures counts the listings that failed in a row, for the backoff.
 	Failures int `json:"failures,omitempty"`
 }

@@ -52,6 +52,13 @@ func withRecord(app *shpyrdv1.App, rec gitauth.SourceRecord) *shpyrdv1.App {
 	if app.Annotations == nil {
 		app.Annotations = map[string]string{}
 	}
+	if rec.Watch == "" {
+		// A record that has been through a pass knows how its pushes arrive:
+		// what the App's record said, else a timer (nothing covers it).
+		if rec.Watch = sourceRecord(app).Watch; rec.Watch == "" {
+			rec.Watch = WatchMode(false, rec)
+		}
+	}
 	raw, _ := json.Marshal(rec)
 	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
 	return app
@@ -804,18 +811,67 @@ func TestACoverThatChangesMovesTheBranchBetweenTheTimerAndTheApp(t *testing.T) {
 	fake.SetRepos(42, elsewhere, githubtest.Repo{FullName: "Acme/shop", DefaultBranch: "main"})
 	r.GitHub.Forget(store.DefaultWorkspace)
 	advance(fake, 2*time.Hour)
-	if res, got = reconcileSource(t, r, got); ls.calls != 1 || res.RequeueAfter != pushDrivenRecheck {
+	// A push missed while the repository joined the installation is found:
+	// the flip reads the branch once.
+	if res, got = reconcileSource(t, r, got); ls.calls != 2 || res.RequeueAfter != pushDrivenRecheck {
 		t.Fatalf("became covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
+	}
+	advance(fake, 5*time.Hour)
+	if res, got = reconcileSource(t, r, got); ls.calls != 2 || res.RequeueAfter != pushDrivenRecheck {
+		t.Fatalf("covered, hours on: %d listings, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	// Taken out again: one read, then the timer.
 	fake.SetRepos(42, elsewhere)
 	r.GitHub.Forget(store.DefaultWorkspace)
 	advance(fake, 2*time.Hour)
-	if res, got = reconcileSource(t, r, got); ls.calls != 2 || res.RequeueAfter > DefaultPollInterval {
+	if res, got = reconcileSource(t, r, got); ls.calls != 3 || res.RequeueAfter > DefaultPollInterval {
 		t.Fatalf("stopped being covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	advance(fake, 6*time.Minute)
-	if _, _ = reconcileSource(t, r, got); ls.calls != 3 {
+	if _, _ = reconcileSource(t, r, got); ls.calls != 4 {
 		t.Errorf("back on the timer: %d listings", ls.calls)
+	}
+}
+
+// The first pass after an upgrade stores no mode yet: it reads the branch
+// once, then a covered repository is left alone.
+func TestARecordWithNoWatchModeReadsTheBranchOnceThenStaysQuiet(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
+	app := shopWith(shpyrdv1.GitSource{Revision: "main"})
+	rec := sourceRecord(app)
+	rec.Watch = ""
+	raw, _ := json.Marshal(rec)
+	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
+	r, fake := gatedWatcher(t, ls, app)
+	_, got := reconcileSource(t, r, app)
+	if ls.calls != 1 || sourceRecord(got).Watch != WatchGitHubApp {
+		t.Fatalf("%d listings, record %+v", ls.calls, sourceRecord(got))
+	}
+	advance(fake, 3*time.Hour)
+	if _, _ = reconcileSource(t, r, got); ls.calls != 1 {
+		t.Errorf("%d listings", ls.calls)
+	}
+}
+
+// A listing a person's deploy asked for does not deploy a skipped head,
+// also where the App covers the repository.
+func TestACoveredRepositoryKeepsASkippedCommitSkipped(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	app := withPush(shopWith(shpyrdv1.GitSource{Revision: "main"}), gitauth.Push{
+		Ref: "refs/heads/main", SHA: otherCommit, Before: testCommit, Message: "Fix a typo [Skip Deploy]", Author: "bruno", Delivery: "d-2", At: sourceNow, App: true,
+	})
+	r, fake := gatedWatcher(t, ls, app)
+	_, got := reconcileSource(t, r, app)
+	if got.PinnedCommit() != testCommit || sourceRecord(got).Skipped != otherCommit || ls.calls != 0 {
+		t.Fatalf("pin %q record %+v listings %d", got.PinnedCommit(), sourceRecord(got), ls.calls)
+	}
+	advance(fake, 3*time.Hour)
+	got.Annotations[configvars.AnnotationDeployRequested] = fake.Time().Add(-time.Second).Format(time.RFC3339Nano)
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	_, got = reconcileSource(t, r, got)
+	if ls.calls != 1 || got.PinnedCommit() != testCommit {
+		t.Errorf("listings %d, pin %q: a listing must not deploy a skipped commit", ls.calls, got.PinnedCommit())
 	}
 }
