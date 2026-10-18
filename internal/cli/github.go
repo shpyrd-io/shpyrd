@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,6 +28,64 @@ var (
 	githubConnectWait = 10 * time.Minute
 )
 
+// githubNotLinked starts the server's 404 when no GitHub account is linked.
+const githubNotLinked = "no GitHub account is linked"
+
+// githubLinkRequired turns the server's github_link_required answer into
+// what to run; nil for any other answer.
+func githubLinkRequired(status int, raw []byte) error {
+	if status != http.StatusConflict {
+		return nil
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(raw, &body) != nil || body.Code != "github_link_required" {
+		return nil
+	}
+	return errors.New("link your GitHub account first: run shpyrd github link")
+}
+
+// openOrPrint opens a page in the browser, or prints its address when
+// asked not to or when nothing opens.
+func openOrPrint(out io.Writer, page string, noBrowser bool) {
+	if !noBrowser && browse(page) == nil {
+		fmt.Fprintf(out, "Opened %s (if nothing opened, open it yourself).\n", page)
+	} else {
+		fmt.Fprintf(out, "Open %s\n", page)
+	}
+}
+
+// waitForBrowser polls step every githubPollEvery until it reports done,
+// for up to githubConnectWait. A step error is a blip: three in a row end
+// the wait. On done, the error is the step's own (what printing returned).
+func waitForBrowser(cancelled, expired string, step func() (done bool, err error)) error {
+	ctx := signalContext()
+	deadline := time.Now().Add(githubConnectWait)
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New(cancelled)
+		case <-time.After(githubPollEvery):
+		}
+		done, err := step()
+		if done {
+			return err
+		}
+		if err != nil {
+			if failures++; failures > 3 {
+				return err
+			}
+		} else {
+			failures = 0
+		}
+		if time.Now().After(deadline) {
+			return errors.New(expired)
+		}
+	}
+}
+
 func githubRequest(g *globalFlags, cmd *cobra.Command, method, path string, out any) error {
 	return signedInRequest(g, cmd, "GitHub connections are managed signed in: run shpyrd login first.", method, path, nil, out)
 }
@@ -41,15 +101,18 @@ func kindOf(accountType string) string {
 func newGitHubCmd(g *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "github",
-		Short: "Connect GitHub: pick repositories, private ones build, every push deploys",
-		Long: `Connect an account or organisation once (workspace admins). Then anyone who
-makes projects picks one of its repositories: private ones build without keys
-or tokens, and every push to a project's branch deploys.
+		Short: "GitHub: link your account, connect accounts, pick repositories; every push deploys",
+		Long: `Link your own GitHub account once: New project, the CLI and your agents then
+list and use the repositories you can read on GitHub. A workspace admin
+connects an account or organisation once; private repositories then build
+without keys or tokens, and every push to a project's branch deploys.
 
+  shpyrd github link                  open the browser to link your GitHub account, and wait for it
+  shpyrd github unlink                unlink it (your projects keep deploying)
   shpyrd github connect               open the dashboard to connect, and wait for it
   shpyrd github list                  the workspace's connections
   shpyrd github disconnect <account>  forget one (the App stays installed on GitHub)
-  shpyrd github repos [--filter TEXT] the repositories the connections reach
+  shpyrd github repos [--filter TEXT] the repositories you can read through the connections
 
 Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 	}
@@ -70,46 +133,30 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			// the page starts it and the CLI only waits.
 			page := workspaceURL() + "/workspace/git"
 			out := g.progress(cmd)
-			if !noBrowser && browse(page) == nil {
-				fmt.Fprintf(out, "Opened %s (if nothing opened, open it yourself).\n", page)
-			} else {
-				fmt.Fprintf(out, "Open %s\n", page)
-			}
+			openOrPrint(out, page, noBrowser)
 			fmt.Fprintln(out, "Connect GitHub there; waiting for the connection…")
 			known := map[int64]bool{}
 			for _, i := range before.Installations {
 				known[i.ID] = true
 			}
-			ctx := signalContext()
-			deadline := time.Now().Add(githubConnectWait)
-			failures := 0
-			for {
-				select {
-				case <-ctx.Done():
-					return errors.New("cancelled; a connection made on the page still counts: shpyrd github list")
-				case <-time.After(githubPollEvery):
-				}
-				var now api.GitHubView
-				if err := githubRequest(g, cmd, "GET", "api/workspace/github", &now); err != nil {
-					// A blip does not end a long wait: three in a row do.
-					if failures++; failures > 3 {
-						return err
+			return waitForBrowser(
+				"cancelled; a connection made on the page still counts: shpyrd github list",
+				"no new connection after 10 minutes: run shpyrd github connect again",
+				func() (bool, error) {
+					var now api.GitHubView
+					if err := githubRequest(g, cmd, "GET", "api/workspace/github", &now); err != nil {
+						return false, err
 					}
-				} else {
-					failures = 0
-				}
-				for _, inst := range now.Installations {
-					if known[inst.ID] {
-						continue
+					for _, inst := range now.Installations {
+						if known[inst.ID] {
+							continue
+						}
+						return true, g.print(cmd, inst, func(w io.Writer) {
+							fmt.Fprintf(w, "Connected %s (%s), installation %d. Its repositories: shpyrd github repos\n", inst.Account, kindOf(inst.Type), inst.ID)
+						})
 					}
-					return g.print(cmd, inst, func(w io.Writer) {
-						fmt.Fprintf(w, "Connected %s (%s), installation %d. Its repositories: shpyrd github repos\n", inst.Account, kindOf(inst.Type), inst.ID)
-					})
-				}
-				if time.Now().After(deadline) {
-					return errors.New("no new connection after 10 minutes: run shpyrd github connect again")
-				}
-			}
+					return false, nil
+				})
 		},
 	}
 	connect.Flags().BoolVar(&noBrowser, "no-browser", false, "print the page link instead of opening it")
@@ -189,7 +236,7 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 	var filter string
 	repos := &cobra.Command{
 		Use:   "repos [--filter TEXT]",
-		Short: "List the repositories the workspace's connections reach",
+		Short: "List the repositories you can read through the workspace's connections",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var all []api.GitHubRepositoryView
 			if err := githubRequest(g, cmd, "GET", "api/workspace/github/repositories", &all); err != nil {
@@ -203,7 +250,7 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			}
 			return g.print(cmd, map[string]any{"repositories": shown}, func(w io.Writer) {
 				if len(shown) == 0 {
-					fmt.Fprintln(w, "No repository matches. A connection reaches what its installation includes: change it on GitHub.")
+					fmt.Fprintln(w, "No repository matches. You see what your GitHub account can read in the connected accounts: shpyrd github link, or ask for access on GitHub.")
 					return
 				}
 				tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -222,7 +269,68 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 	}
 	repos.Flags().StringVar(&filter, "filter", "", "only repositories whose name contains this")
 
-	cmd.AddCommand(connect, list, disconnect, repos)
+	var linkNoBrowser bool
+	link := &cobra.Command{
+		Use:   "link",
+		Short: "Link your GitHub account in the browser, and wait for it",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var me api.GitHubLinkView
+			err := githubRequest(g, cmd, "GET", "api/me/github", &me)
+			if err == nil {
+				return g.print(cmd, me, func(w io.Writer) {
+					fmt.Fprintf(w, "Your GitHub account is linked: %s. To link another, run shpyrd github unlink first.\n", me.Login)
+				})
+			}
+			if !strings.Contains(err.Error(), githubNotLinked) {
+				return err
+			}
+			// The link finishes in the browser, signed in there: the page
+			// goes on to GitHub, and the CLI waits for the link to appear.
+			page := workspaceURL() + "/api/me/github/link"
+			out := g.progress(cmd)
+			openOrPrint(out, page, linkNoBrowser)
+			fmt.Fprintln(out, "Continue with GitHub there; waiting for the link…")
+			return waitForBrowser(
+				"cancelled; a link made in the browser still counts: shpyrd whoami",
+				"not linked after 10 minutes: run shpyrd github link again",
+				func() (bool, error) {
+					var now api.GitHubLinkView
+					err := githubRequest(g, cmd, "GET", "api/me/github", &now)
+					switch {
+					case err == nil:
+						return true, g.print(cmd, now, func(w io.Writer) {
+							fmt.Fprintf(w, "Linked GitHub account %s. The repositories it can read: shpyrd github repos\n", now.Login)
+						})
+					case strings.Contains(err.Error(), githubNotLinked):
+						return false, nil
+					}
+					return false, err
+				})
+		},
+	}
+	link.Flags().BoolVar(&linkNoBrowser, "no-browser", false, "print the page link instead of opening it")
+
+	unlink := &cobra.Command{
+		Use:   "unlink",
+		Short: "Unlink your GitHub account; your projects keep deploying",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var me api.GitHubLinkView
+			if err := githubRequest(g, cmd, "GET", "api/me/github", &me); err != nil {
+				if strings.Contains(err.Error(), githubNotLinked) {
+					return errors.New(githubNotLinked)
+				}
+				return err
+			}
+			if err := githubRequest(g, cmd, "DELETE", "api/me/github", nil); err != nil {
+				return err
+			}
+			return g.print(cmd, map[string]string{"unlinked": me.Login}, func(w io.Writer) {
+				fmt.Fprintf(w, "Unlinked %s; its token is revoked on GitHub. Your projects keep deploying; picking a private repository needs a link again.\n", me.Login)
+			})
+		},
+	}
+
+	cmd.AddCommand(link, unlink, connect, list, disconnect, repos)
 	return cmd
 }
 

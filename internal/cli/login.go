@@ -527,6 +527,35 @@ func whoAmI(ctx context.Context, wsURL, token string) string {
 	return me.Email
 }
 
+// githubOf is the GitHub account linked to the token's person (RFC-0054):
+// its login, or "" when none is linked; known is false when the server
+// did not say.
+func githubOf(ctx context.Context, wsURL, token string) (string, bool) {
+	req, err := http.NewRequestWithContext(ctx, "GET", wsURL+"/api/me/github", nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return "", true
+	case http.StatusOK:
+		var v struct {
+			Login string `json:"login"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&v) != nil {
+			return "", false
+		}
+		return v.Login, true
+	}
+	return "", false
+}
+
 // newLogoutCmd is `shpyrd logout`.
 func newLogoutCmd(g *globalFlags) *cobra.Command {
 	var wsURL string
@@ -595,8 +624,23 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				// The admin token has no person behind it.
 				me = "admin token"
 			}
-			return g.print(cmd, map[string]string{"url": norm, "user": me}, func(w io.Writer) {
+			view := map[string]string{"url": norm, "user": me}
+			ghLogin, known := "", false
+			if me != "admin token" {
+				ghLogin, known = githubOf(ctx, norm, sess.Token)
+			}
+			if known {
+				view["github"] = ghLogin
+			}
+			return g.print(cmd, view, func(w io.Writer) {
 				fmt.Fprintln(w, me)
+				switch {
+				case !known:
+				case ghLogin == "":
+					fmt.Fprintln(w, "GitHub: not linked (shpyrd github link)")
+				default:
+					fmt.Fprintf(w, "GitHub: %s\n", ghLogin)
+				}
 			})
 		},
 	}

@@ -262,6 +262,9 @@ func serverRequestDirect(ctx context.Context, wsURL, token, method, path string,
 	if resp.StatusCode == http.StatusRequestEntityTooLarge && strings.TrimPrefix(path, "/") == "api/sources" {
 		return nil, sourceUploadRefused(ctx, wsURL, len(body), resp)
 	}
+	if err := githubLinkRequired(resp.StatusCode, raw); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 400 {
 		msg := strings.TrimSpace(string(raw))
 		if msg == "" {
