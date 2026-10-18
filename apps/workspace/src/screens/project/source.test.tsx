@@ -272,3 +272,25 @@ it("lets wait for CI be switched off and the watch paths cleared where the GitHu
   expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "Clear watch paths" })).toBeNull();
 });
+
+it("says a repository the GitHub App covers deploys on push through it, and who connected it", () => {
+  const p = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(3) });
+  p.sourceWatch = { mode: "github-app" };
+  p.githubLinkedBy = "paezao";
+  show(p);
+  expect(screen.getByText("Deploys on push through the GitHub App. Connected by paezao.")).toBeTruthy();
+});
+
+it("says a project whose webhook delivered deploys on push through it, and when it last did", () => {
+  const p = projectWith({ url: "https://gitlab.com/acme/shop", revision: "main" }, { commit, latest: commit, lastWebhookAt: minutesAgo(3 * 24 * 60) });
+  p.sourceWatch = { mode: "webhook" };
+  show(p);
+  expect(screen.getByText("Deploys on push through its webhook (last delivery 3 days ago).")).toBeTruthy();
+});
+
+it("says how often a polled branch is checked, and how to stop the checks", () => {
+  const p = projectWith({ url: "https://gitlab.com/acme/shop", revision: "main" }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  p.sourceWatch = { mode: "poll", pollEvery: 300 };
+  show(p);
+  expect(screen.getByText("Checked every 5 min. Set up the webhook to deploy at once and stop the checks.")).toBeTruthy();
+});

@@ -1,6 +1,8 @@
 [
   {
     "slug": "hello-world",
+    "sourceWatch": { "mode": "github-app" },
+    "githubLinkedBy": "ana-souza",
     "displayName": "Hello World",
     "description": "Operations of the day, finance and the team.",
     "icon": "layout-dashboard",
@@ -114,6 +116,7 @@
   },
   {
     "slug": "docs",
+    "sourceWatch": { "mode": "github-app" },
     "displayName": "Docs",
     "description": "What is written about the agency, for everyone.",
     "icon": "book-open",
@@ -191,6 +194,7 @@
   },
   {
     "slug": "billing",
+    "sourceWatch": { "mode": "poll", "pollEvery": 300 },
     "displayName": "Billing",
     "description": "Invoices, plans and what each client owes.",
     "icon": "receipt",
@@ -336,6 +340,7 @@
   },
   {
     "slug": "reports",
+    "sourceWatch": { "mode": "poll", "pollEvery": 300 },
     "displayName": "Reports",
     "description": "Builds the reports of the month, every night.",
     "namespace": "p-reports",
@@ -406,6 +411,7 @@
   },
   {
     "slug": "metrics",
+    "sourceWatch": { "mode": "webhook" },
     "displayName": "Metrics",
     "description": "Collects the numbers of every application, each hour.",
     "namespace": "p-metrics",

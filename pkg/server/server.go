@@ -579,6 +579,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		SystemNamespace: k.Namespace,
 		GitHub:          githubApp,
 		PollInterval:    controller.PollInterval(os.Getenv("SHPYRD_GIT_POLL_INTERVAL")),
+		PollRate:        controller.PollRate(os.Getenv("SHPYRD_GIT_POLL_RATE")),
 	}
 	if err := source.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("source watcher: %w", err)

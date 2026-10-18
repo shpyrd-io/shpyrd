@@ -12,6 +12,7 @@ import (
 	"time"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
 	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
@@ -383,5 +384,21 @@ func TestRestoringAnArchiveOfAPrivateRepositoryNeedsSomeoneWhoCanReadIt(t *testi
 	}
 	if got := linkedBy(t, s, "site"); got != githubtest.UserLogin {
 		t.Errorf("linked by %q after the restore", got)
+	}
+}
+func TestTheProjectSaysHowItLearnsOfPushes(t *testing.T) {
+	s, _, _ := githubServer(t,
+		onGitHub("shop", "https://github.com/acme/shop", "main", ""),
+		recordOn(onGitHub("blog", "https://gitlab.com/acme/blog", "main", ""), gitauth.SourceRecord{Ref: "main", ProjectHook: true}),
+		recordOn(onGitHub("docs", "https://gitlab.com/acme/docs", "main", ""), gitauth.SourceRecord{Ref: "main", Watch: "github-app", LastWebhookAt: &time.Time{}}),
+		// Delivered before the mode was stored: its own webhook (RFC-0054).
+		recordOn(onGitHub("old", "https://gitlab.com/acme/old", "main", ""), gitauth.SourceRecord{Ref: "main", LastWebhookAt: &time.Time{}}),
+	)
+	connectAcme(t, s, store.DefaultWorkspace)
+	for slug, want := range map[string]string{"shop": `"sourceWatch":{"mode":"github-app"}`, "blog": `"sourceWatch":{"mode":"webhook"}`, "docs": `"sourceWatch":{"mode":"poll","pollEvery":300}`, "old": `"sourceWatch":{"mode":"webhook"}`} {
+		rec := do(t, s, "GET", "/api/projects/"+slug, "", true)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: %d %s", slug, rec.Code, rec.Body.String())
+		}
 	}
 }

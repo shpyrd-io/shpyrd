@@ -5,6 +5,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // githubSourceNote says watch paths or wait for CI are set where they do
@@ -36,6 +37,13 @@ func (s *Server) forgetGitHubCover(ws string) {
 	gh.Forget(ws)
 }
 
+// SourceWatchView says how shpyrd learns of a branch's pushes (RFC-0018,
+// RFC-0054): "github-app", "webhook", or "poll" every PollEvery seconds.
+type SourceWatchView struct {
+	Mode      string `json:"mode"`
+	PollEvery int    `json:"pollEvery,omitempty"`
+}
+
 // projectDetail is a project's view with what the GitHub App adds: whether
 // it covers the repository, and a note when the settings it needs are set
 // without it.
@@ -46,5 +54,13 @@ func (s *Server) projectDetail(ctx context.Context, app *shpyrdv1.App) AppDetail
 		d.SourceNote = githubSourceNote
 	}
 	d.GitHubLinkedBy = app.Annotations[shpyrdv1.AnnotationGitHubLinkedBy]
+	if gitauth.Watched(app) {
+		rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+		w := &SourceWatchView{Mode: controller.WatchMode(d.GitHubFeatures, rec)}
+		if w.Mode == controller.WatchPoll {
+			w.PollEvery = int(controller.PollInterval(s.vars("SHPYRD_GIT_POLL_INTERVAL")).Seconds())
+		}
+		d.SourceWatch = w
+	}
 	return d
 }

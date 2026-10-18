@@ -36,6 +36,39 @@ const minutesSince = (iso: string) => {
   return m < 1 ? "under a minute" : `${m} min`;
 };
 
+// "3 days ago", "2 hours ago", "5 min ago", since an ISO time.
+const longAgo = (iso: string) => {
+  const m = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  return `${Math.floor(h / 24)} days ago`;
+};
+
+// How the branch's pushes reach shpyrd (RFC-0054): the GitHub App, the
+// project's own webhook, or a check on a timer, and how to stop it.
+function WatchLine({ project }: { project: Project }) {
+  const watch = project.sourceWatch;
+  if (!watch) return null;
+  let words: string;
+  switch (watch.mode) {
+    case "github-app":
+      words = `Deploys on push through the GitHub App.${project.githubLinkedBy ? ` Connected by ${project.githubLinkedBy}.` : ""}`;
+      break;
+    case "webhook": {
+      const last = project.status.source?.lastWebhookAt;
+      words = last ? `Deploys on push through its webhook (last delivery ${longAgo(last)}).` : "Deploys on push through its webhook.";
+      break;
+    }
+    default: {
+      const every = watch.pollEvery ?? 300;
+      words = `Checked every ${every >= 60 ? `${Math.round(every / 60)} min` : `${every} s`}. Set up the webhook to deploy at once and stop the checks.`;
+    }
+  }
+  return <p className="text-xs text-muted-foreground">{words}</p>;
+}
+
 // Why a commit was not deployed, as the Source block says it.
 function notDeployedWords(reason?: string) {
   if (!reason) return "no reason given";
@@ -92,6 +125,7 @@ export function GitSource({ project, perms }: { project: Project; perms: Perms }
           <WaitForCISwitch slug={project.slug} on={git.waitForChecks === true} allowed={perms.config} available={github} />
         </InfoTableItem>
       </InfoTable>
+      <WatchLine project={project} />
       {source?.skipped && (
         <p className="text-xs text-muted-foreground">
           Skipped {short(source.skipped)}: {(source.latest === source.skipped && subject(source.message)) || "a skip marker"}

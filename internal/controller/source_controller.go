@@ -77,10 +77,18 @@ func WatchMode(covered bool, rec gitauth.SourceRecord) string {
 	switch {
 	case covered:
 		return WatchGitHubApp
-	case rec.ProjectHook:
+	case rec.ProjectHook || legacyWebhook(rec):
 		return WatchWebhook
 	}
 	return WatchPoll
+}
+
+// legacyWebhook says a record written before the watch mode was stored shows
+// a webhook that delivered (LastWebhookAt) without saying whose: when the
+// App does not cover the repository, it was the project's own, and the
+// project is not listed on a timer again.
+func legacyWebhook(rec gitauth.SourceRecord) bool {
+	return rec.Watch == "" && rec.LastWebhookAt != nil && !rec.ProjectHook
 }
 
 // sourceUnreadable is what a person reads when the branch could not be
@@ -109,6 +117,9 @@ type SourceReconciler struct {
 	GitHub *GitHubApp
 	// PollInterval is the wait between listings; zero is the default.
 	PollInterval time.Duration
+	// PollRate is the cluster's cap on listings a second; zero is
+	// DefaultPollRate.
+	PollRate float64
 	// LsRemote lists a repository; nil is gitauth.LsRemote. Tests inject one.
 	LsRemote func(ctx context.Context, cloneURL string, b gitauth.Build) (map[string]string, error)
 	// Now and Jitter are the clock and the spread of requeues; nil is
@@ -132,6 +143,10 @@ type SourceReconciler struct {
 	// statuses, by installation, repository and commit: the Apps on one
 	// repository share it for ciShareFor.
 	ciShared map[ciKey]ciInputs
+	// polls is the cap; listings are the repositories' last listings, by
+	// listingKey, shared by the projects on them.
+	polls    *pollBucket
+	listings map[string]repoListing
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -241,7 +256,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if rec.Ref != rev {
 		// Another branch's record: only what says the webhook works
 		// carries over.
-		rec = gitauth.SourceRecord{LastWebhookAt: rec.LastWebhookAt, Delivery: rec.Delivery, ProjectHook: rec.ProjectHook}
+		rec = gitauth.SourceRecord{LastWebhookAt: rec.LastWebhookAt, Delivery: rec.Delivery, ProjectHook: rec.ProjectHook, Watch: rec.Watch}
 	}
 	rawPush := app.Annotations[shpyrdv1.AnnotationGitPush]
 	push, _ := gitauth.ReadPush(rawPush)
@@ -264,15 +279,25 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// written. A check remembered but not yet seen in the App may be a
 	// write the cache has not caught up with: a missing pin then is not a
 	// reason to read the branch, and pin it, again.
+	covered, known := r.covered(ctx, app)
+	// A webhook that delivered before the watch mode was stored, on a
+	// repository the App does not cover, was the project's own: it is
+	// recorded so, and not read again for the change of record.
+	migrated := known && !covered && legacyWebhook(rec)
+	if migrated {
+		rec.ProjectHook = true
+	}
 	last := rec
 	var remembered bool
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
 	ev := sourceEvent{nudge: nudge}
-	covered, known := r.covered(ctx, app)
 	// A change in how pushes arrive reads the branch once (the first pass
 	// after an upgrade, with no mode stored, counts as one). A cover that
 	// cannot be told is no change, and so is a failed read: the backoff retries it.
 	stored := r.storedWatch(app.UID, rev, rec)
+	if migrated && stored == "" {
+		stored = WatchWebhook
+	}
 	// (A project's own webhook delivering is no change: its push is read.)
 	modeChanged := known && rec.Failures == 0 && (stored == "" || (stored == WatchGitHubApp) != covered)
 	switch {
@@ -280,8 +305,16 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		ev.push = push
 	case push != nil || badPush || modeChanged || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, covered, now):
 		// A push that does not follow the commit last seen may be late,
-		// or delivered again: the branch says what its head is.
-		ev.latest, ev.err = r.poll(ctx, app)
+		// or delivered again: the branch says what its head is. Only a
+		// check the timer asked for shares a listing.
+		timer := push == nil && !badPush && app.PinnedCommit() != "" && last.CheckedAt != nil && !deployAsked(app, last)
+		ev.latest, ev.err = r.poll(ctx, app, timer, now)
+		var deferred *pollDeferred
+		if errors.As(ev.err, &deferred) {
+			// Over the cluster's cap: this App's turn comes after the wait;
+			// nothing is written or dropped meanwhile.
+			return ctrl.Result{RequeueAfter: deferred.wait}, nil
+		}
 		if push != nil && ev.err == nil && ev.latest == strings.ToLower(push.SHA) {
 			// The head is the push's commit: what the push says of it
 			// (its words, author, a skip) holds.
@@ -636,20 +669,37 @@ func describeSourceError(err error, app *shpyrdv1.App) string {
 }
 
 // poll lists the repository with the build's credential and finds the
-// revision's commit. A listing cut at the cap still answers when the
-// revision is among what was read.
-func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App) (string, error) {
+// revision's commit. A timer's check uses a listing of the same repository
+// and credential made within the interval; any listing waits its turn
+// under the cluster's cap (a *pollDeferred). A listing cut at the cap
+// still answers when the revision is among what was read.
+func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App, timer bool, now time.Time) (string, error) {
 	b, err := lookupGitBuild(ctx, r.Client, r.SystemNamespace, r.GitHub, app)
 	if err != nil {
 		return "", err
 	}
-	list := r.LsRemote
-	if list == nil {
-		list = gitauth.LsRemote
-	}
 	// The URL the build clones, in the form the credential fits: an
 	// https URL with a deploy key is read over SSH.
-	refs, err := list(ctx, firstNonEmpty(b.CloneURL, app.Spec.Source.Git.URL), b)
+	cloneURL := firstNonEmpty(b.CloneURL, app.Spec.Source.Git.URL)
+	key := listingKey(cloneURL, b)
+	var refs map[string]string
+	if l, ok := r.sharedListing(key, now); ok && timer {
+		refs = l.refs
+	} else {
+		if wait, ok := r.bucket().take(now, !timer); !ok {
+			return "", &pollDeferred{wait: wait}
+		}
+		list := r.LsRemote
+		if list == nil {
+			list = gitauth.LsRemote
+		}
+		refs, err = list(ctx, cloneURL, b)
+		if err == nil {
+			// Only a complete listing is shared: a failed one is read again
+			// by the backoff, a cut one by each project.
+			r.keepListing(key, repoListing{refs: refs, at: now})
+		}
+	}
 	if err != nil && !errors.Is(err, gitauth.ErrTooManyRefs) {
 		if b.AppRefused != "" {
 			return "", &appRefusedError{why: b.AppRefused, err: err}

@@ -98,7 +98,7 @@ func newSourceReconciler(t *testing.T, ls *fakeLsRemote, objs ...client.Object) 
 	_, c := newTestReconciler(t, objs...)
 	return &SourceReconciler{
 		Client: c, Kube: k8sfake.NewSimpleClientset(), SystemNamespace: "shpyrd-system",
-		PollInterval: DefaultPollInterval, LsRemote: ls.list,
+		PollInterval: DefaultPollInterval, PollRate: 1000, LsRemote: ls.list,
 		Now:    func() time.Time { return sourceNow },
 		Jitter: func(d time.Duration) time.Duration { return d },
 	}, c
@@ -717,7 +717,11 @@ func TestWatchModeSaysHowABranchsPushesArrive(t *testing.T) {
 		{true, gitauth.SourceRecord{}, WatchGitHubApp},
 		{true, gitauth.SourceRecord{ProjectHook: true}, WatchGitHubApp},
 		{false, gitauth.SourceRecord{ProjectHook: true}, WatchWebhook},
-		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchPoll},
+		// An App's push, and the App no longer covers it: listed again.
+		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow), Watch: WatchGitHubApp}, WatchPoll},
+		// A webhook delivered before the mode was stored: the project's own.
+		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchWebhook},
+		{true, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchGitHubApp},
 		{false, gitauth.SourceRecord{}, WatchPoll},
 	} {
 		if got := WatchMode(c.covered, c.rec); got != c.want {

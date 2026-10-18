@@ -251,6 +251,11 @@ export type Project = ProjectSummary & {
   // apply (RFC-0054). sourceNote says when they are set and do not.
   githubFeatures?: boolean;
   sourceNote?: string;
+  // How shpyrd learns of the branch's pushes: the GitHub App, the
+  // project's own webhook, or a check every pollEvery seconds.
+  sourceWatch?: { mode: "github-app" | "webhook" | "poll"; pollEvery?: number };
+  // The GitHub account whose access picked the repository.
+  githubLinkedBy?: string;
 };
 
 // What the source watcher knows of the branch a project follows

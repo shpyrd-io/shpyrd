@@ -152,6 +152,8 @@ type AppDetail struct {
 	// GitHubLinkedBy is the GitHub account whose access picked the
 	// repository (RFC-0054): "Connected by …".
 	GitHubLinkedBy string `json:"githubLinkedBy,omitempty"`
+	// SourceWatch says how shpyrd learns of the branch's pushes.
+	SourceWatch *SourceWatchView `json:"sourceWatch,omitempty"`
 }
 
 type AppDetailSpec struct {
