@@ -271,10 +271,10 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	covered, known := r.covered(ctx, app)
 	// A change in how pushes arrive reads the branch once (the first pass
 	// after an upgrade, with no mode stored, counts as one). A cover that
-	// cannot be told is no change.
+	// cannot be told is no change, and so is a failed read: the backoff retries it.
 	stored := r.storedWatch(app.UID, rev, rec)
 	// (A project's own webhook delivering is no change: its push is read.)
-	modeChanged := known && (stored == "" || (stored == WatchGitHubApp) != covered)
+	modeChanged := known && rec.Failures == 0 && (stored == "" || (stored == WatchGitHubApp) != covered)
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push

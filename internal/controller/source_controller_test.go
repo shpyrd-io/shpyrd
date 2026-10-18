@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -873,5 +874,36 @@ func TestACoveredRepositoryKeepsASkippedCommitSkipped(t *testing.T) {
 	_, got = reconcileSource(t, r, got)
 	if ls.calls != 1 || got.PinnedCommit() != testCommit {
 		t.Errorf("listings %d, pin %q: a listing must not deploy a skipped commit", ls.calls, got.PinnedCommit())
+	}
+}
+
+// A changed mode whose listing fails is retried by the failure backoff, not
+// on every App event.
+func TestAChangedModeWhoseListingFailsWaitsForTheBackoff(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}, err: errors.New("github is down")}
+	app := shopWith(shpyrdv1.GitSource{Revision: "main"})
+	rec := sourceRecord(app)
+	rec.Watch = ""
+	raw, _ := json.Marshal(rec)
+	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
+	r, fake := gatedWatcher(t, ls, app)
+	_, got := reconcileSource(t, r, app)
+	if ls.calls != 1 || sourceRecord(got).Failures != 1 {
+		t.Fatalf("%d listings, record %+v", ls.calls, sourceRecord(got))
+	}
+	for i := 0; i < 3; i++ {
+		advance(fake, time.Second)
+		if _, got = reconcileSource(t, r, got); ls.calls != 1 {
+			t.Fatalf("an App event during the backoff listed again: %d listings", ls.calls)
+		}
+	}
+	ls.err = nil
+	advance(fake, errorBackoff)
+	if _, got = reconcileSource(t, r, got); ls.calls != 2 || sourceRecord(got).Watch != WatchGitHubApp || sourceRecord(got).Failures != 0 {
+		t.Fatalf("the backoff passed: %d listings, record %+v", ls.calls, sourceRecord(got))
+	}
+	advance(fake, 5*time.Hour)
+	if _, _ = reconcileSource(t, r, got); ls.calls != 2 {
+		t.Errorf("listed on a timer once the mode was stored: %d", ls.calls)
 	}
 }
