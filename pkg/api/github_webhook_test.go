@@ -417,3 +417,15 @@ func TestAPushThroughTheAppSaysSo(t *testing.T) {
 		t.Errorf("push %+v", p)
 	}
 }
+
+func TestTheAppsWebhookRefusalSaysGitHubDeliversAgain(t *testing.T) {
+	s, cr := newTestServer(t, nil, nil)
+	s.githubApp = githubtest.NewServer(t).Source(cr, "shpyrd-system")
+	s.githubDeliveries = newRateLimiter(1)
+	deliverApp(t, s, "ping", "d-1", []byte(`{}`), githubtest.WebhookSecret)
+	rec := deliverApp(t, s, "ping", "d-2", []byte(`{}`), githubtest.WebhookSecret)
+	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "GitHub delivers it again within about 5 minutes") ||
+		strings.Contains(rec.Body.String(), "by itself") {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}

@@ -35,7 +35,7 @@ const githubHookBodyLimit = 5 << 20
 func (s *Server) githubWebhook(c *gin.Context) {
 	if !s.githubDeliveries.allow(c.ClientIP()) {
 		c.Header("Retry-After", "60")
-		abort(c, http.StatusTooManyRequests, errors.New("too many webhook deliveries from this address; shpyrd checks the branches by itself meanwhile"))
+		abort(c, http.StatusTooManyRequests, errors.New("too many webhook deliveries from this address; GitHub delivers it again within about 5 minutes once shpyrd answers"))
 		return
 	}
 	ctx := c.Request.Context()
@@ -46,7 +46,7 @@ func (s *Server) githubWebhook(c *gin.Context) {
 	}
 	if err != nil {
 		s.log.Warn("github webhook: could not read the App", "err", err.Error())
-		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
+		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; GitHub delivers it again within about 5 minutes once shpyrd answers"))
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, githubHookBodyLimit))
@@ -143,7 +143,7 @@ func (s *Server) githubLiveInstallation(c *gin.Context, id int64) (_ *store.GitH
 	}
 	if err != nil {
 		s.log.Warn("github webhook: could not look up the installation", "installation", id, "err", err.Error())
-		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
+		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; GitHub delivers it again within about 5 minutes once shpyrd answers"))
 		return nil, false
 	}
 	if inst.SuspendedAt != nil {
@@ -234,10 +234,10 @@ func (s *Server) githubCIEvent(c *gin.Context, event string, body []byte, delive
 
 // githubPushUnavailable answers a push shpyrd could not apply: the real
 // error goes to the log, the public answer says nothing of the cluster.
-// GitHub delivers again; the watcher reads the branches meanwhile.
+// GitHub delivers again (the catch-up sweep asks within about 5 minutes).
 func (s *Server) githubPushUnavailable(c *gin.Context, what string, err error) {
 	s.log.Warn("github webhook: "+what, "err", err.Error())
-	abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; it reads the branches by itself meanwhile"))
+	abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; GitHub delivers it again within about 5 minutes once shpyrd answers"))
 }
 
 // namesGitHubRepo says the App builds the repository GitHub names

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/gin-gonic/gin"
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
