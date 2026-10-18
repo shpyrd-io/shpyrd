@@ -51,10 +51,17 @@ func TestPollRateIsReadFromItsVariable(t *testing.T) {
 	}
 }
 
+func TestAListingKeepsTheCaseOfTheRepositoryPath(t *testing.T) {
+	plain := gitauth.Build{}
+	if listingKey("https://gitlab.com/Org/Repo", plain) == listingKey("https://gitlab.com/org/repo", plain) {
+		t.Error("Org/Repo and org/repo share a listing: a host that tells them apart reads two repositories")
+	}
+}
+
 func TestAListingIsSharedByRepositoryAndCredential(t *testing.T) {
 	key := func(url string, b gitauth.Build) string { return listingKey(url, b) }
 	plain := gitauth.Build{}
-	if key("https://gitlab.com/Acme/Mono", plain) != key("https://gitlab.com/acme/mono.git", plain) {
+	if key("https://GitLab.com/acme/mono", plain) != key("https://gitlab.com/acme/mono.git", plain) {
 		t.Error("one repository in two forms is two listings")
 	}
 	if key("https://gitlab.com/acme/mono", plain) == key("https://gitlab.com/acme/other", plain) {

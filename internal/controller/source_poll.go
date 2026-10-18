@@ -104,12 +104,12 @@ type repoListing struct {
 	at   time.Time
 }
 
-// listingKey is a repository as one listing answers it: its host and path
-// in lower case, and the credential it is read with (its kind, and a
+// listingKey is a repository as one listing answers it: its host in lower
+// case and its path as written (a host may tell Org/Repo from org/repo), and the credential it is read with (its kind, and a
 // fingerprint of the Secret's data, never the data). Projects with the
 // same key share a listing.
 func listingKey(cloneURL string, b gitauth.Build) string {
-	where := strings.ToLower(strings.TrimSpace(cloneURL))
+	where := strings.TrimSpace(cloneURL)
 	if repo, err := gitauth.Parse(cloneURL); err == nil {
 		scheme := repo.Scheme
 		if scheme == "ssh" && !strings.Contains(cloneURL, "://") {
@@ -119,7 +119,7 @@ func listingKey(cloneURL string, b gitauth.Build) string {
 		if repo.Port != "" {
 			where += ":" + repo.Port
 		}
-		where += "/" + strings.ToLower(repo.Path)
+		where += "/" + repo.Path
 		if repo.Scheme == "ssh" {
 			// The login the read uses, hashed like the URL's credentials.
 			sum := sha256.Sum256([]byte(gitauth.SSHLogin(strings.TrimSpace(cloneURL))))
