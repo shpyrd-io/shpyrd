@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -122,6 +121,10 @@ type Server struct {
 	totals         map[string]int  // reported total_count by kind and commit
 	refused        map[string]bool // permissions a token request is refused for
 	compareQuery   string
+
+	deliveries       []Delivery
+	redelivered      []int64
+	redeliveryStatus int
 }
 
 // tokenGrant is an installation token: its installation, the repositories
@@ -331,17 +334,17 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		f.membership(w, r, strings.TrimPrefix(p, "/user/memberships/orgs/"))
 	case r.Method == "POST" && strings.HasPrefix(p, "/app-manifests/") && strings.HasSuffix(p, "/conversions"):
 		f.conversion(w, strings.TrimSuffix(strings.TrimPrefix(p, "/app-manifests/"), "/conversions"))
+	case r.Method == "GET" && p == "/app/hook/deliveries":
+		f.hookDeliveries(w, r)
+	case r.Method == "POST" && strings.HasPrefix(p, "/app/hook/deliveries/") && strings.HasSuffix(p, "/attempts"):
+		f.redeliver(w, r, strings.TrimSuffix(strings.TrimPrefix(p, "/app/hook/deliveries/"), "/attempts"))
 	default:
 		reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 	}
 }
 
 func (f *Server) accessToken(w http.ResponseWriter, r *http.Request, id string) {
-	claims := &jwt.RegisteredClaims{}
-	_, err := jwt.ParseWithClaims(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), claims,
-		func(*jwt.Token) (any, error) { return &Key().PublicKey, nil },
-		jwt.WithValidMethods([]string{"RS256"}), jwt.WithTimeFunc(f.clock), jwt.WithIssuer(strconv.Itoa(AppID)))
-	if err != nil {
+	if !f.appJWT(r) {
 		reply(w, http.StatusUnauthorized, map[string]string{"message": "A JSON web token could not be decoded"})
 		return
 	}

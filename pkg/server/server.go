@@ -590,6 +590,11 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := reporter.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("github reporter: %w", err)
 	}
+	// The catch-up sweep (RFC-0054): deliveries GitHub could not make,
+	// asked for again every 5 minutes, on the leader.
+	if err := mgr.Add(&controller.GitHubSweep{GitHub: githubApp}); err != nil {
+		return nil, fmt.Errorf("github sweep: %w", err)
+	}
 	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace, Kube: k.Kube}
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)

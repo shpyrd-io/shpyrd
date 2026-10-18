@@ -676,3 +676,21 @@ func TestSourceStampsWhenItPinsACommit(t *testing.T) {
 		t.Errorf("record %+v", rec)
 	}
 }
+
+// An older push delivered again (the sweep resends what failed, in any
+// order) pins nothing new: the branch says its head is the newer commit.
+func TestAnOlderPushDeliveredAgainPinsNothing(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	app := withPush(withRecord(pinGit(gitApp("shop", "https://gitlab.com/acme/shop"), otherCommit),
+		gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Delivery: "d-2", CheckedAt: at(sourceNow.Add(-time.Minute))}),
+		gitauth.Push{Ref: "refs/heads/main", SHA: testCommit, Before: "fedcba9876543210fedcba9876543210fedcba98", Delivery: "d-1", Author: "alice", At: sourceNow.Add(-10 * time.Minute)})
+	r, _ := newSourceReconciler(t, ls, app)
+	heard := heardAudits(t)
+	_, got := reconcileSource(t, r, app)
+	if got.PinnedCommit() != otherCommit || ls.calls != 1 || len(*heard) != 0 {
+		t.Errorf("pin %s after %d listings, audits %+v", got.PinnedCommit(), ls.calls, *heard)
+	}
+	if _, ok := got.Annotations[shpyrdv1.AnnotationGitPush]; ok {
+		t.Error("the push stays on the App")
+	}
+}

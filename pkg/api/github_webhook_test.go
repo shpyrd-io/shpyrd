@@ -377,3 +377,34 @@ func TestGitHubWebhookIgnoresTheCIOfASuspendedOrUnknownInstallation(t *testing.T
 		t.Errorf("suspended: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The sweep redelivers what GitHub could not deliver; a delivery shpyrd
+// took already is not left on the App again.
+func TestARedeliveredPushIsNotAppliedTwice(t *testing.T) {
+	s, cr, _ := githubServer(t, onGitHub("shop", "https://github.com/acme/shop", "main", ""))
+	connectAcme(t, s, store.DefaultWorkspace)
+	if rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"shop"`) {
+		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
+	}
+	before := appNamed(t, cr, "shop")
+	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || strings.Contains(rec.Body.String(), `"shop"`) {
+		t.Errorf("redelivered while waiting: %d %s", rec.Code, rec.Body.String())
+	}
+	if after := appNamed(t, cr, "shop"); after.ResourceVersion != before.ResourceVersion {
+		t.Error("the redelivery wrote the App again")
+	}
+	// Once the watcher took it, its record remembers the delivery.
+	app := appNamed(t, cr, "shop")
+	delete(app.Annotations, shpyrdv1.AnnotationGitPush)
+	recordOn(app, gitauth.SourceRecord{Ref: "main", Latest: hookCommit, Delivery: "d-1"})
+	if err := cr.Update(context.Background(), app); err != nil {
+		t.Fatal(err)
+	}
+	if rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret); strings.Contains(rec.Body.String(), `"shop"`) {
+		t.Errorf("redelivered after the watcher took it: %s", rec.Body.String())
+	}
+	if _, ok := appNamed(t, cr, "shop").Annotations[shpyrdv1.AnnotationGitPush]; ok {
+		t.Error("left on the App again")
+	}
+}
