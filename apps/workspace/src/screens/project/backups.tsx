@@ -8,7 +8,7 @@ import type { Perms } from "@/lib/perms";
 export function Backups({ project, perms }: { project: Project; perms: Perms }) {
   const slug = project.slug;
   return <ProjectBackups name={project.displayName || slug} queryKey={slug} allowed={perms.destroy} actions={{
-    status: () => api.projectArchiveStatus(slug), backup: () => api.backupProject(slug),
+    status: () => api.projectArchiveStatus(slug), backup: (options) => api.backupProject(slug, options),
     restore: (file) => api.restoreProject(slug, file), recover: () => api.recoverProject(slug),
   }} />;
 }

@@ -5,7 +5,7 @@ description: A project holds several resources - the app, volumes, databases and
 
 <Lead>
 
-A project is a namespace with resources in it: the app, volumes, PostgreSQL databases and Redis-compatible stores. `shpyrd projects info` and the project page list them all with their status and what uses them.
+A project is a namespace with resources in it: the app, volumes, buckets, PostgreSQL databases and Redis-compatible stores. `shpyrd projects info` and the project page list them all with their status and what uses them.
 
 </Lead>
 
@@ -85,6 +85,67 @@ Restoring into a new volume is the safe path: the copy is created from the snaps
 
 Snapshots are taken at the block level and are crash-consistent: before taking one, shpyrd runs `sync` in the instances mounting the volume, so what the application had written is in the copy; a database is still better served by its own backups. An operator can also snapshot every remaining provider disk at once with `shpyrd-ctl cluster snapshots` ([Platform backups](/docs/backups)).
 
+## Buckets
+
+A bucket holds an app's files: uploads, images, exports, anything several instances write and read. It is S3: every SDK, every tool that speaks S3, reaches it with a key that opens this bucket and nothing else. A bucket needs the `object-storage` extension, which shpyrd cloud has.
+
+```shell
+shpyrd buckets create uploads --project shop                # up to the plan's cap per bucket
+shpyrd buckets create uploads --project shop --size 5Gi     # a cap of its own, within the plan
+shpyrd attach uploads --project shop --prefix AWS           # the names the SDKs read, no code
+shpyrd buckets list --project shop
+shpyrd buckets rotate uploads --project shop                # a new key; the app restarts with it
+```
+
+Attached, a bucket puts six variables in the app, under the prefix of the binding (`BUCKET` by default): `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`, `BUCKET_ENDPOINT_URL`, `BUCKET_REGION`, `BUCKET_BUCKET` (the bucket's name in S3) and `BUCKET_URL` (`s3://<bucket>`). With `--prefix AWS` they become `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_REGION` and `AWS_BUCKET`, the names the AWS SDKs pick up on their own; the bucket is then `AWS_BUCKET`. Addressing is path style (`<endpoint>/<bucket>/<key>`), which every SDK has a setting for. The region is `us-east-1`: a signing scope, not a place; on shpyrd cloud the data lives in Oracle Cloud's Ashburn region.
+
+```js
+// Node, @aws-sdk/client-s3, attached with --prefix AWS
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+const s3 = new S3Client({ endpoint: process.env.AWS_ENDPOINT_URL, region: process.env.AWS_REGION, forcePathStyle: true });
+await s3.send(new PutObjectCommand({ Bucket: process.env.AWS_BUCKET, Key: "avatars/42.png", Body: file }));
+```
+
+```python
+# Python, boto3, attached with --prefix AWS
+import os, boto3
+s3 = boto3.client("s3", endpoint_url=os.environ["AWS_ENDPOINT_URL"], config=boto3.session.Config(s3={"addressing_style": "path"}))
+s3.upload_fileobj(file, os.environ["AWS_BUCKET"], "avatars/42.png")
+```
+
+```go
+// Go, aws-sdk-go-v2, attached with --prefix AWS
+cfg, _ := config.LoadDefaultConfig(ctx)
+client := s3.NewFromConfig(cfg, func(o *s3.Options) { o.BaseEndpoint = aws.String(os.Getenv("AWS_ENDPOINT_URL")); o.UsePathStyle = true })
+_, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(os.Getenv("AWS_BUCKET")), Key: aws.String("avatars/42.png"), Body: file})
+```
+
+```ruby
+# Rails, Active Storage (config/storage.yml), attached with --prefix AWS
+shpyrd:
+  service: S3
+  access_key_id: <%= ENV["AWS_ACCESS_KEY_ID"] %>
+  secret_access_key: <%= ENV["AWS_SECRET_ACCESS_KEY"] %>
+  endpoint: <%= ENV["AWS_ENDPOINT_URL"] %>
+  region: <%= ENV["AWS_REGION"] %>
+  bucket: <%= ENV["AWS_BUCKET"] %>
+  force_path_style: true
+```
+
+### What a bucket holds
+
+Every bucket has a cap, the plan's per bucket unless you ask for less (1 GB on the free workspace): an upload that would pass it is refused with the numbers ("This bucket holds up to 1 GB; this upload would bring it to 1.2 GB."), and what you delete is room again at once. Buckets count against the workspace's plan twice, by number and by their caps together; a bucket past either is refused in words before it is made, and the dashboard's bucket dialog says what the plan allows. The resources page shows each bucket's use against its cap. A bucket's objects are metered by the gigabyte-hour and billed with the workspace; requests are not itemised. Overwritten and deleted objects are kept by the platform for seven days, so a mistake has a week of undo through support.
+
+### From a browser
+
+On shpyrd cloud a bucket is also reachable from outside the cluster, for a browser to upload and download without the app in the middle: the app signs an address for one object and one method (a presigned PUT or GET, every SDK makes them) with a client pointed at `BUCKET_PUBLIC_ENDPOINT_URL`, the same bucket through the platform's public door, and hands it to the page. A browser only follows such an address when the bucket allows its origin: set the bucket's CORS once from the app (`PutBucketCors`, with the SDK) naming the origins and methods it may use. A bucket made with `--public` lets anyone read an object by its address, without a key; listing and writing still need the key. Requests to one bucket are limited to a thousand a second; past that the gateway answers `SlowDown`, which the SDKs retry with backoff.
+
+### What a bucket is not
+
+Not a disk: an app cannot open a file on it, there is no rename and no locking. SQLite, a tool's state or anything that needs a file system goes on a [volume](#volumes). Not versioned: a bucket keeps one version of each object; the platform's own undo is the week above.
+
+A bucket travels with the project's archive by reference: the archive names it, and a restore on the same platform finds the files where they are; tick the archive's option to carry the files too (up to 5 GB together), for a backup before destroying the project or a move to another platform.
+
 ## Attaching resources
 
-Attaching a resource to the app injects its connection details as config vars, Heroku style: a Postgres named `db` provides `DATABASE_URL`, `DATABASE_HOST`, ... The variables are read-only on the project's **Config** page and in `shpyrd secrets list`, shown with the resource that provides them, and take precedence over a config var of the same name. Attaching or detaching is a `config` release ("Attach Postgres db") that rollback undoes like any other. See [Databases and caches](/docs/databases) for `shpyrd pg`, `shpyrd redis`, `shpyrd attach` and `shpyrd detach`.
+Attaching a resource to the app injects its connection details as config vars, Heroku style: a Postgres named `db` provides `DATABASE_URL`, `DATABASE_HOST`, ...; a bucket named `uploads` provides `BUCKET_ACCESS_KEY_ID`, `BUCKET_ENDPOINT_URL`, ... The variables are read-only on the project's **Config** page and in `shpyrd secrets list`, shown with the resource that provides them, and take precedence over a config var of the same name. Attaching or detaching is a `config` release ("Attach Postgres db") that rollback undoes like any other. See [Databases and caches](/docs/databases) for `shpyrd pg`, `shpyrd redis`, `shpyrd attach` and `shpyrd detach`.

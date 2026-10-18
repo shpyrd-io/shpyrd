@@ -1,0 +1,9 @@
+---
+title: "Durable disks on the cloud"
+description: "Volumes, database disks and durable stores live on provider block storage and follow their process across nodes."
+date: "2026-10-10"
+type: feature
+draft: false
+---
+
+On shpyrd cloud, and on the Oracle Cloud and AWS profiles, a volume, a database's disk and a persistent store are now provider block volumes. The disk follows its process to another machine, so a machine can be drained or lost without losing data. Disks start at the provider's minimum (50 GB on Oracle Cloud; a smaller request is rounded up and the answer says so) and grow with `shpyrd volumes resize` or from the resources page.

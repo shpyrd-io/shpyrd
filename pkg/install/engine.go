@@ -453,7 +453,7 @@ func (e *Engine) componentValues(c *Component) (map[string]interface{}, error) {
 	return vals, nil
 }
 
-// MonitoringComponent runs Prometheus and Grafana (kube-prometheus-stack).
+// MonitoringComponent runs Prometheus (kube-prometheus-stack).
 const MonitoringComponent = "monitoring"
 
 // prometheusStorage gives Prometheus a persistent claim of the size, with

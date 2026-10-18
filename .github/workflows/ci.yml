@@ -76,8 +76,8 @@ jobs:
           # library"): a change to its source that does not note it is worth
           # a word, not a failure.
           if git diff --no-renames --name-only "$BASE" HEAD -- design/ui/src \
-              | grep -vE '\.test\.tsx?$|^design/ui/src/test\.ts$' | grep -q . \
-            && ! git diff --name-only "$BASE" HEAD -- design/ui/CHANGELOG.md | grep -q .; then
+              | grep -vE '\.test\.tsx?$|^design/ui/src/test\.ts$' | grep . >/dev/null \
+            && ! git diff --name-only "$BASE" HEAD -- design/ui/CHANGELOG.md | grep . >/dev/null; then
             echo "::warning file=design/ui/CHANGELOG.md::design/ui/src changed and its CHANGELOG did not: note the change under Unreleased, for the next release (design/DESIGN_FOR_AGENT.md)"
           fi
 
@@ -113,7 +113,7 @@ jobs:
         run: |
           go vet -tags foss ./...
           go build -tags foss ./...
-          ! go list -tags foss -deps ./cmd/... | grep -q '/shpyrd/ee/'
+          ! go list -tags foss -deps ./cmd/... | grep '/shpyrd/ee/' >/dev/null
       - name: Committed CRDs and deepcopy are current
         run: |
           make generate
@@ -257,6 +257,19 @@ jobs:
         run: |
           set -euo pipefail
           ./bin/shpyrd projects create "Hello World" --public --context kind-ci
+          # Running from a prebuilt image (no build on this cluster): an app
+          # with nothing to run renders no bindings, and the bucket step
+          # below attaches one. The image runs as a non-root user on 8080,
+          # as the platform requires.
+          ./bin/shpyrd deploy --image nginxinc/nginx-unprivileged:1.27-alpine --project hello-world --context kind-ci
+          # The App is named after the project's id, not its slug.
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
+          for i in $(seq 1 60); do
+            kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running && break
+            sleep 3
+          done
+          kubectl --context kind-ci -n "$NS" get app "$APP" -o jsonpath='{.status.phase} {.status.message}{"\n"}'
           ./bin/shpyrd cluster status --context kind-ci
           kubectl --context kind-ci get pods -A | grep -i "cnpg\|object-storage\|garage\|minio" || true
       - name: The workspace's ceilings refuse in words
@@ -268,14 +281,43 @@ jobs:
           # the plan's words, before anything exists (a durable store is the
           # same refusal, in the API's tests: this suite has no redis); the
           # ceilings are then cleared so the rest of the suite runs.
-          ./bin/shpyrd-ctl workspace limits --disks=false --database-kinds shared --database-default shared --databases 1 --context kind-ci
+          ./bin/shpyrd-ctl workspace limits --disks=false --database-kinds shared --database-default shared --databases 1 --buckets 1 --bucket-cap 1Gi --context kind-ci
           ./bin/shpyrd-ctl workspace status --context kind-ci
           if ./bin/shpyrd volumes create files --size 1Gi --project hello-world --context kind-ci 2>refused.txt; then echo "a disk was admitted on a plan without disks" >&2; exit 1; fi
           grep -q "Disks are not included in the free workspace; use a bucket for files, or upgrade." refused.txt || { echo "the disk was refused with other words:"; cat refused.txt; exit 1; }
           if ./bin/shpyrd pg create own --type dedicated --project hello-world --context kind-ci 2>refused.txt; then echo "a dedicated database was admitted on a plan with shared ones" >&2; exit 1; fi
           grep -q "Your plan includes a shared database. A dedicated database comes with a paid plan." refused.txt || { echo "the database was refused with other words:"; cat refused.txt; exit 1; }
+          # Step 5: the one bucket the plan includes gets the plan's cap; a
+          # bigger one and a second one are refused in words; its key is
+          # rotated on request and its binding gives the SDKs their names.
+          ./bin/shpyrd buckets create files --project hello-world --context kind-ci | tee created.txt
+          grep -q "Your bucket can hold up to 1 GB." created.txt
+          ./bin/shpyrd buckets list --project hello-world --context kind-ci | grep -E "^files\s" | grep -q "1.0 GiB"
+          if ./bin/shpyrd buckets create big --size 5Gi --project hello-world --context kind-ci 2>refused.txt; then echo "a bucket above the plan's cap was admitted" >&2; exit 1; fi
+          grep -q "A bucket holds up to 1 GB." refused.txt || { echo "the bucket was refused with other words:"; cat refused.txt; exit 1; }
+          if ./bin/shpyrd buckets create more --project hello-world --context kind-ci 2>refused.txt; then echo "a second bucket was admitted on a plan with one" >&2; exit 1; fi
+          grep -q "This would bring the workspace to 2 of 1 buckets." refused.txt || { echo "the second bucket was refused with other words:"; cat refused.txt; exit 1; }
+          NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
+          KEY=$(kubectl --context kind-ci -n "$NS" get secret files-object-storage -o jsonpath='{.data.AWS_ACCESS_KEY_ID}')
+          ./bin/shpyrd buckets rotate files --project hello-world --context kind-ci
+          for i in $(seq 1 30); do
+            NEWKEY=$(kubectl --context kind-ci -n "$NS" get secret files-object-storage -o jsonpath='{.data.AWS_ACCESS_KEY_ID}')
+            [ "$NEWKEY" != "$KEY" ] && break
+            sleep 2
+          done
+          [ "$NEWKEY" != "$KEY" ]
+          ./bin/shpyrd attach files --prefix AWS --project hello-world --context kind-ci
+          # The bindings Secret is named after the App, which carries the project's id.
+          APP=$(kubectl --context kind-ci -n "$NS" get app -o jsonpath='{.items[0].metadata.name}')
+          for i in $(seq 1 30); do
+            kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' 2>/dev/null | grep -q AWS_BUCKET && break
+            sleep 2
+          done
+          kubectl --context kind-ci -n "$NS" get secret "$APP-bindings" -o jsonpath='{.data}' | grep -q AWS_ENDPOINT_URL
+          ./bin/shpyrd detach files --project hello-world --context kind-ci
+          ./bin/shpyrd buckets delete files --yes --project hello-world --context kind-ci
           ./bin/shpyrd-ctl workspace limits --none --context kind-ci
-          ./bin/shpyrd-ctl workspace status --context kind-ci | grep -q "limits: none"
+          ./bin/shpyrd-ctl workspace status --context kind-ci | grep "limits: none" >/dev/null
       - name: A shared database on the platform's server
         if: matrix.suite == 'databases'
         run: |
@@ -288,11 +330,11 @@ jobs:
           kubectl --context kind-ci -n shpyrd-shared-postgres get cluster,database,databaserole,job
           NS=$(kubectl --context kind-ci get ns -l shpyrd.io/project=hello-world -o jsonpath='{.items[0].metadata.name}')
           URI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
-          echo "$URI" | grep -q 'sslmode=require&connect_timeout=10'
+          echo "$URI" | grep 'sslmode=require&connect_timeout=10' >/dev/null
           # The tenant's own credentials open its database; from inside the
           # server, at the primary (the URL names the database's own Service).
           INPOD=${URI/@shared:5432/@localhost:5432}
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select current_database() like 'db_%', current_user like 'u_%'" | grep -q 't|t'
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select current_database() like 'db_%', current_user like 'u_%'" | grep 't|t' >/dev/null
           # New credentials on request: the role's password changes and the
           # new URL opens the database.
           ./bin/shpyrd pg rotate shared --project hello-world --context kind-ci
@@ -308,36 +350,36 @@ jobs:
           # the old one must be refused by then.
           opened=0
           for i in $(seq 1 30); do
-            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then
+            if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep '^1$' >/dev/null; then
               sleep 3
-              if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep -q '^1$'; then opened=1; break; fi
+              if kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${NEW/@shared:5432/@localhost:5432}" -At -c "select 1" 2>/dev/null | grep '^1$' >/dev/null; then opened=1; break; fi
             fi
             sleep 2
           done
           [ "$opened" = 1 ]
-          ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select 1" 2>/dev/null | grep -q '^1$'
+          ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "select 1" 2>/dev/null | grep '^1$' >/dev/null
           URI=$NEW
           INPOD=${URI/@shared:5432/@localhost:5432}
           # Extensions: a trusted one is the owner's to create, pgvector is there already, the rest are a dedicated database's.
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension if not exists pgcrypto; select count(*) from pg_extension where extname in ('pgcrypto','vector')" | grep -q '^2$'
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension if not exists pgcrypto; select count(*) from pg_extension where extname in ('pgcrypto','vector')" | grep '^2$' >/dev/null
           ! kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create extension pg_stat_statements" 2>/dev/null
           # Nobody else: the superuser-granted REVOKE keeps PUBLIC out.
           DB=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.dbname}' | base64 -d)
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep -q '^f$'
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql -U postgres -At -c "select has_database_privilege('public', '$DB', 'CONNECT')" | grep '^f$' >/dev/null
           # The nightly dump, run now: pg_dump as the platform's dump role,
           # into the server's bucket.
           kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=jsonpath='{.status.phase}'=Ready objectbucket/pg-shared-1-dumps --timeout=180s
           kubectl --context kind-ci -n shpyrd-shared-postgres create job dumps-now --from=cronjob/pg-shared-1-dumps
           kubectl --context kind-ci -n shpyrd-shared-postgres wait --for=condition=complete job/dumps-now --timeout=300s || { kubectl --context kind-ci -n shpyrd-shared-postgres describe job/dumps-now; kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now --all-containers; exit 1; }
-          kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now -c dump | grep -q 'dumped=1 failed=0'
+          kubectl --context kind-ci -n shpyrd-shared-postgres logs job/dumps-now -c dump | grep 'dumped=1 failed=0' >/dev/null
           # One asked for now, then the listing shows both kinds.
           ./bin/shpyrd pg backup shared --project hello-world --context kind-ci
           ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | tee /tmp/shared-backups.txt
           grep -q 'nightly' /tmp/shared-backups.txt && grep -q 'on demand' /tmp/shared-backups.txt
           # The newest copy restored into a new shared database, as its owner.
           ./bin/shpyrd pg restore shared --as shared2 --project hello-world --context kind-ci
-          ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep -q 'from shared'
-          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep -q restore-
+          ./bin/shpyrd pg info shared2 --project hello-world --context kind-ci | grep 'from shared' >/dev/null
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/postgres-name=shared2 -o name | grep restore- >/dev/null
           # The server's pooler, switched on by the platform when connections
           # run high (here: by hand): the tenants turn to it once it answers,
           # "<name>-direct" keeps the primary, and the tenant's credentials
@@ -355,14 +397,14 @@ jobs:
             sleep 2
           done
           [ "$TARGET" = "$POOLER" ]
-          kubectl --context kind-ci -n "$NS" get svc shared-direct -o jsonpath='{.spec.externalName}' | grep -q '^pg-shared-1-rw\.'
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${URI/@shared:5432/@pg-shared-1-pooler:5432}" -At -c "select current_user like 'u_%'" | grep -q '^t$'
-          ./bin/shpyrd pg info shared --project hello-world --context kind-ci | grep -q 'through its connection pooler'
+          kubectl --context kind-ci -n "$NS" get svc shared-direct -o jsonpath='{.spec.externalName}' | grep '^pg-shared-1-rw\.' >/dev/null
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${URI/@shared:5432/@pg-shared-1-pooler:5432}" -At -c "select current_user like 'u_%'" | grep '^t$' >/dev/null
+          ./bin/shpyrd pg info shared --project hello-world --context kind-ci | grep 'through its connection pooler' >/dev/null
           # Conversion: the shared database becomes a cluster of its own under
           # its name, with its rows and its credentials; then back. The row
           # count is the same at every stop.
           kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "$INPOD" -At -c "create table conv(id int primary key, v vector(3)); insert into conv select g, '[1,2,3]' from generate_series(1,250) g; comment on table conv is 'kept'" >/dev/null
-          (./bin/shpyrd pg convert shared --to dedicated --project hello-world --context kind-ci 2>&1 || true) | grep -q 're-run with --yes'
+          (./bin/shpyrd pg convert shared --to dedicated --project hello-world --context kind-ci 2>&1 || true) | grep 're-run with --yes' >/dev/null
           ./bin/shpyrd pg convert shared --to dedicated --yes --project hello-world --context kind-ci
           for i in $(seq 1 120); do
             TYPE=$(kubectl --context kind-ci -n "$NS" get postgres shared -o jsonpath='{.spec.type}{" "}{.status.phase}{" "}{.metadata.annotations.shpyrd\.io/convert}')
@@ -372,8 +414,8 @@ jobs:
           kubectl --context kind-ci -n "$NS" get postgres shared -o yaml | grep -E 'type:|phase:|message:|convert'
           [ "$TYPE" = "dedicated Ready " ]
           DURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
-          echo "$DURI" | grep -q '@shared-rw:5432/db_'
-          kubectl --context kind-ci -n "$NS" exec shared-1 -c postgres -- psql "${DURI/@shared-rw:5432/@localhost:5432}" -At -c "select count(*) from conv; select obj_description('conv'::regclass)" | tr '\n' ' ' | grep -q '^250 kept '
+          echo "$DURI" | grep '@shared-rw:5432/db_' >/dev/null
+          kubectl --context kind-ci -n "$NS" exec shared-1 -c postgres -- psql "${DURI/@shared-rw:5432/@localhost:5432}" -At -c "select count(*) from conv; select obj_description('conv'::regclass)" | tr '\n' ' ' | grep '^250 kept ' >/dev/null
           ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci || true
           # And back onto the shared server, with new names.
           ./bin/shpyrd pg convert shared --to shared --yes --project hello-world --context kind-ci
@@ -386,16 +428,16 @@ jobs:
           [ "$TYPE" = "shared Ready " ]
           ! kubectl --context kind-ci -n "$NS" get cluster shared 2>/dev/null
           SURI=$(kubectl --context kind-ci -n "$NS" get secret shared-app -o jsonpath='{.data.uri}' | base64 -d)
-          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${SURI/@shared:5432/@localhost:5432}" -At -c "select count(*) from conv" | grep -q '^250$'
-          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | grep -q converted
+          kubectl --context kind-ci -n shpyrd-shared-postgres exec pg-shared-1-1 -c postgres -- psql "${SURI/@shared:5432/@localhost:5432}" -At -c "select count(*) from conv" | grep '^250$' >/dev/null
+          ./bin/shpyrd pg backups list shared --project hello-world --context kind-ci | grep converted >/dev/null
           INPOD=${SURI/@shared:5432/@localhost:5432}
           # Deleting fences the role at once, takes a last copy, and keeps the
           # data seven days behind a drop date.
           ./bin/shpyrd pg delete shared2 --project hello-world --yes --context kind-ci
           ./bin/shpyrd pg delete shared --project hello-world --yes --context kind-ci
-          kubectl --context kind-ci -n shpyrd-shared-postgres get databaserole -o jsonpath='{range .items[*]}{.spec.name} login={.spec.login} limit={.spec.connectionLimit}{"\n"}{end}' | grep -q 'login=false limit=0'
-          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/shared-postgres=dump -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].env[?(@.name=="SHPYRD_DUMPS_KIND")].value}{"\n"}{end}' | grep -q '^last$'
-          kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep -q 'drop-after=20'
+          kubectl --context kind-ci -n shpyrd-shared-postgres get databaserole -o jsonpath='{range .items[*]}{.spec.name} login={.spec.login} limit={.spec.connectionLimit}{"\n"}{end}' | grep 'login=false limit=0' >/dev/null
+          kubectl --context kind-ci -n shpyrd-shared-postgres get job -l shpyrd.io/shared-postgres=dump -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].env[?(@.name=="SHPYRD_DUMPS_KIND")].value}{"\n"}{end}' | grep '^last$' >/dev/null
+          kubectl --context kind-ci -n shpyrd-shared-postgres get database -o jsonpath='{range .items[*]}{.metadata.name} drop-after={.metadata.annotations.shpyrd\.io/drop-after}{"\n"}{end}' | grep 'drop-after=20' >/dev/null
       - name: The projects answer on their URLs
         if: matrix.suite == 'apps'
         run: |

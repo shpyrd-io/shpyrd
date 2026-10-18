@@ -70,13 +70,19 @@ const (
 	VarGatewayRegion       = "SHPYRD_GATEWAY_REGION"
 	VarGatewaySingleWriter = "SHPYRD_GATEWAY_SINGLE_WRITER" // "true" when one gateway process writes descriptors, for a provider that ignores If-Match (OCI); "false" unless the profile says otherwise
 	VarGatewayReplicas     = "SHPYRD_GATEWAY_REPLICAS"      // gateway pods: "2" unless the profile says otherwise, "1" with a single writer
-	VarRegistryS3Secure    = "SHPYRD_REGISTRY_S3_SECURE"
-	VarSourcesBucket       = "SHPYRD_SOURCES_BUCKET"
-	VarSourcesEndpoint     = "SHPYRD_SOURCES_ENDPOINT"
-	VarSourcesRegion       = "SHPYRD_SOURCES_REGION"
-	VarSourcesSecret       = "SHPYRD_SOURCES_SECRET"
-	VarBuildCacheRegistry  = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
-	VarCASource            = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
+	// The gateway's door for the projects' buckets from outside the cluster
+	// (storage plan step 5): presigned addresses and public objects.
+	// buckets.<SHPYRD_DOMAIN> on a cluster with the gateway unless the
+	// operator names another host; "" without the gateway, and no door.
+	VarBucketsHost        = "SHPYRD_BUCKETS_HOST"
+	VarBucketsIssuer      = "SHPYRD_BUCKETS_ISSUER"
+	VarRegistryS3Secure   = "SHPYRD_REGISTRY_S3_SECURE"
+	VarSourcesBucket      = "SHPYRD_SOURCES_BUCKET"
+	VarSourcesEndpoint    = "SHPYRD_SOURCES_ENDPOINT"
+	VarSourcesRegion      = "SHPYRD_SOURCES_REGION"
+	VarSourcesSecret      = "SHPYRD_SOURCES_SECRET"
+	VarBuildCacheRegistry = "SHPYRD_BUILD_CACHE_REGISTRY" // registry host for kpack registry cache ("" = PVC per app)
+	VarCASource           = "SHPYRD_CA_SOURCE"            // where the platform CA comes from: "local" (~/.shpyrd/ca, shared by kind clusters) or "cluster" (generated once in the cluster)
 	// Network policy enforcement (RFC-0035): "calico" installs Calico in
 	// policy-only mode next to the provider's CNI; "none" relies on the
 	// cluster's own engine (kind's kindnet enforces policies).
@@ -103,7 +109,7 @@ const (
 	VarInternalLBSubnet     = "SHPYRD_INTERNAL_LB_SUBNET"       // subnet OCID for the private LB (OCI)
 	VarIngressClassInternal = "SHPYRD_INGRESS_CLASS_INTERNAL"   // ingress class of the internal controller
 	VarIngressClassExternal = "SHPYRD_INGRESS_CLASS_EXTERNAL"   // ingress class of the external controller
-	VarPlatformIngressClass = "SHPYRD_PLATFORM_INGRESS_CLASS"   // derived: the class the dashboard, sign-in and Grafana use
+	VarPlatformIngressClass = "SHPYRD_PLATFORM_INGRESS_CLASS"   // derived: the class the dashboard and sign-in use
 	VarPlatformIssuer       = "SHPYRD_PLATFORM_ISSUER"          // derived: the issuer of their certificates (DNS-01 when a DNS provider exists, so they work on either front door)
 	VarPlatformIngressSvc   = "SHPYRD_PLATFORM_INGRESS_SERVICE" // derived: the controller Service the server dials for platform hostnames (sign-in discovery)
 	// Volumes on cloud profiles (RFC-0060).
@@ -361,7 +367,21 @@ func derivedVars(vars map[string]string, exts []ExtensionComponent) map[string]s
 	if domain := vars[VarDomain]; domain != "" && authHost != domain && !strings.HasSuffix(authHost, "."+domain) {
 		out[VarAuthIssuer] = vars[VarClusterIssuer]
 	}
-	// Front door of the dashboard, sign-in and Grafana (RFC-0036), and the
+	// The buckets' door (storage plan step 5): a host on a cluster with
+	// the gateway, with the platform's issuer inside the domain and the
+	// cluster's outside it; nothing without the gateway.
+	out[VarBucketsHost], out[VarBucketsIssuer] = "", out[VarPlatformIssuer]
+	if vars[VarGatewayBucket] != "" {
+		host := vars[VarBucketsHost]
+		if host == "" {
+			host = "buckets." + vars[VarDomain]
+		}
+		out[VarBucketsHost] = host
+		if domain := vars[VarDomain]; domain != "" && host != domain && !strings.HasSuffix(host, "."+domain) {
+			out[VarBucketsIssuer] = vars[VarClusterIssuer]
+		}
+	}
+	// Front door of the dashboard and sign-in (RFC-0036), and the
 	// controller Service behind it, which the server dials for those
 	// hostnames instead of hairpinning through the load balancer.
 	// Cloud layer: empty string means not in use, which the template

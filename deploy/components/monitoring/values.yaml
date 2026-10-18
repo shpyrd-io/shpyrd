@@ -10,9 +10,9 @@ alertmanager:
   enabled: false
 
 # Alerts on the platform's own jobs. There is no Alertmanager: they show as
-# firing in Prometheus (Alerts) and Grafana (Alerting > Alert rules) and the
-# operator console reads them from there. Every annotation says what
-# happened and what to do in words (#52): no command, tool or object name.
+# firing in Prometheus (Alerts) and the operator console reads them from
+# there. Every annotation says what happened and what to do in words (#52):
+# no command, tool or object name.
 additionalPrometheusRulesMap:
   shpyrd-cluster-overview:
     groups:
@@ -210,6 +210,61 @@ additionalPrometheusRulesMap:
                 old, or none has completed yet. The Backups page of the operator
                 console shows the schedule and the recent runs; start a backup
                 from there and check that it completes.
+  # The object gateway (storage plan step 5): the projects' buckets and
+  # the platform's own consumers go through it; when it fails or the
+  # provider behind it is slow, uploads and backups fail with it.
+  shpyrd-object-storage:
+    groups:
+      - name: shpyrd-object-storage
+        rules:
+          # No gateway pod available: every bucket is unreachable.
+          - alert: ObjectGatewayDown
+            expr: |
+              max by (deployment) (kube_deployment_status_replicas_available{namespace="shpyrd-system", deployment="object-storage"}) == 0
+            for: 5m
+            labels:
+              severity: critical
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object gateway has no instance running
+              description: >-
+                No instance of the object gateway has been available for 5
+                minutes: the projects' buckets, the registry, uploaded sources
+                and database backups cannot be read or written. The Storage
+                page of the operator console shows the gateway's state; its
+                instance may be waiting for a machine after a node loss.
+          # One request in twenty fails on the gateway's side.
+          - alert: ObjectGatewayErrors
+            expr: |
+              sum(rate(shpyrd_gateway_requests_total{status="5xx"}[5m]))
+              /
+              sum(rate(shpyrd_gateway_requests_total[5m])) > 0.05
+            for: 10m
+            labels:
+              severity: warning
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object gateway is failing requests
+              description: >-
+                More than one request in twenty to the object gateway has
+                failed on the gateway's side for 10 minutes. The provider
+                behind it is the usual cause; the gateway's log says which
+                calls fail.
+          # The provider answers slowly: every upload and download waits.
+          - alert: ObjectGatewayProviderSlow
+            expr: |
+              histogram_quantile(0.95, sum by (le) (rate(shpyrd_gateway_provider_request_duration_seconds_bucket[5m]))) > 2
+            for: 15m
+            labels:
+              severity: warning
+              shpyrd_component: object-storage
+            annotations:
+              summary: The object storage provider is slow
+              description: >-
+                One call in twenty to the object storage provider has taken
+                more than 2 seconds for 15 minutes. Uploads, downloads and
+                backups wait on it; check the provider's status for the region
+                the data lives in.
   # Storage and databases (RFC-0060, the storage plan): what an operator
   # must act on when a disk, a database or a node is not where it should be.
   shpyrd-storage:
@@ -217,12 +272,14 @@ additionalPrometheusRulesMap:
       - name: shpyrd-storage
         rules:
           # The database's WAL archive is what makes its backups recoverable
-          # to a point in time. A quiet database still archives a segment
-          # every few minutes, so none for 30 minutes means archiving broke.
+          # to a point in time. A segment the database finished sits in its
+          # archive queue until the archiver ships it: one waiting for 30
+          # minutes means archiving broke. (Time since the last archive says
+          # nothing: an idle database writes no WAL and has nothing to ship.)
           - alert: DatabaseWALArchiveStale
             expr: |
-              cnpg_pg_stat_archiver_seconds_since_last_archival > 1800
-            for: 10m
+              max by (namespace, cluster) (cnpg_collector_pg_wal_archive_status{value="ready"}) > 0
+            for: 30m
             labels:
               severity: critical
               shpyrd_component: postgres
@@ -234,9 +291,13 @@ additionalPrometheusRulesMap:
                 backups cannot restore past the last archived segment. The
                 database's page in the console shows the archive's last error;
                 the object storage behind it is the usual cause.
-          # The last archive attempt failed and nothing succeeded since.
+          # The last archive attempt failed and nothing succeeded since. A
+          # database that never failed reports -1 for the time since its last
+          # failure, which is not a failure a moment ago.
           - alert: DatabaseWALArchiveFailing
             expr: |
+              cnpg_pg_stat_archiver_seconds_since_last_failure >= 0
+              and
               cnpg_pg_stat_archiver_seconds_since_last_failure < cnpg_pg_stat_archiver_seconds_since_last_archival
             for: 15m
             labels:
@@ -438,41 +499,9 @@ prometheus:
         cpu: 100m
         memory: 512Mi
 
+# No Grafana: shpyrd's charts and alerts read Prometheus directly.
 grafana:
-  enabled: true
-  defaultDashboardsEnabled: true
-  sidecar:
-    dashboards:
-      enabled: true
-      searchNamespace: ALL
-      label: grafana_dashboard
-      folderAnnotation: grafana_folder
-      provider:
-        foldersFromFilesStructure: true
-  grafana.ini:
-    server:
-      root_url: https://grafana.${SHPYRD_DOMAIN}
-    security:
-      # Panels are embedded in the shpyrd dashboard.
-      allow_embedding: true
-    analytics:
-      check_for_updates: false
-      reporting_enabled: false
-  ingress:
-    enabled: true
-    ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
-    annotations:
-      cert-manager.io/cluster-issuer: ${SHPYRD_PLATFORM_ISSUER}
-    hosts:
-      - grafana.${SHPYRD_DOMAIN}
-    tls:
-      - secretName: grafana-tls
-        hosts:
-          - grafana.${SHPYRD_DOMAIN}
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
+  enabled: false
 
 kube-state-metrics:
   # The chart's default collectors stay: the platform backup alerts above

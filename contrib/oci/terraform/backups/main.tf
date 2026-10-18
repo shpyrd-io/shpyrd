@@ -219,7 +219,54 @@ resource "oci_objectstorage_bucket" "gateway" {
   name           = "${var.name}-objects"
   access_type    = "NoPublicAccess"
   storage_tier   = "Standard"
-  versioning     = "Disabled"
+  # Versioning is the platform's undo (storage plan step 5): an overwrite
+  # or a delete through the gateway leaves the previous version for the
+  # seven days of the lifecycle rule below, at the cost of a week of
+  # deleted bytes. The gateway itself refuses versioning on its logical
+  # buckets. An in-place update: a plan that replaces this bucket must not
+  # be applied.
+  versioning = "Enabled"
+}
+
+# The lifecycle of the objects bucket: previous versions go after seven
+# days (the undo window), and multipart uploads nobody finished are
+# aborted after seven days (the gateway's sweep does the same; the
+# provider's rule holds when the gateway is down). Object Storage applies
+# a lifecycle policy only when the service may manage the objects: the
+# policy below says so, for the bucket's compartment.
+resource "oci_objectstorage_object_lifecycle_policy" "gateway" {
+  namespace = local.namespace
+  bucket    = oci_objectstorage_bucket.gateway.name
+
+  rules {
+    name        = "previous-versions-seven-days"
+    action      = "DELETE"
+    is_enabled  = true
+    target      = "previous-object-versions"
+    time_amount = 7
+    time_unit   = "DAYS"
+  }
+
+  rules {
+    name        = "unfinished-uploads-seven-days"
+    action      = "ABORT"
+    is_enabled  = true
+    target      = "multipart-uploads"
+    time_amount = 7
+    time_unit   = "DAYS"
+  }
+
+  depends_on = [oci_identity_policy.gateway_lifecycle]
+}
+
+resource "oci_identity_policy" "gateway_lifecycle" {
+  provider       = oci.home
+  compartment_id = var.tenancy_ocid
+  name           = "${var.name}-object-lifecycle"
+  description    = "Let Object Storage apply the lifecycle rules of the ${var.name}-objects bucket"
+  statements = [
+    "Allow service objectstorage-${var.region} to manage object-family in compartment id ${local.s3_compartment}",
+  ]
 }
 
 resource "oci_identity_policy" "gateway" {

@@ -40,6 +40,29 @@ type archivedDatabase struct {
 	Spec shpyrdv1.PostgresSpec `json:"spec"`
 }
 
+// archivedBucket is a bucket of the project's own, by reference (storage
+// plan step 5): its name and spec (the cap, public, retention; never a
+// credential), the logical name its objects live under in the store, and
+// whether the archive carries the objects too (buckets/<name>.tar, with
+// --with-files). A restore in the same cluster finds the objects under
+// the logical name and serves them through an alias when the project's
+// namespace differs.
+type archivedBucket struct {
+	Name    string                    `json:"name"`
+	Spec    shpyrdv1.ObjectBucketSpec `json:"spec"`
+	Logical string                    `json:"logical,omitempty"`
+	Files   bool                      `json:"files,omitempty"`
+}
+
+// archiveFilesCap bounds the bucket objects an archive carries together.
+const archiveFilesCap = 5 << 30
+
+// bucketReferenceNote is what the report says about a bucket carried by
+// reference.
+func bucketReferenceNote(name string) string {
+	return fmt.Sprintf("bucket %s travels by reference: its files stay in the store and a restore in this cluster finds them; export with files to carry them in the archive", name)
+}
+
 // carried says whether the archive holds the database's data: a dedicated
 // database's dump is in it; a shared database's data lives on the
 // platform's server and stays there (storage plan, step 3), so the archive
@@ -61,6 +84,7 @@ type projectArchiveMetadata struct {
 	ReleaseConfig map[int]map[string][]byte     `json:"releaseConfig,omitempty"`
 	Volumes       []archivedVolume              `json:"volumes"`
 	Databases     []archivedDatabase            `json:"databases"`
+	Buckets       []archivedBucket              `json:"buckets,omitempty"`
 	Images        map[string]ocispec.Descriptor `json:"images,omitempty"`
 	SourceEntry   string                        `json:"sourceEntry,omitempty"`
 }
@@ -108,6 +132,22 @@ func (s *Server) projectMetadata(ctx context.Context, app *shpyrdv1.App, portabl
 	for _, pg := range databases.Items {
 		m.Databases = append(m.Databases, archivedDatabase{Name: pg.Name, Spec: *pg.Spec.DeepCopy()})
 	}
+	// The project's own buckets, by reference; the platform's (a
+	// database's backups) are its own business and travel with the
+	// database.
+	var buckets shpyrdv1.ObjectBucketList
+	if err := s.apps.List(ctx, &buckets, client.InNamespace(app.Namespace)); err != nil {
+		return nil, err
+	}
+	for i := range buckets.Items {
+		b := &buckets.Items[i]
+		if databaseBackupsBucket(b) || b.PlatformBucket() || !b.DeletionTimestamp.IsZero() {
+			continue
+		}
+		spec := *b.Spec.DeepCopy()
+		spec.Alias, spec.SecretName = "", ""
+		m.Buckets = append(m.Buckets, archivedBucket{Name: b.Name, Spec: spec, Logical: b.Status.Bucket})
+	}
 	if portable {
 		// Refuse an incomplete export rather than implying that unsupported
 		// persistent resource contents are inside this archive.
@@ -116,21 +156,12 @@ func (s *Server) projectMetadata(ctx context.Context, app *shpyrdv1.App, portabl
 			return nil, err
 		}
 		if len(redis.Items) > 0 {
-			return nil, errors.New("portable archives currently support Postgres and volumes; this project also has Redis resources")
-		}
-		var buckets shpyrdv1.ObjectBucketList
-		if err := s.apps.List(ctx, &buckets, client.InNamespace(app.Namespace)); err != nil {
-			return nil, err
-		}
-		for i := range buckets.Items {
-			if databaseBackupsBucket(&buckets.Items[i]) {
-				continue
-			}
-			return nil, errors.New("portable archives currently support Postgres and volumes; this project also has object buckets of its own, whose contents require a separate export")
+			return nil, errors.New("portable archives currently support Postgres, volumes and buckets; this project also has Redis resources")
 		}
 	}
 	sort.Slice(m.Volumes, func(i, j int) bool { return m.Volumes[i].Name < m.Volumes[j].Name })
 	sort.Slice(m.Databases, func(i, j int) bool { return m.Databases[i].Name < m.Databases[j].Name })
+	sort.Slice(m.Buckets, func(i, j int) bool { return m.Buckets[i].Name < m.Buckets[j].Name })
 	return m, nil
 }
 
@@ -285,6 +316,14 @@ func validateProjectArchive(ctx context.Context, b *projectarchive.Bundle) (*pro
 			return nil, err
 		}
 		f.Close()
+	}
+	for _, bucket := range m.Buckets {
+		if !volumeName.MatchString(bucket.Name) {
+			return nil, fmt.Errorf("invalid bucket name %q", bucket.Name)
+		}
+		if bucket.Files {
+			names["buckets/"+bucket.Name+".tar"] = true
+		}
 	}
 	for _, name := range b.Names() {
 		if !names[name] && !strings.HasPrefix(name, "image/blobs/sha256/") {

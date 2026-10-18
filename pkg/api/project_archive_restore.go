@@ -21,6 +21,7 @@ import (
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/objectstore"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/projectarchive"
 )
@@ -144,12 +145,22 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 			}
 		}
 	}
+	buckets := map[string]archivedBucket{}
+	for _, b := range restored.Buckets {
+		buckets[b.Name] = b
+	}
 	for _, binding := range restored.Spec.Bindings {
-		if !strings.EqualFold(binding.Kind, "postgres") {
+		switch {
+		case strings.EqualFold(binding.Kind, "postgres"):
+			if _, ok := databases[binding.Name]; !ok {
+				return fmt.Errorf("missing database binding %s", binding.Name)
+			}
+		case strings.EqualFold(binding.Kind, "objectbucket"):
+			if _, ok := buckets[binding.Name]; !ok {
+				return fmt.Errorf("missing bucket binding %s", binding.Name)
+			}
+		default:
 			return fmt.Errorf("unsupported archived binding kind %s", binding.Kind)
-		}
-		if _, ok := databases[binding.Name]; !ok {
-			return fmt.Errorf("missing database binding %s", binding.Name)
 		}
 	}
 	var extra resource.Quantity
@@ -174,14 +185,33 @@ func (s *Server) checkArchiveCompatibility(ctx context.Context, app *shpyrdv1.Ap
 			extra.Add(s.databaseDiskSize(pg.Spec.Storage))
 		}
 	}
+	// The buckets the restore adds, with their caps (storage plan step 5).
+	oldB := map[string]bool{}
+	for _, b := range original.Buckets {
+		oldB[b.Name] = true
+	}
+	ch := change{project: app.Spec.Slug, storage: extra, newDisk: extra.Sign() > 0}
+	for _, b := range restored.Buckets {
+		if oldB[b.Name] {
+			continue
+		}
+		ch.buckets++
+		if b.Spec.MaxBytes != nil {
+			ch.objectStorage.Add(*b.Spec.MaxBytes)
+			if b.Spec.MaxBytes.Cmp(ch.bucketCap) > 0 {
+				ch.bucketCap = *b.Spec.MaxBytes
+			}
+		}
+	}
 	ws := s.workspaceOfApp(ctx, app)
 	after := app.DeepCopy()
 	after.Spec = restored.Spec
 	after.Spec.ID = app.Spec.ID
 	after.Spec.Slug = app.Spec.Slug
-	// Judged as one change: the disks the restore adds and the App as it
-	// comes back; the restore itself writes later, step by step.
-	return s.admit(ctx, ws, change{project: app.Spec.Slug, app: after, storage: extra, newDisk: extra.Sign() > 0}, nil)
+	ch.app = after
+	// Judged as one change: the disks and buckets the restore adds and the
+	// App as it comes back; the restore itself writes later, step by step.
+	return s.admit(ctx, ws, ch, nil)
 }
 
 func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, op *projectArchiveOperation, m *projectArchiveMetadata) error {
@@ -226,6 +256,35 @@ func (s *Server) createArchiveResources(ctx context.Context, app *shpyrdv1.App, 
 		current.Spec.Recovery = nil
 		if err := s.apps.Create(ctx, current); err != nil {
 			return err
+		}
+	}
+	for _, b := range m.Buckets {
+		current := &shpyrdv1.ObjectBucket{}
+		err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: b.Name}, current)
+		if err == nil {
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		op.CreatedBuckets = append(op.CreatedBuckets, b.Name)
+		if err := s.saveProjectArchive(ctx, app.Namespace, op); err != nil {
+			return err
+		}
+		current = &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: b.Name, Namespace: app.Namespace, Labels: map[string]string{projectOperationLabel: op.ID, shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: app.Spec.Slug}}, Spec: b.Spec}
+		current.Spec.Alias, current.Spec.SecretName = "", ""
+		// The objects live under the name the first project gave them:
+		// a restore into another namespace on the gateway serves them
+		// through an alias (storage plan step 5). Carried files are
+		// written into the bucket's own name instead.
+		if b.Logical != "" && !b.Files && s.vars(install.VarGatewayBucket) != "" && objectstore.LogicalBucketName(app.Namespace, b.Name) != b.Logical {
+			current.Spec.Alias = b.Logical
+		}
+		if err := s.apps.Create(ctx, current); err != nil {
+			return err
+		}
+		if current.Spec.Alias == "" && !b.Files {
+			op.warn(bucketReferenceNote(b.Name))
 		}
 	}
 	return nil
@@ -287,6 +346,43 @@ func (s *Server) archiveParticipants(app *shpyrdv1.App, op *projectArchiveOperat
 			}, Finish: func(ctx context.Context) error {
 				return withDB(ctx, func(db projectarchive.PostgreSQL) error { return db.Finish(ctx, op.ID) })
 			}})
+	}
+	return resources
+}
+
+// bucketParticipants put the objects an archive carries into the
+// project's buckets once the buckets are ready (storage plan step 5).
+// Objects have no staging: what is written stays, so a rollback leaves
+// them and the report says so; a bucket the restore made goes with the
+// rollback.
+func (s *Server) bucketParticipants(app *shpyrdv1.App, op *projectArchiveOperation, m *projectArchiveMetadata, b *projectarchive.Bundle) []projectarchive.Participant {
+	var resources []projectarchive.Participant
+	for _, bucket := range m.Buckets {
+		if !bucket.Files {
+			continue
+		}
+		resources = append(resources, projectarchive.Participant{Name: "bucket/" + bucket.Name,
+			Stage: func(ctx context.Context) error {
+				if b == nil {
+					return errors.New("no uploaded archive available")
+				}
+				f, err := b.Open("buckets/" + bucket.Name + ".tar")
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				client, err := s.archiveBucketClient(ctx, app.Namespace, bucket.Name, 5*time.Minute)
+				if err != nil {
+					return err
+				}
+				return restoreBucketObjects(ctx, client, f)
+			},
+			Commit: func(context.Context) error { return nil },
+			Rollback: func(context.Context) error {
+				op.warn(fmt.Sprintf("bucket %s: the files the archive carried were written before the rollback and stay", bucket.Name))
+				return nil
+			},
+			Finish: func(context.Context) error { return nil }})
 	}
 	return resources
 }
@@ -419,7 +515,7 @@ func (s *Server) runProjectRestore(ctx context.Context, app *shpyrdv1.App, op *p
 	if err := s.fenceArchiveDatabases(ctx, app, op, m.Databases); err != nil {
 		return err
 	}
-	resources := s.archiveParticipants(app, op, m, b)
+	resources := append(s.archiveParticipants(app, op, m, b), s.bucketParticipants(app, op, m, b)...)
 	save := func(c context.Context, state projectarchive.TransactionState) error {
 		op.State = state
 		return s.saveProjectArchive(c, app.Namespace, op)
@@ -512,10 +608,35 @@ func (s *Server) removeCreatedArchiveResources(ctx context.Context, app *shpyrdv
 		}
 		delete(op.Limits, name)
 	}
+	// A bucket the restore made goes, but never the objects under it: they
+	// may be another project's, served through an alias, or what was
+	// there before the restore. Retain first, then delete.
+	for _, name := range op.CreatedBuckets {
+		b := &shpyrdv1.ObjectBucket{}
+		if err := s.apps.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: name}, b); apierrors.IsNotFound(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if b.Labels[projectOperationLabel] != op.ID {
+			return fmt.Errorf("bucket %s is no longer owned by this restore", name)
+		}
+		if b.Spec.DeletionPolicy != "Retain" {
+			before := b.DeepCopy()
+			b.Spec.DeletionPolicy = "Retain"
+			if err := s.apps.Patch(ctx, b, client.MergeFrom(before)); err != nil {
+				return err
+			}
+		}
+		if err := s.apps.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	// Recovery after workload startup finalizes only resources that still
 	// exist. These newly created resources were removed during rollback.
 	op.CreatedVolumes = nil
 	op.CreatedDatabases = nil
+	op.CreatedBuckets = nil
 	return s.saveProjectArchive(ctx, app.Namespace, op)
 }
 

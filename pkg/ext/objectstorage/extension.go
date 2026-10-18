@@ -31,10 +31,15 @@ import (
 // Name of the extension.
 const Name = "object-storage"
 
-// Endpoint of the store inside the cluster (the component's Service) and
-// AdminEndpoint of its admin API.
+// Endpoint of the store inside the cluster (the component's Service),
+// AppsEndpoint of the gateway's door for the projects' buckets (storage
+// plan step 5) and AdminEndpoint of its admin API.
 func Endpoint(systemNamespace string) string {
 	return "http://" + install.ObjectStorageService + "." + systemNamespace + ".svc:3900"
+}
+
+func AppsEndpoint(systemNamespace string) string {
+	return "http://" + install.ObjectStorageService + "." + systemNamespace + ".svc:3901"
 }
 
 func AdminEndpoint(systemNamespace string) string {
@@ -56,7 +61,7 @@ func (extension) Components() []ext.ComponentRef {
 	return []ext.ComponentRef{{Name: "object-storage", Runlevel: "rc3"}}
 }
 
-// Register runs the ObjectBucket controller.
+// Register runs the ObjectBucket controller and makes buckets attachable.
 func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	var capacity int64
 	if q, err := resource.ParseQuantity(deps.Var(install.VarObjectStorageSize)); err == nil {
@@ -69,16 +74,25 @@ func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	}
 	if deps.Var(install.VarGatewayBucket) != "" {
 		r.UseGateway = true
+		r.AppsEndpoint = AppsEndpoint(deps.SystemNamespace)
+		if host := deps.Var(install.VarBucketsHost); host != "" {
+			r.PublicEndpoint = "https://" + host
+		}
 		r.Connect = func(endpoint, admin, token string) (controller.BucketStore, error) {
 			return objectstore.ConnectGateway(endpoint, admin, token)
 		}
 	}
-	return r.SetupWithManager(mgr)
+	if err := r.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	controller.RegisterBinder("ObjectBucket", controller.ObjectBucketBinder{})
+	return nil
 }
 
-// Types: buckets are resources of the platform, not attachable to apps.
+// Types: a bucket is a resource of a project, attachable to its app as
+// BUCKET_* (storage plan step 5).
 func (extension) Types() []ext.ResourceType {
-	return []ext.ResourceType{{Kind: "ObjectBucket", Group: shpyrdv1.GroupVersion.Group, Version: shpyrdv1.GroupVersion.Version, Resource: "objectbuckets"}}
+	return []ext.ResourceType{{Kind: "ObjectBucket", Group: shpyrdv1.GroupVersion.Group, Version: shpyrdv1.GroupVersion.Version, Resource: "objectbuckets", Bindable: true}}
 }
 
 // Summary is what the cluster page shows.
@@ -241,13 +255,13 @@ func measurePlatformBuckets(ctx context.Context, gw bucketMeasurer) (map[string]
 	return buckets, platformUsage.at, nil
 }
 
-// CLI returns `shpyrd object-storage`.
+// CLI returns `shpyrd buckets` (a project's buckets, the developer's) and
+// `shpyrd-ctl object-storage` (the platform's store, the operator's).
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command {
 	// The platform's store: the operator's view.
 	cmd := ext.ForOperator(&cobra.Command{
-		Use:     "object-storage",
-		Aliases: []string{"buckets"},
-		Short:   "The platform's object store: buckets and their usage",
+		Use:   "object-storage",
+		Short: "The platform's object store: buckets and their usage",
 		Long: `The object-storage extension runs an S3-compatible store (Garage) in the
 cluster. Extensions that need durable storage (Postgres backups, platform
 backups) declare ObjectBucket resources and get a bucket with a credential
@@ -293,7 +307,7 @@ that opens only that bucket. This lists them.`,
 		},
 	}
 	cmd.AddCommand(list)
-	return []*cobra.Command{cmd}
+	return []*cobra.Command{newBucketsCmd(g), cmd}
 }
 
 func humanBytes(n int64) string {

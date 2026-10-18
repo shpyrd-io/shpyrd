@@ -147,13 +147,10 @@ The installer waits for the load balancer address, for `shpyrd.<domain>` to reso
 
 ```
   Dashboard:  https://shpyrd.oci.example.com
-  Grafana:    https://grafana.oci.example.com
   Registry:   in-cluster at 10.96.0.50:5000 (TLS from the platform CA, credential in Secret shpyrd-registry)
   External LB:   147.15.59.84 (ExternalDNS: *.oci.example.com)
   Internal LB:   10.0.10.179 (ExternalDNS: per host, exposure:internal)
 ```
-
-Grafana answers on the internal front door only: connect the VPN to open it. It has no anonymous access; its admin password is in the `monitoring-grafana` Secret (`kubectl --context oke-shpyrd-prod -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d`).
 
 Everything you passed is recorded in the cluster: later runs (`brew upgrade shpyrd && shpyrd cluster init --context oke-shpyrd-prod --profile oci`) need no flags, and the key never leaves the Secrets the installer wrote.
 
@@ -188,7 +185,7 @@ A cloud cluster has kinds of workload that scale differently. The platform's own
 
 | Pool | Size | Carries |
 | --- | --- | --- |
-| `platform` | fixed, `node_count` | every pod the installer puts in place: ingress, Prometheus and Grafana, the control-plane database, KEDA, cert-manager, kpack, the operators, the server, the wake proxy, the autoscaler, Calico's controllers; the projects' data too when there is no `data` pool |
+| `platform` | fixed, `node_count` | every pod the installer puts in place: ingress, Prometheus, the control-plane database, KEDA, cert-manager, kpack, the operators, the server, the wake proxy, the autoscaler, Calico's controllers; the projects' data too when there is no `data` pool |
 | `data` (optional) | `data_min_count` to `data_max_count` | every Postgres and Redis resource, the object store and the Postgres wake proxy |
 | `apps` | autoscaled, `apps_min_count` to `apps_max_count` | web and worker processes, release and one-off Jobs, build pods |
 

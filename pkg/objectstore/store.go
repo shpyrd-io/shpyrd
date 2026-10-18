@@ -22,8 +22,14 @@ import (
 )
 
 // Region consumers put in their configuration; Garage accepts the one it
-// is configured with (s3_region).
-const Region = "garage"
+// is configured with (s3_region), and the gateway keeps it for the
+// platform's own consumers. AppsRegion is what the gateway's door for the
+// projects' buckets signs with: a SigV4 scope, not a place, the string
+// every SDK accepts and some default to (storage plan step 5).
+const (
+	Region     = "garage"
+	AppsRegion = "us-east-1"
+)
 
 // Store is a connection to the object store as administrator.
 type Store struct {
@@ -158,6 +164,12 @@ type BucketSpec struct {
 	Name          string
 	Versioning    bool // Garage has no object versioning; accepted and ignored
 	RetentionDays int32
+	// MaxBytes caps what the bucket holds (0: no cap); Public lets anyone
+	// read an object by its address; Alias names the logical bucket whose
+	// objects this one serves (storage plan step 5, the gateway's).
+	MaxBytes int64  `json:",omitempty"`
+	Public   bool   `json:",omitempty"`
+	Alias    string `json:",omitempty"`
 }
 
 func (s *Store) bucketByName(ctx context.Context, name string) (*bucketInfo, error) {
@@ -191,6 +203,14 @@ func (s *Store) EnsureBucket(ctx context.Context, spec BucketSpec) error {
 	}
 	if err := s3.SetBucketLifecycle(ctx, spec.Name, cfg); err != nil {
 		return fmt.Errorf("retention on %s: %w", spec.Name, err)
+	}
+	// The cap, as Garage's own quota; none when the spec has none.
+	var maxSize any
+	if spec.MaxBytes > 0 {
+		maxSize = spec.MaxBytes
+	}
+	if err := s.call(ctx, "POST", "/v2/UpdateBucket", url.Values{"id": {info.ID}}, map[string]interface{}{"quotas": map[string]interface{}{"maxSize": maxSize, "maxObjects": nil}}, nil); err != nil {
+		return fmt.Errorf("cap on %s: %w", spec.Name, err)
 	}
 	return nil
 }

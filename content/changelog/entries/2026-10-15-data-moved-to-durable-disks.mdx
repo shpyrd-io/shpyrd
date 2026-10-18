@@ -1,0 +1,9 @@
+---
+title: "Existing data moved to durable disks"
+description: "Every volume and database that lived on a machine's own disk now lives on provider block storage."
+date: "2026-10-15"
+type: improvement
+draft: false
+---
+
+On shpyrd cloud, every volume and database that still kept its data on a machine's own disk was moved to provider block storage, one at a time, with a few minutes of pause each. Nothing changed on your side: addresses, credentials and mounts are the same, and the data now survives the loss of a machine.

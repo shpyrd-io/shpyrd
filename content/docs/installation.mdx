@@ -58,7 +58,7 @@ This runs [kind](https://kind.sigs.k8s.io) as a library to create a two-node clu
 | rc0 | Prometheus Operator CRDs |
 | rc1 | node-local storage for project data, cert-manager, the registry credential, the platform's Service |
 | rc2 | development CA `ClusterIssuer`, trust-manager, ingress-nginx (host ports 80/443), the in-cluster registry (TLS from the CA) and the node trust for it |
-| rc3 | kpack with the Paketo buildpacks builder, kube-prometheus-stack + Grafana, the control-plane database (PostgreSQL) |
+| rc3 | kpack with the Paketo buildpacks builder, kube-prometheus-stack, the control-plane database (PostgreSQL) |
 | rc4 | shpyrd server (API, App controller, dashboard), the platform backup schedule (only with a backup target) |
 
 The first run takes 10-20 minutes, mostly downloads. Re-running `cluster create` or `cluster init` on an existing cluster is idempotent and takes about 30 seconds.
@@ -69,7 +69,7 @@ Options worth knowing:
 shpyrd cluster create --http-port 8080 --https-port 8443   # host ports 80/443 already in use
 shpyrd cluster create --domain myapps.example.test          # wildcard domain resolving to your machine
 shpyrd cluster create --workers 2                          # more kind worker nodes
-shpyrd cluster create --skip monitoring                    # lighter install, no Prometheus/Grafana
+shpyrd cluster create --skip monitoring                    # lighter install, no Prometheus
 shpyrd cluster create --no-init                            # only the kind cluster
 ```
 
@@ -140,7 +140,6 @@ rc4       shpyrd                ready            ...
 Endpoints on the default domain:
 
 - `https://shpyrd.127.0.0.1.nip.io` — dashboard
-- `https://grafana.127.0.0.1.nip.io` — Grafana (`admin` / `shpyrd` on the local profile)
 - `10.96.0.50:5000` — the in-cluster registry, inside the cluster only (`shpyrd cluster registry` shows its state)
 
 ## Sign in

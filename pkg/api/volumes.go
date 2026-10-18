@@ -395,7 +395,7 @@ func (s *Server) checkScale(ctx context.Context, app *shpyrdv1.App, process stri
 		return nil
 	}
 	if v := s.singleInstanceVolume(ctx, app, process); v != "" {
-		return fmt.Errorf("%s mounts single-instance volume %q and can run 1 instance (a shared volume allows more)", process, v)
+		return fmt.Errorf("%s mounts the volume %q, which one instance at a time can use; files that several instances share belong in a bucket", process, v)
 	}
 	return nil
 }

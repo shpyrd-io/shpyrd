@@ -13,9 +13,15 @@ export type ProjectArchiveStatus = {
 
 export type ArchiveProject = { id: string; slug: string; name: string; workspace: string; phase: string; nodes: string[] | null };
 
+// What a backup may carry besides the project: the files of its buckets
+// (storage plan step 5), up to 5 GB together; by default the buckets
+// travel by reference.
+export type BackupOptions = { files?: boolean };
+
 export type ProjectArchiveActions = {
   status: () => Promise<ProjectArchiveStatus>;
-  backup: () => Promise<void>;
+  // Resolves with the operation's report: what was left out and why.
+  backup: (options?: BackupOptions) => Promise<string[]>;
   restore: (file: File) => Promise<void>;
   recover: () => Promise<void>;
 };
@@ -23,11 +29,13 @@ export type ProjectArchiveActions = {
 export function projectArchiveActions(path: string): ProjectArchiveActions {
   return {
     status: () => request(path),
-    backup: async () => {
-      const { ticket } = await request<{ ticket: string }>(`${path}/export`, { method: "POST" });
+    backup: async (options) => {
+      const query = options?.files ? "?files=true" : "";
+      const { ticket, warnings } = await request<{ ticket: string; warnings?: string[] }>(`${path}/export${query}`, { method: "POST" });
       // Let the browser stream the download to disk. response.blob() would
       // hold a multi-gigabyte archive in the browser's memory.
       window.location.assign(`${path}/download?ticket=${encodeURIComponent(ticket)}`);
+      return warnings ?? [];
     },
     restore: async (file) => {
       await request(`${path}/restore`, { method: "POST", body: file, headers: { "Content-Type": "application/gzip" } });

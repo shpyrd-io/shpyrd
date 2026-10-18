@@ -1,0 +1,48 @@
+# The buckets' public door (storage plan step 5): one host per cluster,
+# path style (one certificate), to the gateway's listener for the
+# projects' buckets. What comes through it is what an S3 client signs:
+# presigned GET and PUT from a browser, a public object by its address.
+# Bodies stream to the gateway unbuffered up to an object's size (S3
+# takes 5 GB in one PUT); the console's 1 MiB default would refuse an
+# upload before the gateway saw it (#124). The platform's own consumers
+# never come through here: they reach the gateway inside the cluster.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: buckets-tls
+spec:
+  secretName: buckets-tls
+  dnsNames:
+    - ${SHPYRD_BUCKETS_HOST}
+  issuerRef:
+    kind: ClusterIssuer
+    name: ${SHPYRD_BUCKETS_ISSUER}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: object-storage-door
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: ${SHPYRD_PLATFORM_INGRESS_CLASS}
+  tls:
+    - hosts:
+        - ${SHPYRD_BUCKETS_HOST}
+      secretName: buckets-tls
+  rules:
+    - host: ${SHPYRD_BUCKETS_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: object-storage
+                port:
+                  name: s3-apps

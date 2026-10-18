@@ -64,3 +64,32 @@ still require environment-specific testing. Every authenticated request
 reads credential metadata from the provider; that cost is particularly
 relevant for many small objects. Global usage and retention scan costs grow
 with stored metadata/object counts.
+
+# Object gateway load on dev — 2026-10-16 (storage plan step 5)
+
+`shpyrd-server object-gateway-load` as a Job on the dev cluster's apps pool
+(one 1 OCPU node), against one gateway pod (100m CPU request, no limit, on a
+1 OCPU platform node) over the apps listener (3901), with a project bucket's
+own key; 2000 objects of 4 KiB, PUT then GET then DELETE each. The provider
+is OCI Object Storage in Ashburn; its own latency, from the gateway's
+metrics over the runs: PutObject p95 ≤ 200 ms, GetObject ≤ 100 ms,
+DeleteObject ≤ 50 ms.
+
+| Concurrency | Operation | ok | failed | p50 | p95 | max | rate |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 20 | PUT | 2000 | 0 | 27.8 ms | 78.0 ms | 247 ms | 554/s |
+| 20 | GET | 2000 | 0 | 14.2 ms | 44.7 ms | 326 ms | 939/s |
+| 20 | DELETE | 2000 | 0 | 20.3 ms | 56.0 ms | 149 ms | 766/s |
+| 200 | PUT | 2000 | 0 | 204.9 ms | 5400 ms | 7247 ms | 246/s |
+| 200 | GET | 2000 | 0 | 185.6 ms | 371.9 ms | 893 ms | 850/s |
+| 200 | DELETE | 2000 | 0 | 237.4 ms | 570.4 ms | 3107 ms | 599/s |
+
+An earlier run at 200 concurrent on the same pod gave PUT p50 210 / p95 511
+ms (701/s), GET 175 / 381 ms, DELETE 258 / 596 ms: the p95 at 200 clients
+varies between runs with what else the platform node is doing. The queue in
+front of one small pod, not the provider, is the latency: the plan's "p95
+under 200 ms" holds at 20 concurrent clients and per request at the
+provider; at 200 clients it needs more than one 100m pod (two replicas on
+AWS, a larger request on OCI). A first run before the fixes of that day
+answered `SlowDown` as 500 and crossed two buckets' counters; both are in
+the branch's history.

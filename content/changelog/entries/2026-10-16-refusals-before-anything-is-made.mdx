@@ -1,0 +1,9 @@
+---
+title: "Refusals before anything is made"
+description: "Dialogs say what the plan allows, a disk's growth shows where it stands, and an impossible size is refused up front."
+date: "2026-10-16"
+type: improvement
+draft: false
+---
+
+The dashboard's dialogs say what the plan allows before you ask: whether disks are included, which kinds of database, how many instances, the cap of a bucket. A disk's growth reports where it stands (requested, pending while the provider grows it, completed, or failed with the reason), and a growth a storage class cannot do is refused at once. A size no machine of the cluster can hold is refused up front, naming the largest machine, instead of leaving a process waiting forever.

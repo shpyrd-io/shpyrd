@@ -34,7 +34,7 @@ func (m *MeteringLoop) bucketBuckets(ctx context.Context, start, end time.Time, 
 	var out []store.UsageBucket
 	for _, b := range list.Items {
 		meta, ok := nsMap[b.Namespace]
-		if !ok || b.DeletionTimestamp != nil || b.Labels["shpyrd.io/postgres"] != "" {
+		if !ok || b.DeletionTimestamp != nil || b.PlatformBucket() {
 			continue
 		}
 		gib := float64(b.Status.UsedBytes) / (1024 * 1024 * 1024)

@@ -116,7 +116,7 @@ What the file carries, and where each value comes from:
 | `SHPYRD_EFS_ID` | the file system behind shared volumes | `shared_storage` |
 | `SHPYRD_DNS_PROVIDER`, `SHPYRD_DNS_ZONE_ID`, `SHPYRD_DNS_REGION` | Route 53 automation | the hosted zone |
 
-Flags and `--set` win over the file, so `--platform-exposure internal` (dashboard, sign-in and Grafana behind the internal load balancer, VPN only, apps public) or `--set SHPYRD_REGISTRY_SIZE=50Gi` go on the same command line. On a cluster you did not create with this Terraform, pass the values with `--set`; the three cluster facts are read from the cluster.
+Flags and `--set` win over the file, so `--platform-exposure internal` (dashboard and sign-in behind the internal load balancer, VPN only, apps public) or `--set SHPYRD_REGISTRY_SIZE=50Gi` go on the same command line. On a cluster you did not create with this Terraform, pass the values with `--set`; the three cluster facts are read from the cluster.
 
 What happens, in order:
 
@@ -132,7 +132,6 @@ The installer waits for the load balancer hostname, for `shpyrd.<domain>` to res
 
 ```
   Dashboard:  https://shpyrd.aws.example.com
-  Grafana:    https://grafana.aws.example.com
   Registry:   in-cluster at 10.100.0.50:5000 (TLS from the platform CA, credential in Secret shpyrd-registry)
   External LB:   k8s-ingressn-ingressn-015ed2971e-ae9f48a7eeaa7d9f.elb.us-east-1.amazonaws.com (ExternalDNS: *.aws.example.com)
   Internal LB:   k8s-ingressn-ingressn-60fb9cbfd6-a7ec35b89089177e.elb.us-east-1.amazonaws.com (ExternalDNS: per host, exposure:internal)

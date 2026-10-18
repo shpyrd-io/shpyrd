@@ -137,7 +137,6 @@ type PublicConfig struct {
 	Version      string `json:"version"`
 	Domain       string `json:"domain"`
 	HTTPSPort    string `json:"httpsPort"`
-	GrafanaURL   string `json:"grafanaUrl"`
 	DashboardURL string `json:"dashboardUrl,omitempty"`
 	AuthRequired bool   `json:"authRequired"`
 	Metrics      bool   `json:"metrics"`
@@ -850,6 +849,8 @@ func (s *Server) routes() error {
 	api.PATCH("/projects/:slug/resources/postgres/:name/sleep", s.require(authz.ProjectResource), s.patchPostgresSleep)
 	api.POST("/projects/:slug/resources/postgres/:name/suspend", s.require(authz.ProjectResource), s.suspendPostgres)
 	api.POST("/projects/:slug/resources/postgres/:name/rotate", s.require(authz.ProjectResource), s.rotatePostgres)
+	// A bucket's key (storage plan step 5).
+	api.POST("/projects/:slug/resources/objectbucket/:name/rotate", s.require(authz.ProjectResource), s.rotateBucket)
 	api.POST("/projects/:slug/resources/postgres/:name/convert", s.require(authz.ProjectResource), s.convertPostgres)
 	api.POST("/projects/:slug/resources/postgres/:name/resume", s.require(authz.ProjectResource), s.resumePostgres)
 	// Backups and restore (RFC-0038) with the account alone (#74).

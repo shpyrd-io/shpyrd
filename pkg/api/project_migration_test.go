@@ -300,15 +300,30 @@ func TestMigrationRequiresOptInBeforePausing(t *testing.T) {
 	}
 }
 
+// A bucket of the project's own travels by reference in an archive
+// (storage plan step 5) and never blocks a move, which carries no data of
+// it; a Redis still blocks a portable export.
 func TestMigrationMetadataAllowsUnrelatedResourcesWithoutExportingThem(t *testing.T) {
 	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
-	bucket := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "backups", Namespace: app.Namespace}}
+	bucket := &shpyrdv1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "uploads", Namespace: app.Namespace, Labels: map[string]string{shpyrdv1.LabelProject: "shop"}}}
 	s, _ := newTestServer(t, nil, []client.Object{app, bucket})
-	if _, err := s.projectArchiveMetadata(context.Background(), app); err == nil {
-		t.Fatal("archive implied unsupported bucket data was exported")
+	m, err := s.projectArchiveMetadata(context.Background(), app)
+	if err != nil {
+		t.Fatalf("a bucket blocked the archive: %v", err)
+	}
+	if len(m.Buckets) != 1 || m.Buckets[0].Name != "uploads" || m.Buckets[0].Files {
+		t.Fatalf("the archive names the bucket by reference: %+v", m.Buckets)
 	}
 	if _, err := s.projectMetadata(context.Background(), app, false); err != nil {
 		t.Fatalf("unrelated bucket blocked volume migration: %v", err)
+	}
+	cache := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: app.Namespace}}
+	s, _ = newTestServer(t, nil, []client.Object{app, bucket, cache})
+	if _, err := s.projectArchiveMetadata(context.Background(), app); err == nil {
+		t.Fatal("archive implied Redis data was exported")
+	}
+	if _, err := s.projectMetadata(context.Background(), app, false); err != nil {
+		t.Fatalf("a cache blocked a move: %v", err)
 	}
 }
 

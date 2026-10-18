@@ -814,10 +814,8 @@ func runInit(ctx context.Context, cmd *cobra.Command, kopts kube.Options, cluste
 		}
 	}
 
-	base := install.BaseURL(eng.Vars())
 	fmt.Fprintf(out, "\nshpyrd is ready.\n\n")
 	fmt.Fprintf(out, "  Dashboard:  %s\n", eng.Vars()[install.VarDashboardURL]) // the console host: shpyrd.<domain>, or the domain itself in apex mode
-	fmt.Fprintf(out, "  Grafana:    %s\n", base("grafana"))
 	if eng.Vars()[install.VarRegistryIP] != "" {
 		fmt.Fprintf(out, "  Registry:   in-cluster at %s (TLS from the platform CA, credential in Secret %s)\n", eng.Vars()[install.VarRegistryHost], install.RegistrySecretName)
 	} else {

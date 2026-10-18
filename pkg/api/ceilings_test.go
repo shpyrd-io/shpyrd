@@ -9,8 +9,12 @@ import (
 	"sync"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
@@ -232,7 +236,7 @@ func TestParallelCreatesAdmitExactlyWhatFits(t *testing.T) {
 // namespace, no command.
 func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 	q := resource.MustParse
-	l := &store.Limits{Projects: 2, Instances: 3, CPU: "2", Memory: "1Gi", Storage: "100Gi", Postgres: &store.PostgresLimits{Databases: 1, MaxInstances: 2}, ObjectStorage: &store.ObjectStorageLimits{Buckets: 1}}
+	l := &store.Limits{Projects: 2, Instances: 3, CPU: "2", Memory: "1Gi", Storage: "100Gi", Postgres: &store.PostgresLimits{Databases: 1, MaxInstances: 2}, ObjectStorage: &store.ObjectStorageLimits{Buckets: 1, BucketCap: "1Gi", Total: "2Gi"}}
 	no := false
 	none := usage{}
 	cases := []struct {
@@ -250,6 +254,8 @@ func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 		{"databases", l, change{}, usage{databases: 2}},
 		{"instances of a database", l, change{instances: 3}, none},
 		{"buckets", l, change{}, usage{buckets: 2}},
+		{"a bucket's cap", l, change{buckets: 1, bucketCap: q("5Gi"), objectStorage: q("5Gi")}, none},
+		{"object storage", l, change{}, usage{objectStorage: q("3Gi")}},
 	}
 	for _, c := range cases {
 		msg := overCeiling(c.l, nil, c.ch, none, c.after)
@@ -264,7 +270,7 @@ func TestCeilingRefusalsNameNoInternals(t *testing.T) {
 			t.Errorf("%s: %q is not a sentence", c.name, msg)
 		}
 	}
-	for _, msg := range []string{errDedicatedNotIncluded, errSharedNotIncluded} {
+	for _, msg := range []string{errDedicatedNotIncluded, errSharedNotIncluded, noteOneInstance, errNoDisks, errBucketVersioning, errBucketAlias} {
 		if bad := controller.PlatformWordingFault(msg); bad != "" {
 			t.Errorf("%q names %q", msg, bad)
 		}
@@ -312,5 +318,46 @@ func TestWorkspaceSettingsCarryTheThreeCeilings(t *testing.T) {
 	merged := store.MergeLimits(&store.Limits{Storage: "10Gi", Postgres: &store.PostgresLimits{SharedCap: "2Gi"}}, &store.Limits{AllowDisks: &no, Postgres: &store.PostgresLimits{Databases: 3}})
 	if merged.Storage != "10Gi" || merged.AllowsDisks() || merged.Postgres.SharedCap != "2Gi" || merged.Postgres.Databases != 3 {
 		t.Errorf("merged = %+v %+v", merged, merged.Postgres)
+	}
+}
+
+// A free workspace that already holds a claim above what its plan would
+// allow keeps it, grows it within the ceiling, and can still restore it
+// in place: a restore claims nothing new. Only a new disk is refused.
+func TestAFreeWorkspaceKeepsAndRestoresTheClaimItHolds(t *testing.T) {
+	s, cr, st := newTenantServer(t)
+	ctx := context.Background()
+	no := false
+	setLimits(t, st, "acme", &store.Limits{Storage: "10Gi", AllowDisks: &no})
+	s.opts.Vars = func(key string) string {
+		return map[string]string{install.VarStorageClass: "oci-bv", install.VarSnapshotClass: "oci-bv-backup"}[key]
+	}
+	vol := &shpyrdv1.Volume{
+		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app-acme-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "acme", shpyrdv1.LabelProject: "shop"}},
+		Spec:       shpyrdv1.VolumeSpec{Size: resource.MustParse("50Gi"), AccessMode: corev1.ReadWriteOnce},
+		Status:     shpyrdv1.VolumeStatus{Phase: shpyrdv1.VolumeBound, Capacity: "50Gi", StorageClass: "oci-bv"},
+	}
+	if err := cr.Create(ctx, vol); err != nil {
+		t.Fatal(err)
+	}
+	snap := &unstructured.Unstructured{}
+	snap.SetGroupVersionKind(controller.VolumeSnapshotGVK)
+	snap.SetNamespace("app-acme-shop")
+	snap.SetName("data-last-night")
+	snap.SetLabels(map[string]string{shpyrdv1.LabelVolumeOf: "data"})
+	_ = unstructured.SetNestedField(snap.Object, true, "status", "readyToUse")
+	if err := cr.Create(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	if u := workspaceUsageOf(t, s, "acme.shpyrd.test"); u.Storage != "50Gi" {
+		t.Errorf("usage storage = %s, want the 50Gi it holds", u.Storage)
+	}
+	rec := at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes/data/restore", `{"snapshot":"data-last-night"}`)
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Errorf("restore in place of the claim it holds = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = at(t, s, "acme.shpyrd.test", "POST", "/api/projects/shop/volumes", `{"name":"more","size":"1Gi"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), errNoDisks) {
+		t.Errorf("a new disk = %d %s", rec.Code, rec.Body.String())
 	}
 }

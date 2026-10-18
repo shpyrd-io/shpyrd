@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   Camera,
+  KeyRound,
   Link2,
   Minus,
   Plus,
@@ -350,7 +351,13 @@ const prefixOf = (kind: string) =>
     ? "DATABASE"
     : kind === "Redis"
       ? "REDIS"
-      : kind.toUpperCase();
+      : kind === "ObjectBucket"
+        ? "BUCKET"
+        : kind.toUpperCase();
+
+// The word people read for a kind: a bucket, not an ObjectBucket.
+export const wordOf = (kind: string) =>
+  kind === "ObjectBucket" ? "Bucket" : kind;
 
 // What the details of a resource say, in one line; a database's or a
 // store's address goes on a line of its own, beside it.
@@ -370,6 +377,18 @@ export function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
       volume?.resize &&
         volume.resize.phase !== "completed" &&
         `growth to ${volume.resize.to} ${volume.resize.phase}${volume.resize.message ? `: ${volume.resize.message}` : ""}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  if (r.kind === "ObjectBucket")
+    return [
+      d.capBytes && d.capBytes !== "0"
+        ? `up to ${gbWords(Number(d.capBytes) / (1 << 30))}`
+        : "no cap",
+      d.public === "true" && "public read",
+      d.region && `region ${d.region}`,
+      d.retentionDays && d.retentionDays !== "0" && `kept ${d.retentionDays} days`,
+      d.rotating && "key being rotated",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -490,6 +509,12 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
     onSuccess: told("Detached"),
     onError: failed,
   });
+  const rotate = useMutation({
+    mutationFn: (r: ResourceInfo) => api.rotateBucket(project.slug, r.name),
+    onSuccess: (answer) =>
+      told(answer.note ?? "A new key is being written")(),
+    onError: failed,
+  });
   const attached = (r: ResourceInfo) =>
     !!project.spec.bindings?.some(
       (b) => b.kind === r.kind && b.name === r.name,
@@ -549,7 +574,7 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                   /paused/i.test(r.message);
                 return (
                   <TableRow key={`${r.kind}/${r.name}`}>
-                    <TableCell>{r.kind}</TableCell>
+                    <TableCell>{wordOf(r.kind)}</TableCell>
                     <TableCell>
                       <InlineCode>{r.name}</InlineCode>
                     </TableCell>
@@ -578,10 +603,13 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                     </TableCell>
                     <TableCell className="max-w-72 font-mono text-xs whitespace-normal text-muted-foreground">
                       {detailsOf(r, volume)}
-                      {r.kind === "Postgres" &&
-                        r.details?.type === "shared" && (
-                          <CapGauge d={r.details} />
-                        )}
+                      {((r.kind === "Postgres" &&
+                        r.details?.type === "shared") ||
+                        (r.kind === "ObjectBucket" &&
+                          r.details?.capBytes &&
+                          r.details.capBytes !== "0")) && (
+                        <CapGauge d={r.details} />
+                      )}
                       {r.kind !== "Volume" && r.endpoint && (
                         <div className="truncate" title={r.endpoint}>
                           {r.endpoint}
@@ -660,6 +688,27 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                                   onDone={refresh}
                                 />
                               )}
+                              {r.kind === "ObjectBucket" && settled && (
+                                <ConfirmDialog
+                                  trigger={
+                                    <Button
+                                      variant="outline"
+                                      size="xs"
+                                      icon={<KeyRound />}
+                                      disabled={
+                                        rotate.isPending ||
+                                        !!r.details?.rotating
+                                      }
+                                    >
+                                      New key
+                                    </Button>
+                                  }
+                                  title={`A new key for ${r.name}?`}
+                                  description="The key the bucket has stops working and another is written in its place; the apps attached to it restart with it within a minute. Anything else that holds the old key must be given the new one."
+                                  action="Issue a new key"
+                                  onConfirm={() => rotate.mutate(r)}
+                                />
+                              )}
                               {r.bindable &&
                                 (attached(r) ? (
                                   <Button
@@ -693,7 +742,7 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                                   />
                                 }
                                 variant="destructive"
-                                title={`Remove ${r.kind} ${r.name}?`}
+                                title={`Remove ${wordOf(r.kind).toLowerCase()} ${r.name}?`}
                                 description={
                                   r.attachedTo.length
                                     ? `It is attached to ${r.attachedTo.join(", ")}. ${r.data ? "It holds data: what is in it is lost with it." : ""}`
@@ -743,6 +792,7 @@ function AddResource({
   const has = (x: string) => config.data?.extensions.includes(x) ?? false;
   const disks = workspace.data?.limits?.allowDisks !== false;
   const [volume, setVolume] = useState(false);
+  const [bucket, setBucket] = useState(false);
   const [kind, setKind] = useState<"Postgres" | "Redis" | null>(null);
   return (
     <>
@@ -758,6 +808,17 @@ function AddResource({
             {!disks && (
               <span className="text-xs text-muted-foreground">
                 not included in the free workspace
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!has("object-storage")}
+            onClick={() => setBucket(true)}
+          >
+            A bucket{" "}
+            {!has("object-storage") && (
+              <span className="text-xs text-muted-foreground">
+                needs the object-storage extension
               </span>
             )}
           </DropdownMenuItem>
@@ -791,6 +852,13 @@ function AddResource({
         onOpenChange={setVolume}
         onDone={onDone}
       />
+      {bucket && (
+        <BucketDialog
+          slug={project.slug}
+          onDone={onDone}
+          onClose={() => setBucket(false)}
+        />
+      )}
       {kind && (
         <ResourceDialog
           slug={project.slug}
@@ -1013,6 +1081,178 @@ export function VolumeDialog({
               }
             >
               {resize ? "Resize" : "Make it"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// A bucket for the app's files (storage plan step 5): a name, a cap
+// within the plan's per bucket (the plan's when left as it is), public
+// read or not, and how long objects are kept. The count against the plan
+// is said before the request; the server judges it again.
+export function BucketDialog({
+  slug,
+  onDone,
+  onClose,
+}: {
+  slug: string;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const workspace = useQuery({
+    queryKey: ["workspace"],
+    queryFn: api.workspace,
+    staleTime: 60_000,
+  });
+  const plan = workspace.data?.limits?.objectStorage;
+  const have = workspace.data?.usage?.buckets ?? 0;
+  const full = !!plan?.buckets && have + 1 > plan.buckets;
+  const planCap = plan?.bucketCap ? gbOf(plan.bucketCap) : undefined;
+  const [name, setName] = useState("uploads");
+  const [size, setSize] = useState("");
+  const [isPublic, setPublic] = useState(false);
+  const [retention, setRetention] = useState("0");
+  const asked = size.trim() ? gbOf(size.trim()) : undefined;
+  const tooBig = !!planCap && !!asked && asked > planCap;
+  const save = useMutation({
+    mutationFn: () => {
+      const spec: Record<string, unknown> = {};
+      if (size.trim()) spec.maxBytes = size.trim();
+      if (isPublic) spec.public = true;
+      if (retention !== "0") spec.retentionDays = Number(retention);
+      return api.createResource(slug, {
+        kind: "ObjectBucket",
+        name: name.trim(),
+        spec,
+      });
+    },
+    onSuccess: (r) => {
+      toast.success(`Making bucket ${name.trim()}`, {
+        description: r.note
+          ? `${r.note} Attach it once it is ready.`
+          : "Attach it once it is ready.",
+        duration: r.note ? 12_000 : undefined,
+      });
+      onClose();
+      onDone();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>New bucket</DialogTitle>
+          <DialogDescription>
+            S3 storage for the app&apos;s files, with a key that opens this
+            bucket and nothing else. Attached, it puts BUCKET_ACCESS_KEY_ID,
+            BUCKET_ENDPOINT_URL and friends in the config vars; with the
+            prefix AWS, the names the SDKs read.
+          </DialogDescription>
+        </DialogHeader>
+        {full && (
+          <Alert variant="upsell">
+            <AlertTitle>
+              This would bring the workspace to {have + 1} of {plan?.buckets}{" "}
+              buckets.
+            </AlertTitle>
+            <AlertDescription>
+              Remove one, or move to a plan with more.
+            </AlertDescription>
+          </Alert>
+        )}
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim() && !full && !tooBig) save.mutate();
+          }}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Name">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value.toLowerCase())}
+                autoFocus
+              />
+            </Field>
+            <Field
+              label="Holds up to"
+              hint={
+                tooBig
+                  ? `A bucket holds up to ${gbWords(planCap!)}.`
+                  : planCap
+                    ? `The plan's cap per bucket, ${gbWords(planCap)}, unless you ask for less.`
+                    : "No cap unless you set one."
+              }
+            >
+              <Input
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+                placeholder={plan?.bucketCap ?? "no cap"}
+                className="font-mono text-xs"
+                aria-invalid={tooBig || undefined}
+              />
+            </Field>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Objects are kept"
+              hint="Objects older than this expire on their own."
+            >
+              <Select value={retention} onValueChange={setRetention}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[
+                    ["0", "Until deleted"],
+                    ["7", "7 days"],
+                    ["30", "30 days"],
+                    ["90", "90 days"],
+                    ["365", "A year"],
+                  ].map(([value, words]) => (
+                    <SelectItem key={value} value={value}>
+                      {words}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field
+              label="Public read"
+              hint="Anyone with an object's address can read it; listing and writing still need the key."
+            >
+              <Select
+                value={isPublic ? "public" : "private"}
+                onValueChange={(v) => setPublic(v === "public")}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="private">
+                    Private · a key, or a presigned address
+                  </SelectItem>
+                  <SelectItem value="public">
+                    Public · an object by its address
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={full || tooBig || !name.trim() || save.isPending}
+            >
+              Make it
             </Button>
           </DialogFooter>
         </form>
@@ -1300,7 +1540,9 @@ export function ResourceDialog({
                       hint={
                         maxInstances < 3
                           ? `A dedicated database here runs up to ${maxInstances} instance${maxInstances === 1 ? "" : "s"}.`
-                          : undefined
+                          : instances === "1"
+                            ? "One instance pauses for about 40 seconds when its machine is replaced; a second avoids it."
+                            : undefined
                       }
                     >
                       <Select value={instances} onValueChange={setInstances}>

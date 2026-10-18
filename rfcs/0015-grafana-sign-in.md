@@ -1,6 +1,6 @@
 # RFC-0015 Grafana sign-in through shpyrd
 
-**Status:** provisional
+**Status:** withdrawn (2026-10-14): shpyrd no longer installs Grafana
 
 **Owner:** unassigned
 
@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-14
 
 ## Summary
 
@@ -60,3 +60,7 @@ Grafana ships today with `admin/shpyrd` and anonymous access, published at
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-14: Withdrawn. Nothing in shpyrd read Grafana: the console's cluster overview,
+  the project Metrics tab, the alerts and usage metering all query Prometheus directly.
+  Grafana was removed from the monitoring component instead of being put behind
+  shpyrd's sign-in. `grafana.<domain>` stays a reserved name.

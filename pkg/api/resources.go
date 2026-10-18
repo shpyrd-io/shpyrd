@@ -121,9 +121,15 @@ func (s *Server) listProjectResources(c *gin.Context) {
 			continue // CRD missing: nothing of this kind
 		}
 		for _, u := range list.Items {
+			if t.Kind == "ObjectBucket" && platformBucket(u) {
+				continue // a database's backups: the platform's, not the project's
+			}
 			v := resourceViewOf(t, u)
-			if t.Kind == "Postgres" {
+			switch t.Kind {
+			case "Postgres":
 				s.postgresDetails(ctx, u, v.Details)
+			case "ObjectBucket":
+				bucketDetails(u, v.Details)
 			}
 			v.AttachedTo = attached[t.Kind+"/"+u.GetName()]
 			if v.AttachedTo == nil {
@@ -259,6 +265,39 @@ func (s *Server) postgresDetails(ctx context.Context, u unstructured.Unstructure
 	d["backups"] = fmt.Sprintf("nightly, kept %d", controller.SharedDumpsKeep(&pg))
 }
 
+// bucketDetails say what a bucket holds against its cap and where it is
+// reached: the cap and the last measured size in bytes, the logical name
+// in the store, the endpoint inside the cluster and the door outside it,
+// the signing region, and whether its objects are readable by anyone.
+func bucketDetails(u unstructured.Unstructured, d map[string]string) {
+	var b shpyrdv1.ObjectBucket
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &b); err != nil {
+		return
+	}
+	d["capBytes"] = strconv.FormatInt(b.CapBytes(), 10)
+	d["usedBytes"] = strconv.FormatInt(b.Status.UsedBytes, 10)
+	d["objects"] = strconv.FormatInt(b.Status.Objects, 10)
+	if b.Status.Bucket != "" {
+		d["bucket"] = b.Status.Bucket
+	}
+	if b.Status.PublicEndpoint != "" {
+		d["publicEndpoint"] = b.Status.PublicEndpoint
+	}
+	if b.Status.Region != "" {
+		d["region"] = b.Status.Region
+	}
+	d["public"] = strconv.FormatBool(b.Spec.Public)
+	if stamp := b.Annotations[controller.AnnotationRotate]; stamp != "" && b.Status.Rotated != stamp {
+		d["rotating"] = stamp
+	}
+}
+
+// platformBucket says an ObjectBucket is the platform's own (a database's
+// backups), which the project neither lists, attaches nor deletes.
+func platformBucket(u unstructured.Unstructured) bool {
+	return u.GetLabels()[shpyrdv1.LabelBucketPostgres] != ""
+}
+
 // CreateResourceRequest creates a resource of an extension kind.
 type CreateResourceRequest struct {
 	Kind string                 `json:"kind" binding:"required"`
@@ -342,6 +381,15 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 			note = fmt.Sprintf("Your database can hold up to %s.", cap)
 		}
 	}
+	if t.Kind == "ObjectBucket" {
+		n, cap, err := s.applyBucketRules(ctx, s.workspace(c), spec)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		note = n
+		ch.buckets, ch.bucketCap, ch.objectStorage = 1, cap, cap
+	}
 	if (t.Kind == "Postgres" && !shared) || t.Kind == "Redis" {
 		n, res, count, err := s.storeSize(ctx, t.Kind, spec)
 		if err != nil {
@@ -350,6 +398,9 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		}
 		note = n
 		ch.add, ch.addN, ch.instances = res, count, count
+		if t.Kind == "Postgres" && count == 1 {
+			note = strings.TrimSpace(note + " " + noteOneInstance)
+		}
 		// Its disk counts against the workspace's storage ceiling, as the
 		// namespace quota will count it, once per instance: refused here,
 		// in words, rather than left waiting for a claim the quota never
@@ -391,7 +442,51 @@ const (
 	// What a plan refuses by kind (storage plan step 4).
 	errDedicatedNotIncluded = "Your plan includes a shared database. A dedicated database comes with a paid plan."
 	errSharedNotIncluded    = "This workspace's plan has dedicated databases; a shared one is not among its kinds."
+	// What a dedicated database with one instance is told at creation
+	// (storage plan step 4): a node roll pauses it, a second instance does
+	// not.
+	noteOneInstance = "A database with one instance pauses for about 40 seconds when its machine is replaced; a second instance avoids it."
 )
+
+// What a bucket refuses, in words (storage plan step 5).
+const (
+	errBucketVersioning = "Versioning is not available on a bucket."
+	errBucketAlias      = "A bucket serves its own objects; an alias is set by a restore, not by hand."
+)
+
+// applyBucketRules fills a new bucket's spec in from the workspace's plan
+// (storage plan step 5): the cap it gets when it asks for none is the
+// plan's per-bucket cap, and what the gateway does not do is refused in
+// words. It returns the note for the person and the cap counted against
+// the workspace's object storage.
+func (s *Server) applyBucketRules(ctx context.Context, ws string, spec map[string]interface{}) (string, resource.Quantity, error) {
+	if v, _ := spec["versioning"].(bool); v {
+		return "", resource.Quantity{}, errors.New(errBucketVersioning)
+	}
+	if a, _ := spec["alias"].(string); a != "" {
+		return "", resource.Quantity{}, errors.New(errBucketAlias)
+	}
+	var cap resource.Quantity
+	if raw, has := spec["maxBytes"]; has {
+		str := fmt.Sprint(raw)
+		q, err := resource.ParseQuantity(str)
+		if err != nil || q.Sign() <= 0 {
+			return "", cap, fmt.Errorf("maxBytes %q is not a positive quantity (try 1Gi, 10Gi)", str)
+		}
+		cap = q
+		spec["maxBytes"] = q.String()
+	} else if limits := s.limitsOf(ctx, ws); limits != nil && limits.ObjectStorage != nil && limits.ObjectStorage.BucketCap != "" {
+		if q, err := resource.ParseQuantity(limits.ObjectStorage.BucketCap); err == nil {
+			cap = q
+			spec["maxBytes"] = q.String()
+		}
+	}
+	note := ""
+	if cap.Sign() > 0 {
+		note = fmt.Sprintf("Your bucket can hold up to %s.", bytesWords(cap))
+	}
+	return note, cap, nil
+}
 
 // sharedRefusal is a refusal raised inside a retried mutation.
 type sharedRefusal struct{ msg string }
@@ -615,6 +710,9 @@ func (s *Server) deleteResource(c *gin.Context) {
 		return
 	}
 	name := c.Param("name")
+	if t.Kind == "ObjectBucket" && !s.projectBucket(c, ns, name) {
+		return
+	}
 	var apps shpyrdv1.AppList
 	_ = s.apps.List(c.Request.Context(), &apps, client.InNamespace(ns))
 	var bound []string
@@ -676,6 +774,10 @@ func (s *Server) attachResource(c *gin.Context) {
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: t.Group, Version: t.Version, Kind: t.Kind})
 	if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: ns, Name: req.Name}, u); err != nil {
 		abortNotFound(c, err, strings.ToLower(t.Kind)+" "+req.Name)
+		return
+	}
+	if t.Kind == "ObjectBucket" && platformBucket(*u) {
+		abort(c, http.StatusNotFound, fmt.Errorf("no bucket %q in this project", req.Name))
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
@@ -844,6 +946,89 @@ func (s *Server) rotatePostgres(c *gin.Context) {
 	}
 	s.audit(c, c.Param("slug"), "postgres.rotate", pg.Name, stamp)
 	c.JSON(http.StatusAccepted, gin.H{"name": pg.Name, "rotate": stamp, "note": fmt.Sprintf("New credentials for %s are being written; the apps bound to it restart with them within a minute.", pg.Name)})
+}
+
+// rotateBucket is POST .../objectbucket/:name/rotate: a new key for a
+// bucket (storage plan step 5). The controller revokes the key the
+// bucket has, issues another and writes it where the credential lives;
+// the apps bound to the bucket restart with it.
+func (s *Server) rotateBucket(c *gin.Context) {
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	b, err := s.mutateObjectBucket(c, func(b *shpyrdv1.ObjectBucket) error {
+		if b.Status.Phase != shpyrdv1.BucketReady {
+			return &sharedRefusal{"The bucket is not ready yet; rotate its key once it is."}
+		}
+		if b.Annotations == nil {
+			b.Annotations = map[string]string{}
+		}
+		b.Annotations[controller.AnnotationRotate] = stamp
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	s.audit(c, c.Param("slug"), "bucket.rotate", b.Name, stamp)
+	c.JSON(http.StatusAccepted, gin.H{"name": b.Name, "rotate": stamp, "note": fmt.Sprintf("A new key for %s is being written; the apps bound to it restart with it within a minute.", b.Name)})
+}
+
+// mutateObjectBucket applies a change to one of the project's buckets
+// under conflict retries; the platform's own buckets are not the
+// project's and are not found.
+func (s *Server) mutateObjectBucket(c *gin.Context, mutate func(*shpyrdv1.ObjectBucket) error) (*shpyrdv1.ObjectBucket, error) {
+	ns, ok := s.projectNamespace(c)
+	if !ok {
+		return nil, errors.New("project not found")
+	}
+	name := c.Param("name")
+	var out *shpyrdv1.ObjectBucket
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		b := &shpyrdv1.ObjectBucket{}
+		if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: ns, Name: name}, b); err != nil {
+			return err
+		}
+		if b.PlatformBucket() {
+			return apierrors.NewNotFound(schema.GroupResource{Group: shpyrdv1.GroupVersion.Group, Resource: "objectbuckets"}, name)
+		}
+		if err := mutate(b); err != nil {
+			return &userError{err}
+		}
+		if err := s.apps.Update(c.Request.Context(), b); err != nil {
+			return err
+		}
+		out = b
+		return nil
+	})
+	if err != nil {
+		var ue *userError
+		var shared *sharedRefusal
+		switch {
+		case errors.As(err, &ue) && errors.As(ue.error, &shared):
+			abort(c, http.StatusConflict, shared)
+		case errors.As(err, &ue):
+			abort(c, http.StatusBadRequest, ue.error)
+		case apierrors.IsNotFound(err):
+			abort(c, http.StatusNotFound, fmt.Errorf("no bucket %q in this project", name))
+		default:
+			abort(c, http.StatusBadGateway, err)
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// projectBucket says the bucket is one of the project's own; the
+// platform's are answered as not found.
+func (s *Server) projectBucket(c *gin.Context, ns, name string) bool {
+	b := &shpyrdv1.ObjectBucket{}
+	if err := s.apps.Get(c.Request.Context(), types.NamespacedName{Namespace: ns, Name: name}, b); err != nil {
+		abortNotFound(c, err, "bucket "+name)
+		return false
+	}
+	if b.PlatformBucket() {
+		abort(c, http.StatusNotFound, fmt.Errorf("no bucket %q in this project", name))
+		return false
+	}
+	return true
 }
 
 func (s *Server) suspendPostgres(c *gin.Context) { s.setPostgresSuspended(c, true) }

@@ -157,3 +157,45 @@ consumers. Consumer descriptors live in the physical bucket, so gateway
 restarts require neither a PVC nor a database during bootstrap. Large-object
 validation must include transfers above 1 GiB, integrity, peak process memory,
 and cross-consumer denial for reads, listings, copies and multipart operations.
+
+### Buckets for apps (2026-10-16, storage plan step 5)
+
+A bucket is a project's resource an app attaches, through a
+`controller.Binder` like a database's: `BUCKET_ACCESS_KEY_ID`,
+`BUCKET_SECRET_ACCESS_KEY`, `BUCKET_ENDPOINT_URL`, `BUCKET_REGION`,
+`BUCKET_BUCKET`, `BUCKET_URL` and, where the cluster has a door,
+`BUCKET_PUBLIC_ENDPOINT_URL`; with `--prefix AWS` the SDKs read their own
+names. Created on demand (`shpyrd buckets create`, the dashboard), never with
+every project. The CRD keeps its name; the word people read is "bucket".
+
+- **Region.** The gateway serves two listeners from one process: 3900 for
+  the platform's own consumers, signing with `garage` as before, so nothing
+  is rolled; 3901 for the projects' buckets, signing with `us-east-1`, the
+  SigV4 scope every SDK accepts. VersityGW checks one region per server; two
+  servers over one backend was simpler than rolling every consumer Secret.
+- **Cap and counter.** `spec.maxBytes` (the plan's per bucket when the API
+  fills it in) lives on the descriptor, which also counts: each replica
+  keeps a pending delta per bucket and flushes it once a minute as an
+  increment onto the re-read record; the hourly sweep makes a listing the
+  counter and aborts multipart uploads older than seven days. `PutObject`,
+  `UploadPart` and copies are refused past the cap before the provider sees
+  a byte; a delete counts out at once; an overwrite over-counts until the
+  sweep. Usage for metering comes from the counter once a bucket is
+  measured.
+- **Public door.** One TLS host per cluster (`SHPYRD_BUCKETS_HOST`,
+  `buckets.<domain>` by default) through the front door to 3901, bodies
+  unbuffered to 5 GB; presigned addresses; per-bucket CORS kept on the
+  descriptor; `spec.public` answers a bucket policy allowing `GetObject` to
+  anyone and nothing else, so an address is readable and a listing is not;
+  a token bucket per logical bucket answers `SlowDown`. The platform's own
+  consumers never come through the door.
+- **Archives.** A bucket travels by reference (name, cap, logical name;
+  never a credential); a restore into another namespace serves the objects
+  under their first name through `spec.alias`, set by the restore only, and
+  deleting an aliased bucket takes only its key. With files, the objects
+  come along under a 5 GB cap, copied before the project is paused.
+- **Disruption budget.** `maxUnavailable: 1` stays: `minAvailable: 1` on
+  the single replica OCI runs would block every drain.
+- **Undo** is the provider's: versioning on the objects bucket with a
+  seven-day lifecycle for previous versions (Terraform), so the gateway
+  refuses versioning on logical buckets.
