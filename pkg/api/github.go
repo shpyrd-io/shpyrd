@@ -506,7 +506,7 @@ func (s *Server) githubAccounts(c *gin.Context) {
 		s.githubLinkAnswer(c, err)
 		return
 	}
-	provider, subject, _ := githubPersonOf(c)
+	provider, subject, _ := s.githubPersonOf(c)
 	mine, err := cl.UserInstallations(ctx, tok)
 	if err != nil {
 		s.githubPersonFailed(c, provider, subject, "your accounts", err)
@@ -569,7 +569,7 @@ func (s *Server) githubRepositories(c *gin.Context) {
 		}
 		only = id
 	}
-	provider, subject, _ := githubPersonOf(c)
+	provider, subject, _ := s.githubPersonOf(c)
 	key := githubRepoKey(ws, provider, subject, only)
 	now := time.Now()
 	if e, ok := s.githubRepos.get(key, now); ok {
@@ -649,7 +649,7 @@ func (s *Server) githubBranches(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		provider, subject, _ := githubPersonOf(c)
+		provider, subject, _ := s.githubPersonOf(c)
 		s.githubPersonFailed(c, provider, subject, "the branches of "+owner+"/"+repo, err)
 		return
 	}

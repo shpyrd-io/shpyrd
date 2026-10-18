@@ -64,7 +64,7 @@ func (s *Server) githubAccess(c *gin.Context, gitURL string) (string, bool) {
 	if inst == nil {
 		return "", true
 	}
-	provider, subject, person := githubPersonOf(c)
+	provider, subject, person := s.githubPersonOf(c)
 	if !person {
 		return "", true
 	}

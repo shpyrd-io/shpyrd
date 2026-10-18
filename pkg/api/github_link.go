@@ -53,6 +53,9 @@ const (
 	// sessionAuthKey is set by auth when the identity came from the
 	// session cookie: a browser the person signed in to.
 	sessionAuthKey = "shpyrd.sessionAuth"
+	// extensionProvider is the provider of an identity an extension's OAuth
+	// access token made (ee/mcp): the person's link is looked up by who it is.
+	extensionProvider = "oauth"
 )
 
 var (
@@ -96,8 +99,10 @@ func readGitHubLinkTicket(key, raw string, now time.Time) (githubLinkTicket, err
 // githubPersonOf is whose GitHub link a request uses: the person signed
 // in, or, for an API token, the person who made it. Not ok for the admin
 // token, a token the admin token made, the operator's kubeconfig, and a
-// server without sign-in.
-func githubPersonOf(c *gin.Context) (provider, subject string, ok bool) {
+// server without sign-in. An assistant through an extension's OAuth
+// (provider "oauth") is the person it acts for, whose link is stored under
+// their own sign-in: the provider they last signed in with.
+func (s *Server) githubPersonOf(c *gin.Context) (provider, subject string, ok bool) {
 	id, signedIn := ext.IdentityFrom(c)
 	if v, has := c.Get(tokenOwnerKey); has {
 		if owner, isIdentity := v.(ext.Identity); isIdentity {
@@ -109,6 +114,12 @@ func githubPersonOf(c *gin.Context) (provider, subject string, ok bool) {
 		return "", "", false
 	case id.Provider == "token" || id.Provider == "api-token" || id.Provider == "kubeconfig" || id.Provider == "none":
 		return "", "", false
+	case id.Provider == extensionProvider:
+		person, err := s.store.GetIdentity(c.Request.Context(), s.doorWorkspace(c), id.Subject)
+		if err != nil || person.ID == "" || person.Provider == "" || person.Provider == extensionProvider {
+			return "", "", false
+		}
+		return person.Provider, person.ID, true
 	}
 	return id.Provider, id.Subject, true
 }
@@ -149,7 +160,7 @@ func (s *Server) githubLinkBrowser(c *gin.Context) {
 }
 
 func (s *Server) githubLinkURL(c *gin.Context, ret string) (string, bool) {
-	provider, subject, ok := githubPersonOf(c)
+	provider, subject, ok := s.githubPersonOf(c)
 	if !ok {
 		abort(c, http.StatusBadRequest, errGitHubNoPerson)
 		return "", false
@@ -220,7 +231,7 @@ func (s *Server) githubLinkFinish(c *gin.Context) {
 		refuse(http.StatusBadRequest)
 		return
 	}
-	provider, subject, ok := githubPersonOf(c)
+	provider, subject, ok := s.githubPersonOf(c)
 	if !ok || tk.Workspace != s.doorWorkspace(c) || tk.Provider != provider || tk.Subject != subject {
 		refuse(http.StatusForbidden)
 		return
@@ -325,7 +336,7 @@ func (s *Server) githubLinkedPage(c *gin.Context, login, back string) {
 
 // githubMe is GET /api/me/github.
 func (s *Server) githubMe(c *gin.Context) {
-	provider, subject, ok := githubPersonOf(c)
+	provider, subject, ok := s.githubPersonOf(c)
 	if !ok {
 		abort(c, http.StatusNotFound, errors.New("no GitHub account is linked: the admin token is no person"))
 		return
@@ -345,7 +356,7 @@ func (s *Server) githubMe(c *gin.Context) {
 // githubUnlink is DELETE /api/me/github: the token is revoked at GitHub
 // and the link removed. The person's projects keep deploying.
 func (s *Server) githubUnlink(c *gin.Context) {
-	provider, subject, ok := githubPersonOf(c)
+	provider, subject, ok := s.githubPersonOf(c)
 	if !ok {
 		abort(c, http.StatusBadRequest, errGitHubNoPerson)
 		return
@@ -655,7 +666,7 @@ func (s *Server) githubPersonToken(c *gin.Context, cl *github.Client) (string, s
 // githubPersonTokenIn is githubPersonToken under ctx: the store's read and
 // any renewal answer within its deadline.
 func (s *Server) githubPersonTokenIn(ctx context.Context, c *gin.Context, cl *github.Client) (string, string, error) {
-	provider, subject, ok := githubPersonOf(c)
+	provider, subject, ok := s.githubPersonOf(c)
 	if !ok {
 		return "", "", errGitHubLinkRequired
 	}
@@ -681,7 +692,7 @@ func (s *Server) githubLinkAnswer(c *gin.Context, err error) {
 	case errors.Is(err, errGitHubLinkBusy):
 		abort(c, http.StatusBadGateway, errGitHubLinkBusy)
 	default:
-		provider, subject, _ := githubPersonOf(c)
+		provider, subject, _ := s.githubPersonOf(c)
 		s.githubPersonFailed(c, provider, subject, "your GitHub authorization", err)
 	}
 }

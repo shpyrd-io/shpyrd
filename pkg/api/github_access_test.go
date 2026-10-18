@@ -12,6 +12,8 @@ import (
 	"time"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/gin-gonic/gin"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
@@ -400,5 +402,70 @@ func TestTheProjectSaysHowItLearnsOfPushes(t *testing.T) {
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("%s: %d %s", slug, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// asMCPAgent adds an identifier like the MCP extension's OAuth one
+// (ee/mcp): the request is the person, Provider "oauth", with their roles.
+func asMCPAgent(t *testing.T, s *Server) func(email, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	s.identifiers = append(s.identifiers, func(c *gin.Context) bool {
+		email := c.GetHeader("X-Test-Agent")
+		if email == "" {
+			return false
+		}
+		person, err := s.store.GetIdentity(c.Request.Context(), store.DefaultWorkspace, email)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner := ext.Identity{Subject: person.ID, Email: person.Email, Provider: person.Provider}
+		ws, _ := s.store.Workspace(c.Request.Context(), store.DefaultWorkspace)
+		roles, err := s.rolesInWorkspace(c.Request.Context(), ws, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ext.SetIdentity(c, ext.Identity{Subject: person.ID, Email: person.Email, Provider: "oauth"})
+		c.Set(rolesKey, roles)
+		return true
+	})
+	return func(email, method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("X-Test-Agent", email)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+}
+
+// An agent through the MCP extension's OAuth is the person, under the
+// provider "oauth": its GitHub link is the one stored under the person's
+// own sign-in.
+func TestAnMCPAgentUsesThePersonsLink(t *testing.T) {
+	s, _, _ := githubServer(t)
+	connectAcme(t, s, store.DefaultWorkspace)
+	anaSID, anaCSRF, _ := signInPerson(t, s, "ana@example.test", store.WorkspaceRoleMember)
+	signInPerson(t, s, "bob@example.test", store.WorkspaceRoleMember)
+	linkAs(t, s, anaSID, anaCSRF, githubtest.Code)
+	agent := asMCPAgent(t, s)
+	if rec := agent("ana@example.test", "GET", "/api/workspace/github/accounts", ""); rec.Code != http.StatusOK {
+		t.Errorf("ana's agent, the picker: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := agent("ana@example.test", "POST", "/api/projects", createBody("shop", "https://github.com/acme/shop")); rec.Code != http.StatusCreated {
+		t.Errorf("ana's agent, create: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := linkedBy(t, s, "shop"); got != githubtest.UserLogin {
+		t.Errorf("linked by %q", got)
+	}
+	for _, call := range [][3]string{{"GET", "/api/workspace/github/accounts", ""}, {"POST", "/api/projects", createBody("shop2", "https://github.com/acme/shop")}} {
+		if rec := agent("bob@example.test", call[0], call[1], call[2]); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"github_link_required"`) {
+			t.Errorf("bob's agent, %s %s: %d %s", call[0], call[1], rec.Code, rec.Body.String())
+		}
+	}
+	// A link starts and finishes in a browser only.
+	if rec := agent("ana@example.test", "POST", "/api/me/github/link", ""); rec.Code != http.StatusForbidden {
+		t.Errorf("an agent starts a link: %d %s", rec.Code, rec.Body.String())
 	}
 }
