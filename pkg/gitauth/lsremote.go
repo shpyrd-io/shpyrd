@@ -416,3 +416,7 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// SSHLogin is the user an SSH read of cloneURL logs in as: the URL's, or
+// git.
+func SSHLogin(cloneURL string) string { return sshUser(cloneURL) }

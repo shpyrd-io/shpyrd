@@ -264,3 +264,25 @@ func TestAChangedWatchModeListsFreshAndNotFromAShared(t *testing.T) {
 		t.Errorf("calls %d, pin %s", ls.calls, got.PinnedCommit())
 	}
 }
+
+func TestAnSSHListingIsKeyedByTheLoginItReadsAs(t *testing.T) {
+	plain := gitauth.Build{}
+	k := func(u string) string { return listingKey(u, plain) }
+	if k("git@gitlab.com:acme/mono") == k("deploy@gitlab.com:acme/mono") {
+		t.Error("two scp logins share a listing")
+	}
+	if k("git@gitlab.com:acme/mono") == k("ssh://gitlab.com/acme/mono") {
+		t.Error("the scp form shares the ssh:// form's listing")
+	}
+	if k("ssh://git@gitlab.com/acme/mono") == k("ssh://deploy@gitlab.com/acme/mono") {
+		t.Error("two ssh:// logins share a listing")
+	}
+	if k("ssh://gitlab.com/acme/mono") != k("ssh://git@gitlab.com/acme/mono") {
+		t.Error("an unnamed login is git")
+	}
+	for _, u := range []string{"deploy@gitlab.com:acme/mono", "ssh://deploy@gitlab.com/acme/mono"} {
+		if strings.Contains(k(u), "deploy") {
+			t.Errorf("the key shows the login: %q", k(u))
+		}
+	}
+}

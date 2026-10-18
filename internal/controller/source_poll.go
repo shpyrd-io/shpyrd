@@ -111,13 +111,22 @@ type repoListing struct {
 func listingKey(cloneURL string, b gitauth.Build) string {
 	where := strings.ToLower(strings.TrimSpace(cloneURL))
 	if repo, err := gitauth.Parse(cloneURL); err == nil {
-		where = repo.Scheme + "://" + strings.ToLower(repo.Host)
+		scheme := repo.Scheme
+		if scheme == "ssh" && !strings.Contains(cloneURL, "://") {
+			scheme = "scp" // its path is relative to the login's home
+		}
+		where = scheme + "://" + strings.ToLower(repo.Host)
 		if repo.Port != "" {
 			where += ":" + repo.Port
 		}
 		where += "/" + strings.ToLower(repo.Path)
+		if repo.Scheme == "ssh" {
+			// The login the read uses, hashed like the URL's credentials.
+			sum := sha256.Sum256([]byte(gitauth.SSHLogin(strings.TrimSpace(cloneURL))))
+			where += "|login:" + hex.EncodeToString(sum[:])[:16]
+		}
 		// Credentials in the URL are part of the identity, never shown.
-		if u, err := url.Parse(strings.TrimSpace(cloneURL)); err == nil && u.User != nil {
+		if u, err := url.Parse(strings.TrimSpace(cloneURL)); err == nil && u.User != nil && repo.Scheme != "ssh" {
 			sum := sha256.Sum256([]byte(u.User.String()))
 			where += "|url:" + hex.EncodeToString(sum[:])[:16]
 		}
