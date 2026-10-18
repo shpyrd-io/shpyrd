@@ -280,6 +280,11 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// write the cache has not caught up with: a missing pin then is not a
 	// reason to read the branch, and pin it, again.
 	covered, known := r.covered(ctx, app)
+	if !known && r.storedWatch(app.UID, rev, rec) == WatchGitHubApp {
+		// A cover that cannot be told keeps the stored mode: a branch the
+		// App was watching is not listed on a timer meanwhile.
+		covered = true
+	}
 	// A webhook that delivered before the watch mode was stored, on a
 	// repository the App does not cover, was the project's own: it is
 	// recorded so, and not read again for the change of record.

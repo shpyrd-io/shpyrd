@@ -194,6 +194,28 @@ func TestWatchPathsAreNotCheckedWhenShpyrdCannotTellWhetherTheAppCoversTheReposi
 	}
 }
 
+func TestAStoredAppModeIsNotListedOnATimerWhileTheCoverIsUnknown(t *testing.T) {
+	app := shopWith(shpyrdv1.GitSource{})
+	withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "push", Watch: WatchGitHubApp, CheckedAt: at(sourceNow.Add(-3 * time.Hour))})
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
+	r, _ := gatedWatcher(t, ls, app)
+	r.GitHub.Installations = unreadableInstallations{r.GitHub.Installations}
+	_, got := reconcileSource(t, r, app)
+	if ls.calls != 0 || sourceRecord(got).Watch != WatchGitHubApp {
+		t.Errorf("listed %d times with the cover unknown, watch %q", ls.calls, sourceRecord(got).Watch)
+	}
+	// Stored as polled, it is still listed on its timer.
+	poll := shopWith(shpyrdv1.GitSource{})
+	withRecord(poll, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", Watch: WatchPoll, CheckedAt: at(sourceNow.Add(-3 * time.Hour))})
+	ls2 := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
+	r2, _ := gatedWatcher(t, ls2, poll)
+	r2.GitHub.Installations = unreadableInstallations{r2.GitHub.Installations}
+	reconcileSource(t, r2, poll)
+	if ls2.calls != 1 {
+		t.Errorf("a polled branch is listed %d times", ls2.calls)
+	}
+}
+
 func TestTheWatchersFailuresLeaveTheClonesBackoffAndRefusalsAlone(t *testing.T) {
 	app := pushed(shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}}), otherCommit, testCommit, "fix login", sourceNow)
 	r, fake := gatedWatcher(t, &fakeLsRemote{}, app)
