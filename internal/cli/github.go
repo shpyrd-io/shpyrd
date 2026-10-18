@@ -50,12 +50,16 @@ func githubLinkRequired(status int, raw []byte) error {
 const githubAdminRefusal = "The admin token is not a person: sign in as yourself (shpyrd login) to link a GitHub account."
 
 // isAdminToken says the signed-in credential has no person behind it, as
-// whoami decides: /api/me names nobody.
-func isAdminToken(g *globalFlags, cmd *cobra.Command) bool {
+// whoami decides: /api/me answers and names nobody. A call that fails is
+// not that answer: its error is returned, to be reported as it is.
+func isAdminToken(g *globalFlags, cmd *cobra.Command) (bool, error) {
 	var me struct {
 		Email string `json:"email"`
 	}
-	return githubRequest(g, cmd, "GET", "api/me", &me) != nil || me.Email == ""
+	if err := githubRequest(g, cmd, "GET", "api/me", &me); err != nil {
+		return false, err
+	}
+	return me.Email == "", nil
 }
 
 // openOrPrint opens a page in the browser, or prints its address when
@@ -296,7 +300,9 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			if !strings.Contains(err.Error(), githubNotLinked) {
 				return err
 			}
-			if isAdminToken(g, cmd) {
+			if admin, err := isAdminToken(g, cmd); err != nil {
+				return err
+			} else if admin {
 				return errors.New(githubAdminRefusal)
 			}
 			// The link finishes in the browser, signed in there: the page
@@ -332,7 +338,9 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			var me api.GitHubLinkView
 			if err := githubRequest(g, cmd, "GET", "api/me/github", &me); err != nil {
 				if strings.Contains(err.Error(), githubNotLinked) {
-					if isAdminToken(g, cmd) {
+					if admin, err := isAdminToken(g, cmd); err != nil {
+						return err
+					} else if admin {
 						return errors.New(githubAdminRefusal)
 					}
 					return errors.New(githubNotLinked)

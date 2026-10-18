@@ -170,7 +170,7 @@ func adminHandler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/me":
-			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"subject":"admin-token","provider":"token"}`))
 		case "/api/me/github":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"no GitHub account is linked: the admin token is no person"}`))
@@ -186,6 +186,31 @@ func TestGitHubLinkAndUnlinkRefuseTheAdminToken(t *testing.T) {
 	for _, sub := range []string{"link", "unlink"} {
 		_, err := runShpyrd(t, adminHandler(t), "github", sub)
 		if err == nil || err.Error() != adminRefusal {
+			t.Errorf("%s: err = %v", sub, err)
+		}
+	}
+	if len(*opened) != 0 {
+		t.Errorf("opened %v", *opened)
+	}
+}
+
+func TestAFailedWhoAmICallIsNotTakenForTheAdminToken(t *testing.T) {
+	opened := fastGitHubPolls(t)
+	githubConnectWait = time.Hour
+	for _, sub := range []string{"link", "unlink"} {
+		_, err := runShpyrd(t, func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/me":
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"the database is down"}`))
+			case "/api/me/github":
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"no GitHub account is linked: shpyrd github link"}`))
+			default:
+				t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			}
+		}, "github", sub)
+		if err == nil || err.Error() == adminRefusal || !strings.Contains(err.Error(), "the database is down") {
 			t.Errorf("%s: err = %v", sub, err)
 		}
 	}
