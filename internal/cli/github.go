@@ -46,6 +46,18 @@ func githubLinkRequired(status int, raw []byte) error {
 	return errors.New("link your GitHub account first: run shpyrd github link")
 }
 
+// githubAdminRefusal is what link and unlink say to the admin token.
+const githubAdminRefusal = "The admin token is not a person: sign in as yourself (shpyrd login) to link a GitHub account."
+
+// isAdminToken says the signed-in credential has no person behind it, as
+// whoami decides: /api/me names nobody.
+func isAdminToken(g *globalFlags, cmd *cobra.Command) bool {
+	var me struct {
+		Email string `json:"email"`
+	}
+	return githubRequest(g, cmd, "GET", "api/me", &me) != nil || me.Email == ""
+}
+
 // openOrPrint opens a page in the browser, or prints its address when
 // asked not to or when nothing opens.
 func openOrPrint(out io.Writer, page string, noBrowser bool) {
@@ -284,6 +296,9 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			if !strings.Contains(err.Error(), githubNotLinked) {
 				return err
 			}
+			if isAdminToken(g, cmd) {
+				return errors.New(githubAdminRefusal)
+			}
 			// The link finishes in the browser, signed in there: the page
 			// goes on to GitHub, and the CLI waits for the link to appear.
 			page := workspaceURL() + "/api/me/github/link"
@@ -317,6 +332,9 @@ Then: shpyrd deploy --git https://github.com/<owner>/<repo> --ref <branch>`,
 			var me api.GitHubLinkView
 			if err := githubRequest(g, cmd, "GET", "api/me/github", &me); err != nil {
 				if strings.Contains(err.Error(), githubNotLinked) {
+					if isAdminToken(g, cmd) {
+						return errors.New(githubAdminRefusal)
+					}
 					return errors.New(githubNotLinked)
 				}
 				return err
