@@ -293,3 +293,14 @@ func TestSourceRecordKeepsWhenTheCommitWasPinned(t *testing.T) {
 		t.Errorf("read back %+v", out)
 	}
 }
+
+func TestARecordKeepsThatTheProjectsWebhookDelivered(t *testing.T) {
+	raw, _ := json.Marshal(SourceRecord{Ref: "main", ProjectHook: true})
+	if !strings.Contains(string(raw), `"projectHook":true`) || !ReadSourceRecord(string(raw)).ProjectHook {
+		t.Errorf("%s", raw)
+	}
+	pushRaw, _ := json.Marshal(Push{Ref: "refs/heads/main", SHA: "a", App: true})
+	if p, err := ReadPush(string(pushRaw)); err != nil || !p.App {
+		t.Errorf("%s: %+v %v", pushRaw, p, err)
+	}
+}

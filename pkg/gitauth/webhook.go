@@ -115,6 +115,9 @@ type Push struct {
 	At       time.Time `json:"at"`
 	// Skip: the whole message, before it was clipped, asks not to deploy.
 	Skip bool `json:"skip,omitempty"`
+	// App: the push came through the GitHub App's webhook (RFC-0054), not
+	// the project's own.
+	App bool `json:"app,omitempty"`
 	// Deleted: the push removed the ref (its new commit is all zeros).
 	Deleted bool `json:"-"`
 }
@@ -239,6 +242,10 @@ type SourceRecord struct {
 	// Delivery is the id of the last delivery applied: a host delivering
 	// it again is ignored.
 	Delivery string `json:"delivery,omitempty"`
+	// ProjectHook: the project's own webhook has delivered (RFC-0054): a
+	// repository the GitHub App does not cover is then no longer listed on
+	// a timer.
+	ProjectHook bool `json:"projectHook,omitempty"`
 	// Failures counts the listings that failed in a row, for the backoff.
 	Failures int `json:"failures,omitempty"`
 }

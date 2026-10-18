@@ -408,3 +408,12 @@ func TestARedeliveredPushIsNotAppliedTwice(t *testing.T) {
 		t.Error("left on the App again")
 	}
 }
+
+func TestAPushThroughTheAppSaysSo(t *testing.T) {
+	s, cr, _ := githubServer(t, onGitHub("shop", "https://github.com/acme/shop", "main", ""))
+	connectAcme(t, s, store.DefaultWorkspace)
+	deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if p := pushOn(t, cr, "shop"); p == nil || !p.App {
+		t.Errorf("push %+v", p)
+	}
+}

@@ -107,7 +107,7 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	push.Delivery, push.At = delivery, time.Now().UTC()
+	push.Delivery, push.At, push.App = delivery, time.Now().UTC(), true
 	list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
 	if err != nil {
 		s.githubPushUnavailable(c, "could not list the apps", err)

@@ -33,17 +33,20 @@ import (
 // the commit in two annotations, with the release note and attribution a
 // deploy uses, and records what it saw in AnnotationGitSource. It never
 // writes status: the App controller copies the record there.
+//
+// A repository the GitHub App covers is never listed on a timer (its
+// webhook, and the sweep's redeliveries, are the signal); another is listed
+// until its own webhook has delivered.
 
 const (
-	// DefaultPollInterval is how often a branch with no recent webhook is
-	// read (SHPYRD_GIT_POLL_INTERVAL).
-	DefaultPollInterval = 2 * time.Minute
-	minPollInterval     = 10 * time.Second
-	// webhookInterval is how often a branch whose webhook delivered in
-	// the last day is read: the webhook is the signal, the listing the
-	// net under it.
-	webhookInterval = time.Hour
-	webhookRecent   = 24 * time.Hour
+	// DefaultPollInterval is how often a branch whose pushes do not arrive
+	// by webhook is read (SHPYRD_GIT_POLL_INTERVAL).
+	DefaultPollInterval = 5 * time.Minute
+	minPollInterval     = 30 * time.Second
+	// pushDrivenRecheck is how often a branch whose pushes arrive by
+	// webhook is reconciled: its cover is looked at again, and nothing is
+	// listed.
+	pushDrivenRecheck = time.Hour
 	// recordRefresh is how stale the record's checkedAt may get: a check
 	// that finds nothing new writes nothing (each write of the App wakes
 	// the App controller) until the written time is this old.
@@ -60,12 +63,32 @@ const (
 	maxFailures = 6
 )
 
+// How shpyrd learns of a branch's pushes (WatchMode).
+const (
+	WatchGitHubApp = "github-app"
+	WatchWebhook   = "webhook"
+	WatchPoll      = "poll"
+)
+
+// WatchMode says how a branch's pushes reach shpyrd: through the GitHub
+// App when it covers the repository; through the project's own webhook
+// once it has delivered; else by listing the branch on a timer.
+func WatchMode(covered bool, rec gitauth.SourceRecord) string {
+	switch {
+	case covered:
+		return WatchGitHubApp
+	case rec.ProjectHook:
+		return WatchWebhook
+	}
+	return WatchPoll
+}
+
 // sourceUnreadable is what a person reads when the branch could not be
 // read for a reason without words of its own; the error itself is logged.
 const sourceUnreadable = "shpyrd could not read the branch; it tries again by itself."
 
-// PollInterval reads SHPYRD_GIT_POLL_INTERVAL ("2m", "30s"): empty or
-// unreadable is the default, and nothing below 10 s.
+// PollInterval reads SHPYRD_GIT_POLL_INTERVAL ("5m", "30s"): empty or
+// unreadable is the default, and nothing below 30 s.
 func PollInterval(v string) time.Duration {
 	d, err := time.ParseDuration(strings.TrimSpace(v))
 	if err != nil || d <= 0 {
@@ -203,7 +226,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if rec.Ref != rev {
 		// Another branch's record: only what says the webhook works
 		// carries over.
-		rec = gitauth.SourceRecord{LastWebhookAt: rec.LastWebhookAt, Delivery: rec.Delivery}
+		rec = gitauth.SourceRecord{LastWebhookAt: rec.LastWebhookAt, Delivery: rec.Delivery, ProjectHook: rec.ProjectHook}
 	}
 	rawPush := app.Annotations[shpyrdv1.AnnotationGitPush]
 	push, _ := gitauth.ReadPush(rawPush)
@@ -230,10 +253,11 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var remembered bool
 	last.CheckedAt, remembered = r.lastChecked(app.UID, rev, rec)
 	ev := sourceEvent{nudge: nudge}
+	covered := r.covered(ctx, app)
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push
-	case push != nil || badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
+	case push != nil || badPush || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, covered, now):
 		// A push that does not follow the commit last seen may be late,
 		// or delivered again: the branch says what its head is.
 		ev.latest, ev.err = r.poll(ctx, app)
@@ -266,7 +290,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			nudge = nil
 		}
 		// A nudge held back by ciNudgeEvery is read once it is due.
-		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, nudge != nil, now)}, nil
+		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, covered, nudge != nil, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
 	// Watch paths and wait for CI need GitHub's answers: asked, then the
@@ -302,7 +326,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 	}
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, false, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, covered, false, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -461,6 +485,9 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 		}
 		u.record.LastWebhookAt = &seen
 		u.record.Delivery = p.Delivery
+		if !p.App {
+			u.record.ProjectHook = true
+		}
 	}
 	if via == "push" || sha != rec.Latest {
 		u.record.Latest, u.record.LatestAt = sha, &seen
@@ -683,8 +710,8 @@ func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
 // requeue is the wait until the next pass: the next check of the branch,
 // or sooner, the next read of a held commit's checks, or of the commit a
 // nudge held back by ciNudgeEvery (nudged) is about.
-func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, nudged bool, now time.Time) time.Duration {
-	d := r.untilDue(rec, now)
+func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, covered, nudged bool, now time.Time) time.Duration {
+	d := r.untilDue(rec, covered, now)
 	held := rec.Held != "" && rec.Held == rec.Latest
 	if !held && !nudged {
 		return d
@@ -716,43 +743,70 @@ func (r *SourceReconciler) auditUpdate(ctx context.Context, app *shpyrdv1.App, u
 	}
 }
 
-// due says the branch should be read now: never read, a deploy asked
-// after the last check, or the wait since the last check has passed (90 %
-// of it: requeues are spread ±10 %).
-func (r *SourceReconciler) due(app *shpyrdv1.App, rec gitauth.SourceRecord, now time.Time) bool {
-	if rec.CheckedAt == nil {
-		return true
+// covered says the GitHub App covers the App's repository: cover's own
+// test, an answer it cannot give being "no" (such a branch is listed, as
+// before).
+func (r *SourceReconciler) covered(ctx context.Context, app *shpyrdv1.App) bool {
+	if r.GitHub == nil {
+		return false
 	}
-	if asked, err := time.Parse(time.RFC3339Nano, app.Annotations[configvars.AnnotationDeployRequested]); err == nil && asked.After(*rec.CheckedAt) {
-		return true
-	}
-	return now.Sub(*rec.CheckedAt) >= r.wait(rec, now)*9/10
+	_, ok, _ := r.GitHub.coverQuietly(ctx, app)
+	return ok
 }
 
-// wait is the time between checks: the interval (an hour while webhooks
-// arrive), or after failures a backoff from 30 s that doubles up to it.
-func (r *SourceReconciler) wait(rec gitauth.SourceRecord, now time.Time) time.Duration {
-	every := r.PollInterval
-	if every <= 0 {
-		every = DefaultPollInterval
+// deployAsked says a person deployed after the last check.
+func deployAsked(app *shpyrdv1.App, rec gitauth.SourceRecord) bool {
+	asked, err := time.Parse(time.RFC3339Nano, app.Annotations[configvars.AnnotationDeployRequested])
+	return err == nil && rec.CheckedAt != nil && asked.After(*rec.CheckedAt)
+}
+
+// due says the branch should be read now: never read, a deploy asked
+// after the last check, a failed read due again, or, for a branch whose
+// pushes do not arrive by webhook, the wait since the last check has
+// passed (90 % of it: requeues are spread ±10 %). A branch the App covers,
+// or whose own webhook has delivered, is never read on a timer.
+func (r *SourceReconciler) due(app *shpyrdv1.App, rec gitauth.SourceRecord, covered bool, now time.Time) bool {
+	if rec.CheckedAt == nil || deployAsked(app, rec) {
+		return true
 	}
-	if rec.LastWebhookAt != nil && now.Sub(*rec.LastWebhookAt) < webhookRecent {
-		every = max(every, webhookInterval)
+	if rec.Failures == 0 && WatchMode(covered, rec) != WatchPoll {
+		return false
 	}
+	return now.Sub(*rec.CheckedAt) >= r.wait(rec)*9/10
+}
+
+// wait is the time between timer listings: the interval, or after
+// failures a backoff from 30 s that doubles up to it.
+func (r *SourceReconciler) wait(rec gitauth.SourceRecord) time.Duration {
+	every := r.interval()
 	if rec.Failures > 0 {
 		return min(every, errorBackoff<<min(rec.Failures-1, 10))
 	}
 	return every
 }
 
-func (r *SourceReconciler) untilDue(rec gitauth.SourceRecord, now time.Time) time.Duration {
-	left := r.wait(rec, now)
-	if rec.CheckedAt != nil {
-		left -= now.Sub(*rec.CheckedAt)
+// interval is the wait between timer listings.
+func (r *SourceReconciler) interval() time.Duration {
+	if r.PollInterval <= 0 {
+		return DefaultPollInterval
 	}
+	return r.PollInterval
+}
+
+// untilDue is the wait until the next pass: for a branch whose pushes
+// arrive by webhook, pushDrivenRecheck, which only looks at the cover
+// again; else until the next listing is due.
+func (r *SourceReconciler) untilDue(rec gitauth.SourceRecord, covered bool, now time.Time) time.Duration {
 	spread := r.Jitter
 	if spread == nil {
 		spread = jitter
+	}
+	if rec.Failures == 0 && WatchMode(covered, rec) != WatchPoll {
+		return spread(pushDrivenRecheck)
+	}
+	left := r.wait(rec)
+	if rec.CheckedAt != nil {
+		left -= now.Sub(*rec.CheckedAt)
 	}
 	return spread(max(left, time.Second))
 }

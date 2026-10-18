@@ -18,6 +18,8 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
 	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 const (
@@ -187,8 +189,11 @@ func TestSourceDeploysAPushToTheBranch(t *testing.T) {
 	if rec.Via != "push" || rec.Delivery != "d-1" || rec.Author != "alice" || rec.LastWebhookAt == nil || !rec.LastWebhookAt.Equal(sourceNow) {
 		t.Errorf("record %+v", rec)
 	}
-	if res.RequeueAfter != time.Hour {
-		t.Errorf("with a webhook, polls are hourly: %v", res.RequeueAfter)
+	if res.RequeueAfter != pushDrivenRecheck {
+		t.Errorf("a project whose webhook delivered is never listed on a timer; its next pass looks at its cover: %v", res.RequeueAfter)
+	}
+	if !rec.ProjectHook {
+		t.Error("the project's own webhook delivered")
 	}
 	if len(*heard) != 1 || (*heard)[0].Actor != "git:alice" || (*heard)[0].Detail != "fix login" {
 		t.Errorf("audit %+v", *heard)
@@ -211,7 +216,7 @@ func TestSourceDropsAPushToAnotherBranch(t *testing.T) {
 func TestSourceKeepsASkippedCommitSkipped(t *testing.T) {
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
 	app := withPush(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit), gitauth.Push{
-		Ref: "refs/heads/main", SHA: otherCommit, Message: "Fix a typo [Skip Deploy]", Author: "bruno", Delivery: "d-2",
+		Ref: "refs/heads/main", SHA: otherCommit, Message: "Fix a typo [Skip Deploy]", Author: "bruno", Delivery: "d-2", App: true,
 	})
 	r, _ := newSourceReconciler(t, ls, app)
 	heard := heardAudits(t)
@@ -276,7 +281,7 @@ func TestSourcePollsOnlyWhenDue(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		res, _ = reconcileSource(t, r, app)
 	}
-	if ls.calls != 0 || res.RequeueAfter != 90*time.Second {
+	if ls.calls != 0 || res.RequeueAfter != DefaultPollInterval-30*time.Second {
 		t.Fatalf("listings %d, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	// An app whose listings fail backs off (30 s, 1 m, 2 m: the third
@@ -423,7 +428,7 @@ func TestLookupGitBuildIsWhatTheBuildUses(t *testing.T) {
 }
 
 func TestPollIntervalAndJitter(t *testing.T) {
-	for in, want := range map[string]time.Duration{"": 2 * time.Minute, "30s": 30 * time.Second, "nonsense": 2 * time.Minute, "1s": 10 * time.Second} {
+	for in, want := range map[string]time.Duration{"": 5 * time.Minute, "30s": 30 * time.Second, "nonsense": 5 * time.Minute, "1s": 30 * time.Second, "10m": 10 * time.Minute} {
 		if got := PollInterval(in); got != want {
 			t.Errorf("PollInterval(%q) = %v, want %v", in, got, want)
 		}
@@ -465,7 +470,7 @@ func TestSourceSameCommitWithinTheHourWritesNothing(t *testing.T) {
 	}
 	// A new commit is written.
 	ls.refs = map[string]string{"refs/heads/main": otherCommit}
-	r.Now = func() time.Time { return sourceNow.Add(3 * time.Minute) }
+	r.Now = func() time.Time { return sourceNow.Add(6 * time.Minute) }
 	if _, got = reconcileSource(t, r, got); ls.calls != 2 || got.PinnedCommit() != otherCommit || sourceRecord(got).Latest != otherCommit {
 		t.Errorf("listings %d pin %q record %+v", ls.calls, got.PinnedCommit(), sourceRecord(got))
 	}
@@ -692,5 +697,125 @@ func TestAnOlderPushDeliveredAgainPinsNothing(t *testing.T) {
 	}
 	if _, ok := got.Annotations[shpyrdv1.AnnotationGitPush]; ok {
 		t.Error("the push stays on the App")
+	}
+}
+
+func TestWatchModeSaysHowABranchsPushesArrive(t *testing.T) {
+	for _, c := range []struct {
+		covered bool
+		rec     gitauth.SourceRecord
+		want    string
+	}{
+		{true, gitauth.SourceRecord{}, WatchGitHubApp},
+		{true, gitauth.SourceRecord{ProjectHook: true}, WatchGitHubApp},
+		{false, gitauth.SourceRecord{ProjectHook: true}, WatchWebhook},
+		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchPoll},
+		{false, gitauth.SourceRecord{}, WatchPoll},
+	} {
+		if got := WatchMode(c.covered, c.rec); got != c.want {
+			t.Errorf("%v %+v: %s", c.covered, c.rec, got)
+		}
+	}
+}
+
+// Review Focus 7.
+func TestACoveredRepositoryIsNeverListedOnATimer(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
+	app := shopWith(shpyrdv1.GitSource{Revision: "main"})
+	r, fake := gatedWatcher(t, ls, app)
+	got := app
+	for i := 0; i < 6; i++ {
+		var res ctrl.Result
+		res, got = reconcileSource(t, r, got)
+		if res.RequeueAfter != pushDrivenRecheck {
+			t.Fatalf("pass %d: requeue %v", i, res.RequeueAfter)
+		}
+		advance(fake, 4*time.Hour)
+	}
+	if ls.calls != 0 {
+		t.Fatalf("a repository the GitHub App covers was listed %d times on a timer", ls.calls)
+	}
+	// A person's deploy reads the branch, once.
+	got.Annotations[configvars.AnnotationDeployRequested] = fake.Time().Format(time.RFC3339Nano)
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	advance(fake, time.Second)
+	if _, got = reconcileSource(t, r, got); ls.calls != 1 {
+		t.Fatalf("the deploy: %d listings", ls.calls)
+	}
+	if _, got = reconcileSource(t, r, got); ls.calls != 1 {
+		t.Fatalf("the deploy read twice: %d listings", ls.calls)
+	}
+	// Taken out of the installation: once its token ages, the App no longer
+	// covers it, and the timer lists it again although App pushes arrived.
+	fake.SetRepos(42, githubtest.Repo{FullName: "Acme/site", DefaultBranch: "trunk"})
+	r.GitHub.Forget(store.DefaultWorkspace)
+	advance(fake, 2*time.Hour)
+	if _, _ = reconcileSource(t, r, got); ls.calls != 2 {
+		t.Errorf("no longer covered: %d listings", ls.calls)
+	}
+}
+
+func TestAProjectsOwnWebhookStopsItsChecksButTheAppsDoesNot(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	viaApp := withPush(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
+		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Delivery: "d-1", Author: "alice", At: sourceNow, App: true})
+	viaHook := withPush(pinGit(gitApp("blog", "https://gitlab.com/acme/blog"), testCommit),
+		gitauth.Push{Ref: "refs/heads/main", SHA: otherCommit, Delivery: "d-2", Author: "alice", At: sourceNow})
+	r, _ := newSourceReconciler(t, ls, viaApp, viaHook)
+	clock := sourceNow
+	r.Now = func() time.Time { return clock }
+	_, app := reconcileSource(t, r, viaApp)
+	_, hook := reconcileSource(t, r, viaHook)
+	if sourceRecord(app).ProjectHook || !sourceRecord(hook).ProjectHook || ls.calls != 0 {
+		t.Fatalf("records %+v %+v, %d listings", sourceRecord(app), sourceRecord(hook), ls.calls)
+	}
+	clock = sourceNow.Add(time.Hour)
+	reconcileSource(t, r, hook)
+	if ls.calls != 0 {
+		t.Errorf("a project whose webhook delivered was listed: %d", ls.calls)
+	}
+	// Not covered (no App here): a push through the App does not stop the
+	// checks.
+	reconcileSource(t, r, app)
+	if ls.calls != 1 {
+		t.Errorf("an uncovered repository with App pushes only: %d listings", ls.calls)
+	}
+}
+
+// A change of cover is seen at the next pass: a repository that stops being
+// covered is read once and goes back to the timer; one that becomes covered
+// stops its timer.
+func TestACoverThatChangesMovesTheBranchBetweenTheTimerAndTheApp(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
+	app := shopWith(shpyrdv1.GitSource{Revision: "main"})
+	r, fake := gatedWatcher(t, ls, app)
+	elsewhere := githubtest.Repo{FullName: "Acme/site", DefaultBranch: "trunk"}
+	fake.SetRepos(42, elsewhere)
+	r.GitHub.Forget(store.DefaultWorkspace)
+	// Not covered: the timer lists it.
+	advance(fake, 6*time.Minute)
+	res, got := reconcileSource(t, r, app)
+	if ls.calls != 1 || res.RequeueAfter > DefaultPollInterval {
+		t.Fatalf("not covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
+	}
+	// Covered: no more listings, and the next pass is the hourly look at the cover.
+	fake.SetRepos(42, elsewhere, githubtest.Repo{FullName: "Acme/shop", DefaultBranch: "main"})
+	r.GitHub.Forget(store.DefaultWorkspace)
+	advance(fake, 2*time.Hour)
+	if res, got = reconcileSource(t, r, got); ls.calls != 1 || res.RequeueAfter != pushDrivenRecheck {
+		t.Fatalf("became covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
+	}
+	// Taken out again: one read, then the timer.
+	fake.SetRepos(42, elsewhere)
+	r.GitHub.Forget(store.DefaultWorkspace)
+	advance(fake, 2*time.Hour)
+	if res, got = reconcileSource(t, r, got); ls.calls != 2 || res.RequeueAfter > DefaultPollInterval {
+		t.Fatalf("stopped being covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
+	}
+	advance(fake, 6*time.Minute)
+	if _, _ = reconcileSource(t, r, got); ls.calls != 3 {
+		t.Errorf("back on the timer: %d listings", ls.calls)
 	}
 }

@@ -63,8 +63,9 @@ type githubAsk struct {
 func (a githubAsk) any() bool { return a.changed || a.ci }
 
 // heldRecheck is how often a held commit's checks are read when no
-// webhook says they changed: the net under missed deliveries, two reads.
-const heldRecheck = 30 * time.Second
+// webhook says they changed: the net under missed deliveries, which the
+// sweep redelivers within about 5 minutes.
+const heldRecheck = 2 * time.Minute
 
 // The rate budget of one installation (5,000 calls an hour), which every
 // project on its repositories shares, a monorepo's many:
@@ -76,7 +77,7 @@ const heldRecheck = 30 * time.Second
 //   - maxCompares: compares kept (they never change).
 const (
 	ciNudgeEvery = 5 * time.Second
-	ciShareFor   = 25 * time.Second
+	ciShareFor   = 90 * time.Second
 	maxCompares  = 512
 )
 

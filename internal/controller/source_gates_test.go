@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/configvars"
 	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/github/githubtest"
@@ -159,6 +160,9 @@ func TestACommitNotDeployedStaysSoWhenTheBranchIsReadAgain(t *testing.T) {
 	app := shopWith(shpyrdv1.GitSource{WatchPaths: []string{"services/api/**"}})
 	withRecord(app, gitauth.SourceRecord{Ref: "main", Latest: otherCommit, Via: "push", NotDeployed: otherCommit,
 		NotDeployedReason: gitauth.ReasonNoWatchedChanges, CheckedAt: at(sourceNow.Add(-3 * time.Hour))})
+	// A person's deploy asks for the branch: the App covers it, so nothing
+	// else lists it.
+	app.Annotations[configvars.AnnotationDeployRequested] = sourceNow.Add(-time.Hour).Format(time.RFC3339Nano)
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
 	r, fake := gatedWatcher(t, ls, app)
 	_, got := reconcileSource(t, r, app)
@@ -254,7 +258,7 @@ func TestAHeldCommitDeploysOnceItsCIPasses(t *testing.T) {
 		t.Errorf("read again after 5 s: %v", fake.Calls())
 	}
 	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"), githubtest.CheckRun{Name: "shpyrd / shop", Status: "queued", AppID: githubtest.AppID})
-	advance(fake, 25*time.Second)
+	advance(fake, heldRecheck)
 	_, got = reconcileSource(t, r, got)
 	rec = sourceRecord(got)
 	if got.PinnedCommit() != otherCommit || rec.Held != "" || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (CI passed)" {
@@ -307,7 +311,7 @@ func TestAHeldCommitIsGivenUpAfterAnHour(t *testing.T) {
 	if _, got = reconcileSource(t, r, got); sourceRecord(got).Held != otherCommit {
 		t.Fatalf("59 minutes: %+v", sourceRecord(got))
 	}
-	advance(fake, time.Minute)
+	advance(fake, heldRecheck)
 	_, got = reconcileSource(t, r, got)
 	rec := sourceRecord(got)
 	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCITimeout {
@@ -346,7 +350,8 @@ func TestACommitWithNoCIDeploysAfterAMinute(t *testing.T) {
 	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != testCommit {
 		t.Fatal("30 s: CI may still report")
 	}
-	advance(fake, 30*time.Second)
+	// No CI: decided at the first read after a minute, the 2-minute recheck.
+	advance(fake, heldRecheck-30*time.Second)
 	_, got = reconcileSource(t, r, got)
 	if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != "Push 89abcde by alice: fix login (no CI)" {
 		t.Errorf("pin %s, note %q", got.PinnedCommit(), got.Annotations[shpyrdv1.AnnotationReleaseNote])
@@ -360,7 +365,7 @@ func TestAHeldCommitStaysHeldWhileGitHubIsDown(t *testing.T) {
 	_, got := reconcileSource(t, r, app)
 	fake.SetDown(true)
 	for range 4 {
-		advance(fake, 30*time.Second)
+		advance(fake, heldRecheck)
 		_, got = reconcileSource(t, r, got)
 	}
 	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != otherCommit || rec.NotDeployed != "" {
@@ -393,7 +398,7 @@ func TestAHeldCommitStaysHeldWhenShpyrdCannotTellWhetherTheAppCoversTheRepositor
 	r.GitHub.Installations = unreadableInstallations{st}
 	_, got := reconcileSource(t, r, app)
 	for range 3 {
-		advance(fake, 30*time.Second)
+		advance(fake, heldRecheck)
 		_, got = reconcileSource(t, r, got)
 	}
 	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != otherCommit || rec.NotDeployed != "" {
@@ -406,7 +411,7 @@ func TestAHeldCommitStaysHeldWhenShpyrdCannotTellWhetherTheAppCoversTheRepositor
 	// The store answers again, then the App's Secret breaks: still held.
 	r.GitHub.Installations = st
 	fake.SetCheckRuns(otherCommit, ciRun("test", "in_progress", ""))
-	advance(fake, 30*time.Second)
+	advance(fake, heldRecheck)
 	if _, got = reconcileSource(t, r, got); sourceRecord(got).Held != otherCommit {
 		t.Fatalf("pending: %+v", sourceRecord(got))
 	}
@@ -507,9 +512,9 @@ func TestARerunsNudgeIsReadWhenTheBranchIsDue(t *testing.T) {
 		name string
 		wait func(r *SourceReconciler, fake *githubtest.Server)
 	}{
-		{"the poll interval passed", func(_ *SourceReconciler, fake *githubtest.Server) { advance(fake, 2*time.Hour) }},
+		{"two hours passed", func(_ *SourceReconciler, fake *githubtest.Server) { advance(fake, 2*time.Hour) }},
 		{"the controller restarted", func(r *SourceReconciler, fake *githubtest.Server) {
-			advance(fake, time.Minute)
+			advance(fake, ciShareFor)
 			r.checked, r.ciChecked = nil, nil
 		}},
 	} {
@@ -547,7 +552,7 @@ func TestAHeldCommitKeepsItsWatchPathsNoteWhenItDeploys(t *testing.T) {
 		t.Fatalf("record %+v", rec)
 	}
 	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
-	advance(fake, 30*time.Second)
+	advance(fake, heldRecheck)
 	_, got = reconcileSource(t, r, got)
 	want := "Push 89abcde by alice: fix login (watch paths not checked: 300 or more files changed) (CI passed)"
 	if got.PinnedCommit() != otherCommit || got.Annotations[shpyrdv1.AnnotationReleaseNote] != want {
@@ -567,7 +572,7 @@ func TestAHeldCommitsWatchPathsAreCheckedOnceTheCoverIsKnown(t *testing.T) {
 		t.Fatalf("held while the cover is unknown: %+v", rec)
 	}
 	r.GitHub.Installations = st
-	advance(fake, 30*time.Second)
+	advance(fake, heldRecheck)
 	_, got = reconcileSource(t, r, got)
 	if rec := sourceRecord(got); got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonNoWatchedChanges {
 		t.Errorf("pin %s, record %+v", got.PinnedCommit(), rec)
@@ -598,7 +603,7 @@ func TestAHeldCommitStaysHeldWhenTheAppNoLongerCoversTheRepository(t *testing.T)
 		_, got := reconcileSource(t, r, app)
 		c.lose(r, fake)
 		fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
-		advance(fake, 30*time.Second)
+		advance(fake, heldRecheck)
 		if _, got = reconcileSource(t, r, got); got.PinnedCommit() != testCommit || sourceRecord(got).Held != otherCommit {
 			t.Fatalf("%s: deployed unchecked: pin %s, record %+v", c.name, got.PinnedCommit(), sourceRecord(got))
 		}
@@ -630,7 +635,12 @@ func TestUnreadableChecksAreLoggedAtMostOnceAMinute(t *testing.T) {
 	fake.SetDown(true)
 	var buf strings.Builder
 	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) { buf.WriteString(prefix + args + "\n") }, funcr.Options{}))
-	for range 5 {
+	for i := range 5 {
+		if i > 0 {
+			// A re-run's nudge reads the checks each 30 s (the recheck
+			// alone reads them every 2 minutes).
+			nudgeCI(t, r.Client, app, otherCommit, fake.Time())
+		}
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
 			t.Fatal(err)
 		}
@@ -735,7 +745,7 @@ func TestPermissionsNotAcceptedEndAHeldCommitAtOnce(t *testing.T) {
 	}
 	fake.SetDown(false)
 	fake.RefusePermission("checks")
-	advance(fake, 30*time.Second)
+	advance(fake, heldRecheck)
 	_, got = reconcileSource(t, r, got)
 	rec := sourceRecord(got)
 	if got.PinnedCommit() != testCommit || rec.Held != "" || rec.NotDeployed != otherCommit || rec.NotDeployedReason != gitauth.ReasonCIPermissions {
@@ -801,9 +811,9 @@ func TestTwoProjectsOnOneRepositoryShareTheirCommitsChecks(t *testing.T) {
 		t.Errorf("%d check-runs and %d statuses calls: %v", n, m, fake.Calls())
 	}
 	// Each decides from its own hold: the shared answer is read again
-	// once it is 25 seconds old.
+	// once it is 90 seconds old.
 	fake.SetCheckRuns(otherCommit, ciRun("test", "completed", "success"))
-	advance(fake, 20*time.Second)
+	advance(fake, heldRecheck-10*time.Second)
 	if _, got = reconcileSource(t, r, got); got.PinnedCommit() != otherCommit {
 		t.Errorf("pin %s, record %+v", got.PinnedCommit(), sourceRecord(got))
 	}
