@@ -1,0 +1,83 @@
+id: tour-launcher
+
+title: "Tour 1: the launcher"
+
+area: launcher
+
+tags: [tour]
+
+scenario: tour
+
+goal: >
+  A person signs in and sees the launcher: every application they may open,
+  the theme, their menu, and the dialog that makes a new project.
+
+steps:
+  - action: goto
+    path: /
+    narration: This is shpyrd, where your team's applications live.
+
+  - action: wait
+    text: Sign in to open its applications.
+
+  - action: capture
+    name: sign-in
+    description: The workspace's sign-in page.
+    use: { docs: true }
+
+  - action: do
+    instruction: Log in as "owner@acme.test" with password ${env:VOYAGER_PASSWORD}, until the workspace opens signed in as Olivia Owner
+
+  - action: wait
+    text: Storefront
+    narration: The launcher shows every application you may open, and whether it is running.
+
+  - action: capture
+    name: launcher
+    description: The launcher with three projects.
+    use: { docs: true, marketing: true }
+
+  - action: do
+    instruction: Click the Dark theme button, until the button reads Light theme instead
+    narration: Light or dark, as you like it.
+
+  - action: capture
+    name: launcher-dark
+    description: The launcher in the dark theme.
+    use: { docs: true, marketing: true }
+
+  - action: do
+    instruction: Open the menu of the person signed in, Olivia Owner, at the top right
+
+  - action: wait
+    text: Sign out
+
+  - action: capture
+    name: person-menu
+    description: The menu of the person signed in.
+    use: { docs: true }
+
+  - action: goto
+    path: /
+
+  - action: wait
+    text: Storefront
+
+  - action: do
+    instruction: Click New project, until the New project dialog opens
+    narration: A new project takes a name, and optionally a Git repository to build from.
+
+  - action: wait
+    text: What it is
+
+  - action: capture
+    name: new-project-dialog
+    description: The new project dialog.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: true

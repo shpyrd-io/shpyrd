@@ -1,0 +1,79 @@
+id: mock-access
+
+title: "Mock tour 5: who may open a project"
+
+area: projects
+
+tags: [tour, mock]
+
+scenario: mock
+
+goal: >
+  Who may open an application and who may change it: access and opening it
+  as someone else, roles, connections, and the project's activity.
+
+steps:
+  - action: goto
+    path: /projects/billing/access
+
+  - action: wait
+    text: Who may open it
+    narration: "Each app decides who may open it: anyone, whoever signs in, or named people. And you can see it as they would."
+
+  - action: capture
+    name: access
+    description: Who may open an application open to those who sign in.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/roles
+
+  - action: wait
+    text: marcelo@acme.com
+    narration: Roles say who may deploy, configure or administer it.
+
+  - action: capture
+    name: roles
+    description: The people and teams with a role on the project.
+    use: { docs: true }
+
+  - action: do
+    instruction: Click Add, until the Give someone a role dialog opens
+
+  - action: wait
+    text: Give someone a role
+
+  - action: capture
+    name: role-dialog
+    description: Giving someone a role on a project.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/connections
+
+  - action: wait
+    text: Let in
+
+  - action: capture
+    name: connections
+    description: The projects and platform services let into this one.
+    use: { docs: true }
+
+  - action: goto
+    path: /projects/hello-world/activity
+
+  - action: wait
+    text: Activity
+    narration: And everything done to it is written down, with who did it.
+
+  - action: capture
+    name: activity
+    description: Everything done to the project, by whom.
+    use: { docs: true }
+
+outputs:
+  e2e: true
+  screenshots: true
+  video: true
+  docs: true
+  marketing: false

@@ -1,0 +1,10 @@
+id: empty
+
+description: >
+  A fresh workspace "Acme" with no projects, no teams and no invitations.
+  One account, its owner: owner@acme.test ("Olivia Owner"), password
+  VOYAGER_PASSWORD.
+
+seed:
+  command: .voyager/seed.sh empty
+  timeout: 3m
