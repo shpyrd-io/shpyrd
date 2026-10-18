@@ -12,8 +12,8 @@ import { ScrollArea } from "@shpyrd/ui/components/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Skeleton } from "@shpyrd/ui/components/skeleton";
 import { api } from "@/api/api";
-import type { GitHubAccount, GitHubRepositories } from "@/api/types";
-import { linkGitHub } from "@/lib/github-link";
+import type { GitHubAccount, GitHubBranches, GitHubRepositories } from "@/api/types";
+import { cancelGitHubLink, LinkCancelled, linkGitHub } from "@/lib/github-link";
 
 // What New project makes from GitHub: a repository and its branch.
 export type Picked = { fullName: string; branch: string };
@@ -36,7 +36,12 @@ export function branchesInOrder(branches: string[], defaultBranch: string): stri
 // Before the picker: the person links their own GitHub account, in a
 // popup, and the dialog under it keeps what was typed (RFC-0054).
 export function GitHubLinkStep({ onLinked }: { onLinked: () => void }) {
-  const link = useMutation({ mutationFn: linkGitHub, onSuccess: onLinked, onError: (e: Error) => toast.error(e.message) });
+  const link = useMutation({ mutationFn: linkGitHub, onSuccess: onLinked, onError: (e: Error) => {
+      if (!(e instanceof LinkCancelled)) toast.error(e.message);
+    },
+  });
+  // Leaving the step ends the wait for GitHub.
+  useEffect(() => cancelGitHubLink, []);
   return (
     <div className="grid justify-items-start gap-3 rounded-md border p-4">
       <p className="text-sm text-muted-foreground">
@@ -95,7 +100,9 @@ export function GitHubPicker({
     queryFn: () => api.githubBranches(value!.fullName),
     enabled: !!chosen,
     staleTime: 60_000,
+    structuralSharing: false,
   });
+  const branchesCut = (branches.data as GitHubBranches | undefined)?.truncated === true;
   const addAccount = async () => {
     try {
       const { installURL } = await api.connectGitHub();
@@ -207,6 +214,9 @@ export function GitHubPicker({
             </Select>
           )}
         </Field>
+      )}
+      {chosen && value && branchesCut && (
+        <p className="text-xs text-muted-foreground">Showing the first {branches.data?.length}. Filter to narrow.</p>
       )}
     </div>
   );

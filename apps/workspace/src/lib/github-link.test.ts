@@ -1,44 +1,119 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { linkGitHub } from "./github-link";
+import { cancelGitHubLink, LinkCancelled, linkGitHub } from "./github-link";
 
 const fake = vi.hoisted(() => ({ linkGitHub: vi.fn(), githubMe: vi.fn() }));
 vi.mock("@/api/api", () => ({ api: fake }));
 
+type Popup = { closed: boolean; close: ReturnType<typeof vi.fn>; location: { href: string } };
+const newPopup = (): Popup => ({ closed: false, close: vi.fn(), location: { href: "" } });
+// A message as the browser delivers it: from a window, with an origin.
+function message(data: unknown, origin: string, source: unknown) {
+  const e = new MessageEvent("message", { data, origin });
+  Object.defineProperty(e, "source", { value: source });
+  window.dispatchEvent(e);
+}
+
 beforeEach(() => fake.githubMe.mockResolvedValue(null));
 afterEach(() => {
+  cancelGitHubLink();
   vi.restoreAllMocks();
   vi.resetAllMocks();
   vi.useRealTimers();
 });
 
-it("is done at once when the server says the account is linked already", async () => {
-  fake.linkGitHub.mockResolvedValue({ authorizeURL: "" });
-  const open = vi.spyOn(window, "open");
-  await linkGitHub();
-  expect(open).not.toHaveBeenCalled();
-});
-
-it("opens GitHub in a popup and is done when the popup says so", async () => {
-  fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/login/oauth/authorize?state=s" });
-  const open = vi.spyOn(window, "open").mockReturnValue({ closed: false } as Window);
+it("opens the popup at once, before the server answers, then sends it to GitHub", async () => {
+  const popup = newPopup();
+  const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  let answer: (v: { authorizeURL: string }) => void = () => {};
+  fake.linkGitHub.mockReturnValue(new Promise((r) => (answer = r)));
   const done = linkGitHub();
-  await vi.waitFor(() => expect(open).toHaveBeenCalledWith("https://github.test/login/oauth/authorize?state=s", "shpyrd-github-link", expect.stringContaining("popup")));
-  window.dispatchEvent(new MessageEvent("message", { data: { github: "linked" }, origin: window.location.origin }));
+  expect(open).toHaveBeenCalledWith("", "shpyrd-github", expect.stringContaining("popup"));
+  expect(popup.location.href).toBe("");
+  answer({ authorizeURL: "https://github.test/login/oauth/authorize?state=s" });
+  await vi.waitFor(() => expect(popup.location.href).toBe("https://github.test/login/oauth/authorize?state=s"));
+  message({ github: "linked" }, window.location.origin, popup);
   await expect(done).resolves.toBeUndefined();
 });
 
-it("ignores a message from another origin, and is done once the server shows the link", async () => {
+it("closes the popup and is done when the server says the account is linked already", async () => {
+  const popup = newPopup();
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  fake.linkGitHub.mockResolvedValue({ authorizeURL: "" });
+  await linkGitHub();
+  expect(popup.close).toHaveBeenCalled();
+});
+
+it("closes the popup and fails when the server refuses", async () => {
+  const popup = newPopup();
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  fake.linkGitHub.mockRejectedValue(new Error("nope"));
+  await expect(linkGitHub()).rejects.toThrow("nope");
+  expect(popup.close).toHaveBeenCalled();
+});
+
+it("ignores a message from another origin, or from another window, and is done once the server shows the link", async () => {
   vi.useFakeTimers();
+  const popup = newPopup();
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
-  vi.spyOn(window, "open").mockReturnValue({ closed: false } as Window);
   let settled = false;
   const done = linkGitHub().then(() => (settled = true));
   await vi.advanceTimersByTimeAsync(0);
-  window.dispatchEvent(new MessageEvent("message", { data: { github: "linked" }, origin: "https://evil.test" }));
+  message({ github: "linked" }, "https://evil.test", popup);
+  message({ github: "linked" }, window.location.origin, newPopup());
+  message({ github: "other" }, window.location.origin, popup);
   await vi.advanceTimersByTimeAsync(2_000);
   expect(settled).toBe(false);
   fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
   await vi.advanceTimersByTimeAsync(2_000);
   await done;
   expect(settled).toBe(true);
+});
+
+it("ends the wait when the popup is closed and nothing is linked", async () => {
+  vi.useFakeTimers();
+  const popup = newPopup();
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
+  const done = linkGitHub();
+  const failed = expect(done).rejects.toThrow("GitHub was not linked.");
+  await vi.advanceTimersByTimeAsync(2_000);
+  popup.closed = true;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await failed;
+});
+
+it("is done, not failed, when the popup closes after the link was made", async () => {
+  vi.useFakeTimers();
+  const popup = newPopup();
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
+  const done = linkGitHub();
+  popup.closed = true;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await expect(done).resolves.toBeUndefined();
+});
+
+it("cancels the wait before it when called again, and when cancelled", async () => {
+  vi.useFakeTimers();
+  const first = newPopup();
+  const second = newPopup();
+  vi.spyOn(window, "open").mockReturnValueOnce(first as unknown as Window).mockReturnValueOnce(second as unknown as Window);
+  fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
+  const a = linkGitHub();
+  const aCancelled = expect(a).rejects.toBeInstanceOf(LinkCancelled);
+  await vi.advanceTimersByTimeAsync(0);
+  const b = linkGitHub();
+  await aCancelled;
+  expect(first.close).toHaveBeenCalled();
+  // The first wait's message no longer counts; the second's does.
+  message({ github: "linked" }, window.location.origin, first);
+  await vi.advanceTimersByTimeAsync(0);
+  message({ github: "linked" }, window.location.origin, second);
+  await expect(b).resolves.toBeUndefined();
+  const c = linkGitHub();
+  const cCancelled = expect(c).rejects.toBeInstanceOf(LinkCancelled);
+  cancelGitHubLink();
+  await cCancelled;
 });

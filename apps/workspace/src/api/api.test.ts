@@ -101,6 +101,7 @@ describe("the api picks the Mock when asked to", () => {
 
   it("links the person's GitHub in the Mock, connects an account, lists what it reaches and forgets a connection", async () => {
     await expect(api.githubAccounts()).rejects.toMatchObject({ status: 409, code: "github_link_required" });
+    await expect(api.githubBranches("acme/hello-world")).rejects.toMatchObject({ status: 409, code: "github_link_required" });
     expect(await api.githubMe()).toBeNull();
     expect((await api.linkGitHub("/")).authorizeURL).toBe("");
     expect((await api.githubMe())?.login).toBe("ana-souza");

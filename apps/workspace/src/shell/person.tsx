@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ExternalLink, Link2, LogOut, Moon, Sun, Unlink } from "lucide-react";
 import { toast } from "sonner";
@@ -15,7 +16,8 @@ import {
 } from "@shpyrd/ui/components/dropdown-menu";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { api } from "@/api/api";
-import { linkGitHub } from "@/lib/github-link";
+import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
+import { cancelGitHubLink, LinkCancelled, linkGitHub } from "@/lib/github-link";
 
 // The small controls every screen has at the top right: the theme, and
 // the person signed in with the way out.
@@ -59,11 +61,14 @@ export function PersonMenu() {
     try {
       await linkGitHub();
     } catch (e) {
-      toast.error((e as Error).message);
+      if (!(e instanceof LinkCancelled)) toast.error((e as Error).message);
     } finally {
       githubChanged();
     }
   };
+  // Leaving the menu ends a wait for GitHub.
+  useEffect(() => cancelGitHubLink, []);
+  const [unlinking, setUnlinking] = useState(false);
   const unlink = async () => {
     try {
       await api.unlinkGitHub();
@@ -77,6 +82,7 @@ export function PersonMenu() {
   const name = me.data?.name || me.data?.email || "…";
   const consoleUrl = me.data?.console && config.data?.workspace?.ownedByOperator ? config.data.consoleUrl : undefined;
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" icon={<Avatar size={20} alt={name} />} iconEnd={<ChevronDown />} aria-label={name}>
@@ -102,7 +108,7 @@ export function PersonMenu() {
           (github.data ? (
             <>
               <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
-              <DropdownMenuItem onClick={unlink}>
+              <DropdownMenuItem onSelect={() => setUnlinking(true)}>
                 <Unlink /> Unlink GitHub
               </DropdownMenuItem>
             </>
@@ -119,5 +125,15 @@ export function PersonMenu() {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <ConfirmDialog
+      open={unlinking}
+      onOpenChange={setUnlinking}
+      title="Unlink GitHub?"
+      description="You won't see your private repositories in New project until you link again. Projects keep deploying."
+      action="Unlink"
+      variant="destructive"
+      onConfirm={unlink}
+    />
+    </>
   );
 }

@@ -331,6 +331,9 @@ export type GitHubLink = { login: string; linkedAt: string };
 // it reads (the header X-Shpyrd-Truncated), so the picker says so.
 export type GitHubRepositories = GitHubRepository[] & { truncated?: boolean };
 
+// A repository's branches; truncated when the server cut the list.
+export type GitHubBranches = string[] & { truncated?: boolean };
+
 // What the project's builds clone with.
 export type ProjectGitAuth = {
   url?: string;

@@ -8,6 +8,7 @@ import type {
   APIToken,
   AuditEntry,
   DomainStatus,
+  GitHubBranches,
   GitHubRepositories,
   Metrics,
   Project,
@@ -302,9 +303,13 @@ export const backend: Api = {
     if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
     return data;
   },
-  githubBranches: (fullName) => {
+  githubBranches: async (fullName) => {
     const [owner, repo] = fullName.split("/");
-    return request(`/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`);
+    const { data, headers } = await requestWithHeaders<GitHubBranches>(
+      `/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
   },
   setProjectIcon: async (slug, dataUrl) =>
     toProject(

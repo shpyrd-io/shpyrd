@@ -30,13 +30,17 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-it("shows the linked GitHub account and unlinks it", async () => {
+it("shows the linked GitHub account and unlinks it once confirmed", async () => {
   fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
   fake.unlinkGitHub.mockResolvedValue(undefined);
   show();
   await openMenu();
   expect(await screen.findByText("GitHub: paezao")).toBeTruthy();
   fireEvent.click(screen.getByRole("menuitem", { name: /Unlink GitHub/ }));
+  expect(await screen.findByText("Unlink GitHub?")).toBeTruthy();
+  expect(screen.getByText(/You won't see your private repositories in New project until you link again/)).toBeTruthy();
+  expect(fake.unlinkGitHub).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
   await waitFor(() => expect(fake.unlinkGitHub).toHaveBeenCalled());
 });
 
@@ -47,6 +51,15 @@ it("offers to link GitHub when no account is linked", async () => {
   await openMenu();
   fireEvent.click(await screen.findByRole("menuitem", { name: /Link GitHub/ }));
   await waitFor(() => expect(fake.linkGitHub).toHaveBeenCalled());
+});
+
+it("does not unlink when the question is cancelled", async () => {
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
+  show();
+  await openMenu();
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Unlink GitHub/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+  expect(fake.unlinkGitHub).not.toHaveBeenCalled();
 });
 
 it("offers nothing of GitHub to the admin token", async () => {

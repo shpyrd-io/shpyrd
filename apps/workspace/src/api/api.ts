@@ -19,6 +19,7 @@ import type {
   Exposure,
   GitHooks,
   GitHubAccounts,
+  GitHubBranches,
   GitHubConnections,
   GitHubLink,
   GitHubRepositories,
@@ -182,7 +183,7 @@ export type Api = {
   // cut says so in `truncated`.
   githubAccounts: () => Promise<GitHubAccounts>;
   githubRepositories: (installation?: number) => Promise<GitHubRepositories>;
-  githubBranches: (fullName: string) => Promise<string[]>;
+  githubBranches: (fullName: string) => Promise<GitHubBranches>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
   removeProjectIcon: (slug: string) => Promise<Project>;

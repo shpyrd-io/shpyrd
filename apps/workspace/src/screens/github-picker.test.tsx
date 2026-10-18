@@ -125,6 +125,13 @@ it("says so when the server cut the list, and not otherwise", async () => {
   expect(screen.queryByText(/Filter to narrow/)).toBeNull();
 });
 
+it("says so when the server cut the branches", async () => {
+  fake.githubBranches.mockResolvedValue(Object.assign(["main", "dev"], { truncated: true }));
+  show();
+  fireEvent.click(await screen.findByRole("button", { name: /acme\/billing/ }));
+  expect(await screen.findByText("Showing the first 2. Filter to narrow.")).toBeTruthy();
+});
+
 it("orders the branches with the default first, once", () => {
   expect(branchesInOrder(["dev", "main", "release"], "main")).toEqual(["main", "dev", "release"]);
   expect(branchesInOrder([], "main")).toEqual(["main"]);

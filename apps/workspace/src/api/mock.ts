@@ -854,6 +854,8 @@ export const mock: Api = {
   githubBranches: async (fullName) => {
     const branches = (await thingsOf.get()).githubBranches[fullName];
     if (!branches) throw new ApiError(404, `No GitHub connection of this workspace reaches ${fullName.split("/")[0]}.`);
+    if (!(await thingsOf.get()).githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
     return branches;
   },
   // The Mock keeps the image itself, as the data URL it came as.

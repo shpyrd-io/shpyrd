@@ -81,6 +81,11 @@ describe("the Backend reads GitHub's answers", () => {
     expect((await backend.githubRepositories()).truncated).toBeUndefined();
   });
 
+  it("marks a branch list the server cut", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_path: string) => new Response('["main"]', { status: 200, headers: { "X-Shpyrd-Truncated": "true" } })));
+    expect((await backend.githubBranches("acme/a")).truncated).toBe(true);
+  });
+
   it("takes a 404 on the person's link as no link", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "no link" }), { status: 404 })));
     expect(await backend.githubMe()).toBeNull();
