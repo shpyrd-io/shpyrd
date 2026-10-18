@@ -796,3 +796,23 @@ func TestALinkMadeAgainRevokesTheEarlierToken(t *testing.T) {
 		t.Errorf("link %+v %v", l, err)
 	}
 }
+
+func TestTheAccessCacheDropsPeopleWhoseTokenExpired(t *testing.T) {
+	now := time.Now()
+	g := newGitHubUserTokens(nil, nil, slog.New(slog.DiscardHandler))
+	g.now = func() time.Time { return now }
+	for _, who := range []string{"a", "b", "c"} {
+		g.put(personKey("local", who), githubUserEntry{access: "ghu_" + who, expires: now.Add(time.Hour)})
+		g.lock(personKey("local", who))
+	}
+	g.put(personKey("local", "pending"), githubUserEntry{expires: now.Add(time.Hour), pending: &githubPendingWrite{}})
+	g.lock(personKey("local", "pending"))
+	now = now.Add(2 * time.Hour)
+	g.put(personKey("local", "d"), githubUserEntry{access: "ghu_d", expires: now.Add(time.Hour)})
+	if len(g.by) != 2 {
+		t.Errorf("%d entries kept: the expired are dropped, the pending renewal and the new one stay", len(g.by))
+	}
+	if len(g.locks) != 1 || g.locks[personKey("local", "pending")] == nil {
+		t.Errorf("%d locks kept", len(g.locks))
+	}
+}

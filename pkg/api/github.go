@@ -210,8 +210,10 @@ func githubWho(c *gin.Context) (actor, provider, subject string) {
 	return "anonymous", "", ""
 }
 
-// nonceSet remembers the states used until they expire. The server runs
-// one replica.
+// nonceSet remembers the states used until they expire, in this replica's
+// memory: a state or ticket is single-use per replica. Replayed on another
+// replica it would pass this check, and GitHub's own code, which it also
+// carries, is single-use, which blunts the replay.
 type nonceSet struct {
 	mu   sync.Mutex
 	used map[string]time.Time

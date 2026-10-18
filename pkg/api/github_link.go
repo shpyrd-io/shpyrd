@@ -462,6 +462,20 @@ func (g *githubUserTokens) put(key string, e githubUserEntry) {
 	if g.by == nil {
 		g.by = map[string]githubUserEntry{}
 	}
+	// On insert, entries whose token expired are dropped, with their locks
+	// when no one holds them: people who stopped using shpyrd do not pile
+	// up. An entry with a renewal the store has not taken stays.
+	now := g.now()
+	for k, old := range g.by {
+		if k == key || old.pending != nil || now.Before(old.expires) {
+			continue
+		}
+		delete(g.by, k)
+		if mu := g.locks[k]; mu != nil && mu.TryLock() {
+			mu.Unlock()
+			delete(g.locks, k)
+		}
+	}
 	g.by[key] = e
 }
 
