@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +84,20 @@ func (e *pollDeferred) Error() string {
 	return fmt.Sprintf("over the cluster's cap of listings: the turn comes in %v", e.wait)
 }
 
+// maxListings caps the shared listings kept; the oldest go first.
+const maxListings = 5000
+
+// branchHeads keeps what ResolveBranch reads of a listing: branches and tags.
+func branchHeads(refs map[string]string) map[string]string {
+	out := make(map[string]string, len(refs))
+	for k, v := range refs {
+		if strings.HasPrefix(k, "refs/heads/") || strings.HasPrefix(k, "refs/tags/") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // repoListing is what one listing of a repository found, and when.
 type repoListing struct {
 	refs map[string]string
@@ -96,7 +111,16 @@ type repoListing struct {
 func listingKey(cloneURL string, b gitauth.Build) string {
 	where := strings.ToLower(strings.TrimSpace(cloneURL))
 	if repo, err := gitauth.Parse(cloneURL); err == nil {
-		where = strings.ToLower(repo.Host + "/" + repo.Path)
+		where = repo.Scheme + "://" + strings.ToLower(repo.Host)
+		if repo.Port != "" {
+			where += ":" + repo.Port
+		}
+		where += "/" + strings.ToLower(repo.Path)
+		// Credentials in the URL are part of the identity, never shown.
+		if u, err := url.Parse(strings.TrimSpace(cloneURL)); err == nil && u.User != nil {
+			sum := sha256.Sum256([]byte(u.User.String()))
+			where += "|url:" + hex.EncodeToString(sum[:])[:16]
+		}
 	}
 	cred := b.Kind
 	if b.Secret != nil {
@@ -164,5 +188,16 @@ func (r *SourceReconciler) keepListing(key string, l repoListing) {
 			delete(r.listings, k)
 		}
 	}
+	l.refs = branchHeads(l.refs)
 	r.listings[key] = l
+	for len(r.listings) > maxListings {
+		oldest, first := "", true
+		var at time.Time
+		for k, v := range r.listings {
+			if first || v.at.Before(at) {
+				oldest, at, first = k, v.at, false
+			}
+		}
+		delete(r.listings, oldest)
+	}
 }

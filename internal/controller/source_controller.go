@@ -307,7 +307,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// A push that does not follow the commit last seen may be late,
 		// or delivered again: the branch says what its head is. Only a
 		// check the timer asked for shares a listing.
-		timer := push == nil && !badPush && app.PinnedCommit() != "" && last.CheckedAt != nil && !deployAsked(app, last)
+		timer := push == nil && !badPush && !modeChanged && app.PinnedCommit() != "" && last.CheckedAt != nil && !deployAsked(app, last)
 		ev.latest, ev.err = r.poll(ctx, app, timer, now)
 		var deferred *pollDeferred
 		if errors.As(ev.err, &deferred) {

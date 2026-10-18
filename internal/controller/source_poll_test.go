@@ -213,3 +213,54 @@ func TestAPersonsReadBorrowsFromTheBurstAndTheTimerNeverExceedsTheRate(t *testin
 		t.Errorf("%d timer listings in 100 s", ok)
 	}
 }
+
+func TestAListingIsNeverSharedAcrossCredentialsInTheURLOrPorts(t *testing.T) {
+	plain := gitauth.Build{}
+	bare := listingKey("https://gitlab.com/acme/mono", plain)
+	if k := listingKey("https://user:s3cr3t@gitlab.com/acme/mono", plain); k == bare {
+		t.Error("a credentialed URL shares the bare one's listing")
+	} else if strings.Contains(k, "s3cr3t") || strings.Contains(k, "user") {
+		t.Errorf("the key shows the credential: %q", k)
+	}
+	if listingKey("https://a:1@gitlab.com/acme/mono", plain) == listingKey("https://a:2@gitlab.com/acme/mono", plain) {
+		t.Error("two URL credentials share a listing")
+	}
+	if listingKey("https://gitlab.com:8443/acme/mono", plain) == listingKey("https://gitlab.com:443/acme/mono", plain) {
+		t.Error("two ports share a listing")
+	}
+	if listingKey("http://gitlab.com/acme/mono", plain) == bare {
+		t.Error("two schemes share a listing")
+	}
+}
+
+func TestTheListingCacheKeepsHeadsOnlyAndIsBounded(t *testing.T) {
+	r := &SourceReconciler{}
+	for i := 0; i < maxListings+50; i++ {
+		r.keepListing(fmt.Sprintf("k%d", i), repoListing{
+			refs: map[string]string{"refs/heads/main": "a", "refs/pull/1/head": "b"},
+			at:   sourceNow.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	if len(r.listings) != maxListings {
+		t.Fatalf("%d listings kept", len(r.listings))
+	}
+	if _, ok := r.listings["k0"]; ok {
+		t.Error("the oldest stayed")
+	}
+	if l := r.listings[fmt.Sprintf("k%d", maxListings+49)]; len(l.refs) != 1 || l.refs["refs/heads/main"] != "a" {
+		t.Errorf("kept %v", l.refs)
+	}
+}
+
+func TestAChangedWatchModeListsFreshAndNotFromAShared(t *testing.T) {
+	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": otherCommit}}
+	obj := withRecord(pinGit(gitApp("m", "https://gitlab.com/acme/m"), testCommit),
+		gitauth.SourceRecord{Ref: "main", Latest: testCommit, CheckedAt: at(sourceNow.Add(-time.Minute)), Watch: WatchGitHubApp})
+	r, _ := newSourceReconciler(t, ls, obj)
+	r.Now = func() time.Time { return sourceNow }
+	// A listing shared a moment ago says the old head.
+	r.keepListing(listingKey("https://gitlab.com/acme/m", gitauth.Build{}), repoListing{refs: map[string]string{"refs/heads/main": testCommit}, at: sourceNow})
+	if _, got := reconcileSource(t, r, obj); ls.calls != 1 || got.PinnedCommit() != otherCommit {
+		t.Errorf("calls %d, pin %s", ls.calls, got.PinnedCommit())
+	}
+}
