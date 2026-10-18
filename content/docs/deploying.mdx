@@ -134,12 +134,7 @@ shpyrd git-hooks rotate --project shop    # a new URL and secret; the old ones a
 The dashboard shows the same under the project's Summary, **Deploy on
 push**. Only people who may change the project see the secret.
 
-**Without one: within minutes.** shpyrd checks the branch every 2 minutes
-(the operator sets it with `SHPYRD_GIT_POLL_INTERVAL`), and every hour once a
-webhook has delivered in the last day: the webhook is then the signal, the
-check the net under it. A repository shpyrd cannot read says why on the
-project, with the `shpyrd git-auth` command that fixes it, and shpyrd tries
-again by itself.
+**Without one: within 5 minutes.** On a GitHub repository the shpyrd GitHub App covers, there is nothing to set up and nothing to wait for: see [Connect GitHub](#connect-github). On another host, shpyrd checks the branch every 5 minutes (the operator sets it with `SHPYRD_GIT_POLL_INTERVAL`, 30 seconds at least). Projects on one repository with the same credential share one check, and the platform makes at most 5 checks a second however many projects there are (`SHPYRD_GIT_POLL_RATE`). Once the project's own webhook has delivered, the checks stop: pushes arrive by webhook from then on. The Source block says which: "Checked every 5 min. Set up the webhook to deploy at once and stop the checks.", or "Deploys on push through its webhook (last delivery 3 days ago)." A repository shpyrd cannot read says why on the project, with the `shpyrd git-auth` command that fixes it, and shpyrd tries again by itself. A deploy reads the branch at once, webhook or not.
 
 **Skipping a commit.** A commit whose message says `[skip deploy]` (or
 `[deploy skip]`, in any case) is recorded and not deployed, also when a
@@ -189,15 +184,21 @@ shpyrd github disconnect acme    # forget one; the App stays installed on GitHub
 
 Only an owner of the GitHub account can connect it: an owner of the organisation, or, for a personal account, that account itself. Nobody else can connect it with a copied link. An installation another workspace has connected is refused ("disconnect it there first") and never moves. **Manage on GitHub** opens the installation's settings, where you add repositories, suspend it or remove it.
 
-**Make a project from a repository:** New project, **From GitHub**, filter the list, pick the repository and the branch (its default branch first). Or find it with `shpyrd github repos --filter shop` and deploy it as any git repository:
+**Link your GitHub account.** Each person links their own GitHub account once, in a browser session. In New project, **From GitHub** shows **Continue with GitHub**: GitHub asks you to authorize the App in a small window, and the dialog keeps what you typed. While it waits, the dialog offers **Not finished? Try again** and Cancel. The person menu has **Link GitHub** too, and once linked shows `GitHub: paezao` with **Unlink GitHub**, which asks before it unlinks. From a terminal, `shpyrd github link` opens the browser and waits, `shpyrd github unlink` unlinks, and `shpyrd whoami` shows the account. An API token can read the link and unlink it, but cannot link: linking needs a browser. An API token acts as the person who made it, so an agent with your token picks what you can pick. The admin token is not a person and has no link.
+
+**Make a project from a repository:** New project, **From GitHub**, pick the account (the workspace's accounts your GitHub account can see), filter the list, pick the repository and the branch (its default branch first). The list shows only the repositories you can read on GitHub; a list cut short says "Showing the first N. Filter to narrow." **Can't find a repository?** opens the account's installation on GitHub, where repositories are added; **Add GitHub account or organisation** connects another (workspace admins; others are told to ask one). Or find it with `shpyrd github repos --filter shop` and deploy it as any git repository:
 
 ```shell
 shpyrd deploy --git https://github.com/acme/shop --ref main --project shop
 ```
 
+**Who can pick what.** Making a project, deploying with a changed repository URL, and restoring an archived project check that you can read the repository on GitHub (for a token, the person who made it): otherwise shpyrd answers "You can't read acme/shop on GitHub", or asks you to link your account first. A public repository needs no link. A redeploy of the same repository is not checked. The project shows who connected it ("Connected by paezao"). Builds, webhooks, checks and Deployments go through the workspace's installation, never through your account: when you unlink or leave the workspace, your projects keep deploying.
+
+**What shpyrd keeps.** GitHub's user token for the App can do only what both you and the App may do. Its access token lives in the platform's memory only. Its refresh token is stored encrypted (AES-256-GCM), under a key in the Secret `shpyrd-token-key`, apart from the database. Unlinking revokes the token on GitHub. A refresh token GitHub no longer accepts (unused for 6 months, or revoked) removes the link, and New project asks you to link again; so does a new token key, which an operator makes by deleting that Secret: everyone links again. Linking needs the App's user tokens to expire: with "Expire user authorization tokens" off in the App's settings on GitHub, linking is refused and says so.
+
 **How builds reach it.** For a repository on github.com whose owner the workspace has connected, every build and every check of the branch uses a token the App gives for that one repository, read-only, that lasts an hour; shpyrd renews it every 50 minutes. The App comes first, then the project's deploy key, then the workspace's token. shpyrd skips the App for a suspended installation, a repository the installation does not include, an installation that is gone, and while GitHub is failing (it asks again after a pause). A token already issued is kept through a short GitHub outage. `shpyrd git-auth show --project shop` says `through the GitHub App (acme)`, and so does the Source block of the project's overview.
 
-**Pushes** arrive through the App's own webhook, with nothing to set up per project: `shpyrd git-hooks show` says so. A suspended installation's pushes do not deploy. `[skip deploy]` and auto-deploy work as in [Deploying on push](#deploying-on-push).
+**Pushes** arrive through the App's own webhook, with nothing to set up per project: `shpyrd git-hooks show` says so. A repository the App covers is never checked on a timer. Every 5 minutes shpyrd asks GitHub to deliver again whatever push, CI result or installation event did not reach it (GitHub keeps deliveries three days), so a missed delivery deploys within about 5 minutes. A delivery GitHub never made is not caught: push again, or Redeploy. A suspended installation's pushes do not deploy. `[skip deploy]` and auto-deploy work as in [Deploying on push](#deploying-on-push).
 
 **When the App cannot read a repository.** shpyrd tries the deploy key and the token. When nothing gives access, the project says why, starting with the App's reason ("The GitHub App's installation on acme does not include shop: add the repository to it on GitHub."), and what runs keeps running.
 
@@ -234,7 +235,7 @@ The Source block says "Waiting for CI on a1b2c3d (since 2 min)" meanwhile, and `
 - **The App stops covering the repository:** a waiting commit stays held and ends "CI could not be read: the GitHub App no longer covers the repository".
 - **The installation has not accepted the App's updated permissions:** the commit is not deployed, at once: "CI could not be read: accept the GitHub App's updated permissions on GitHub". Accept them on GitHub; the next push waits for its CI again.
 
-shpyrd learns of results through the App's webhook, and checks a waiting commit every 30 seconds in case a delivery is missed. A deploy by a person (`shpyrd deploy`, Redeploy, a rollback) and the first commit of a new project do not wait. Turning auto-deploy back on sends the commit that was waiting through watch paths and wait for CI like any other.
+shpyrd learns of results through the App's webhook, and checks a waiting commit every 2 minutes in case a delivery is missed (the projects on one repository share what GitHub said for 90 seconds). A deploy by a person (`shpyrd deploy`, Redeploy, a rollback) and the first commit of a new project do not wait. Turning auto-deploy back on sends the commit that was waiting through watch paths and wait for CI like any other.
 
 ### Watch paths
 
