@@ -27,7 +27,7 @@ export function cancelGitHubLink() {
 // what was typed (RFC-0054). The popup opens at once, on the click, and
 // goes to GitHub when the server answers. Done when the popup says so, or
 // when the server shows the link (GitHub's pages may cut the popup from its
-// opener); failed when the popup is closed with no link. One wait at a
+// opener), never because the popup reads as closed. One wait at a
 // time: a new call, or cancelGitHubLink, ends the one before. The Mock
 // links at once: an empty authorizeURL.
 export function linkGitHub(): Promise<void> {
@@ -70,13 +70,14 @@ export function linkGitHub(): Promise<void> {
         const started = Date.now();
         timer = setInterval(async () => {
           if (Date.now() - started > wait) return end(new Error("GitHub was not linked within 10 minutes. Try again."));
-          const closed = popup.closed;
+          // popup.closed says nothing: GitHub's Cross-Origin-Opener-Policy
+          // makes a live popup read as closed. Only the link, the person
+          // or the time ends the wait.
           try {
             if (await api.githubMe()) return end();
           } catch {
             // asked again at the next tick
           }
-          if (closed) end(new Error("GitHub was not linked."));
         }, every);
       },
       (err) => {

@@ -70,29 +70,31 @@ it("ignores a message from another origin, or from another window, and is done o
   expect(settled).toBe(true);
 });
 
-it("ends the wait when the popup is closed and nothing is linked", async () => {
+it("keeps waiting when the popup reads as closed, and picks up a link made meanwhile", async () => {
+  // GitHub's Cross-Origin-Opener-Policy makes a live popup read as closed.
   vi.useFakeTimers();
   const popup = newPopup();
   vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
-  const done = linkGitHub();
-  const failed = expect(done).rejects.toThrow("GitHub was not linked.");
+  let settled = false;
+  const done = linkGitHub().then(() => (settled = true));
   await vi.advanceTimersByTimeAsync(2_000);
   popup.closed = true;
+  await vi.advanceTimersByTimeAsync(6_000);
+  expect(settled).toBe(false);
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
   await vi.advanceTimersByTimeAsync(2_000);
-  await failed;
+  await done;
+  expect(settled).toBe(true);
 });
 
-it("is done, not failed, when the popup closes after the link was made", async () => {
+it("gives up after ten minutes without a link", async () => {
   vi.useFakeTimers();
-  const popup = newPopup();
-  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  vi.spyOn(window, "open").mockReturnValue(newPopup() as unknown as Window);
   fake.linkGitHub.mockResolvedValue({ authorizeURL: "https://github.test/authorize" });
-  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
-  const done = linkGitHub();
-  popup.closed = true;
-  await vi.advanceTimersByTimeAsync(2_000);
-  await expect(done).resolves.toBeUndefined();
+  const failed = expect(linkGitHub()).rejects.toThrow(/not linked within 10 minutes/);
+  await vi.advanceTimersByTimeAsync(10 * 60_000 + 4_000);
+  await failed;
 });
 
 it("cancels the wait before it when called again, and when cancelled", async () => {

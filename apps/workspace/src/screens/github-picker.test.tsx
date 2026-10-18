@@ -114,6 +114,29 @@ it("asks to continue with GitHub, and says when the link is done", async () => {
   await waitFor(() => expect(onLinked).toHaveBeenCalled());
 });
 
+it("offers to try again or cancel while it waits for GitHub, and cancel is silent", async () => {
+  const { toast } = await import("sonner");
+  fake.linkGitHub.mockReturnValue(new Promise(() => {}));
+  const open = vi.spyOn(window, "open").mockReturnValue({ closed: false, close: vi.fn(), location: { href: "" } } as unknown as Window);
+  queries = new QueryClient();
+  render(
+    <QueryClientProvider client={queries}>
+      <GitHubLinkStep onLinked={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Continue with GitHub" }));
+  expect(await screen.findByText("Waiting for GitHub…")).toBeTruthy();
+  expect(open).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Not finished? Try again" }));
+  await waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+  expect(fake.linkGitHub).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("Waiting for GitHub…")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByText("Waiting for GitHub…")).toBeNull());
+  expect(screen.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
+  expect(toast.error).not.toHaveBeenCalled();
+});
+
 it("says so when the server cut the list, and not otherwise", async () => {
   Object.assign(repos[42], { truncated: true });
   show();

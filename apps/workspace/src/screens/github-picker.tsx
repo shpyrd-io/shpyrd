@@ -36,7 +36,10 @@ export function branchesInOrder(branches: string[], defaultBranch: string): stri
 // Before the picker: the person links their own GitHub account, in a
 // popup, and the dialog under it keeps what was typed (RFC-0054).
 export function GitHubLinkStep({ onLinked }: { onLinked: () => void }) {
-  const link = useMutation({ mutationFn: linkGitHub, onSuccess: onLinked, onError: (e: Error) => {
+  const link = useMutation({
+    mutationFn: linkGitHub,
+    onSuccess: onLinked,
+    onError: (e: Error) => {
       if (!(e instanceof LinkCancelled)) toast.error(e.message);
     },
   });
@@ -50,7 +53,17 @@ export function GitHubLinkStep({ onLinked }: { onLinked: () => void }) {
       <Button type="button" onClick={() => link.mutate()}>
         Continue with GitHub
       </Button>
-      {link.isPending && <p className="text-xs text-muted-foreground">Waiting for GitHub…</p>}
+      {link.isPending && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">Waiting for GitHub…</p>
+          <Button type="button" variant="link" size="xs" onClick={() => link.mutate()}>
+            Not finished? Try again
+          </Button>
+          <Button type="button" variant="link" size="xs" onClick={cancelGitHubLink}>
+            Cancel
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

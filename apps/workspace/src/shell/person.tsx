@@ -6,6 +6,7 @@ import { ChevronDown, ExternalLink, Link2, LogOut, Moon, Sun, Unlink } from "luc
 import { toast } from "sonner";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { Button } from "@shpyrd/ui/components/button";
+import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,7 +17,6 @@ import {
 } from "@shpyrd/ui/components/dropdown-menu";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { api } from "@/api/api";
-import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { cancelGitHubLink, LinkCancelled, linkGitHub } from "@/lib/github-link";
 
 // The small controls every screen has at the top right: the theme, and
@@ -83,57 +83,57 @@ export function PersonMenu() {
   const consoleUrl = me.data?.console && config.data?.workspace?.ownedByOperator ? config.data.consoleUrl : undefined;
   return (
     <>
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" icon={<Avatar size={20} alt={name} />} iconEnd={<ChevronDown />} aria-label={name}>
-          <span className="hidden max-w-40 truncate sm:inline">{name}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel className="font-normal">
-          <div className="text-sm font-medium">{me.data?.name ?? name}</div>
-          <div className="text-xs text-muted-foreground">
-            {me.data?.provider === "token" ? "admin token" : `signed in with ${me.data?.provider ?? "…"}`}
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {consoleUrl && (
-          <DropdownMenuItem asChild>
-            <a href={consoleUrl}>
-              <ExternalLink /> Console
-            </a>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" icon={<Avatar size={20} alt={name} />} iconEnd={<ChevronDown />} aria-label={name}>
+            <span className="hidden max-w-40 truncate sm:inline">{name}</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel className="font-normal">
+            <div className="text-sm font-medium">{me.data?.name ?? name}</div>
+            <div className="text-xs text-muted-foreground">
+              {me.data?.provider === "token" ? "admin token" : `signed in with ${me.data?.provider ?? "…"}`}
+            </div>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {consoleUrl && (
+            <DropdownMenuItem asChild>
+              <a href={consoleUrl}>
+                <ExternalLink /> Console
+              </a>
+            </DropdownMenuItem>
+          )}
+          {person &&
+            (github.data ? (
+              <>
+                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => setUnlinking(true)}>
+                  <Unlink /> Unlink GitHub
+                </DropdownMenuItem>
+              </>
+            ) : (
+              github.isSuccess && (
+                <DropdownMenuItem onClick={link}>
+                  <Link2 /> Link GitHub
+                </DropdownMenuItem>
+              )
+            ))}
+          {person && <DropdownMenuSeparator />}
+          <DropdownMenuItem onClick={signOut}>
+            <LogOut /> Sign out
           </DropdownMenuItem>
-        )}
-        {person &&
-          (github.data ? (
-            <>
-              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => setUnlinking(true)}>
-                <Unlink /> Unlink GitHub
-              </DropdownMenuItem>
-            </>
-          ) : (
-            github.isSuccess && (
-              <DropdownMenuItem onClick={link}>
-                <Link2 /> Link GitHub
-              </DropdownMenuItem>
-            )
-          ))}
-        {person && <DropdownMenuSeparator />}
-        <DropdownMenuItem onClick={signOut}>
-          <LogOut /> Sign out
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-    <ConfirmDialog
-      open={unlinking}
-      onOpenChange={setUnlinking}
-      title="Unlink GitHub?"
-      description="You won't see your private repositories in New project until you link again. Projects keep deploying."
-      action="Unlink"
-      variant="destructive"
-      onConfirm={unlink}
-    />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmDialog
+        open={unlinking}
+        onOpenChange={setUnlinking}
+        title="Unlink GitHub?"
+        description="You won't see your private repositories in New project until you link again. Projects keep deploying."
+        action="Unlink"
+        variant="destructive"
+        onConfirm={unlink}
+      />
     </>
   );
 }
