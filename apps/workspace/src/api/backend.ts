@@ -1,12 +1,14 @@
 import { parseLogLine } from "@shpyrd/shared/logs";
 import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
-import { json, request, stream } from "@shpyrd/shared/api/http";
+import { ApiError } from "@shpyrd/shared/api/error";
+import { json, request, requestWithHeaders, stream } from "@shpyrd/shared/api/http";
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
 import type {
   APIToken,
   AuditEntry,
   DomainStatus,
+  GitHubRepositories,
   Metrics,
   Project,
   ProjectSummary,
@@ -282,7 +284,24 @@ export const backend: Api = {
   github: () => request("/api/workspace/github"),
   connectGitHub: () => request("/api/workspace/github/connect", json("POST", {})),
   disconnectGitHub: (id) => request(`/api/workspace/github/installations/${id}`, gone),
-  githubRepositories: () => request("/api/workspace/github/repositories"),
+  githubMe: async () => {
+    try {
+      return await request("/api/me/github");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+  linkGitHub: (returnTo) => request("/api/me/github/link", json("POST", { return: returnTo })),
+  unlinkGitHub: () => request("/api/me/github", gone),
+  githubAccounts: () => request("/api/workspace/github/accounts"),
+  githubRepositories: async (installation) => {
+    const { data, headers } = await requestWithHeaders<GitHubRepositories>(
+      `/api/workspace/github/repositories${installation ? `?installation=${installation}` : ""}`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
+  },
   githubBranches: (fullName) => {
     const [owner, repo] = fullName.split("/");
     return request(`/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`);

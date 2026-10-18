@@ -15,7 +15,9 @@ import type {
   DomainClaim,
   DomainStatus,
   Drain,
+  GitHubAccounts,
   GitHubConnections,
+  GitHubLink,
   GitHubRepository,
   Identity,
   Invitation,
@@ -80,6 +82,7 @@ type Things = {
   sizes: SizeCatalog;
   globals: Globals;
   github: GitHubConnections;
+  githubLink: GitHubLink | null;
   githubRepositories: GitHubRepository[];
   githubBranches: Record<string, string[]>;
 };
@@ -810,10 +813,43 @@ export const mock: Api = {
     all.github.installations = all.github.installations.filter((i) => i.id !== id);
     await thingsOf.set(all);
   },
-  githubRepositories: async () => {
+  githubMe: async () => (await thingsOf.get()).githubLink,
+  // GitHub would ask the person to authorize the App in a popup: the Mock
+  // links Ana at once.
+  linkGitHub: async () => {
+    const all = await thingsOf.get();
+    all.githubLink = { login: "ana-souza", linkedAt: now() };
+    await thingsOf.set(all);
+    return { authorizeURL: "" };
+  },
+  unlinkGitHub: async () => {
+    const all = await thingsOf.get();
+    all.githubLink = null;
+    await thingsOf.set(all);
+  },
+  githubAccounts: async () => {
     const all = await thingsOf.get();
     if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
-    return all.github.installations.length ? all.githubRepositories : [];
+    const connected = all.github.installations.length;
+    if (connected > 0 && !all.githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
+    const accounts: GitHubAccounts["accounts"] = all.github.installations.map((i) => ({
+      installation: i.id,
+      account: i.account,
+      type: i.type,
+      suspended: i.suspended,
+      manageURL: i.manageURL,
+    }));
+    return { accounts, connected };
+  },
+  githubRepositories: async (installation) => {
+    const all = await thingsOf.get();
+    if (!all.github.configured) throw new ApiError(409, all.github.note ?? "GitHub is not set up on this platform.");
+    if (!all.github.installations.length) return [];
+    if (!all.githubLink)
+      throw new ApiError(409, "Link your GitHub account first: Continue with GitHub in New project, or run shpyrd github link", "github_link_required");
+    const live = new Set(all.github.installations.map((i) => i.id));
+    return all.githubRepositories.filter((r) => live.has(r.installation) && (installation === undefined || r.installation === installation));
   },
   githubBranches: async (fullName) => {
     const branches = (await thingsOf.get()).githubBranches[fullName];

@@ -309,6 +309,28 @@ export type GitHubRepository = {
   defaultBranch: string;
 };
 
+// An account of the workspace's GitHub the person sees on GitHub: the
+// picker's account switcher. manageURL is its settings on GitHub, where
+// repositories are added.
+export type GitHubAccount = {
+  installation: number;
+  account: string;
+  type: "Organization" | "User";
+  suspended: boolean;
+  manageURL: string;
+};
+
+// The person's accounts, and how many the workspace has: none, and New
+// project offers no GitHub.
+export type GitHubAccounts = { accounts: GitHubAccount[]; connected: number };
+
+// The person's own GitHub account (RFC-0054).
+export type GitHubLink = { login: string; linkedAt: string };
+
+// A listing of repositories; truncated when the server cut it at the most
+// it reads (the header X-Shpyrd-Truncated), so the picker says so.
+export type GitHubRepositories = GitHubRepository[] & { truncated?: boolean };
+
 // What the project's builds clone with.
 export type ProjectGitAuth = {
   url?: string;

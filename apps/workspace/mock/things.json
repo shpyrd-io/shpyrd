@@ -723,16 +723,19 @@
       { "id": 42, "account": "acme", "type": "Organization", "connectedBy": "ana@acme.test", "createdAt": "2026-10-01T09:00:00Z", "suspended": false, "manageURL": "https://github.com/organizations/acme/settings/installations/42" }
     ]
   },
+  "githubLink": null,
   "githubRepositories": [
     { "installation": 42, "fullName": "acme/billing", "private": true, "defaultBranch": "main" },
     { "installation": 42, "fullName": "acme/docs", "private": false, "defaultBranch": "trunk" },
     { "installation": 42, "fullName": "acme/hello-world", "private": false, "defaultBranch": "main" },
-    { "installation": 42, "fullName": "acme/reports", "private": true, "defaultBranch": "main" }
+    { "installation": 42, "fullName": "acme/reports", "private": true, "defaultBranch": "main" },
+    { "installation": 77, "fullName": "acme-labs/ml-pipeline", "private": true, "defaultBranch": "main" }
   ],
   "githubBranches": {
     "acme/billing": ["main", "hotfix"],
     "acme/docs": ["trunk"],
     "acme/hello-world": ["main", "dev", "release/2026"],
-    "acme/reports": ["main"]
+    "acme/reports": ["main"],
+    "acme-labs/ml-pipeline": ["main"]
   }
 }

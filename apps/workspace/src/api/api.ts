@@ -18,8 +18,10 @@ import type {
   Drain,
   Exposure,
   GitHooks,
+  GitHubAccounts,
   GitHubConnections,
-  GitHubRepository,
+  GitHubLink,
+  GitHubRepositories,
   ProjectGitAuth,
   Identity,
   Link,
@@ -169,7 +171,17 @@ export type Api = {
   github: () => Promise<GitHubConnections>;
   connectGitHub: () => Promise<{ installURL: string; authorizeURL: string }>;
   disconnectGitHub: (id: number) => Promise<void>;
-  githubRepositories: () => Promise<GitHubRepository[]>;
+  // The person's own GitHub account (RFC-0054): null when none is linked.
+  // linkGitHub answers GitHub's authorize page for a popup; an empty one
+  // means linked already (the Mock links at once).
+  githubMe: () => Promise<GitHubLink | null>;
+  linkGitHub: (returnTo: string) => Promise<{ authorizeURL: string }>;
+  unlinkGitHub: () => Promise<void>;
+  // What the person reads through the workspace's GitHub: a 409 with the
+  // code "github_link_required" while they have no link. A list the server
+  // cut says so in `truncated`.
+  githubAccounts: () => Promise<GitHubAccounts>;
+  githubRepositories: (installation?: number) => Promise<GitHubRepositories>;
   githubBranches: (fullName: string) => Promise<string[]>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;

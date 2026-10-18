@@ -29,13 +29,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { api, ApiError } from "@/api/api";
 import type { Exposure, ProjectSummary } from "@/api/types";
+import { LINK_REQUIRED } from "@/lib/github-link";
 import { useInternalExposure } from "@/lib/networking";
 import { useBrandColor } from "@/lib/branding";
 import { usePerms, useUserOnly } from "@/lib/perms";
 import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
 import { lookOf } from "@/lib/tile";
 import { PersonMenu, ThemeButton } from "@/shell/person";
-import { GitHubPicker, type Picked, slugFromRepo } from "./github-picker";
+import { GitHubLinkStep, GitHubPicker, type Picked, slugFromRepo } from "./github-picker";
 
 // Where everyone lands: the applications of the workspace, one card
 // each. Who operates sees the gear of each and the way to make one more;
@@ -148,12 +149,15 @@ export function NewProject({ asButton = false }: { asButton?: boolean }) {
   // while the dialog is open.
   const [from, setFrom] = useState<"github" | "url">("github");
   const [picked, setPicked] = useState<Picked>();
-  const repos = useQuery({ queryKey: ["github-repositories"], queryFn: api.githubRepositories, enabled: open, retry: false, staleTime: 60_000 });
-  const githubShown = repos.isSuccess ? repos.data.length > 0 : repos.error instanceof ApiError && repos.error.status === 502;
+  const perms = usePerms();
+  const accounts = useQuery({ queryKey: ["github-accounts"], queryFn: api.githubAccounts, enabled: open, retry: false, staleTime: 60_000 });
+  const needsLink = accounts.error instanceof ApiError && accounts.error.code === LINK_REQUIRED;
+  // Offered when the workspace has a GitHub account, when the person must
+  // link first, or when GitHub failed (so the error shows).
+  const githubShown = accounts.isSuccess
+    ? accounts.data.connected > 0
+    : needsLink || (accounts.error instanceof ApiError && accounts.error.status === 502);
   const fromGitHub = githubShown && from === "github";
-  // A repository the list no longer has is not picked: GitHub took it
-  // away from the connection meanwhile.
-  if (picked && repos.data && !repos.data.some((r) => r.fullName === picked.fullName)) setPicked(undefined);
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   // The app's address around the slug: acme-<slug>.shpyrd.app, or
   // <slug>.<domain> where the server gives no pattern.
@@ -252,19 +256,29 @@ export function NewProject({ asButton = false }: { asButton?: boolean }) {
                   <TabsTrigger value="url">Git URL</TabsTrigger>
                 </TabsList>
                 <TabsContent value="github">
-                  {repos.error ? (
-                    <Alert variant="destructive">
-                      <AlertDescription>{repos.error.message}</AlertDescription>
-                    </Alert>
-                  ) : (
-                    <GitHubPicker
-                      repositories={repos.data ?? []}
-                      value={picked}
-                      onChange={(p) => {
-                        setPicked(p);
-                        if (!slug.trim()) setSlug(slugFromRepo(p.fullName));
+                  {needsLink ? (
+                    <GitHubLinkStep
+                      onLinked={() => {
+                        queries.invalidateQueries({ queryKey: ["github-me"] });
+                        queries.invalidateQueries({ queryKey: ["github-accounts"] });
                       }}
                     />
+                  ) : accounts.error ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>{accounts.error.message}</AlertDescription>
+                    </Alert>
+                  ) : accounts.data ? (
+                    <GitHubPicker
+                      accounts={accounts.data.accounts}
+                      value={picked}
+                      canAdd={perms.admin}
+                      onChange={(p) => {
+                        setPicked(p);
+                        if (p && !slug.trim()) setSlug(slugFromRepo(p.fullName));
+                      }}
+                    />
+                  ) : (
+                    <Skeleton className="h-48 w-full" />
                   )}
                 </TabsContent>
                 <TabsContent value="url" className="grid gap-4">

@@ -1,7 +1,8 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, LogOut, Moon, Sun } from "lucide-react";
+import { ChevronDown, ExternalLink, Link2, LogOut, Moon, Sun, Unlink } from "lucide-react";
+import { toast } from "sonner";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { Button } from "@shpyrd/ui/components/button";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@shpyrd/ui/components/dropdown-menu";
 import { useTheme } from "@shpyrd/ui/lib/theme";
 import { api } from "@/api/api";
+import { linkGitHub } from "@/lib/github-link";
 
 // The small controls every screen has at the top right: the theme, and
 // the person signed in with the way out.
@@ -45,6 +47,33 @@ export function PersonMenu() {
   };
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, staleTime: 60_000 });
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
+  // The person's own GitHub account (RFC-0054); the admin token has none.
+  const person = me.data !== undefined && me.data.provider !== "token";
+  const github = useQuery({ queryKey: ["github-me"], queryFn: api.githubMe, staleTime: 60_000, enabled: person });
+  const githubChanged = () => {
+    queries.invalidateQueries({ queryKey: ["github-me"] });
+    queries.invalidateQueries({ queryKey: ["github-accounts"] });
+    queries.invalidateQueries({ queryKey: ["github-repositories"] });
+  };
+  const link = async () => {
+    try {
+      await linkGitHub();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      githubChanged();
+    }
+  };
+  const unlink = async () => {
+    try {
+      await api.unlinkGitHub();
+      toast.success("GitHub unlinked", { description: "Your projects keep deploying." });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      githubChanged();
+    }
+  };
   const name = me.data?.name || me.data?.email || "…";
   const consoleUrl = me.data?.console && config.data?.workspace?.ownedByOperator ? config.data.consoleUrl : undefined;
   return (
@@ -69,6 +98,22 @@ export function PersonMenu() {
             </a>
           </DropdownMenuItem>
         )}
+        {person &&
+          (github.data ? (
+            <>
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
+              <DropdownMenuItem onClick={unlink}>
+                <Unlink /> Unlink GitHub
+              </DropdownMenuItem>
+            </>
+          ) : (
+            github.isSuccess && (
+              <DropdownMenuItem onClick={link}>
+                <Link2 /> Link GitHub
+              </DropdownMenuItem>
+            )
+          ))}
+        {person && <DropdownMenuSeparator />}
         <DropdownMenuItem onClick={signOut}>
           <LogOut /> Sign out
         </DropdownMenuItem>

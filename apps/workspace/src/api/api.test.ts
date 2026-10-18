@@ -99,21 +99,28 @@ describe("the api picks the Mock when asked to", () => {
     expect((await api.project("reports")).status.source?.error).toContain("shpyrd git-auth");
   });
 
-  it("connects GitHub in the Mock, lists what it reaches and forgets a connection", async () => {
+  it("links the person's GitHub in the Mock, connects an account, lists what it reaches and forgets a connection", async () => {
+    await expect(api.githubAccounts()).rejects.toMatchObject({ status: 409, code: "github_link_required" });
+    expect(await api.githubMe()).toBeNull();
+    expect((await api.linkGitHub("/")).authorizeURL).toBe("");
+    expect((await api.githubMe())?.login).toBe("ana-souza");
     const before = await api.github();
     expect(before.configured).toBe(true);
     const { installURL, authorizeURL } = await api.connectGitHub();
     expect(installURL).toBe("/workspace/git");
     expect(authorizeURL).toBe("/workspace/git");
-    const after = await api.github();
-    expect(after.installations.length).toBe(before.installations.length + 1);
-    const repos = await api.githubRepositories();
-    expect(repos.map((r) => r.fullName)).toContain("acme/hello-world");
+    const accounts = await api.githubAccounts();
+    expect(accounts.connected).toBe(before.installations.length + 1);
+    expect(accounts.accounts.map((a) => a.account)).toEqual(["acme", "acme-labs"]);
+    expect((await api.githubRepositories(42)).map((r) => r.fullName)).toContain("acme/hello-world");
+    expect((await api.githubRepositories(77)).map((r) => r.fullName)).toEqual(["acme-labs/ml-pipeline"]);
     expect(await api.githubBranches("acme/hello-world")).toContain("main");
     await expect(api.githubBranches("someone/else")).rejects.toThrow(/No GitHub connection/);
     await api.disconnectGitHub(77);
     expect((await api.github()).installations.length).toBe(before.installations.length);
     expect((await api.projectGitAuth("hello-world")).using).toBe("github-app");
+    await api.unlinkGitHub();
+    expect(await api.githubMe()).toBeNull();
   }, 15_000);
 });
 

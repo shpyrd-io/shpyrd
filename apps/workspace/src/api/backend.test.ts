@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { toLogLine, toMetrics, toProject, type DetailAnswer, type MetricsAnswer } from "./backend";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { backend, toLogLine, toMetrics, toProject, type DetailAnswer, type MetricsAnswer } from "./backend";
 
 describe("the Backend reads the server's shapes as the screens read them", () => {
   it("lifts the phase, the address, the access and the processes of a project out of status and spec", () => {
@@ -65,5 +65,24 @@ describe("the Backend reads the server's shapes as the screens read them", () =>
     expect(m.network).toEqual([]);
     expect(m.throughput).toEqual([]);
     expect(m.releases).toEqual([{ time: 130, label: "v3" }]);
+  });
+});
+
+describe("the Backend reads GitHub's answers", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("marks a repository list the server cut, and asks for one account when told", async () => {
+    const fetchMock = vi.fn(async (_path: string) => new Response(JSON.stringify([{ installation: 42, fullName: "acme/a", private: false, defaultBranch: "main" }]), { status: 200, headers: { "X-Shpyrd-Truncated": "true" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const cut = await backend.githubRepositories(42);
+    expect(cut.truncated).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/workspace/github/repositories?installation=42");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    expect((await backend.githubRepositories()).truncated).toBeUndefined();
+  });
+
+  it("takes a 404 on the person's link as no link", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "no link" }), { status: 404 })));
+    expect(await backend.githubMe()).toBeNull();
   });
 });
