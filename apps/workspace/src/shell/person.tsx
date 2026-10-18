@@ -89,7 +89,7 @@ export function PersonMenu() {
             <span className="hidden max-w-40 truncate sm:inline">{name}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="min-w-56">
           <DropdownMenuLabel className="font-normal">
             <div className="text-sm font-medium">{me.data?.name ?? name}</div>
             <div className="text-xs text-muted-foreground">
@@ -107,7 +107,7 @@ export function PersonMenu() {
           {person &&
             (github.data ? (
               <>
-                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
+                <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">GitHub: {github.data.login}</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => setUnlinking(true)}>
                   <Unlink /> Unlink GitHub
                 </DropdownMenuItem>

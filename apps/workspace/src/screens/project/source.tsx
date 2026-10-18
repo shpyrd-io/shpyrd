@@ -293,16 +293,11 @@ function WatchPaths({ slug, paths, allowed, available }: { slug: string; paths: 
   );
 }
 
-// How pushes reach shpyrd: through the GitHub App, with nothing to set
-// up, or through the project's own webhook (RFC-0054).
+// The webhook to set up, when the GitHub App does not deliver the pushes.
+// Where it does, WatchLine already says so and who connected it (RFC-0054).
 function SourceAccess({ slug, canConfig }: { slug: string; canConfig: boolean }) {
   const auth = useQuery({ queryKey: ["git-auth", slug], queryFn: () => api.projectGitAuth(slug), staleTime: 60_000 });
-  if (auth.data?.using === "github-app")
-    return (
-      <p className="text-xs text-muted-foreground">
-        Through the GitHub App ({auth.data.githubAccount}): every push arrives by itself, nothing to set up.
-      </p>
-    );
+  if (auth.data?.using === "github-app") return null;
   return canConfig ? <DeployOnPush slug={slug} /> : null;
 }
 

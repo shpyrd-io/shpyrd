@@ -149,10 +149,16 @@ it("says when the clipboard cannot be written", async () => {
   Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
 });
 
-it("says pushes arrive through the GitHub App and offers no webhook to set up", async () => {
+it("shows one GitHub App line for a covered repository, and no webhook to set up", async () => {
   fake.projectGitAuth.mockResolvedValue({ url: repo.url, using: "github-app", githubAccount: "acme" });
-  show(projectWith(repo, { commit, latest: commit, via: "push", checkedAt: minutesAgo(1) }));
-  expect(await screen.findByText("Through the GitHub App (acme): every push arrives by itself, nothing to set up.")).toBeTruthy();
+  const p = projectWith(repo, { commit, latest: commit, via: "push", checkedAt: minutesAgo(1) });
+  p.sourceWatch = { mode: "github-app" };
+  p.githubLinkedBy = "paezao";
+  show(p);
+  expect(await screen.findByText("Deploys on push through the GitHub App. Connected by paezao.")).toBeTruthy();
+  await waitFor(() => expect(fake.projectGitAuth).toHaveBeenCalled());
+  expect(screen.queryByText(/nothing to set up/)).toBeNull();
+  expect(screen.getAllByText(/GitHub App/)).toHaveLength(1);
   expect(screen.queryByRole("button", { name: "Deploy on push" })).toBeNull();
 });
 
