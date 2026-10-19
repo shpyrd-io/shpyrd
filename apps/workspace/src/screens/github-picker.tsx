@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@shpyrd/ui/components/alert";
 import { Button } from "@shpyrd/ui/components/button";
+import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { ScrollArea } from "@shpyrd/ui/components/scroll-area";
@@ -68,6 +69,45 @@ export function GitHubLinkStep({ onLinked }: { onLinked: () => void }) {
   );
 }
 
+// Whose GitHub account the picker reads, and the way to unlink it: here,
+// where the link is used, rather than in the person menu (RFC-0054).
+export function GitHubAccountLine() {
+  const queries = useQueryClient();
+  const me = useQuery({ queryKey: ["github-me"], queryFn: api.githubMe, staleTime: 60_000 });
+  const [asking, setAsking] = useState(false);
+  const unlink = async () => {
+    try {
+      await api.unlinkGitHub();
+      toast.success("GitHub unlinked", { description: "Your projects keep deploying." });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      queries.invalidateQueries({ queryKey: ["github-me"] });
+      queries.invalidateQueries({ queryKey: ["github-accounts"] });
+      queries.invalidateQueries({ queryKey: ["github-repositories"] });
+    }
+  };
+  if (!me.data) return null;
+  return (
+    <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      <span className="truncate">GitHub: {me.data.login}</span>
+      <span aria-hidden>·</span>
+      <Button type="button" variant="link" size="xs" onClick={() => setAsking(true)}>
+        Unlink
+      </Button>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title="Unlink GitHub?"
+        description="You won't see your private repositories here until you link again. Projects keep deploying."
+        action="Unlink"
+        variant="destructive"
+        onConfirm={unlink}
+      />
+    </div>
+  );
+}
+
 // The repositories the person can read in the workspace's GitHub accounts
 // (RFC-0054): an account, a filter over a list that scrolls, then the
 // branch; below, where to find a missing repository and how to add an
@@ -125,19 +165,22 @@ export function GitHubPicker({
     }
   };
   const below = (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      {account && (
-        <Button type="button" variant="link" size="xs" onClick={() => window.open(account.manageURL, "_blank", "noopener")}>
-          Can't find a repository?
-        </Button>
-      )}
-      {canAdd ? (
-        <Button type="button" variant="link" size="xs" onClick={addAccount}>
-          Add GitHub account or organisation
-        </Button>
-      ) : (
-        <p className="text-xs text-muted-foreground">A workspace admin adds accounts in Workspace settings → Git.</p>
-      )}
+    <div className="grid gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {account && (
+          <Button type="button" variant="link" size="xs" onClick={() => window.open(account.manageURL, "_blank", "noopener")}>
+            Can't find a repository?
+          </Button>
+        )}
+        {canAdd ? (
+          <Button type="button" variant="link" size="xs" onClick={addAccount}>
+            Add GitHub account or organisation
+          </Button>
+        ) : (
+          <p className="text-xs text-muted-foreground">A workspace admin adds accounts in Workspace settings → Git.</p>
+        )}
+      </div>
+      <GitHubAccountLine />
     </div>
   );
   if (!account) {

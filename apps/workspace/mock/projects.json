@@ -194,7 +194,7 @@
   },
   {
     "slug": "billing",
-    "sourceWatch": { "mode": "poll", "pollEvery": 300 },
+    "sourceWatch": { "mode": "manual" },
     "displayName": "Billing",
     "description": "Invoices, plans and what each client owes.",
     "icon": "receipt",
@@ -340,7 +340,7 @@
   },
   {
     "slug": "reports",
-    "sourceWatch": { "mode": "poll", "pollEvery": 300 },
+    "sourceWatch": { "mode": "manual" },
     "displayName": "Reports",
     "description": "Builds the reports of the month, every night.",
     "namespace": "p-reports",

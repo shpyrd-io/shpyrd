@@ -204,15 +204,15 @@ func TestAStoredAppModeIsNotListedOnATimerWhileTheCoverIsUnknown(t *testing.T) {
 	if ls.calls != 0 || sourceRecord(got).Watch != WatchGitHubApp {
 		t.Errorf("listed %d times with the cover unknown, watch %q", ls.calls, sourceRecord(got).Watch)
 	}
-	// Stored as polled, it is still listed on its timer.
-	poll := shopWith(shpyrdv1.GitSource{})
-	withRecord(poll, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", Watch: WatchPoll, CheckedAt: at(sourceNow.Add(-3 * time.Hour))})
+	// Stored as manual, it is not listed on a timer either.
+	manual := shopWith(shpyrdv1.GitSource{})
+	withRecord(manual, gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", Watch: WatchManual, CheckedAt: at(sourceNow.Add(-3 * time.Hour))})
 	ls2 := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
-	r2, _ := gatedWatcher(t, ls2, poll)
+	r2, _ := gatedWatcher(t, ls2, manual)
 	r2.GitHub.Installations = unreadableInstallations{r2.GitHub.Installations}
-	reconcileSource(t, r2, poll)
-	if ls2.calls != 1 {
-		t.Errorf("a polled branch is listed %d times", ls2.calls)
+	reconcileSource(t, r2, manual)
+	if ls2.calls != 0 {
+		t.Errorf("a branch without a webhook is listed %d times", ls2.calls)
 	}
 }
 

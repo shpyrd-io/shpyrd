@@ -251,8 +251,8 @@ export type Project = ProjectSummary & {
   githubFeatures?: boolean;
   sourceNote?: string;
   // How shpyrd learns of the branch's pushes: the GitHub App, the
-  // project's own webhook, or a check every pollEvery seconds.
-  sourceWatch?: { mode: "github-app" | "webhook" | "poll"; pollEvery?: number };
+  // project's own webhook, or not until its webhook is set up (manual).
+  sourceWatch?: { mode: "github-app" | "webhook" | "manual" };
   // The GitHub account whose access picked the repository.
   githubLinkedBy?: string;
 };

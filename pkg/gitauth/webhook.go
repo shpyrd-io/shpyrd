@@ -243,11 +243,10 @@ type SourceRecord struct {
 	// it again is ignored.
 	Delivery string `json:"delivery,omitempty"`
 	// ProjectHook: the project's own webhook has delivered (RFC-0054): a
-	// repository the GitHub App does not cover is then no longer listed on
-	// a timer.
+	// repository the GitHub App does not cover then deploys on push.
 	ProjectHook bool `json:"projectHook,omitempty"`
 	// Watch is how the branch's pushes last arrived ("github-app",
-	// "webhook" or "poll"; empty: not known yet). A change of it reads the
+	// "webhook" or "manual"; empty: not known yet). A change of it reads the
 	// branch once, so a push missed while the mode changed is found.
 	Watch string `json:"watch,omitempty"`
 	// Failures counts the listings that failed in a row, for the backoff.

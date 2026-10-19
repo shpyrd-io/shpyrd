@@ -55,7 +55,7 @@ func withRecord(app *shpyrdv1.App, rec gitauth.SourceRecord) *shpyrdv1.App {
 	}
 	if rec.Watch == "" {
 		// A record that has been through a pass knows how its pushes arrive:
-		// what the App's record said, else a timer (nothing covers it).
+		// what the App's record said, else a person (nothing covers it).
 		if rec.Watch = sourceRecord(app).Watch; rec.Watch == "" {
 			rec.Watch = WatchMode(false, rec)
 		}
@@ -63,6 +63,21 @@ func withRecord(app *shpyrdv1.App, rec gitauth.SourceRecord) *shpyrdv1.App {
 	raw, _ := json.Marshal(rec)
 	app.Annotations[shpyrdv1.AnnotationGitSource] = string(raw)
 	return app
+}
+
+// askDeploy writes a person's deploy request on the App, as the API does:
+// the watcher reads the branch for it.
+func askDeploy(t *testing.T, r *SourceReconciler, app *shpyrdv1.App, when time.Time) *shpyrdv1.App {
+	t.Helper()
+	got := &shpyrdv1.App{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(app), got); err != nil {
+		t.Fatal(err)
+	}
+	got.Annotations[configvars.AnnotationDeployRequested] = when.Format(time.RFC3339Nano)
+	if err := r.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func sourceRecord(app *shpyrdv1.App) gitauth.SourceRecord {
@@ -98,9 +113,9 @@ func newSourceReconciler(t *testing.T, ls *fakeLsRemote, objs ...client.Object) 
 	_, c := newTestReconciler(t, objs...)
 	return &SourceReconciler{
 		Client: c, Kube: k8sfake.NewSimpleClientset(), SystemNamespace: "shpyrd-system",
-		PollInterval: DefaultPollInterval, PollRate: 1000, LsRemote: ls.list,
-		Now:    func() time.Time { return sourceNow },
-		Jitter: func(d time.Duration) time.Duration { return d },
+		LsRemote: ls.list,
+		Now:      func() time.Time { return sourceNow },
+		Jitter:   func(d time.Duration) time.Duration { return d },
 	}, c
 }
 
@@ -137,7 +152,7 @@ func TestSourcePinsTheBranchOfANewApp(t *testing.T) {
 	if ls.url != "https://github.com/acme/shop" {
 		t.Errorf("listed %q", ls.url)
 	}
-	if note := got.Annotations[shpyrdv1.AnnotationReleaseNote]; note != "Commit 0123456 (polled)" {
+	if note := got.Annotations[shpyrdv1.AnnotationReleaseNote]; note != "Commit 0123456 (head of main)" {
 		t.Errorf("note %q", note)
 	}
 	if got.Annotations[shpyrdv1.AnnotationDeployedBy] != "git" || got.Annotations[shpyrdv1.AnnotationDeployedClient] != "poll" {
@@ -147,7 +162,7 @@ func TestSourcePinsTheBranchOfANewApp(t *testing.T) {
 	if rec.Ref != "main" || rec.Latest != testCommit || rec.Via != "poll" || rec.CheckedAt == nil || !rec.CheckedAt.Equal(sourceNow) || rec.Error != "" {
 		t.Errorf("record %+v", rec)
 	}
-	if res.RequeueAfter != DefaultPollInterval {
+	if res.RequeueAfter != pushDrivenRecheck {
 		t.Errorf("requeue %v", res.RequeueAfter)
 	}
 	if len(*heard) != 1 || (*heard)[0].Action != "git.push" || (*heard)[0].Target != "0123456" || (*heard)[0].Actor != "git" {
@@ -235,11 +250,12 @@ func TestSourceKeepsASkippedCommitSkipped(t *testing.T) {
 	if len(*heard) != 1 || (*heard)[0].Action != "git.skip" || (*heard)[0].Actor != "git:bruno" {
 		t.Errorf("audit %+v", *heard)
 	}
-	// Three hours on, a poll finds the skipped commit at the head.
+	// Three hours on, the hourly pass neither lists the branch nor deploys
+	// the skipped commit.
 	r.Now = func() time.Time { return sourceNow.Add(3 * time.Hour) }
 	_, got = reconcileSource(t, r, got)
-	if ls.calls != 1 || got.PinnedCommit() != testCommit {
-		t.Errorf("listings %d, pin %q: a poll must not deploy a skipped commit", ls.calls, got.PinnedCommit())
+	if ls.calls != 0 || got.PinnedCommit() != testCommit {
+		t.Errorf("listings %d, pin %q: a skipped commit is not deployed", ls.calls, got.PinnedCommit())
 	}
 }
 
@@ -277,8 +293,8 @@ func TestSourceWebhookBeatsAStalePoll(t *testing.T) {
 }
 
 // Review Focus 1: every status write of the App controller is an App
-// event; none of them lists the repository before the check is due.
-func TestSourcePollsOnlyWhenDue(t *testing.T) {
+// event; none of them lists the repository: nothing does on a timer.
+func TestSourceListsOnlyWhenAsked(t *testing.T) {
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
 	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, CheckedAt: at(sourceNow.Add(-30 * time.Second))})
@@ -289,7 +305,7 @@ func TestSourcePollsOnlyWhenDue(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		res, _ = reconcileSource(t, r, app)
 	}
-	if ls.calls != 0 || res.RequeueAfter != DefaultPollInterval-30*time.Second {
+	if ls.calls != 0 || res.RequeueAfter != pushDrivenRecheck {
 		t.Fatalf("listings %d, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	// An app whose listings fail backs off (30 s, 1 m, 2 m: the third
@@ -316,13 +332,13 @@ func TestSourceFollowsAForcePushAndKeepsThePinWhenTheBranchGoes(t *testing.T) {
 	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, CheckedAt: at(sourceNow.Add(-time.Hour))})
 	r, _ := newSourceReconciler(t, ls, app)
-	_, got := reconcileSource(t, r, app)
+	_, got := reconcileSource(t, r, askDeploy(t, r, app, sourceNow.Add(-time.Second)))
 	if got.PinnedCommit() != otherCommit {
 		t.Fatalf("history rewritten: the branch's commit is what runs; pin %q", got.PinnedCommit())
 	}
 	ls.refs = map[string]string{"refs/heads/dev": testCommit}
 	r.Now = func() time.Time { return sourceNow.Add(time.Hour) }
-	res, got := reconcileSource(t, r, got)
+	res, got := reconcileSource(t, r, askDeploy(t, r, got, sourceNow.Add(time.Hour-time.Second)))
 	rec := sourceRecord(got)
 	if got.PinnedCommit() != otherCommit {
 		t.Errorf("a deleted branch keeps what runs: pin %q", got.PinnedCommit())
@@ -435,12 +451,7 @@ func TestLookupGitBuildIsWhatTheBuildUses(t *testing.T) {
 	}
 }
 
-func TestPollIntervalAndJitter(t *testing.T) {
-	for in, want := range map[string]time.Duration{"": 5 * time.Minute, "30s": 30 * time.Second, "nonsense": 5 * time.Minute, "1s": 30 * time.Second, "10m": 10 * time.Minute} {
-		if got := PollInterval(in); got != want {
-			t.Errorf("PollInterval(%q) = %v, want %v", in, got, want)
-		}
-	}
+func TestJitter(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		if d := jitter(100 * time.Second); d < 90*time.Second || d > 110*time.Second {
 			t.Fatalf("jitter(100s) = %v", d)
@@ -448,10 +459,9 @@ func TestPollIntervalAndJitter(t *testing.T) {
 	}
 }
 
-// Ruling A: a check that finds what the record already says writes
-// nothing, so the App controller is not woken every interval; the time of
-// the check is kept in memory.
-func TestSourceSameCommitWithinTheHourWritesNothing(t *testing.T) {
+// Ruling A: a pass with nothing asked of it lists nothing and writes
+// nothing, so the App controller is not woken; a deploy reads the branch.
+func TestSourceAPassWithNothingAskedWritesNothing(t *testing.T) {
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
 	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, LatestAt: at(sourceNow.Add(-time.Hour)), Via: "poll", CheckedAt: at(sourceNow.Add(-5 * time.Minute))})
@@ -461,25 +471,24 @@ func TestSourceSameCommitWithinTheHourWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, got := reconcileSource(t, r, app)
-	if ls.calls != 1 {
-		t.Fatalf("the check was due: %d listings", ls.calls)
+	if ls.calls != 0 {
+		t.Fatalf("nothing asked: %d listings", ls.calls)
 	}
 	if got.ResourceVersion != before.ResourceVersion || got.Annotations[shpyrdv1.AnnotationGitSource] != before.Annotations[shpyrdv1.AnnotationGitSource] {
-		t.Errorf("a check that found nothing new wrote the App: %q -> %q", before.Annotations[shpyrdv1.AnnotationGitSource], got.Annotations[shpyrdv1.AnnotationGitSource])
+		t.Errorf("a pass with nothing asked wrote the App: %q -> %q", before.Annotations[shpyrdv1.AnnotationGitSource], got.Annotations[shpyrdv1.AnnotationGitSource])
 	}
-	if res.RequeueAfter != DefaultPollInterval {
-		t.Errorf("requeue %v: the next check counts from this one", res.RequeueAfter)
+	if res.RequeueAfter != pushDrivenRecheck {
+		t.Errorf("requeue %v", res.RequeueAfter)
 	}
-	// The App controller's writes wake the watcher: the check made a
-	// moment ago, kept in memory, is not repeated.
+	// The App controller's writes wake the watcher: nothing is listed.
 	r.Now = func() time.Time { return sourceNow.Add(10 * time.Second) }
-	if res, _ = reconcileSource(t, r, got); ls.calls != 1 || res.RequeueAfter != DefaultPollInterval-10*time.Second {
+	if res, _ = reconcileSource(t, r, got); ls.calls != 0 || res.RequeueAfter != pushDrivenRecheck {
 		t.Errorf("listings %d requeue %v", ls.calls, res.RequeueAfter)
 	}
-	// A new commit is written.
+	// A deploy reads the branch, and its new commit is written.
 	ls.refs = map[string]string{"refs/heads/main": otherCommit}
 	r.Now = func() time.Time { return sourceNow.Add(6 * time.Minute) }
-	if _, got = reconcileSource(t, r, got); ls.calls != 2 || got.PinnedCommit() != otherCommit || sourceRecord(got).Latest != otherCommit {
+	if _, got = reconcileSource(t, r, askDeploy(t, r, got, sourceNow.Add(6*time.Minute-time.Second))); ls.calls != 1 || got.PinnedCommit() != otherCommit || sourceRecord(got).Latest != otherCommit {
 		t.Errorf("listings %d pin %q record %+v", ls.calls, got.PinnedCommit(), sourceRecord(got))
 	}
 }
@@ -489,7 +498,7 @@ func TestSourceWritesAnErrorAndClearsIt(t *testing.T) {
 	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", CheckedAt: at(sourceNow.Add(-5 * time.Minute))})
 	r, _ := newSourceReconciler(t, ls, app)
-	_, got := reconcileSource(t, r, app)
+	_, got := reconcileSource(t, r, askDeploy(t, r, app, sourceNow.Add(-time.Second)))
 	if rec := sourceRecord(got); rec.Error == "" || rec.Failures != 1 || !rec.CheckedAt.Equal(sourceNow) {
 		t.Fatalf("record %+v", rec)
 	}
@@ -505,7 +514,7 @@ func TestSourceRefreshesCheckedAtHourly(t *testing.T) {
 	app := withRecord(pinGit(gitApp("shop", "https://github.com/acme/shop"), testCommit),
 		gitauth.SourceRecord{Ref: "main", Latest: testCommit, Via: "poll", CheckedAt: at(sourceNow.Add(-61 * time.Minute))})
 	r, _ := newSourceReconciler(t, ls, app)
-	_, got := reconcileSource(t, r, app)
+	_, got := reconcileSource(t, r, askDeploy(t, r, app, sourceNow.Add(-time.Second)))
 	rec := sourceRecord(got)
 	if ls.calls != 1 || rec.CheckedAt == nil || !rec.CheckedAt.Equal(sourceNow) {
 		t.Errorf("listings %d record %+v", ls.calls, rec)
@@ -718,11 +727,11 @@ func TestWatchModeSaysHowABranchsPushesArrive(t *testing.T) {
 		{true, gitauth.SourceRecord{ProjectHook: true}, WatchGitHubApp},
 		{false, gitauth.SourceRecord{ProjectHook: true}, WatchWebhook},
 		// An App's push, and the App no longer covers it: listed again.
-		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow), Watch: WatchGitHubApp}, WatchPoll},
+		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow), Watch: WatchGitHubApp}, WatchManual},
 		// A webhook delivered before the mode was stored: the project's own.
 		{false, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchWebhook},
 		{true, gitauth.SourceRecord{LastWebhookAt: at(sourceNow)}, WatchGitHubApp},
-		{false, gitauth.SourceRecord{}, WatchPoll},
+		{false, gitauth.SourceRecord{}, WatchManual},
 	} {
 		if got := WatchMode(c.covered, c.rec); got != c.want {
 			t.Errorf("%v %+v: %s", c.covered, c.rec, got)
@@ -760,7 +769,7 @@ func TestACoveredRepositoryIsNeverListedOnATimer(t *testing.T) {
 		t.Fatalf("the deploy read twice: %d listings", ls.calls)
 	}
 	// Taken out of the installation: once its token ages, the App no longer
-	// covers it, and the timer lists it again although App pushes arrived.
+	// covers it, and the change of mode reads the branch once.
 	fake.SetRepos(42, githubtest.Repo{FullName: "Acme/site", DefaultBranch: "trunk"})
 	r.GitHub.Forget(store.DefaultWorkspace)
 	advance(fake, 2*time.Hour)
@@ -788,28 +797,29 @@ func TestAProjectsOwnWebhookStopsItsChecksButTheAppsDoesNot(t *testing.T) {
 	if ls.calls != 0 {
 		t.Errorf("a project whose webhook delivered was listed: %d", ls.calls)
 	}
-	// Not covered (no App here): a push through the App does not stop the
-	// checks.
+	// Not covered (no App here): nothing lists it on a timer either.
 	reconcileSource(t, r, app)
-	if ls.calls != 1 {
+	if ls.calls != 0 {
 		t.Errorf("an uncovered repository with App pushes only: %d listings", ls.calls)
+	}
+	if w := WatchMode(false, sourceRecord(app)); w != WatchManual {
+		t.Errorf("watch %q", w)
 	}
 }
 
-// A change of cover is seen at the next pass: a repository that stops being
-// covered is read once and goes back to the timer; one that becomes covered
-// stops its timer.
-func TestACoverThatChangesMovesTheBranchBetweenTheTimerAndTheApp(t *testing.T) {
+// A change of cover is seen at the next pass, and reads the branch once
+// either way; nothing lists it on a timer after.
+func TestACoverThatChangesReadsTheBranchOnce(t *testing.T) {
 	ls := &fakeLsRemote{refs: map[string]string{"refs/heads/main": testCommit}}
 	app := shopWith(shpyrdv1.GitSource{Revision: "main"})
 	r, fake := gatedWatcher(t, ls, app)
 	elsewhere := githubtest.Repo{FullName: "Acme/site", DefaultBranch: "trunk"}
 	fake.SetRepos(42, elsewhere)
 	r.GitHub.Forget(store.DefaultWorkspace)
-	// Not covered: the timer lists it.
+	// Not covered: read once, as a new project.
 	advance(fake, 6*time.Minute)
 	res, got := reconcileSource(t, r, app)
-	if ls.calls != 1 || res.RequeueAfter > DefaultPollInterval {
+	if ls.calls != 1 || res.RequeueAfter > pushDrivenRecheck {
 		t.Fatalf("not covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	// Covered: no more listings, and the next pass is the hourly look at the cover.
@@ -825,16 +835,16 @@ func TestACoverThatChangesMovesTheBranchBetweenTheTimerAndTheApp(t *testing.T) {
 	if res, got = reconcileSource(t, r, got); ls.calls != 2 || res.RequeueAfter != pushDrivenRecheck {
 		t.Fatalf("covered, hours on: %d listings, requeue %v", ls.calls, res.RequeueAfter)
 	}
-	// Taken out again: one read, then the timer.
+	// Taken out again: one read, then nothing.
 	fake.SetRepos(42, elsewhere)
 	r.GitHub.Forget(store.DefaultWorkspace)
 	advance(fake, 2*time.Hour)
-	if res, got = reconcileSource(t, r, got); ls.calls != 3 || res.RequeueAfter > DefaultPollInterval {
+	if res, got = reconcileSource(t, r, got); ls.calls != 3 || res.RequeueAfter > pushDrivenRecheck {
 		t.Fatalf("stopped being covered: %d listings, requeue %v", ls.calls, res.RequeueAfter)
 	}
 	advance(fake, 6*time.Minute)
-	if _, _ = reconcileSource(t, r, got); ls.calls != 4 {
-		t.Errorf("back on the timer: %d listings", ls.calls)
+	if _, _ = reconcileSource(t, r, got); ls.calls != 3 {
+		t.Errorf("not covered, minutes on: %d listings", ls.calls)
 	}
 }
 

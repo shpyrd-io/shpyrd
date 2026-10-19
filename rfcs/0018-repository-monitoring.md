@@ -36,7 +36,7 @@ redeploy. Webhooks are faster than polling and the standard integration.
   show` prints the URL and the secret); verifies GitHub's HMAC signature or GitLab's token,
   ignores pushes to other branches, resolves the commit and sets `spec.source.git.revision`
   to it (a deploy with note "Push <sha> by <author>").
-- Polling: the controller runs `git ls-remote` every `SHPYRD_GIT_POLL_INTERVAL` (default 5m since 2026-10-18, was 2m; 30s at least)
+- Polling: the controller runs `git ls-remote` every `SHPYRD_GIT_POLL_INTERVAL` (default 2m). **Dropped on 2026-10-19:** nothing is polled; pushes arrive by the GitHub App's webhook or the project's own, and without either a person deploys (as on Vercel)
   for Dockerfile-strategy apps whose revision is a branch, using the project's credentials. Since 2026-10-18 a repository the GitHub App covers is never polled, and any other stops being polled once the project's own webhook has delivered; see RFC-0054.
 - `spec.source.git.autoDeploy: true|false` (default true for git sources); `shpyrd deploy
   --git ... --no-auto-deploy`; dashboard toggle on the Source card.

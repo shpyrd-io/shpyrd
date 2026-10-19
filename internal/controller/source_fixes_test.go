@@ -169,7 +169,7 @@ func (refusedForTest) Is(target error) bool { return target == gitauth.ErrRefuse
 func TestSourceFailuresAreCapped(t *testing.T) {
 	ls := &fakeLsRemote{err: gitauth.ErrNoAccess}
 	app := gitApp("shop", "https://github.com/acme/shop")
-	app = withRecord(app, gitauth.SourceRecord{Ref: "main", Error: describeSourceError(gitauth.ErrNoAccess, app), Failures: 6, CheckedAt: at(sourceNow.Add(-6 * time.Minute))})
+	app = withRecord(app, gitauth.SourceRecord{Ref: "main", Error: describeSourceError(gitauth.ErrNoAccess, app), Failures: 6, CheckedAt: at(sourceNow.Add(-maxBackoff))})
 	r, c := newSourceReconciler(t, ls, app)
 	before := &shpyrdv1.App{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), before); err != nil {

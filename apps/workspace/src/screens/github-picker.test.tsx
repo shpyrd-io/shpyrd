@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import type { GitHubAccount, GitHubRepository } from "@/api/types";
 import { branchesInOrder, GitHubLinkStep, GitHubPicker, type Picked, slugFromRepo } from "./github-picker";
 
-const fake = vi.hoisted(() => ({ githubBranches: vi.fn(), githubRepositories: vi.fn(), connectGitHub: vi.fn(), linkGitHub: vi.fn(), githubMe: vi.fn() }));
+const fake = vi.hoisted(() => ({ githubBranches: vi.fn(), githubRepositories: vi.fn(), connectGitHub: vi.fn(), linkGitHub: vi.fn(), githubMe: vi.fn(), unlinkGitHub: vi.fn() }));
 vi.mock("@/api/api", () => ({ api: fake }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -28,6 +28,7 @@ function Harness({ accounts, canAdd = true }: { accounts: GitHubAccount[]; canAd
 }
 function show(accounts: GitHubAccount[] = [acme], canAdd = true) {
   fake.githubRepositories.mockImplementation(async (installation: number) => repos[installation] ?? []);
+  if (!fake.githubMe.getMockImplementation()) fake.githubMe.mockResolvedValue(null);
   queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queries}>
@@ -94,6 +95,33 @@ it("adds an account through Connect for a workspace admin, and says who adds the
   show([acme], false);
   expect(await screen.findByText("A workspace admin adds accounts in Workspace settings → Git.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add GitHub account or organisation" })).toBeNull();
+});
+
+it("shows whose GitHub account it reads, and unlinks it once confirmed", async () => {
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
+  fake.unlinkGitHub.mockResolvedValue(undefined);
+  show();
+  expect(await screen.findByText("GitHub: paezao")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
+  expect(await screen.findByText("Unlink GitHub?")).toBeTruthy();
+  expect(screen.getByText(/You won't see your private repositories here until you link again/)).toBeTruthy();
+  expect(fake.unlinkGitHub).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Unlink" }));
+  await waitFor(() => expect(fake.unlinkGitHub).toHaveBeenCalled());
+});
+
+it("does not unlink when the question is cancelled", async () => {
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
+  show();
+  fireEvent.click(await screen.findByRole("button", { name: "Unlink" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+  expect(fake.unlinkGitHub).not.toHaveBeenCalled();
+});
+
+it("shows the account line under an empty picker too", async () => {
+  fake.githubMe.mockResolvedValue({ login: "paezao", linkedAt: "2026-10-17T10:00:00Z" });
+  show([]);
+  expect(await screen.findByText("GitHub: paezao")).toBeTruthy();
 });
 
 it("says so when the person's GitHub reads none of the workspace's accounts", async () => {

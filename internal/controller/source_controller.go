@@ -34,18 +34,14 @@ import (
 // deploy uses, and records what it saw in AnnotationGitSource. It never
 // writes status: the App controller copies the record there.
 //
-// A repository the GitHub App covers is never listed on a timer (its
-// webhook, and the sweep's redeliveries, are the signal); another is listed
-// until its own webhook has delivered.
+// No branch is listed on a timer: pushes arrive by the GitHub App's
+// webhook (and the sweep's redeliveries) or by the project's own webhook.
+// Without either, a person deploys. A failed read is retried with a
+// backoff.
 
 const (
-	// DefaultPollInterval is how often a branch whose pushes do not arrive
-	// by webhook is read (SHPYRD_GIT_POLL_INTERVAL).
-	DefaultPollInterval = 5 * time.Minute
-	minPollInterval     = 30 * time.Second
-	// pushDrivenRecheck is how often a branch whose pushes arrive by
-	// webhook is reconciled: its cover is looked at again, and nothing is
-	// listed.
+	// pushDrivenRecheck is how often a branch is reconciled when nothing
+	// asks: its cover is looked at again, and nothing is listed.
 	pushDrivenRecheck = time.Hour
 	// recordRefresh is how stale the record's checkedAt may get: a check
 	// that finds nothing new writes nothing (each write of the App wakes
@@ -55,11 +51,12 @@ const (
 	// the written record has caught up with it.
 	forgetChecks = 2 * time.Hour
 	// errorBackoff is the first wait after a failed listing; it doubles
-	// up to the interval.
+	// up to maxBackoff.
 	errorBackoff = 30 * time.Second
-	// maxFailures caps the failures counted: the backoff has reached the
-	// interval by then, and a record that stops changing is not written on
-	// each attempt.
+	maxBackoff   = 10 * time.Minute
+	// maxFailures caps the failures counted: the backoff has reached
+	// maxBackoff by then, and a record that stops changing is not written
+	// on each attempt.
 	maxFailures = 6
 )
 
@@ -67,12 +64,12 @@ const (
 const (
 	WatchGitHubApp = "github-app"
 	WatchWebhook   = "webhook"
-	WatchPoll      = "poll"
+	WatchManual    = "manual"
 )
 
 // WatchMode says how a branch's pushes reach shpyrd: through the GitHub
 // App when it covers the repository; through the project's own webhook
-// once it has delivered; else by listing the branch on a timer.
+// once it has delivered; else they do not: a person deploys (WatchManual).
 func WatchMode(covered bool, rec gitauth.SourceRecord) string {
 	switch {
 	case covered:
@@ -80,13 +77,13 @@ func WatchMode(covered bool, rec gitauth.SourceRecord) string {
 	case rec.ProjectHook || legacyWebhook(rec):
 		return WatchWebhook
 	}
-	return WatchPoll
+	return WatchManual
 }
 
 // legacyWebhook says a record written before the watch mode was stored shows
 // a webhook that delivered (LastWebhookAt) without saying whose: when the
 // App does not cover the repository, it was the project's own, and the
-// project is not listed on a timer again.
+// project is recorded as watched by its webhook.
 func legacyWebhook(rec gitauth.SourceRecord) bool {
 	return rec.Watch == "" && rec.LastWebhookAt != nil && !rec.ProjectHook
 }
@@ -94,16 +91,6 @@ func legacyWebhook(rec gitauth.SourceRecord) bool {
 // sourceUnreadable is what a person reads when the branch could not be
 // read for a reason without words of its own; the error itself is logged.
 const sourceUnreadable = "shpyrd could not read the branch; it tries again by itself."
-
-// PollInterval reads SHPYRD_GIT_POLL_INTERVAL ("5m", "30s"): empty or
-// unreadable is the default, and nothing below 30 s.
-func PollInterval(v string) time.Duration {
-	d, err := time.ParseDuration(strings.TrimSpace(v))
-	if err != nil || d <= 0 {
-		return DefaultPollInterval
-	}
-	return max(d, minPollInterval)
-}
 
 // SourceReconciler pins the commit each watched App builds.
 type SourceReconciler struct {
@@ -115,11 +102,6 @@ type SourceReconciler struct {
 	// GitHub is the GitHub App (RFC-0054): listings use its token as
 	// builds do. Nil: never.
 	GitHub *GitHubApp
-	// PollInterval is the wait between listings; zero is the default.
-	PollInterval time.Duration
-	// PollRate is the cluster's cap on listings a second; zero is
-	// DefaultPollRate.
-	PollRate float64
 	// LsRemote lists a repository; nil is gitauth.LsRemote. Tests inject one.
 	LsRemote func(ctx context.Context, cloneURL string, b gitauth.Build) (map[string]string, error)
 	// Now and Jitter are the clock and the spread of requeues; nil is
@@ -143,10 +125,6 @@ type SourceReconciler struct {
 	// statuses, by installation, repository and commit: the Apps on one
 	// repository share it for ciShareFor.
 	ciShared map[ciKey]ciInputs
-	// polls is the cap; listings are the repositories' last listings, by
-	// listingKey, shared by the projects on them.
-	polls    *pollBucket
-	listings map[string]repoListing
 }
 
 // sourceCheck is a check remembered: when, and of which revision.
@@ -308,18 +286,10 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	switch {
 	case push != nil && pushFollows(push, rec):
 		ev.push = push
-	case push != nil || badPush || modeChanged || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, covered, now):
+	case push != nil || badPush || modeChanged || (app.PinnedCommit() == "" && rec.Failures == 0 && !remembered) || r.due(app, last, now):
 		// A push that does not follow the commit last seen may be late,
-		// or delivered again: the branch says what its head is. Only a
-		// check the timer asked for shares a listing.
-		timer := push == nil && !badPush && !modeChanged && app.PinnedCommit() != "" && last.CheckedAt != nil && !deployAsked(app, last)
-		ev.latest, ev.err = r.poll(ctx, app, timer, now)
-		var deferred *pollDeferred
-		if errors.As(ev.err, &deferred) {
-			// Over the cluster's cap: this App's turn comes after the wait;
-			// nothing is written or dropped meanwhile.
-			return ctrl.Result{RequeueAfter: deferred.wait}, nil
-		}
+		// or delivered again: the branch says what its head is.
+		ev.latest, ev.err = r.list(ctx, app)
 		if push != nil && ev.err == nil && ev.latest == strings.ToLower(push.SHA) {
 			// The head is the push's commit: what the push says of it
 			// (its words, author, a skip) holds.
@@ -349,7 +319,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			nudge = nil
 		}
 		// A nudge held back by ciNudgeEvery is read once it is due.
-		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, covered, nudge != nil, now)}, nil
+		return ctrl.Result{RequeueAfter: r.requeue(app.UID, last, nudge != nil, now)}, nil
 	}
 	u := decideSource(app, rec, ev, now)
 	// Watch paths and wait for CI need GitHub's answers: asked, then the
@@ -392,7 +362,7 @@ func (r *SourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.dropAnnotation(ctx, app, shpyrdv1.AnnotationGitCI, rawCI)
 	}
 	r.auditUpdate(ctx, app, u)
-	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, covered, false, now)}, nil
+	return ctrl.Result{RequeueAfter: r.requeue(app.UID, u.record, false, now)}, nil
 }
 
 // pushFollows says a push applies as it is: it follows the commit last
@@ -611,7 +581,7 @@ func decideSource(app *shpyrdv1.App, rec gitauth.SourceRecord, ev sourceEvent, n
 	case u.record.Via == "push":
 		u.note = pushNote(sha, u.record.Author, u.record.Message)
 	default:
-		u.note = "Commit " + shortCommit(sha) + " (polled)"
+		u.note = "Commit " + shortCommit(sha) + " (head of " + app.GitRevision() + ")"
 	}
 	u.note += suffix
 	return u
@@ -673,12 +643,10 @@ func describeSourceError(err error, app *shpyrdv1.App) string {
 	return sourceUnreadable
 }
 
-// poll lists the repository with the build's credential and finds the
-// revision's commit. A timer's check uses a listing of the same repository
-// and credential made within the interval; any listing waits its turn
-// under the cluster's cap (a *pollDeferred). A listing cut at the cap
-// still answers when the revision is among what was read.
-func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App, timer bool, now time.Time) (string, error) {
+// list lists the repository with the build's credential and finds the
+// revision's commit. A listing cut at shpyrd's limit still answers when
+// the revision is among what was read.
+func (r *SourceReconciler) list(ctx context.Context, app *shpyrdv1.App) (string, error) {
 	b, err := lookupGitBuild(ctx, r.Client, r.SystemNamespace, r.GitHub, app)
 	if err != nil {
 		return "", err
@@ -686,25 +654,11 @@ func (r *SourceReconciler) poll(ctx context.Context, app *shpyrdv1.App, timer bo
 	// The URL the build clones, in the form the credential fits: an
 	// https URL with a deploy key is read over SSH.
 	cloneURL := firstNonEmpty(b.CloneURL, app.Spec.Source.Git.URL)
-	key := listingKey(cloneURL, b)
-	var refs map[string]string
-	if l, ok := r.sharedListing(key, now); ok && timer {
-		refs = l.refs
-	} else {
-		if wait, ok := r.bucket().take(now, !timer); !ok {
-			return "", &pollDeferred{wait: wait}
-		}
-		list := r.LsRemote
-		if list == nil {
-			list = gitauth.LsRemote
-		}
-		refs, err = list(ctx, cloneURL, b)
-		if err == nil {
-			// Only a complete listing is shared: a failed one is read again
-			// by the backoff, a cut one by each project.
-			r.keepListing(key, repoListing{refs: refs, at: now})
-		}
+	list := r.LsRemote
+	if list == nil {
+		list = gitauth.LsRemote
 	}
+	refs, err := list(ctx, cloneURL, b)
 	if err != nil && !errors.Is(err, gitauth.ErrTooManyRefs) {
 		if b.AppRefused != "" {
 			return "", &appRefusedError{why: b.AppRefused, err: err}
@@ -796,8 +750,8 @@ func (r *SourceReconciler) ciDue(uid types.UID, now time.Time) bool {
 // requeue is the wait until the next pass: the next check of the branch,
 // or sooner, the next read of a held commit's checks, or of the commit a
 // nudge held back by ciNudgeEvery (nudged) is about.
-func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, covered, nudged bool, now time.Time) time.Duration {
-	d := r.untilDue(rec, covered, now)
+func (r *SourceReconciler) requeue(uid types.UID, rec gitauth.SourceRecord, nudged bool, now time.Time) time.Duration {
+	d := r.untilDue(rec, now)
 	held := rec.Held != "" && rec.Held == rec.Latest
 	if !held && !nudged {
 		return d
@@ -847,50 +801,32 @@ func deployAsked(app *shpyrdv1.App, rec gitauth.SourceRecord) bool {
 }
 
 // due says the branch should be read now: never read, a deploy asked
-// after the last check, a failed read due again, or, for a branch whose
-// pushes do not arrive by webhook, the wait since the last check has
-// passed (90 % of it: requeues are spread ±10 %). A branch the App covers,
-// or whose own webhook has delivered, is never read on a timer.
-func (r *SourceReconciler) due(app *shpyrdv1.App, rec gitauth.SourceRecord, covered bool, now time.Time) bool {
+// after the last check, or a failed read due again (90 % of the backoff:
+// requeues are spread ±10 %). Nothing else reads it on a timer.
+func (r *SourceReconciler) due(app *shpyrdv1.App, rec gitauth.SourceRecord, now time.Time) bool {
 	if rec.CheckedAt == nil || deployAsked(app, rec) {
 		return true
 	}
-	if rec.Failures == 0 && WatchMode(covered, rec) != WatchPoll {
-		return false
-	}
-	return now.Sub(*rec.CheckedAt) >= r.wait(rec)*9/10
+	return rec.Failures > 0 && now.Sub(*rec.CheckedAt) >= backoff(rec.Failures)*9/10
 }
 
-// wait is the time between timer listings: the interval, or after
-// failures a backoff from 30 s that doubles up to it.
-func (r *SourceReconciler) wait(rec gitauth.SourceRecord) time.Duration {
-	every := r.interval()
-	if rec.Failures > 0 {
-		return min(every, errorBackoff<<min(rec.Failures-1, 10))
-	}
-	return every
+// backoff is the wait after failures in a row: 30 s, doubling up to
+// maxBackoff.
+func backoff(failures int) time.Duration {
+	return min(maxBackoff, errorBackoff<<min(max(failures-1, 0), 10))
 }
 
-// interval is the wait between timer listings.
-func (r *SourceReconciler) interval() time.Duration {
-	if r.PollInterval <= 0 {
-		return DefaultPollInterval
-	}
-	return r.PollInterval
-}
-
-// untilDue is the wait until the next pass: for a branch whose pushes
-// arrive by webhook, pushDrivenRecheck, which only looks at the cover
-// again; else until the next listing is due.
-func (r *SourceReconciler) untilDue(rec gitauth.SourceRecord, covered bool, now time.Time) time.Duration {
+// untilDue is the wait until the next pass: after a failed read, until it
+// is retried; else pushDrivenRecheck, which only looks at the cover again.
+func (r *SourceReconciler) untilDue(rec gitauth.SourceRecord, now time.Time) time.Duration {
 	spread := r.Jitter
 	if spread == nil {
 		spread = jitter
 	}
-	if rec.Failures == 0 && WatchMode(covered, rec) != WatchPoll {
+	if rec.Failures == 0 {
 		return spread(pushDrivenRecheck)
 	}
-	left := r.wait(rec)
+	left := backoff(rec.Failures)
 	if rec.CheckedAt != nil {
 		left -= now.Sub(*rec.CheckedAt)
 	}

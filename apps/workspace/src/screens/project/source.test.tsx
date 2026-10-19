@@ -294,9 +294,9 @@ it("says a project whose webhook delivered deploys on push through it, and when 
   expect(screen.getByText("Deploys on push through its webhook (last delivery 3 days ago).")).toBeTruthy();
 });
 
-it("says how often a polled branch is checked, and how to stop the checks", () => {
+it("says pushes do not deploy until the webhook is set up", () => {
   const p = projectWith({ url: "https://gitlab.com/acme/shop", revision: "main" }, { commit, latest: commit, checkedAt: minutesAgo(1) });
-  p.sourceWatch = { mode: "poll", pollEvery: 300 };
+  p.sourceWatch = { mode: "manual" };
   show(p);
-  expect(screen.getByText("Checked every 5 min. Set up the webhook to deploy at once and stop the checks.")).toBeTruthy();
+  expect(screen.getByText("Pushes do not deploy until its webhook is set up. Deploy to build the branch's latest commit.")).toBeTruthy();
 });

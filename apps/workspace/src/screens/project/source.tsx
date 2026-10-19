@@ -47,7 +47,8 @@ const longAgo = (iso: string) => {
 };
 
 // How the branch's pushes reach shpyrd (RFC-0054): the GitHub App, the
-// project's own webhook, or a check on a timer, and how to stop it.
+// project's own webhook, or not yet: a person deploys until the webhook
+// is set up.
 function WatchLine({ project }: { project: Project }) {
   const watch = project.sourceWatch;
   if (!watch) return null;
@@ -61,10 +62,8 @@ function WatchLine({ project }: { project: Project }) {
       words = last ? `Deploys on push through its webhook (last delivery ${longAgo(last)}).` : "Deploys on push through its webhook.";
       break;
     }
-    default: {
-      const every = watch.pollEvery ?? 300;
-      words = `Checked every ${every >= 60 ? `${Math.round(every / 60)} min` : `${every} s`}. Set up the webhook to deploy at once and stop the checks.`;
-    }
+    default:
+      words = "Pushes do not deploy until its webhook is set up. Deploy to build the branch's latest commit.";
   }
   return <p className="text-xs text-muted-foreground">{words}</p>;
 }

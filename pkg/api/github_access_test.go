@@ -397,7 +397,7 @@ func TestTheProjectSaysHowItLearnsOfPushes(t *testing.T) {
 		recordOn(onGitHub("old", "https://gitlab.com/acme/old", "main", ""), gitauth.SourceRecord{Ref: "main", LastWebhookAt: &time.Time{}}),
 	)
 	connectAcme(t, s, store.DefaultWorkspace)
-	for slug, want := range map[string]string{"shop": `"sourceWatch":{"mode":"github-app"}`, "blog": `"sourceWatch":{"mode":"webhook"}`, "docs": `"sourceWatch":{"mode":"poll","pollEvery":300}`, "old": `"sourceWatch":{"mode":"webhook"}`} {
+	for slug, want := range map[string]string{"shop": `"sourceWatch":{"mode":"github-app"}`, "blog": `"sourceWatch":{"mode":"webhook"}`, "docs": `"sourceWatch":{"mode":"manual"}`, "old": `"sourceWatch":{"mode":"webhook"}`} {
 		rec := do(t, s, "GET", "/api/projects/"+slug, "", true)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("%s: %d %s", slug, rec.Code, rec.Body.String())
