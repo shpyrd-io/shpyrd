@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -113,8 +113,8 @@ func TestGitHubWebhookBeforeTheCallbackIsAcceptedAndIgnored(t *testing.T) {
 	if p := pushOn(t, cr, "shop"); p != nil {
 		t.Fatalf("an installation no workspace connected wrote %+v", p)
 	}
-	if _, err := s.store.GitHubInstallation(context.Background(), 42); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("installation.created connects nothing: %v", err)
+	if got, err := s.store.GitHubInstallationConnections(context.Background(), 42); err != nil || len(got) != 0 {
+		t.Errorf("installation.created connects nothing: %+v %v", got, err)
 	}
 	connectAcme(t, s, store.DefaultWorkspace)
 	if rec := deliverApp(t, s, "push", "d-2", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret); rec.Code != http.StatusAccepted {
@@ -148,16 +148,16 @@ func TestGitHubWebhookRecordsInstallationEvents(t *testing.T) {
 	if rec := deliverApp(t, s, "installation", "d-1", installationEvent("suspend", 42), githubtest.WebhookSecret); rec.Code != http.StatusAccepted {
 		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.store.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt == nil {
+	if got := githubConnection(t, s, 42, store.DefaultWorkspace); got == nil || got.SuspendedAt == nil {
 		t.Errorf("suspended: %+v", got)
 	}
 	deliverApp(t, s, "installation", "d-2", installationEvent("unsuspend", 42), githubtest.WebhookSecret)
-	if got, _ := s.store.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt != nil {
+	if got := githubConnection(t, s, 42, store.DefaultWorkspace); got == nil || got.SuspendedAt != nil {
 		t.Errorf("unsuspended: %+v", got)
 	}
 	deliverApp(t, s, "installation", "d-3", installationEvent("deleted", 42), githubtest.WebhookSecret)
-	if _, err := s.store.GitHubInstallation(ctx, 42); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("deleted: %v", err)
+	if got, err := s.store.GitHubInstallationConnections(ctx, 42); err != nil || len(got) != 0 {
+		t.Errorf("deleted: %+v %v", got, err)
 	}
 	var actions []string
 	for _, e := range *heard {
@@ -215,6 +215,56 @@ func TestGitHubWebhookListsOnlyTheInstallationsWorkspace(t *testing.T) {
 	}
 	if appNamed(t, cr, "ours").Annotations[shpyrdv1.AnnotationGitPush] != "" {
 		t.Error("another workspace's App got the push")
+	}
+}
+
+func TestGitHubWebhookServesEveryWorkspaceThatConnectedTheInstallation(t *testing.T) {
+	s, cr, _ := githubServer(t,
+		onGitHub("ours", "https://github.com/acme/shop", "main", ""),
+		onGitHub("theirs", "https://github.com/acme/shop", "main", "beta"),
+	)
+	if _, err := s.store.CreateWorkspace(context.Background(), store.Workspace{Slug: "beta", Name: "Beta", Address: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	connectAcme(t, s, store.DefaultWorkspace)
+	connectAcme(t, s, "beta")
+	rec := deliverApp(t, s, "push", "d-1", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["beta/theirs","default/ours"]`) {
+		t.Fatalf("push: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, slug := range []string{"ours", "theirs"} {
+		if p := pushOn(t, cr, slug); p == nil || p.Delivery != "d-1" {
+			t.Errorf("%s: %+v", slug, p)
+		}
+	}
+	// GitHub's state is the installation's: each workspace hears it.
+	heard := githubAudits(t)
+	if rec := deliverApp(t, s, "installation", "d-2", installationEvent("suspend", 42), githubtest.WebhookSecret); rec.Code != http.StatusAccepted {
+		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, ws := range []string{store.DefaultWorkspace, "beta"} {
+		if got := githubConnection(t, s, 42, ws); got == nil || got.SuspendedAt == nil {
+			t.Errorf("%s: %+v", ws, got)
+		}
+	}
+	var details []string
+	for _, e := range *heard {
+		details = append(details, e.Action+" "+e.Detail)
+	}
+	sort.Strings(details)
+	if fmt.Sprint(details) != "[github.suspend workspace beta github.suspend workspace default]" {
+		t.Errorf("audit %q", details)
+	}
+	// Disconnected from one, the other still gets pushes.
+	if err := s.store.SetGitHubInstallationState(context.Background(), 42, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.DeleteGitHubInstallation(context.Background(), "beta", 42); err != nil {
+		t.Fatal(err)
+	}
+	rec = deliverApp(t, s, "push", "d-3", appPush(42, "Acme/shop", "refs/heads/main"), githubtest.WebhookSecret)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"projects":["ours"]`) {
+		t.Errorf("after beta's disconnect: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

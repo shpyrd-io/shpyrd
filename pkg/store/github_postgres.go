@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -17,49 +16,20 @@ func scanGitHubInstallation(row pgx.Row) (GitHubInstallation, error) {
 }
 
 func (p *Postgres) AddGitHubInstallation(ctx context.Context, ws string, inst GitHubInstallation) error {
-	tx, err := p.pool.Begin(ctx)
+	wsID, err := p.wsID(ctx, p.pool, ws)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	wsID, err := p.wsID(ctx, tx, ws)
-	if err != nil {
-		return err
-	}
-	var prevID, prevSlug string
-	var prevDeleted *time.Time
-	err = tx.QueryRow(ctx, `SELECT g.workspace_id::text, w.slug, g.deleted_at FROM github_installations g
-		JOIN workspaces w ON w.id = g.workspace_id WHERE g.id = $1 FOR UPDATE OF g`, inst.ID).Scan(&prevID, &prevSlug, &prevDeleted)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	if err == nil && prevDeleted == nil && prevID != wsID {
-		return &GitHubHeldError{Workspace: prevSlug}
-	}
-	// SET sees the row as it was: created_at stays only for a connection
-	// to the same workspace that was never uninstalled.
-	tag, err := tx.Exec(ctx, `INSERT INTO github_installations (id, workspace_id, account_login, account_type, connected_by, suspended_at)
+	// SET sees the row as it was: created_at stays for a connection that
+	// was never uninstalled.
+	_, err = p.pool.Exec(ctx, `INSERT INTO github_installations (id, workspace_id, account_login, account_type, connected_by, suspended_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (id) DO UPDATE SET
-		 created_at = CASE WHEN github_installations.workspace_id = EXCLUDED.workspace_id AND github_installations.deleted_at IS NULL
-		  THEN github_installations.created_at ELSE now() END,
-		 workspace_id = EXCLUDED.workspace_id, account_login = EXCLUDED.account_login, account_type = EXCLUDED.account_type,
-		 connected_by = EXCLUDED.connected_by, suspended_at = EXCLUDED.suspended_at, deleted_at = NULL
-		WHERE github_installations.workspace_id = EXCLUDED.workspace_id OR github_installations.deleted_at IS NOT NULL`,
+		ON CONFLICT (id, workspace_id) DO UPDATE SET
+		 created_at = CASE WHEN github_installations.deleted_at IS NULL THEN github_installations.created_at ELSE now() END,
+		 account_login = EXCLUDED.account_login, account_type = EXCLUDED.account_type,
+		 connected_by = EXCLUDED.connected_by, suspended_at = EXCLUDED.suspended_at, deleted_at = NULL`,
 		inst.ID, wsID, inst.AccountLogin, inst.AccountType, inst.ConnectedBy, inst.SuspendedAt)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		// Another workspace's connect, inserted after the check above, won:
-		// the WHERE kept it there.
-		var slug string
-		if err := tx.QueryRow(ctx, `SELECT w.slug FROM github_installations g JOIN workspaces w ON w.id = g.workspace_id WHERE g.id = $1`, inst.ID).Scan(&slug); err != nil {
-			return err
-		}
-		return &GitHubHeldError{Workspace: slug}
-	}
-	return tx.Commit(ctx)
+	return err
 }
 
 func (p *Postgres) GitHubInstallations(ctx context.Context, ws string) ([]GitHubInstallation, error) {
@@ -67,8 +37,13 @@ func (p *Postgres) GitHubInstallations(ctx context.Context, ws string) ([]GitHub
 	if err != nil {
 		return nil, err
 	}
+	return p.githubInstallations(ctx, `g.workspace_id = $1`, wsID)
+}
+
+// githubInstallations are the live rows where cond holds, oldest first.
+func (p *Postgres) githubInstallations(ctx context.Context, cond string, arg any) ([]GitHubInstallation, error) {
 	rows, err := p.pool.Query(ctx, `SELECT `+githubColumns+` FROM github_installations g JOIN workspaces w ON w.id = g.workspace_id
-		WHERE g.workspace_id = $1 AND g.deleted_at IS NULL ORDER BY g.created_at, g.id`, wsID)
+		WHERE `+cond+` AND g.deleted_at IS NULL ORDER BY g.created_at, g.id, w.slug`, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -84,16 +59,8 @@ func (p *Postgres) GitHubInstallations(ctx context.Context, ws string) ([]GitHub
 	return out, rows.Err()
 }
 
-func (p *Postgres) GitHubInstallation(ctx context.Context, id int64) (*GitHubInstallation, error) {
-	g, err := scanGitHubInstallation(p.pool.QueryRow(ctx, `SELECT `+githubColumns+` FROM github_installations g
-		JOIN workspaces w ON w.id = g.workspace_id WHERE g.id = $1 AND g.deleted_at IS NULL`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &g, nil
+func (p *Postgres) GitHubInstallationConnections(ctx context.Context, id int64) ([]GitHubInstallation, error) {
+	return p.githubInstallations(ctx, `g.id = $1`, id)
 }
 
 func (p *Postgres) SetGitHubInstallationState(ctx context.Context, id int64, suspended, deleted bool) error {

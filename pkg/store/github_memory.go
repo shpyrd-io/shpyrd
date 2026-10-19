@@ -5,6 +5,12 @@ import (
 	"sort"
 )
 
+// githubKey is a connection: an installation and a workspace's ID.
+type githubKey struct {
+	id          int64
+	workspaceID string
+}
+
 // githubRow keeps the workspace by ID, as Postgres does: a slug may change.
 type githubRow struct {
 	GitHubInstallation
@@ -34,18 +40,16 @@ func (m *Memory) AddGitHubInstallation(_ context.Context, ws string, inst GitHub
 		return err
 	}
 	if m.github == nil {
-		m.github = map[int64]*githubRow{}
+		m.github = map[githubKey]*githubRow{}
 	}
+	key := githubKey{inst.ID, w.ID}
 	created := m.now()
-	if prev, ok := m.github[inst.ID]; ok && prev.DeletedAt == nil {
-		if prev.workspaceID != w.ID {
-			return &GitHubHeldError{Workspace: m.slugOfID(prev.workspaceID)}
-		}
+	if prev, ok := m.github[key]; ok && prev.DeletedAt == nil {
 		created = prev.CreatedAt
 	}
 	row := &githubRow{GitHubInstallation: inst, workspaceID: w.ID}
 	row.CreatedAt, row.DeletedAt = created, nil
-	m.github[inst.ID] = row
+	m.github[key] = row
 	return nil
 }
 
@@ -56,9 +60,20 @@ func (m *Memory) GitHubInstallations(_ context.Context, ws string) ([]GitHubInst
 	if err != nil {
 		return nil, err
 	}
+	return m.githubLive(func(k githubKey) bool { return k.workspaceID == w.ID }), nil
+}
+
+func (m *Memory) GitHubInstallationConnections(_ context.Context, id int64) ([]GitHubInstallation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.githubLive(func(k githubKey) bool { return k.id == id }), nil
+}
+
+// githubLive are the rows not uninstalled whose key matches, oldest first.
+func (m *Memory) githubLive(match func(githubKey) bool) []GitHubInstallation {
 	out := []GitHubInstallation{}
-	for _, r := range m.github {
-		if r.workspaceID == w.ID && r.DeletedAt == nil {
+	for k, r := range m.github {
+		if match(k) && r.DeletedAt == nil {
 			out = append(out, m.githubOut(r))
 		}
 	}
@@ -66,38 +81,36 @@ func (m *Memory) GitHubInstallations(_ context.Context, ws string) ([]GitHubInst
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.Before(out[j].CreatedAt)
 		}
-		return out[i].ID < out[j].ID
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Workspace < out[j].Workspace
 	})
-	return out, nil
-}
-
-func (m *Memory) GitHubInstallation(_ context.Context, id int64) (*GitHubInstallation, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, ok := m.github[id]
-	if !ok || r.DeletedAt != nil {
-		return nil, ErrNotFound
-	}
-	out := m.githubOut(r)
-	return &out, nil
+	return out
 }
 
 func (m *Memory) SetGitHubInstallationState(_ context.Context, id int64, suspended, deleted bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r, ok := m.github[id]
-	if !ok {
-		return ErrNotFound
-	}
 	now := m.now()
-	switch {
-	case !suspended:
-		r.SuspendedAt = nil
-	case r.SuspendedAt == nil:
-		r.SuspendedAt = &now
+	found := false
+	for k, r := range m.github {
+		if k.id != id {
+			continue
+		}
+		found = true
+		switch {
+		case !suspended:
+			r.SuspendedAt = nil
+		case r.SuspendedAt == nil:
+			r.SuspendedAt = &now
+		}
+		if deleted && r.DeletedAt == nil {
+			r.DeletedAt = &now
+		}
 	}
-	if deleted && r.DeletedAt == nil {
-		r.DeletedAt = &now
+	if !found {
+		return ErrNotFound
 	}
 	return nil
 }
@@ -109,11 +122,11 @@ func (m *Memory) DeleteGitHubInstallation(_ context.Context, ws string, id int64
 	if err != nil {
 		return err
 	}
-	r, ok := m.github[id]
-	if !ok || r.workspaceID != w.ID {
+	key := githubKey{id, w.ID}
+	if _, ok := m.github[key]; !ok {
 		return ErrNotFound
 	}
-	delete(m.github, id)
+	delete(m.github, key)
 	return nil
 }
 

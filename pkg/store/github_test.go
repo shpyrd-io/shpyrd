@@ -12,6 +12,20 @@ func acme(id int64, by string) GitHubInstallation {
 	return GitHubInstallation{ID: id, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: by}
 }
 
+// connections are an installation's connections, by workspace.
+func connections(t *testing.T, s Store, id int64) map[string]GitHubInstallation {
+	t.Helper()
+	list, err := s.GitHubInstallationConnections(context.Background(), id)
+	if err != nil {
+		t.Fatalf("connections of %d: %v", id, err)
+	}
+	out := map[string]GitHubInstallation{}
+	for _, g := range list {
+		out[g.Workspace] = g
+	}
+	return out
+}
+
 func TestGitHubInstallations(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
@@ -28,23 +42,23 @@ func TestGitHubInstallations(t *testing.T) {
 				list[0].AccountType != "Organization" || list[0].ConnectedBy != "ana@acme.test" || list[0].CreatedAt.IsZero() || list[0].SuspendedAt != nil {
 				t.Fatalf("list: %+v %v", list, err)
 			}
-			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace {
-				t.Errorf("by id: %+v %v", got, err)
+			if got := connections(t, s, 42); len(got) != 1 || got[DefaultWorkspace].ID != 42 {
+				t.Errorf("by id: %+v", got)
 			}
-			if _, err := s.GitHubInstallation(ctx, 7); !errors.Is(err, ErrNotFound) {
-				t.Errorf("unknown id: %v", err)
+			if got := connections(t, s, 7); len(got) != 0 {
+				t.Errorf("unknown id: %+v", got)
 			}
 			// Suspended on GitHub, then unsuspended.
 			if err := s.SetGitHubInstallationState(ctx, 42, true, false); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := s.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt == nil {
+			if got := connections(t, s, 42)[DefaultWorkspace]; got.SuspendedAt == nil {
 				t.Errorf("suspended: %+v", got)
 			}
 			if err := s.SetGitHubInstallationState(ctx, 42, false, false); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := s.GitHubInstallation(ctx, 42); got == nil || got.SuspendedAt != nil {
+			if got := connections(t, s, 42)[DefaultWorkspace]; got.ID != 42 || got.SuspendedAt != nil {
 				t.Errorf("unsuspended: %+v", got)
 			}
 			if err := s.SetGitHubInstallationState(ctx, 7, true, false); !errors.Is(err, ErrNotFound) {
@@ -57,8 +71,8 @@ func TestGitHubInstallations(t *testing.T) {
 			if list, _ := s.GitHubInstallations(ctx, DefaultWorkspace); len(list) != 0 {
 				t.Errorf("deleted is not listed: %+v", list)
 			}
-			if _, err := s.GitHubInstallation(ctx, 42); !errors.Is(err, ErrNotFound) {
-				t.Errorf("deleted by id: %v", err)
+			if got := connections(t, s, 42); len(got) != 0 {
+				t.Errorf("deleted by id: %+v", got)
 			}
 			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "bob@acme.test")); err != nil {
 				t.Fatalf("revive: %v", err)
@@ -80,7 +94,7 @@ func TestGitHubInstallations(t *testing.T) {
 	}
 }
 
-func TestGitHubInstallationIsNeverTakenFromAnotherWorkspace(t *testing.T) {
+func TestWorkspacesShareAGitHubInstallation(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -91,38 +105,57 @@ func TestGitHubInstallationIsNeverTakenFromAnotherWorkspace(t *testing.T) {
 			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
 				t.Fatal(err)
 			}
-			err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test"))
-			var held *GitHubHeldError
-			if !errors.Is(err, ErrGitHubInstallationHeld) || !errors.As(err, &held) || held.Workspace != DefaultWorkspace {
-				t.Fatalf("taken: %v", err)
+			if err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test")); err != nil {
+				t.Fatalf("beta connects it too: %v", err)
 			}
-			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace || got.ConnectedBy != "ana@acme.test" {
-				t.Errorf("the default workspace keeps it: %+v %v", got, err)
+			got := connections(t, s, 42)
+			if len(got) != 2 || got[DefaultWorkspace].ConnectedBy != "ana@acme.test" || got["beta"].ConnectedBy != "bob@beta.test" {
+				t.Fatalf("both: %+v", got)
 			}
+			for _, ws := range []string{DefaultWorkspace, "beta"} {
+				if list, _ := s.GitHubInstallations(ctx, ws); len(list) != 1 || list[0].ID != 42 || list[0].Workspace != ws {
+					t.Errorf("%s lists: %+v", ws, list)
+				}
+			}
+			// A connection made again keeps its time.
+			first := got[DefaultWorkspace].CreatedAt
 			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
-				t.Errorf("connecting again where it is: %v", err)
-			}
-			// Disconnected there, or uninstalled on GitHub: another may have it.
-			if err := s.DeleteGitHubInstallation(ctx, DefaultWorkspace, 42); err != nil {
 				t.Fatal(err)
 			}
+			if again := connections(t, s, 42)[DefaultWorkspace]; !again.CreatedAt.Equal(first) {
+				t.Errorf("created at moved: %v, was %v", again.CreatedAt, first)
+			}
+			// GitHub's state is the installation's: every connection has it.
+			if err := s.SetGitHubInstallationState(ctx, 42, true, false); err != nil {
+				t.Fatal(err)
+			}
+			for ws, g := range connections(t, s, 42) {
+				if g.SuspendedAt == nil {
+					t.Errorf("%s's is not suspended", ws)
+				}
+			}
+			// A disconnect is one workspace's.
+			if err := s.DeleteGitHubInstallation(ctx, "beta", 42); err != nil {
+				t.Fatal(err)
+			}
+			if got := connections(t, s, 42); len(got) != 1 || got[DefaultWorkspace].ID != 42 {
+				t.Errorf("after beta's disconnect: %+v", got)
+			}
+			// Uninstalled on GitHub: gone from every workspace.
 			if err := s.AddGitHubInstallation(ctx, "beta", acme(42, "bob@beta.test")); err != nil {
-				t.Fatalf("after a disconnect: %v", err)
+				t.Fatal(err)
 			}
 			if err := s.SetGitHubInstallationState(ctx, 42, false, true); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.AddGitHubInstallation(ctx, DefaultWorkspace, acme(42, "ana@acme.test")); err != nil {
-				t.Fatalf("after an uninstall: %v", err)
-			}
-			if got, err := s.GitHubInstallation(ctx, 42); err != nil || got.Workspace != DefaultWorkspace {
-				t.Errorf("by id: %+v %v", got, err)
+			if got := connections(t, s, 42); len(got) != 0 {
+				t.Errorf("after the uninstall: %+v", got)
 			}
 		})
 	}
 }
 
-func TestGitHubInstallationRaceHasOneWinner(t *testing.T) {
+func TestGitHubInstallationConnectsRaceAllWin(t *testing.T) {
 	for name, open := range implementations(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -134,9 +167,9 @@ func TestGitHubInstallationRaceHasOneWinner(t *testing.T) {
 				}
 				slugs = append(slugs, slug)
 			}
-			errs := make(chan error, len(slugs))
+			errs := make(chan error, 2*len(slugs))
 			var wg sync.WaitGroup
-			for _, slug := range slugs {
+			for _, slug := range append(slugs, slugs...) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
@@ -145,18 +178,19 @@ func TestGitHubInstallationRaceHasOneWinner(t *testing.T) {
 			}
 			wg.Wait()
 			close(errs)
-			won := 0
 			for err := range errs {
-				switch {
-				case err == nil:
-					won++
-				case !errors.Is(err, ErrGitHubInstallationHeld):
+				if err != nil {
 					t.Errorf("unexpected: %v", err)
 				}
 			}
-			got, err := s.GitHubInstallation(ctx, 77)
-			if won != 1 || err != nil || got.ConnectedBy != got.Workspace {
-				t.Errorf("%d won; kept %+v %v", won, got, err)
+			got := connections(t, s, 77)
+			if len(got) != len(slugs) {
+				t.Fatalf("%d connections: %+v", len(got), got)
+			}
+			for ws, g := range got {
+				if g.ConnectedBy != ws {
+					t.Errorf("%s: %+v", ws, g)
+				}
 			}
 		})
 	}
@@ -177,11 +211,14 @@ func TestOneWorkspaceSeesOnlyItsGitHubInstallations(t *testing.T) {
 				t.Fatal(err)
 			}
 			one := OneWorkspace(st)
-			if _, err := one.GitHubInstallation(ctx, 9); !errors.Is(err, ErrNotFound) {
-				t.Errorf("a workspace added by hand: %v", err)
+			if err := st.AddGitHubInstallation(ctx, "byhand", acme(42, "x@byhand.test")); err != nil {
+				t.Fatal(err)
 			}
-			if got, err := one.GitHubInstallation(ctx, 42); err != nil || got.ID != 42 {
-				t.Errorf("the default one's: %+v %v", got, err)
+			if got := connections(t, one, 9); len(got) != 0 {
+				t.Errorf("a workspace added by hand: %+v", got)
+			}
+			if got := connections(t, one, 42); len(got) != 1 || got[DefaultWorkspace].ID != 42 {
+				t.Errorf("the default one's only: %+v", got)
 			}
 		})
 	}

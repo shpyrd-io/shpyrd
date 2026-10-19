@@ -187,7 +187,23 @@ func TestGitHubCallbackOfAnUpdateOnlyGoesBack(t *testing.T) {
 	}
 }
 
-func TestGitHubConnectRefusesAnInstallationAnotherWorkspaceHas(t *testing.T) {
+// githubConnection is the workspace's connection of the installation; nil
+// when it has none.
+func githubConnection(t *testing.T, s *Server, id int64, ws string) *store.GitHubInstallation {
+	t.Helper()
+	conns, err := s.store.GitHubInstallationConnections(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range conns {
+		if conns[i].Workspace == ws {
+			return &conns[i]
+		}
+	}
+	return nil
+}
+
+func TestGitHubConnectsAnInstallationAnotherWorkspaceHasToo(t *testing.T) {
 	s, _, _ := githubServer(t)
 	ctx := context.Background()
 	if _, err := s.store.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta"}); err != nil {
@@ -197,30 +213,17 @@ func TestGitHubConnectRefusesAnInstallationAnotherWorkspaceHas(t *testing.T) {
 		t.Fatal(err)
 	}
 	heard := githubAudits(t)
-	rec := installed(t, s, "42", githubtest.Code, connectState(t, s))
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Acme is connected to workspace beta: disconnect it there first.") {
+	if rec := connected(t, s, "42"); rec.Code != http.StatusFound {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.store.GitHubInstallation(ctx, 42); got == nil || got.Workspace != "beta" {
+	if got := githubConnection(t, s, 42, store.DefaultWorkspace); got == nil || got.AccountLogin != "Acme" {
+		t.Errorf("connected here: %+v", got)
+	}
+	if got := githubConnection(t, s, 42, "beta"); got == nil || got.ConnectedBy != "bob@beta.test" {
 		t.Errorf("beta keeps it: %+v", got)
 	}
-	if len(*heard) != 0 {
+	if len(*heard) != 1 || (*heard)[0].Action != "github.connect" {
 		t.Errorf("audit %+v", *heard)
-	}
-	// Taken by another workspace between the callback and the finish: the
-	// finish refuses too.
-	if err := s.store.DeleteGitHubInstallation(ctx, "beta", 42); err != nil {
-		t.Fatal(err)
-	}
-	finish := ticketOf(t, installed(t, s, "42", githubtest.Code, connectState(t, s)))
-	if err := s.store.AddGitHubInstallation(ctx, "beta", store.GitHubInstallation{ID: 42, AccountLogin: "Acme", AccountType: "Organization", ConnectedBy: "bob@beta.test"}); err != nil {
-		t.Fatal(err)
-	}
-	if rec := do(t, s, "GET", finish, "", true); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "connected to workspace beta") {
-		t.Errorf("finish: %d %s", rec.Code, rec.Body.String())
-	}
-	if got, _ := s.store.GitHubInstallation(ctx, 42); got == nil || got.Workspace != "beta" {
-		t.Errorf("beta keeps it: %+v", got)
 	}
 }
 
@@ -261,7 +264,7 @@ func TestGitHubOnlyThePersonConnectsTheirOwnAccount(t *testing.T) {
 	if rec := connected(t, s, "7"); rec.Code != http.StatusFound {
 		t.Fatalf("their own: %d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.store.GitHubInstallation(context.Background(), 7); got == nil || got.AccountLogin != "Ana" || got.AccountType != "User" {
+	if got := githubConnection(t, s, 7, store.DefaultWorkspace); got == nil || got.AccountLogin != "Ana" || got.AccountType != "User" {
 		t.Errorf("stored %+v", got)
 	}
 	s, _, fake = githubServer(t)
@@ -318,7 +321,7 @@ func TestGitHubFinishNeedsTheSessionThatStarted(t *testing.T) {
 	if rec := doCookie(t, s, "GET", finish, "", anaSID, ""); rec.Code != http.StatusFound || !strings.HasSuffix(rec.Header().Get("Location"), "/workspace/git") {
 		t.Fatalf("ana finishes: %d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.store.GitHubInstallation(ctx, 42); got == nil || got.ConnectedBy != "ana@example.test" {
+	if got := githubConnection(t, s, 42, store.DefaultWorkspace); got == nil || got.ConnectedBy != "ana@example.test" {
 		t.Errorf("stored %+v", got)
 	}
 	refused("replayed", doCookie(t, s, "GET", finish, "", anaSID, ""))
@@ -437,32 +440,6 @@ func TestGitHubCallbackOfARequestedInstall(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "An owner of the organisation must approve the request on GitHub; then connect it from Workspace settings → Git.") {
 		t.Errorf("request: %d %s", rec.Code, rec.Body.String())
 	}
-}
-
-func TestGitHubFinishRefusesWhenTheStoreSaysAnotherWorkspaceHasIt(t *testing.T) {
-	s, _, _ := githubServer(t)
-	held := &heldStore{Store: s.store}
-	s.store = held
-	finish := ticketOf(t, installed(t, s, "42", githubtest.Code, connectState(t, s)))
-	// Taken between the finish's own check and its write.
-	held.err = &store.GitHubHeldError{Workspace: "beta"}
-	if rec := do(t, s, "GET", finish, "", true); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Acme is connected to workspace beta: disconnect it there first.") {
-		t.Errorf("%d %s", rec.Code, rec.Body.String())
-	}
-}
-
-// heldStore answers err from AddGitHubInstallation: another workspace won
-// the race.
-type heldStore struct {
-	store.Store
-	err error
-}
-
-func (h *heldStore) AddGitHubInstallation(ctx context.Context, ws string, inst store.GitHubInstallation) error {
-	if h.err != nil {
-		return h.err
-	}
-	return h.Store.AddGitHubInstallation(ctx, ws, inst)
 }
 
 func TestGitHubDisconnect(t *testing.T) {
@@ -629,7 +606,7 @@ func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(body, "Connect an installation") || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("%d %s", rec.Code, body)
 	}
-	for _, says := range []string{"Beta is connected to workspace beta: disconnect it there first.", "Mine (organisation): connected."} {
+	for _, says := range []string{"Mine (organisation): connected."} {
 		if !strings.Contains(body, says) {
 			t.Errorf("does not say %q: %s", says, body)
 		}
@@ -655,11 +632,12 @@ func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
 			t.Errorf("%s: ticket %+v", label, tk)
 		}
 		finishes[tk.Installation] = u.RequestURI()
-		if want := map[int64]string{42: "Connect Acme (organisation)", 7: "Connect ana (personal account)"}[tk.Installation]; label != want {
+		if want := map[int64]string{42: "Connect Acme (organisation)", 7: "Connect ana (personal account)", 10: "Connect Beta (organisation)"}[tk.Installation]; label != want {
 			t.Errorf("installation %d labelled %q", tk.Installation, label)
 		}
 	}
-	if len(finishes) != 2 || finishes[42] == "" || finishes[7] == "" {
+	// Beta's too: another workspace has it, and this one may as well.
+	if len(finishes) != 3 || finishes[42] == "" || finishes[7] == "" || finishes[10] == "" {
 		t.Fatalf("connectable %v; links %v", finishes, links)
 	}
 	install, err := url.Parse(links["Install the App on another account"])
@@ -674,18 +652,18 @@ func TestGitHubAuthorizeListsTheInstallationsThePersonOwns(t *testing.T) {
 		t.Fatalf("the page alone connects nothing: %+v %+v", list, *heard)
 	}
 	// Each finishes on its own, once.
-	for _, id := range []int64{42, 7} {
+	for _, id := range []int64{42, 7, 10} {
 		if rec := do(t, s, "GET", finishes[id], "", true); rec.Code != http.StatusFound || !strings.HasSuffix(rec.Header().Get("Location"), "/workspace/git") {
 			t.Errorf("finish %d: %d %s", id, rec.Code, rec.Body.String())
 		}
-		if got, _ := s.store.GitHubInstallation(ctx, id); got == nil || got.Workspace != store.DefaultWorkspace {
+		if got := githubConnection(t, s, id, store.DefaultWorkspace); got == nil {
 			t.Errorf("stored %d: %+v", id, got)
 		}
 	}
 	if rec := do(t, s, "GET", finishes[42], "", true); rec.Code != http.StatusBadRequest {
 		t.Errorf("a ticket spent twice: %d %s", rec.Code, rec.Body.String())
 	}
-	if got, _ := s.store.GitHubInstallation(ctx, 10); got == nil || got.Workspace != "beta" {
+	if got := githubConnection(t, s, 10, "beta"); got == nil {
 		t.Errorf("beta keeps it: %+v", got)
 	}
 }

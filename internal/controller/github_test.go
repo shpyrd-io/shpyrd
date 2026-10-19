@@ -129,8 +129,7 @@ func TestGitHubAppIsSkippedForAnInstallationMovedAway(t *testing.T) {
 	if _, err := st.CreateWorkspace(ctx, store.Workspace{Slug: "beta", Name: "Beta"}); err != nil {
 		t.Fatal(err)
 	}
-	// The store never takes an installation from another workspace: it
-	// moves by being disconnected, then connected to beta.
+	// Disconnected from the default workspace, connected to beta.
 	if err := st.DeleteGitHubInstallation(ctx, store.DefaultWorkspace, 42); err != nil {
 		t.Fatal(err)
 	}

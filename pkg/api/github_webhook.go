@@ -23,8 +23,8 @@ import (
 )
 
 // The GitHub App's webhook (RFC-0054): one URL for every installation.
-// A push goes to every App of the installation's workspace that builds
-// that repository's branch, through the git-push annotation PR 2's source
+// A push goes to every App, in every workspace that connected the
+// installation, that builds that repository's branch, through the git-push annotation PR 2's source
 // watcher reads; installation events keep the connection's state. Every
 // answer that applies nothing is 2xx, so GitHub does not retry it.
 
@@ -82,8 +82,8 @@ func (s *Server) githubWebhook(c *gin.Context) {
 	}
 }
 
-// githubPush leaves the push on every App of the installation's workspace
-// that builds the repository's branch.
+// githubPush leaves the push on every App, in the workspaces that
+// connected the installation, that builds the repository's branch.
 func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 	ctx := c.Request.Context()
 	var meta struct {
@@ -98,7 +98,7 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		abort(c, http.StatusBadRequest, errors.New("the push names no installation or no repository"))
 		return
 	}
-	inst, ok := s.githubLiveInstallation(c, meta.Installation.ID)
+	conns, ok := s.githubLiveConnections(c, meta.Installation.ID)
 	if !ok {
 		return
 	}
@@ -108,50 +108,78 @@ func (s *Server) githubPush(c *gin.Context, body []byte, delivery string) {
 		return
 	}
 	push.Delivery, push.At, push.App = delivery, time.Now().UTC(), true
-	list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
-	if err != nil {
-		s.githubPushUnavailable(c, "could not list the apps", err)
-		return
-	}
 	raw, _ := json.Marshal(push)
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{shpyrdv1.AnnotationGitPush: string(raw)}}})
 	accepted := []string{}
-	for i := range list {
-		app := &list[i]
-		if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, meta.Repository.FullName) || ignoredPush(app, push) != "" {
-			continue
-		}
-		if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
-			s.githubPushUnavailable(c, "could not leave the push on "+project.SlugOf(app), err)
+	for _, inst := range conns {
+		list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
+		if err != nil {
+			s.githubPushUnavailable(c, "could not list the apps", err)
 			return
 		}
-		accepted = append(accepted, project.SlugOf(app))
+		for i := range list {
+			app := &list[i]
+			if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, meta.Repository.FullName) || ignoredPush(app, push) != "" {
+				continue
+			}
+			if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
+				s.githubPushUnavailable(c, "could not leave the push on "+project.SlugOf(app), err)
+				return
+			}
+			accepted = append(accepted, githubProjectName(conns, inst.Workspace, app))
+		}
 	}
 	sort.Strings(accepted)
 	c.JSON(http.StatusAccepted, gin.H{"accepted": push.SHA, "projects": accepted})
 }
 
-// githubLiveInstallation is the connected, unsuspended installation a
-// delivery names. Without one it has answered the delivery, and ok is
-// false.
-func (s *Server) githubLiveInstallation(c *gin.Context, id int64) (_ *store.GitHubInstallation, ok bool) {
-	inst, err := s.store.GitHubInstallation(c.Request.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		// Before the setup callback, or never connected here.
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
+// githubLiveConnections are the unsuspended connections of the
+// installation a delivery names, one a workspace. Without one it has
+// answered the delivery, and ok is false.
+func (s *Server) githubLiveConnections(c *gin.Context, id int64) (_ []store.GitHubInstallation, ok bool) {
+	conns, ok := s.githubConnections(c, id)
+	if !ok {
 		return nil, false
 	}
+	live := []store.GitHubInstallation{}
+	for _, inst := range conns {
+		if inst.SuspendedAt == nil {
+			live = append(live, inst)
+		}
+	}
+	if len(live) == 0 {
+		// A delivery queued before the suspension, or redelivered by hand.
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "the installation is suspended"})
+		return nil, false
+	}
+	return live, true
+}
+
+// githubConnections are the workspaces' connections of the installation
+// a delivery names. Without one it has answered the delivery, and ok is
+// false.
+func (s *Server) githubConnections(c *gin.Context, id int64) (_ []store.GitHubInstallation, ok bool) {
+	conns, err := s.store.GitHubInstallationConnections(c.Request.Context(), id)
 	if err != nil {
 		s.log.Warn("github webhook: could not look up the installation", "installation", id, "err", err.Error())
 		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now; GitHub delivers it again within about 5 minutes once shpyrd answers"))
 		return nil, false
 	}
-	if inst.SuspendedAt != nil {
-		// A delivery queued before the suspension, or redelivered by hand.
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "the installation is suspended"})
+	if len(conns) == 0 {
+		// Before the setup callback, or never connected here.
+		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
 		return nil, false
 	}
-	return inst, true
+	return conns, true
+}
+
+// githubProjectName names a project in a delivery's answer: by its slug,
+// with its workspace's when the installation is connected to several.
+func githubProjectName(conns []store.GitHubInstallation, ws string, app *shpyrdv1.App) string {
+	if len(conns) > 1 {
+		return ws + "/" + project.SlugOf(app)
+	}
+	return project.SlugOf(app)
 }
 
 // githubWorkspaceApps are the Apps of an installation's workspace; the
@@ -170,8 +198,8 @@ func (s *Server) githubWorkspaceApps(ctx context.Context, workspace string) ([]s
 }
 
 // githubCIEvent is a commit's checks or statuses changing (a check suite
-// completed, a status set): every App of the installation's workspace on
-// the repository that waits on that commit's CI is nudged, through the
+// completed, a status set): every App, in the workspaces that connected
+// the installation, on the repository that waits on that commit's CI is nudged, through the
 // git-ci annotation, to read it again.
 func (s *Server) githubCIEvent(c *gin.Context, event string, body []byte, delivery string) {
 	ctx := c.Request.Context()
@@ -201,32 +229,34 @@ func (s *Server) githubCIEvent(c *gin.Context, event string, body []byte, delive
 		c.JSON(http.StatusAccepted, gin.H{"ignored": "the event names no commit"})
 		return
 	}
-	inst, ok := s.githubLiveInstallation(c, ev.Installation.ID)
+	conns, ok := s.githubLiveConnections(c, ev.Installation.ID)
 	if !ok {
-		return
-	}
-	list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
-	if err != nil {
-		s.githubPushUnavailable(c, "could not list the apps", err)
 		return
 	}
 	raw, _ := json.Marshal(gitauth.CINudge{SHA: sha, Delivery: delivery, At: time.Now().UTC()})
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{shpyrdv1.AnnotationGitCI: string(raw)}}})
 	nudged := []string{}
-	for i := range list {
-		app := &list[i]
-		if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, ev.Repository.FullName) || !gitauth.Watched(app) {
-			continue
-		}
-		rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
-		if rec.Ref != app.GitRevision() || !rec.WaitsOnCI(sha) {
-			continue
-		}
-		if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
-			s.githubPushUnavailable(c, "could not nudge "+project.SlugOf(app), err)
+	for _, inst := range conns {
+		list, err := s.githubWorkspaceApps(ctx, inst.Workspace)
+		if err != nil {
+			s.githubPushUnavailable(c, "could not list the apps", err)
 			return
 		}
-		nudged = append(nudged, project.SlugOf(app))
+		for i := range list {
+			app := &list[i]
+			if workspaceOf(app) != inst.Workspace || !app.DeletionTimestamp.IsZero() || !namesGitHubRepo(app, ev.Repository.FullName) || !gitauth.Watched(app) {
+				continue
+			}
+			rec := gitauth.ReadSourceRecord(app.Annotations[shpyrdv1.AnnotationGitSource])
+			if rec.Ref != app.GitRevision() || !rec.WaitsOnCI(sha) {
+				continue
+			}
+			if err := s.apps.Patch(ctx, app.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
+				s.githubPushUnavailable(c, "could not nudge "+project.SlugOf(app), err)
+				return
+			}
+			nudged = append(nudged, githubProjectName(conns, inst.Workspace, app))
+		}
 	}
 	sort.Strings(nudged)
 	c.JSON(http.StatusAccepted, gin.H{"nudged": sha, "projects": nudged})
@@ -280,25 +310,22 @@ func (s *Server) githubInstallationEvent(c *gin.Context, body []byte) {
 		c.JSON(http.StatusAccepted, gin.H{"ignored": "installation " + ev.Action})
 		return
 	}
-	inst, err := s.store.GitHubInstallation(ctx, ev.Installation.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
-		return
-	}
-	if err != nil {
-		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now"))
+	conns, ok := s.githubConnections(c, ev.Installation.ID)
+	if !ok {
 		return
 	}
 	if deleted {
-		suspended = inst.SuspendedAt != nil
+		suspended = conns[0].SuspendedAt != nil
 	}
-	if err := s.store.SetGitHubInstallationState(ctx, inst.ID, suspended, deleted); err != nil {
+	if err := s.store.SetGitHubInstallationState(ctx, ev.Installation.ID, suspended, deleted); err != nil {
 		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now"))
 		return
 	}
-	s.forgetGitHubRepos(inst.Workspace)
-	s.githubChanged(inst.Workspace)
-	s.auditActor(c, "github:"+firstNonEmpty(ev.Sender.Login, "unknown"), action, githubTarget(inst.ID, inst.AccountLogin), "workspace "+inst.Workspace)
+	for _, inst := range conns {
+		s.forgetGitHubRepos(inst.Workspace)
+		s.githubChanged(inst.Workspace)
+		s.auditActor(c, "github:"+firstNonEmpty(ev.Sender.Login, "unknown"), action, githubTarget(inst.ID, inst.AccountLogin), "workspace "+inst.Workspace)
+	}
 	c.JSON(http.StatusAccepted, gin.H{"recorded": ev.Action})
 }
 
@@ -316,16 +343,13 @@ func (s *Server) githubRepositoriesEvent(c *gin.Context, body []byte) {
 		c.JSON(http.StatusAccepted, gin.H{"ignored": "the event names no installation"})
 		return
 	}
-	inst, err := s.store.GitHubInstallation(c.Request.Context(), ev.Installation.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		c.JSON(http.StatusAccepted, gin.H{"ignored": "no workspace has connected this installation"})
+	conns, ok := s.githubConnections(c, ev.Installation.ID)
+	if !ok {
 		return
 	}
-	if err != nil {
-		abort(c, http.StatusBadGateway, errors.New("shpyrd could not take the delivery now"))
-		return
+	for _, inst := range conns {
+		s.forgetGitHubRepos(inst.Workspace)
+		s.githubChanged(inst.Workspace)
 	}
-	s.forgetGitHubRepos(inst.Workspace)
-	s.githubChanged(inst.Workspace)
 	c.JSON(http.StatusAccepted, gin.H{"recorded": "repositories"})
 }
