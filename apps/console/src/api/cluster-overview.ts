@@ -2,7 +2,7 @@ import type { Node, Series } from "./types";
 
 export type OverviewView = "compute" | "storage" | "network";
 export type Values = Record<string, number | undefined>;
-export type OverviewNode = Node & { values: Values; conditions: string[]; unschedulable: boolean; issues: string[]; misplaced: number; diskMount?: string };
+export type OverviewNode = Node & { values: Values; conditions: string[]; unschedulable: boolean; issues: string[]; misplaced: number; diskMount?: string; diskEvictionDefault?: boolean };
 export type OverviewPool = { name: string; nodes: number; ready: number; issues: number; missing: number; values: Values; coverage: Record<string, number>; distribution: Record<string, number> };
 export type Overview = { snapshot: string; updatedAt: string; pools: OverviewPool[]; errors: string[]; install?: { profile: string; version: string; domain: string; updatedAt: string } };
 export type NodePage = { snapshot: string; updatedAt: string; nodes: OverviewNode[]; total: number; next: number };

@@ -144,6 +144,12 @@ const (
 	VarAppsPool     = "SHPYRD_APPS_POOL"     // apps, builds, one-off runs
 	VarPlatformPool = "SHPYRD_PLATFORM_POOL" // platform components
 	VarDataPool     = "SHPYRD_DATA_POOL"     // project databases and stores, object storage ("" = the platform pool)
+	// VarDiskEvictionPct is the share of a node's filesystem below which its
+	// kubelet evicts pods, for the cluster overview's disk warnings (#207):
+	// "" = the kubelet's default, 15%. Set it where the kubelets are tuned
+	// otherwise; the overview does not read their config, which would need
+	// the kubelet proxy.
+	VarDiskEvictionPct = "SHPYRD_DISK_EVICTION_PCT"
 	// The Kubernetes version charts are rendered for without a cluster
 	// (`cluster export`); "" = the one the client libraries were built
 	// for. A cluster init renders for the cluster's own.
