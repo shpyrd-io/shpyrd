@@ -13,13 +13,17 @@ data:
       http: 0.0.0.0:5556
     telemetry:
       http: 0.0.0.0:5558
-    # The pages Dex still serves (connector chooser, password fallback) use
-    # the shpyrd theme assembled by the web init container (RFC-0012).
+    # The pages Dex still serves (errors, connector chooser, password
+    # fallback) are shpyrd's, laid over the image's by the web init
+    # container (RFC-0012, design/pages). home is where a failed sign-in
+    # starts again: the dashboard, never an address the request names.
     frontend:
       dir: /web
       issuer: shpyrd
       theme: shpyrd
       logoURL: theme/logo.svg
+      extra:
+        home: ${SHPYRD_DASHBOARD_URL}
     oauth2:
       skipApprovalScreen: true
       responseTypes: [code]

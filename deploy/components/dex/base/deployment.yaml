@@ -15,6 +15,9 @@ spec:
         # Dex reads its ConfigMap at start only: roll the Deployment when
         # the URLs baked into the config change (domain or front door).
         shpyrd.io/config-urls: "${SHPYRD_AUTH_URL} ${SHPYRD_DASHBOARD_URL}"
+        # And when its pages change: the hash of web.yaml, written with it
+        # by design/pages (`make pages`).
+        shpyrd.io/web: "af139898a4de3a81"
     spec:
       serviceAccountName: dex
       securityContext:
@@ -24,7 +27,8 @@ spec:
           type: RuntimeDefault
       initContainers:
         # Dex takes a whole web tree or none: copy the one shipped in the
-        # image and lay the shpyrd theme and templates over it (RFC-0012).
+        # image and lay the shpyrd theme and templates over it (RFC-0012):
+        # every template Dex renders, drawn by design/pages (web.yaml).
         - name: web
           image: ghcr.io/dexidp/dex:v2.45.1
           command:
@@ -34,7 +38,7 @@ spec:
               cp -R /srv/dex/web/. /web/
               mkdir -p /web/themes/shpyrd
               cp /theme/styles.css /theme/logo.svg /web/themes/shpyrd/
-              cp /theme/header.html /theme/password.html /web/templates/
+              cp /theme/*.html /web/templates/
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
