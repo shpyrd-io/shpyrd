@@ -145,9 +145,9 @@ const columns: Record<OverviewView, { label: string; render: (v: Values, n: Over
   ],
   storage: [
     { label: "Mount", render: (_, n) => n.diskMount ?? "Unavailable" }, { label: "Used / total", render: v => `${size(difference(v.diskSize, v.diskFree))} / ${size(v.diskSize)}` }, { label: "Free / available", render: v => `${size(v.diskFree)} / ${size(v.diskAvailable)}` },
-    { label: "Available · evicts below", render: (v, n) => `${diskPercent(v.diskAvailablePct)} · ${diskPercent(v.diskEvictionPct)}${n.diskEvictionDefault ? " (default)" : ""}` },
-    { label: "Lowest, 24 h", render: v => diskPercent(v.diskAvailablePctMin24h) },
-    { label: "Pressure / evictions, 7 d", render: v => v.diskPressure7d === undefined && v.diskEvictions7d === undefined ? "Unavailable" : `${number(v.diskPressure7d ?? 0)} / ${number(v.diskEvictions7d ?? 0)}` },
+    { label: "Free · evicts below", render: (v, n) => `${diskPercent(v.diskAvailablePct)} · ${diskPercent(v.diskEvictionPct)}${n.diskEvictionDefault ? " (default)" : ""}` },
+    { label: "24 h low", render: v => diskPercent(v.diskAvailablePctMin24h) },
+    { label: "7 d pressure / evicted", render: v => v.diskPressure7d === undefined && v.diskEvictions7d === undefined ? "Unavailable" : `${number(v.diskPressure7d ?? 0)} / ${number(v.diskEvictions7d ?? 0)}` },
     { label: "Read / write IOPS", render: v => `${number(v.readIOPS)} / ${number(v.writeIOPS)}` }, { label: "Read / write", render: v => `${throughput(v.readBytes)} / ${throughput(v.writeBytes)}` },
   ],
   network: [
