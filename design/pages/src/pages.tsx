@@ -59,7 +59,7 @@ const server: Record<string, ServerPage> = {
   nothing: {
     title: "Nothing here",
     about: "Nothing answers at the address: no app, no workspace, a link that expired (pkg/api/edge.go, members.go).",
-    sample: { Title: "No app here", Text: "There is no app at this address.", Links: [{ Label: "Dashboard", URL: "#" }] },
+    sample: { Title: "No app here", Text: "There is no app at this address.", Links: [] },
     render: (f) => <StatePage title={f.word("Title")} description={f.word("Text")} action={links(f)} />,
   },
   "no-access": {
