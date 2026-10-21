@@ -28,7 +28,10 @@ type overviewNode struct {
 	Unschedulable bool               `json:"unschedulable"`
 	Issues        []string           `json:"issues"`
 	DiskMount     string             `json:"diskMount,omitempty"`
-	Misplaced     int                `json:"misplaced"`
+	// DiskEvictionDefault: the threshold is the kubelet's default, the
+	// operator set none.
+	DiskEvictionDefault bool `json:"diskEvictionDefault,omitempty"`
+	Misplaced           int  `json:"misplaced"`
 }
 type overviewPool struct {
 	Name         string             `json:"name"`
@@ -163,11 +166,23 @@ func (s *Server) buildOverview(ctx context.Context) (*overviewSnapshot, error) {
 			if len(samples) == 0 {
 				out.Errors = append(out.Errors, "Node recording rules are unavailable. Update the monitoring component; no raw pod scan is used as a fallback.")
 			}
+			if err := s.diskHistory(ctx, byName); err != nil {
+				out.Errors = append(out.Errors, "Disk history of the last 24 hours and 7 days could not be read.")
+			}
 		}
 	}
+	var vars map[string]string
 	if info, err := install.ReadInstallInfo(ctx, s.kube, ""); err == nil {
+		vars = info.Vars
 		out.Install = &InstallInfo{Profile: info.Profile, Version: info.Version, Domain: info.Vars[install.VarDomain], UpdatedAt: info.UpdatedAt}
 		s.overviewPlacement(ctx, out, byName, info.Vars)
+	}
+	limit, set := evictionPct(vars)
+	for i := range out.Nodes {
+		if _, ok := out.Nodes[i].Values["diskAvailablePct"]; ok {
+			out.Nodes[i].Values["diskEvictionPct"] = limit
+			out.Nodes[i].DiskEvictionDefault = !set
+		}
 	}
 	for i := range out.Nodes {
 		evaluateOverviewNode(&out.Nodes[i])
@@ -261,9 +276,7 @@ func evaluateOverviewNode(n *overviewNode) {
 			n.Values[r.key] = v
 		}
 	}
-	if v, ok := n.Values["diskAvailablePct"]; ok && v < 10 {
-		n.Issues = append(n.Issues, "Low filesystem space")
-	}
+	n.Issues = append(n.Issues, diskIssues(n)...)
 	if v, ok := n.Values["inodesAvailablePct"]; ok && v < 10 {
 		n.Issues = append(n.Issues, "Low free inodes")
 	}
@@ -311,13 +324,21 @@ func aggregateOverview(nodes []overviewNode) []overviewPool {
 				p.Distribution[k]++
 			}
 		}
-		for _, k := range []string{"diskAvailablePct", "inodesAvailablePct"} {
-			if v, ok := n.Values[k]; ok {
-				p.Coverage[k]++
-				if v < 10 {
-					p.Distribution[k]++
-				}
+		// Nodes within the warning margin of their eviction threshold.
+		if near, ok := diskNear(n); ok {
+			p.Coverage["diskAvailablePct"]++
+			if near {
+				p.Distribution["diskAvailablePct"]++
 			}
+		}
+		if v, ok := n.Values["inodesAvailablePct"]; ok {
+			p.Coverage["inodesAvailablePct"]++
+			if v < 10 {
+				p.Distribution["inodesAvailablePct"]++
+			}
+		}
+		if n.Values["diskPressure7d"] > 0 || n.Values["diskEvictions7d"] > 0 {
+			p.Distribution["diskEvicting7d"]++
 		}
 		// Each ratio uses only nodes having BOTH numerator and denominator. Missing
 		// telemetry must never depress a pool's utilization by contributing capacity.
@@ -450,7 +471,7 @@ func filterOverviewNodes(nodes []overviewNode, pool, search, zone, status string
 	return out
 }
 func overviewView(values map[string]float64, view string) map[string]float64 {
-	keys := map[string][]string{"compute": {"cpuBusyPct", "cpuRequestedPct", "memoryUsedPct", "memoryRequestedPct", "pods", "podCapacity", "cpuCapacity", "cpuAllocatable", "memoryCapacity", "memoryAllocatable"}, "storage": {"diskSize", "diskFree", "diskAvailable", "diskAvailablePct", "inodesAvailablePct", "readIOPS", "writeIOPS", "readBytes", "writeBytes"}, "network": {"receiveBytes", "transmitBytes", "receiveErrors", "transmitErrors", "receiveDrops", "transmitDrops"}}
+	keys := map[string][]string{"compute": {"cpuBusyPct", "cpuRequestedPct", "memoryUsedPct", "memoryRequestedPct", "pods", "podCapacity", "cpuCapacity", "cpuAllocatable", "memoryCapacity", "memoryAllocatable"}, "storage": {"diskSize", "diskFree", "diskAvailable", "diskAvailablePct", "diskEvictionPct", "diskAvailablePctMin24h", "diskPressure24h", "diskPressure7d", "diskEvictions24h", "diskEvictions7d", "inodesAvailablePct", "readIOPS", "writeIOPS", "readBytes", "writeBytes"}, "network": {"receiveBytes", "transmitBytes", "receiveErrors", "transmitErrors", "receiveDrops", "transmitDrops"}}
 	out := map[string]float64{}
 	for _, k := range keys[view] {
 		if v, ok := values[k]; ok {

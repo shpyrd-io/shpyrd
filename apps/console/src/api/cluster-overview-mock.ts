@@ -14,8 +14,9 @@ const pools: OverviewPool[] = [...new Set(nodes.map(n => n.pool ?? ""))].map(nam
     const present = rows.filter(n => n.values[k] !== undefined);
     coverage[k] = present.length;
     values[k] = present.reduce((sum, n) => sum + n.values[k]!, 0) / (k.endsWith("Pct") ? present.length : 1);
-    distribution[k] = present.filter(n => k === "diskAvailablePct" || k === "inodesAvailablePct" ? n.values[k]! < 10 : n.values[k]! >= 85).length;
+    distribution[k] = present.filter(n => k === "diskAvailablePct" ? n.values[k]! < (n.values.diskEvictionPct ?? 15) + 10 : k === "inodesAvailablePct" ? n.values[k]! < 10 : n.values[k]! >= 85).length;
   }
+  distribution.diskEvicting7d = rows.filter(n => (n.values.diskPressure7d ?? 0) > 0 || (n.values.diskEvictions7d ?? 0) > 0).length;
   return { name, nodes: rows.length, ready: rows.filter(n => n.ready).length, issues: rows.filter(n => n.issues.length).length, missing: 0, values, coverage, distribution };
 });
 const updatedAt = () => new Date().toISOString();
