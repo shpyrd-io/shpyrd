@@ -18,7 +18,7 @@ function StatePage({
   waiting = false,
   children,
   ...props
-}: React.ComponentProps<"div"> & {
+}: Omit<React.ComponentProps<"div">, "title"> & {
   // Over the title: the mark, or an icon that says what happened.
   icon?: React.ReactElement;
   // Over the title, bigger than an icon and in no box: a drawing of what
