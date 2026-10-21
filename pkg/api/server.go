@@ -235,6 +235,8 @@ type Server struct {
 	edgeKeys  *edge.Keys
 	edgeCodes *edge.Codes
 	hostCache hostCache
+	// Redirect Ingresses by host (#133).
+	redirects redirectCache
 	// lookupTXT resolves TXT records for domain claims; nil uses the system
 	// resolver (tests inject one).
 	lookupTXT func(ctx context.Context, name string) ([]string, error)
@@ -541,6 +543,8 @@ func (s *Server) SourcesHandler() http.Handler {
 
 func (s *Server) routes() error {
 	s.engine.Any("/_shpyrd/maintenance", projectMaintenanceResponse)
+	s.engine.Any(controller.RedirectPath, s.hostRedirect)
+	s.engine.Any(controller.RedirectPath+"/*path", s.hostRedirect)
 	// The edge (RFC-0033): what ingress-nginx and app hosts call.
 	// /edge/auth arrives from ingress-nginx at the service name and names
 	// its workspace in the query; the JWKS is the platform's, whatever the
