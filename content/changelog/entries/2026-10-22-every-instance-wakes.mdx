@@ -1,0 +1,9 @@
+---
+title: "Every instance wakes"
+description: "An app with several instances under a sleep policy came back with one; it comes back with all of them."
+date: "2026-10-22"
+type: fix
+draft: false
+---
+
+A process set to two or more instances and a sleep policy woke with a single instance after its first sleep, and stayed that way until the next deploy. A wake now restores the count the process declares.
