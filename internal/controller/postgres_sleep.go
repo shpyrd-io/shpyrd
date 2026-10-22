@@ -160,6 +160,10 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 		if fromPlan && pg.Status.Sleep != nil && pg.Status.Sleep.State == pgAwake && pg.Status.Sleep.Message != "" && !strings.Contains(pg.Status.Sleep.Message, planDefaultNote) {
 			pg.Status.Sleep.Message += " " + planDefaultNote
 		}
+		// The schedule follows the state: suspended while hibernated.
+		if err := r.syncBackupSchedule(ctx, pg); err != nil {
+			log.FromContext(ctx).Error(err, "backup schedule did not follow the sleep state", "postgres", pg.Name)
+		}
 	}()
 
 	// No policy, or an HA database (never sleeps): make sure it is awake
@@ -237,6 +241,11 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 			sleep.State, sleep.Message = pgAwake, ""
 			sleep.LastActivityAt = &now
 			sleep.ActivityCheckedAt = &now
+			// Asleep it archived nothing: a copy now when the last one is
+			// older than a schedule period.
+			if err := r.backupAfterWakeIfDue(ctx, pg, now.Time); err != nil {
+				return err
+			}
 		}
 		return r.ensurePostgresService(ctx, pg)
 	}
@@ -272,13 +281,27 @@ func (r *PostgresReconciler) maybeHibernate(ctx context.Context, pg *shpyrdv1.Po
 		sleep.Message = "awake: idle, but the pg-gateway is not running (nothing could wake it)"
 		return nil
 	}
+	// A database with backups is copied first when its last copy is older
+	// than a schedule period (a hibernated cluster archives nothing).
+	backedUp, waiting, warning, err := r.backupBeforeSleepReady(ctx, pg, now)
+	if err != nil {
+		return err
+	}
+	if !backedUp {
+		sleep.Message = waiting
+		return nil
+	}
 	// Hibernate via the CNPG annotation; the Service goes to the gateway.
 	if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
 		return err
 	}
 	sleep.State = pgSleeping
 	sleep.Message = fmt.Sprintf("sleeping since %s (idle %s)", now.UTC().Format(time.RFC3339), idle.Truncate(time.Second))
-	log.FromContext(ctx).Info("database hibernated", "postgres", pg.Name, "idle", idle.Truncate(time.Second))
+	if warning != "" {
+		sleep.Message += "; " + noFreshBackupNote + warning
+		r.Recorder.Eventf(pg, corev1.EventTypeWarning, "SleepWithoutBackup", "%s hibernated without a fresh backup: %s", pg.Name, warning)
+	}
+	log.FromContext(ctx).Info("database hibernated", "postgres", pg.Name, "idle", idle.Truncate(time.Second), "backupWarning", warning)
 	return r.ensurePostgresService(ctx, pg)
 }
 
@@ -521,7 +544,11 @@ func pgSleepDescription(pg *shpyrdv1.Postgres) string {
 	}
 	switch pg.Status.Sleep.State {
 	case pgSleeping:
-		return "sleeping (volumes kept, data safe; wakes on the first connection)"
+		desc := "sleeping (volumes kept, data safe; wakes on the first connection)"
+		if w := sleepBackupWarning(pg); w != "" {
+			desc += "; " + w
+		}
+		return desc
 	case pgWaking:
 		return "waking up — connections will succeed shortly"
 	case pgSuspended:

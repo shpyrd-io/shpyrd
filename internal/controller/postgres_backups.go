@@ -186,6 +186,7 @@ func (r *PostgresReconciler) reconcileBackups(ctx context.Context, pg *shpyrdv1.
 		schedule.Object["spec"] = map[string]interface{}{
 			"schedule":             cron,
 			"immediate":            true,
+			"suspend":              backupsSuspended(pg), // a hibernated cluster has no instance to back up
 			"backupOwnerReference": "self",
 			"cluster":              map[string]interface{}{"name": pg.Name},
 			"method":               "plugin",
