@@ -602,7 +602,6 @@ func (s *Server) routes() error {
 	s.engine.GET(edgePathPrefix+"gate", tenant, s.gateOpen)
 
 	s.engine.GET("/api/healthz", s.healthz)
-	s.engine.GET("/api/readyz", s.readyz) // #147: what a deploy, a backup and a sleeping app need
 	// Account self-service pages (RFC-0014): no session required.
 	pub := s.engine.Group("/api", tenant)
 	pub.GET("/config", s.config)
@@ -636,6 +635,9 @@ func (s *Server) routes() error {
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
 	api := s.engine.Group("/api", tenant, s.auth())
+	// The platform's readiness (#147): the cluster admin's on this host; the
+	// internal API serves it to monitoring inside the cluster.
+	api.GET("/readyz", s.require(authz.ClusterAdmin), s.readyz)
 	// Extensions that serve at the workspace's root (the MCP server and its
 	// OAuth, ee/mcp) get the server's Host.
 	if err := s.mountRoot(api, tenant, login); err != nil {

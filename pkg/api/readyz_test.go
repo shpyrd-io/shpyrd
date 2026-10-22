@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,8 @@ import (
 
 // #147: /api/readyz says, one line per check, what a deploy, a backup and
 // a sleeping app need; a component the cluster does not run is skipped,
-// a stopped one makes the report degraded (503).
+// a stopped one makes the report degraded (503). On the public host it is
+// the cluster admin's; the internal API serves it without a credential.
 func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	deploy := func(ns, name string, ready int32) *appsv1.Deployment {
 		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: appsv1.DeploymentSpec{Replicas: ptr.To[int32](1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: ready}}
@@ -24,9 +26,18 @@ func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	stale := metav1.NewTime(time.Now().Add(-30 * time.Hour))
 	backup := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "platform-backup", Namespace: "shpyrd-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-72 * time.Hour))}, Status: batchv1.CronJobStatus{LastSuccessfulTime: &stale}}
 	s, _ := newTestServer(t, nil, []client.Object{}, deploy("shpyrd-system", "registry", 1), deploy("shpyrd-system", "pg-gateway", 0), backup)
-	rec := do(t, s, "GET", "/api/readyz", "", false)
+	if rec := do(t, s, "GET", "/api/readyz", "", false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("readyz without a credential on the public host = %d, want 401", rec.Code)
+	}
+	rec := do(t, s, "GET", "/api/readyz", "", true)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz = %d %s", rec.Code, rec.Body)
+	}
+	// Inside the cluster, on the internal API, no credential is needed.
+	internal := httptest.NewRecorder()
+	s.InternalAPIHandler().ServeHTTP(internal, httptest.NewRequest("GET", "/api/readyz", nil))
+	if internal.Code != http.StatusServiceUnavailable || !strings.Contains(internal.Body.String(), `"degraded"`) {
+		t.Errorf("internal readyz = %d %s", internal.Code, internal.Body)
 	}
 	var report ReadyReport
 	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
@@ -54,7 +65,7 @@ func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	fresh := metav1.Now()
 	backup.Status.LastSuccessfulTime = &fresh
 	s2, _ := newTestServer(t, nil, []client.Object{}, deploy("shpyrd-system", "registry", 1), deploy("shpyrd-system", "pg-gateway", 2), deploy("shpyrd-system", "object-storage", 1), deploy("keda", "keda-add-ons-http-interceptor", 2), backup)
-	rec = do(t, s2, "GET", "/api/readyz", "", false)
+	rec = do(t, s2, "GET", "/api/readyz", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("healthy readyz = %d %s", rec.Code, rec.Body)
 	}
