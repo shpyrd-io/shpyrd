@@ -410,7 +410,17 @@ func (e *Engine) applyComponent(ctx context.Context, c *Component) error {
 		}
 	}
 
-	for _, w := range c.Wait {
+	waits := c.Wait
+	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
+		// The cluster's primary (a replica still joining does not hold the
+		// install), and the StatefulSet while the data is on it.
+		e.rep.Step(c.Name, "waiting for the primary of cluster "+ControlPlaneCluster)
+		if err := e.waitControlPlanePrimary(ctx, c.Namespace); err != nil {
+			return err
+		}
+		waits = controlPlaneWaits(c.Namespace, e.controlPlaneMovedNow(ctx, c.Namespace))
+	}
+	for _, w := range waits {
 		e.rep.Step(c.Name, "waiting for "+w.String())
 		if err := e.applier.waitFor(ctx, w, c.Namespace); err != nil {
 			return err
@@ -544,7 +554,27 @@ func (e *Engine) renderComponent(c *Component) ([]*unstructured.Unstructured, er
 	if c.Name == ServerComponent && e.vars[VarSourcesBucket] != "" {
 		return sourcesInBucket(objs, e.vars[VarSourcesSecret])
 	}
+	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
+		// The control plane on CloudNativePG: the cluster beside the
+		// StatefulSet until the data moved, the cluster alone after (the
+		// StatefulSet stays behind at zero replicas, unmanaged, until it is
+		// removed by hand).
+		if e.controlPlaneMovedNow(context.Background(), c.Namespace) {
+			objs = nil
+		}
+		objs = append(objs, controlPlaneObjects(e.vars, c.Namespace)...)
+	}
 	return objs, nil
+}
+
+// controlPlaneMovedNow reads the control-plane Secret's word on where the
+// data is.
+func (e *Engine) controlPlaneMovedNow(ctx context.Context, namespace string) bool {
+	if e.kube == nil || e.kube.Kube == nil {
+		return false
+	}
+	sec, err := e.kube.Kube.CoreV1().Secrets(namespace).Get(ctx, ControlPlaneDBSecretName, metav1.GetOptions{})
+	return err == nil && controlPlaneMoved(sec.Data)
 }
 
 func (e *Engine) ensureNamespace(ctx context.Context, name string) error {

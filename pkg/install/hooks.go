@@ -449,6 +449,18 @@ func dnsCredentialsHook(ctx context.Context, e *Engine, c *Component) error {
 
 // applyOpaqueSecret writes an Opaque Secret with server-side apply.
 func (e *Engine) applyOpaqueSecret(ctx context.Context, namespace, name string, data map[string]string) error {
+	return e.applySecret(ctx, namespace, name, "Opaque", data)
+}
+
+// randomHex is a fresh secret of n bytes, hex-encoded.
+func randomHex(n int) string {
+	raw := make([]byte, n)
+	_, _ = rand.Read(raw)
+	return hex.EncodeToString(raw)
+}
+
+// applySecret applies a Secret of a type with string data.
+func (e *Engine) applySecret(ctx context.Context, namespace, name, secretType string, data map[string]string) error {
 	enc := map[string]interface{}{}
 	for k, v := range data {
 		enc[k] = base64.StdEncoding.EncodeToString([]byte(v))
@@ -456,7 +468,7 @@ func (e *Engine) applyOpaqueSecret(ctx context.Context, namespace, name string, 
 	secret := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Secret",
-		"type":       "Opaque",
+		"type":       secretType,
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": namespace,
@@ -657,6 +669,9 @@ const ControlPlaneDBSecretName = "control-plane-db"
 func controlPlaneDBHook(ctx context.Context, e *Engine, c *Component) error {
 	secrets := e.kube.Kube.CoreV1().Secrets(c.Namespace)
 	existing, err := secrets.Get(ctx, ControlPlaneDBSecretName, metav1.GetOptions{})
+	if controlPlaneOnCNPG(e.vars) {
+		return e.controlPlaneHookCNPG(ctx, c, existing, err == nil)
+	}
 	if external := e.vars[VarDatabaseURL]; external != "" {
 		if err == nil && string(existing.Data["url"]) == external {
 			e.rep.Step(c.Name, "control-plane database: the configured SHPYRD_DATABASE_URL")

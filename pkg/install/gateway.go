@@ -106,6 +106,8 @@ func gatewayConsumers(vars map[string]string) []gatewayConsumer {
 		consumers = append(consumers, gatewayConsumer{bucket: "platform-backups", secret: "gateway-platform-backups"})
 	}
 	consumers = append(consumers, gatewayConsumer{bucket: MetricsBucket, secret: MetricsSecret, retentionDays: MetricsRetentionDays})
+	// The control plane's own backups (Barman keeps its retention).
+	consumers = append(consumers, gatewayConsumer{bucket: ControlPlaneBackupsBucket, secret: ControlPlaneBackupsSecret})
 	return consumers
 }
 
