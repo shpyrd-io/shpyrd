@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,16 +64,17 @@ func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	}
 }
 
-// Storage plan step 7: once told to stop, the process says so on healthz
-// (the readiness probe fails) while it keeps serving for the drain delay.
+// Storage plan step 7: once told to stop, the process keeps serving for
+// the drain delay, and healthz keeps answering 200 while it does: a 503
+// would only reach what the front door still routes here.
 func TestHealthzSaysDrainingOnShutdown(t *testing.T) {
 	s, _ := newTestServer(t, nil, []client.Object{})
 	if rec := do(t, s, "GET", "/api/healthz", "", false); rec.Code != http.StatusOK {
 		t.Fatalf("healthz = %d", rec.Code)
 	}
 	s.draining.Store(true)
-	if rec := do(t, s, "GET", "/api/healthz", "", false); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("healthz while draining = %d", rec.Code)
+	if rec := do(t, s, "GET", "/api/healthz", "", false); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "draining") {
+		t.Errorf("healthz while draining = %d %s", rec.Code, rec.Body)
 	}
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
 	t.Setenv("SHPYRD_DRAIN_DELAY", "")

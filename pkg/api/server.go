@@ -212,10 +212,13 @@ type Server struct {
 	overviewQueries overviewQueryCache
 	opts            Options
 	log             *slog.Logger
-	// draining says the process was told to stop: /api/healthz answers 503
-	// so the readiness probe fails, and the listeners stay open for
-	// drainDelay before closing, so a connection the load balancer still
-	// sends to this pod is served, not reset (storage plan step 7).
+	// draining says the process was told to stop and keeps its listeners
+	// open for drainDelay before closing, so a connection the load balancer
+	// still sends to this pod is served, not reset (storage plan step 7).
+	// /api/healthz keeps answering 200 meanwhile: under Kubernetes the
+	// endpoint leaves the Service as the pod terminates, probes or not, and
+	// a 503 from here would only reach the people and monitors the front
+	// door still routes to the pod.
 	draining         atomic.Bool
 	engine           *gin.Engine
 	internalAPI      *gin.Engine
@@ -532,8 +535,8 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	// Drain: not ready first, the listeners open a moment longer. Under
-	// Kubernetes the endpoint leaves the Service as the pod terminates, but
+	// Drain: the listeners open a moment longer. Under Kubernetes the
+	// endpoint leaves the Service as the pod terminates, but
 	// the front door's upstream list follows a second later; closing at
 	// once resets what it still sends here.
 	s.draining.Store(true)
