@@ -751,3 +751,77 @@ func TestDedicatedDatabasesAreStampedWithTheirSize(t *testing.T) {
 		t.Error("a shared database was stamped; its cap is measured elsewhere")
 	}
 }
+
+// TestActivitySignalFollowsTheWorkspaceDefault: the loop keeps the activity
+// check for a database sleeping by the workspace's default, not only for one
+// with a policy of its own (storage plan step 6); before, such a database
+// waited for ever for a check nobody wrote. An explicit off, a shared
+// database and a high-availability one are left alone, and without auto
+// sleep the default does not apply.
+func TestActivitySignalFollowsTheWorkspaceDefault(t *testing.T) {
+	ctx := context.Background()
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := int32(2)
+	fresh := func() client.Client {
+		mk := func(name string, spec shpyrdv1.PostgresSpec) *shpyrdv1.Postgres {
+			return &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app-shop"}, Spec: spec}
+		}
+		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			mk("own", shpyrdv1.PostgresSpec{Sleep: &shpyrdv1.PostgresSleepSpec{After: "30m"}}),
+			mk("bydefault", shpyrdv1.PostgresSpec{}),
+			mk("off", shpyrdv1.PostgresSpec{Sleep: &shpyrdv1.PostgresSleepSpec{After: "off"}}),
+			mk("shared", shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}),
+			mk("ha", shpyrdv1.PostgresSpec{Instances: &two}),
+		).WithStatusSubresource(&shpyrdv1.Postgres{}).Build()
+	}
+	var scraped []map[string]any
+	for _, n := range []string{"own", "bydefault", "off", "shared", "ha"} {
+		scraped = append(scraped, sample(map[string]string{"job": "app-shop/" + n}, "1"))
+	}
+	srv := fakeProm(t, map[string][]map[string]any{
+		"cnpg_backends_total[5m]":     scraped, // every database is scraped
+		"cnpg_backends_total{usename": {},      // nobody is connected
+	})
+	defer srv.Close()
+	checked := func(c client.Client, name string) bool {
+		t.Helper()
+		pg := &shpyrdv1.Postgres{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, pg); err != nil {
+			t.Fatal(err)
+		}
+		return pg.Status.Sleep != nil && pg.Status.Sleep.ActivityCheckedAt != nil
+	}
+	run := func(name string, m *MeteringLoop, c client.Client, want map[string]bool) {
+		t.Helper()
+		m.Client = c
+		if err := m.postgresActivity(ctx, time.Now()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for db, w := range want {
+			if got := checked(c, db); got != w {
+				t.Errorf("%s: %s checked = %v, want %v", name, db, got, w)
+			}
+		}
+	}
+	none := func(context.Context, string) string { return "" }
+	hour := func(context.Context, string) string { return "1h" }
+	base := func() *MeteringLoop { return &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL)} }
+
+	m := base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = always, none
+	run("no default", m, fresh(), map[string]bool{"own": true, "bydefault": false, "off": false, "shared": false, "ha": false})
+
+	m = base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = always, hour
+	run("workspace default", m, fresh(), map[string]bool{"own": true, "bydefault": true, "off": false, "shared": false, "ha": false})
+
+	m = base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = func() bool { return false }, hour
+	run("auto sleep off", m, fresh(), map[string]bool{"own": true, "bydefault": false})
+
+	m = base() // the loop of a platform without the fields: as before
+	run("unwired", m, fresh(), map[string]bool{"own": true, "bydefault": false})
+}

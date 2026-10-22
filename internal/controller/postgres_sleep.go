@@ -13,10 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Postgres sleep (RFC-0075): CloudNativePG declarative hibernation with a
@@ -76,6 +78,29 @@ func (r *PostgresReconciler) effectiveSleep(ctx context.Context, pg *shpyrdv1.Po
 	}
 	after = parseSleepDuration(r.WorkspaceSleepDefault(ctx, pg.Namespace))
 	return after, false, after > 0
+}
+
+// WorkspaceDatabaseSleepDefault answers a project namespace's workspace
+// default for databases (RFC-0075): the namespace carries its workspace's
+// slug as a label; a namespace without one is the default workspace's.
+// Asked once a minute per database with no policy of its own, so no cache.
+// The Postgres reconciler and the metering loop share it.
+func WorkspaceDatabaseSleepDefault(c client.Client, st store.Store) func(ctx context.Context, namespace string) string {
+	return func(ctx context.Context, namespace string) string {
+		ns := &corev1.Namespace{}
+		if err := c.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+			return ""
+		}
+		slug := ns.Labels[shpyrdv1.LabelWorkspace]
+		if slug == "" {
+			slug = store.DefaultWorkspaceSlug(ctx, st)
+		}
+		ws, err := st.Workspace(ctx, slug)
+		if err != nil || ws.Settings.Sleep == nil {
+			return ""
+		}
+		return ws.Settings.Sleep.DatabasesAfter
+	}
 }
 
 // activityStaleAfter is how old the activity check may be before the

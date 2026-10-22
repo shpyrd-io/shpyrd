@@ -33,6 +33,13 @@ type MeteringLoop struct {
 	// Client reads namespaces. When nil (tests), the mapping falls back to
 	// kube_namespace_labels in Prometheus.
 	Client client.Client
+	// SleepAllowed and WorkspaceSleepDefault are the Postgres reconciler's
+	// own (storage plan step 6): the activity signal is kept for every
+	// database whose effective policy could put it to sleep, the
+	// workspace's default included, not only for one with a policy of its
+	// own. Nil: databases with a policy of their own only.
+	SleepAllowed          func() bool
+	WorkspaceSleepDefault func(ctx context.Context, namespace string) string
 }
 
 func (m *MeteringLoop) NeedLeaderElection() bool { return true }
@@ -272,7 +279,7 @@ func (m *MeteringLoop) postgresActivity(ctx context.Context, at time.Time) error
 	}
 	var withPolicy []shpyrdv1.Postgres
 	for _, pg := range list.Items {
-		if pg.Spec.Sleep != nil && pg.Spec.Sleep.After != "" && pg.Spec.Sleep.After != "off" {
+		if m.sleepApplies(ctx, &pg) {
 			withPolicy = append(withPolicy, pg)
 		}
 	}
@@ -331,6 +338,26 @@ func (m *MeteringLoop) postgresActivity(ctx context.Context, at time.Time) error
 		}
 	}
 	return nil
+}
+
+// sleepApplies says the database could be put to sleep by a policy, so its
+// activity must be known: a quiet period of its own, or none of its own and
+// the workspace's default while databases may sleep by themselves. An
+// explicit "off" opts out of the default (#135); a shared database and a
+// high-availability one never sleep (RFC-0075). Before this a database
+// sleeping by the workspace's default never hibernated: the reconciler
+// waited for an activity check that nobody wrote.
+func (m *MeteringLoop) sleepApplies(ctx context.Context, pg *shpyrdv1.Postgres) bool {
+	if pg.Spec.Type == shpyrdv1.PostgresTypeShared || instances(pg) > 1 {
+		return false
+	}
+	if pg.Spec.Sleep != nil {
+		return sleepAfterDuration(pg.Spec.Sleep) > 0
+	}
+	if m.SleepAllowed == nil || !m.SleepAllowed() || m.WorkspaceSleepDefault == nil {
+		return false
+	}
+	return parseSleepDuration(m.WorkspaceSleepDefault(ctx, pg.Namespace)) > 0
 }
 
 // Component attribution (RFC-0075). Every metered thing is named after what
