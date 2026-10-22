@@ -895,6 +895,10 @@ type Memberships interface {
 	// DeleteMembership removes a person's workspace role; ErrNotFound when
 	// they had none.
 	DeleteMembership(ctx context.Context, ws, email string) error
+	// MembershipsOf lists the roles the person bound to an external
+	// identity holds, across workspaces, oldest first. A suspended person
+	// holds none, and an unbound legacy principal is never matched.
+	MembershipsOf(ctx context.Context, issuer, connector, subject string) ([]Membership, error)
 
 	// ListInvitations lists the workspace's invitations, expired ones
 	// included (the caller says so), oldest first.

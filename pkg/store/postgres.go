@@ -1316,6 +1316,29 @@ func (p *Postgres) ListMemberships(ctx context.Context, ws string) ([]Membership
 	return out, rows.Err()
 }
 
+func (p *Postgres) MembershipsOf(ctx context.Context, issuer, connector, subject string) ([]Membership, error) {
+	if issuer == "" || subject == "" {
+		return nil, nil
+	}
+	rows, err := p.pool.Query(ctx, `SELECT m.id, m.workspace_id, m.email, m.role, m.created_at, m.updated_at, m.principal_id
+ FROM memberships m JOIN identities i ON i.id::text = m.principal_id AND i.workspace_id = m.workspace_id
+ WHERE i.realm = 'workspace' AND i.status = 'active' AND i.issuer = $1 AND i.connector = $2 AND i.subject = $3
+ ORDER BY m.created_at, m.id`, issuer, connector, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Membership
+	for rows.Next() {
+		mb, err := scanMembership(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *mb)
+	}
+	return out, rows.Err()
+}
+
 func (p *Postgres) PutMembership(ctx context.Context, ws, key, role string) (*Membership, error) {
 	if !ValidWorkspaceRole(role) {
 		return nil, errors.New("invalid workspace role")
