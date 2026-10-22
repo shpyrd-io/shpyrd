@@ -33,16 +33,46 @@ var failingReasons = map[string]bool{
 // left out: during a rollout the previous release's instances stay until the
 // new ones are ready, and their crash loop is not the new release's (#91).
 func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.ReplicaSet) (failing int32, reason string) {
+	h := r.processHealthDetail(ctx, current)
+	return h.failing, h.reason
+}
+
+// processHealthDetail is processHealth with what it found out on the way:
+// unschedulable says the first failure is a placement no machine will
+// make (#127), the case a Recreate rollout falls back from.
+type healthDetail struct {
+	failing       int32
+	reason        string
+	unschedulable bool
+}
+
+func (r *AppReconciler) processHealthDetail(ctx context.Context, current *appsv1.ReplicaSet) healthDetail {
+	var detail healthDetail
+	detail.failing, detail.reason, detail.unschedulable = r.processHealthOf(ctx, current)
+	return detail
+}
+
+func (r *AppReconciler) processHealthOf(ctx context.Context, current *appsv1.ReplicaSet) (failing int32, reason string, unschedulable bool) {
 	if current == nil || current.Spec.Selector == nil {
-		return 0, ""
+		return 0, "", false
 	}
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(current.Namespace), client.MatchingLabels(current.Spec.Selector.MatchLabels)); err != nil {
-		return 0, ""
+		return 0, "", false
 	}
 	waiting := ""
 	for _, pod := range pods.Items {
 		if pod.DeletionTimestamp != nil || !metav1.IsControlledBy(&pod, current) {
+			continue
+		}
+		// An instance no machine will place is a failure, not a wait
+		// (#127): the rollout would otherwise stay "rolling out" for ever
+		// with every way back locked behind it.
+		if words := r.schedulingHopeless(ctx, &pod); words != "" {
+			failing++
+			if reason == "" {
+				reason, unschedulable = words, true
+			}
 			continue
 		}
 		if pod.Status.Phase == corev1.PodFailed && pod.Status.Reason == "Evicted" {
@@ -97,9 +127,9 @@ func (r *AppReconciler) processHealth(ctx context.Context, current *appsv1.Repli
 		}
 	}
 	if failing == 0 {
-		return 0, waiting
+		return 0, waiting, false
 	}
-	return failing, reason
+	return failing, reason, unschedulable
 }
 
 // currentReplicaSet is the ReplicaSet the Deployment controller made for d's

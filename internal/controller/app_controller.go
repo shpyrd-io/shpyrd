@@ -886,6 +886,41 @@ func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the
 // process map and removes workloads of dropped process types.
+// previousRelease is the last release that ran the process with another
+// image or another size than the spec asks now: what a fallback puts back
+// (#127). The current rollout's own record, and any record of the same
+// target, are skipped.
+func previousRelease(app *shpyrdv1.App, process, image, size string) *shpyrdv1.Release {
+	for i := len(app.Status.Releases) - 1; i >= 0; i-- {
+		rel := &app.Status.Releases[i]
+		if rel.Image == "" {
+			continue
+		}
+		if rel.Image == image && (rel.Sizes[process] == size || rel.Sizes[process] == "") {
+			continue
+		}
+		return rel
+	}
+	return nil
+}
+
+// fallbackWorkload is what a process runs while a fallback holds (#127):
+// the previous release's image and, when that release recorded a size for
+// the process, that size's resources; the spec's resources otherwise.
+func (r *AppReconciler) fallbackWorkload(prev *shpyrdv1.Release, p namedProcess, catalog sizes.Catalog, res corev1.ResourceRequirements) (string, corev1.ResourceRequirements, int) {
+	if size := prev.Sizes[p.Name]; size != "" && size != "custom" {
+		if got, _, err := catalog.Resolve(size, corev1.ResourceRequirements{}); err == nil {
+			res = got
+		}
+	}
+	return prev.Image, res, prev.Number
+}
+
+// fallbackNote completes a failure reason while the previous release runs.
+func fallbackNote(release int) string {
+	return fmt.Sprintf(" The previous release (v%d) runs again meanwhile; resize the process, or roll back.", release)
+}
+
 func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
 	status := map[string]shpyrdv1.ProcessStatus{}
 	wanted := map[string]bool{}
@@ -902,6 +937,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
 	var webReplicas *int32 // what the web Deployment currently asks for
 	release := releaseNumber(app, image, hash)
+	// A fallback holds for the generation it was decided for (#127); a
+	// change to the spec starts a rollout from the spec again.
+	if fb := app.Status.Fallback; fb != nil && fb.Generation != app.Generation {
+		app.Status.Fallback = nil
+	}
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
@@ -911,10 +951,18 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if err != nil {
 			return nil, err
 		}
+		// What this process runs: the spec, or, while a fallback holds for
+		// it, its previous release (#127).
+		pImage, pRes, pRelease := image, res, release
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			if prev := app.ReleaseByNumber(fb.Release); prev != nil {
+				pImage, pRes, pRelease = r.fallbackWorkload(prev, p, catalog, res)
+			}
+		}
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
 		scaledExternally := kedaScales && p.Name == "web"
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, revision, release, res, mounts[p.Name], d, scaledExternally)
+			r.Config.mutateDeployment(app, p, pImage, hash, revision, pRelease, pRes, mounts[p.Name], d, scaledExternally)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {
@@ -941,7 +989,30 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if d.Status.ObservedGeneration < d.Generation {
 			ps.Ready, ps.Updated = 0, 0
 		}
-		ps.Failing, ps.Reason = r.processHealth(ctx, current)
+		health := r.processHealthDetail(ctx, current)
+		ps.Failing, ps.Reason = health.failing, health.reason
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			// The previous release runs; the failure is the spec's, and it
+			// shows until the spec changes.
+			ps.Failing = max(ps.Failing, 1)
+			ps.Reason = fb.Message + fallbackNote(fb.Release)
+		} else if health.unschedulable && rolloutStrategy(p, mounts[p.Name]).Type == appsv1.RecreateDeploymentStrategyType {
+			// A Recreate rollout stopped the running instance before the new
+			// one proved impossible to place: put the previous release back
+			// (#127) rather than leave the app down behind a locked rollout.
+			if prev := previousRelease(app, p.Name, image, sizeName); prev != nil {
+				app.Status.Fallback = &shpyrdv1.FallbackStatus{Generation: app.Generation, Process: p.Name, Release: prev.Number, Message: health.reason}
+				fImage, fRes, fRelease := r.fallbackWorkload(prev, p, catalog, res)
+				if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
+					r.Config.mutateDeployment(app, p, fImage, hash, revision, fRelease, fRes, mounts[p.Name], d, scaledExternally)
+					return controllerutil.SetControllerReference(app, d, r.Scheme)
+				}); err != nil {
+					return nil, fmt.Errorf("deployment %s (fallback): %w", d.Name, err)
+				}
+				r.Recorder.Eventf(app, corev1.EventTypeWarning, "Fallback", "%s: %s The previous release (v%d) runs again meanwhile.", p.Name, health.reason, prev.Number)
+				ps.Reason = health.reason + fallbackNote(prev.Number)
+			}
+		}
 		ps.Size = sizeName
 		// The size's CPU is the limit; a shared size requests only a share.
 		ps.CPU = res.Limits.Cpu().String()
