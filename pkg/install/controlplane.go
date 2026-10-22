@@ -105,12 +105,13 @@ func controlPlaneMoved(data map[string][]byte) bool {
 // network policy, and, with the object gateway, its backup store and
 // schedule.
 func controlPlaneObjects(vars map[string]string, namespace string) []*unstructured.Unstructured {
-	get := func(k string) string { return vars[k] }
 	instances := controlPlaneInstances(vars)
 	gateway := vars[VarGatewayBucket] != ""
 	size := firstNonEmptyString(vars[VarControlPlaneDBSize], "2Gi")
+	// The platform's class (the StatefulSet's claim had the cluster's
+	// default): not the databases' class, node-local on the local profile.
 	storage := map[string]interface{}{"size": size}
-	if class := DatabaseStorageClass(get); class != "" {
+	if class := vars[VarStorageClass]; class != "" {
 		storage["storageClass"] = class
 	}
 	spec := map[string]interface{}{
