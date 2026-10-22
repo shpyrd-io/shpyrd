@@ -462,6 +462,41 @@ func (p *Postgres) TakeExecTicket(ctx context.Context, hash string) ([]byte, boo
 	return payload, true, nil
 }
 
+func (p *Postgres) PutPendingLogin(ctx context.Context, hash string, payload []byte, expires time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM pending_logins WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("pending logins: %w", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO pending_logins (hash, payload, expires_at) VALUES ($1, $2, $3)`, hash, payload, expires); err != nil {
+		return fmt.Errorf("pending login: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `SELECT payload FROM pending_logins WHERE hash = $1 AND expires_at >= now()`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("pending login: %w", err)
+	}
+	return payload, true, nil
+}
+
+func (p *Postgres) TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM pending_logins WHERE hash = $1 AND expires_at >= now() RETURNING payload`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, _ = p.pool.Exec(ctx, `DELETE FROM pending_logins WHERE hash = $1`, hash) // a stale one goes too
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("pending login: %w", err)
+	}
+	return payload, true, nil
+}
+
 const claimColumns = `id, workspace_id, domain, token, connector, verified_at, created_at`
 
 func scanClaim(row pgx.Row) (*DomainClaim, error) {

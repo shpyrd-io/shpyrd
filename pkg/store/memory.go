@@ -50,6 +50,7 @@ type Memory struct {
 	console     map[string]ConsoleUser
 	cost        *costsMemory
 	tickets     map[string]memTicket
+	logins      map[string]memTicket
 	now         func() time.Time
 }
 
@@ -440,6 +441,43 @@ func (m *Memory) TakeExecTicket(_ context.Context, hash string) ([]byte, bool, e
 		return nil, false, nil
 	}
 	return t.payload, true, nil
+}
+
+func (m *Memory) PutPendingLogin(_ context.Context, hash string, payload []byte, expires time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.logins == nil {
+		m.logins = map[string]memTicket{}
+	}
+	now := m.now()
+	for k, l := range m.logins {
+		if now.After(l.expires) {
+			delete(m.logins, k)
+		}
+	}
+	m.logins[hash] = memTicket{payload: append([]byte(nil), payload...), expires: expires}
+	return nil
+}
+
+func (m *Memory) PeekPendingLogin(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.logins[hash]
+	if !ok || m.now().After(l.expires) {
+		return nil, false, nil
+	}
+	return append([]byte(nil), l.payload...), true, nil
+}
+
+func (m *Memory) TakePendingLogin(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.logins[hash]
+	delete(m.logins, hash)
+	if !ok || m.now().After(l.expires) {
+		return nil, false, nil
+	}
+	return l.payload, true, nil
 }
 
 func (m *Memory) ListDomainClaims(_ context.Context, ws string) ([]DomainClaim, error) {

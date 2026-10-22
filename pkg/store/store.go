@@ -935,6 +935,15 @@ type Store interface {
 	// when no live ticket has the hash. Both sweep expired tickets.
 	PutExecTicket(ctx context.Context, hash string, payload []byte, expires time.Time) error
 	TakeExecTicket(ctx context.Context, hash string) ([]byte, bool, error)
+	// PutPendingLogin keeps a sign-in in flight (RFC-0080) under the hash of
+	// its state until it expires; PeekPendingLogin reads it without taking
+	// it (the shared callback, which only hands the browser on) and
+	// TakePendingLogin hands it out once (the callback that completes it),
+	// whichever replica of the server asks: false when no live login has
+	// the hash. Put sweeps expired logins.
+	PutPendingLogin(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
+	TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
 	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)

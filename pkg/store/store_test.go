@@ -1470,3 +1470,38 @@ func TestLockWorkspaceSerialises(t *testing.T) {
 		})
 	}
 }
+
+// A sign-in in flight is read by the shared callback, taken once by the
+// callback that completes it, and gone when it expires, whichever replica
+// of the server asks.
+func TestPendingLogins(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			st := open(t)
+			ctx := context.Background()
+			payload := []byte(`{"host":"acme.shpyrd.cloud"}`)
+			if err := st.PutPendingLogin(ctx, "live", payload, time.Now().Add(10*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.PutPendingLogin(ctx, "stale", payload, time.Now().Add(-time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ { // a peek takes nothing
+				if got, ok, err := st.PeekPendingLogin(ctx, "live"); err != nil || !ok || !strings.Contains(string(got), "acme.shpyrd.cloud") {
+					t.Fatalf("peek %d = %s %v %v", i, got, ok, err)
+				}
+			}
+			if got, ok, err := st.TakePendingLogin(ctx, "live"); err != nil || !ok || !strings.Contains(string(got), "acme.shpyrd.cloud") {
+				t.Fatalf("take = %s %v %v", got, ok, err)
+			}
+			for _, hash := range []string{"live", "stale", "never"} {
+				if _, ok, err := st.TakePendingLogin(ctx, hash); err != nil || ok {
+					t.Errorf("take %s = %v %v, want gone", hash, ok, err)
+				}
+				if _, ok, err := st.PeekPendingLogin(ctx, hash); err != nil || ok {
+					t.Errorf("peek %s = %v %v, want gone", hash, ok, err)
+				}
+			}
+		})
+	}
+}
