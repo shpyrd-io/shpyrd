@@ -257,6 +257,21 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 		return r.ensurePostgresService(ctx, pg)
 
 	case pgAwake:
+		// The cluster's word first. Hibernated while the status says awake
+		// means the status write after a hibernation lost a conflict (seen
+		// on production on 2026-10-22: two databases the moment they went
+		// to sleep, the cluster held hibernated, the status awake, the
+		// Service on a primary that could not come, so nothing could wake
+		// them). The cluster is the truth: sleeping, the Service on the
+		// gateway.
+		if on, err := r.cnpgHibernated(ctx, pg); err != nil {
+			return err
+		} else if on {
+			sleep.State = pgSleeping
+			sleep.Message = "sleeping (found hibernated: the status had stayed awake)"
+			log.FromContext(ctx).Info("database found hibernated with an awake status; marked sleeping", "postgres", pg.Name)
+			return r.ensurePostgresService(ctx, pg)
+		}
 		if err := r.ensurePostgresService(ctx, pg); err != nil {
 			return err
 		}
@@ -519,6 +534,16 @@ func (r *PostgresReconciler) setCNPGHibernation(ctx context.Context, pg *shpyrdv
 	}
 	cluster.SetAnnotations(ann)
 	return r.Client.Update(ctx, cluster)
+}
+
+// cnpgHibernated reads the cluster's hibernation annotation: CloudNativePG's
+// word on whether the database is down by our request.
+func (r *PostgresReconciler) cnpgHibernated(ctx context.Context, pg *shpyrdv1.Postgres) (bool, error) {
+	cluster, err := r.getCNPGCluster(ctx, pg)
+	if err != nil || cluster == nil {
+		return false, err
+	}
+	return cluster.GetAnnotations()[pgHibernationAnnotation] == "on", nil
 }
 
 // getCNPGCluster fetches the CNPG Cluster object as unstructured.
