@@ -877,3 +877,57 @@ func TestSleepReadBack(t *testing.T) {
 		})
 	}
 }
+
+// Storage plan step 6: an app with a disk resumes behind the waiting page
+// whatever its policy says (a workspace default saying "wait", a disk
+// added after the policy): the route serves the page and the read-back
+// says page mode.
+func TestSleepPageModeWithADisk(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "free"}},
+		Spec: shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {
+			Port: ptr.To[int32](8080), Volumes: []shpyrdv1.VolumeMount{{Name: "data", Path: "/data"}},
+		}}},
+	}
+	disk := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app-shop"}}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil) // a cluster with the KEDA kinds
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(app, disk).
+		WithStatusSubresource(&shpyrdv1.App{}, &shpyrdv1.Volume{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always,
+			WorkspaceSleepDefault: func(string) (string, string) { return "15m", "wait" }}.Defaults(),
+	}
+	got := runReconcile(t, r, app)
+	st := got.Status.Processes["web"].Sleep
+	if st == nil || st.Source != "workspace" || st.Resuming != "page" {
+		t.Fatalf("read-back = %+v, want the workspace's default in page mode", st)
+	}
+	ir := makeUnstructured(InterceptorRouteGVK, "shop", "app-shop")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, ir); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := unstructured.NestedMap(ir.Object, "spec", "coldStart", "placeholder"); !ok {
+		t.Error("the route must serve the waiting page for an app with a disk")
+	}
+	// Without the disk the default's wait mode applies.
+	p := got.Spec.Processes["web"]
+	p.Volumes = nil
+	got.Spec.Processes["web"] = p
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	if st := runReconcile(t, r, got).Status.Processes["web"].Sleep; st == nil || st.Resuming != "wait" {
+		t.Errorf("read-back without the disk = %+v, want wait mode", st)
+	}
+}

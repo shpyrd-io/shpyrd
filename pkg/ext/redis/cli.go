@@ -102,6 +102,9 @@ func newCreateCmd(g ext.CLIGlobals) *cobra.Command {
 			}
 			return ext.Print(g, cmd, v, func(w io.Writer) {
 				fmt.Fprintf(w, "Store %s is ready at %s. Attach it with `shpyrd attach %s --project %s`.\n", args[0], v.Endpoint, args[0], project)
+				if !persistent {
+					fmt.Fprintln(w, "A cache sleeps with the project's web process: it stops while the web process sleeps and comes back with it, empty.")
+				}
 			})
 		},
 	}

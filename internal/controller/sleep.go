@@ -102,19 +102,19 @@ func (r *AppReconciler) sleepSource(app *shpyrdv1.App) string {
 // quiet period and wake mode as they apply, where they come from, and the
 // state before the reconcile decides it. A policy that auto sleep does not
 // honour (no license) is reported as asked, with the state unavailable.
-func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App) *shpyrdv1.SleepStatus {
+func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App, mounts []resolvedMount) *shpyrdv1.SleepStatus {
 	st := &shpyrdv1.SleepStatus{State: "awake", Source: r.sleepSource(app)}
 	if st.Source == "off" {
 		return st
 	}
 	if sp := r.webSleepSpec(app); sp != nil && parseSleepDuration(sp.After) > 0 {
-		st.After, st.Resuming = sp.After, firstNonEmpty(sp.Resuming, "wait")
+		st.After, st.Resuming = sp.After, sleepResuming(sp, mounts)
 		return st
 	}
 	if st.Source == "project" {
 		for _, p := range processes(app) {
 			if p.Name == "web" && p.Sleep != nil {
-				st.After, st.Resuming = p.Sleep.After, firstNonEmpty(p.Sleep.Resuming, "wait")
+				st.After, st.Resuming = p.Sleep.After, sleepResuming(p.Sleep, mounts)
 			}
 		}
 		if !maintenance(app) {
@@ -122,6 +122,29 @@ func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App) *shpyrdv1.SleepStatus 
 		}
 	}
 	return st
+}
+
+// sleepResuming is the wake mode that applies: the policy's (wait when it
+// says none), except that an app with a disk resumes behind the waiting
+// page, whatever the policy says: the disk takes a moment to reattach,
+// longer than a held connection should wait. The API refuses "wait" on a
+// process with a disk; a workspace default saying "wait", or a disk added
+// later, lands here.
+func sleepResuming(sp *shpyrdv1.SleepSpec, mounts []resolvedMount) string {
+	if hasDisk(mounts) {
+		return "page"
+	}
+	return firstNonEmpty(sp.Resuming, "wait")
+}
+
+// hasDisk says the process mounts a single-instance volume (a disk).
+func hasDisk(mounts []resolvedMount) bool {
+	for _, m := range mounts {
+		if !m.Shared {
+			return true
+		}
+	}
+	return false
 }
 
 // sleepLicensedMessage is what the status says when a policy is set and
@@ -201,7 +224,7 @@ func (r *AppReconciler) scaledObjectBroken(so *unstructured.Unstructured) (bool,
 // reconcileSleep ensures or removes the KEDA sleep objects for the app and
 // reports whether the Ingress should route through the interceptor. It is
 // false when the policy is off or when KEDA's CRDs are not installed.
-func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (bool, error) {
+func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App, mounts []resolvedMount) (bool, error) {
 	if !r.sleepEnabled(app) {
 		return false, r.deleteSleepObjects(ctx, app)
 	}
@@ -214,6 +237,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 	}
 	sp := r.webSleepSpec(app)
 	cooldown := int64(parseSleepDuration(sp.After).Seconds())
+	resuming := sleepResuming(sp, mounts)
 
 	// The web Service and Deployment are named as every other object of
 	// the process is (RFC-0076: "web" in p-<id>, "<slug>-web" for a legacy
@@ -263,7 +287,7 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App) (
 			"concurrency": map[string]interface{}{"targetValue": int64(1000)},
 		}
 		coldStart := map[string]interface{}{"maxPendingRequests": int64(100), "overflow": "Reject"}
-		if sp.Resuming == "page" {
+		if resuming == "page" {
 			scalingMetric = map[string]interface{}{
 				"requestRate": map[string]interface{}{"targetValue": int64(1000), "window": "1m", "granularity": "1s"},
 			}

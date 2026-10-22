@@ -970,7 +970,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 
 	// Sleep objects (RFC-0075) come before the Ingress: the backend only
 	// points at the KEDA interceptor once the objects exist.
-	sleepActive, err := r.reconcileSleep(ctx, app)
+	sleepActive, err := r.reconcileSleep(ctx, app, mounts["web"])
 	if err != nil {
 		return nil, err
 	}
@@ -978,7 +978,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		// The policy as it applies and where it comes from, for every web
 		// process (#120, #132), then the state, decided after the objects
 		// were reconciled (a pause may have just happened).
-		ps.Sleep = r.webSleepStatus(app)
+		ps.Sleep = r.webSleepStatus(app, mounts["web"])
 		if sleepWanted {
 			switch pause, paused := r.sleepPause(app); {
 			case paused:

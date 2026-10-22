@@ -25,3 +25,23 @@ func TestASleepPolicyNeedsAutoSleep(t *testing.T) {
 		t.Errorf("sleep off without auto sleep = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// Storage plan step 6: "resuming: wait" is refused on a web process with a
+// disk (the disk takes a moment to reattach); page mode and off are fine.
+func TestSleepWaitIsRefusedWithADisk(t *testing.T) {
+	shop := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}, Spec: shpyrdv1.AppSpec{Processes: map[string]shpyrdv1.Process{"web": {Volumes: []shpyrdv1.VolumeMount{{Name: "data", Path: "/data"}}}}}}
+	disk := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app-shop"}}
+	s, _ := newTestServer(t, nil, []client.Object{shop, disk})
+	s.sleepGate = func() bool { return true }
+	s.sleepAvailable = func() bool { return true }
+	rec := do(t, s, "POST", "/api/projects/shop/processes", `{"processes":{"web":{"sleep":{"after":"15m","resuming":"wait"}}}}`, true)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "an app with a disk resumes behind the waiting page") {
+		t.Errorf("wait with a disk = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/processes", `{"processes":{"web":{"sleep":{"after":"15m","resuming":"page"}}}}`, true); rec.Code != http.StatusOK {
+		t.Errorf("page with a disk = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, s, "POST", "/api/projects/shop/processes", `{"processes":{"web":{"sleep":{"after":"off"}}}}`, true); rec.Code != http.StatusOK {
+		t.Errorf("off with a disk = %d %s", rec.Code, rec.Body)
+	}
+}

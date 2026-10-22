@@ -410,6 +410,9 @@ func (s *Server) createResourceOf(c *gin.Context, t ext.ResourceType, name strin
 		if t.Kind == "Postgres" && count == 1 {
 			note = strings.TrimSpace(note + " " + noteOneInstance)
 		}
+		if persistent, _ := spec["persistent"].(bool); t.Kind == "Redis" && !persistent {
+			note = strings.TrimSpace(note + " " + noteCacheSleeps)
+		}
 		// Its disk counts against the workspace's storage ceiling, as the
 		// namespace quota will count it, once per instance: refused here,
 		// in words, rather than left waiting for a claim the quota never
@@ -1024,6 +1027,9 @@ func (s *Server) mutateObjectBucket(c *gin.Context, mutate func(*shpyrdv1.Object
 	}
 	return out, nil
 }
+
+// noteCacheSleeps is said when a cache is created (storage plan step 6).
+const noteCacheSleeps = "A cache sleeps with the project's web process: it stops while the web process sleeps and comes back with it, empty."
 
 // projectBucket says the bucket is one of the project's own; the
 // platform's are answered as not found.
