@@ -102,6 +102,17 @@ destroy` deletes them - the one local caveat, documented.
   not written yet. kind's `standard` class does not allow expansion, so resize fails
   there with the explanation.
 
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`), steps 1–7): volumes on cloud profiles are durable block
+  disks that follow their process (RFC-0060); the nine node-local databases and
+  seven volumes of the first cloud moved to them (steps 1–2); a single-instance
+  volume no longer pins the process to one node unless its class is node-local.
+  `shpyrd run --process <p>` and the release step see a process's volumes, on the
+  machine that holds the disk, and `shpyrd shell --debug` opens a copy of a process
+  that will not start (#126). A resize no machine, or the disk's machine, can hold
+  is refused with the numbers; a Recreate rollout whose instance cannot start
+  falls back to the previous release (#127). An app with a disk wakes behind the
+  waiting page (RFC-0075).
+
 ## Implementation status
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.

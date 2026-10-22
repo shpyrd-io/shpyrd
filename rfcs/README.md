@@ -79,7 +79,7 @@ implement those proposals.
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
 | [0037](0037-platform-backup-and-restore.md) | Platform backup and restore | implemented | 0046 |
 | [0038](0038-postgres-backups-and-pitr.md) | Postgres backups and PITR | implemented | 0009, 0046 |
-| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implementable | 0009 |
+| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (pooling on shared servers; gaps) | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (`storage-rwx`) | implementable | 0006 |
 | [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; per-project quotas, LimitRange and usage bars still to do) | 0008 |
@@ -121,6 +121,7 @@ implement those proposals.
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting (fixed since 2026-10-04), OSS creates one workspace at init and shows no other, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
+| [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1); phase 2 history | 0006, 0009, 0060 |
 | [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
 
 ## Phases
@@ -171,8 +172,8 @@ an "Implementation status" section with the details; the short version:
 | 0045 | e2e for `examples/hello-docker` |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
-| 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench (p95/p99 across languages — first samples: HTTP 6–7 s, Postgres 36 s); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); Postgres sleep bench and backup-before-sleep; `sleep_events` for databases — details in the RFC's "Implementation status" |
-| 0077 | autoscaler log noise for platform nodes (`node pool not found for instance`); unpinned platform Deployments may ride apps nodes; apps pool minimum 0 untested end to end; `data` pool not started |
+| 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench per language (the per-path bench of 2026-10-22: HTTP 7.5 s / 9.2 s, with a disk 14.1 s / 52.0 s, a database 44.2 s / 52.8 s, p50 / p95); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); `sleep_events` for databases — details in the RFC's "Implementation status" |
+| 0077 | autoscaler log noise for platform nodes (`node pool not found for instance`); apps pool minimum 0 untested end to end; a data pool at its CPU limit leaves a hibernated database no slot to wake into (found on dev, 2026-10-22) |
 
 Fixed in the same audit: the users API required no role (0007/0008), the RBAC mirror was
 not cumulative (0008), `--platform-exposure` and `--internal-lb-subnet` did nothing (0036),

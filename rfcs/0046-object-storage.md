@@ -199,3 +199,10 @@ every project. The CRD keeps its name; the word people read is "bucket".
 - **Undo** is the provider's: versioning on the objects bucket with a
   seven-day lifecycle for previous versions (Terraform), so the gateway
   refuses versioning on logical buckets.
+
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`), step 7): the gateway holds a `platform-metrics` bucket whose
+  objects expire after 90 days; with the gateway, Prometheus's Thanos sidecar
+  uploads its blocks there (the monitoring component's `thanos-objstore` hook
+  writes the sidecar's store config from the bucket's credential). `/api/readyz`
+  reports the gateway and the sources bucket. The registry runs two replicas with
+  a disruption budget on object storage.

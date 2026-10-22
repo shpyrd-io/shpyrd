@@ -168,3 +168,12 @@ to take a backup before a risky release. Every provider has a variant of each.
   available and applies no minimum. Shared volumes: Terraform, component and refusals
   built; the PoC tenancy's File Storage limits are 0 in the region, so the `shpyrd-fss`
   class is verified end to end once the limit increase lands.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`), steps 1–7): the cloud profiles retired the node-local class
+  (`shpyrd-local` stays on kind); durable block classes are the only ones a
+  project gets, with the rounding guard; a migration tool moved the first
+  cloud's node-local databases and volumes with 72 h retention and a snapshot
+  of the new claim (steps 1–2); nightly snapshots and restore in place are as
+  above. The data pool is Terraform-owned (two nodes on dev, three on the first
+  cloud). An app with a disk wakes behind the waiting page, measured at 14 s
+  median and 52 s p95 on OCI block volumes (RFC-0075's bench), because a volume
+  that moves node detaches and reattaches.
