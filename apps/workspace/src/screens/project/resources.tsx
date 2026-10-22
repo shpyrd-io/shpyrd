@@ -8,6 +8,7 @@ import {
   KeyRound,
   Link2,
   Minus,
+  MoonStar,
   Plus,
   Trash2,
   Undo2,
@@ -73,6 +74,7 @@ import type {
   PublicConfig,
   ResourceInfo,
   SizeCatalog,
+  SleepStatus,
   SnapshotInfo,
   VolumeInfo,
 } from "@/api/types";
@@ -141,6 +143,15 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
   );
   const dirty = Object.keys(changes).length > 0;
   const waiting = busy(project);
+  const sleep = useMutation({
+    mutationFn: (policy: { after: string; resuming?: "page" | "wait" }) =>
+      api.applyProcesses(project.slug, { web: { sleep: policy } }),
+    onSuccess: (_, policy) => {
+      queries.invalidateQueries({ queryKey: ["project", project.slug] });
+      toast.success(sleepSetWords("web", policy));
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const apply = useMutation({
     mutationFn: () => api.applyProcesses(project.slug, changes),
     onSuccess: () => {
@@ -335,6 +346,27 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
                         {st.sleep.message}
                       </div>
                     )}
+                    {name === "web" && st?.sleep && (
+                      <Stack
+                        direction="horizontal"
+                        align="center"
+                        gap="tight"
+                        className="mt-1"
+                      >
+                        <span className="text-[11px] text-muted-foreground">
+                          {sleepWords(st.sleep)}
+                        </span>
+                        {perms.resource && (
+                          <SleepDialog
+                            what={project.slug}
+                            current={st.sleep}
+                            modes
+                            busy={sleep.isPending}
+                            onSave={(policy) => sleep.mutate(policy)}
+                          />
+                        )}
+                      </Stack>
+                    )}
                   </TableCell>
                 </TableRow>
               );
@@ -415,9 +447,189 @@ export function detailsOf(r: ResourceInfo, volume?: VolumeInfo) {
     d.backups &&
       `backups ${d.backups}${d.lastBackup ? `, last ${ago(d.lastBackup)}` : ", none yet"}`,
     d.restoredFrom && `restored from ${d.restoredFrom}`,
+    r.kind === "Postgres" &&
+      d.sleepSource &&
+      (d.sleepAfter || d.sleepSource === "off") &&
+      sleepWords(sleepOf(d)),
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+// A database's sleep read-back, from its details (#120).
+export function sleepOf(d: Record<string, string>): SleepStatus {
+  return {
+    state: (d.sleepState || "awake") as SleepStatus["state"],
+    after: d.sleepAfter,
+    source: d.sleepSource as SleepStatus["source"],
+    message: d.sleepMessage,
+  };
+}
+
+// What a sleep policy says in a few words: the three states of #135 read
+// apart, with the wake mode when it has one.
+export function sleepWords(st: SleepStatus) {
+  const mode = st.resuming ? ` (${st.resuming} mode)` : "";
+  const now =
+    st.state === "sleeping"
+      ? "; asleep now"
+      : st.state === "suspended"
+        ? "; suspended now"
+        : "";
+  if (st.source === "off") return "never sleeps, whatever the workspace's default";
+  if (st.source === "project") return `sleeps after ${st.after}${mode}, its own policy${now}`;
+  if (st.after) return `sleeps after ${st.after}${mode}, the workspace's default${now}`;
+  return "does not sleep: the workspace's default sets none";
+}
+
+// What the toast says once a policy is set.
+function sleepSetWords(
+  what: string,
+  policy: { after: string; resuming?: "page" | "wait" },
+) {
+  const after = policy.after.toLowerCase();
+  if (after === "off") return `${what} never sleeps now, whatever the workspace's default.`;
+  if (after === "default" || after === "")
+    return `${what} follows the workspace's default again.`;
+  return `${what} sleeps after ${after}${policy.resuming ? ` (${policy.resuming} mode)` : ""}.`;
+}
+
+// The quiet periods a policy may name.
+const quietPeriods = ["5m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"];
+
+// The sleep of a web process or a dedicated database (#132): the three
+// states of #135, a quiet period of its own with its wake mode for a web
+// process, off, or the workspace's default.
+export function SleepDialog({
+  what,
+  current,
+  modes = false,
+  busy = false,
+  onSave,
+}: {
+  what: string;
+  current: SleepStatus;
+  modes?: boolean;
+  busy?: boolean;
+  onSave: (policy: { after: string; resuming?: "page" | "wait" }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const initial = current.source ?? "workspace";
+  const [choice, setChoice] = useState<"workspace" | "project" | "off">(initial);
+  const [after, setAfter] = useState(
+    current.source === "project" && current.after ? current.after : "30m",
+  );
+  const [resuming, setResuming] = useState<"page" | "wait">(
+    current.resuming === "page" ? "page" : "wait",
+  );
+  const reset = () => {
+    setChoice(initial);
+    setAfter(current.source === "project" && current.after ? current.after : "30m");
+    setResuming(current.resuming === "page" ? "page" : "wait");
+  };
+  const policy =
+    choice === "off"
+      ? { after: "off" }
+      : choice === "workspace"
+        ? { after: "default" }
+        : { after, ...(modes ? { resuming } : {}) };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) reset();
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs" icon={<MoonStar />} title="When it sleeps">
+          Sleep
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>When {what} sleeps</DialogTitle>
+          <DialogDescription>
+            Now it {sleepWords(current)}.{" "}
+            {modes
+              ? "A sleeping app scales to zero after the quiet period and wakes on the first request."
+              : "A sleeping database stops after the quiet period without client connections and wakes on the first one; its volume and data stay."}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave(policy);
+            setOpen(false);
+          }}
+        >
+          <Field label="Policy">
+            <Select
+              value={choice}
+              onValueChange={(v) => setChoice(v as typeof choice)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="workspace">The workspace&apos;s default</SelectItem>
+                <SelectItem value="project">A quiet period of its own</SelectItem>
+                <SelectItem value="off">Never sleeps</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {choice === "project" && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Quiet period">
+                <Select value={after} onValueChange={setAfter}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {quietPeriods.map((q) => (
+                      <SelectItem key={q} value={q}>
+                        {q}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              {modes && (
+                <Field
+                  label="Waking"
+                  hint="An app with a disk wakes behind the page: the disk takes a moment to reattach."
+                >
+                  <Select
+                    value={resuming}
+                    onValueChange={(v) => setResuming(v as "page" | "wait")}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="page">A waking page</SelectItem>
+                      <SelectItem value="wait">Hold the request</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={busy}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // A shared database's cap: what it holds over what it may, a thin bar
@@ -507,6 +719,18 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
   const detach = useMutation({
     mutationFn: (r: ResourceInfo) => api.detach(project.slug, r.kind, r.name),
     onSuccess: told("Detached"),
+    onError: failed,
+  });
+  const sleepDatabase = useMutation({
+    mutationFn: ({ r, after }: { r: ResourceInfo; after: string }) =>
+      api.sleepPostgres(project.slug, r.name, after),
+    onSuccess: (_, { r, after }) => {
+      toast.success(sleepSetWords(r.name, { after }), {
+        description:
+          "The apps attached to it are re-released once when the policy appears or disappears.",
+      });
+      refresh();
+    },
     onError: failed,
   });
   const rotate = useMutation({
@@ -680,6 +904,19 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
                                   onDone={refresh}
                                 />
                               )}
+                              {r.kind === "Postgres" &&
+                                settled &&
+                                kindOf(r) === "dedicated" &&
+                                r.details?.sleepSource && (
+                                  <SleepDialog
+                                    what={r.name}
+                                    current={sleepOf(r.details)}
+                                    busy={sleepDatabase.isPending}
+                                    onSave={({ after }) =>
+                                      sleepDatabase.mutate({ r, after })
+                                    }
+                                  />
+                                )}
                               {r.kind === "Postgres" && settled && (
                                 <ConvertDialog
                                   slug={project.slug}

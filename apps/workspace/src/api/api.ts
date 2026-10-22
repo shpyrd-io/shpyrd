@@ -64,6 +64,15 @@ export type NewProject = {
 // until the signal aborts.
 export type LogQuery = { process?: string; tail?: number; follow?: boolean };
 
+// One process's change: a size, an instance count, or the web process's
+// sleep (RFC-0075): a quiet period with its wake mode, "off" (awake
+// whatever the workspace's default) or "default" (the workspace's).
+export type ProcessChange = {
+  size?: string;
+  replicas?: number;
+  sleep?: { after: string; resuming?: "page" | "wait" };
+};
+
 export type Api = {
   projectArchiveStatus: (slug: string) => Promise<ProjectArchiveStatus>;
   backupProject: (slug: string, options?: { files?: boolean }) => Promise<string[]>;
@@ -163,7 +172,7 @@ export type Api = {
   rollback: (slug: string, release: number) => Promise<void>;
   applyProcesses: (
     slug: string,
-    changes: Record<string, { size?: string; replicas?: number }>,
+    changes: Record<string, ProcessChange>,
   ) => Promise<Project>;
   setExposure: (slug: string, exposure: Exposure) => Promise<Project>;
   setAccess: (slug: string, access: Access) => Promise<Project>;
@@ -206,6 +215,14 @@ export type Api = {
   // A new key for a bucket (storage plan step 5): the apps attached to it
   // restart with it.
   rotateBucket: (slug: string, name: string) => Promise<{ note?: string }>;
+  // When a dedicated database hibernates (RFC-0075): a quiet period of its
+  // own, "off", or "default" (the workspace's). The apps bound to it are
+  // re-released once when the policy appears or disappears.
+  sleepPostgres: (
+    slug: string,
+    name: string,
+    after: string,
+  ) => Promise<{ name: string }>;
   convertPostgres: (
     slug: string,
     name: string,

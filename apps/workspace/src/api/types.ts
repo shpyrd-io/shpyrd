@@ -141,8 +141,14 @@ export type WorkspaceInfo = {
 };
 
 export type SleepStatus = {
-  state: "awake" | "sleeping" | "waking" | "unavailable";
+  state: "awake" | "sleeping" | "waking" | "unavailable" | "suspended";
   message?: string;
+  // The policy as it applies and where it comes from (#120): a quiet
+  // period of the project's own, an explicit off, or the workspace's
+  // default (none when it sets none).
+  after?: string;
+  resuming?: "page" | "wait" | "";
+  source?: "project" | "off" | "workspace";
 };
 
 export type ProcessStatus = {
@@ -210,7 +216,13 @@ export type Project = ProjectSummary & {
     pinnedDigest?: string;
     processes?: Record<
       string,
-      { size?: string; replicas?: number; command?: string; port?: number }
+      {
+        size?: string;
+        replicas?: number;
+        command?: string;
+        port?: number;
+        sleep?: { after?: string; resuming?: "page" | "wait" | "" };
+      }
     >;
     build?: {
       strategy?: "buildpacks" | "dockerfile";
