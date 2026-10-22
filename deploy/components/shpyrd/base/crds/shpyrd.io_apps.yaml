@@ -959,6 +959,15 @@ spec:
                         Sleep is the scale-to-zero state of the web process when a sleep
                         policy is set (RFC-0075); absent otherwise.
                       properties:
+                        after:
+                          description: |-
+                            After and Resuming are the policy as it applies (#120): the quiet
+                            period and the wake mode, empty when nothing puts the process to
+                            sleep. Source says where it comes from: "project" for a policy of
+                            the project's own, "off" for an explicit off (awake whatever the
+                            workspace's default), "workspace" otherwise (the workspace's
+                            default, or none when it sets none).
+                          type: string
                         lastActivityAt:
                           description: LastActivityAt is when the last request arrived.
                           format: date-time
@@ -974,6 +983,10 @@ spec:
                           type: integer
                         message:
                           description: Message explains an unavailable state.
+                          type: string
+                        resuming:
+                          type: string
+                        source:
                           type: string
                         state:
                           description: |-

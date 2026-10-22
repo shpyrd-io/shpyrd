@@ -103,6 +103,40 @@ func WorkspaceDatabaseSleepDefault(c client.Client, st store.Store) func(ctx con
 	}
 }
 
+// readBackSleep writes the policy as it applies and where it comes from
+// on the status (#120): "project" for a quiet period of the database's
+// own, "off" for an explicit off (or a suspension with no period), else
+// "workspace" with the workspace's default when one applies. Every
+// dedicated database carries it, so the three states are always visible.
+func (r *PostgresReconciler) readBackSleep(ctx context.Context, pg *shpyrdv1.Postgres) {
+	if pg.Status.Sleep == nil {
+		pg.Status.Sleep = &shpyrdv1.PostgresSleepStatus{State: pgAwake}
+	}
+	st := pg.Status.Sleep
+	st.After, st.Source = "", "workspace"
+	switch {
+	case pg.Spec.Sleep != nil && sleepAfterDuration(pg.Spec.Sleep) > 0:
+		st.After, st.Source = pg.Spec.Sleep.After, "project"
+	case pg.Spec.Sleep != nil:
+		st.Source = "off"
+	default:
+		if after, _, fromPlan := r.effectiveSleep(ctx, pg); fromPlan && after > 0 {
+			st.After = after.String()
+		}
+	}
+}
+
+// sleepHost is the host apps reach the database by, as the Binder hands it
+// out: the shpyrd-owned Service "<name>" when one exists (a policy applies,
+// the database's own or the workspace's), CNPG's "<name>-rw" otherwise.
+func (r *PostgresReconciler) sleepHost(ctx context.Context, pg *shpyrdv1.Postgres) string {
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name}, svc); err == nil && svc.Labels["shpyrd.io/postgres"] == pg.Name {
+		return pg.Name
+	}
+	return pg.Name + "-rw"
+}
+
 // activityStaleAfter is how old the activity check may be before the
 // reconciler refuses to hibernate: without a fresh signal (Prometheus down,
 // metering loop not leader) a busy database must never be put to sleep.
@@ -129,6 +163,7 @@ const (
 //	waking ──(CNPG primary ready)──▶ awake
 //	any ──(spec.sleep.suspended)──▶ suspended ──(resume)──▶ waking
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	r.readBackSleep(ctx, pg)
 	if pg.Annotations[AnnotationDataMove] != "" {
 		return r.setCNPGHibernation(ctx, pg, true)
 	}

@@ -424,7 +424,9 @@ func (r *PostgresReconciler) reconcileDedicated(ctx context.Context, pg *shpyrdv
 	}
 	// Status from the CNPG cluster and its application Secret.
 	r.backupStatus(ctx, pg, current)
-	pg.Status.Endpoint = fmt.Sprintf("%s-rw.%s.svc:%d", pg.Name, pg.Namespace, PostgresPort)
+	// The endpoint is the host apps get (RFC-0075): the sleep-aware Service
+	// when a policy applies, CNPG's "-rw" otherwise.
+	pg.Status.Endpoint = fmt.Sprintf("%s.%s.svc:%d", r.sleepHost(ctx, pg), pg.Namespace, PostgresPort)
 	pg.Status.CredentialsSecret = PostgresSecretName(pg.Name)
 	ready, _, _ := unstructured.NestedInt64(current.Object, "status", "readyInstances")
 	phase, _, _ := unstructured.NestedString(current.Object, "status", "phase")

@@ -83,15 +83,51 @@ func (r *AppReconciler) webSleepSpec(app *shpyrdv1.App) *shpyrdv1.SleepSpec {
 	return &shpyrdv1.SleepSpec{After: after, Resuming: resuming}
 }
 
-// sleepSource says where the effective policy comes from, for the status.
+// sleepSource says where the effective policy comes from, for the status:
+// "project" for a quiet period of the project's own, "off" for an explicit
+// off (awake whatever the workspace's default, #135), "workspace" otherwise.
 func (r *AppReconciler) sleepSource(app *shpyrdv1.App) string {
 	for _, p := range processes(app) {
 		if p.Name == "web" && p.Sleep != nil {
-			return "project"
+			if parseSleepDuration(p.Sleep.After) > 0 {
+				return "project"
+			}
+			return "off"
 		}
 	}
 	return "workspace"
 }
+
+// webSleepStatus is the read-back of the web process's sleep (#120): the
+// quiet period and wake mode as they apply, where they come from, and the
+// state before the reconcile decides it. A policy that auto sleep does not
+// honour (no license) is reported as asked, with the state unavailable.
+func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App) *shpyrdv1.SleepStatus {
+	st := &shpyrdv1.SleepStatus{State: "awake", Source: r.sleepSource(app)}
+	if st.Source == "off" {
+		return st
+	}
+	if sp := r.webSleepSpec(app); sp != nil && parseSleepDuration(sp.After) > 0 {
+		st.After, st.Resuming = sp.After, firstNonEmpty(sp.Resuming, "wait")
+		return st
+	}
+	if st.Source == "project" {
+		for _, p := range processes(app) {
+			if p.Name == "web" && p.Sleep != nil {
+				st.After, st.Resuming = p.Sleep.After, firstNonEmpty(p.Sleep.Resuming, "wait")
+			}
+		}
+		if !maintenance(app) {
+			st.State, st.Message = "unavailable", sleepLicensedMessage
+		}
+	}
+	return st
+}
+
+// sleepLicensedMessage is what the status says when a policy is set and
+// auto sleep is off on the platform (the API refuses new ones; an existing
+// one, or a lapsed license, leaves it in place).
+const sleepLicensedMessage = "sleep is set but auto sleep is off on this platform: available with a license"
 
 // parseSleepDuration parses the after value; returns 0 when disabled.
 func parseSleepDuration(after string) time.Duration {

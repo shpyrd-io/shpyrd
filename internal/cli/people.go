@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/api"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -336,15 +337,17 @@ func article(word string) string {
 
 // newSleepCmd configures HTTP sleep for a project's web process: a quiet
 // period of its own, off (awake even when the workspace has a default), or
-// the workspace's default (#135).
+// the workspace's default (#135). Without --after it says what applies and
+// where it comes from (#120).
 func newSleepCmd(g *globalFlags) *cobra.Command {
 	var after, resuming string
 	cmd := &cobra.Command{
-		Use:   "sleep <project>",
-		Short: "Configure scale-to-zero for a project's web process",
+		Use:   "sleep <project> [--after <period>|off|default]",
+		Short: "Show or configure scale-to-zero for a project's web process",
 		Long: `Scale the web process to zero when nobody has used the app for a while;
 the first request wakes it. The person may choose:
 
+  shpyrd sleep shop                               # what applies now, and where it comes from
   shpyrd sleep shop --after 15m --resuming page   # branded waking screen
   shpyrd sleep shop --after 30m --resuming wait   # hold the connection
   shpyrd sleep shop --after off                   # never sleeps, whatever the workspace's default
@@ -357,6 +360,16 @@ Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 			t, err := newTeamsAPI(g)
 			if err != nil {
 				return err
+			}
+			if !cmd.Flags().Changed("after") {
+				var d api.AppDetail
+				if err := t.call(ctx, "GET", "api/projects/"+args[0], nil, &d); err != nil {
+					return err
+				}
+				st := d.Processes["web"].Sleep
+				return g.print(cmd, map[string]any{"project": args[0], "sleep": st}, func(w io.Writer) {
+					printSleepReadBack(w, args[0], st)
+				})
 			}
 			// The batch process endpoint takes the sleep spec for web; the
 			// server validates 5m..24h and page|wait, stores "off" as the
@@ -380,8 +393,38 @@ Needs the sleep extension on the cluster (shpyrd-ctl extensions enable sleep).`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' keeps the app awake, 'default' follows the workspace")
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before scaling to zero, e.g. 15m; 'off' keeps the app awake, 'default' follows the workspace; without it, the policy that applies is shown")
 	cmd.Flags().StringVar(&resuming, "resuming", "wait", "page (branded waking screen) or wait (hold the connection)")
-	_ = cmd.MarkFlagRequired("after")
 	return cmd
+}
+
+// printSleepReadBack says what sleep applies to a project's web process
+// and where it comes from, then the state (#120): the three states of
+// #135 read apart.
+func printSleepReadBack(w io.Writer, project string, st *shpyrdv1.SleepStatus) {
+	if st == nil {
+		fmt.Fprintf(w, "%s has no sleep state yet: the project has no web process, or it has not been reconciled.\n", project)
+		return
+	}
+	switch st.Source {
+	case "off":
+		fmt.Fprintf(w, "Sleep is off for %s: it stays awake, also when the workspace has a default.\n", project)
+	case "project":
+		fmt.Fprintf(w, "%s sleeps after %s of inactivity (%s mode), by a policy of its own.\n", project, st.After, firstNonEmpty(st.Resuming, "wait"))
+	default:
+		if st.After == "" {
+			fmt.Fprintf(w, "%s follows the workspace's default, which sets no sleep: it stays awake.\n", project)
+		} else {
+			fmt.Fprintf(w, "%s follows the workspace's default: it sleeps after %s of inactivity (%s mode).\n", project, st.After, firstNonEmpty(st.Resuming, "wait"))
+		}
+	}
+	switch st.State {
+	case "sleeping":
+		fmt.Fprintln(w, "Asleep now; the first request wakes it.")
+	case "waking":
+		fmt.Fprintln(w, "Waking up now.")
+	case "unavailable":
+		fmt.Fprintf(w, "Not sleeping now: %s\n", firstNonEmpty(st.Message, "the cluster cannot honour the policy"))
+	}
+	fmt.Fprintf(w, "Change it: shpyrd sleep %s --after 15m|off|default\n", project)
 }

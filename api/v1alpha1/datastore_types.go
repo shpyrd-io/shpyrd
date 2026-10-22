@@ -93,6 +93,14 @@ type PostgresSleepStatus struct {
 	// Message explains the state (why not sleeping, wake progress).
 	// +optional
 	Message string `json:"message,omitempty"`
+	// After is the quiet period as it applies (#120), empty when nothing
+	// puts the database to sleep; Source says where it comes from:
+	// "project" for a policy of the database's own, "off" for an explicit
+	// off, "workspace" otherwise (the workspace's default, or none).
+	// +optional
+	After string `json:"after,omitempty"`
+	// +optional
+	Source string `json:"source,omitempty"`
 }
 
 // The two kinds of database (PostgresSpec.Type).

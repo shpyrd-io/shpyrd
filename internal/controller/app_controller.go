@@ -974,22 +974,23 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	if err != nil {
 		return nil, err
 	}
-	if ps, ok := status["web"]; ok && sleepWanted {
-		// The sleep state, decided after the objects were reconciled (a
-		// pause may have just happened).
-		ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
-		switch pause, paused := r.sleepPause(app); {
-		case paused:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
-		case !sleepActive:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
-		case webReplicas != nil && *webReplicas == 0:
-			ps.Sleep.State = "sleeping"
-			ps.Desired = 0 // the scaler's decision, not a failure
-		}
-		if ps.Sleep.Message == "" && r.sleepSource(app) == "workspace" {
-			if sp := r.webSleepSpec(app); sp != nil {
-				ps.Sleep.Message = "the workspace's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
+	if ps, ok := status["web"]; ok {
+		// The policy as it applies and where it comes from, for every web
+		// process (#120, #132), then the state, decided after the objects
+		// were reconciled (a pause may have just happened).
+		ps.Sleep = r.webSleepStatus(app)
+		if sleepWanted {
+			switch pause, paused := r.sleepPause(app); {
+			case paused:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
+			case !sleepActive:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
+			case webReplicas != nil && *webReplicas == 0:
+				ps.Sleep.State = "sleeping"
+				ps.Desired = 0 // the scaler's decision, not a failure
+			}
+			if ps.Sleep.Message == "" && ps.Sleep.Source == "workspace" {
+				ps.Sleep.Message = "the workspace's default: sleeps after " + ps.Sleep.After + " (" + ps.Sleep.Resuming + " mode), unless the project sets a sleep policy of its own or none"
 			}
 		}
 		status["web"] = ps

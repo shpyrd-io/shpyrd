@@ -264,3 +264,53 @@ func TestSchedulePeriod(t *testing.T) {
 		}
 	}
 }
+
+// A dedicated database always says what sleep applies and where it comes
+// from (#120), and its endpoint is the host apps get: the sleep-aware
+// Service while a policy applies, CNPG's -rw otherwise.
+func TestPostgresSleepReadBackAndEndpoint(t *testing.T) {
+	ctx := context.Background()
+	mk := func(name string, sleep *shpyrdv1.PostgresSleepSpec) *shpyrdv1.Postgres {
+		storage := resource.MustParse("10Gi")
+		return &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "p-free"}, Spec: shpyrdv1.PostgresSpec{Storage: &storage, Sleep: sleep}}
+	}
+	own, off, byDefault, none := mk("own", &shpyrdv1.PostgresSleepSpec{After: "30m"}), mk("off", &shpyrdv1.PostgresSleepSpec{After: "off"}), mk("bydefault", nil), mk("none", nil)
+	none.Namespace = "p-paid"
+	var objs []client.Object
+	for _, pg := range []*shpyrdv1.Postgres{own, off, byDefault, none} {
+		cluster := &unstructured.Unstructured{}
+		cluster.SetGroupVersionKind(CNPGClusterGVK)
+		cluster.SetName(pg.Name)
+		cluster.SetNamespace(pg.Namespace)
+		objs = append(objs, pg, cluster)
+	}
+	gateway := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: pgGatewayName, Namespace: "shpyrd-system"}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}
+	base, c := newTestReconciler(t, append(objs, gateway)...)
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", SleepAllowed: always,
+		WorkspaceSleepDefault: func(_ context.Context, ns string) string {
+			if ns == "p-free" {
+				return "10m"
+			}
+			return ""
+		}}
+	for _, tc := range []struct {
+		pg                  *shpyrdv1.Postgres
+		source, after, host string
+	}{
+		{own, "project", "30m", "own"},
+		{off, "off", "", "off-rw"},
+		{byDefault, "workspace", "10m0s", "bydefault"},
+		{none, "workspace", "", "none-rw"},
+	} {
+		if err := r.reconcilePostgresSleep(ctx, tc.pg); err != nil {
+			t.Fatalf("%s: %v", tc.pg.Name, err)
+		}
+		st := tc.pg.Status.Sleep
+		if st == nil || st.Source != tc.source || st.After != tc.after || st.State != pgAwake {
+			t.Errorf("%s: read-back = %+v, want source %q after %q awake", tc.pg.Name, st, tc.source, tc.after)
+		}
+		if host := r.sleepHost(ctx, tc.pg); host != tc.host {
+			t.Errorf("%s: host = %q, want %q", tc.pg.Name, host, tc.host)
+		}
+	}
+}

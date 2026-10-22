@@ -403,6 +403,18 @@ type SleepStatus struct {
 	// Message explains an unavailable state.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// After and Resuming are the policy as it applies (#120): the quiet
+	// period and the wake mode, empty when nothing puts the process to
+	// sleep. Source says where it comes from: "project" for a policy of
+	// the project's own, "off" for an explicit off (awake whatever the
+	// workspace's default), "workspace" otherwise (the workspace's
+	// default, or none when it sets none).
+	// +optional
+	After string `json:"after,omitempty"`
+	// +optional
+	Resuming string `json:"resuming,omitempty"`
+	// +optional
+	Source string `json:"source,omitempty"`
 	// LastActivityAt is when the last request arrived.
 	// +optional
 	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`

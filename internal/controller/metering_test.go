@@ -825,3 +825,55 @@ func TestActivitySignalFollowsTheWorkspaceDefault(t *testing.T) {
 	m = base() // the loop of a platform without the fields: as before
 	run("unwired", m, fresh(), map[string]bool{"own": true, "bydefault": false})
 }
+
+// TestSleepReadBack: every web process says what sleep applies and where it
+// comes from (#120), the three states of #135 read apart: a policy of its
+// own, an explicit off, the workspace's default, and the workspace's
+// default when it sets none.
+func TestSleepReadBack(t *testing.T) {
+	newApp := func(sleep *shpyrdv1.SleepSpec, workspace string) *shpyrdv1.App {
+		return &shpyrdv1.App{
+			ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: workspace}},
+			Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080), Sleep: sleep}}},
+		}
+	}
+	defaults := func(slug string) (string, string) {
+		if slug == "free" {
+			return "15m", "page"
+		}
+		return "", ""
+	}
+	for _, tc := range []struct {
+		name                           string
+		sleep                          *shpyrdv1.SleepSpec
+		workspace                      string
+		allowed                        func() bool
+		source, after, resuming, state string
+	}{
+		{"own policy", &shpyrdv1.SleepSpec{After: "30m", Resuming: "wait"}, "paid", always, "project", "30m", "wait", "unavailable"},
+		{"explicit off", &shpyrdv1.SleepSpec{After: "off"}, "free", always, "off", "", "", "awake"},
+		{"workspace default", nil, "free", always, "workspace", "15m", "page", "unavailable"},
+		{"workspace sets none", nil, "paid", always, "workspace", "", "", "awake"},
+		{"own policy without auto sleep", &shpyrdv1.SleepSpec{After: "30m"}, "paid", func() bool { return false }, "project", "30m", "wait", "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newApp(tc.sleep, tc.workspace)
+			r, _ := newTestReconciler(t, app)
+			r.Config.SystemNamespace = "shpyrd-system"
+			r.Config.SleepAllowed = tc.allowed
+			r.Config.WorkspaceSleepDefault = defaults
+			got := runReconcile(t, r, app).Status.Processes["web"].Sleep
+			if got == nil {
+				t.Fatal("no sleep status on the web process")
+			}
+			// Without keda-http on the cluster a policy that applies is
+			// unavailable; the read-back is the same.
+			if got.Source != tc.source || got.After != tc.after || got.Resuming != tc.resuming || got.State != tc.state {
+				t.Errorf("read-back = source %q after %q resuming %q state %q, want %q %q %q %q (message %q)", got.Source, got.After, got.Resuming, got.State, tc.source, tc.after, tc.resuming, tc.state, got.Message)
+			}
+			if tc.name == "own policy without auto sleep" && got.Message != sleepLicensedMessage {
+				t.Errorf("message = %q", got.Message)
+			}
+		})
+	}
+}

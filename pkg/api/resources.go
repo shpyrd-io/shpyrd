@@ -187,6 +187,15 @@ func resourceViewOf(t ext.ResourceType, u unstructured.Unstructured) ResourceVie
 			}
 		}
 	}
+	// Sleep (RFC-0075): the state, the quiet period that applies and where
+	// it comes from (#120).
+	if sl, ok, _ := unstructured.NestedMap(u.Object, "status", "sleep"); ok && sl != nil {
+		for key, detail := range map[string]string{"state": "sleepState", "after": "sleepAfter", "source": "sleepSource", "message": "sleepMessage"} {
+			if s, _ := sl[key].(string); s != "" {
+				v.Details[detail] = s
+			}
+		}
+	}
 	// Backups (RFC-0038): on/off with retention, the last one and the window.
 	if b, ok, _ := unstructured.NestedMap(u.Object, "spec", "backups"); ok && b != nil {
 		retention, _ := b["retention"].(string)
