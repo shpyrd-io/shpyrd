@@ -110,6 +110,32 @@ moves to the platform's wake-capable address).
 	return cmd
 }
 
+// pgSleepWords is a database's sleep in one line, for `pg info`: the
+// three states of #135 read apart, and the state now.
+func pgSleepWords(v *resources.View) string {
+	after, source, state := v.Details["sleepAfter"], v.Details["sleepSource"], v.Details["sleepState"]
+	var words string
+	switch {
+	case source == "off":
+		words = "never, whatever the workspace's default"
+	case source == "project":
+		words = "after " + after + " without client connections, its own policy"
+	case after == "":
+		words = "no: the workspace's default sets none"
+	default:
+		words = "after " + after + " without client connections, the workspace's default"
+	}
+	switch state {
+	case "sleeping":
+		words += "; asleep now"
+	case "waking":
+		words += "; waking now"
+	case "suspended":
+		words += "; suspended now"
+	}
+	return words
+}
+
 // printPgSleepReadBack says what sleep applies to a database and where it
 // comes from, then the state (#120).
 func printPgSleepReadBack(w io.Writer, name string, v *resources.View) {
@@ -463,6 +489,9 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 					}
 				}
 				fmt.Fprintf(out, "Backups:    %s\n", backups)
+				if v.Details["type"] != shpyrdv1.PostgresTypeShared && v.Details["sleepSource"] != "" {
+					fmt.Fprintf(out, "Sleep:      %s\n", pgSleepWords(v))
+				}
 				if from := v.Details["restoredFrom"]; from != "" {
 					fmt.Fprintf(out, "Restored:   from %s\n", from)
 				}

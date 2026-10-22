@@ -114,7 +114,9 @@ shpyrd pg suspend db --project shop                # stop now and stay stopped; 
 shpyrd pg resume db --project shop
 ```
 
-A workspace can set a default quiet period for its databases; a database with no policy of its own follows it. `off` is a policy of its own: the database stays awake even when the workspace's default changes.
+A workspace can set a default quiet period for its databases; a database with no policy of its own follows it. `off` is a policy of its own: the database stays awake even when the workspace's default changes. `shpyrd pg sleep db --project shop` with no flag says which of the three applies, where it comes from and the state now; `pg info` and the project's **Resources** page say the same, and the page's **Sleep** button on a dedicated database sets it.
+
+Backups and sleep: a sleeping database archives nothing, so a database with backups is copied before it sleeps when its last copy is older than a schedule period (a day by default). The copy runs first and the database sleeps once it is done; if it has not finished in an hour, or it failed, the database sleeps anyway and its status says so ("no fresh backup"). The schedule is suspended while it sleeps and resumed at the wake, and a copy is taken after a wake when the last one is still older than a period. `pg backups list` shows these copies with the scheduled ones.
 
 How it decides: every five minutes the platform counts the database's client sessions. Any connection counts — an application's idle connection pool keeps its database awake, on purpose; a database sleeps when its app has no connection open, which is what happens when the app itself is [asleep](/docs/cli#deploying-and-running) or has no pool. The database will not sleep when the count is stale (the metrics pipeline is down), when the quiet period has not elapsed, or when the wake proxy is not running; `pg info` says which.
 
@@ -148,7 +150,7 @@ A store takes a size from the Redis list, the processes' names with clients of t
 
 A resize restarts the store: a cache comes back empty, a persistent store reloads its file. A store made before stores had sizes of their own and naming a size the list does not have is given the Redis size its pod runs with.
 
-[Valkey](https://valkey.io) (BSD licensed, protocol compatible) is the default engine; `--engine redis` selects upstream Redis. A store is a single instance run by the shpyrd controller: `maxmemory` is 75% of the size's memory; a **cache** evicts with `allkeys-lru` and loses its content on restart, which is the expected behaviour of a cache; a **persistent** store keeps an append-only file on a volume and refuses writes instead of evicting when full. Persistence cannot change after creation. High availability through an operator comes later.
+[Valkey](https://valkey.io) (BSD licensed, protocol compatible) is the default engine; `--engine redis` selects upstream Redis. A store is a single instance run by the shpyrd controller: `maxmemory` is 75% of the size's memory; a **cache** evicts with `allkeys-lru` and loses its content on restart, which is the expected behaviour of a cache; a **persistent** store keeps an append-only file on a volume and refuses writes instead of evicting when full. Persistence cannot change after creation. A cache sleeps with the project's web process: while the web process [sleeps](/docs/cli#deploying-and-running) and no other process of the project runs, the cache is scaled to zero, and it comes back with the web process, empty; a persistent store stays up. High availability through an operator comes later.
 
 ## Attaching
 
