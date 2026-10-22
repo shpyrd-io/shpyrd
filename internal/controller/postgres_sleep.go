@@ -13,10 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Postgres sleep (RFC-0075): CloudNativePG declarative hibernation with a
@@ -78,6 +80,63 @@ func (r *PostgresReconciler) effectiveSleep(ctx context.Context, pg *shpyrdv1.Po
 	return after, false, after > 0
 }
 
+// WorkspaceDatabaseSleepDefault answers a project namespace's workspace
+// default for databases (RFC-0075): the namespace carries its workspace's
+// slug as a label; a namespace without one is the default workspace's.
+// Asked once a minute per database with no policy of its own, so no cache.
+// The Postgres reconciler and the metering loop share it.
+func WorkspaceDatabaseSleepDefault(c client.Client, st store.Store) func(ctx context.Context, namespace string) string {
+	return func(ctx context.Context, namespace string) string {
+		ns := &corev1.Namespace{}
+		if err := c.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+			return ""
+		}
+		slug := ns.Labels[shpyrdv1.LabelWorkspace]
+		if slug == "" {
+			slug = store.DefaultWorkspaceSlug(ctx, st)
+		}
+		ws, err := st.Workspace(ctx, slug)
+		if err != nil || ws.Settings.Sleep == nil {
+			return ""
+		}
+		return ws.Settings.Sleep.DatabasesAfter
+	}
+}
+
+// readBackSleep writes the policy as it applies and where it comes from
+// on the status (#120): "project" for a quiet period of the database's
+// own, "off" for an explicit off (or a suspension with no period), else
+// "workspace" with the workspace's default when one applies. Every
+// dedicated database carries it, so the three states are always visible.
+func (r *PostgresReconciler) readBackSleep(ctx context.Context, pg *shpyrdv1.Postgres) {
+	if pg.Status.Sleep == nil {
+		pg.Status.Sleep = &shpyrdv1.PostgresSleepStatus{State: pgAwake}
+	}
+	st := pg.Status.Sleep
+	st.After, st.Source = "", "workspace"
+	switch {
+	case pg.Spec.Sleep != nil && sleepAfterDuration(pg.Spec.Sleep) > 0:
+		st.After, st.Source = pg.Spec.Sleep.After, "project"
+	case pg.Spec.Sleep != nil:
+		st.Source = "off"
+	default:
+		if after, _, fromPlan := r.effectiveSleep(ctx, pg); fromPlan && after > 0 {
+			st.After = after.String()
+		}
+	}
+}
+
+// sleepHost is the host apps reach the database by, as the Binder hands it
+// out: the shpyrd-owned Service "<name>" when one exists (a policy applies,
+// the database's own or the workspace's), CNPG's "<name>-rw" otherwise.
+func (r *PostgresReconciler) sleepHost(ctx context.Context, pg *shpyrdv1.Postgres) string {
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name}, svc); err == nil && svc.Labels["shpyrd.io/postgres"] == pg.Name {
+		return pg.Name
+	}
+	return pg.Name + "-rw"
+}
+
 // activityStaleAfter is how old the activity check may be before the
 // reconciler refuses to hibernate: without a fresh signal (Prometheus down,
 // metering loop not leader) a busy database must never be put to sleep.
@@ -104,6 +163,7 @@ const (
 //	waking ──(CNPG primary ready)──▶ awake
 //	any ──(spec.sleep.suspended)──▶ suspended ──(resume)──▶ waking
 func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shpyrdv1.Postgres) error {
+	r.readBackSleep(ctx, pg)
 	if pg.Annotations[AnnotationDataMove] != "" {
 		return r.setCNPGHibernation(ctx, pg, true)
 	}
@@ -134,6 +194,10 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 		// database's own, as a web process's does.
 		if fromPlan && pg.Status.Sleep != nil && pg.Status.Sleep.State == pgAwake && pg.Status.Sleep.Message != "" && !strings.Contains(pg.Status.Sleep.Message, planDefaultNote) {
 			pg.Status.Sleep.Message += " " + planDefaultNote
+		}
+		// The schedule follows the state: suspended while hibernated.
+		if err := r.syncBackupSchedule(ctx, pg); err != nil {
+			log.FromContext(ctx).Error(err, "backup schedule did not follow the sleep state", "postgres", pg.Name)
 		}
 	}()
 
@@ -212,6 +276,11 @@ func (r *PostgresReconciler) reconcilePostgresSleep(ctx context.Context, pg *shp
 			sleep.State, sleep.Message = pgAwake, ""
 			sleep.LastActivityAt = &now
 			sleep.ActivityCheckedAt = &now
+			// Asleep it archived nothing: a copy now when the last one is
+			// older than a schedule period.
+			if err := r.backupAfterWakeIfDue(ctx, pg, now.Time); err != nil {
+				return err
+			}
 		}
 		return r.ensurePostgresService(ctx, pg)
 	}
@@ -247,13 +316,34 @@ func (r *PostgresReconciler) maybeHibernate(ctx context.Context, pg *shpyrdv1.Po
 		sleep.Message = "awake: idle, but the pg-gateway is not running (nothing could wake it)"
 		return nil
 	}
+	// Nothing until the primary answers: a cluster still coming up (a
+	// wake waiting for room) can neither be copied, CloudNativePG refuses
+	// a backup of a hibernated cluster, nor hibernated again cleanly.
+	if !r.primaryReady(ctx, pg) {
+		sleep.Message = "awake: idle, waiting for the database to be up"
+		return nil
+	}
+	// A database with backups is copied first when its last copy is older
+	// than a schedule period (a hibernated cluster archives nothing).
+	backedUp, waiting, warning, err := r.backupBeforeSleepReady(ctx, pg, now)
+	if err != nil {
+		return err
+	}
+	if !backedUp {
+		sleep.Message = waiting
+		return nil
+	}
 	// Hibernate via the CNPG annotation; the Service goes to the gateway.
 	if err := r.setCNPGHibernation(ctx, pg, true); err != nil {
 		return err
 	}
 	sleep.State = pgSleeping
 	sleep.Message = fmt.Sprintf("sleeping since %s (idle %s)", now.UTC().Format(time.RFC3339), idle.Truncate(time.Second))
-	log.FromContext(ctx).Info("database hibernated", "postgres", pg.Name, "idle", idle.Truncate(time.Second))
+	if warning != "" {
+		sleep.Message += "; " + noFreshBackupNote + warning
+		r.Recorder.Eventf(pg, corev1.EventTypeWarning, "SleepWithoutBackup", "%s hibernated without a fresh backup: %s", pg.Name, warning)
+	}
+	log.FromContext(ctx).Info("database hibernated", "postgres", pg.Name, "idle", idle.Truncate(time.Second), "backupWarning", warning)
 	return r.ensurePostgresService(ctx, pg)
 }
 
@@ -496,7 +586,11 @@ func pgSleepDescription(pg *shpyrdv1.Postgres) string {
 	}
 	switch pg.Status.Sleep.State {
 	case pgSleeping:
-		return "sleeping (volumes kept, data safe; wakes on the first connection)"
+		desc := "sleeping (volumes kept, data safe; wakes on the first connection)"
+		if w := sleepBackupWarning(pg); w != "" {
+			desc += "; " + w
+		}
+		return desc
 	case pgWaking:
 		return "waking up — connections will succeed shortly"
 	case pgSuspended:

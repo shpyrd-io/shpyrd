@@ -57,3 +57,48 @@ func TestSleepOffAndDefaultAreSaidApart(t *testing.T) {
 		}
 	}
 }
+
+// #120: `shpyrd sleep <project>` with no flag reads the policy back: what
+// applies, where it comes from, and the state.
+func TestSleepReadsThePolicyBack(t *testing.T) {
+	for _, tc := range []struct {
+		sleep string
+		text  []string
+	}{
+		{`{"state":"awake","after":"15m","resuming":"page","source":"project"}`, []string{"shop sleeps after 15m of inactivity (page mode), by a policy of its own."}},
+		{`{"state":"sleeping","after":"15m","resuming":"wait","source":"workspace"}`, []string{"shop follows the workspace's default: it sleeps after 15m of inactivity (wait mode).", "Asleep now; the first request wakes it."}},
+		{`{"state":"awake","source":"workspace"}`, []string{"shop follows the workspace's default, which sets no sleep: it stays awake."}},
+		{`{"state":"awake","source":"off"}`, []string{"Sleep is off for shop: it stays awake, also when the workspace has a default."}},
+		{`{"state":"unavailable","after":"15m","source":"project","message":"sleep needs the sleep extension"}`, []string{"Not sleeping now: sleep needs the sleep extension"}},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" && r.URL.Path == "/api/projects/shop" {
+				_, _ = w.Write([]byte(`{"slug":"shop","processes":{"web":{"desired":1,"ready":1,"sleep":` + tc.sleep + `}}}`))
+				return
+			}
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}))
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("KUBECONFIG", "")
+		t.Setenv("SHPYRD_URL", srv.URL)
+		t.Setenv("SHPYRD_TOKEN", "test-token")
+		root := New()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{"sleep", "shop"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%s: %v", tc.sleep, err)
+		}
+		srv.Close()
+		for _, want := range tc.text {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s printed:\n%s\nwant %q", tc.sleep, out.String(), want)
+			}
+		}
+		if !strings.Contains(out.String(), "Change it: shpyrd sleep shop --after 15m|off|default") {
+			t.Errorf("no hint on how to change it:\n%s", out.String())
+		}
+	}
+}

@@ -1,0 +1,10 @@
+---
+title: "Databases on a workspace default now sleep"
+description: "A dedicated database with no sleep setting of its own follows the workspace's default, hibernates when nobody is connected and wakes on the first connection."
+date: "2026-10-21"
+type: improvement
+draft: false
+---
+A workspace can set a default quiet period for its databases. Until now only a database with a setting of its own went to sleep; one on the workspace's default stayed awake. From this release it hibernates after the quiet period without client connections, like a database with a policy of its own: its instance stops, its volume and data stay, and the first connection wakes it. Expect under a minute for that first connection while PostgreSQL starts; the next ones take milliseconds. An app whose first request needs its database sees the app's wake plus the database's, which the app's "waking page" mode covers.
+
+Nothing changes for a database that set its own quiet period or turned sleep off. To keep a database awake whatever the workspace says: `shpyrd pg sleep db --project shop --after off`, or the **Sleep** button on the project's resources page. Shared databases are always on and never sleep.

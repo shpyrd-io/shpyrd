@@ -1,0 +1,10 @@
+---
+title: "See when an app or a database sleeps"
+description: "The CLI and the resources page say which sleep applies, where it comes from and the state now, and let you change it."
+date: "2026-10-21"
+type: improvement
+draft: false
+---
+A project's web process and a dedicated database can be on one of three settings: a quiet period of their own, never, or the workspace's default. Until now you could set them but not read them back.
+
+`shpyrd sleep shop` and `shpyrd pg sleep db --project shop`, with no flag, now say which applies, where it comes from and the state now, and how to change it. The project's **Resources** page says the same on the web row and on each dedicated database, and a **Sleep** button sets it: the workspace's default, a quiet period with its waking mode, or never. `shpyrd pg info` and the resources list carry the same words.

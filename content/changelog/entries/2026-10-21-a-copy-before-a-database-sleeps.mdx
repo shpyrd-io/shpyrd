@@ -1,0 +1,8 @@
+---
+title: "A copy before a database sleeps"
+description: "A database with backups is backed up before it hibernates when its last copy is older than a day, and its schedule pauses while it sleeps."
+date: "2026-10-21"
+type: improvement
+draft: false
+---
+A sleeping database archives nothing. So a database with backups whose last copy is older than a schedule period (a day by default) is copied first, and sleeps once the copy is done. If the copy has not finished in an hour, or failed, the database sleeps anyway and its status says so: "no fresh backup". The backup schedule pauses while the database sleeps and resumes at the wake, and a copy is taken after a wake when the last one is still older than a period. `shpyrd pg backups list` shows these copies with the scheduled ones, and the last backup shown on the database is always a copy that completed.

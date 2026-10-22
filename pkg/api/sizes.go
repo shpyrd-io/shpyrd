@@ -257,6 +257,11 @@ func validateSleep(process string, sp *shpyrdv1.SleepSpec) (*shpyrdv1.SleepSpec,
 	return &shpyrdv1.SleepSpec{After: d.String(), Resuming: resuming}, nil
 }
 
+// errSleepWaitWithDisk refuses "resuming: wait" on a process with a disk
+// (storage plan step 6): a held connection would wait for the volume to
+// reattach, longer than clients wait.
+const errSleepWaitWithDisk = "an app with a disk resumes behind the waiting page: the disk takes a moment to reattach (use --resuming page)"
+
 // sleepTurnsOn reports whether a validated spec makes the process sleep:
 // an explicit off and a cleared policy (nil) need neither auto sleep nor
 // the add-on.
@@ -339,6 +344,11 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				p.Replicas = ch.Replicas
 			}
 			if ch.Sleep != nil {
+				if sp := sleeps[name]; sleepTurnsOn(sp) && sp.Resuming == "wait" {
+					if v := s.singleInstanceVolume(c.Request.Context(), a, name); v != "" {
+						return fmt.Errorf("%s: %s", v, errSleepWaitWithDisk)
+					}
+				}
 				p.Sleep = sleeps[name] // nil clears it: the workspace's default applies
 			}
 			a.Spec.Processes[name] = p

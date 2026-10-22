@@ -21,7 +21,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
@@ -61,8 +63,56 @@ func (r *RedisReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		// A cache sleeps with its project's web process (RFC-0075): the
+		// App's sleep state moves the stores of its namespace.
+		Watches(&shpyrdv1.App{}, handler.EnqueueRequestsFromMapFunc(r.appToStores)).
 		Complete(r)
 }
+
+// appToStores enqueues the stores of an App's namespace.
+func (r *RedisReconciler) appToStores(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list shpyrdv1.RedisList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for _, rd := range list.Items {
+		if !rd.Spec.Persistent {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&rd)})
+		}
+	}
+	return reqs
+}
+
+// asleepWithWeb says a cache has nothing to serve: the project's web
+// process sleeps and no other process runs (storage plan step 6). A
+// persistent store is a queue or a session store and stays up; a cache is
+// scaled to zero with the web process and comes back with it, empty,
+// which a cache accepts. Without this an always-on cache pod costs about a
+// dollar a month on a free project, twice its cap.
+func (r *RedisReconciler) asleepWithWeb(ctx context.Context, rd *shpyrdv1.Redis) bool {
+	if rd.Spec.Persistent {
+		return false
+	}
+	var apps shpyrdv1.AppList
+	if err := r.List(ctx, &apps, client.InNamespace(rd.Namespace)); err != nil || len(apps.Items) == 0 {
+		return false
+	}
+	ps := apps.Items[0].Status.Processes
+	web, ok := ps["web"]
+	if !ok || web.Sleep == nil || web.Sleep.State != "sleeping" {
+		return false
+	}
+	for name, p := range ps {
+		if name != "web" && p.Desired > 0 {
+			return false // a worker may use the store while the web sleeps
+		}
+	}
+	return true
+}
+
+// redisAsleepMessage is the status of a cache scaled to zero with its web.
+const redisAsleepMessage = "asleep with the web process: a cache comes back with it, empty"
 
 func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -196,6 +246,7 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 	}
 
 	// StatefulSet.
+	asleep := r.asleepWithWeb(ctx, rd)
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: rd.Name, Namespace: rd.Namespace}}
 	storage := resource.MustParse(defaultRedisStorage)
 	if rd.Spec.Storage != nil {
@@ -248,9 +299,10 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 		}
 		sts.Labels = mergeMaps(sts.Labels, redisLabels(rd))
 		sts.Spec.Replicas = ptr.To[int32](1)
-		if suspendedWithWorkspace(rd) {
-			// Down with its workspace; a Redis without persistence comes
-			// back empty, as from any restart.
+		if suspendedWithWorkspace(rd) || asleep {
+			// Down with its workspace, or asleep with its web process; a
+			// Redis without persistence comes back empty, as from any
+			// restart.
 			sts.Spec.Replicas = ptr.To[int32](0)
 		}
 		sts.Spec.Template = r.podTemplate(rd, engine, image, size)
@@ -270,6 +322,12 @@ func (r *RedisReconciler) reconcile(ctx context.Context, rd *shpyrdv1.Redis) (ct
 		rd.Status.Phase = shpyrdv1.ResourceReady
 		rd.Status.Message = "workspace suspended: stopped until the workspace is activated"
 		setResourceCondition(&rd.Status, rd.Generation, metav1.ConditionTrue, "Suspended", rd.Status.Message)
+		return ctrl.Result{}, nil
+	}
+	if asleep {
+		rd.Status.Phase = shpyrdv1.ResourceReady
+		rd.Status.Message = redisAsleepMessage
+		setResourceCondition(&rd.Status, rd.Generation, metav1.ConditionTrue, "Sleeping", rd.Status.Message)
 		return ctrl.Result{}, nil
 	}
 	if sts.Status.ReadyReplicas >= 1 && sts.Status.ObservedGeneration >= sts.Generation {

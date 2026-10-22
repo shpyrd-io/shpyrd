@@ -30,6 +30,7 @@ import type {
   VolumeInfo,
   WorkspaceDomain,
   WorkspaceInfo,
+  SleepStatus,
 } from "./types";
 import { buildOutput, liveLine, logsOf, metricsOf } from "@/lib/samples";
 import audit from "../../mock/audit.json";
@@ -121,6 +122,20 @@ const empty = (): ProjectThings => ({
   members: [],
   allow: [],
 });
+
+// The read-back of a sleep policy as the server writes it (#120): the
+// project's own, an explicit off, or the workspace's default (15m, page
+// mode, in the Mock's workspace).
+function sleepReadBack(
+  own: { after?: string; resuming?: "page" | "wait" | "" } | undefined,
+  was: { state?: string } | undefined,
+): SleepStatus {
+  const state = (was?.state as "awake" | "sleeping" | undefined) ?? "awake";
+  if (own?.after === "off") return { state: "awake", source: "off" };
+  if (own?.after)
+    return { state, after: own.after, resuming: own.resuming || "wait", source: "project" };
+  return { state, after: "15m", resuming: "page", source: "workspace" };
+}
 
 async function ofProject(slug: string): Promise<[Things, ProjectThings]> {
   const all = await thingsOf.get();
@@ -789,6 +804,12 @@ export const mock: Api = {
         ...(change.size ? { size: change.size } : {}),
         ...(change.replicas !== undefined ? { replicas: change.replicas } : {}),
       };
+      // Sleep (#135): "off" is stored, "default" clears the project's own.
+      if (change.sleep) {
+        const after = change.sleep.after.toLowerCase();
+        if (after === "default" || after === "") delete spec.sleep;
+        else spec.sleep = after === "off" ? { after: "off" } : { after, resuming: change.sleep.resuming ?? "wait" };
+      }
       p.spec.processes = { ...p.spec.processes, [name]: spec };
       const st = p.processes?.[name] ?? { desired: 1, ready: 1 };
       p.processes = {
@@ -798,6 +819,9 @@ export const mock: Api = {
           desired: spec.replicas ?? st.desired,
           ready: spec.replicas ?? st.ready,
           size: spec.size ?? st.size,
+          ...(change.sleep && name === "web"
+            ? { sleep: sleepReadBack(spec.sleep, st.sleep) }
+            : {}),
         },
       };
     }
@@ -1148,6 +1172,27 @@ export const mock: Api = {
       await thingsOf.set(all2);
     }, 5000);
     return { note: `A new key for ${name} is being written; the apps bound to it restart with it within a minute.` };
+  },
+  sleepPostgres: async (slug, name, after) => {
+    await wait();
+    const [all, t] = await ofProject(slug);
+    const r = t.resources.find((x) => x.kind === "Postgres" && x.name === name);
+    if (!r) throw new ApiError(404, `no database named ${name}`);
+    if (r.details?.type === "shared")
+      throw new ApiError(400, "Shared databases have no sleep setting; they are always on.");
+    const want = after.toLowerCase();
+    const st = sleepReadBack(
+      want === "default" || want === "" ? undefined : { after: want },
+      { state: r.details?.sleepState === "sleeping" ? "sleeping" : "awake" },
+    );
+    r.details = {
+      ...r.details,
+      sleepState: st.state,
+      sleepAfter: st.after ?? "",
+      sleepSource: st.source ?? "workspace",
+    };
+    await thingsOf.set(all);
+    return { name };
   },
   convertPostgres: async (slug, name, body) => {
     await wait();
