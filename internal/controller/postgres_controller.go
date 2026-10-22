@@ -417,6 +417,15 @@ func (r *PostgresReconciler) reconcileDedicated(ctx context.Context, pg *shpyrdv
 		}
 	}
 
+	// The database and its extensions (pgvector), declared to the operator.
+	if _, err := r.ensureDedicatedDatabase(ctx, pg); err != nil {
+		if !strings.Contains(err.Error(), "no matches for kind") {
+			return ctrl.Result{}, fmt.Errorf("declare the database: %w", err)
+		}
+		// An operator older than the Database kind (CloudNativePG 1.26):
+		// the database works, without pgvector.
+		log.FromContext(ctx).Info("no Database kind on this cluster: pgvector not installed (CloudNativePG 1.26 or later has it)", "postgres", pg.Name)
+	}
 	// Sleep: shpyrd-owned Service and hibernation management (RFC-0075).
 	if err := r.reconcilePostgresSleep(ctx, pg); err != nil {
 		// Non-fatal: log and continue; the database still functions.
