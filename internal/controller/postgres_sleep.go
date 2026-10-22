@@ -316,6 +316,13 @@ func (r *PostgresReconciler) maybeHibernate(ctx context.Context, pg *shpyrdv1.Po
 		sleep.Message = "awake: idle, but the pg-gateway is not running (nothing could wake it)"
 		return nil
 	}
+	// Nothing until the primary answers: a cluster still coming up (a
+	// wake waiting for room) can neither be copied, CloudNativePG refuses
+	// a backup of a hibernated cluster, nor hibernated again cleanly.
+	if !r.primaryReady(ctx, pg) {
+		sleep.Message = "awake: idle, waiting for the database to be up"
+		return nil
+	}
 	// A database with backups is copied first when its last copy is older
 	// than a schedule period (a hibernated cluster archives nothing).
 	backedUp, waiting, warning, err := r.backupBeforeSleepReady(ctx, pg, now)

@@ -643,8 +643,15 @@ Updated 2026-10-21.
   a disk, and the controller renders page mode for one whatever the policy says. A
   `persistent: false` Redis is scaled to zero while the project's web sleeps and no other
   process runs, back with the web. Restore-in-place and cut-overs already run under the
-  maintenance annotation, which removes the sleep objects first. The wake bench per path is
-  recorded below once measured on dev.
+  maintenance annotation, which removes the sleep objects first. **Wake bench** (dev,
+  2026-10-22, `contrib/wake-bench.sh`, 20 forced cycles per path, p50 / p95): HTTP alone in
+  page mode 7.5 s / 9.2 s (also the shared-database path, which never sleeps); HTTP with a
+  50 GiB block disk 14.1 s / 52.0 s (bimodal: ~11 s when the volume is still attached to the
+  node the pod lands on, ~50 s when it detaches and reattaches); a dedicated database's
+  first connection through the pg-gateway, from hibernated, 44.2 s / 52.8 s (max 56.5 s,
+  against the gateway's 60 s wake deadline, which the hardening tail should widen to 90 s).
+  The budgets of RFC-0075's plan hold for HTTP and the database; "HTTP + disk ≈ 25–30 s"
+  does not hold at p95 on OCI block volumes.
 
 - 2026-10-01: **plans carry more than prices.** `postgres_sleep_after`: the plan's default
   sleep for databases, inherited by a database with no policy of its own (an explicit `off`

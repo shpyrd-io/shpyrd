@@ -422,7 +422,7 @@ func sleepPageCMName(app *shpyrdv1.App) string { return app.Name + "-sleep-page"
 func buildSleepPageHTML(name string) string {
 	return pages.HTML(pages.Waking, pages.Page{
 		Title:   "Waking " + name + " up.",
-		Text:    "It was asleep, as it is when nobody asks for it. It answers in a few seconds; this page goes to it by itself.",
+		Text:    "It was asleep, as it is when nobody asks for it. It answers in a few seconds, up to a minute when it has a disk or a database to wake too; this page goes to it by itself.",
 		Refresh: 3,
 	})
 }
