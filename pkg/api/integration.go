@@ -28,7 +28,7 @@ func (s *Server) integrationRouter(surface string) *gin.Engine {
 	if surface == "internal" {
 		// The readiness report for monitoring inside the cluster (#147);
 		// on the public host it is the cluster admin's.
-		r.GET("/api/readyz", s.readyz)
+		r.GET("/api/readyz", s.readyzInternal)
 	}
 	return r
 }

@@ -17,8 +17,9 @@ import (
 
 // #147: /api/readyz says, one line per check, what a deploy, a backup and
 // a sleeping app need; a component the cluster does not run is skipped,
-// a stopped one makes the report degraded (503). On the public host it is
-// the cluster admin's; the internal API serves it without a credential.
+// a stopped one makes the report degraded (503). On the public host anyone
+// gets the status word, the cluster admin the checks; the internal API
+// serves the checks without a credential.
 func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	deploy := func(ns, name string, ready int32) *appsv1.Deployment {
 		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: appsv1.DeploymentSpec{Replicas: ptr.To[int32](1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: ready}}
@@ -26,8 +27,15 @@ func TestReadyzReportsEachStorageCheck(t *testing.T) {
 	stale := metav1.NewTime(time.Now().Add(-30 * time.Hour))
 	backup := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "platform-backup", Namespace: "shpyrd-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-72 * time.Hour))}, Status: batchv1.CronJobStatus{LastSuccessfulTime: &stale}}
 	s, _ := newTestServer(t, nil, []client.Object{}, deploy("shpyrd-system", "registry", 1), deploy("shpyrd-system", "pg-gateway", 0), backup)
-	if rec := do(t, s, "GET", "/api/readyz", "", false); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("readyz without a credential on the public host = %d, want 401", rec.Code)
+	if rec := do(t, s, "GET", "/api/readyz", "", false); rec.Code != http.StatusServiceUnavailable || rec.Body.String() != `{"status":"degraded"}` {
+		t.Fatalf("readyz without a credential = %d %s, want the status word alone", rec.Code, rec.Body)
+	}
+	wrong := httptest.NewRequest("GET", "/api/readyz", nil)
+	wrong.Header.Set("Authorization", "Bearer not-the-token")
+	refused := httptest.NewRecorder()
+	s.Handler().ServeHTTP(refused, wrong)
+	if refused.Code != http.StatusUnauthorized {
+		t.Errorf("a wrong token on readyz = %d, want 401 (no oracle)", refused.Code)
 	}
 	rec := do(t, s, "GET", "/api/readyz", "", true)
 	if rec.Code != http.StatusServiceUnavailable {

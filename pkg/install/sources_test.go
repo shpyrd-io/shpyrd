@@ -37,4 +37,10 @@ func TestServerRunsTwoReplicasWithSourcesInTheBucket(t *testing.T) {
 	if got.Spec.Template.Spec.Volumes[0].EmptyDir == nil {
 		t.Error("the data volume must be scratch space")
 	}
+	if len(out) != 2 || out[1].GetKind() != "PodDisruptionBudget" || out[1].GetName() != "shpyrd-server" {
+		t.Fatalf("a disruption budget must follow the two replicas, got %d objects", len(out))
+	}
+	if min, _, _ := unstructured.NestedInt64(out[1].Object, "spec", "minAvailable"); min != 1 {
+		t.Errorf("minAvailable = %d", min)
+	}
 }

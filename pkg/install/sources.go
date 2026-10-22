@@ -48,6 +48,19 @@ func sourcesInBucket(objs []*unstructured.Unstructured, secret string) ([]*unstr
 			if err != nil {
 				return nil, err
 			}
+			out = append(out, obj)
+			// A node drain never takes both replicas.
+			pdb := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "policy/v1",
+				"kind":       "PodDisruptionBudget",
+				"metadata":   map[string]interface{}{"name": "shpyrd-server", "namespace": obj.GetNamespace(), "labels": map[string]interface{}{"app.kubernetes.io/name": "shpyrd-server"}},
+				"spec": map[string]interface{}{
+					"minAvailable": int64(1),
+					"selector":     map[string]interface{}{"matchLabels": map[string]interface{}{"app.kubernetes.io/name": "shpyrd-server"}},
+				},
+			}}
+			out = append(out, pdb)
+			continue
 		}
 		out = append(out, obj)
 	}

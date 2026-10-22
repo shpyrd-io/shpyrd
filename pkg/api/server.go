@@ -602,6 +602,10 @@ func (s *Server) routes() error {
 	s.engine.GET(edgePathPrefix+"gate", tenant, s.gateOpen)
 
 	s.engine.GET("/api/healthz", s.healthz)
+	// The platform's readiness (#147): the status word for anyone, the
+	// report for the cluster admin; the internal API serves the report to
+	// monitoring inside the cluster.
+	s.engine.GET("/api/readyz", tenant, s.optionalAuth(), s.readyz)
 	// Account self-service pages (RFC-0014): no session required.
 	pub := s.engine.Group("/api", tenant)
 	pub.GET("/config", s.config)
@@ -635,9 +639,6 @@ func (s *Server) routes() error {
 	// Every protected route names the action it performs (RFC-0008); the
 	// caller's roles decide.
 	api := s.engine.Group("/api", tenant, s.auth())
-	// The platform's readiness (#147): the cluster admin's on this host; the
-	// internal API serves it to monitoring inside the cluster.
-	api.GET("/readyz", s.require(authz.ClusterAdmin), s.readyz)
 	// Extensions that serve at the workspace's root (the MCP server and its
 	// OAuth, ee/mcp) get the server's Host.
 	if err := s.mountRoot(api, tenant, login); err != nil {
@@ -871,6 +872,23 @@ func (s *Server) routes() error {
 // auth accepts the admin token as a Bearer token or in X-Shpyrd-Token (the
 // API server's service proxy strips Authorization when the CLI uploads
 // through it).
+// optionalAuth identifies a caller that presents a credential, with
+// auth()'s checks, throttle and audit, and lets one that presents none
+// through as nobody: for a route that answers everyone and says more to a
+// cluster admin. A wrong credential is refused as auth() refuses it, so the
+// route is no oracle for a token.
+func (s *Server) optionalAuth() gin.HandlerFunc {
+	authenticate := s.auth()
+	return func(c *gin.Context) {
+		_, cookieErr := c.Cookie(sessionCookie)
+		if c.GetHeader("Authorization") == "" && c.GetHeader("X-Shpyrd-Token") == "" && cookieErr != nil {
+			c.Next()
+			return
+		}
+		authenticate(c)
+	}
+}
+
 func (s *Server) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.opts.Token == "" && !s.opts.TokenDisabled {

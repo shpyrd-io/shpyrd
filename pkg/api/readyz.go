@@ -16,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/shpyrd-io/shpyrd/internal/controller"
+	"github.com/shpyrd-io/shpyrd/pkg/authz"
+	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 )
 
@@ -35,22 +37,50 @@ type ReadyCheck struct {
 // ReadyReport is GET /api/readyz.
 type ReadyReport struct {
 	Status string                `json:"status"`
-	Checks map[string]ReadyCheck `json:"checks"`
+	Checks map[string]ReadyCheck `json:"checks,omitempty"`
 }
 
 // backupStaleAfter is how old the last platform backup may be: a daily
 // job, two hours of slack.
 const backupStaleAfter = 26 * time.Hour
 
+// readyz is the public route: the status word for anyone, the checks for
+// a cluster admin (the platform's own workspace).
 func (s *Server) readyz(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	report := s.readiness(ctx)
-	code := http.StatusOK
-	if report.Status != "ok" {
-		code = http.StatusServiceUnavailable
+	if !s.callerIsClusterAdmin(c) {
+		report.Checks = nil
 	}
-	c.JSON(code, report)
+	c.JSON(readyCode(report), report)
+}
+
+// readyzInternal is the report whole, for the internal API inside the
+// cluster.
+func (s *Server) readyzInternal(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	report := s.readiness(ctx)
+	c.JSON(readyCode(report), report)
+}
+
+func readyCode(report ReadyReport) int {
+	if report.Status != "ok" {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusOK
+}
+
+// callerIsClusterAdmin says the request's identity holds the cluster
+// admin's rights. Nobody (no credential) never does, whatever the rules
+// of a server with authentication off would say.
+func (s *Server) callerIsClusterAdmin(c *gin.Context) bool {
+	if _, ok := ext.IdentityFrom(c); !ok {
+		return false
+	}
+	roles, err := s.rolesOf(c)
+	return err == nil && roles.Can(authz.ClusterAdmin, "")
 }
 
 // readiness runs every check; the status is "ok" when none failed.
