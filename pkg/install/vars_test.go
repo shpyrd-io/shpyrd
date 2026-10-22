@@ -138,8 +138,9 @@ func TestGatewayConsumersFollowTheRegistryAndBackupTargets(t *testing.T) {
 		return out
 	}
 	all := map[string]string{VarSystemNS: ns, VarGatewayBucket: "shared", VarRegistryEndpoint: gatewayEndpoint(ns), VarBackupEndpoint: gatewayEndpoint(ns)}
-	// The metrics bucket (storage plan step 7) is always among them.
-	if got := buckets(all); len(got) != 4 || got[0] != "registry" || got[1] != "sources" || got[2] != "platform-backups" || got[3] != MetricsBucket {
+	// The metrics bucket (storage plan step 7) and the control plane's own
+	// backups bucket are always among them.
+	if got := buckets(all); len(got) != 5 || got[0] != "registry" || got[1] != "sources" || got[2] != "platform-backups" || got[3] != MetricsBucket || got[4] != ControlPlaneBackupsBucket {
 		t.Errorf("everything through the gateway: consumers = %v", got)
 	}
 	for _, c := range gatewayConsumers(all) {
@@ -148,7 +149,7 @@ func TestGatewayConsumersFollowTheRegistryAndBackupTargets(t *testing.T) {
 		}
 	}
 	direct := map[string]string{VarSystemNS: ns, VarGatewayBucket: "shared", VarRegistryEndpoint: "https://provider.example", VarBackupEndpoint: "https://provider.example"}
-	if got := buckets(direct); len(got) != 2 || got[0] != "sources" || got[1] != MetricsBucket {
+	if got := buckets(direct); len(got) != 3 || got[0] != "sources" || got[1] != MetricsBucket || got[2] != ControlPlaneBackupsBucket {
 		t.Errorf("registry and backups direct: consumers = %v", got)
 	}
 }

@@ -87,14 +87,15 @@ func (s *Server) callerIsClusterAdmin(c *gin.Context) bool {
 func (s *Server) readiness(ctx context.Context) ReadyReport {
 	ns := s.deps().SystemNamespace
 	checks := map[string]ReadyCheck{
-		"sources":         s.readySources(ctx),
-		"backup":          s.readyBackup(ctx, ns),
-		"disks":           s.readyDisks(ctx),
-		"registry":        s.readyDeployment(ctx, ns, "registry", false),
-		"pg-gateway":      s.readyDeployment(ctx, ns, "pg-gateway", true),
-		"keda-http":       s.readyDeployment(ctx, "keda", "keda-add-ons-http-interceptor", true),
-		"object-gateway":  s.readyDeployment(ctx, ns, "object-storage", true),
-		"shared-postgres": s.readySharedPostgres(ctx),
+		"sources":          s.readySources(ctx),
+		"backup":           s.readyBackup(ctx, ns),
+		"disks":            s.readyDisks(ctx),
+		"registry":         s.readyDeployment(ctx, ns, "registry", false),
+		"pg-gateway":       s.readyDeployment(ctx, ns, "pg-gateway", true),
+		"keda-http":        s.readyDeployment(ctx, "keda", "keda-add-ons-http-interceptor", true),
+		"object-gateway":   s.readyDeployment(ctx, ns, "object-storage", true),
+		"shared-postgres":  s.readySharedPostgres(ctx),
+		"control-plane-db": s.readyControlPlaneDB(ctx, ns),
 	}
 	status := "ok"
 	for _, ch := range checks {
@@ -220,6 +221,32 @@ func (s *Server) readySharedPostgres(ctx context.Context) ReadyCheck {
 		return ReadyCheck{Message: fmt.Sprintf("no ready instance on %v", down)}
 	}
 	return ReadyCheck{OK: true, Message: fmt.Sprintf("%d shared server(s) with a ready primary", len(list.Items))}
+}
+
+// readyControlPlaneDB: the control plane's own CloudNativePG cluster has a
+// ready instance (skipped where the control plane runs on the StatefulSet
+// or a managed database: the server would not be answering otherwise).
+func (s *Server) readyControlPlaneDB(ctx context.Context, ns string) ReadyCheck {
+	if s.apps == nil {
+		return ReadyCheck{OK: true, Skipped: true}
+	}
+	cl := &unstructured.Unstructured{}
+	cl.SetGroupVersionKind(controller.CNPGClusterGVK)
+	if err := s.apps.Get(ctx, client.ObjectKey{Namespace: ns, Name: install.ControlPlaneCluster}, cl); err != nil {
+		if apierrors.IsNotFound(err) || isNoKindError(err) {
+			return ReadyCheck{OK: true, Skipped: true, Message: "the control plane is not on a CloudNativePG cluster"}
+		}
+		return ReadyCheck{Message: "the control-plane cluster cannot be read: " + err.Error()}
+	}
+	ready, _, _ := unstructured.NestedInt64(cl.Object, "status", "readyInstances")
+	instances, _, _ := unstructured.NestedInt64(cl.Object, "spec", "instances")
+	if ready < 1 {
+		return ReadyCheck{Message: "no ready instance on the control-plane cluster"}
+	}
+	if ready < instances {
+		return ReadyCheck{OK: true, Message: fmt.Sprintf("%d of %d control-plane instances ready", ready, instances)}
+	}
+	return ReadyCheck{OK: true, Message: fmt.Sprintf("%d control-plane instance(s) ready", ready)}
 }
 
 // isNoKindError says the cluster has no such kind (an operator not installed).

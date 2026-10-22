@@ -125,7 +125,7 @@ const (
 	VarMonitoringSize          = "SHPYRD_MONITORING_SIZE"            // claim Prometheus keeps its metrics on, with the class of VarStorageClass ("" = an emptyDir, lost on restart)
 	// The control-plane database (RFC-0033).
 	VarDatabaseURL        = "SHPYRD_DATABASE_URL"          // managed PostgreSQL; empty runs the control-plane-db component
-	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume
+	VarControlPlaneDBSize = "SHPYRD_CONTROL_PLANE_DB_SIZE" // its volume; with the postgres extension it is a CloudNativePG cluster of SHPYRD_CONTROL_PLANE_DB_INSTANCES (controlplane.go)
 	// Platform backups (RFC-0037): where the encrypted archives go.
 	VarBackupTarget   = "SHPYRD_BACKUP_TARGET"   // s3://bucket/prefix ("" = component skipped)
 	VarBackupEndpoint = "SHPYRD_BACKUP_ENDPOINT" // S3 endpoint URL ("" = AWS S3 in the region)
