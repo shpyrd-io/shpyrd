@@ -62,3 +62,30 @@ func TestReadyzReportsEachStorageCheck(t *testing.T) {
 		t.Errorf("healthy report = %+v", report)
 	}
 }
+
+// Storage plan step 7: once told to stop, the process says so on healthz
+// (the readiness probe fails) while it keeps serving for the drain delay.
+func TestHealthzSaysDrainingOnShutdown(t *testing.T) {
+	s, _ := newTestServer(t, nil, []client.Object{})
+	if rec := do(t, s, "GET", "/api/healthz", "", false); rec.Code != http.StatusOK {
+		t.Fatalf("healthz = %d", rec.Code)
+	}
+	s.draining.Store(true)
+	if rec := do(t, s, "GET", "/api/healthz", "", false); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("healthz while draining = %d", rec.Code)
+	}
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
+	t.Setenv("SHPYRD_DRAIN_DELAY", "")
+	if d := drainDelay(); d != 5*time.Second {
+		t.Errorf("drain delay under Kubernetes = %s", d)
+	}
+	t.Setenv("SHPYRD_DRAIN_DELAY", "250ms")
+	if d := drainDelay(); d != 250*time.Millisecond {
+		t.Errorf("drain delay override = %s", d)
+	}
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("SHPYRD_DRAIN_DELAY", "")
+	if d := drainDelay(); d != 0 {
+		t.Errorf("drain delay outside Kubernetes = %s", d)
+	}
+}

@@ -32,6 +32,10 @@ type HelmRelease struct {
 }
 
 func (s *Server) healthz(c *gin.Context) {
+	if s.draining.Load() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "draining"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -207,10 +208,15 @@ type BrandingView struct {
 }
 
 type Server struct {
-	overview         overviewCache
-	overviewQueries  overviewQueryCache
-	opts             Options
-	log              *slog.Logger
+	overview        overviewCache
+	overviewQueries overviewQueryCache
+	opts            Options
+	log             *slog.Logger
+	// draining says the process was told to stop: /api/healthz answers 503
+	// so the readiness probe fails, and the listeners stay open for
+	// drainDelay before closing, so a connection the load balancer still
+	// sends to this pod is served, not reset (storage plan step 7).
+	draining         atomic.Bool
 	engine           *gin.Engine
 	internalAPI      *gin.Engine
 	publicAPI        *gin.Engine
@@ -526,6 +532,15 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
+	// Drain: not ready first, the listeners open a moment longer. Under
+	// Kubernetes the endpoint leaves the Service as the pod terminates, but
+	// the front door's upstream list follows a second later; closing at
+	// once resets what it still sends here.
+	s.draining.Store(true)
+	if delay := drainDelay(); delay > 0 {
+		s.log.Info("draining", "for", delay)
+		time.Sleep(delay)
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.log.Info("shutting down")
@@ -533,6 +548,23 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = srcSrv.Shutdown(shutdownCtx)
 	}
 	return srv.Shutdown(shutdownCtx)
+}
+
+// drainDelay is how long the server keeps serving after it was told to
+// stop: five seconds under Kubernetes (the pod's termination grace of 30 s
+// leaves room for it and the 15 s shutdown), none elsewhere, where nothing
+// routes to the process but the person who stopped it. SHPYRD_DRAIN_DELAY
+// overrides it (a duration).
+func drainDelay() time.Duration {
+	if v := os.Getenv("SHPYRD_DRAIN_DELAY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return 5 * time.Second
+	}
+	return 0
 }
 
 // SourcesHandler serves the uploaded source archives and nothing else: the
