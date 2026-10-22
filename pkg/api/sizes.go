@@ -134,6 +134,9 @@ func (s *Server) saveCatalog(c *gin.Context, cat sizes.Catalog) error {
 type resizeRequest struct {
 	Process string `json:"process" binding:"required"`
 	Size    string `json:"size" binding:"required"`
+	// Force applies the size while a release is still rolling out (#127):
+	// the rollout in progress is cancelled by it.
+	Force bool `json:"force,omitempty"`
 }
 
 // resizeApp sets the instance size of one process type.
@@ -165,6 +168,9 @@ func (s *Server) resizeApp(c *gin.Context) {
 		if !ok && req.Process != "web" {
 			return errors.New("unknown process " + req.Process)
 		}
+		if err := s.fitsItsMachine(c.Request.Context(), a, req.Process, size); err != nil {
+			return err
+		}
 		p.Size = req.Size
 		p.Resources = corev1.ResourceRequirements{} // the size is authoritative
 		a.Spec.Processes[req.Process] = p
@@ -173,8 +179,16 @@ func (s *Server) resizeApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, project.SlugOf(app), "resize", project.SlugOf(app), req.Process+"="+req.Size)
+	s.audit(c, project.SlugOf(app), "resize", project.SlugOf(app), req.Process+"="+req.Size+forcedNote(req.Force))
 	c.JSON(http.StatusOK, summarize(app))
+}
+
+// forcedNote marks an audit entry made over a rollout in progress.
+func forcedNote(force bool) string {
+	if force {
+		return " (forced over a rollout in progress)"
+	}
+	return ""
 }
 
 // ProcessChange is one entry of an applyProcesses request.
@@ -271,6 +285,9 @@ func sleepTurnsOn(sp *shpyrdv1.SleepSpec) bool {
 
 type applyProcessesRequest struct {
 	Processes map[string]ProcessChange `json:"processes" binding:"required"`
+	// Force applies the changes while a release is still rolling out
+	// (#127): the rollout in progress is cancelled by them.
+	Force bool `json:"force,omitempty"`
 }
 
 // applyProcesses changes sizes and instance counts of several process types
@@ -310,8 +327,13 @@ func (s *Server) applyProcesses(c *gin.Context) {
 			sleeps[name] = sp
 		}
 		if ch.Size != nil {
-			if _, ok := cat.Get(*ch.Size); !ok {
+			size, ok := cat.Get(*ch.Size)
+			if !ok {
 				abort(c, http.StatusBadRequest, fmt.Errorf("unknown size %q for %s", *ch.Size, name))
+				return
+			}
+			if err := s.fitsAPool(c.Request.Context(), size); err != nil {
+				abort(c, http.StatusBadRequest, err)
 				return
 			}
 			resizes = true
@@ -322,8 +344,8 @@ func (s *Server) applyProcesses(c *gin.Context) {
 		}
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
-		if resizes && rolloutInProgress(a) {
-			return fmt.Errorf("a release is still rolling out (%s); wait for it to finish", firstNonEmpty(a.Status.Message, a.Status.Phase))
+		if resizes && !req.Force && rolloutInProgress(a) {
+			return fmt.Errorf("%s; wait for it to finish, or apply the change anyway with force (the rollout in progress is cancelled)", rolloutInProgressWords(a))
 		}
 		if a.Spec.Processes == nil {
 			a.Spec.Processes = map[string]shpyrdv1.Process{"web": {}}
@@ -334,6 +356,11 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				return errors.New("unknown process " + name)
 			}
 			if ch.Size != nil {
+				if size, ok := cat.Get(*ch.Size); ok {
+					if err := s.fitsItsMachine(c.Request.Context(), a, name, size); err != nil {
+						return err
+					}
+				}
 				p.Size = *ch.Size
 				p.Resources = corev1.ResourceRequirements{}
 			}
@@ -358,7 +385,7 @@ func (s *Server) applyProcesses(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, project.SlugOf(app), "processes", project.SlugOf(app), processChangesDetail(req.Processes))
+	s.audit(c, project.SlugOf(app), "processes", project.SlugOf(app), processChangesDetail(req.Processes)+forcedNote(req.Force))
 	c.JSON(http.StatusOK, summarize(app))
 }
 

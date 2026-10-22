@@ -508,7 +508,7 @@ config vars are restored. The source configuration is kept; the next
 				})
 			}
 			if ac.session {
-				body, _ := json.Marshal(map[string]any{"release": target.Number})
+				body, _ := json.Marshal(map[string]any{"release": target.Number, "force": force})
 				raw, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/rollback", body, "application/json")
 				if err != nil {
 					return err
