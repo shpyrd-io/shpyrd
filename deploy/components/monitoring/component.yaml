@@ -1,6 +1,10 @@
 name: monitoring
 description: Prometheus, node-exporter and kube-state-metrics (kube-prometheus-stack)
 namespace: monitoring
+# With the object gateway, the Thanos sidecar uploads Prometheus's blocks to
+# the gateway bucket platform-metrics (kept 90 days); the hook writes the
+# sidecar's store config from the credential the gateway hook made.
+hooks: [thanos-objstore]
 helm:
   repo: https://prometheus-community.github.io/helm-charts
   chart: kube-prometheus-stack

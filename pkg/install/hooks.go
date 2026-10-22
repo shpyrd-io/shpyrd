@@ -53,6 +53,7 @@ var hooks = map[string]Hook{
 	"sources-signing-key":          sourcesSigningHook,
 	"object-gateway-credentials":   gatewayCredentialsHook,
 	"backup-target":                backupTargetHook,
+	"thanos-objstore":              thanosObjstoreHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
 	"registry-s3":                  registryS3Hook,
 	"autoscaler-credentials":       autoscalerCredentialsHook,
@@ -609,6 +610,40 @@ func backupTargetHook(ctx context.Context, e *Engine, c *Component) error {
 		how = "an access key"
 	}
 	e.rep.Step(c.Name, "backups go to "+target+" ("+how+")")
+	return nil
+}
+
+// ThanosObjstoreSecret is the Secret, in the monitoring namespace, the
+// Thanos sidecar reads its object store from (key objstore.yml): the
+// gateway's metrics bucket, written by the hook from the credential the
+// gateway hook made (storage plan step 7). Without the gateway the hook
+// writes nothing and the values leave the sidecar out.
+const ThanosObjstoreSecret = "thanos-objstore"
+
+func thanosObjstoreHook(ctx context.Context, e *Engine, c *Component) error {
+	if e.vars[VarGatewayBucket] == "" {
+		e.rep.Step(c.Name, "no object gateway: metrics stay on Prometheus's own disk")
+		return nil
+	}
+	cred, err := e.kube.Kube.CoreV1().Secrets(e.SystemNamespace()).Get(ctx, MetricsSecret, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the metrics bucket's credential (Secret %s/%s, from the object-gateway component): %w", e.SystemNamespace(), MetricsSecret, err)
+	}
+	endpoint := strings.TrimPrefix(strings.TrimPrefix(string(cred.Data["endpoint"]), "http://"), "https://")
+	objstore := fmt.Sprintf(`type: S3
+config:
+  bucket: %q
+  endpoint: %q
+  region: %q
+  access_key: %q
+  secret_key: %q
+  insecure: true
+  bucket_lookup_type: path
+`, string(cred.Data["bucket"]), endpoint, string(cred.Data["region"]), string(cred.Data["AWS_ACCESS_KEY_ID"]), string(cred.Data["AWS_SECRET_ACCESS_KEY"]))
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, ThanosObjstoreSecret, map[string]string{"objstore.yml": objstore}); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, fmt.Sprintf("Prometheus uploads its blocks to the gateway bucket %s, kept %d days", MetricsBucket, MetricsRetentionDays))
 	return nil
 }
 

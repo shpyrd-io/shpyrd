@@ -59,7 +59,7 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 	endpoint := gatewayEndpoint(c.Namespace)
 	for _, consumer := range gatewayConsumers(e.vars) {
 		bucket := consumer.bucket
-		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: bucket}); err != nil {
+		if err := records.Ensure(ctx, objectstore.BucketSpec{Name: bucket, RetentionDays: consumer.retentionDays}); err != nil {
 			return err
 		}
 		cred, err := records.Credential(ctx, bucket, "", "")
@@ -75,21 +75,37 @@ func gatewayCredentialsHook(ctx context.Context, e *Engine, c *Component) error 
 }
 
 // gatewayConsumer is a platform flow with a logical bucket of its own on
-// the gateway and the Secret holding its credential.
-type gatewayConsumer struct{ bucket, secret string }
+// the gateway and the Secret holding its credential; retentionDays expires
+// its objects (0: kept).
+type gatewayConsumer struct {
+	bucket, secret string
+	retentionDays  int32
+}
+
+// MetricsBucket is the gateway bucket Prometheus's Thanos sidecar uploads
+// its blocks to (storage plan step 7), MetricsSecret the credential the
+// monitoring component's hook turns into the sidecar's store config, and
+// MetricsRetentionDays how long a block stays there: blocks are immutable,
+// so the bucket's own expiry is the retention.
+const (
+	MetricsBucket        = "platform-metrics"
+	MetricsSecret        = "gateway-platform-metrics"
+	MetricsRetentionDays = 90
+)
 
 // gatewayConsumers lists the platform flows the gateway serves. The registry
 // and the platform backups are left out while they keep a bucket of their
 // own (see derivedVars): writing the registry-s3 Secret for them would
 // replace the provider credential the registry hook keeps between runs.
 func gatewayConsumers(vars map[string]string) []gatewayConsumer {
-	consumers := []gatewayConsumer{{"sources", "gateway-sources"}}
+	consumers := []gatewayConsumer{{bucket: "sources", secret: "gateway-sources"}}
 	if registryViaGateway(vars) {
-		consumers = append([]gatewayConsumer{{"registry", RegistryS3SecretName}}, consumers...)
+		consumers = append([]gatewayConsumer{{bucket: "registry", secret: RegistryS3SecretName}}, consumers...)
 	}
 	if backupsViaGateway(vars) {
-		consumers = append(consumers, gatewayConsumer{"platform-backups", "gateway-platform-backups"})
+		consumers = append(consumers, gatewayConsumer{bucket: "platform-backups", secret: "gateway-platform-backups"})
 	}
+	consumers = append(consumers, gatewayConsumer{bucket: MetricsBucket, secret: MetricsSecret, retentionDays: MetricsRetentionDays})
 	return consumers
 }
 
