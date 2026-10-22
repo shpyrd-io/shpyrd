@@ -42,7 +42,11 @@ type Options struct {
 	// project namespaces, so the NetworkPolicy can keep everything else
 	// (the edge, the API) to the front doors (RFC-0033). Empty: sources
 	// are served on Addr only.
-	SourcesAddr     string
+	SourcesAddr string
+	// PeerAddr is where the other replicas of the server reach this one
+	// (http://<pod IP>:<sources port>): a project export's download that
+	// lands elsewhere is fetched from here. Empty: a single replica.
+	PeerAddr        string
 	InternalAPIAddr string
 	PublicAPIAddr   string
 	// TrustedProxies are the CIDRs whose X-Forwarded-For is believed (the
@@ -373,9 +377,9 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 		// Tickets in the store: a second replica may answer the WebSocket.
 		s.execTickets = newSharedTicketStore(execTicketTTL, opts.Store)
 	}
-	s.archiveDownloads = newArchiveDownloads()
+	s.archiveDownloads = sharedArchiveDownloads(opts.Store, opts.PeerAddr)
 	s.shells = newShellRegistry()
-	s.cliDevices = newCLIDeviceStore()
+	s.cliDevices = newCLIDeviceStore(opts.Store)
 	s.execStream = s.streamExec
 	s.attachStream = s.streamAttach
 	s.runPoll = time.Second
@@ -576,6 +580,9 @@ func (s *Server) SourcesHandler() http.Handler {
 	e := gin.New()
 	e.Use(gin.Recovery(), s.requestLogger())
 	e.GET("/api/sources/:name", s.serveSource)
+	// A project export held here, fetched by the replica its download
+	// landed on (the ticket is the credential).
+	e.GET(archivePeerPath, s.servePeerArchive)
 	e.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	return e
 }

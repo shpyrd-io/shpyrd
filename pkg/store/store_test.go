@@ -41,7 +41,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"cost_export_chunks", "cost_exports", "cost_daily", "cost_collections", "cost_drains", "cost_lines", "console_users", "settings", "project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"archive_downloads", "cli_devices", "pending_logins", "exec_tickets", "cost_export_chunks", "cost_exports", "cost_daily", "cost_collections", "cost_drains", "cost_lines", "console_users", "settings", "project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}
@@ -1501,6 +1501,83 @@ func TestPendingLogins(t *testing.T) {
 				if _, ok, err := st.PeekPendingLogin(ctx, hash); err != nil || ok {
 					t.Errorf("peek %s = %v %v, want gone", hash, ok, err)
 				}
+			}
+		})
+	}
+}
+
+// A `shpyrd login` code: unique while it waits in its workspace, capped,
+// answered once, polled at its pace, and taken by the poll that reads the
+// answer, whichever replica of the server asks.
+func TestCLIDevices(t *testing.T) {
+	for name, open := range implementations(t) {
+		t.Run(name, func(t *testing.T) {
+			st := open(t)
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			put := func(hash, ws, user string) error {
+				return st.PutCLIDevice(ctx, CLIDevice{DeviceHash: hash, WorkspaceID: ws, UserCode: user, Name: "laptop", Expires: now.Add(10 * time.Minute)}, 3, now)
+			}
+			if err := put("d1", "ws1", "AAAA-BBBB"); err != nil {
+				t.Fatal(err)
+			}
+			if err := put("d2", "ws1", "AAAA-BBBB"); !errors.Is(err, ErrConflict) {
+				t.Errorf("a user code waiting twice in a workspace: %v", err)
+			}
+			if err := put("d2", "ws2", "AAAA-BBBB"); err != nil {
+				t.Errorf("the same user code in another workspace: %v", err)
+			}
+			if err := put("d3", "ws1", "CCCC-DDDD"); err != nil {
+				t.Fatal(err)
+			}
+			if err := put("d4", "ws1", "FFFF-GGGG"); !errors.Is(err, ErrFull) {
+				t.Errorf("past the cap: %v", err)
+			}
+
+			d, err := st.CLIDeviceByUserCode(ctx, "ws1", "AAAA-BBBB", now)
+			if err != nil || d.DeviceHash != "d1" || d.Name != "laptop" {
+				t.Fatalf("lookup = %+v %v", d, err)
+			}
+			if _, err := st.CLIDeviceByUserCode(ctx, "ws2", "CCCC-DDDD", now); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a code of ws1 found at ws2: %v", err)
+			}
+			// Waiting: polled at its pace.
+			if d, slow, err := st.PollCLIDevice(ctx, "ws1", "d1", now, 4*time.Second); err != nil || slow || d.State != "" {
+				t.Fatalf("first poll = %+v %v %v", d, slow, err)
+			}
+			if _, slow, err := st.PollCLIDevice(ctx, "ws1", "d1", now.Add(time.Second), 4*time.Second); err != nil || !slow {
+				t.Errorf("fast poll = %v %v", slow, err)
+			}
+			if _, _, err := st.PollCLIDevice(ctx, "ws2", "d1", now.Add(time.Minute), 4*time.Second); !errors.Is(err, ErrNotFound) {
+				t.Errorf("polled from another workspace: %v", err)
+			}
+			// Answered once.
+			exp := now.Add(720 * time.Hour)
+			if err := st.DecideCLIDevice(ctx, "ws1", "AAAA-BBBB", "approved", "shp_secret", "dev@example.test", &exp, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.DecideCLIDevice(ctx, "ws1", "AAAA-BBBB", "denied", "", "", nil, now); !errors.Is(err, ErrNotFound) {
+				t.Errorf("answered twice: %v", err)
+			}
+			if _, err := st.CLIDeviceByUserCode(ctx, "ws1", "AAAA-BBBB", now); !errors.Is(err, ErrNotFound) {
+				t.Errorf("an answered code still waits: %v", err)
+			}
+			// Taken by the poll that reads the answer.
+			later := now.Add(time.Minute)
+			d, slow, err := st.PollCLIDevice(ctx, "ws1", "d1", later, 4*time.Second)
+			if err != nil || slow || d.State != "approved" || d.Token != "shp_secret" || d.Email != "dev@example.test" || d.TokenExp == nil || !d.TokenExp.Equal(exp) {
+				t.Fatalf("answered poll = %+v %v %v", d, slow, err)
+			}
+			if _, _, err := st.PollCLIDevice(ctx, "ws1", "d1", later.Add(time.Minute), 4*time.Second); !errors.Is(err, ErrNotFound) {
+				t.Errorf("the answer was handed out twice: %v", err)
+			}
+			// Expired codes are gone and make room.
+			gone := now.Add(11 * time.Minute)
+			if _, err := st.CLIDeviceByUserCode(ctx, "ws1", "CCCC-DDDD", gone); !errors.Is(err, ErrNotFound) {
+				t.Errorf("an expired code still waits: %v", err)
+			}
+			if err := st.PutCLIDevice(ctx, CLIDevice{DeviceHash: "d5", WorkspaceID: "ws1", UserCode: "CCCC-DDDD", Expires: gone.Add(10 * time.Minute)}, 3, gone); err != nil {
+				t.Errorf("an expired code's user code drawn again: %v", err)
 			}
 		})
 	}

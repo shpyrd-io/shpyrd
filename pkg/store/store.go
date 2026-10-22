@@ -23,7 +23,28 @@ const DefaultWorkspace = "default"
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("already exists")
+	// ErrFull is a store refusing more of something it caps.
+	ErrFull = errors.New("too many waiting")
 )
+
+// CLIDevice is a `shpyrd login` waiting for its approval in the browser
+// (RFC-0052): the CLI holds the device code (kept here by its hash) and
+// polls; the person types the user code at their workspace and approves.
+type CLIDevice struct {
+	DeviceHash  string
+	WorkspaceID string
+	UserCode    string
+	// Name is what the CLI called its machine.
+	Name string
+	// State is "" while waiting, then "approved" (Token holds the minted
+	// credential until a poll takes it) or "denied".
+	State    string
+	Token    string
+	Email    string
+	TokenExp *time.Time
+	LastPoll time.Time
+	Expires  time.Time
+}
 
 // Workspace is the tenant. Every workspace answers at an Address of its
 // own (RFC-0080): the dashboard and sign-in at <Address>, apps at
@@ -941,6 +962,23 @@ type Store interface {
 	// TakePendingLogin hands it out once (the callback that completes it),
 	// whichever replica of the server asks: false when no live login has
 	// the hash. Put sweeps expired logins.
+	// PutCLIDevice keeps a code waiting for approval: ErrConflict when its
+	// user code waits already in the workspace, ErrFull at max waiting.
+	// The others find the one waiting by what the person typed, record the
+	// person's answer once, and answer the CLI's poll: not before minGap
+	// since the last (slowDown), and an answered code is taken by the poll
+	// that reads it. Times are the caller's clock; expired codes are gone
+	// (ErrNotFound) and swept on Put.
+	PutCLIDevice(ctx context.Context, d CLIDevice, max int, now time.Time) error
+	CLIDeviceByUserCode(ctx context.Context, workspaceID, userCode string, now time.Time) (*CLIDevice, error)
+	DecideCLIDevice(ctx context.Context, workspaceID, userCode, state, token, email string, tokenExp *time.Time, now time.Time) error
+	PollCLIDevice(ctx context.Context, workspaceID, deviceHash string, now time.Time, minGap time.Duration) (d *CLIDevice, slowDown bool, err error)
+	// PutArchiveDownload says which replica holds a project export's
+	// one-time download, under the hash of its ticket, until it expires;
+	// TakeArchiveDownload hands that out once: false when no live row has
+	// the hash. Put sweeps expired rows.
+	PutArchiveDownload(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	TakeArchiveDownload(ctx context.Context, hash string) ([]byte, bool, error)
 	PutPendingLogin(ctx context.Context, hash string, payload []byte, expires time.Time) error
 	PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error)
 	TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error)

@@ -58,7 +58,17 @@ func newTestServer(t *testing.T, prom *PromClient, crObjs []client.Object, kubeO
 	}
 	cs := kubefake.NewSimpleClientset(toRuntime(runtimeObjs)...)
 	k := &kube.Client{Kube: cs, Namespace: "shpyrd-system"}
-	s, err := newServer(k, Options{Token: testToken, Store: principalFixtureStore(), Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
+	return newTestServerOn(t, principalFixtureStore(), cr, prom, k)
+}
+
+// newTestServerOn is a replica of the test server on st: two of them on one
+// store are two replicas of the server behind the front door.
+func newTestServerOn(t *testing.T, st store.Store, cr client.Client, prom *PromClient, k *kube.Client) (*Server, client.Client) {
+	t.Helper()
+	if k == nil {
+		k = &kube.Client{Kube: kubefake.NewSimpleClientset(), Namespace: "shpyrd-system"}
+	}
+	s, err := newServer(k, Options{Token: testToken, Store: st, Apps: cr, Prometheus: prom, Public: PublicConfig{Domain: "example.test"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

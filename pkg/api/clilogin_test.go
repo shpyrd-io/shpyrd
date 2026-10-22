@@ -254,3 +254,62 @@ func TestNormaliseUserCode(t *testing.T) {
 		}
 	}
 }
+
+// Two replicas of the server on one store: the CLI asks one for its code,
+// the person approves on the other, and the CLI's polls land on either.
+// The code lives in the store, not in the memory of the replica the CLI
+// asked first ("not waiting for approval" on the other when it did).
+func TestCLIBrowserSignInAcrossReplicas(t *testing.T) {
+	shop := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"}}
+	a, cr := newTestServer(t, nil, []client.Object{shop})
+	b, _ := newTestServerOn(t, a.store, cr, nil, nil)
+	ctx := t.Context()
+	if _, err := a.store.TouchIdentity(ctx, store.DefaultWorkspace, store.Identity{Email: "dev@example.test", Provider: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, s := range []*Server{a, b} {
+		s.authz.TTL = 1
+		s.cliDevices.now = func() time.Time { return now }
+	}
+
+	device, user := startDevice(t, a)
+	if code, body := pollDevice(t, b, device); code != http.StatusBadRequest || body["error"] != "authorization_pending" {
+		t.Fatalf("pending poll on the other replica = %d %v", code, body)
+	}
+	// The polling pace is the code's, whichever replica is asked.
+	if code, body := pollDevice(t, a, device); code != http.StatusBadRequest || body["error"] != "slow_down" {
+		t.Fatalf("fast poll on the first replica = %d %v", code, body)
+	}
+
+	sid, csrf := signIn(t, b, ext.Identity{Subject: "u1", Email: "dev@example.test", Provider: "local"})
+	if rec := activate(t, b, sid, map[string]string{"csrf": csrf, "code": user, "decision": "allow"}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "signed in") {
+		t.Fatalf("approve on the other replica: %d %s", rec.Code, rec.Body.String())
+	}
+	// Answered once: a second answer on the first replica finds nothing
+	// waiting and mints nothing.
+	if rec := activate(t, a, sid, map[string]string{"csrf": csrf, "code": user, "decision": "allow"}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "not waiting for approval") {
+		t.Fatalf("second answer: %d %s", rec.Code, rec.Body.String())
+	}
+
+	now = now.Add(cliDeviceInterval * time.Second)
+	code, body := pollDevice(t, a, device)
+	if code != http.StatusOK || body["email"] != "dev@example.test" || !IsAPIToken(body["token"].(string)) {
+		t.Fatalf("approved poll on the first replica = %d %v", code, body)
+	}
+	now = now.Add(cliDeviceInterval * time.Second)
+	if code, body := pollDevice(t, b, device); code != http.StatusBadRequest || body["error"] != "expired_token" {
+		t.Errorf("the token was handed out twice: %d %v", code, body)
+	}
+	person, _ := a.store.GetIdentity(ctx, store.DefaultWorkspace, "dev@example.test")
+	tokens, _ := a.store.ListTokens(ctx, store.DefaultWorkspace, person.ID)
+	sessions := 0
+	for _, tk := range tokens {
+		if tk.Kind == store.TokenKindSession {
+			sessions++
+		}
+	}
+	if sessions != 1 {
+		t.Errorf("CLI credentials = %d, want the one handed out", sessions)
+	}
+}
