@@ -360,6 +360,10 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
 	s.execTickets = newTicketStore(execTicketTTL)
+	if opts.Store != nil {
+		// Tickets in the store: a second replica may answer the WebSocket.
+		s.execTickets = newSharedTicketStore(execTicketTTL, opts.Store)
+	}
 	s.archiveDownloads = newArchiveDownloads()
 	s.shells = newShellRegistry()
 	s.cliDevices = newCLIDeviceStore()

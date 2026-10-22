@@ -439,6 +439,29 @@ func (p *Postgres) LockWorkspace(ctx context.Context, slug string, fn func(ctx c
 	return fn(ctx)
 }
 
+func (p *Postgres) PutExecTicket(ctx context.Context, hash string, payload []byte, expires time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM exec_tickets WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("exec tickets: %w", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO exec_tickets (hash, payload, expires_at) VALUES ($1, $2, $3)`, hash, payload, expires); err != nil {
+		return fmt.Errorf("exec ticket: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) TakeExecTicket(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM exec_tickets WHERE hash = $1 AND expires_at >= now() RETURNING payload`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, _ = p.pool.Exec(ctx, `DELETE FROM exec_tickets WHERE hash = $1`, hash) // a stale one goes too
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("exec ticket: %w", err)
+	}
+	return payload, true, nil
+}
+
 const claimColumns = `id, workspace_id, domain, token, connector, verified_at, created_at`
 
 func scanClaim(row pgx.Row) (*DomainClaim, error) {

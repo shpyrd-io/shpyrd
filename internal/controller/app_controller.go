@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -722,14 +725,16 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	rebuild := app.Annotations[shpyrdv1.AnnotationRebuildAt]
 	needsTrigger := rebuild != "" && current.GetAnnotations()[shpyrdv1.AnnotationRebuildAt] != rebuild
 
-	// An archive uploaded before the sources port existed names the API
-	// port; rewriting that in the Image would make kpack rebuild every
-	// app on upgrade. The current URL stays until a build happens anyway:
+	// The same archive at another address (the sources port where the API
+	// port was, a token added, a host renamed) is not a new source:
+	// rewriting the URL in the Image would make kpack rebuild every app on
+	// an upgrade (#93). The archive is named by its sha256, so the current
+	// URL stays while that name is the same, until a build happens anyway:
 	// a new archive, or a rebuild asked for, which takes the new address.
 	if !needsTrigger {
 		curURL, _, _ := unstructured.NestedString(current.Object, "spec", "source", "blob", "url")
 		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
-		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
+		if curURL != "" && curURL != desURL && (r.Config.sourceURL(curURL) == desURL || sameArchive(curURL, desURL)) {
 			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
 		}
 	}
@@ -797,6 +802,27 @@ var errImageMoving = errors.New("kpack image moving to a new repository")
 
 // kpackBuildNeededAnnotation on an Image's latest Build makes kpack schedule
 // another build of the same source (build reason TRIGGER).
+// sameArchive says two source URLs name the same archive: the file is
+// named by its sha256 (<sha256>.tgz), whatever host, port or token carries
+// it (#93).
+func sameArchive(a, b string) bool {
+	name := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil || u.Path == "" {
+			return ""
+		}
+		base := path.Base(u.Path)
+		if !archiveName.MatchString(base) {
+			return ""
+		}
+		return base
+	}
+	n := name(a)
+	return n != "" && n == name(b)
+}
+
+var archiveName = regexp.MustCompile(`^[a-f0-9]{64}\.tgz$`)
+
 const kpackBuildNeededAnnotation = "image.kpack.io/additionalBuildNeeded"
 
 // triggerKpackBuild annotates the Image's latest Build so kpack builds

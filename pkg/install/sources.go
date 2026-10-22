@@ -5,6 +5,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 // Sources only need scratch space with S3. Existing claims are deliberately
@@ -26,6 +28,13 @@ func sourcesInBucket(objs []*unstructured.Unstructured, secret string) ([]*unstr
 					v.VolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 				}
 			}
+			// Nothing of the server's is on a read-write-once claim now: two
+			// replicas, rolled one at a time, keep the API and the sources
+			// answering through a platform roll (storage plan step 7). The
+			// controllers run on the leader; shell tickets live in the
+			// control-plane database.
+			dep.Spec.Replicas = ptr.To[int32](2)
+			dep.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType, RollingUpdate: &appsv1.RollingUpdateDeployment{MaxSurge: ptr.To(intstr.FromInt32(1)), MaxUnavailable: ptr.To(intstr.FromInt32(0))}}
 			for i := range dep.Spec.Template.Spec.Containers {
 				c := &dep.Spec.Template.Spec.Containers[i]
 				if c.Name == "server" {

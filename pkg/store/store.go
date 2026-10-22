@@ -929,6 +929,12 @@ type Store interface {
 	// the control-plane database, a transaction-scoped advisory lock, and
 	// is released when fn returns, whatever it returns.
 	LockWorkspace(ctx context.Context, slug string, fn func(ctx context.Context) error) error
+	// PutExecTicket keeps a one-time shell ticket (RFC-0026) under the hash
+	// of its code until it expires, and TakeExecTicket hands it out once,
+	// whichever replica of the server asks (storage plan step 7): false
+	// when no live ticket has the hash. Both sweep expired tickets.
+	PutExecTicket(ctx context.Context, hash string, payload []byte, expires time.Time) error
+	TakeExecTicket(ctx context.Context, hash string) ([]byte, bool, error)
 	SetWorkspaceInternalExposure(ctx context.Context, slug string, enabled *bool) (*Workspace, error)
 	// SetWorkspaceStatus suspends or reactivates a workspace.
 	SetWorkspaceStatus(ctx context.Context, slug, status string) (*Workspace, error)
