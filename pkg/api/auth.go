@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -24,6 +25,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // The server is an OpenID Connect relying party (RFC-0007): extensions
@@ -105,12 +107,110 @@ type pendingLogin struct {
 	created time.Time
 }
 
+// storedLogin is a pending login as the store keeps it, under the hash of
+// its state: the shared callback and the callback that completes the login
+// may each land on any replica of the server (two replicas since the
+// hardening tail), so the login cannot live in one replica's memory.
+type storedLogin struct {
+	Provider string    `json:"provider"`
+	Nonce    string    `json:"nonce"`
+	Verifier string    `json:"verifier"`
+	Next     string    `json:"next"`
+	Redirect string    `json:"redirect"`
+	Host     string    `json:"host"`
+	Created  time.Time `json:"created"`
+}
+
+// loginStoreTimeout bounds the store's part of starting or finishing a login.
+const loginStoreTimeout = 5 * time.Second
+
+// loginStore is where pending logins live: the control-plane database when
+// the server has one, nil for memory (tests, a server with no store), which
+// a single replica is enough for.
+func (rp *relyingParty) loginStore() store.Store {
+	if rp.sessions == nil {
+		return nil
+	}
+	return rp.sessions.store
+}
+
+func (rp *relyingParty) savePending(ctx context.Context, state string, pl pendingLogin) error {
+	if st := rp.loginStore(); st != nil {
+		payload, err := json.Marshal(storedLogin{Provider: pl.provider, Nonce: pl.nonce, Verifier: pl.verifier, Next: pl.next, Redirect: pl.redirect, Host: pl.host, Created: pl.created})
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(ctx, loginStoreTimeout)
+		defer cancel()
+		if err := st.PutPendingLogin(ctx, hashCode(state), payload, pl.created.Add(loginTTL)); err != nil {
+			return fmt.Errorf("keep the login: %w", err)
+		}
+		return nil
+	}
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	for k, v := range rp.pending {
+		if pl.created.Sub(v.created) > loginTTL {
+			delete(rp.pending, k)
+		}
+	}
+	rp.pending[state] = pl
+	return nil
+}
+
+// peekPending reads the login a state names without taking it; false for
+// a state nobody issued, used or expired.
+func (rp *relyingParty) peekPending(ctx context.Context, state string) (pendingLogin, bool) {
+	return rp.loadPending(ctx, state, false)
+}
+
+// takePending hands the login a state names out once.
+func (rp *relyingParty) takePending(ctx context.Context, state string) (pendingLogin, bool) {
+	return rp.loadPending(ctx, state, true)
+}
+
+func (rp *relyingParty) loadPending(ctx context.Context, state string, take bool) (pendingLogin, bool) {
+	if state == "" {
+		return pendingLogin{}, false
+	}
+	if st := rp.loginStore(); st != nil {
+		ctx, cancel := context.WithTimeout(ctx, loginStoreTimeout)
+		defer cancel()
+		read := st.PeekPendingLogin
+		if take {
+			read = st.TakePendingLogin
+		}
+		payload, ok, err := read(ctx, hashCode(state))
+		if err != nil {
+			if rp.log != nil {
+				rp.log.Warn("pending login unreadable", "error", err)
+			}
+			return pendingLogin{}, false
+		}
+		var kept storedLogin
+		if !ok || json.Unmarshal(payload, &kept) != nil || rp.now().Sub(kept.Created) > loginTTL {
+			return pendingLogin{}, false
+		}
+		return pendingLogin{provider: kept.Provider, nonce: kept.Nonce, verifier: kept.Verifier, next: kept.Next, redirect: kept.Redirect, host: kept.Host, created: kept.Created}, true
+	}
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	pl, ok := rp.pending[state]
+	if take {
+		delete(rp.pending, state)
+	}
+	if !ok || rp.now().Sub(pl.created) > loginTTL {
+		return pendingLogin{}, false
+	}
+	return pl, true
+}
+
 // relyingParty holds providers, in-flight logins and sessions.
 type relyingParty struct {
 	mu        sync.Mutex
 	providers map[string]*oidcProvider
 	order     []string
-	pending   map[string]pendingLogin
+	pending   map[string]pendingLogin // only without a store: see loginStore
 	sessions  *sessionStore
 	baseURL   string // the console's URL; the redirect URI of each login is its own host's (RFC-0080)
 	domain    string
@@ -309,7 +409,7 @@ func (rp *relyingParty) endSessionURL(sess *session) string {
 // begin starts the authorization code flow and returns the issuer URL.
 // redirect is the callback the issuer returns to ("" keeps the console's);
 // host is where the login started, where it completes.
-func (rp *relyingParty) begin(providerID, next, redirect, host string) (string, error) {
+func (rp *relyingParty) begin(ctx context.Context, providerID, next, redirect, host string) (string, error) {
 	rp.mu.Lock()
 	p, ok := rp.providers[providerID]
 	if !ok && providerID == "" && len(rp.order) == 1 {
@@ -329,15 +429,10 @@ func (rp *relyingParty) begin(providerID, next, redirect, host string) (string, 
 		return "", err
 	}
 	verifier := oauth2.GenerateVerifier()
-	rp.mu.Lock()
-	now := rp.now()
-	for k, v := range rp.pending {
-		if now.Sub(v.created) > loginTTL {
-			delete(rp.pending, k)
-		}
+	pl := pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), redirect: redirect, host: strings.ToLower(host), created: rp.now()}
+	if err := rp.savePending(ctx, state, pl); err != nil {
+		return "", err
 	}
-	rp.pending[state] = pendingLogin{provider: providerID, nonce: nonce, verifier: verifier, next: safeNext(next), redirect: redirect, host: strings.ToLower(host), created: now}
-	rp.mu.Unlock()
 	opts := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
 	if redirect != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("redirect_uri", redirect))
@@ -351,11 +446,9 @@ func (rp *relyingParty) begin(providerID, next, redirect, host string) (string, 
 
 // pendingHost is the host a login in flight started at, without taking
 // the login: "" for a state nobody issued or that expired.
-func (rp *relyingParty) pendingHost(state string) string {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	pl, ok := rp.pending[state]
-	if !ok || rp.now().Sub(pl.created) > loginTTL {
+func (rp *relyingParty) pendingHost(ctx context.Context, state string) string {
+	pl, ok := rp.peekPending(ctx, state)
+	if !ok {
 		return ""
 	}
 	return pl.host
@@ -364,12 +457,11 @@ func (rp *relyingParty) pendingHost(state string) string {
 // complete exchanges the callback code for an identity, the raw id_token
 // and the pending login it answers (destination, workspace).
 func (rp *relyingParty) complete(ctx context.Context, state, code string) (ext.Identity, string, pendingLogin, error) {
+	pl, ok := rp.takePending(ctx, state)
 	rp.mu.Lock()
-	pl, ok := rp.pending[state]
-	delete(rp.pending, state)
 	p := rp.providers[pl.provider]
 	rp.mu.Unlock()
-	if !ok || p == nil || rp.now().Sub(pl.created) > loginTTL {
+	if !ok || p == nil {
 		return ext.Identity{}, "", pl, errors.New("login expired or unknown; start again")
 	}
 	exchange := []oauth2.AuthCodeOption{oauth2.VerifierOption(pl.verifier)}
@@ -524,7 +616,7 @@ func (s *Server) authLogin(c *gin.Context) {
 		abort(c, http.StatusBadRequest, fmt.Errorf("login method %q is not offered here", provider))
 		return
 	}
-	u, err := s.rp.begin(provider, next, s.callbackURL(c), c.Request.Host)
+	u, err := s.rp.begin(c.Request.Context(), provider, next, s.callbackURL(c), c.Request.Host)
 	if err != nil {
 		abort(c, http.StatusBadRequest, err)
 		return
@@ -542,7 +634,7 @@ func (s *Server) authCallback(c *gin.Context) {
 		s.loginFailed(c, fmt.Errorf("%s: %s", e, c.Query("error_description")))
 		return
 	}
-	if host := s.rp.pendingHost(c.Query("state")); host != "" && host != strings.ToLower(c.Request.Host) {
+	if host := s.rp.pendingHost(c.Request.Context(), c.Query("state")); host != "" && host != strings.ToLower(c.Request.Host) {
 		// A login completes where it started; the code is not taken here.
 		s.loginFailed(c, errors.New("this sign-in started at another address; start again"))
 		return
