@@ -64,6 +64,8 @@ Other controllers reconcile the other resources the same way: `Volume`, `Postgre
 
 `shpyrd-server` runs the controller manager (with leader election) and an HTTP API in one process. The API serves both CLIs and the dashboard (projects, builds, logs streamed as NDJSON with Heroku-style instance names, Prometheus-backed metrics per process and cluster capacity, write-only config vars, scale/rollback/deploy/destroy) and receives source archives from `shpyrd deploy`. It stores them by SHA-256, on a persistent volume or, with the S3 gateway, in object storage, and serves them to builds at a cluster-internal URL.
 
+`GET /api/readyz` is the platform's readiness, one line per check, for operators and monitoring: the sources store answers, the platform backup succeeded within a day, the profile's storage class exists, the registry, the wake gateway for databases, the sleep interceptor, the object gateway and every shared PostgreSQL server have a ready instance. It answers 200 "ok" or 503 "degraded"; a component the cluster does not run is skipped. `/api/healthz` stays the process's own liveness.
+
 People sign in with accounts (the `auth-local` extension and its connectors): the server is an OpenID Connect relying party and keeps a session cookie. The CLI and integrations use personal API tokens or a CLI session from `shpyrd login`. The admin token generated at install time remains for the operator and for automation, and can be switched off; it is accepted as `Authorization: Bearer` or `X-Shpyrd-Token`. For apps that are not public, the server's edge checks the visitor's sign-in before the request reaches the app.
 
 ## The CLI
