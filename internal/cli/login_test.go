@@ -122,7 +122,7 @@ func TestSignupLoginOpensCloudWithoutCallingTheLegacyAPI(t *testing.T) {
 			if err := cmd.Execute(); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out.String(), tc.want) || !strings.Contains(out.String(), "shpyrd login --url <workspace URL>") {
+			if !strings.Contains(out.String(), tc.want) || !strings.Contains(out.String(), "shpyrd login --url <workspace name>") {
 				t.Errorf("output: %s", out.String())
 			}
 		})

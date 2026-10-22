@@ -14,8 +14,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -317,6 +319,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		Pages:                  o.opts.Pages,
 		Sources:                sources,
 		SourcesAddr:            fmt.Sprintf(":%d", api.SourcesPort),
+		PeerAddr:               peerAddr(os.Getenv("SHPYRD_POD_IP"), api.SourcesPort),
 		InternalAPIAddr:        ":8083",
 		PublicAPIAddr:          publicAPIListenAddr(),
 		TrustedProxies:         trustedProxies(os.Getenv("SHPYRD_POD_CIDR")),
@@ -755,4 +758,13 @@ func defaultWorkspaceFromEnv(domain, dashboard string) store.DefaultWorkspaceSpe
 // says so.
 func publishesNames(provider, wildcardTLS string) bool {
 	return (provider != "" && provider != "none") || wildcardTLS == "true"
+}
+
+// peerAddr is where the other replicas reach this one: the pod's own
+// address on the sources port. "" without one (outside a cluster).
+func peerAddr(podIP string, port int) string {
+	if ip := net.ParseIP(strings.TrimSpace(podIP)); ip != nil {
+		return "http://" + net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	}
+	return ""
 }
