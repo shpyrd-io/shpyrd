@@ -389,6 +389,8 @@ shpyrd shell -- cat /etc/os-release   # run one command and return its exit code
 
 `shpyrd shell` attaches to a **running instance**: what you see is the live process's filesystem and environment. Buildpack images get the same environment as the process (through the CNB launcher), so `node`, `bundle` or `python` are on the `PATH`.
 
+A process that will not start has no instance to attach to. `shpyrd shell --debug` (with `--process` or `--instance` to name it) opens a shell in a **new copy of the process**: its image, config vars and volumes, on the machine that holds its disk, with the process's command replaced by the shell. Look at `/data`, run the fix, exit; the copy is removed.
+
 ```shell
 shpyrd run rails db:migrate                 # a new instance of the current release, removed when the command exits
 shpyrd run --size shared-l python manage.py import big.csv
@@ -396,6 +398,8 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 ```
 
 `shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). A one-off instance stops after an hour at most; `--detach` leaves it running until then.
+
+A one-off instance has no volumes unless you ask: `shpyrd run --process web -- fluxyr migrate-storage` mounts web's volumes at their paths, and runs on the machine that holds a single-instance disk right now, so the two instances share the attached disk. The release step can see them too: declare the volume on the `release` process in `shpyrd.yaml` (`processes.release.volumes`, the same entry as the process's) and the step runs with it, where the disk is. A data migration on a disk belongs there.
 
 ## Volumes
 

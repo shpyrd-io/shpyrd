@@ -528,7 +528,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
-		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
+		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res, r.releaseMounts(ctx, app))
 		if err != nil {
 			return outcome{}, err
 		}

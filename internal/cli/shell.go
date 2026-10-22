@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -35,6 +36,7 @@ func newShellCmd(g *globalFlags) *cobra.Command {
 		appName  string
 		process  string
 		instance string
+		debug    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "shell [-- command...]",
@@ -42,7 +44,12 @@ func newShellCmd(g *globalFlags) *cobra.Command {
 		Long: `Attach an interactive shell to a running instance of the project (bash, or
 sh when the image has no bash). Buildpack images get the same environment
 as the running process. Pick the instance with --instance (web.2) or the
-process type with --process; the default is the first web instance.`,
+process type with --process; the default is the first web instance.
+
+--debug opens a shell in a new instance made like the process (its image,
+config vars and volumes, on the machine that holds its disk) with the
+process's command replaced by the shell: for a process that will not start,
+to look at its files and run the fix. It is removed when the shell exits.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
 			name, err := resolveAppName(appName)
@@ -52,6 +59,25 @@ process type with --process; the default is the first web instance.`,
 			ac, err := newAppClient(g, g.progress(cmd))
 			if err != nil {
 				return err
+			}
+			if debug {
+				// A copy of the process with a shell for its command (#126):
+				// a one-off run with the process's volumes.
+				if instance != "" {
+					process = strings.SplitN(instance, ".", 2)[0]
+				}
+				if process == "" {
+					process = "web"
+				}
+				command := args
+				if len(command) == 0 {
+					command = []string{"sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"}
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Opening a debug copy of %s: a new instance with its image, config vars and volumes; its command is the shell.\n", process)
+				if ac.session {
+					return ac.runAPI(ctx, name, command, "", false, kexec.StdinIsTerminal(), process, cmd.OutOrStdout(), cmd.ErrOrStderr())
+				}
+				return ac.runDebugLocal(ctx, cmd, name, process, command)
 			}
 			if ac.session {
 				// Over the API: the web terminal's bridge (RFC-0026), with the
@@ -84,6 +110,7 @@ process type with --process; the default is the first web instance.`,
 	appFlag(cmd, &appName)
 	cmd.Flags().StringVarP(&process, "process", "p", "", "process type (default web, else the first one)")
 	cmd.Flags().StringVarP(&instance, "instance", "i", "", "instance name, e.g. web.2")
+	cmd.Flags().BoolVar(&debug, "debug", false, "a shell in a new copy of the process (image, config vars, volumes) instead of a running instance: for a process that will not start")
 	return cmd
 }
 
@@ -170,6 +197,7 @@ func newRunCmd(g *globalFlags) *cobra.Command {
 	var (
 		appName string
 		size    string
+		process string
 		detach  bool
 	)
 	cmd := &cobra.Command{
@@ -181,7 +209,8 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 
   shpyrd run npm run migrate
   shpyrd run rails console
-  shpyrd run --detach ./import.sh     # leave it running; follow with 'shpyrd logs -p run'`,
+  shpyrd run --detach ./import.sh     # leave it running; follow with 'shpyrd logs -p run'
+  shpyrd run --process web -- fluxyr migrate-storage   # with web's volumes, on the machine that holds its disk`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
@@ -197,7 +226,7 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 			if ac.session {
 				// Over the API (RFC-0052): the server starts the instance
 				// and the web terminal's bridge attaches to it.
-				return ac.runAPI(ctx, name, args, size, detach, tty, cmd.OutOrStdout(), cmd.ErrOrStderr())
+				return ac.runAPI(ctx, name, args, size, detach, tty, process, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			}
 			app, err := ac.getApp(ctx, name)
 			if err != nil {
@@ -221,6 +250,15 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 				pool = info.Vars[install.VarAppsPool]
 			}
 			pod := controller.OneOffPod(app, image, args, res, tty, !detach, pool)
+			if process != "" {
+				// The process's volumes (#126), on the machine that holds a
+				// single-instance disk right now.
+				note, err := ac.mountProcessVolumes(ctx, app, process, pod)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s.\n", note)
+			}
 			created, err := ac.k.Kube.CoreV1().Pods(app.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("start one-off instance: %w", err)
@@ -266,6 +304,7 @@ exits (like 'heroku run'). Use it for migrations, consoles and scripts.
 	appFlag(cmd, &appName)
 	cmd.Flags().StringVar(&size, "size", "", "instance size (default: the catalog default)")
 	cmd.Flags().BoolVar(&detach, "detach", false, "start the instance and return; it is not deleted automatically")
+	cmd.Flags().StringVar(&process, "process", "", "mount that process type's volumes at their paths, on the machine that holds its disk (a data migration on a disk)")
 	return cmd
 }
 
@@ -321,4 +360,92 @@ func (a *appClient) exitCode(ctx context.Context, namespace, name string) (int, 
 		}
 	}
 	return 0, nil
+}
+
+// mountProcessVolumes gives a one-off pod a process's volumes (#126) when
+// the CLI talks to the cluster itself: the Volume objects by the dynamic
+// client, the machine that holds a single-instance claim by the pods.
+func (a *appClient) mountProcessVolumes(ctx context.Context, app *shpyrdv1.App, process string, pod *corev1.Pod) (string, error) {
+	gvr := shpyrdv1.GroupVersion.WithResource("volumes")
+	list, err := a.k.Dynamic.Resource(gvr).Namespace(app.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("list volumes: %w", err)
+	}
+	volumes := map[string]*shpyrdv1.Volume{}
+	for i := range list.Items {
+		v := &shpyrdv1.Volume{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, v); err != nil {
+			return "", err
+		}
+		volumes[v.Name] = v
+	}
+	mounts, err := controller.ProcessMounts(app, process, volumes)
+	if err != nil {
+		return "", err
+	}
+	node := ""
+	if pods, err := a.k.Kube.CoreV1().Pods(app.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		node = controller.ClaimHolderNode(pods.Items, mounts)
+	}
+	controller.MountVolumesOnPod(&pod.Spec, mounts, node)
+	return controller.MountsNote(process, mounts, node), nil
+}
+
+// runDebugLocal is `shpyrd shell --debug` against the cluster itself: a
+// one-off run of the shell with the process's volumes, attached.
+func (a *appClient) runDebugLocal(ctx context.Context, cmd *cobra.Command, name, process string, command []string) error {
+	app, err := a.getApp(ctx, name)
+	if err != nil {
+		return err
+	}
+	image := firstNonEmpty(app.Spec.Image, app.Status.Image)
+	if image == "" {
+		return errors.New("the project has no release yet; deploy first")
+	}
+	catalog, _, err := loadCatalog(ctx, a.k)
+	if err != nil {
+		return err
+	}
+	size := app.Spec.Processes[process].Size
+	res, _, err := catalog.Resolve(size, corev1.ResourceRequirements{})
+	if err != nil {
+		return err
+	}
+	pool := ""
+	if info, err := install.ReadInstallInfo(ctx, a.k, a.k.Namespace); err == nil {
+		pool = info.Vars[install.VarAppsPool]
+	}
+	tty := kexec.StdinIsTerminal()
+	pod := controller.OneOffPod(app, image, command, res, tty, true, pool)
+	note, err := a.mountProcessVolumes(ctx, app, process, pod)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s.\n", note)
+	created, err := a.k.Kube.CoreV1().Pods(app.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("start debug instance: %w", err)
+	}
+	a.audit(ctx, name, "shell", created.Name, "debug copy of "+process)
+	defer func() {
+		_ = a.k.Kube.CoreV1().Pods(app.Namespace).Delete(context.Background(), created.Name, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](5)})
+	}()
+	if err := a.waitPodRunningOrDone(ctx, app.Namespace, created.Name, 3*time.Minute); err != nil {
+		return err
+	}
+	if tty {
+		fmt.Fprintln(cmd.ErrOrStderr(), "If you don't see a prompt, try pressing enter.")
+	}
+	out := &kexec.CountingWriter{W: os.Stdout}
+	if err := kexec.Attach(ctx, a.k, app.Namespace, created.Name, "app", tty, out); err != nil && ctx.Err() != nil {
+		return err
+	}
+	code, err := a.exitCode(ctx, app.Namespace, created.Name)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return &kexec.ExitError{Code: code}
+	}
+	return nil
 }

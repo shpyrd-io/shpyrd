@@ -170,8 +170,8 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd env unset K ...` | Save variable removals for the next deployment. |
 | `shpyrd env list` | Show plain variable names and values. |
 | `shpyrd secrets list` | Names and last-updated times, plus variables provided by attached resources. Values are never printed. |
-| `shpyrd shell [-- cmd...]` | Interactive shell in a running instance (`--process`, `--instance web.2`); with a command, runs it and returns its exit code. |
-| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`. Signed in, the server starts the instance and attaches the terminal through the web terminal's bridge; piped input reaches the command and ends when the pipe does. |
+| `shpyrd shell [-- cmd...]` | Interactive shell in a running instance (`--process`, `--instance web.2`); with a command, runs it and returns its exit code. `--debug` opens the shell in a new copy of the process (its image, config vars and volumes, on the machine that holds its disk) for a process that will not start. |
+| `shpyrd run <cmd...>` | One-off instance of the current release with the config vars: streams output, returns the exit code, removes the instance. `--size`, `--detach`, `--process web` to mount that process's volumes (on the machine that holds its disk). Signed in, the server starts the instance and attaches the terminal through the web terminal's bridge; piped input reaches the command and ends when the pipe does. |
 | `shpyrd volumes create <name> --size 5Gi` | Create a persistent volume in the project (`--class`, `--shared`, `--from-snapshot`). Cloud profiles round the size up to the provider's minimum and say so. |
 | `shpyrd volumes list` | Volumes with size, mode, status and what mounts them. |
 | `shpyrd volumes resize <name> --size 10Gi` | Grow a volume (when the storage class allows expansion). |
