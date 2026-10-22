@@ -117,6 +117,15 @@ installed in every one, PostgreSQL's trusted extensions are the owner's to creat
 the rest are a dedicated database's. Deletion closes the role, takes a last copy and
 drops the data seven days later. Docs: `content/docs/databases.mdx`.
 
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`), steps 3–7): `spec.type: shared | dedicated` (step 3): a shared
+  database is a database and a role on a platform-owned server with a cap, always
+  on; a dedicated one keeps this RFC's cluster, on block storage, with backups on
+  by default. `shpyrd pg convert` moves between them. Databases count against the
+  workspace's ceiling (step 4). A dedicated database on the workspace's sleep
+  default hibernates (step 6, RFC-0075), is copied before it sleeps, and reads its
+  policy back on the status; its `status.endpoint` is the host apps get. The wake
+  ports run 15000–24999 (step 7).
+
 ## Implementation status
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.

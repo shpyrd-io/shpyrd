@@ -153,7 +153,7 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
     onError: (e: Error) => toast.error(e.message),
   });
   const apply = useMutation({
-    mutationFn: () => api.applyProcesses(project.slug, changes),
+    mutationFn: (force?: boolean) => api.applyProcesses(project.slug, changes, force),
     onSuccess: () => {
       queries.invalidateQueries({ queryKey: ["project", project.slug] });
       setDraft({});
@@ -184,16 +184,29 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
               >
                 Cancel
               </Button>
-              <Button
-                size="sm"
-                disabled={apply.isPending || waiting}
-                title={
-                  waiting ? "Wait for the current release to finish" : undefined
-                }
-                onClick={() => apply.mutate()}
-              >
-                Apply {Object.keys(changes).length}
-              </Button>
+              {waiting ? (
+                // The way back is never locked (#127): over a rollout in
+                // progress the change asks first, then cancels it.
+                <ConfirmDialog
+                  trigger={
+                    <Button size="sm" disabled={apply.isPending}>
+                      Apply {Object.keys(changes).length}
+                    </Button>
+                  }
+                  title="Apply over the rollout in progress?"
+                  description={`A release is still rolling out (${project.status.message || project.status.phase}). Applying these changes cancels it: a new release rolls out with them.`}
+                  action="Apply anyway"
+                  onConfirm={() => apply.mutate(true)}
+                />
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={apply.isPending}
+                  onClick={() => apply.mutate(false)}
+                >
+                  Apply {Object.keys(changes).length}
+                </Button>
+              )}
             </Stack>
           </CardAction>
         )}

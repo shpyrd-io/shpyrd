@@ -51,3 +51,9 @@ Traffic varies; fixed instance counts either waste money or fall over.
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): not started as a feature. What exists around it: KEDA and
+  its HTTP add-on drive the web process between 0 and its instance count for
+  sleep (RFC-0075; the ScaledObject's maximum is the declared count, the
+  exclusion this RFC promised); a single-instance volume caps a process at one
+  instance; a size no machine can hold is refused before the rollout, and an
+  instance that still finds no room fails in words instead of waiting (#127).

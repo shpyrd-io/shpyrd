@@ -37,8 +37,11 @@ import (
 const (
 	// pgWakePortBase is the start of the wake-port allocation range.
 	pgWakePortBase = 15000
-	// pgWakePortCap is the exclusive end of the range.
-	pgWakePortCap = 16000
+	// pgWakePortCap is the exclusive end of the range: 15000–24999, ten
+	// thousand sleeping databases per cluster (storage plan step 7; the
+	// first range stopped at 16000). The gateway's listener table and the
+	// pgwake-<port> Services follow the status, so nothing else names it.
+	pgWakePortCap = 25000
 	// pgGatewayName is the pg-gateway Deployment (system namespace) and the
 	// app.kubernetes.io/name label on its pods.
 	pgGatewayName = "pg-gateway"

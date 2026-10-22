@@ -49,7 +49,14 @@ type Memory struct {
 	settings    map[string]string
 	console     map[string]ConsoleUser
 	cost        *costsMemory
+	tickets     map[string]memTicket
 	now         func() time.Time
+}
+
+// memTicket is a one-time shell ticket held in memory.
+type memTicket struct {
+	payload []byte
+	expires time.Time
 }
 
 // NewMemory returns an empty store with the implicit workspace.
@@ -406,6 +413,33 @@ func (m *Memory) LockWorkspace(ctx context.Context, slug string, fn func(ctx con
 	mu.Lock()
 	defer mu.Unlock()
 	return fn(ctx)
+}
+
+func (m *Memory) PutExecTicket(_ context.Context, hash string, payload []byte, expires time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tickets == nil {
+		m.tickets = map[string]memTicket{}
+	}
+	now := m.now()
+	for k, t := range m.tickets {
+		if now.After(t.expires) {
+			delete(m.tickets, k)
+		}
+	}
+	m.tickets[hash] = memTicket{payload: append([]byte(nil), payload...), expires: expires}
+	return nil
+}
+
+func (m *Memory) TakeExecTicket(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tickets[hash]
+	delete(m.tickets, hash)
+	if !ok || m.now().After(t.expires) {
+		return nil, false, nil
+	}
+	return t.payload, true, nil
 }
 
 func (m *Memory) ListDomainClaims(_ context.Context, ws string) ([]DomainClaim, error) {

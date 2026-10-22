@@ -1,6 +1,6 @@
 # RFC-0081 Project portability and local storage for the MVP
 
-**Status:** implementable
+**Status:** implemented (phase 1, the portable project archive); phase 2 is history: the storage plan of 2026-10-10 retired local disks from the cloud profiles
 
 **Owner:** Patrick Negri
 
@@ -184,3 +184,14 @@ uses local-path, so this validates real Kubernetes rebinding and CNPG behavior,
 not a cloud provider's CSI attach/detach implementation. Production data is not
 used or changed by these tests. Node boot disks are not expanded by migration;
 destination space and transfer limits must accommodate the copy.
+
+## Implementation History
+
+- 2026-10-03: RFC written.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): **phase 1** (the portable project archive: export, import,
+  restore in place, buckets by reference and with files) is implemented and in
+  production since the plan's steps 2 and 5. **Phase 2** (local disks and project
+  placement on the cloud) is history: the plan chose durable block storage for
+  every project disk and database on cloud profiles, moved the existing local
+  data to it (steps 1–2) and kept the node-local class for kind only; the
+  placement machinery of this RFC remains for that class.

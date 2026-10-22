@@ -449,8 +449,37 @@ func (e *Engine) componentValues(c *Component) (map[string]interface{}, error) {
 		if err := prometheusStorage(vals, e.vars[VarMonitoringSize], e.vars[VarStorageClass]); err != nil {
 			return nil, fmt.Errorf("%s: %w", c.Name, err)
 		}
+		thanosSidecar(vals, e.vars[VarGatewayBucket] != "", e.vars[VarDomain])
 	}
 	return vals, nil
+}
+
+// thanosSidecar gives Prometheus the Thanos sidecar that uploads its blocks
+// to the gateway's metrics bucket (storage plan step 7): history survives a
+// restart and a disk, and the local retention stays a few days. The
+// external label names the cluster so blocks from two clusters in one
+// bucket read apart. Without the gateway nothing is added.
+func thanosSidecar(vals map[string]interface{}, gateway bool, domain string) {
+	if !gateway {
+		return
+	}
+	spec := table(table(vals, "prometheus"), "prometheusSpec")
+	spec["thanos"] = map[string]interface{}{
+		"objectStorageConfig": map[string]interface{}{
+			"existingSecret": map[string]interface{}{"name": ThanosObjstoreSecret, "key": "objstore.yml"},
+		},
+	}
+	labels := table(spec, "externalLabels")
+	labels["cluster"] = firstNonEmptyString(domain, "shpyrd")
+}
+
+func firstNonEmptyString(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // MonitoringComponent runs Prometheus (kube-prometheus-stack).

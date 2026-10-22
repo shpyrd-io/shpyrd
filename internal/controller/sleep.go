@@ -341,9 +341,15 @@ func (r *AppReconciler) reconcileSleep(ctx context.Context, app *shpyrdv1.App, m
 			"scaleTargetRef": map[string]interface{}{
 				"apiVersion": "apps/v1", "kind": "Deployment", "name": workloadName(app, "web"),
 			},
-			"minReplicaCount": int64(0),
-			"maxReplicaCount": maxR,
-			"cooldownPeriod":  cooldown,
+			// Asleep is zero; awake is the process's own instance count,
+			// all of it: with minReplicaCount at zero KEDA's HPA woke an
+			// app to one instance whatever it declared (found on dev with
+			// two). idleReplicaCount is the sleeping count, minReplicaCount
+			// the count a wake restores.
+			"idleReplicaCount": int64(0),
+			"minReplicaCount":  maxR,
+			"maxReplicaCount":  maxR,
+			"cooldownPeriod":   cooldown,
 			// A trigger that has never been active has no cooldown to wait
 			// for; without this KEDA scales a freshly enabled app to zero
 			// at once instead of after the quiet period.

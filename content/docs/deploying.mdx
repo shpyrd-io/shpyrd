@@ -348,6 +348,8 @@ The same check runs three ways: at start (the grace period), for readiness (3 fa
 
 The deploy waits for each new instance to pass its readiness probe before the old one is removed, so traffic is always served. If a new instance never becomes healthy the rollout stalls, the Activity panel shows the reason (exit code, probe error) and a rollback button; the old instances keep serving.
 
+A size no machine can hold is refused before anything is stopped ("dedicated-m needs 2 cores; the largest machine in this cluster offers 1.83 cores"), and so is one the machine that holds a process's disk has no room for. An instance that still finds no room fails instead of waiting for ever: at once when no machine is large enough ("web cannot start: it asks for 2 cores; no machine here has more than 1.83 cores"), after five minutes when the cluster is not adding a machine. A process with a single-instance volume rolls out by stopping the old instance first; when the new one cannot start, the previous release runs again meanwhile and the page says so until you resize or roll back. The way back is never locked: a rollback or a resize over a rollout in progress asks for a confirmation (`--force` on the CLI) and cancels it.
+
 HTTP checks reach the process directly, without the edge's sign-in, cookies or identity headers. Keep the health path outside your app's authentication middleware and return `2xx` to a plain GET. A `401`, `403`, server error, timeout or failing redirect can leave the instance unready; repeated startup or liveness failures restart it even when its logs say it started successfully. Redirecting an unauthenticated check to `/.shpyrd/signin` cannot sign it in: that route belongs to the edge.
 
 If `/` requires sign-in, add an unauthenticated `/healthz` route and set `processes.web.healthCheck.path: /healthz`. Alternatively, use `processes.web.healthCheck.tcp: true` to check only that the port accepts connections; this does not check the HTTP response or application dependencies. See [Sign-in for your app](/docs/app-access#health-checks-and-sign-in).
@@ -387,6 +389,8 @@ shpyrd shell -- cat /etc/os-release   # run one command and return its exit code
 
 `shpyrd shell` attaches to a **running instance**: what you see is the live process's filesystem and environment. Buildpack images get the same environment as the process (through the CNB launcher), so `node`, `bundle` or `python` are on the `PATH`.
 
+A process that will not start has no instance to attach to. `shpyrd shell --debug` (with `--process` or `--instance` to name it) opens a shell in a **new copy of the process**: its image, config vars and volumes, on the machine that holds its disk, with the process's command replaced by the shell. Look at `/data`, run the fix, exit; the copy is removed.
+
 ```shell
 shpyrd run rails db:migrate                 # a new instance of the current release, removed when the command exits
 shpyrd run --size shared-l python manage.py import big.csv
@@ -394,6 +398,8 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 ```
 
 `shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). A one-off instance stops after an hour at most; `--detach` leaves it running until then.
+
+A one-off instance has no volumes unless you ask: `shpyrd run --process web -- fluxyr migrate-storage` mounts web's volumes at their paths, and runs on the machine that holds a single-instance disk right now, so the two instances share the attached disk. The release step can see them too: declare the volume on the `release` process in `shpyrd.yaml` (`processes.release.volumes`, the same entry as the process's) and the step runs with it, where the disk is. A data migration on a disk belongs there.
 
 ## Volumes
 

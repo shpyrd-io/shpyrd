@@ -931,3 +931,42 @@ func TestSleepPageModeWithADisk(t *testing.T) {
 		t.Errorf("read-back without the disk = %+v, want wait mode", st)
 	}
 }
+
+// A web process with several instances wakes to all of them: KEDA's idle
+// count is zero and its minimum the declared count (found on dev with two
+// instances and a wake to one).
+func TestSleepWakesEveryDeclaredInstance(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"},
+		Spec: shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {
+			Port: ptr.To[int32](8080), Replicas: ptr.To[int32](2), Sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "page"},
+		}}},
+	}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(app).WithStatusSubresource(&shpyrdv1.App{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
+	}
+	runReconcile(t, r, app)
+	so := makeUnstructured(ScaledObjectGVK, "shop-sleep", "app-shop")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); err != nil {
+		t.Fatal(err)
+	}
+	idle, _, _ := unstructured.NestedInt64(so.Object, "spec", "idleReplicaCount")
+	minR, _, _ := unstructured.NestedInt64(so.Object, "spec", "minReplicaCount")
+	maxR, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount")
+	if idle != 0 || minR != 2 || maxR != 2 {
+		t.Errorf("scaledobject idle=%d min=%d max=%d, want 0, 2, 2", idle, minR, maxR)
+	}
+}

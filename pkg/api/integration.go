@@ -25,6 +25,11 @@ func (s *Server) integrationRouter(surface string) *gin.Engine {
 		s.log.Info("integration_request", "surface", surface, "request_id", id, "method", c.Request.Method, "route", route, "status", c.Writer.Status(), "duration_ms", time.Since(start).Milliseconds())
 	})
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	if surface == "internal" {
+		// The readiness report for monitoring inside the cluster (#147);
+		// on the public host it is the cluster admin's.
+		r.GET("/api/readyz", s.readyzInternal)
+	}
 	return r
 }
 

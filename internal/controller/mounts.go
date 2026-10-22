@@ -76,10 +76,15 @@ func (r *AppReconciler) resolveMounts(ctx context.Context, app *shpyrdv1.App) (m
 				return nil, err
 			}
 			if !vol.Shared() {
-				if other, ok := rwoUsers[m.Name]; ok && other != p.Name {
+				// The release step may see the volume of the process it
+				// migrates (#126): it runs on the disk's machine, beside or
+				// before that process, never as a second long-running user.
+				if other, ok := rwoUsers[m.Name]; ok && other != p.Name && other != releaseProcessType && p.Name != releaseProcessType {
 					return nil, fmt.Errorf("single-instance volume %q is mounted by both %s and %s: only one process can use it (make it shared to mount it from several)", m.Name, other, p.Name)
 				}
-				rwoUsers[m.Name] = p.Name
+				if p.Name != releaseProcessType {
+					rwoUsers[m.Name] = p.Name
+				}
 				if p.replicas() > 1 {
 					return nil, fmt.Errorf("process %q mounts single-instance volume %q and can run 1 instance, not %d (a shared volume allows more)", p.Name, m.Name, p.replicas())
 				}

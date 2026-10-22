@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -207,10 +208,18 @@ type BrandingView struct {
 }
 
 type Server struct {
-	overview         overviewCache
-	overviewQueries  overviewQueryCache
-	opts             Options
-	log              *slog.Logger
+	overview        overviewCache
+	overviewQueries overviewQueryCache
+	opts            Options
+	log             *slog.Logger
+	// draining says the process was told to stop and keeps its listeners
+	// open for drainDelay before closing, so a connection the load balancer
+	// still sends to this pod is served, not reset (storage plan step 7).
+	// /api/healthz keeps answering 200 meanwhile: under Kubernetes the
+	// endpoint leaves the Service as the pod terminates, probes or not, and
+	// a 503 from here would only reach the people and monitors the front
+	// door still routes to the pod.
+	draining         atomic.Bool
 	engine           *gin.Engine
 	internalAPI      *gin.Engine
 	publicAPI        *gin.Engine
@@ -360,6 +369,10 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.authz = &authz.Resolver{Store: opts.Store, DefaultSlug: func(ctx context.Context) string { return store.DefaultWorkspaceSlug(ctx, opts.Store) }}
 	s.tokenFailures = newRateLimiter(20)
 	s.execTickets = newTicketStore(execTicketTTL)
+	if opts.Store != nil {
+		// Tickets in the store: a second replica may answer the WebSocket.
+		s.execTickets = newSharedTicketStore(execTicketTTL, opts.Store)
+	}
 	s.archiveDownloads = newArchiveDownloads()
 	s.shells = newShellRegistry()
 	s.cliDevices = newCLIDeviceStore()
@@ -522,6 +535,15 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
+	// Drain: the listeners open a moment longer. Under Kubernetes the
+	// endpoint leaves the Service as the pod terminates, but
+	// the front door's upstream list follows a second later; closing at
+	// once resets what it still sends here.
+	s.draining.Store(true)
+	if delay := drainDelay(); delay > 0 {
+		s.log.Info("draining", "for", delay)
+		time.Sleep(delay)
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.log.Info("shutting down")
@@ -529,6 +551,23 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = srcSrv.Shutdown(shutdownCtx)
 	}
 	return srv.Shutdown(shutdownCtx)
+}
+
+// drainDelay is how long the server keeps serving after it was told to
+// stop: five seconds under Kubernetes (the pod's termination grace of 30 s
+// leaves room for it and the 15 s shutdown), none elsewhere, where nothing
+// routes to the process but the person who stopped it. SHPYRD_DRAIN_DELAY
+// overrides it (a duration).
+func drainDelay() time.Duration {
+	if v := os.Getenv("SHPYRD_DRAIN_DELAY"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return 5 * time.Second
+	}
+	return 0
 }
 
 // SourcesHandler serves the uploaded source archives and nothing else: the
@@ -563,6 +602,10 @@ func (s *Server) routes() error {
 	s.engine.GET(edgePathPrefix+"gate", tenant, s.gateOpen)
 
 	s.engine.GET("/api/healthz", s.healthz)
+	// The platform's readiness (#147): the status word for anyone, the
+	// report for the cluster admin; the internal API serves the report to
+	// monitoring inside the cluster.
+	s.engine.GET("/api/readyz", tenant, s.optionalAuth(), s.readyz)
 	// Account self-service pages (RFC-0014): no session required.
 	pub := s.engine.Group("/api", tenant)
 	pub.GET("/config", s.config)
@@ -829,6 +872,23 @@ func (s *Server) routes() error {
 // auth accepts the admin token as a Bearer token or in X-Shpyrd-Token (the
 // API server's service proxy strips Authorization when the CLI uploads
 // through it).
+// optionalAuth identifies a caller that presents a credential, with
+// auth()'s checks, throttle and audit, and lets one that presents none
+// through as nobody: for a route that answers everyone and says more to a
+// cluster admin. A wrong credential is refused as auth() refuses it, so the
+// route is no oracle for a token.
+func (s *Server) optionalAuth() gin.HandlerFunc {
+	authenticate := s.auth()
+	return func(c *gin.Context) {
+		_, cookieErr := c.Cookie(sessionCookie)
+		if c.GetHeader("Authorization") == "" && c.GetHeader("X-Shpyrd-Token") == "" && cookieErr != nil {
+			c.Next()
+			return
+		}
+		authenticate(c)
+	}
+}
+
 func (s *Server) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.opts.Token == "" && !s.opts.TokenDisabled {

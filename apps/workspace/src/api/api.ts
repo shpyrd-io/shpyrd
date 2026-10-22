@@ -169,10 +169,13 @@ export type Api = {
     slug: string,
     action?: "restart" | "rebuild",
   ) => Promise<{ action: string; message: string }>;
-  rollback: (slug: string, release: number) => Promise<void>;
+  // force rolls back, or applies the changes, while a release is still
+  // rolling out (#127): the rollout in progress is cancelled by it.
+  rollback: (slug: string, release: number, force?: boolean) => Promise<void>;
   applyProcesses: (
     slug: string,
     changes: Record<string, ProcessChange>,
+    force?: boolean,
   ) => Promise<Project>;
   setExposure: (slug: string, exposure: Exposure) => Promise<Project>;
   setAccess: (slug: string, access: Access) => Promise<Project>;
