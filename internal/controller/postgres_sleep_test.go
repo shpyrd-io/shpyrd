@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,5 +272,50 @@ func TestDatabasesDoNotSleepByThemselvesWithoutAutoSleep(t *testing.T) {
 	pg.Spec.Sleep.Suspended = true
 	if _, suspended, _ := r.effectiveSleep(ctx, pg); !suspended {
 		t.Error("a database put to sleep by hand woke up")
+	}
+}
+
+// The cluster's word beats a stale status: a database the controller
+// hibernated whose status write then lost a conflict reads "awake" while
+// CloudNativePG holds it down (production, 2026-10-22). The awake branch
+// would wait forever for a primary that cannot come; it marks the database
+// sleeping instead and points the Service at the gateway, so a connection
+// wakes it.
+func TestPostgresSleepTrustsTheClusterOverAStaleStatus(t *testing.T) {
+	storage := resource.MustParse("10Gi")
+	port := int32(15007)
+	pg := &shpyrdv1.Postgres{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "app-shop"},
+		Spec:       shpyrdv1.PostgresSpec{Storage: &storage, Sleep: &shpyrdv1.PostgresSleepSpec{After: "30m"}},
+		Status:     shpyrdv1.ResourceStatus{Sleep: &shpyrdv1.PostgresSleepStatus{State: pgAwake, Message: "awake: idle, waiting for the database to be up", WakePort: &port}},
+	}
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(CNPGClusterGVK)
+	cluster.SetName("db")
+	cluster.SetNamespace("app-shop")
+	cluster.SetAnnotations(map[string]string{pgHibernationAnnotation: "on"})
+	gateway := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: pgGatewayName, Namespace: "shpyrd-system"},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 2},
+	}
+	base, c := newTestReconciler(t, pg, cluster, gateway)
+	r := &PostgresReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system", SleepAllowed: always}
+	ctx := context.Background()
+	if err := r.reconcilePostgresSleep(ctx, pg); err != nil {
+		t.Fatalf("reconcile sleep: %v", err)
+	}
+	if pg.Status.Sleep.State != pgSleeping {
+		t.Fatalf("state = %q %q, want sleeping: the cluster is hibernated", pg.Status.Sleep.State, pg.Status.Sleep.Message)
+	}
+	svc := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "db"}, svc); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Spec.Type != corev1.ServiceTypeExternalName || !strings.Contains(svc.Spec.ExternalName, "15007") {
+		t.Errorf("service = %s %q, want an ExternalName to the gateway's wake port", svc.Spec.Type, svc.Spec.ExternalName)
+	}
+	// Found hibernated again on the next pass: still sleeping, nothing else.
+	if err := r.reconcilePostgresSleep(ctx, pg); err != nil || pg.Status.Sleep.State != pgSleeping {
+		t.Fatalf("second pass: %v state=%q", err, pg.Status.Sleep.State)
 	}
 }
