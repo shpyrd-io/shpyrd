@@ -46,11 +46,19 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 note() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 
 # sleep_web scales the web process to 0 and waits until no pod of it runs.
+# In page mode the scaler acts on the request rate over a minute: a request
+# younger than that (the previous wake's polling) brings the pod straight
+# back, so the cycles leave more than a minute between the last request and
+# the scale-down, and the pod is scaled down once more if it came back.
 sleep_web() {
-  k scale deployment "$deployment" --replicas=0 >/dev/null
-  for _ in $(seq 1 120); do
-    [ "$(k get pods -l shpyrd.io/process=web --no-headers 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && return 0
-    sleep 1
+  local attempt
+  for attempt in 1 2 3; do
+    k scale deployment "$deployment" --replicas=0 >/dev/null
+    for _ in $(seq 1 90); do
+      [ "$(k get pods -l shpyrd.io/process=web --no-headers 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && return 0
+      sleep 1
+    done
+    note "the web pods came back after the scale-down (attempt $attempt); scaling down again"
   done
   echo "the web pods did not stop" >&2; return 1
 }
@@ -118,8 +126,9 @@ for i in $(seq 1 "$cycles"); do
   else
     note "cycle $i: ${t} ms"
   fi
-  # Let the app settle (and the database re-run its idle clock) before the next cycle.
-  sleep 10
+  # Let the app settle before the next cycle: past the scaler's one-minute
+  # request window, so the next scale-down holds.
+  sleep 75
 done
 # report prints p50, p95, min and max of a list of milliseconds.
 report() {
