@@ -520,7 +520,7 @@ restart drops in-flight wakes):
    connections wait on the same operation.
 3. Raw socket held open. No bytes read, no bytes written.
 4. Polls until `pg.Status.Sleep.State == awake` and a TCP dial to the primary succeeds,
-   within `maxWakeWait` (60 s by default). Past the deadline: close cleanly. Clients see
+   within `maxWakeWait` (90 s since the storage plan's step 7; 60 s before). Past the deadline: close cleanly. Clients see
    "connection refused" and retry.
 5. `io.Copy` bidirectionally for the session's life. TLS, `SSLRequest`, `StartupMessage`,
    `CancelRequest`, streaming — all pass through unmodified.
@@ -649,7 +649,7 @@ Updated 2026-10-21.
   50 GiB block disk 14.1 s / 52.0 s (bimodal: ~11 s when the volume is still attached to the
   node the pod lands on, ~50 s when it detaches and reattaches); a dedicated database's
   first connection through the pg-gateway, from hibernated, 44.2 s / 52.8 s (max 56.5 s,
-  against the gateway's 60 s wake deadline, which the hardening tail should widen to 90 s).
+  against the gateway's 60 s wake deadline, widened to 90 s in the hardening tail).
   The budgets of RFC-0075's plan hold for HTTP and the database; "HTTP + disk ≈ 25–30 s"
   does not hold at p95 on OCI block volumes.
 

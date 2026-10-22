@@ -34,7 +34,11 @@ import (
 const (
 	// maxWakeWait is the deadline for a database to become ready after a
 	// wake request. Past this, the connection is closed.
-	maxWakeWait = 60 * time.Second
+	// 90 s: the bench of 2026-10-22 (RFC-0075) put a dedicated database's
+	// first connection at 44 s median and 56 s at most on OCI block volumes,
+	// too close to 60 s for a slow day; a client's connect_timeout is the
+	// other bound.
+	maxWakeWait = 90 * time.Second
 	// maxPending is the total number of held connections per database.
 	maxPending = 32
 	// readyPollInterval is how often to check whether the database is awake.
