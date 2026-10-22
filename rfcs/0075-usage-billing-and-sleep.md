@@ -491,7 +491,7 @@ rolling restart of the app). The shpyrd Service's selector flips between CNPG's 
 (awake) and the wake proxy pod (sleeping/waking).
 
 Port allocated to the database: `pg.Status.Sleep.WakePort`, assigned once from a range
-(15000–16000) by the reconciler and stored in the CRD status. The `pg-gateway` builds its
+(15000–24999 since the storage plan's step 7; 15000–16000 before) by the reconciler and stored in the CRD status. The `pg-gateway` builds its
 listener table from the Postgres CRDs — no ConfigMap, crash-safe reconstruction on restart.
 
 ### Going to sleep
