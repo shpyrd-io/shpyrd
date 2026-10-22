@@ -56,3 +56,36 @@ func TestDedicatedDatabasesCarryPgvector(t *testing.T) {
 		t.Errorf("converted database object: name=%s owner=%s", name, owner)
 	}
 }
+
+// A conversion to shared stamps the shared tenant's names on the resource
+// while the dedicated cluster still holds "app"; the Database object keeps
+// the cluster's own names (production, 2026-10-22: every reconcile failed
+// on "spec.name: name is immutable" and the database sat at Failed).
+func TestDedicatedDatabaseObjectKeepsTheClustersNamesThroughAConversion(t *testing.T) {
+	ctx := context.Background()
+	storage := resource.MustParse("1Gi")
+	pg := &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "p-shop", UID: "uid-shop-db", Generation: 1}, Spec: shpyrdv1.PostgresSpec{Storage: &storage}}
+	r, c := sharedReconciler(t, 200, pg)
+	settle(t, r, client.ObjectKeyFromObject(pg))
+	before := getU(t, c, "Database", "p-shop", "db-db")
+	if name, _, _ := unstructured.NestedString(before.Object, "spec", "name"); name != PostgresDatabase {
+		t.Fatalf("object made with name %q", name)
+	}
+	// The conversion's first step: the shared names on the resource.
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pg), pg); err != nil {
+		t.Fatal(err)
+	}
+	pg.Annotations = mergeMaps(pg.Annotations, map[string]string{AnnotationConvert: shpyrdv1.PostgresTypeShared, AnnotationSharedTenant: "d1119649", AnnotationSharedServer: "pg-shared-1"})
+	if err := c.Update(ctx, pg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ensureDedicatedDatabase(ctx, pg); err != nil {
+		t.Fatalf("with the conversion stamped: %v", err)
+	}
+	after := getU(t, c, "Database", "p-shop", "db-db")
+	name, _, _ := unstructured.NestedString(after.Object, "spec", "name")
+	owner, _, _ := unstructured.NestedString(after.Object, "spec", "owner")
+	if name != PostgresDatabase || owner != PostgresUser {
+		t.Errorf("object renamed to %s/%s; the cluster still holds app/app", name, owner)
+	}
+}

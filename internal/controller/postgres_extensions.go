@@ -36,8 +36,29 @@ func platformExtensionSpecs() []interface{} {
 // object drops nothing (the cluster's removal does). Owned by the Postgres
 // resource, it goes with it. It says whether the operator applied it.
 func (r *PostgresReconciler) ensureDedicatedDatabase(ctx context.Context, pg *shpyrdv1.Postgres) (bool, error) {
-	initdb := dedicatedInitdb(pg)
-	return r.ensureDatabaseObject(ctx, pg, initdb["database"].(string), initdb["owner"].(string))
+	// The names are the cluster's own: what its initdb made. Not
+	// dedicatedInitdb(pg) once the cluster exists: a conversion to shared
+	// stamps the shared tenant's names on the resource while the dedicated
+	// cluster still holds "app", and the Database object's name is
+	// immutable (production, 2026-10-22: a reconcile failing on every pass
+	// with "spec.name: name is immutable").
+	database, owner := PostgresDatabase, PostgresUser
+	cluster, err := r.getCNPGCluster(ctx, pg)
+	if err != nil {
+		return false, err
+	}
+	if cluster != nil {
+		if d, _, _ := unstructured.NestedString(cluster.Object, "spec", "bootstrap", "initdb", "database"); d != "" {
+			database = d
+		}
+		if o, _, _ := unstructured.NestedString(cluster.Object, "spec", "bootstrap", "initdb", "owner"); o != "" {
+			owner = o
+		}
+	} else {
+		initdb := dedicatedInitdb(pg)
+		database, owner = initdb["database"].(string), initdb["owner"].(string)
+	}
+	return r.ensureDatabaseObject(ctx, pg, database, owner)
 }
 
 // databaseObjectName is the Database object of a dedicated cluster.
@@ -54,6 +75,14 @@ func (r *PostgresReconciler) ensureDatabaseObject(ctx context.Context, pg *shpyr
 		db.SetLabels(mergeMaps(db.GetLabels(), map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name}))
 		if err := controllerutil.SetControllerReference(pg, db, r.Scheme); err != nil {
 			return err
+		}
+		// An object that exists keeps its names: CloudNativePG refuses a
+		// change of spec.name, and the database it names is the one there.
+		if existing, _, _ := unstructured.NestedString(db.Object, "spec", "name"); existing != "" {
+			database = existing
+			if o, _, _ := unstructured.NestedString(db.Object, "spec", "owner"); o != "" {
+				owner = o
+			}
 		}
 		return unstructured.SetNestedMap(db.Object, map[string]interface{}{
 			"cluster":               map[string]interface{}{"name": pg.Name},
