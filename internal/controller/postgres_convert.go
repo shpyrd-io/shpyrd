@@ -106,7 +106,7 @@ func (r *PostgresReconciler) nameConvertJob(ctx context.Context, pg *shpyrdv1.Po
 
 // sharedAllowedExtensions are what a shared database can hold: the
 // extensions PostgreSQL 17 marks trusted, which the owner creates alone,
-// and the ones the platform installs (sharedExtensions).
+// and the ones the platform installs (platformExtensions).
 var sharedAllowedExtensions = []string{
 	"btree_gin", "btree_gist", "citext", "cube", "dict_int", "earthdistance", "fuzzystrmatch", "hstore", "intarray", "isn", "lo",
 	"ltree", "pgcrypto", "pg_trgm", "seg", "tablefunc", "tcn", "tsm_system_rows", "tsm_system_time", "unaccent", "uuid-ossp",
@@ -444,36 +444,11 @@ func (r *PostgresReconciler) convertToDedicated(ctx context.Context, pg *shpyrdv
 }
 
 // ensureConvertedExtensions gives a cluster converted from a shared
-// database the extensions every shared database has, by a Database object
-// on the cluster (kept: it reclaims nothing), and says whether the
-// operator applied it.
+// database the extensions every database has, by the Database object every
+// dedicated cluster carries (kept: it reclaims nothing), and says whether
+// the operator applied it.
 func (r *PostgresReconciler) ensureConvertedExtensions(ctx context.Context, pg *shpyrdv1.Postgres, hash string) (bool, error) {
-	db := &unstructured.Unstructured{}
-	db.SetGroupVersionKind(CNPGDatabaseGVK)
-	db.SetNamespace(pg.Namespace)
-	db.SetName(pg.Name + "-db")
-	extensions := make([]interface{}, 0, len(sharedExtensions))
-	for _, name := range sharedExtensions {
-		extensions = append(extensions, map[string]interface{}{"name": name, "ensure": "present"})
-	}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, db, func() error {
-		db.SetLabels(mergeMaps(db.GetLabels(), map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", "shpyrd.io/postgres": pg.Name}))
-		if err := unstructured.SetNestedMap(db.Object, map[string]interface{}{
-			"cluster":               map[string]interface{}{"name": pg.Name},
-			"name":                  sharedDatabaseName(hash),
-			"owner":                 sharedRoleName(hash),
-			"databaseReclaimPolicy": "retain",
-			"ensure":                "present",
-			"extensions":            extensions,
-		}, "spec"); err != nil {
-			return err
-		}
-		return controllerutil.SetControllerReference(pg, db, r.Scheme)
-	}); err != nil {
-		return false, err
-	}
-	applied, _, _ := unstructured.NestedBool(db.Object, "status", "applied")
-	return applied, nil
+	return r.ensureDatabaseObject(ctx, pg, sharedDatabaseName(hash), sharedRoleName(hash))
 }
 
 // retargetSharedAppSecret rewrites the hosts in a shared database's
