@@ -178,3 +178,43 @@ func TestConvertKeyAndWords(t *testing.T) {
 		}
 	}
 }
+
+// A table with row-level security forced hides its rows from its owner:
+// the target's own count reads zero where the copy landed whole. With a
+// counter that sees every row (the server's superuser) the conversion
+// verifies and completes; without one it would fall back.
+func TestConvertCountsTheTargetThroughTheCounterWhenGiven(t *testing.T) {
+	ctx := context.Background()
+	source := &fakeDatabase{rows: map[string]int64{"public.audit_entries": 6, "public.posts": 2}}
+	target := &fakeDatabase{rows: map[string]int64{}}
+	objects := &fakeObjects{objects: map[string]string{}}
+	c := Convert{Source: source, Target: target, Objects: objects, Getter: objects, Key: "db_x/2026.converted.dump"}
+	// The owner's view of the target: the policy hides audit_entries.
+	hidden := &rlsView{Database: target, hidden: "public.audit_entries"}
+	c.Target = hidden
+	if _, err := c.Do(ctx); err == nil || !strings.Contains(err.Error(), "public.audit_entries has 6 rows at the source and 0 at the target") {
+		t.Fatalf("without a counter the owner's zero fails the copy: %v", err)
+	}
+	target.rows = map[string]int64{}
+	c.TargetCounter = target // the superuser sees the rows the policy hides
+	moved, err := c.Do(ctx)
+	if err != nil {
+		t.Fatalf("with the superuser's count: %v", err)
+	}
+	if moved.Rows != 8 || moved.Tables != 2 {
+		t.Errorf("moved = %+v, want 8 rows in 2 tables", moved)
+	}
+}
+
+// rlsView is a target whose owner cannot see one table's rows.
+type rlsView struct {
+	Database
+	hidden string
+}
+
+func (v *rlsView) Count(ctx context.Context, table string) (int64, error) {
+	if table == v.hidden {
+		return 0, nil
+	}
+	return v.Database.Count(ctx, table)
+}
