@@ -410,15 +410,12 @@ func (e *Engine) applyComponent(ctx context.Context, c *Component) error {
 		}
 	}
 
-	waits := c.Wait
-	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
-		// The cluster's primary (a replica still joining does not hold the
-		// install), and the StatefulSet while the data is on it.
+	primary, waits := e.componentWaits(ctx, c)
+	if primary {
 		e.rep.Step(c.Name, "waiting for the primary of cluster "+ControlPlaneCluster)
 		if err := e.waitControlPlanePrimary(ctx, c.Namespace); err != nil {
 			return err
 		}
-		waits = controlPlaneWaits(c.Namespace, e.controlPlaneMovedNow(ctx, c.Namespace))
 	}
 	for _, w := range waits {
 		e.rep.Step(c.Name, "waiting for "+w.String())
@@ -567,6 +564,18 @@ func (e *Engine) renderComponent(c *Component) ([]*unstructured.Unstructured, er
 	return objs, nil
 }
 
+// componentWaits are what a component waits for, at the apply and in the
+// status: its declared waits, or, for the control-plane database on
+// CloudNativePG, the cluster's primary (said by the flag; a replica still
+// joining holds nothing the install needs) and the StatefulSet until the
+// data moved.
+func (e *Engine) componentWaits(ctx context.Context, c *Component) (primary bool, waits []WaitSpec) {
+	if c.Name == controlPlaneStatefulSet && controlPlaneOnCNPG(e.vars) {
+		return true, controlPlaneWaits(c.Namespace, e.controlPlaneMovedNow(ctx, c.Namespace))
+	}
+	return false, c.Wait
+}
+
 // controlPlaneMovedNow reads the control-plane Secret's word on where the
 // data is.
 func (e *Engine) controlPlaneMovedNow(ctx context.Context, namespace string) bool {
@@ -708,8 +717,13 @@ func (e *Engine) Status(ctx context.Context) ([]ComponentStatus, error) {
 				st.Ready = false
 				st.Detail = "not installed"
 			}
+			primary, waits := e.componentWaits(ctx, c)
+			if st.Ready && primary && !e.controlPlaneClusterReady(ctx, c.Namespace) {
+				st.Ready = false
+				st.Detail = "cluster " + ControlPlaneCluster + " has no ready instance"
+			}
 			if st.Ready {
-				for _, w := range c.Wait {
+				for _, w := range waits {
 					wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 					err := e.applier.waitFor(wctx, w, c.Namespace)
 					cancel()

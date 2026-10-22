@@ -40,7 +40,7 @@ func TestControlPlaneOnCNPGNeedsTheExtensionAndNoManagedDatabase(t *testing.T) {
 // schedule; one instance alone and no backups without the gateway.
 func TestControlPlaneObjectsRenderTheCluster(t *testing.T) {
 	ns := "shpyrd-system"
-	vars := map[string]string{VarExtensions: "postgres", VarGatewayBucket: "shared", VarPlatformPool: "platform", VarDataPool: "data", VarControlPlaneDBSize: "5Gi", VarDatabaseStorageClass: "oci-bv"}
+	vars := map[string]string{VarExtensions: "postgres", VarGatewayBucket: "shared", VarPlatformPool: "platform", VarDataPool: "data", VarControlPlaneDBSize: "5Gi", VarStorageClass: "oci-bv", VarDatabaseStorageClass: "shpyrd-local"}
 	objs := controlPlaneObjects(vars, ns)
 	kinds := map[string]*unstructured.Unstructured{}
 	for _, o := range objs {
@@ -62,7 +62,7 @@ func TestControlPlaneObjectsRenderTheCluster(t *testing.T) {
 		t.Errorf("storage size = %q", size)
 	}
 	if class, _, _ := unstructured.NestedString(cl.Object, "spec", "storage", "storageClass"); class != "oci-bv" {
-		t.Errorf("storage class = %q", class)
+		t.Errorf("storage class = %q, want the platform's class, not the databases' (node-local on kind)", class)
 	}
 	if pool, _, _ := unstructured.NestedString(cl.Object, "spec", "affinity", "nodeSelector", PoolLabel); pool != "platform" {
 		t.Errorf("node selector pool = %q, want the platform pool, where the StatefulSet ran", pool)
@@ -132,6 +132,30 @@ func TestControlPlaneURL(t *testing.T) {
 	want := "postgres://shpyrd:s3cret@control-plane-pg-rw.shpyrd-system.svc:5432/shpyrd?sslmode=require"
 	if got != want {
 		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
+// The component's waits, at the apply and in the status: the cluster's
+// primary, and the StatefulSet until the data moved; the declared waits
+// for every other component and for the StatefulSet path.
+func TestControlPlaneComponentWaits(t *testing.T) {
+	ctx := context.Background()
+	ns := "shpyrd-system"
+	comp := &Component{Name: "control-plane-db", Namespace: ns, Wait: []WaitSpec{{StatefulSet: ns + "/control-plane-db"}}}
+	cs := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ControlPlaneDBSecretName, Namespace: ns}, Data: map[string][]byte{"moved": []byte(ControlPlaneCluster)}})
+	e := fakeEngine(ctx, cs, map[string]string{VarExtensions: "postgres"})
+	if primary, waits := e.componentWaits(ctx, comp); !primary || len(waits) != 0 {
+		t.Errorf("moved: primary=%v waits=%+v, want the primary alone", primary, waits)
+	}
+	if err := cs.CoreV1().Secrets(ns).Delete(ctx, ControlPlaneDBSecretName, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if primary, waits := e.componentWaits(ctx, comp); !primary || len(waits) != 1 || waits[0].StatefulSet != ns+"/control-plane-db" {
+		t.Errorf("not moved: primary=%v waits=%+v, want the primary and the StatefulSet", primary, waits)
+	}
+	plain := fakeEngine(ctx, fake.NewSimpleClientset(), map[string]string{VarExtensions: "redis"})
+	if primary, waits := plain.componentWaits(ctx, comp); primary || len(waits) != 1 {
+		t.Errorf("without the extension: primary=%v waits=%+v, want the declared wait alone", primary, waits)
 	}
 }
 
