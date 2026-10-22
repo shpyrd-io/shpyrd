@@ -7,7 +7,24 @@ kind: Kustomization
 namespace: shpyrd-system
 resources:
   - ../base
+  - pdb.yaml
 patches:
+  # On object storage the registry is stateless: two replicas, rolled one
+  # at a time, so a platform roll or a node drain never stops image pulls
+  # (storage plan step 7). The filesystem base keeps one with Recreate: its
+  # claim is read-write-once.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: registry
+      spec:
+        replicas: 2
+        strategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
   - patch: |-
       apiVersion: v1
       kind: PersistentVolumeClaim
