@@ -1043,6 +1043,7 @@ type Store interface {
 	Settings
 	ConsoleUsers
 	Costs
+	GitHub
 
 	// Export and Import move the whole workspace's people and tenancy
 	// (platform backups, RFC-0037).

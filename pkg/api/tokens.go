@@ -93,6 +93,8 @@ func (s *Server) identifyWithToken(c *gin.Context) bool {
 	}
 	ext.SetIdentity(c, tc.identity)
 	c.Set("shpyrd.roles", tc.roles)
+	// The person the token acts for: its GitHub link is theirs (RFC-0054).
+	c.Set(tokenOwnerKey, tc.owner)
 	return true
 }
 

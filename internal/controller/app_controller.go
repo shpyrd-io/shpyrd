@@ -37,6 +37,7 @@ import (
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/pkg/audit"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 	"github.com/shpyrd-io/shpyrd/pkg/logs"
 	"github.com/shpyrd-io/shpyrd/pkg/sizes"
 )
@@ -84,11 +85,32 @@ type AppReconciler struct {
 	workspaceEvents chan event.GenericEvent
 }
 
+// RequeueGitHub reconciles the Apps of a workspace that build from
+// github.com again: its GitHub connections changed (RFC-0054), and with
+// them the credential <app>-git holds.
+func (r *AppReconciler) RequeueGitHub(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(app *shpyrdv1.App) bool { return buildsFromGitHub(app) })
+}
+
+// buildsFromGitHub says the App's source is a repository on github.com.
+func buildsFromGitHub(app *shpyrdv1.App) bool {
+	if app.Spec.Source == nil || app.Spec.Source.Git == nil {
+		return false
+	}
+	repo, err := gitauth.Parse(app.Spec.Source.Git.URL)
+	return err == nil && strings.EqualFold(repo.Host, "github.com")
+}
+
 // RequeueWorkspace reconciles every App of a workspace again: its address
 // or its domains changed, and with them the apps' hosts (RFC-0033 names).
 // The default workspace's include the Apps from before workspaces, which
 // carry no workspace label.
 func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
+	r.requeueApps(ctx, slug, func(*shpyrdv1.App) bool { return true })
+}
+
+// requeueApps reconciles the Apps of a workspace that pick says again.
+func (r *AppReconciler) requeueApps(ctx context.Context, slug string, pick func(*shpyrdv1.App) bool) {
 	if r.workspaceEvents == nil {
 		return
 	}
@@ -99,7 +121,7 @@ func (r *AppReconciler) RequeueWorkspace(ctx context.Context, slug string) {
 	}
 	var picked []client.Object
 	for i := range apps.Items {
-		if workspaceOf(&apps.Items[i]) == slug {
+		if workspaceOf(&apps.Items[i]) == slug && pick(&apps.Items[i]) {
 			picked = append(picked, &apps.Items[i])
 		}
 	}
@@ -280,6 +302,12 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if out.domainsPending && (out.result.RequeueAfter == 0 || out.result.RequeueAfter > 30*time.Second) {
 		out.result.RequeueAfter = 30 * time.Second
 	}
+	// A build cloning through the GitHub App gets a new token before the
+	// one in <app>-git is 50 minutes old (RFC-0054); only a reconcile that
+	// wrote <app>-git knows when.
+	if d := out.gitRefresh; d > 0 && (out.result.RequeueAfter == 0 || d < out.result.RequeueAfter) {
+		out.result.RequeueAfter = d
+	}
 	return out.result, nil
 }
 
@@ -291,11 +319,22 @@ type outcome struct {
 	result         ctrl.Result
 	newRelease     *shpyrdv1.Release
 	clearNote      bool
+	// gitRefresh is when <app>-git, written by this reconcile, needs the
+	// GitHub App again (RFC-0054); 0: never.
+	gitRefresh time.Duration
 }
 
 func requeue(d time.Duration) outcome { return outcome{result: ctrl.Result{RequeueAfter: d}} }
 
 func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outcome, error) {
+	var gitRefresh time.Duration
+	out, err := r.reconcileApp(ctx, app, &gitRefresh)
+	out.gitRefresh = gitRefresh
+	return out, err
+}
+
+// reconcileApp is reconcile; it sets gitRefresh once <app>-git is written.
+func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, gitRefresh *time.Duration) (outcome, error) {
 	if maintenance(app) && app.Annotations[shpyrdv1.AnnotationMaintenance] != "starting" {
 		return r.reconcileMaintenance(ctx, app)
 	}
@@ -349,6 +388,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	if err := r.reconcileRegistryCredentials(ctx, app); err != nil {
 		return outcome{}, err
 	}
+	gitBuild, err := r.reconcileGitCredentials(ctx, app)
+	if err != nil {
+		return outcome{}, err
+	}
+	*gitRefresh = r.githubRefreshOf(gitBuild)
+	if err := r.ensureBuildServiceAccount(ctx, app, gitBuild); err != nil {
+		return outcome{}, err
+	}
 	globals, err := r.reconcileGlobals(ctx, app)
 	if err != nil {
 		return outcome{}, err
@@ -370,14 +417,25 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		return outcome{}, err
 	}
 
+	// What the source watcher saw of the branch (RFC-0018).
+	app.Status.Source = sourceStatus(app)
+	setSourceCondition(app)
+
 	// 2. Image: pinned, or built from the source (kpack Image for
 	// buildpacks, BuildKit Job for Dockerfiles).
 	image := app.Spec.Image
 	var build buildState
 	var kpackBuild *unstructured.Unstructured
 	if app.HasSource() {
-		if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
-			st, err := r.reconcileDockerfileBuild(ctx, app)
+		if msg, failed := waitingForCommit(app); msg != "" {
+			// No commit pinned for the branch yet: nothing is built, and
+			// what runs keeps running.
+			build = buildState{Ready: "Unknown", Reason: reasonWaitingForCommit, Message: msg, LatestImage: app.Status.Image, LatestBuild: app.Status.LatestBuild}
+			if failed {
+				build.Ready, build.Reason = "False", reasonSourceUnreadable
+			}
+		} else if app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
+			st, err := r.reconcileDockerfileBuild(ctx, app, gitBuild)
 			if err != nil {
 				return outcome{}, err
 			}
@@ -401,7 +459,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 			if err := r.reconcileBuildEnv(ctx, app, vars); err != nil {
 				return outcome{}, err
 			}
-			img, err := r.reconcileKpackImage(ctx, app)
+			img, err := r.reconcileKpackImage(ctx, app, gitBuild)
 			if errors.Is(err, errImageMoving) {
 				app.Status.Phase = shpyrdv1.PhaseBuilding
 				app.Status.Message = "moving the build to its new image repository"
@@ -455,10 +513,10 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		case "True":
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionTrue, "BuildSucceeded", "image "+shortImage(build.LatestImage))
 		case "False":
-			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionFalse, build.failedReason(), build.Message)
 		default:
 			reason := "Building"
-			if build.Reason == "PreparingBuilder" {
+			if build.Reason == "PreparingBuilder" || build.Reason == reasonWaitingForCommit {
 				reason = build.Reason
 			}
 			setCondition(app, shpyrdv1.ConditionBuilt, metav1.ConditionUnknown, reason, firstNonEmpty(build.Message, "build in progress"))
@@ -481,12 +539,15 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		if build.Ready == "False" {
 			app.Status.Phase = shpyrdv1.PhaseFailed
 			app.Status.Message = build.Message
-			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+			setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 			return outcome{}, nil
 		}
 		app.Status.Phase = shpyrdv1.PhaseBuilding
 		app.Status.Message = firstNonEmpty(build.Message, "waiting for the first build")
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
+		if build.Reason == reasonWaitingForCommit {
+			return requeue(5 * time.Second), nil
+		}
 		return requeue(30 * time.Second), nil
 	}
 
@@ -630,6 +691,9 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 		app.Status.Message = firstNonEmpty(build.Message, "building new release; "+summary)
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "Building", app.Status.Message)
 		out.result = ctrl.Result{RequeueAfter: 30 * time.Second}
+		if build.Reason == reasonWaitingForCommit {
+			out.result.RequeueAfter = 5 * time.Second
+		}
 	case failing && !ready:
 		// New instances cannot start; older ones may still be serving.
 		app.Status.Phase = shpyrdv1.PhaseFailed
@@ -640,7 +704,7 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 	case app.HasSource() && app.Spec.Image == "" && build.Ready == "False":
 		app.Status.Phase = shpyrdv1.PhaseFailed
 		app.Status.Message = build.Message + " The previous release keeps running."
-		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, "BuildFailed", build.Message)
+		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionFalse, build.failedReason(), build.Message)
 	case !ready:
 		app.Status.Phase = shpyrdv1.PhaseDeploying
 		app.Status.Message = summary
@@ -659,14 +723,14 @@ func (r *AppReconciler) reconcile(ctx context.Context, app *shpyrdv1.App) (outco
 
 // reconcileKpackImage creates or updates the kpack Image and returns its
 // current state.
-func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App) (*unstructured.Unstructured, error) {
+func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.App, git gitauth.Build) (*unstructured.Unstructured, error) {
 	// The project's own builder when it composes its build (RFC-0065),
 	// else the platform's.
 	builderRef, err := r.reconcileBuilder(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := r.Config.desiredKpackImage(app)
+	desired, err := r.Config.desiredKpackImage(app, git)
 	if err != nil {
 		return nil, err
 	}
@@ -1212,16 +1276,27 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 			log.FromContext(ctx).Info("could not audit the release", "err", err.Error())
 			return
 		}
+		// Drop who asked for the release, unless someone (a push) asked
+		// for the next one meanwhile.
+		asked := map[string]string{}
+		for _, k := range []string{shpyrdv1.AnnotationDeployedBy, shpyrdv1.AnnotationDeployedSubject, shpyrdv1.AnnotationDeployedClient} {
+			if v, ok := app.Annotations[k]; ok {
+				asked[k] = v
+			}
+		}
 		patch := client.MergeFrom(app.DeepCopy())
 		if app.Annotations == nil {
 			app.Annotations = map[string]string{}
 		}
 		app.Annotations[shpyrdv1.AnnotationAuditedRelease] = strconv.Itoa(cur.Number)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedBy)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedSubject)
-		delete(app.Annotations, shpyrdv1.AnnotationDeployedClient)
 		if err := r.Patch(ctx, app, patch); err != nil {
 			log.FromContext(ctx).Info("could not mark the release audited", "err", err.Error())
+			return
+		}
+		for k, v := range asked {
+			if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+				logRemoveAnnotation(ctx, err, "kept who asked for the next release", "who asked for the release", "annotation", k)
+			}
 		}
 	case app.Status.Phase == shpyrdv1.PhaseFailed && before.Status.Phase != shpyrdv1.PhaseFailed:
 		entry.Action, entry.Detail = "release.failed", app.Status.Message
@@ -1231,13 +1306,20 @@ func (r *AppReconciler) auditReleaseOutcome(ctx context.Context, before, app *sh
 	}
 }
 
-// clearReleaseNote removes the one-shot annotations once consumed.
+// clearReleaseNote removes the one-shot annotations once consumed, each
+// only while it holds the value this reconcile read: a note the source
+// watcher wrote meanwhile is the next release's (RFC-0018).
 func (r *AppReconciler) clearReleaseNote(ctx context.Context, app *shpyrdv1.App) {
-	patch := client.MergeFrom(app.DeepCopy())
-	delete(app.Annotations, shpyrdv1.AnnotationReleaseNote)
-	delete(app.Annotations, shpyrdv1.AnnotationRollbackTo)
-	if err := r.Patch(ctx, app, patch); err != nil {
-		log.FromContext(ctx).Info("could not clear release note", "err", err.Error())
+	read := map[string]string{}
+	for _, k := range []string{shpyrdv1.AnnotationReleaseNote, shpyrdv1.AnnotationRollbackTo} {
+		if v, ok := app.Annotations[k]; ok {
+			read[k] = v
+		}
+	}
+	for k, v := range read {
+		if _, err := removeAnnotationIfUnchanged(ctx, r.Client, app, k, v); err != nil {
+			logRemoveAnnotation(ctx, err, "kept a newer one-shot annotation", "a one-shot annotation", "annotation", k)
+		}
 	}
 }
 

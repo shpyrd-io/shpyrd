@@ -209,7 +209,7 @@ export type ProjectSummary = {
 export type Project = ProjectSummary & {
   spec: {
     source?: {
-      git?: { url: string; revision?: string };
+      git?: { url: string; revision?: string; autoDeploy?: boolean; watchPaths?: string[]; waitForChecks?: boolean };
       blob?: { sha256?: string; ref?: string };
       subPath?: string;
     };
@@ -247,6 +247,8 @@ export type Project = ProjectSummary & {
       state: "Running" | "Succeeded" | "Failed";
       message?: string;
     };
+    // What the source watcher knows of the branch (RFC-0018).
+    source?: SourceStatus;
     // Built is False when the last build failed; Ready's reason says what
     // stops the project (BuildFailed, ReleaseFailed, QuotaExceeded, ...).
     conditions?: {
@@ -256,16 +258,114 @@ export type Project = ProjectSummary & {
       message?: string;
     }[];
   };
+  // The GitHub App covers the repository: watch paths and wait for CI
+  // apply (RFC-0054). sourceNote says when they are set and do not.
+  githubFeatures?: boolean;
+  sourceNote?: string;
+  // How shpyrd learns of the branch's pushes: the GitHub App, the
+  // project's own webhook, or not until its webhook is set up (manual).
+  sourceWatch?: { mode: "github-app" | "webhook" | "manual" };
+  // The GitHub account whose access picked the repository.
+  githubLinkedBy?: string;
+};
+
+// What the source watcher knows of the branch a project follows
+// (RFC-0018): the commit that runs, the newest seen, and how.
+export type SourceStatus = {
+  commit?: string;
+  latest?: string;
+  latestAt?: string;
+  message?: string;
+  author?: string;
+  via?: "push" | "poll" | "deploy";
+  // A commit whose message asked not to deploy it.
+  skipped?: string;
+  // A commit waiting for its other checks on GitHub, since heldSince.
+  held?: string;
+  heldSince?: string;
+  // The last commit not deployed, and why ("No changes in the watch
+  // paths", "CI failed: test", "CI did not finish within an hour").
+  notDeployed?: string;
+  notDeployedReason?: string;
+  lastWebhookAt?: string;
+  checkedAt?: string;
+  // Why the branch cannot be read, in words.
+  error?: string;
+};
+
+// The webhook a git host calls on a push: its address and its secret.
+export type GitHooks = { url: string; secret: string };
+
+// A GitHub App installation connected to the workspace (RFC-0054).
+export type GitHubInstallation = {
+  id: number;
+  account: string;
+  type: "Organization" | "User";
+  connectedBy: string;
+  createdAt: string;
+  suspended: boolean;
+  // The installation's settings on GitHub.
+  manageURL: string;
+};
+
+// The workspace's GitHub: whether the platform has an App, why not, and
+// the connections.
+export type GitHubConnections = {
+  configured: boolean;
+  appURL?: string;
+  note?: string;
+  installations: GitHubInstallation[];
+};
+
+// A repository a connection reaches, for New project.
+export type GitHubRepository = {
+  installation: number;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+};
+
+// An account of the workspace's GitHub the person sees on GitHub: the
+// picker's account switcher. manageURL is its settings on GitHub, where
+// repositories are added.
+export type GitHubAccount = {
+  installation: number;
+  account: string;
+  type: "Organization" | "User";
+  suspended: boolean;
+  manageURL: string;
+};
+
+// The person's accounts, and how many the workspace has: none, and New
+// project offers no GitHub.
+export type GitHubAccounts = { accounts: GitHubAccount[]; connected: number };
+
+// The person's own GitHub account (RFC-0054).
+export type GitHubLink = { login: string; linkedAt: string };
+
+// A listing of repositories; truncated when the server cut it at the most
+// it reads (the header X-Shpyrd-Truncated), so the picker says so.
+export type GitHubRepositories = GitHubRepository[] & { truncated?: boolean };
+
+// A repository's branches; truncated when the server cut the list.
+export type GitHubBranches = string[] & { truncated?: boolean };
+
+// What the project's builds clone with.
+export type ProjectGitAuth = {
+  url?: string;
+  using: "none" | "token" | "deploy-key" | "github-app";
+  githubAccount?: string;
 };
 
 // buildFailed says the project's last build failed (its Built condition).
+// A branch shpyrd cannot read (SourceUnreadable) built nothing.
 export const buildFailed = (status: {
   phase: string;
-  conditions?: { type: string; status: string }[];
+  conditions?: { type: string; status: string; reason?: string }[];
 }) =>
   status.phase === "Failed" &&
   (status.conditions ?? []).some(
-    (c) => c.type === "Built" && c.status === "False",
+    (c) => c.type === "Built" && c.status === "False" && c.reason !== "SourceUnreadable",
   );
 
 export type DeployRequest = {

@@ -106,7 +106,7 @@ export function ProjectPages() {
         <>
           <Heading project={project.data} perms={perms} />
           <Routes>
-            <Route index element={<Overview project={project.data} />} />
+            <Route index element={<Overview project={project.data} perms={perms} />} />
             <Route path="releases" element={<Releases project={project.data} perms={perms} />} />
             <Route path="backups" element={<Backups project={project.data} perms={perms} />} />
             <Route path="metrics" element={<Metrics project={project.data} />} />

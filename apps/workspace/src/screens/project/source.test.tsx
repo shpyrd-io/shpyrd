@@ -1,0 +1,302 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { Project, SourceStatus } from "@/api/types";
+import type { Perms } from "@/lib/perms";
+import seed from "../../../mock/projects.json";
+import { GitSource } from "./source";
+
+const fake = vi.hoisted(() => ({ updateProject: vi.fn(), projectGitHooks: vi.fn(), projectGitAuth: vi.fn() }));
+vi.mock("@/api/api", () => ({ api: fake }));
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: toasts }));
+let queries: QueryClient;
+beforeEach(() => fake.projectGitAuth.mockResolvedValue({ using: "none" }));
+afterEach(() => {
+  cleanup();
+  queries?.clear();
+  vi.resetAllMocks();
+});
+
+const commit = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+const newer = "b2c3d4e5f60718293a4b5c6d7e8f901234567890";
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
+function projectWith(
+  git: { url: string; revision?: string; autoDeploy?: boolean; watchPaths?: string[]; waitForChecks?: boolean } | undefined,
+  source?: SourceStatus,
+): Project {
+  const p = structuredClone(seed[0]) as unknown as Project;
+  p.spec.source = git ? { git } : { blob: { sha256: "e3b0c442", ref: "local checkout" } };
+  p.status.source = source;
+  return p;
+}
+
+function show(project: Project, perms: Partial<Perms> = { config: true }) {
+  queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queries}>
+      <GitSource project={project} perms={perms as Perms} />
+    </QueryClientProvider>,
+  );
+}
+
+const repo = { url: "https://github.com/acme/hello-world", revision: "main" };
+
+it("shows the commit that runs, its message and author, and when the branch was last checked", () => {
+  show(projectWith(repo, { commit, latest: commit, message: "Fix the login redirect\n\nLonger body", author: "alice", via: "push", checkedAt: minutesAgo(3) }));
+  expect(screen.getByText("a1b2c3d")).toBeTruthy();
+  expect(screen.getByText("Fix the login redirect")).toBeTruthy();
+  expect(screen.getByText("by alice")).toBeTruthy();
+  expect(screen.getByText("3m ago · via push")).toBeTruthy();
+  expect(screen.getByRole("switch", { name: "Auto-deploy" }).getAttribute("aria-checked")).toBe("true");
+});
+
+it("says the branch is being read before a commit is pinned", () => {
+  show(projectWith(repo, {}));
+  expect(screen.getByText("Reading the branch's latest commit.")).toBeTruthy();
+  expect(screen.getByText("not yet")).toBeTruthy();
+});
+
+it("says the build follows the branch when shpyrd does not watch it", () => {
+  show(projectWith({ url: "git://git.example.test/acme/hello-world", revision: "main" }, undefined));
+  expect(screen.getByText("The build follows the branch")).toBeTruthy();
+  expect(screen.queryByText("Reading the branch's latest commit.")).toBeNull();
+});
+
+it("says a skipped commit was not deployed", () => {
+  show(projectWith(repo, { commit, latest: newer, skipped: newer, message: "[skip deploy] typo", author: "bruno", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("Skipped b2c3d4e: [skip deploy] typo")).toBeTruthy();
+  cleanup();
+  show(projectWith(repo, { commit, latest: newer, skipped: newer, via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("Skipped b2c3d4e: a skip marker")).toBeTruthy();
+});
+
+it("says the latest commit waits when auto-deploy is off", () => {
+  show(projectWith({ ...repo, autoDeploy: false }, { commit, latest: newer, via: "poll", checkedAt: minutesAgo(2) }));
+  expect(screen.getByText("Latest on main: b2c3d4e, not deployed: auto-deploy is off.")).toBeTruthy();
+  expect(screen.getByRole("switch", { name: "Auto-deploy" }).getAttribute("aria-checked")).toBe("false");
+});
+
+it("shows why the branch cannot be read", () => {
+  show(projectWith(repo, { commit, error: "shpyrd could not read the repository: it is private.", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("shpyrd could not read the repository: it is private.")).toBeTruthy();
+});
+
+it("shows a commit revision as pinned, with nothing to switch", () => {
+  show(projectWith({ url: repo.url, revision: "a1b2c3d" }, undefined));
+  expect(screen.getByText("Pinned to a commit: a push deploys nothing.")).toBeTruthy();
+  expect(screen.queryByRole("switch")).toBeNull();
+});
+
+it("renders nothing for a project that does not come from git", () => {
+  const { container } = show(projectWith(undefined));
+  expect(container.innerHTML).toBe("");
+});
+
+it("switches auto-deploy off through the api, and only for those who may change the project", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockResolvedValue(projectWith({ ...repo, autoDeploy: false }, project.status.source));
+  show(project);
+  fireEvent.click(screen.getByRole("switch", { name: "Auto-deploy" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { autoDeploy: false }));
+  cleanup();
+  show(project, { config: false });
+  expect((screen.getByRole("switch", { name: "Auto-deploy" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Deploy on push" })).toBeNull();
+});
+
+it("shows the webhook URL and secret to copy in the dialog", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(project);
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  expect(await screen.findByText("https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n")).toBeTruthy();
+  expect(screen.getByText("s3cr3t")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Copy the secret" })).toBeTruthy();
+  expect(fake.projectGitHooks).toHaveBeenCalledWith(project.slug);
+});
+
+it("forgets the webhook's secret when the dialog closes", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(project);
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  expect(await screen.findByText("s3cr3t")).toBeTruthy();
+  expect(queries.getQueryData(["git-hooks", project.slug])).toBeTruthy();
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByText("s3cr3t")).toBeNull());
+  expect(queries.getQueryData(["git-hooks", project.slug])).toBeUndefined();
+});
+
+it("says when the clipboard cannot be written", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.projectGitHooks.mockResolvedValue({ url: "https://acme.shpyrd.app/api/hooks/git/hello-world/t0k3n", secret: "s3cr3t" });
+  show(project);
+  fireEvent.click(screen.getByRole("button", { name: "Deploy on push" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Copy the secret" }));
+  await waitFor(() => expect(toasts.error).toHaveBeenCalled());
+  expect(toasts.success).not.toHaveBeenCalled();
+
+  const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the URL" }));
+  await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(2));
+
+  writeText.mockResolvedValue(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Copy the URL" }));
+  await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("URL copied"));
+  Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+});
+
+it("shows one GitHub App line for a covered repository, and no webhook to set up", async () => {
+  fake.projectGitAuth.mockResolvedValue({ url: repo.url, using: "github-app", githubAccount: "acme" });
+  const p = projectWith(repo, { commit, latest: commit, via: "push", checkedAt: minutesAgo(1) });
+  p.sourceWatch = { mode: "github-app" };
+  p.githubLinkedBy = "paezao";
+  show(p);
+  expect(await screen.findByText("Deploys on push through the GitHub App. Connected by paezao.")).toBeTruthy();
+  await waitFor(() => expect(fake.projectGitAuth).toHaveBeenCalled());
+  expect(screen.queryByText(/nothing to set up/)).toBeNull();
+  expect(screen.getAllByText(/GitHub App/)).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Deploy on push" })).toBeNull();
+});
+
+it("says a commit waits for CI, and since when", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, held: newer, heldSince: minutesAgo(2), via: "push", checkedAt: minutesAgo(2) }));
+  expect(screen.getByText("Waiting for CI on b2c3d4e (since 2 min)")).toBeTruthy();
+});
+
+it("says why a commit was not deployed, in the Source block's words", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI failed: test", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI failed (test)")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, watchPaths: ["services/api/**"] }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "No changes in the watch paths", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: no changes in the watch paths")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI did not finish within an hour", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI did not finish within an hour")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI could not be read: the GitHub App no longer covers the repository", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI could not be read: the GitHub App no longer covers the repository")).toBeTruthy();
+  cleanup();
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, notDeployed: newer, notDeployedReason: "CI could not be read: accept the GitHub App's updated permissions on GitHub", via: "push", checkedAt: minutesAgo(1) }));
+  expect(screen.getByText("b2c3d4e not deployed: CI could not be read: accept the GitHub App's updated permissions on GitHub")).toBeTruthy();
+});
+
+it("switches wait for CI through the api", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockResolvedValue(projectWith({ ...repo, waitForChecks: true }, project.status.source));
+  show(project);
+  fireEvent.click(screen.getByRole("switch", { name: "Wait for CI" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { waitForChecks: true }));
+  await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Each commit waits for its other checks"));
+});
+
+it("saves the watch paths, one pattern per line", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockResolvedValue(projectWith({ ...repo, watchPaths: ["services/api/**", "!**/*.md"] }, project.status.source));
+  show(project);
+  const field = screen.getByLabelText("Watch paths") as HTMLTextAreaElement;
+  expect(field.placeholder).toBe("services/api/**\n!**/*.md");
+  fireEvent.change(field, { target: { value: " services/api/**\n\n!**/*.md " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { watchPaths: ["services/api/**", "!**/*.md"] }));
+});
+
+it("shows a pattern the server refused under the field", async () => {
+  const project = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  fake.updateProject.mockRejectedValue(new Error('in the watch path "a**", ** stands alone between slashes, as in services/**/api'));
+  show(project);
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a**" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  expect(await screen.findByText(/stands alone between slashes/)).toBeTruthy();
+});
+
+it("disables wait for CI and watch paths where the GitHub App does not reach", () => {
+  const project = projectWith({ url: "https://gitlab.example.test/acme/shop", revision: "main" }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  project.githubFeatures = false;
+  show(project);
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.getAllByText("Needs the GitHub App").length).toBe(2);
+});
+
+it("lets only those who may change the project change the two settings", () => {
+  show(projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) }), { config: false });
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Save watch paths" })).toBeNull();
+});
+
+it("shows the saved watch paths again when they change under it", () => {
+  const source = { commit, latest: commit, checkedAt: minutesAgo(1) };
+  const view = show(projectWith({ ...repo, watchPaths: ["a/**"] }, source));
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).value).toBe("a/**");
+  view.rerender(
+    <QueryClientProvider client={queries}>
+      <GitSource project={projectWith({ ...repo, watchPaths: ["b/**", "!c"] }, source)} perms={{ config: true } as Perms} />
+    </QueryClientProvider>,
+  );
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).value).toBe("b/**\n!c");
+});
+
+it("clears the refused pattern's message when the field is edited", async () => {
+  fake.updateProject.mockRejectedValue(new Error("in the watch path \"a**\", ** stands alone between slashes"));
+  show(projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(1) }));
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a**" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch paths" }));
+  expect(await screen.findByText(/stands alone between slashes/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Watch paths"), { target: { value: "a/**" } });
+  expect(screen.queryByText(/stands alone between slashes/)).toBeNull();
+});
+
+it("says nothing of a held or not-deployed commit that is not the latest, or that runs", () => {
+  show(projectWith({ ...repo, waitForChecks: true }, { commit, latest: newer, held: commit, heldSince: minutesAgo(2), checkedAt: minutesAgo(1) }));
+  expect(screen.queryByText(/Waiting for CI/)).toBeNull();
+  cleanup();
+  show(projectWith(repo, { commit, latest: commit, notDeployed: commit, notDeployedReason: "CI failed: test", checkedAt: minutesAgo(1) }));
+  expect(screen.queryByText(/not deployed/)).toBeNull();
+});
+
+it("lets wait for CI be switched off and the watch paths cleared where the GitHub App does not reach, never on or added", async () => {
+  const project = projectWith({ ...repo, waitForChecks: true, watchPaths: ["services/api/**"] }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  project.githubFeatures = false;
+  fake.updateProject.mockResolvedValue(projectWith(repo, project.status.source));
+  show(project);
+  const wait = screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement;
+  expect(wait.disabled).toBe(false);
+  fireEvent.click(wait);
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { waitForChecks: false }));
+  expect((screen.getByLabelText("Watch paths") as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Save watch paths" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Clear watch paths" }));
+  await waitFor(() => expect(fake.updateProject).toHaveBeenCalledWith(project.slug, { watchPaths: [] }));
+  expect(screen.getAllByText("Needs the GitHub App").length).toBe(2);
+  cleanup();
+  show(project, { config: false });
+  expect((screen.getByRole("switch", { name: "Wait for CI" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Clear watch paths" })).toBeNull();
+});
+
+it("says a repository the GitHub App covers deploys on push through it, and who connected it", () => {
+  const p = projectWith(repo, { commit, latest: commit, checkedAt: minutesAgo(3) });
+  p.sourceWatch = { mode: "github-app" };
+  p.githubLinkedBy = "paezao";
+  show(p);
+  expect(screen.getByText("Deploys on push through the GitHub App. Connected by paezao.")).toBeTruthy();
+});
+
+it("says a project whose webhook delivered deploys on push through it, and when it last did", () => {
+  const p = projectWith({ url: "https://gitlab.com/acme/shop", revision: "main" }, { commit, latest: commit, lastWebhookAt: minutesAgo(3 * 24 * 60) });
+  p.sourceWatch = { mode: "webhook" };
+  show(p);
+  expect(screen.getByText("Deploys on push through its webhook (last delivery 3 days ago).")).toBeTruthy();
+});
+
+it("says pushes do not deploy until the webhook is set up", () => {
+  const p = projectWith({ url: "https://gitlab.com/acme/shop", revision: "main" }, { commit, latest: commit, checkedAt: minutesAgo(1) });
+  p.sourceWatch = { mode: "manual" };
+  show(p);
+  expect(screen.getByText("Pushes do not deploy until its webhook is set up. Deploy to build the branch's latest commit.")).toBeTruthy();
+});

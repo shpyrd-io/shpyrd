@@ -37,7 +37,7 @@ New to shpyrd? [Create your account and workspace on shpyrd cloud](https://accou
 | `shpyrd login --url <workspace> [--token <token>]` | Sign the CLI in to a workspace (`https://acme.shpyrd.cloud`) and make it the **current** one; the credential is kept in `~/.shpyrd/sessions.json`. Without `--token` the browser opens the workspace's sign-in: approve the code the terminal shows and the CLI is signed in as you for 30 days (`--no-browser` prints the link instead, for a shell over SSH); That creates a **session token**, listed under Workspace → API tokens as `CLI on <host>` and revoked there. With `--token`, a personal API token (below) or, for the operator, the admin token from `shpyrd-ctl cluster token`. `SHPYRD_URL` and `SHPYRD_TOKEN` work without a saved session: set them in CI. A token the workspace rejects is not saved. |
 | `shpyrd use [workspace]` | List the workspaces you are signed in to (`*` marks the current one), or switch. Commands talk to the current workspace; with several sessions and none current they ask you to pick. |
 | `shpyrd version` | The CLI's version (`shpyrd-ctl version` too). |
-| `shpyrd whoami` | Who you are at the current workspace, checked live; fails when the token expired or was revoked. |
+| `shpyrd whoami` | Who you are at the current workspace, checked live, and your linked GitHub account (`GitHub: paezao`, or `GitHub: not linked (shpyrd github link)`; nothing for the admin token or when the link cannot be read); fails when the token expired or was revoked. |
 | `shpyrd logout` | Forget the current workspace's credential (or `--url` another's). |
 | `shpyrd tokens create <name>` | Create an API token for CI or another machine: `--platform-role platform-viewer\|platform-admin` or `--project <slug> --role reader\|user\|viewer\|developer\|admin`, `--expires 90d`. The value is printed once. A token never carries more than you hold at the moment it is used, and a token cannot create tokens: run this signed in as yourself (or with the admin token), or use the dashboard's **Workspace › API tokens** page. |
 | `shpyrd tokens list`, `tokens revoke <id>` | Your tokens with role, expiry and last use (platform admins see everyone's); a session token is listed as `session (your roles)`. Revocation is immediate. |
@@ -88,6 +88,7 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd-ctl cluster status` | The installed components and their state; the platform's pods outside its pool; the volumes still on a node's disk (their nodes stay until they are migrated). |
 | `shpyrd-ctl cluster snapshots take --class <storage-class> [--keep 7]`, `list` | Provider snapshots of every block disk of a class now (the `platform-snapshots` job takes them nightly on the cloud profiles), and the list of them. |
 | `shpyrd-ctl cluster unpin <project-id>` | Clear the node pins a move left on a project (its processes and databases); each restarts once, the scheduler places them by pool. |
+| `shpyrd-ctl github app create [--org ORG] [--name NAME] [--public] [--url DASHBOARD_URL]` | Register the cluster's GitHub App on GitHub from a manifest, in one click in the browser; its credentials go into the Secret `shpyrd-system/shpyrd-github-app`. `github app show` prints its slug, id and page (never the keys); `github app delete` removes the Secret. See [Connect GitHub](/docs/installation#connect-github). |
 | `shpyrd-ctl storage migrate database <namespace>/<name>` | Move a database's data to the profile's storage class by switchover, without stopping it; the old volume is kept three days. When the data check fails both instances stay: `--back` returns to the old volume, `--no-checks` accepts the numbers and finishes. |
 | `shpyrd-ctl storage migrate volume <project-id> <volume> --yes` | Move a volume's data to the profile's storage class through the project move; the project pauses for the copy. |
 
@@ -98,6 +99,40 @@ Self-hosted: operator commands, for running shpyrd yourself (on shpyrd cloud, we
 | `shpyrd drains add <url> [--name] [--header "Name: value"]... [--processes web,worker] [--format json\|syslog] --project <slug> \| --workspace <slug> \| --cluster` | Forward a project's, a workspace's or every project's lines to an HTTPS or syslog receiver (extension `logs-agent`). |
 | `shpyrd drains list [--project \| --workspace \| --cluster]` | Drains with delivery status and last delivery. |
 | `shpyrd drains remove <name> [--project \| --workspace \| --cluster]` | Remove a drain and its stored headers. |
+
+## Git credentials
+
+Give builds access to private git repositories. Signed in only. See [Private repositories](/docs/deploying#private-repositories).
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd git-auth set --host <host> --token <token\|-> [--username <user>]` | Set the workspace's token for a git host (workspace admins). `-` reads the token from stdin. Default user: `x-access-token`, `oauth2` on gitlab.com, `x-token-auth` on bitbucket.org. |
+| `shpyrd git-auth unset --host <host>` | Remove the workspace's token for a host. |
+| `shpyrd git-auth list` | The workspace's tokens: host, user and who set it. Never the values. |
+| `shpyrd git-auth deploy-key [--project <name>] [--host <host>] [--remove]` | Make a deploy key for the project and print its public half; add it to the repository as read-only. A project with no git repository yet needs `--host`. `--remove` deletes it. |
+| `shpyrd git-auth show [--project <name>]` | Which credential the project's builds clone with: the GitHub App, a deploy key, a token, or none. |
+
+## Deploy on push
+
+The webhook a git host calls when the project's branch moves. Signed in only. See [Deploying on push](/docs/deploying#deploying-on-push).
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd git-hooks show [--project <name>]` | The webhook's URL and secret, where they go on GitHub, GitLab and Gitea, and whether a push deploys. |
+| `shpyrd git-hooks rotate [--project <name>]` | A new URL and secret. The old ones are refused from then on: change them on the git host. |
+
+## GitHub
+
+Link your own GitHub account; connect an account or organisation once; then pick the repositories you can read. Signed in only. See [Connect GitHub](/docs/deploying#connect-github).
+
+| Command | What it does |
+| --- | --- |
+| `shpyrd github link [--no-browser]` | Open the browser to link your GitHub account, and wait until it is linked. New projects from GitHub, the CLI and your agents (with your API token) then reach the repositories you can read. A command that needs it says "link your GitHub account first: run shpyrd github link". |
+| `shpyrd github unlink` | Unlink your GitHub account and revoke its token on GitHub. Your projects keep deploying. |
+| `shpyrd github connect [--no-browser]` | Open the dashboard's Git page, where a workspace admin connects, and wait until the new connection appears. |
+| `shpyrd github list` | The workspace's connections: account, kind, id, who connected it, and whether it is suspended on GitHub (workspace admins). |
+| `shpyrd github disconnect <account\|id>` | Forget a connection (workspace admins). Its repositories stop building through the App; the App stays installed on GitHub. |
+| `shpyrd github repos [--filter TEXT]` | The repositories you can read through the workspace's connections, with their default branch. |
 
 ## Global config vars
 
@@ -151,14 +186,14 @@ Self-hosted: the platform's sender, set by the operator.
 | `shpyrd projects create "<name>"` | Create the project. The name is free text ("My Shop"); its **slug** (`my-shop`) is derived from it and identifies the project in `--project`, URLs and the hostname. On shpyrd cloud the app answers at `https://<workspace>-<slug>.shpyrd.app`; on a cluster you run, at `https://<slug>.<domain>`. `--slug` chooses it, `--domain` adds custom domains, `--save` writes `shpyrd.yaml`. (`shpyrd apps` still works as an alias.) New projects ask visitors to sign in; `--public` makes a site anyone can open. |
 | `shpyrd projects rename <slug> "<name>"` | Change the display name. `--slug <new>` changes the slug and the address too; the old address redirects for 30 days (signed in; projects in a `p-<id>` namespace). |
 | `shpyrd projects list` | Table of projects: slug, name, phase, release, URL, age. |
-| `shpyrd projects info <slug>` | Phase and message, URL, build digest, source, processes (with sizes and failing reasons), recent releases, and every resource of the project (app, attached resources, volumes). |
+| `shpyrd projects info <slug>` | Phase and message, URL, build digest, source, the commit waiting for CI or not deployed and why, processes (with sizes and failing reasons), recent releases, and every resource of the project (app, attached resources, volumes). |
 | `shpyrd projects destroy <name>` | Delete the project and its namespace (`--yes`). |
 
 ## Deploying and running
 
 | Command | What it does |
 | --- | --- |
-| `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. From a package of an npm, pnpm or Yarn workspace it archives the workspace's root and builds that package ([Monorepos and workspaces](/docs/deploying#monorepos-and-workspaces)). `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately; `--save` writes what the build profile or workspace detection inferred into `shpyrd.yaml`. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
+| `shpyrd deploy` | Archive the committed tree of the current directory, upload, build and release. From a package of an npm, pnpm or Yarn workspace it archives the workspace's root and builds that package ([Monorepos and workspaces](/docs/deploying#monorepos-and-workspaces)). `--working-tree` deploys the directory as is; `--git <url> --ref <rev> --path <dir>` builds from Git; with `--git`, a branch or tag is followed and every push deploys, `--no-auto-deploy` records pushes without deploying them and `--auto-deploy` switches that back on (with neither, the project's setting stays); `--watch-path <glob>` (repeatable) deploys only commits that change a matching file and `--no-watch-paths` removes them; `--wait-for-ci` deploys a commit once its other checks on GitHub pass and `--no-wait-for-ci` stops waiting (both GitHub App only: [Wait for CI](/docs/deploying#wait-for-ci), [Watch paths](/docs/deploying#watch-paths); with neither, the project's settings stay); `--dockerfile [path]` builds the Dockerfile (auto-detected for local deploys); `--image <ref>` runs a prebuilt image; `--no-wait` returns immediately; `--save` writes what the build profile or workspace detection inferred into `shpyrd.yaml`. Applies `shpyrd.yaml` (processes, sizes, build, domains). |
 | `shpyrd scale web=N worker=M` | Set instance counts per process type. |
 | `shpyrd resize web=SIZE worker=SIZE` | Set instance sizes per process type (a release). A size no machine can hold, or that the machine holding the process's disk has no room for, is refused with the numbers. Refused while another release is rolling out unless `--force`, which cancels it. |
 | `shpyrd sizes list` | The instance sizes to choose from, in three lists with the same names: processes, Postgres and Redis (with their connections), each with its default (`shpyrd sizes` alone does the same). `--json` answers it as `GET /api/sizes` does. |

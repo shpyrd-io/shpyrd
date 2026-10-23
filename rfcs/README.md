@@ -56,8 +56,8 @@ implement those proposals.
 | [0014](0014-account-lifecycle.md) | Account lifecycle: password reset, invite activation, lockout | replaced by 0082 (local lifecycle removed; workspace invitations retained) | 0012, 0013 |
 | [0015](0015-grafana-sign-in.md) | Grafana sign-in through shpyrd | withdrawn (Grafana no longer installed, 2026-10-14) | 0007 |
 | [0016](0016-global-config-vars.md) | Global config vars | implemented | 0003 |
-| [0017](0017-git-credentials.md) | Git credentials for private repositories | provisional | 0004 |
-| [0018](0018-repository-monitoring.md) | Repository monitoring and auto-deploy | provisional | 0017 |
+| [0017](0017-git-credentials.md) | Git credentials for private repositories | implemented | 0004 |
+| [0018](0018-repository-monitoring.md) | Repository monitoring and auto-deploy | implemented | 0017 |
 | [0019](0019-health-checks-and-rollouts.md) | Health checks and zero-downtime rollouts | implemented, gaps | 0001 |
 | [0020](0020-maintenance-mode.md) | Maintenance mode | provisional | 0001 |
 | [0021](0021-structured-logs.md) | Structured logs in the viewer and the CLI | implemented | |
@@ -94,7 +94,7 @@ implement those proposals.
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
 | [0052](0052-api-first-cli-and-login.md) | API-first CLI and `shpyrd login` | implemented (v0.8.0 login and shpyrd-ctl; v0.9.8 every developer command over the API; v0.9.61 the browser sign-in, run, pg psql, redis cli and globals over the API; complete) | 0031, 0026 |
 | [0053](0053-mfa-and-passkeys.md) | MFA and passkeys | replaced by 0082 (Core proposal discarded; Accounts/IdP MFA and passkeys shipped) | 0012, 0014 |
-| [0054](0054-github-app.md) | GitHub App integration | implementable | 0017, 0018 |
+| [0054](0054-github-app.md) | GitHub App integration | implemented | 0017, 0018 |
 | [0055](0055-environments-and-promotion.md) | Environments and promotion | deferred (Git branches per environment) | |
 | [0056](0056-tracing-backend.md) | Tracing backend (Jaeger) | implementable | 0029, 0015 |
 | [0057](0057-local-names-and-front-door.md) | Local names and front door (dnsmasq wildcard, Caddy on 443) | implemented | 0001 |

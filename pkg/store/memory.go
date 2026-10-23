@@ -49,6 +49,8 @@ type Memory struct {
 	settings    map[string]string
 	console     map[string]ConsoleUser
 	cost        *costsMemory
+	github      map[githubKey]*githubRow
+	githubLinks map[string]GitHubUserLink
 	tickets     map[string]memTicket
 	logins      map[string]memTicket
 	downloads   map[string]memTicket

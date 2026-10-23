@@ -41,6 +41,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/buildtrust"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/all"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/objectgateway"
@@ -281,6 +282,9 @@ func run(o runOptions, logger *slog.Logger) error {
 	// front doors; the API pokes it when a workspace changes.
 	memberships := &controller.MembershipReconciler{Store: st}
 	workspaces := &controller.WorkspaceReconciler{Store: st}
+	// The GitHub App (RFC-0054): the API tells it when a workspace's
+	// connections change; the manager gives it the App's Secret.
+	githubApp := &controller.GitHubApp{Installations: st}
 
 	// The open-source platform resolves every host to its one workspace.
 	var resolver tenancy.Resolver = &tenancy.Single{Store: st, ConsoleHost: hostOf(dashboard), DefaultSlug: defaultSlugOf(st)}
@@ -313,6 +317,11 @@ func run(o runOptions, logger *slog.Logger) error {
 		WorkspacesChanged: func() {
 			if o.controller {
 				workspaces.Notify()
+			}
+		},
+		GitHubChanged: func(ws string) {
+			if o.controller {
+				githubApp.Changed(context.Background(), ws)
 			}
 		},
 		UI:                     uiFiles(logger),
@@ -364,7 +373,7 @@ func run(o runOptions, logger *slog.Logger) error {
 
 	if o.controller {
 		runControllers := func() error {
-			mgr, err := newManager(k, o, memberships, workspaces, srv.Deps())
+			mgr, err := newManager(k, o, memberships, workspaces, githubApp, srv.Deps())
 			if err != nil {
 				return err
 			}
@@ -459,7 +468,7 @@ func openStore(logger *slog.Logger, k *kube.Client, def store.DefaultWorkspaceSp
 	return st, nil
 }
 
-func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler, apiDeps ext.Deps) (ctrl.Manager, error) {
+func newManager(k *kube.Client, o runOptions, memberships *controller.MembershipReconciler, workspaces *controller.WorkspaceReconciler, githubApp *controller.GitHubApp, apiDeps ext.Deps) (ctrl.Manager, error) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, err
@@ -513,6 +522,9 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 		}
 		return store.DefaultWorkspace
 	}
+	// The GitHub App (RFC-0054): its Secret through the manager's cache,
+	// and the workspaces' installations.
+	githubApp.Source = &github.Source{Reader: mgr.GetClient(), Namespace: k.Namespace, Options: github.Options{APIURL: os.Getenv(github.EnvAPIURL)}}
 	rec := &controller.AppReconciler{
 		BindableTypes: bindable,
 		Kube:          k.Kube,
@@ -534,6 +546,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 			WorkspaceSuspended:      workspaceCache.Suspended,
 			WorkspaceID:             workspaceCache.ID,
 			Projects:                memberships.Store,
+			GitHub:                  githubApp,
 			DashboardURL:            envOr("SHPYRD_DASHBOARD_URL", ""),
 			HTTPSPort:               os.Getenv("SHPYRD_HTTPS_PORT"),
 			RegistryHost:            os.Getenv("SHPYRD_REGISTRY_HOST"),
@@ -567,6 +580,29 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := rec.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("app controller: %w", err)
 	}
+	// The source watcher (RFC-0018): pins the commit each App on a git
+	// branch builds, from webhooks and the deploys people ask for.
+	source := &controller.SourceReconciler{
+		Client:          mgr.GetClient(),
+		Kube:            k.Kube,
+		SystemNamespace: k.Namespace,
+		GitHub:          githubApp,
+	}
+	if err := source.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("source watcher: %w", err)
+	}
+	// The GitHub reporter (RFC-0054): check runs and Deployments on GitHub
+	// for the Apps its App covers; the dashboard's address from the App
+	// controller's Config.
+	reporter := &controller.GitHubReporter{Client: mgr.GetClient(), GitHub: githubApp, Config: rec.Config}
+	if err := reporter.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("github reporter: %w", err)
+	}
+	// The catch-up sweep (RFC-0054): deliveries GitHub could not make,
+	// asked for again every 5 minutes, on the leader.
+	if err := mgr.Add(&controller.GitHubSweep{GitHub: githubApp}); err != nil {
+		return nil, fmt.Errorf("github sweep: %w", err)
+	}
 	drains := &controller.LogDrainReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Recorder: mgr.GetEventRecorderFor("shpyrd"), SystemNamespace: k.Namespace, Kube: k.Kube}
 	if err := drains.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("log drain controller: %w", err)
@@ -591,6 +627,7 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	workspaces.Client, workspaces.Scheme, workspaces.Config, workspaces.LookupLB = mgr.GetClient(), mgr.GetScheme(), rec.Config, rec.LookupLB
 	workspaces.Forget = workspaceCache.Forget
 	workspaces.NamesChanged = rec.RequeueWorkspace
+	githubApp.SetRequeue(rec.RequeueGitHub)
 	if err := workspaces.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("workspace controller: %w", err)
 	}

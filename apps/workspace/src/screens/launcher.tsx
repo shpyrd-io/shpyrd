@@ -25,15 +25,18 @@ import { LauncherCard } from "@shpyrd/ui/components/launcher-card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Skeleton } from "@shpyrd/ui/components/skeleton";
 import { Stack } from "@shpyrd/ui/components/stack";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@shpyrd/ui/components/tabs";
 import { Textarea } from "@shpyrd/ui/components/textarea";
 import { api, ApiError } from "@/api/api";
 import type { Exposure, ProjectSummary } from "@/api/types";
+import { LINK_REQUIRED } from "@/lib/github-link";
 import { useInternalExposure } from "@/lib/networking";
 import { useBrandColor } from "@/lib/branding";
 import { usePerms, useUserOnly } from "@/lib/perms";
 import { addressOf, badgesOf, hostOf, openUrl, phaseOf } from "@/lib/project";
 import { lookOf } from "@/lib/tile";
 import { PersonMenu, ThemeButton } from "@/shell/person";
+import { GitHubLinkStep, GitHubPicker, type Picked, slugFromRepo } from "./github-picker";
 
 // Where everyone lands: the applications of the workspace, one card
 // each. Who operates sees the gear of each and the way to make one more;
@@ -129,7 +132,7 @@ function Card({ project, operator }: { project: ProjectSummary; operator: boolea
 
 // The dialog that makes a project. It is the "+" at the top, or the
 // button of the empty page.
-function NewProject({ asButton = false }: { asButton?: boolean }) {
+export function NewProject({ asButton = false }: { asButton?: boolean }) {
   const queries = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -141,6 +144,20 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
   const [git, setGit] = useState("");
   const [ref, setRef] = useState("");
   const [path, setPath] = useState("");
+  // From GitHub (RFC-0054): offered when the workspace's connections reach
+  // a repository, or when GitHub failed, so the error shows; asked only
+  // while the dialog is open.
+  const [from, setFrom] = useState<"github" | "url">("github");
+  const [picked, setPicked] = useState<Picked>();
+  const perms = usePerms();
+  const accounts = useQuery({ queryKey: ["github-accounts"], queryFn: api.githubAccounts, enabled: open, retry: false, staleTime: 60_000 });
+  const needsLink = accounts.error instanceof ApiError && accounts.error.code === LINK_REQUIRED;
+  // Offered when the workspace has a GitHub account, when the person must
+  // link first, or when GitHub failed (so the error shows).
+  const githubShown = accounts.isSuccess
+    ? accounts.data.connected > 0
+    : needsLink || (accounts.error instanceof ApiError && accounts.error.status === 502);
+  const fromGitHub = githubShown && from === "github";
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: 60_000 });
   // The app's address around the slug: acme-<slug>.shpyrd.app, or
   // <slug>.<domain> where the server gives no pattern.
@@ -155,8 +172,13 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
         exposure,
         displayName: name.trim() || undefined,
         description: description.trim() || undefined,
-        git: git.trim() ? { url: git.trim(), revision: ref.trim() || "main" } : undefined,
-        subPath: path.trim() || undefined,
+        git: fromGitHub
+          ? picked && { url: `https://github.com/${picked.fullName}`, revision: picked.branch }
+          : git.trim()
+            ? { url: git.trim(), revision: ref.trim() || "main" }
+            : undefined,
+        // The directory is a field of the Git URL tab alone.
+        subPath: fromGitHub ? undefined : path.trim() || undefined,
       }),
     onSuccess: (p) => {
       queries.invalidateQueries({ queryKey: ["projects"] });
@@ -167,6 +189,23 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
     onError: (e: Error) => toast.error(e instanceof ApiError ? e.message : "Could not create the project"),
   });
   const validSlug = /^[a-z0-9-]{2,}$/.test(slug.trim());
+  const gitURLFields = (
+    <>
+      <Field label="Git repository" hint="Optional: it is built and released right away. Without one, deploy later, from Git or from a checkout with the CLI.">
+        <Input value={git} onChange={(e) => setGit(e.target.value)} placeholder="https://github.com/acme/hello-world" className="font-mono text-xs" />
+      </Field>
+      {git.trim() && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Branch, tag or commit">
+            <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" className="font-mono text-xs" />
+          </Field>
+          <Field label="Directory">
+            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="services/api" className="font-mono text-xs" />
+          </Field>
+        </div>
+      )}
+    </>
+  );
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -176,54 +215,86 @@ function NewProject({ asButton = false }: { asButton?: boolean }) {
           <Button size="icon-lg" icon={<Plus />} aria-label="New project" className="ml-2" />
         )}
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader divider>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
             It answers at its address within a minute, with its certificate. The name may change later; the slug may not.
           </DialogDescription>
         </DialogHeader>
-        <Stack gap="normal">
-          <Field label="Slug" hint="Lowercase letters, digits and dashes." required error={slug && !validSlug ? "Only lowercase letters, digits and dashes." : undefined}>
-            <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" prefix={prefix} suffix={suffix} autoFocus />
-          </Field>
-          <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hello World" />
-          </Field>
-          <Field label="What it is" hint="One line, on its card.">
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A small API that answers the mobile app." />
-          </Field>
-          {supportsInternal && (
-            <Field label="Network" hint="Internal apps are reachable only through this workspace's private network.">
-              <Select value={exposure} onValueChange={(v) => setExposure(v as Exposure)}>
-                <SelectTrigger aria-label="Network"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="external">Public internet</SelectItem>
-                  <SelectItem value="internal">Internal network</SelectItem>
-                </SelectContent>
-              </Select>
+        <div className="grid gap-6 md:grid-cols-2">
+          {/* The project: its address, its name and where it answers. */}
+          <Stack gap="normal">
+            <Field label="Slug" hint="Lowercase letters, digits and dashes." required error={slug && !validSlug ? "Only lowercase letters, digits and dashes." : undefined}>
+              <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="hello-world" prefix={prefix} suffix={suffix} autoFocus />
             </Field>
-          )}
-          {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
-          <Field label="Git repository" hint="Optional: it is built and released right away. Without one, deploy later, from Git or from a checkout with the CLI.">
-            <Input value={git} onChange={(e) => setGit(e.target.value)} placeholder="https://github.com/acme/hello-world" className="font-mono text-xs" />
-          </Field>
-          {git.trim() && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Branch, tag or commit">
-                <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" className="font-mono text-xs" />
+            <Field label="Name">
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hello World" />
+            </Field>
+            <Field label="What it is" hint="One line, on its card.">
+              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A small API that answers the mobile app." />
+            </Field>
+            {supportsInternal && (
+              <Field label="Network" hint="Internal apps are reachable only through this workspace's private network.">
+                <Select value={exposure} onValueChange={(v) => setExposure(v as Exposure)}>
+                  <SelectTrigger aria-label="Network" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="external">Public internet</SelectItem>
+                    <SelectItem value="internal">Internal network</SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
-              <Field label="Directory">
-                <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="services/api" className="font-mono text-xs" />
-              </Field>
-            </div>
-          )}
-        </Stack>
+            )}
+            {!supportsInternal && exposure === "internal" && <p className="text-sm text-destructive">Internal exposure is no longer available. <button type="button" className="underline" onClick={() => setExposure("external")}>Choose public internet</button> to continue.</p>}
+          </Stack>
+          {/* Its code: a repository from GitHub, or any git URL. */}
+          <Stack gap="normal">
+            {githubShown ? (
+              <Tabs value={from} onValueChange={(v) => setFrom(v as "github" | "url")}>
+                <TabsList>
+                  <TabsTrigger value="github">From GitHub</TabsTrigger>
+                  <TabsTrigger value="url">Git URL</TabsTrigger>
+                </TabsList>
+                <TabsContent value="github">
+                  {needsLink ? (
+                    <GitHubLinkStep
+                      onLinked={() => {
+                        queries.invalidateQueries({ queryKey: ["github-me"] });
+                        queries.invalidateQueries({ queryKey: ["github-accounts"] });
+                      }}
+                    />
+                  ) : accounts.error ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>{accounts.error.message}</AlertDescription>
+                    </Alert>
+                  ) : accounts.data ? (
+                    <GitHubPicker
+                      accounts={accounts.data.accounts}
+                      value={picked}
+                      canAdd={perms.admin}
+                      onChange={(p) => {
+                        setPicked(p);
+                        if (p && !slug.trim()) setSlug(slugFromRepo(p.fullName));
+                      }}
+                    />
+                  ) : (
+                    <Skeleton className="h-48 w-full" />
+                  )}
+                </TabsContent>
+                <TabsContent value="url" className="grid gap-4">
+                  {gitURLFields}
+                </TabsContent>
+              </Tabs>
+            ) : (
+              gitURLFields
+            )}
+          </Stack>
+        </div>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal)} onClick={() => create.mutate()}>
+          <Button disabled={!validSlug || create.isPending || (exposure === "internal" && !supportsInternal) || (fromGitHub && !picked)} onClick={() => create.mutate()}>
             Create
           </Button>
         </DialogFooter>

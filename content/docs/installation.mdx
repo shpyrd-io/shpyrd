@@ -187,6 +187,27 @@ shpyrd cluster init --context my-cluster --profile local --domain apps.example.t
 
 `--yes` is required for contexts that do not look like kind clusters. The `local` profile assumes ingress-nginx can bind host ports on a node labelled `ingress-ready=true` and that the service subnet is `10.96.0.0/16` (the registry uses the fixed ClusterIP `10.96.0.50`). For a managed Kubernetes cluster use a cloud profile: [Oracle Cloud (OKE)](/docs/oracle-cloud) or [AWS (EKS)](/docs/aws).
 
+## Connect GitHub
+
+Workspaces connect GitHub through one GitHub App per cluster, which the operator registers once. On shpyrd cloud the App is already set up.
+
+```shell
+shpyrd-ctl github app create --org acme      # or without --org, under your own account
+```
+
+A browser opens on GitHub with the App filled in: its name (`shpyrd-<dashboard host>`, or `--name`, at most 34 characters), its webhook at `<dashboard>/api/github/webhook`, its setup page at `<dashboard>/api/github/installed`, and the permissions it asks for: contents, metadata, members and statuses read; checks and deployments write. Members lets shpyrd check that the person connecting an organisation owns it. Checks and deployments let shpyrd show each commit's build and release on GitHub, and statuses let it wait for a commit's CI ([Checks and Deployments on GitHub](/docs/deploying#checks-and-deployments-on-github)). One click creates the App. `shpyrd-ctl` keeps its credentials in the Secret `shpyrd-system/shpyrd-github-app`. The App is private unless you pass `--public`: then any account can install it, not only its owner. A private App registered under a personal account can be installed only on that account: to install it on an organisation, register it with `--org` (under the organisation), or with `--public`.
+
+People link their own GitHub accounts through the same App: it asks for user authorization during installation, and its user tokens must expire (GitHub's "Expire user authorization tokens", under Optional features in the App's settings). An App registered before GitHub made that the default may have it off: turn it on, or linking says so. The server keeps the key that encrypts the people's GitHub tokens in the Secret `shpyrd-system/shpyrd-token-key`, made at its first start. To rotate it, delete the Secret and restart every server replica together; people then link again.
+
+GitHub must reach the dashboard's address for the webhook. The address comes from the cluster's install settings; `--url` gives another, and the command needs one of them. The command waits ten minutes for GitHub; Ctrl-C stops it.
+
+```shell
+shpyrd-ctl github app show      # slug, id and page on GitHub; never the keys
+shpyrd-ctl github app delete    # remove the Secret; then delete the App on GitHub
+```
+
+GitHub Enterprise Server is not supported yet: the App works with github.com.
+
 ## Upgrading
 
 Install the new CLI and run `shpyrd cluster init` again with the same context and profile: the recorded decisions (domain, exposure, extensions) are reused, and `--only shpyrd` limits the run to the platform's own components when nothing else changed. What an upgrade does to running apps:

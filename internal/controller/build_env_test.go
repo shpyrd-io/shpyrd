@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
 )
 
 // A buildpack build sees the variables the app runs with (#54): they reach
@@ -119,7 +120,7 @@ func TestOlderImageBindsTheVariablesWithItsNextBuild(t *testing.T) {
 		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Blob: &shpyrdv1.BlobSource{URL: "http://shpyrd-server.shpyrd-system.svc:8082/api/sources/" + strings.Repeat("b", 64) + ".tgz"}}},
 	}
 	r, c := newTestReconciler(t, app)
-	old, err := r.Config.desiredKpackImage(app)
+	old, err := r.Config.desiredKpackImage(app, gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +168,8 @@ func TestGitImageBindsTheVariablesAtOnce(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "web1", Namespace: "app-web1", Generation: 1},
 		Spec:       shpyrdv1.AppSpec{Source: &shpyrdv1.Source{Git: &shpyrdv1.GitSource{URL: "https://example.test/repo.git", Revision: "main"}}},
 	}
-	r, c := newTestReconciler(t, app)
-	old, err := r.Config.desiredKpackImage(app)
+	r, c := newTestReconciler(t, pinGit(app, testCommit))
+	old, err := r.Config.desiredKpackImage(app, gitauth.Build{})
 	if err != nil {
 		t.Fatal(err)
 	}

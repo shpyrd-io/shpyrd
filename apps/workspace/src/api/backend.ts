@@ -1,12 +1,15 @@
 import { parseLogLine } from "@shpyrd/shared/logs";
 import { projectArchiveActions } from "@shpyrd/shared/api/project-archives";
-import { json, request, stream } from "@shpyrd/shared/api/http";
+import { ApiError } from "@shpyrd/shared/api/error";
+import { json, request, requestWithHeaders, stream } from "@shpyrd/shared/api/http";
 import type { LogLine } from "@shpyrd/ui/components/log-view";
 import type { Api } from "./api";
 import type {
   APIToken,
   AuditEntry,
   DomainStatus,
+  GitHubBranches,
+  GitHubRepositories,
   Metrics,
   Project,
   ProjectSummary,
@@ -277,6 +280,37 @@ export const backend: Api = {
     ),
   updateProject: async (slug, body) =>
     toProject(await request<DetailAnswer>(project(slug), json("PATCH", body))),
+  projectGitHooks: (slug) => request(`${project(slug)}/git-hooks`),
+  projectGitAuth: (slug) => request(`${project(slug)}/git-auth`),
+  github: () => request("/api/workspace/github"),
+  connectGitHub: () => request("/api/workspace/github/connect", json("POST", {})),
+  disconnectGitHub: (id) => request(`/api/workspace/github/installations/${id}`, gone),
+  githubMe: async () => {
+    try {
+      return await request("/api/me/github");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+  linkGitHub: (returnTo) => request("/api/me/github/link", json("POST", { return: returnTo })),
+  unlinkGitHub: () => request("/api/me/github", gone),
+  githubAccounts: () => request("/api/workspace/github/accounts"),
+  githubRepositories: async (installation) => {
+    const { data, headers } = await requestWithHeaders<GitHubRepositories>(
+      `/api/workspace/github/repositories${installation ? `?installation=${installation}` : ""}`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
+  },
+  githubBranches: async (fullName) => {
+    const [owner, repo] = fullName.split("/");
+    const { data, headers } = await requestWithHeaders<GitHubBranches>(
+      `/api/workspace/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+    );
+    if (headers.get("X-Shpyrd-Truncated") === "true") data.truncated = true;
+    return data;
+  },
   setProjectIcon: async (slug, dataUrl) =>
     toProject(
       await request<DetailAnswer>(

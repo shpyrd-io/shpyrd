@@ -68,7 +68,7 @@ func TestKpackBuildFailureInWords(t *testing.T) {
 			{Name: "build", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 51}}},
 		}},
 	}
-	r, c := newTestReconciler(t, app, build, pod)
+	r, c := newTestReconciler(t, pinGit(app, testCommit), build, pod)
 	r.Kube = kubefake.NewSimpleClientset() // its logs answer "fake logs"
 	runReconcile(t, r, app)
 	img := &unstructured.Unstructured{}
@@ -133,5 +133,50 @@ func TestBuildStepThatNeverStarted(t *testing.T) {
 	r.Kube = kubefake.NewSimpleClientset()
 	if got := r.kpackBuildFailure(ctx, b); got != notStartedMessage || PlatformWordingFault(got) != "" {
 		t.Errorf("read by the controller: %q", got)
+	}
+}
+
+func TestRefusedCloneNamesTheFix(t *testing.T) {
+	for _, out := range []string{
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		"remote: Repository not found.\nfatal: repository 'https://github.com/acme/api.git/' not found",
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+		"Error: failed to fetch: authentication required",
+		// kpack, an ssh URL with no credential for it (seen on a kind run)
+		`unable to fetch references for repository: error creating SSH agent: "SSH agent requested but SSH_AUTH_SOCK not-specified"`,
+		// kpack (go-git), a key the host does not accept
+		"unable to fetch references for repository: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain",
+	} {
+		msg := describeBuildFailure("prepare", out)
+		if !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || !strings.Contains(msg, "shpyrd git-auth set") || !strings.Contains(msg, "shpyrd redeploy") {
+			t.Errorf("%q -> %s", out, msg)
+		}
+	}
+	// git's real output on a refused host key; only the fetch's marker (a
+	// deploy key was used) makes it the host-key message.
+	gitOut := "Host key verification failed.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists."
+	if msg := describeBuildFailure("prepare", gitOut+"\n"+hostKeyChangedMarker); !strings.Contains(msg, "host key is not the one recorded") || strings.Contains(msg, "private") {
+		t.Errorf("host key with the marker -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", gitOut); !strings.Contains(msg, "private") || !strings.Contains(msg, "shpyrd git-auth deploy-key") || strings.Contains(msg, "host key is not") {
+		t.Errorf("no deploy key (no marker) -> %s", msg)
+	}
+	if msg := describeBuildFailure("prepare", "fatal: unable to access: Could not resolve host"); strings.Contains(msg, "git-auth") {
+		t.Errorf("a network failure is not an access failure: %s", msg)
+	}
+}
+
+// Only a clone of the app's own repository, in the prepare step, gets the
+// git-auth hint. An app's own fetch inside the build (npm, go, pip) does not.
+func TestAppDependencyFetchIsNotAClone(t *testing.T) {
+	for _, c := range []struct{ step, out string }{
+		{"build", "npm ERR! code E401\nnpm ERR! Authentication failed for registry"},
+		{"dockerfile", "process \"/bin/sh -c go mod download\" did not complete successfully: exit code: 1\nfatal: could not read Username for 'https://github.com': terminal prompts disabled"},
+		{"build", "Host key verification failed."},
+	} {
+		msg := describeBuildFailure(c.step, c.out)
+		if strings.Contains(msg, "git-auth") || strings.Contains(msg, "private") {
+			t.Errorf("%s: %q -> %s", c.step, c.out, msg)
+		}
 	}
 }

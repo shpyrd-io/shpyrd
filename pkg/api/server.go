@@ -25,11 +25,14 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/authz"
 	"github.com/shpyrd-io/shpyrd/pkg/edge"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/gitauth"
+	"github.com/shpyrd-io/shpyrd/pkg/github"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
 	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/pages"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 	"github.com/shpyrd-io/shpyrd/pkg/tenancy"
+	"github.com/shpyrd-io/shpyrd/pkg/tokenseal"
 )
 
 // Options configures the server.
@@ -100,6 +103,11 @@ type Options struct {
 	// MembershipChanged is called after every team or grant write so the
 	// RBAC mirror runs at once; nil when this replica does not run it.
 	MembershipChanged func()
+	// GitHubChanged is called after a workspace's GitHub connections
+	// change (connect, disconnect, an installation event) so its Apps on
+	// github.com take their credential again at once (RFC-0054); nil when
+	// this replica does not run the controllers.
+	GitHubChanged func(workspace string)
 	// Tenancy maps request hosts to workspaces (RFC-0033 phase 6). Defaults
 	// to tenancy.Single: every host is the implicit workspace. The cloud
 	// layer supplies a resolver that knows many.
@@ -260,6 +268,9 @@ type Server struct {
 	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
 	// REST mapper (tests inject one).
 	sleepAvailable func() bool
+	// scanHostKey records a git host's SSH key for a deploy key
+	// (RFC-0017); a field so tests need no network.
+	scanHostKey func(ctx context.Context, host, port string) (line, fingerprint string, err error)
 	// sleepGate says whether things may sleep by themselves; nil asks the
 	// extensions (ext.SleepGate). Tests inject one.
 	sleepGate func() bool
@@ -285,6 +296,30 @@ type Server struct {
 	cliDevices *cliDeviceStore
 	// shellMints throttles ticket minting per actor (RFC-0026).
 	shellMints *rateLimiter
+	// deployKeyMints throttles deploy key creation per actor: each one
+	// dials a host the caller names (RFC-0017).
+	deployKeyMints *rateLimiter
+	// gitHookDeliveries throttles webhook deliveries per address, and
+	// hookRefusals the log lines of refused ones per project (RFC-0018).
+	gitHookDeliveries *rateLimiter
+	hookRefusals      *rateLimiter
+	// The GitHub App (RFC-0054): its credentials, read from its Secret;
+	// the connect states and finish tickets used; each workspace's
+	// repositories, a minute; and the App webhook's own limiter (Task 5).
+	githubApp *github.Source
+	// githubCover keeps GitHub's answers on whether the App covers a
+	// repository, for the projects' views.
+	githubCoverMu    sync.Mutex
+	githubCover      *controller.GitHubApp
+	githubNonces     *nonceSet
+	githubTickets    *nonceSet
+	githubRepos      *githubRepoCache
+	githubDeliveries *rateLimiter
+	// githubBox seals the people's GitHub refresh tokens (RFC-0054): its
+	// key is the Secret shpyrd-token-key, made at start when absent.
+	githubBox *tokenseal.Box
+	// githubUsers keeps the people's GitHub access tokens in memory.
+	githubUsers *githubUserTokens
 	// The exec bridge (RFC-0026). The three function fields are the seam tests
 	// replace: everything but the pod stream itself is then testable, down to
 	// the candidate walk execRun sits under.
@@ -383,12 +418,20 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	s.execStream = s.streamExec
 	s.attachStream = s.streamAttach
 	s.runPoll = time.Second
+	s.scanHostKey = gitauth.ScanHostKey
 	s.probeShell = s.resolveShell
 	s.execRun = s.runKexec
 	s.shellIdle = shellIdleTimeout
 	s.shellPing = shellPingInterval
 	s.shellProbe = shellProbeTimeout
 	s.shellMints = newRateLimiter(shellMintsPerMinute)
+	s.deployKeyMints = newRateLimiter(deployKeysPerMinute)
+	s.gitHookDeliveries = newRateLimiter(gitHooksPerMinute)
+	s.hookRefusals = newRateLimiter(hookRefusalsPerMinute)
+	s.githubNonces = &nonceSet{}
+	s.githubTickets = &nonceSet{}
+	s.githubRepos = &githubRepoCache{}
+	s.githubDeliveries = newRateLimiter(githubHooksPerMinute)
 	s.engine = gin.New()
 	s.engine.Use(gin.Recovery(), s.requestLogger(), securityHeaders(), s.relaySignIn(), s.redirectMoved())
 	if err := s.engine.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -405,6 +448,21 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 			systemNS = k.Namespace
 		}
 	}
+	s.githubApp = &github.Source{Reader: opts.Apps, Namespace: systemNS, Options: github.Options{APIURL: opts.Vars(github.EnvAPIURL)}}
+	if kubeIface != nil {
+		box, err := tokenseal.LoadOrCreate(context.Background(), kubeIface, systemNS)
+		if err != nil {
+			return nil, fmt.Errorf("token key: %w", err)
+		}
+		s.githubBox = box
+	} else {
+		box, err := tokenseal.Generate()
+		if err != nil {
+			return nil, err
+		}
+		s.githubBox = box
+	}
+	s.githubUsers = newGitHubUserTokens(s.store, s.githubBox, s.log)
 	sessions := newSessionStore(opts.Store, kubeIface, systemNS, opts.Logger)
 	sessions.load(context.Background())
 	// The edge's signing key lives in the cluster; tests and clusterless
@@ -619,6 +677,12 @@ func (s *Server) routes() error {
 	// Archives are content addressed (SHA-256) and fetched by build
 	// instances, which cannot present the admin token.
 	pub.GET("/sources/:name", s.serveSource)
+	// Git hosts deliver pushes here (RFC-0018): no session; the URL's
+	// token and the delivery's signature are the credential.
+	pub.POST("/hooks/git/:slug/:token", s.gitHook)
+	// The GitHub App's webhook (RFC-0054): no session; the App's webhook
+	// secret signs every delivery. 404 while the platform has no App.
+	pub.POST("/github/webhook", s.githubWebhook)
 	// The web terminal (RFC-0026) carries no header and may carry no cookie: a
 	// browser cannot set headers on a WebSocket, and `shpyrd cluster dashboard`
 	// signs in with a token in localStorage. So it skips s.auth() and the
@@ -640,6 +704,9 @@ func (s *Server) routes() error {
 	// and a page where the person approves it, with the dashboard session.
 	pub.POST("/cli/device", login, s.cliDeviceStart)
 	pub.POST("/cli/device/token", login, s.cliDevicePoll)
+	// GitHub sends the browser here after an install (RFC-0054): no
+	// session; the signed state and the person's own GitHub token decide.
+	pub.GET("/github/installed", login, s.githubInstalled)
 	s.engine.GET("/cli/activate", tenant, login, s.cliActivatePage)
 	s.engine.POST("/cli/activate", tenant, login, s.cliActivateDecide)
 
@@ -652,6 +719,10 @@ func (s *Server) routes() error {
 		return err
 	}
 	api.GET("/me", s.me)
+	// The person's own GitHub account (RFC-0054).
+	api.GET("/me/github", s.githubMe)
+	api.POST("/me/github/link", s.githubLinkStart)
+	api.DELETE("/me/github", s.githubUnlink)
 	api.GET("/links", s.links)
 	api.POST("/auth/logout", s.authLogout)
 	// The cluster is the operator's (RFC-0033 phase 6): a workspace's
@@ -695,6 +766,25 @@ func (s *Server) routes() error {
 	api.GET("/workspace/drains", s.require(authz.ClusterAdmin), s.listWorkspaceDrains) // RFC-0023: the workspace's own
 	api.POST("/workspace/drains", s.require(authz.ClusterAdmin), s.createWorkspaceDrain)
 	api.DELETE("/workspace/drains/:name", s.require(authz.ClusterAdmin), s.deleteWorkspaceDrain)
+	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens) // RFC-0017
+	api.PUT("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.putGitToken)
+	api.DELETE("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.deleteGitToken)
+	api.GET("/workspace/github", s.require(authz.ClusterAdmin), s.githubView) // RFC-0054
+	api.POST("/workspace/github/connect", s.require(authz.ClusterAdmin), s.githubConnect)
+	api.DELETE("/workspace/github/installations/:id", s.require(authz.ClusterAdmin), s.githubDisconnect)
+	// The connect finishes on the workspace's own address, with the
+	// session that started it; a browser without one signs in first.
+	s.engine.GET("/api/workspace/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.require(authz.ClusterAdmin), s.githubFinish)
+	// A link of the person's GitHub: the CLI opens its start in the
+	// browser, and it finishes on the workspace's own address with the
+	// session that started it; a browser without one signs in first.
+	s.engine.GET("/api/me/github/link", tenant, login, s.githubSignInFirst, s.auth(), s.githubLinkBrowser)
+	s.engine.GET("/api/me/github/finish", tenant, login, s.githubSignInFirst, s.auth(), s.githubLinkFinish)
+	// Who makes projects picks from the repositories (ClusterCreate, the
+	// action of POST /projects).
+	api.GET("/workspace/github/accounts", s.require(authz.ClusterCreate), s.githubAccounts)
+	api.GET("/workspace/github/repositories", s.require(authz.ClusterCreate), s.githubRepositories)
+	api.GET("/workspace/github/repositories/:owner/:repo/branches", s.require(authz.ClusterCreate), s.githubBranches)
 	// Cluster log drains: every project's lines (RFC-0023).
 	api.GET("/drains", console, s.require(authz.ClusterAdmin), s.listClusterDrains)
 	api.POST("/drains", console, s.require(authz.ClusterAdmin), s.createClusterDrain)
@@ -837,6 +927,11 @@ func (s *Server) routes() error {
 	api.GET("/projects/:slug/drains", s.require(authz.ProjectView), s.listProjectDrains)
 	api.POST("/projects/:slug/drains", s.require(authz.ProjectResource), s.createProjectDrain)
 	api.DELETE("/projects/:slug/drains/:name", s.require(authz.ProjectResource), s.deleteProjectDrain)
+	api.GET("/projects/:slug/git-auth", s.require(authz.ProjectView), s.showProjectGitAuth) // RFC-0017
+	api.POST("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.throttleDeployKeys(), s.createDeployKey)
+	api.DELETE("/projects/:slug/git-auth/deploy-key", s.require(authz.ProjectConfig), s.deleteDeployKey)
+	api.GET("/projects/:slug/git-hooks", s.require(authz.ProjectConfig), s.showGitHooks) // RFC-0018
+	api.POST("/projects/:slug/git-hooks/rotate", s.require(authz.ProjectConfig), s.rotateGitHooks)
 	api.GET("/projects/:slug/members", s.require(authz.ProjectMembers), s.listMembers)
 	api.POST("/projects/:slug/members", s.require(authz.ProjectMembers), s.addMember)
 	api.DELETE("/projects/:slug/members/:name", s.require(authz.ProjectMembers), s.removeMember)
@@ -960,6 +1055,9 @@ func (s *Server) auth() gin.HandlerFunc {
 			abort(c, http.StatusUnauthorized, errors.New("missing or invalid token"))
 			return
 		}
+		// Who came with the session cookie, and nothing else: only they
+		// link a GitHub account (RFC-0054).
+		c.Set(sessionAuthKey, true)
 		c.Next()
 	}
 }

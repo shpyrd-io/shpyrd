@@ -17,6 +17,13 @@ import type {
   DomainStatus,
   Drain,
   Exposure,
+  GitHooks,
+  GitHubAccounts,
+  GitHubBranches,
+  GitHubConnections,
+  GitHubLink,
+  GitHubRepositories,
+  ProjectGitAuth,
   Identity,
   Link,
   Instance,
@@ -155,8 +162,37 @@ export type Api = {
       featured?: boolean;
       icon?: string;
       iconColor?: string;
+      // Whether a push to the project's branch deploys.
+      autoDeploy?: boolean;
+      // The commits a push deploys: only those that change these globs,
+      // and only once their other checks pass (the GitHub App's).
+      watchPaths?: string[];
+      waitForChecks?: boolean;
     },
   ) => Promise<Project>;
+  // The project's webhook for deploy on push: its URL and secret.
+  projectGitHooks: (slug: string) => Promise<GitHooks>;
+  // What the project's builds clone with: a GitHub App, a deploy key, a token.
+  projectGitAuth: (slug: string) => Promise<ProjectGitAuth>;
+  // The workspace's GitHub (RFC-0054): its connections; Connect sends the
+  // browser to GitHub's authorize page, which says who the person is so the
+  // server lists the installations they own; the install page is for a new
+  // account. Both carry the same single-use state.
+  github: () => Promise<GitHubConnections>;
+  connectGitHub: () => Promise<{ installURL: string; authorizeURL: string }>;
+  disconnectGitHub: (id: number) => Promise<void>;
+  // The person's own GitHub account (RFC-0054): null when none is linked.
+  // linkGitHub answers GitHub's authorize page for a popup; an empty one
+  // means linked already (the Mock links at once).
+  githubMe: () => Promise<GitHubLink | null>;
+  linkGitHub: (returnTo: string) => Promise<{ authorizeURL: string }>;
+  unlinkGitHub: () => Promise<void>;
+  // What the person reads through the workspace's GitHub: a 409 with the
+  // code "github_link_required" while they have no link. A list the server
+  // cut says so in `truncated`.
+  githubAccounts: () => Promise<GitHubAccounts>;
+  githubRepositories: (installation?: number) => Promise<GitHubRepositories>;
+  githubBranches: (fullName: string) => Promise<GitHubBranches>;
   // The project's own image for its card, as a data URL; and back to its symbol.
   setProjectIcon: (slug: string, dataUrl: string) => Promise<Project>;
   removeProjectIcon: (slug: string) => Promise<Project>;

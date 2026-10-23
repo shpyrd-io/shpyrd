@@ -23,7 +23,7 @@ import (
 // runs when the registry needs no credentials (the in-cluster registry).
 
 // reconcileRegistryCredentials mirrors the registry Secret into the project
-// namespace and keeps the build ServiceAccount in step.
+// namespace; ensureBuildServiceAccount links it.
 func (r *AppReconciler) reconcileRegistryCredentials(ctx context.Context, app *shpyrdv1.App) error {
 	if r.Config.RegistrySecret == "" {
 		return nil
@@ -44,15 +44,6 @@ func (r *AppReconciler) reconcileRegistryCredentials(ctx context.Context, app *s
 		return nil
 	}); err != nil {
 		return fmt.Errorf("mirror registry credentials: %w", err)
-	}
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: BuildServiceAccount, Namespace: app.Namespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.Labels = mergeMaps(sa.Labels, map[string]string{shpyrdv1.LabelManagedBy: "shpyrd", shpyrdv1.LabelProject: app.Name})
-		sa.Secrets = []corev1.ObjectReference{{Name: r.Config.RegistrySecret}}
-		sa.ImagePullSecrets = []corev1.LocalObjectReference{{Name: r.Config.RegistrySecret}}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("build service account: %w", err)
 	}
 	return nil
 }
