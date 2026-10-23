@@ -644,7 +644,7 @@ func newAppClient(g *globalFlags, out io.Writer) (*appClient, error) {
 		if len(sessions.Sessions) > 1 {
 			// Several workspaces, none chosen: do not guess, and do not fall
 			// back to whatever the kubeconfig points at.
-			return nil, errors.New("you are signed in to several workspaces: pick one with `shpyrd use <workspace URL>` (or set SHPYRD_URL), or name a cluster with --context")
+			return nil, errors.New("you are signed in to several workspaces: pick one with `shpyrd use <workspace>` (or set SHPYRD_URL), or name a cluster with --context")
 		}
 	}
 	k, err := kube.Connect(kube.Options{Kubeconfig: g.kubeconfig, Context: g.kubeCtx})
