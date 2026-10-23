@@ -14,7 +14,7 @@ You built an app with your agent. shpyrd is where it goes next: its own address,
 
 ### With the installer
 
-Download it for your computer and open it. It installs the shpyrd CLI, adds shpyrd to every AI agent it finds on your computer, and offers to sign you in.
+Download it for your computer and open it. It installs the shpyrd CLI, adds shpyrd to every AI agent it finds on your computer, and opens Accounts to connect your workspace. You can sign in or create your account there.
 
 <AddToAgent />
 
@@ -40,17 +40,23 @@ curl -fsSL https://shpyrd.io/install.sh | sh
 brew install shpyrd-io/tap/shpyrd
 ```
 
-**Sign up.** New to shpyrd? [Create your account and workspace on shpyrd cloud](https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud).
+On Windows, use native **PowerShell** (no WSL required):
 
-Your workspace answers at its own address, like `acme.shpyrd.cloud`, and every app you put online gets an address of its own, like `acme-purchases.shpyrd.app`.
-
-**Sign in to the CLI.** Once your workspace is ready, or if you already have one, sign in using its address:
-
-```shell
-shpyrd login --url https://acme.shpyrd.cloud
+```powershell
+irm https://shpyrd.io/install.ps1 | iex
 ```
 
-Your browser opens on its sign-in. Approve the code your terminal shows. The CLI is signed in as you for 30 days, and never with more than your roles allow.
+**Connect your workspace.** Run:
+
+```shell
+shpyrd login
+```
+
+Accounts opens in your browser. Sign in or create your account and workspace there. If you just created a workspace or downloaded its installer, it is selected for you; otherwise choose a workspace when you have several. The CLI waits for provisioning, then opens workspace authorization. Approve the code shown in your terminal to finish. Existing sessions are reused only if they are valid for the selected workspace.
+
+For a self-hosted workspace or an explicit address, use `shpyrd login --url https://workspace.example.com`. `SHPYRD_URL` still supplies an explicit workspace; `shpyrd login --accounts` ignores that override and starts in Accounts.
+
+Your CLI session lasts 30 days and never grants more access than your workspace roles allow.
 
 ## 2. Talk to it
 
