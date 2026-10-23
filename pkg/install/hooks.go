@@ -56,6 +56,7 @@ var hooks = map[string]Hook{
 	"thanos-objstore":              thanosObjstoreHook,
 	"control-plane-db-credentials": controlPlaneDBHook,
 	"registry-s3":                  registryS3Hook,
+	"registry-http-secret":         registryHTTPSecretHook,
 	"autoscaler-credentials":       autoscalerCredentialsHook,
 	"image-pull-secret":            imagePullSecretHook,
 	"dns-credentials":              dnsCredentialsHook,
@@ -739,6 +740,26 @@ func registryS3Hook(ctx context.Context, e *Engine, c *Component) error {
 		return err
 	}
 	e.rep.Step(c.Name, fmt.Sprintf("registry will store images in OCI Object Storage bucket %s", bucket))
+	return nil
+}
+
+// registryHTTPSecretHook generates the registry's upload-signing secret on
+// first install and keeps it afterwards. Without one each replica makes up
+// its own at start, and an upload that moves between replicas fails with
+// "blob upload invalid - invalid secret".
+func registryHTTPSecretHook(ctx context.Context, e *Engine, c *Component) error {
+	existing, err := e.kube.Kube.CoreV1().Secrets(c.Namespace).Get(ctx, RegistryHTTPSecretName, metav1.GetOptions{})
+	if err == nil && len(existing.Data["secret"]) > 0 {
+		e.rep.Step(c.Name, "keeping existing registry HTTP secret")
+		return nil
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("registry HTTP secret: %w", err)
+	}
+	if err := e.applyOpaqueSecret(ctx, c.Namespace, RegistryHTTPSecretName, map[string]string{"secret": randomHex(32)}); err != nil {
+		return err
+	}
+	e.rep.Step(c.Name, "generated the registry's shared HTTP secret")
 	return nil
 }
 
