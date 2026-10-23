@@ -6,7 +6,7 @@ import { ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -23,10 +23,10 @@ import type { Perms } from "@/lib/perms";
 import { ago, openUrl } from "@/lib/project";
 import { Failed, Loading, when } from "./shared";
 
-const modes: Record<AccessMode, { label: string; text: string }> = {
-  public: { label: "Anyone", text: "The app answers to anyone on the internet, or on the local network when it is internal." },
-  authenticated: { label: "Who signs in", text: "The app asks for a sign-in of this workspace before it answers." },
-  identified: { label: "Named people", text: "Only the people and teams named under Roles, with the role user or above." },
+const modes: Record<AccessMode, { label: string }> = {
+  public: { label: "Public" },
+  authenticated: { label: "Private" },
+  identified: { label: "Auto-detected" },
 };
 
 // Who may open the app, and a way to see it as a team would.
@@ -52,7 +52,6 @@ export function Access({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Who may open it</CardTitle>
-        <CardDescription>{project.access === "public" ? (project.exposure === "internal" ? "The app answers to anyone on its internal network." : "The app answers to anyone on the internet.") : modes[project.access].text}</CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">
@@ -160,7 +159,6 @@ export function Roles({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Roles</CardTitle>
-        <CardDescription>Who can open the app (user) and who can operate the project. Admins of the workspace can do everything anyway.</CardDescription>
         {perms.members && (
           <CardAction>
             <AddMember onAdd={(m) => set.mutate(m)} />
@@ -357,7 +355,6 @@ export function Connections({ project, perms }: { project: Project; perms: Perms
     <Card>
       <CardHeader>
         <CardTitle>Connections</CardTitle>
-        <CardDescription>Who may reach the project from inside the cluster. Nothing may, until it is listed here: not another project, not the platform acting for someone. No release is needed.</CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">
@@ -450,7 +447,6 @@ export function Activity({ project }: { project: Project }) {
     <Card>
       <CardHeader>
         <CardTitle>Activity</CardTitle>
-        <CardDescription>Who did what on this project, from the dashboard, the API and the CLI.</CardDescription>
       </CardHeader>
       <CardContent>
         {audit.isLoading ? (

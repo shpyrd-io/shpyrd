@@ -6,7 +6,7 @@ import { Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -53,7 +53,6 @@ export function Drains() {
       <Card>
         <CardHeader>
           <CardTitle>Log drains</CardTitle>
-          <CardDescription>Every project's lines of the workspace, labelled with the project, sent as they are written: JSON over HTTPS or syslog. A project's own drains are on its page. The values of the headers are never read back.</CardDescription>
           <CardAction>
             <AddDrain onDone={refresh} />
           </CardAction>

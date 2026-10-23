@@ -8,7 +8,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -53,9 +52,6 @@ export function Overview({ project, perms }: { project: Project; perms: Perms })
       <Card className="@5xl/page-layout:col-span-2">
         <CardHeader>
           <CardTitle>Summary</CardTitle>
-          <CardDescription>
-            Where the project comes from, what runs now, and on what.
-          </CardDescription>
           <CardAction className="flex gap-3">
             <Link
               to={`/projects/${project.slug}/releases`}
@@ -146,10 +142,6 @@ export function Overview({ project, perms }: { project: Project; perms: Perms })
       <Card>
         <CardHeader>
           <CardTitle>Activity</CardTitle>
-          <CardDescription>
-            The last thing done to the project, from the dashboard, the API or
-            the CLI.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {audit.isLoading ? (
@@ -249,12 +241,6 @@ function StorageUsed({
     <Card className="@5xl/page-layout:col-span-3">
       <CardHeader>
         <CardTitle>Storage</CardTitle>
-        <CardDescription>
-          {usage.own
-            ? "This project has a cap of its own, set under the workspace's General page."
-            : "The workspace's ceiling, shared with its other projects."}{" "}
-          Disks and dedicated databases count by the capacity they claim.
-        </CardDescription>
         <CardAction>
           <Link
             to={`/projects/${slug}/resources`}

@@ -6,7 +6,7 @@ import { Ban, Copy, Plus, Trash2, UserRoundCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@shpyrd/ui/components/avatar";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -71,7 +71,6 @@ export function People() {
       <Card>
         <CardHeader>
           <CardTitle>People</CardTitle>
-          <CardDescription>Everyone who signed in here, and what each may do in the workspace.</CardDescription>
           <CardAction>
             <Invite onDone={refresh} canOwner={perms.owner} />
           </CardAction>
@@ -155,7 +154,6 @@ export function People() {
       <Card>
         <CardHeader>
           <CardTitle>Invitations</CardTitle>
-          <CardDescription>Asked in, not yet here. An invitation lasts a week.</CardDescription>
         </CardHeader>
         <CardContent>
           {invitations.isLoading ? (

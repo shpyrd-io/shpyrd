@@ -4,12 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
 import { api } from "@/api/api";
-import { usePerms } from "@/lib/perms";
 import { ago } from "@/lib/project";
 import { Failed, Loading, when } from "../project/shared";
 
@@ -17,7 +16,6 @@ import { Failed, Loading, when } from "../project/shared";
 // through MCP, a pipeline. A person sees their own; an admin, everyone's.
 // Cutting one does not touch the person.
 export function Connections() {
-  const perms = usePerms();
   const queries = useQueryClient();
   const connections = useQuery({ queryKey: ["connections"], queryFn: api.connections });
   const revoke = useMutation({
@@ -32,9 +30,6 @@ export function Connections() {
     <Card>
       <CardHeader>
         <CardTitle>Connections</CardTitle>
-        <CardDescription>
-          {perms.admin ? "Every assistant and pipeline connected to the workspace as one of its people." : "The assistants and pipelines connected as you."} Cutting one does not touch the person.
-        </CardDescription>
       </CardHeader>
       <CardContent>
         {connections.isLoading ? (

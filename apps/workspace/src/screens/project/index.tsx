@@ -119,7 +119,6 @@ export function ProjectPages() {
               element={
                 <DomainsCard
                   title="Domains"
-                  description="Addresses of your own that reach the project. Choose a verified domain to redirect visitors from the platform address."
                   queryKey={["domains", slug]}
                   list={() => api.domains(slug)}
                   add={(host) => api.addDomain(slug, host)}

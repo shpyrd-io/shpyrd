@@ -40,6 +40,12 @@ describe("LauncherCard", () => {
     expect(screen.getByRole("img", { name: "Only for who signs in" })).not.toBeNull();
   });
 
+  it("marks one that asks for a sign-in on some paths only with its own sign, not the lock", () => {
+    render(<LauncherCard name="Shop" url="shop.example" access="mixed" />);
+    expect(screen.getByRole("img", { name: "Public, sign-in on some paths" })).not.toBeNull();
+    expect(screen.queryByRole("img", { name: "Only for who signs in" })).toBeNull();
+  });
+
   it("opens its settings from the gear, and has none without a handler", () => {
     const onSettings = vi.fn();
     const { rerender } = render(<LauncherCard name="Docs" url="docs.example" onSettings={onSettings} />);
