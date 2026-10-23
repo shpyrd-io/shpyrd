@@ -185,6 +185,12 @@ const RegistrySecretName = "shpyrd-registry"
 // authenticates against (key "htpasswd").
 const RegistryHtpasswdSecretName = "registry-htpasswd"
 
+// RegistryHTTPSecretName holds the secret every registry replica signs
+// upload state with (key "secret"): with two replicas behind one Service,
+// a blob upload's requests land on either, and each must accept the other's
+// state (distribution's http.secret).
+const RegistryHTTPSecretName = "registry-http-secret"
+
 // DNS automation (RFC-0061).
 const (
 	DNSAuthKey      = "key"

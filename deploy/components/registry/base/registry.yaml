@@ -166,6 +166,15 @@ spec:
                   name: registry-s3
                   key: AWS_SECRET_ACCESS_KEY
                   optional: true
+            # One upload-signing secret for every replica (registry-http-secret
+            # hook): an upload that moves between replicas is accepted.
+            # Not optional, so a missing Secret fails the rollout instead of
+            # each replica making up its own.
+            - name: REGISTRY_HTTP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: registry-http-secret
+                  key: secret
           resources:
             requests:
               cpu: 20m
