@@ -19,6 +19,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Exercise native install without downloading a release
-        shell: ${{ matrix.shell }}
+      - name: Exercise native install on Windows PowerShell 5.1
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: ./hack/test-install-windows.ps1
+      - name: Exercise native install on PowerShell 7
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ./hack/test-install-windows.ps1
