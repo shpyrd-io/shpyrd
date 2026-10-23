@@ -281,6 +281,31 @@ func TestMembershipsAndInvitations(t *testing.T) {
 				t.Errorf("after delete: %+v", roles)
 			}
 
+			// Across workspaces, by bound external identity only.
+			if got, err := s.MembershipsOf(ctx, "https://idp.test", "", "bob@example.test"); err != nil || len(got) != 1 || got[0].Role != WorkspaceRoleAdmin || got[0].Email != "bob@example.test" {
+				t.Errorf("memberships of bob: %+v %v", got, err)
+			}
+			for _, key := range [][3]string{{"https://idp.test", "", "ada@example.test"}, {"https://idp.test", "other", "bob@example.test"}, {"https://other.test", "", "bob@example.test"}, {"", "", ""}} {
+				if got, err := s.MembershipsOf(ctx, key[0], key[1], key[2]); err != nil || len(got) != 0 {
+					t.Errorf("memberships of %v: %+v %v", key, got, err)
+				}
+			}
+			if _, err := s.TouchIdentity(ctx, ws, Identity{Email: "carol@example.test", Issuer: "https://idp.test", Subject: "carol"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.PutMembership(ctx, ws, "carol@example.test", WorkspaceRoleMember); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetIdentityStatus(ctx, ws, "carol@example.test", StatusSuspended); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.MembershipsOf(ctx, "https://idp.test", "", "carol"); len(got) != 0 {
+				t.Errorf("a suspended person holds memberships: %+v", got)
+			}
+			if err := s.DeleteMembership(ctx, ws, "carol@example.test"); err != nil {
+				t.Fatal(err)
+			}
+
 			// Invitations: one per email, replaced by a re-invite, found by
 			// the token's hash, team optional and checked.
 			if _, err := s.CreateInvitation(ctx, ws, Invitation{Email: "eve@example.test", Role: WorkspaceRoleMember, Team: "ghosts"}, "h1"); !errors.Is(err, ErrNotFound) {

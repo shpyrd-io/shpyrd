@@ -1376,6 +1376,25 @@ func (m *Memory) ListMemberships(_ context.Context, ws string) ([]Membership, er
 	return out, nil
 }
 
+func (m *Memory) MembershipsOf(_ context.Context, issuer, connector, subject string) ([]Membership, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if issuer == "" || subject == "" {
+		return nil, nil
+	}
+	var out []Membership
+	for _, mb := range m.memberships {
+		for _, p := range m.identities {
+			if p.ID == mb.PrincipalID && p.WorkspaceID == mb.WorkspaceID && p.Realm == RealmWorkspace && p.Status == StatusActive &&
+				p.Issuer == issuer && p.Connector == connector && p.Subject == subject {
+				out = append(out, mb)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
 func (m *Memory) PutMembership(ctx context.Context, ws, email, role string) (*Membership, error) {
 	if !ValidWorkspaceRole(role) {
 		return nil, fmt.Errorf("role %q is not a workspace role", role)
