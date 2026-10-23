@@ -1,0 +1,24 @@
+name: Native Windows CLI installation
+on:
+  pull_request:
+    paths: ['apps/website/public/install.ps1', 'hack/test-install-windows.ps1', '.github/workflows/windows-install.yml']
+  push:
+    branches: [main]
+    paths: ['apps/website/public/install.ps1', 'hack/test-install-windows.ps1', '.github/workflows/windows-install.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  powershell:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Exercise native install without downloading a release
+        shell: ${{ matrix.shell }}
+        run: ./hack/test-install-windows.ps1
