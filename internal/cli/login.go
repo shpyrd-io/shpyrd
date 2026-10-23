@@ -135,6 +135,16 @@ func defaultWorkspacesDomain() string {
 	return "shpyrd.cloud"
 }
 
+// envWorkspaceURL is SHPYRD_URL as commands dial it: a workspace's name
+// alone (SHPYRD_URL=acme) is its address, as `shpyrd login` takes it.
+func envWorkspaceURL() string {
+	raw := os.Getenv("SHPYRD_URL")
+	if norm, err := normaliseURL(raw); err == nil {
+		return norm
+	}
+	return raw
+}
+
 // SessionFor returns the saved token for the given workspace URL, or "" when
 // none is stored.
 func SessionFor(wsURL string) string {
@@ -283,7 +293,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
 	cmd.Flags().BoolVar(&signup, "signup", false, "open shpyrd cloud signup in the browser, then sign in with the new workspace URL")
@@ -585,7 +595,7 @@ func newLogoutCmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	return cmd
 }
 
@@ -602,7 +612,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				wsURL = s.activeURL()
 			}
 			if wsURL == "" {
-				return errors.New("not signed in: run `shpyrd login --url <workspace URL>`")
+				return errors.New("not signed in: run `shpyrd login --url <workspace>`")
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -625,7 +635,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	return cmd
 }
 
@@ -684,6 +694,11 @@ pass it to shpyrd login --token.`,
 		if url == "" {
 			return nil, errors.New("--url is required or run `shpyrd login`")
 		}
+		norm, err := normaliseURL(url)
+		if err != nil {
+			return nil, err
+		}
+		url = norm
 		if tok == "" {
 			return nil, errors.New("not signed in: run `shpyrd login --url " + url + " --token <token>`")
 		}
@@ -803,7 +818,7 @@ pass it to shpyrd login --token.`,
 	}
 
 	for _, c := range []*cobra.Command{createCmd, listCmd, revokeCmd} {
-		c.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+		c.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	}
 	cmd.AddCommand(createCmd, listCmd, revokeCmd)
 	return cmd
@@ -813,7 +828,7 @@ pass it to shpyrd login --token.`,
 // talk to. `shpyrd use` alone lists them.
 func newUseCmd(g *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "use [workspace URL]",
+		Use:   "use [workspace]",
 		Short: "Choose the signed-in workspace commands talk to (no argument: list them)",
 		Long: `The CLI keeps one saved login per workspace. Commands talk to the current
 one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
@@ -842,7 +857,7 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 				}
 				return g.print(cmd, list, func(out io.Writer) {
 					if len(list) == 0 {
-						fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL>")
+						fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace>")
 						return
 					}
 					for _, e := range list {
