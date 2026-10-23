@@ -5,7 +5,7 @@ import { Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@shpyrd/ui/components/table";
@@ -45,9 +45,6 @@ export function Git() {
     <Card>
       <CardHeader>
         <CardTitle>GitHub</CardTitle>
-        <CardDescription>
-          Connect an account or organisation once. Anyone in the workspace then picks one of its repositories when making a project: private ones build, and every push deploys. Nothing to paste per project.
-        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         {github.isLoading ? (
