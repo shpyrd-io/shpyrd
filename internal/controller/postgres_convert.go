@@ -248,8 +248,10 @@ func (r *PostgresReconciler) convertJobWords(ctx context.Context, job *batchv1.J
 }
 
 // convertEnd is one side of the copy: a server, a database, the Secret
-// with the role's username and password.
-type convertEnd struct{ host, database, secret string }
+// with the role's username and password, and, for the target, the Secret
+// with its superuser's (in the Job's namespace), which counts the rows
+// row-level security would hide from the owner.
+type convertEnd struct{ host, database, secret, superSecret string }
 
 // desiredConvertJob copies one database into another: the platform's
 // binary in the CloudNativePG image, the source as SOURCE_*, the target
@@ -282,6 +284,9 @@ func (r *PostgresReconciler) desiredConvertJob(pg *shpyrdv1.Postgres, hash, serv
 	}
 	if cap > 0 {
 		env = append(env, corev1.EnvVar{Name: "SHPYRD_CONVERT_CAP", Value: fmt.Sprint(cap)})
+	}
+	if target.superSecret != "" {
+		env = append(env, from("TARGET_SUPERUSER", target.superSecret, "username"), from("TARGET_SUPERPASSWORD", target.superSecret, "password"))
 	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: convertJobName(pg), Namespace: SharedPostgresNamespace, Labels: labels},
@@ -379,6 +384,24 @@ func (r *PostgresReconciler) convertToDedicated(ctx context.Context, pg *shpyrdv
 		if !applied {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
+		// The new cluster's superuser counts the rows after the copy (a
+		// table with row-level security forced hides them from the owner);
+		// its credentials, where the Job can read them.
+		superuser := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: pg.Namespace, Name: pg.Name + "-superuser"}, superuser); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		copied := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sharedConvertSecret(hash), Namespace: SharedPostgresNamespace}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, copied, func() error {
+			copied.Labels = mergeMaps(copied.Labels, mergeMaps(sharedTenantLabels(pg, server), map[string]string{sharedServerLabel: "convert"}))
+			copied.Data = map[string][]byte{"username": superuser.Data["username"], "password": superuser.Data["password"]}
+			return nil
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
 		if convertJobName(pg) == "" {
 			return r.nameConvertJob(ctx, pg, hash)
 		}
@@ -388,7 +411,7 @@ func (r *PostgresReconciler) convertToDedicated(ctx context.Context, pg *shpyrdv
 		}
 		job := r.desiredConvertJob(pg, hash, server,
 			convertEnd{host: server + "-rw", database: sharedDatabaseName(hash), secret: sharedDumpRoleSecret(server)},
-			convertEnd{host: fmt.Sprintf("%s-rw.%s.svc.cluster.local", pg.Name, pg.Namespace), database: sharedDatabaseName(hash), secret: sharedRoleObject(hash)},
+			convertEnd{host: fmt.Sprintf("%s-rw.%s.svc.cluster.local", pg.Name, pg.Namespace), database: sharedDatabaseName(hash), secret: sharedRoleObject(hash), superSecret: sharedConvertSecret(hash)},
 			pgdump.ConvertKey(sharedDatabaseName(hash), time.Now()), nil, 0, "", pull)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, err
@@ -577,7 +600,7 @@ func (r *PostgresReconciler) convertToShared(ctx context.Context, pg *shpyrdv1.P
 		}
 		job := r.desiredConvertJob(pg, hash, server,
 			convertEnd{host: fmt.Sprintf("%s-rw.%s.svc.cluster.local", pg.Name, pg.Namespace), database: firstNonEmpty(string(app.Data["dbname"]), PostgresDatabase), secret: sharedConvertSecret(hash)},
-			convertEnd{host: server + "-rw", database: sharedDatabaseName(hash), secret: sharedRoleObject(hash)},
+			convertEnd{host: server + "-rw", database: sharedDatabaseName(hash), secret: sharedRoleObject(hash), superSecret: server + "-superuser"},
 			pgdump.ConvertKey(sharedDatabaseName(hash), time.Now()), sharedAllowedExtensions, cap, firstNonEmpty(string(app.Data["username"]), PostgresUser), pull)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, err

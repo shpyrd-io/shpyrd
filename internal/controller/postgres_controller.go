@@ -742,7 +742,7 @@ func desiredCNPGCluster(pg *shpyrdv1.Postgres, storage resource.Quantity, size s
 		"storage":               cnpgStorage(storage, storageClass),
 		"resources":             map[string]interface{}{"requests": toMap(res.Requests), "limits": toMap(res.Limits)},
 		"bootstrap":             map[string]interface{}{"initdb": dedicatedInitdb(pg)},
-		"enableSuperuserAccess": convertingTo(pg) == shpyrdv1.PostgresTypeShared, // the conversion's Job pauses the owner as the superuser
+		"enableSuperuserAccess": converting(pg), // the conversion's Job pauses the owner as the superuser, and counts the rows as it
 		// Metrics (cnpg_backends_total, ...) scraped by the platform's
 		// Prometheus: the sleep activity signal reads them (RFC-0075).
 		"monitoring": map[string]interface{}{"enablePodMonitor": true},

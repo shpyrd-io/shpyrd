@@ -52,7 +52,19 @@ type Convert struct {
 	// again when the copy does not land; both optional (a shared source
 	// is fenced by the platform).
 	Fence, Lift func(ctx context.Context) error
-	Log         *slog.Logger
+	// TargetCounter, when set, counts the target's rows in place of
+	// Target: a connection that sees every row (the server's superuser).
+	// A table with row-level security forced hides its rows from its
+	// owner too, so the owner's count reads zero where the copy landed
+	// whole (production, 2026-10-22: a conversion fell back on a table
+	// with six rows).
+	TargetCounter Counter
+	Log           *slog.Logger
+}
+
+// A Counter counts the rows of a table.
+type Counter interface {
+	Count(ctx context.Context, table string) (int64, error)
 }
 
 // Moved says what a conversion moved.
@@ -129,12 +141,16 @@ func (c Convert) move(ctx context.Context, rep *Moved, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("list the source's tables: %w", err)
 	}
+	var counter Counter = c.Target
+	if c.TargetCounter != nil {
+		counter = c.TargetCounter
+	}
 	for _, table := range tables {
 		from, err := c.Source.Count(ctx, table)
 		if err != nil {
 			return fmt.Errorf("count %s at the source: %w", table, err)
 		}
-		to, err := c.Target.Count(ctx, table)
+		to, err := counter.Count(ctx, table)
 		if err != nil {
 			return fmt.Errorf("count %s at the target: %w", table, err)
 		}

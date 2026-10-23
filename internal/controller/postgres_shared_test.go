@@ -1333,8 +1333,18 @@ func TestConvertSharedToDedicated(t *testing.T) {
 		t.Errorf("no copy before the extensions are applied: %v", jobs)
 	}
 	markApplied(t, c, ext)
+	spin(t, r, key, 2)
+	if jobs := convertJobs(t, c); len(jobs) != 0 {
+		t.Errorf("no copy before the new cluster's superuser credentials are there (they count the rows): %v", jobs)
+	}
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	values, secrets := convertJobEnv(t, c, key)
+	if secrets["TARGET_SUPERUSER"] != "convert-"+hash || secrets["TARGET_SUPERPASSWORD"] != "convert-"+hash {
+		t.Errorf("the target's superuser for the count: %v", secrets)
+	}
 	if values["SOURCE_HOST"] != "pg-shared-1-rw" || values["SOURCE_DATABASE"] != "db_"+hash || secrets["SOURCE_USER"] != "pg-shared-1-dump" ||
 		values["PGHOST"] != "db-rw.p-shop.svc.cluster.local" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
 		!strings.HasPrefix(values["SHPYRD_CONVERT_KEY"], "db_"+hash+"/") || !strings.HasSuffix(values["SHPYRD_CONVERT_KEY"], ".converted.dump") ||
@@ -1409,6 +1419,10 @@ func TestConvertToDedicatedFailsBack(t *testing.T) {
 	}
 	spin(t, r, key, 2)
 	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	// The new cluster's superuser, whose count verifies the copy.
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	finishJob(t, c, key, false)
 	spin(t, r, key, 4)
@@ -1504,7 +1518,7 @@ func TestConvertDedicatedToShared(t *testing.T) {
 	}
 	values, secrets := convertJobEnv(t, c, key)
 	if values["SOURCE_HOST"] != "db-rw.app-shop.svc.cluster.local" || values["SOURCE_DATABASE"] != "app" || secrets["SOURCE_USER"] != "convert-"+hash ||
-		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash ||
+		values["PGHOST"] != "pg-shared-1-rw" || values["PGDATABASE"] != "db_"+hash || secrets["PGUSER"] != "u-"+hash || secrets["TARGET_SUPERUSER"] != "pg-shared-1-superuser" ||
 		!strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "vector") || !strings.Contains(values["SHPYRD_CONVERT_EXTENSIONS"], "pgcrypto") ||
 		values["SHPYRD_CONVERT_CAP"] != "1073741824" || values["SHPYRD_CONVERT_FENCE_ROLE"] != "app" {
 		t.Errorf("job env = %v secrets %v", values, secrets)
@@ -1573,6 +1587,10 @@ func TestConvertBackTakesANewHashAndJob(t *testing.T) {
 	}
 	spin(t, r, key, 2)
 	markApplied(t, c, getU(t, c, "Database", "p-shop", "db-db"))
+	// The new cluster's superuser, whose count verifies the copy.
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+		t.Fatal(err)
+	}
 	spin(t, r, key, 3)
 	firstJob := convertJob(t, c, key).Name
 	if !strings.HasPrefix(firstJob, "convert-"+first+"-") {
@@ -1616,7 +1634,7 @@ func TestConvertBackTakesANewHashAndJob(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); err != nil {
+	if err := c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-superuser", Namespace: "p-shop"}, Data: map[string][]byte{"username": []byte("postgres"), "password": []byte("sup3r")}}); client.IgnoreAlreadyExists(err) != nil {
 		t.Fatal(err)
 	}
 	spin(t, r, key, 4)
