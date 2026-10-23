@@ -48,3 +48,8 @@ nothing provisions ReadWriteMany.
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): shared folders (OCI File Storage, class `shpyrd-fss`) are
+  built on OKE (RFC-0060) and refused in words until the tenancy's File Storage
+  limit is raised: "files that several instances share belong in a bucket" is the
+  answer meanwhile, and buckets for apps shipped (RFC-0046, step 5). End to end
+  verification is the last item of the plan's hardening tail (step 7).

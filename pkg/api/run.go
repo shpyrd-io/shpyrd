@@ -12,7 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
@@ -37,6 +39,10 @@ type RunRequest struct {
 	Detach bool `json:"detach,omitempty"`
 	// TTY says the attached terminal is one: the process gets a pty.
 	TTY bool `json:"tty,omitempty"`
+	// Process mounts that process's volumes at their paths, on the machine
+	// that holds a single-instance disk right now (#126): a data migration
+	// on a disk, a look at a crash-looping process's files.
+	Process string `json:"process,omitempty"`
 }
 
 // RunResult is what a started one-off instance is called, and the ticket
@@ -45,6 +51,9 @@ type RunResult struct {
 	Name   string `json:"name"`
 	Size   string `json:"size"`
 	Ticket string `json:"ticket,omitempty"`
+	// Note says what the instance got beyond the command: the volumes of
+	// a process, and the machine it runs on for them.
+	Note string `json:"note,omitempty"`
 }
 
 // runWaitTimeout bounds how long the socket waits for a one-off instance
@@ -93,6 +102,16 @@ func (s *Server) runApp(c *gin.Context) {
 	}
 	attach := !req.Detach
 	pod := controller.OneOffPod(app, image, req.Command, res, attach && req.TTY, attach, pool)
+	note := ""
+	if req.Process != "" {
+		mounts, node, err := s.processMounts(c.Request.Context(), app, req.Process)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		controller.MountVolumesOnPod(&pod.Spec, mounts, node)
+		note = controller.MountsNote(req.Process, mounts, node)
+	}
 	created, err := s.kube.Kube.CoreV1().Pods(app.Namespace).Create(c.Request.Context(), pod, metav1.CreateOptions{})
 	if err != nil {
 		abort(c, http.StatusBadGateway, fmt.Errorf("start one-off instance: %w", err))
@@ -102,7 +121,7 @@ func (s *Server) runApp(c *gin.Context) {
 	detail := strings.Join(req.Command, " ")
 	if req.Detach {
 		s.audit(c, slug, "run", created.Name, detail+" (detached)")
-		c.JSON(http.StatusCreated, RunResult{Name: created.Name, Size: sizeLabel(catalog, sizeName)})
+		c.JSON(http.StatusCreated, RunResult{Name: created.Name, Size: sizeLabel(catalog, sizeName), Note: note})
 		return
 	}
 	s.audit(c, slug, "run", created.Name, detail)
@@ -123,7 +142,29 @@ func (s *Server) runApp(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusCreated, RunResult{Name: created.Name, Size: sizeLabel(catalog, sizeName), Ticket: code})
+	c.JSON(http.StatusCreated, RunResult{Name: created.Name, Size: sizeLabel(catalog, sizeName), Ticket: code, Note: note})
+}
+
+// processMounts resolves a process's volumes for a one-off instance (#126)
+// and the machine that holds a single-instance claim now.
+func (s *Server) processMounts(ctx context.Context, app *shpyrdv1.App, process string) ([]controller.ProcessMount, string, error) {
+	var list shpyrdv1.VolumeList
+	if err := s.apps.List(ctx, &list, client.InNamespace(app.Namespace)); err != nil {
+		return nil, "", err
+	}
+	volumes := map[string]*shpyrdv1.Volume{}
+	for i := range list.Items {
+		volumes[list.Items[i].Name] = &list.Items[i]
+	}
+	mounts, err := controller.ProcessMounts(app, process, volumes)
+	if err != nil {
+		return nil, "", err
+	}
+	node := ""
+	if pods, err := s.kube.Kube.CoreV1().Pods(app.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		node = controller.ClaimHolderNode(pods.Items, mounts)
+	}
+	return mounts, node, nil
 }
 
 // sizeLabel names a size the way the CLI prints it: "shared-m: 0.5 CPU,

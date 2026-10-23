@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -104,6 +105,12 @@ func (s *loginSessions) save() error {
 
 // normaliseURL strips trailing slashes and ensures the scheme is present.
 func normaliseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if workspaceName.MatchString(raw) && raw != "localhost" {
+		// A workspace's name alone: its address on shpyrd cloud, or on
+		// the platform SHPYRD_WORKSPACES_DOMAIN names.
+		raw = raw + "." + defaultWorkspacesDomain()
+	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
 	}
@@ -112,6 +119,20 @@ func normaliseURL(raw string) (string, error) {
 		return "", fmt.Errorf("not a valid URL: %q", raw)
 	}
 	return strings.TrimRight(u.Scheme+"://"+u.Host+u.Path, "/"), nil
+}
+
+// workspaceName is a workspace's name typed alone, as `shpyrd login acme`
+// takes it: a DNS label, no dot, no port, no scheme.
+var workspaceName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// defaultWorkspacesDomain is where a workspace named alone lives: shpyrd
+// cloud's workspaces domain, or SHPYRD_WORKSPACES_DOMAIN for a platform of
+// one's own.
+func defaultWorkspacesDomain() string {
+	if d := strings.Trim(strings.TrimSpace(os.Getenv("SHPYRD_WORKSPACES_DOMAIN")), "."); d != "" {
+		return d
+	}
+	return "shpyrd.cloud"
 }
 
 // SessionFor returns the saved token for the given workspace URL, or "" when
@@ -159,9 +180,13 @@ func newLoginCmd(g *globalFlags) *cobra.Command {
 		Short: "Sign in to a workspace (no kubeconfig needed for project commands)",
 		Long: `Sign in to a shpyrd workspace so project commands work without a kubeconfig:
 
-  shpyrd login --url https://acme.shpyrd.app                      # approve in the browser
-  shpyrd login --url https://acme.shpyrd.app --token shp_...      # a token from the dashboard or CI
-  shpyrd login --url https://shpyrd.oci.shpyrd.io --token <admin token>
+  shpyrd login --url acme                                         # approve in the browser
+  shpyrd login --url https://acme.shpyrd.cloud --token shp_...    # a token from the dashboard or CI
+  shpyrd login --url https://shpyrd.oci.example.com --token <admin token>
+
+A workspace's name alone means its address on shpyrd cloud: acme is
+https://acme.shpyrd.cloud (SHPYRD_WORKSPACES_DOMAIN names another platform's
+workspaces domain).
 
 Without --token the browser opens the workspace's sign-in; approve the code
 shown here and the CLI is signed in as you for 30 days (--no-browser prints
@@ -185,7 +210,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			if wsURL == "" && !signup {
 				// Try to guess from --context if available.
 				if g.kubeCtx != "" {
-					return errors.New("--url is required: give the dashboard URL, e.g. https://shpyrd.oci.shpyrd.io")
+					return errors.New("--url is required: give the dashboard URL, e.g. https://shpyrd.oci.example.com")
 				}
 				// At a terminal, ask: an existing workspace, or a new
 				// account with its first workspace on shpyrd cloud.
@@ -195,7 +220,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				}
 				switch choice {
 				case "":
-					return errors.New("--url is required: the workspace URL, e.g. https://acme.shpyrd.app (or --signup to create an account)")
+					return errors.New("--url is required: the workspace's name or URL, e.g. acme or https://acme.shpyrd.cloud (or --signup to create an account)")
 				case loginChoiceSignup:
 					signup = true
 				default:
@@ -281,7 +306,7 @@ func askLoginChoice(in io.Reader, out io.Writer) (string, error) {
 		return "", nil
 	}
 	fmt.Fprintln(out, "No workspace given. What do you want to do?")
-	fmt.Fprintln(out, "  1) Sign in to a workspace you belong to (its URL, like https://acme.shpyrd.app)")
+	fmt.Fprintln(out, "  1) Sign in to a workspace you belong to (its name, like acme, or its URL, like https://acme.shpyrd.cloud)")
 	fmt.Fprintln(out, "  2) Create an account and your first workspace on shpyrd cloud")
 	fmt.Fprint(out, "Choose 1 or 2: ")
 	reader := bufio.NewReader(in)
@@ -293,7 +318,7 @@ func askLoginChoice(in io.Reader, out io.Writer) (string, error) {
 	case "2":
 		return loginChoiceSignup, nil
 	case "1":
-		fmt.Fprint(out, "Workspace URL: ")
+		fmt.Fprint(out, "Workspace name or URL: ")
 		url, err := reader.ReadString('\n')
 		if err != nil && url == "" {
 			return "", err
@@ -325,7 +350,7 @@ func signupLogin(cmd *cobra.Command, g *globalFlags, signupURL string, out io.Wr
 	}
 	return g.print(cmd, map[string]any{"signupUrl": link, "signedIn": false}, func(w io.Writer) {
 		fmt.Fprintf(w, "Create your account and workspace at %s\n", link)
-		fmt.Fprintln(w, "When your workspace is ready, run: shpyrd login --url <workspace URL>")
+		fmt.Fprintln(w, "When your workspace is ready, run: shpyrd login --url <workspace name>")
 	})
 }
 
@@ -838,7 +863,7 @@ func newUseCmd(g *globalFlags) *cobra.Command {
 one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 
   shpyrd use                              # list the workspaces you are signed in to
-  shpyrd use https://acme.shpyrd.app      # switch`,
+  shpyrd use acme                         # switch (https://acme.shpyrd.cloud)`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := loadSessions()

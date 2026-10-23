@@ -330,13 +330,16 @@ export const backend: Api = {
       `${project(slug)}/redeploy`,
       json("POST", action ? { action } : {}),
     ),
-  rollback: async (slug, release) => {
-    await request(`${project(slug)}/rollback`, json("POST", { release }));
+  rollback: async (slug, release, force) => {
+    await request(
+      `${project(slug)}/rollback`,
+      json("POST", force ? { release, force } : { release }),
+    );
   },
-  applyProcesses: async (slug, changes) => {
+  applyProcesses: async (slug, changes, force) => {
     await request(
       `${project(slug)}/processes`,
-      json("POST", { processes: changes }),
+      json("POST", force ? { processes: changes, force } : { processes: changes }),
     );
     return backend.project(slug);
   },
@@ -398,6 +401,11 @@ export const backend: Api = {
     request(
       `/api/projects/${encodeURIComponent(slug)}/resources/objectbucket/${encodeURIComponent(name)}/rotate`,
       { method: "POST" },
+    ),
+  sleepPostgres: (slug, name, after) =>
+    request(
+      `${project(slug)}/resources/postgres/${encodeURIComponent(name)}/sleep`,
+      json("PATCH", { sleep: { after } }),
     ),
   convertPostgres: (slug, name, body) =>
     request(

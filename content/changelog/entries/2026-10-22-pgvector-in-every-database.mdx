@@ -1,0 +1,10 @@
+---
+title: "pgvector in every database"
+description: "Dedicated databases now carry the vector extension, as shared ones did."
+date: "2026-10-22"
+type: improvement
+draft: false
+---
+Shared databases have had pgvector since they exist; a dedicated database answered "permission denied to create extension" to `CREATE EXTENSION vector`, because PostgreSQL does not let a database's owner create an extension it does not mark trusted.
+
+Every dedicated database now has `vector` installed by the platform, the existing ones included, within a minute of this release reaching your cluster. Nothing to run: `CREATE TABLE items (embedding vector(1536))` works. The trusted extensions (pgcrypto, uuid-ossp, pg_trgm and the others) stay yours to create as before.

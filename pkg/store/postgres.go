@@ -439,6 +439,180 @@ func (p *Postgres) LockWorkspace(ctx context.Context, slug string, fn func(ctx c
 	return fn(ctx)
 }
 
+func (p *Postgres) PutExecTicket(ctx context.Context, hash string, payload []byte, expires time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM exec_tickets WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("exec tickets: %w", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO exec_tickets (hash, payload, expires_at) VALUES ($1, $2, $3)`, hash, payload, expires); err != nil {
+		return fmt.Errorf("exec ticket: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) TakeExecTicket(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM exec_tickets WHERE hash = $1 AND expires_at >= now() RETURNING payload`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, _ = p.pool.Exec(ctx, `DELETE FROM exec_tickets WHERE hash = $1`, hash) // a stale one goes too
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("exec ticket: %w", err)
+	}
+	return payload, true, nil
+}
+
+const cliDeviceColumns = `device_hash, workspace_id, user_code, name, state, token, email, token_expires_at, last_poll_at, expires_at`
+
+func scanCLIDevice(row pgx.Row) (*CLIDevice, error) {
+	var d CLIDevice
+	var lastPoll *time.Time
+	if err := row.Scan(&d.DeviceHash, &d.WorkspaceID, &d.UserCode, &d.Name, &d.State, &d.Token, &d.Email, &d.TokenExp, &lastPoll, &d.Expires); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if lastPoll != nil {
+		d.LastPoll = *lastPoll
+	}
+	return &d, nil
+}
+
+func (p *Postgres) PutCLIDevice(ctx context.Context, d CLIDevice, max int, now time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM cli_devices WHERE expires_at <= $1`, now); err != nil {
+		return fmt.Errorf("cli devices: %w", err)
+	}
+	var waiting int
+	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM cli_devices`).Scan(&waiting); err != nil {
+		return fmt.Errorf("cli devices: %w", err)
+	}
+	if waiting >= max {
+		return ErrFull
+	}
+	_, err := p.pool.Exec(ctx, `INSERT INTO cli_devices (device_hash, workspace_id, user_code, name, expires_at) VALUES ($1, $2, $3, $4, $5)`,
+		d.DeviceHash, d.WorkspaceID, d.UserCode, d.Name, d.Expires)
+	if isUnique(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return fmt.Errorf("cli device: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) CLIDeviceByUserCode(ctx context.Context, workspaceID, userCode string, now time.Time) (*CLIDevice, error) {
+	d, err := scanCLIDevice(p.pool.QueryRow(ctx, `SELECT `+cliDeviceColumns+` FROM cli_devices WHERE workspace_id = $1 AND user_code = $2 AND state = '' AND expires_at > $3`, workspaceID, userCode, now))
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("cli device: %w", err)
+	}
+	return d, err
+}
+
+func (p *Postgres) DecideCLIDevice(ctx context.Context, workspaceID, userCode, state, token, email string, tokenExp *time.Time, now time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE cli_devices SET state = $3, token = $4, email = $5, token_expires_at = $6 WHERE workspace_id = $1 AND user_code = $2 AND state = '' AND expires_at > $7`,
+		workspaceID, userCode, state, token, email, tokenExp, now)
+	if err != nil {
+		return fmt.Errorf("cli device: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PollCLIDevice reads, stamps and (once answered) removes the row in one
+// transaction, the row locked, so two polls on two replicas cannot both
+// take the credential.
+func (p *Postgres) PollCLIDevice(ctx context.Context, workspaceID, deviceHash string, now time.Time, minGap time.Duration) (*CLIDevice, bool, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("cli device: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	d, err := scanCLIDevice(tx.QueryRow(ctx, `SELECT `+cliDeviceColumns+` FROM cli_devices WHERE device_hash = $1 AND workspace_id = $2 AND expires_at > $3 FOR UPDATE`, deviceHash, workspaceID, now))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, false, ErrNotFound
+		}
+		return nil, false, fmt.Errorf("cli device: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE cli_devices SET last_poll_at = $2 WHERE device_hash = $1`, deviceHash, now); err != nil {
+		return nil, false, fmt.Errorf("cli device: %w", err)
+	}
+	if !d.LastPoll.IsZero() && now.Sub(d.LastPoll) < minGap {
+		return nil, true, tx.Commit(ctx)
+	}
+	if d.State != "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM cli_devices WHERE device_hash = $1`, deviceHash); err != nil {
+			return nil, false, fmt.Errorf("cli device: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("cli device: %w", err)
+	}
+	d.LastPoll = now
+	return d, false, nil
+}
+
+func (p *Postgres) PutArchiveDownload(ctx context.Context, hash string, payload []byte, expires time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM archive_downloads WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("archive downloads: %w", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO archive_downloads (hash, payload, expires_at) VALUES ($1, $2, $3)`, hash, payload, expires); err != nil {
+		return fmt.Errorf("archive download: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) TakeArchiveDownload(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM archive_downloads WHERE hash = $1 AND expires_at >= now() RETURNING payload`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, _ = p.pool.Exec(ctx, `DELETE FROM archive_downloads WHERE hash = $1`, hash) // a stale one goes too
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("archive download: %w", err)
+	}
+	return payload, true, nil
+}
+
+func (p *Postgres) PutPendingLogin(ctx context.Context, hash string, payload []byte, expires time.Time) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM pending_logins WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("pending logins: %w", err)
+	}
+	if _, err := p.pool.Exec(ctx, `INSERT INTO pending_logins (hash, payload, expires_at) VALUES ($1, $2, $3)`, hash, payload, expires); err != nil {
+		return fmt.Errorf("pending login: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) PeekPendingLogin(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `SELECT payload FROM pending_logins WHERE hash = $1 AND expires_at >= now()`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("pending login: %w", err)
+	}
+	return payload, true, nil
+}
+
+func (p *Postgres) TakePendingLogin(ctx context.Context, hash string) ([]byte, bool, error) {
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM pending_logins WHERE hash = $1 AND expires_at >= now() RETURNING payload`, hash).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, _ = p.pool.Exec(ctx, `DELETE FROM pending_logins WHERE hash = $1`, hash) // a stale one goes too
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("pending login: %w", err)
+	}
+	return payload, true, nil
+}
+
 const claimColumns = `id, workspace_id, domain, token, connector, verified_at, created_at`
 
 func scanClaim(row pgx.Row) (*DomainClaim, error) {

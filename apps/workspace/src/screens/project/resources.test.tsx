@@ -6,7 +6,7 @@ import type { Perms } from "@/lib/perms";
 import mockConfig from "../../../mock/config.json";
 import projects from "../../../mock/projects.json";
 import things from "../../../mock/things.json";
-import { allowanceOf, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, VolumeDialog } from "./resources";
+import { allowanceOf, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, SleepDialog, sleepOf, sleepWords, VolumeDialog } from "./resources";
 import workspace from "../../../mock/workspace.json";
 
 // The queries answer from the Mock's files, by the first word of their
@@ -249,5 +249,58 @@ describe("a bucket beside the application", () => {
     render(<BucketDialog slug="hello-world" onDone={nothing} onClose={nothing} />);
     expect(screen.getByText("This would bring the workspace to 2 of 1 buckets.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Make it" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// Sleep (#120, #132): the three states of #135 read apart, on the web row
+// and on a dedicated database, and the dialog that sets them.
+describe("what a sleep policy says and how it is set", () => {
+  it("reads the three states apart, with the wake mode and the state now", () => {
+    expect(sleepWords({ state: "awake", source: "off" })).toBe("never sleeps, whatever the workspace's default");
+    expect(sleepWords({ state: "awake", after: "30m", resuming: "wait", source: "project" })).toBe("sleeps after 30m (wait mode), its own policy");
+    expect(sleepWords({ state: "sleeping", after: "15m", resuming: "page", source: "workspace" })).toBe("sleeps after 15m (page mode), the workspace's default; asleep now");
+    expect(sleepWords({ state: "awake", source: "workspace" })).toBe("does not sleep: the workspace's default sets none");
+    expect(sleepWords({ state: "suspended", after: "10m", source: "workspace" })).toBe("sleeps after 10m, the workspace's default; suspended now");
+  });
+  it("reads a database's policy out of its details, and says it in the details line only when something applies", () => {
+    expect(sleepOf({ sleepState: "sleeping", sleepAfter: "10m0s", sleepSource: "workspace" })).toEqual({ state: "sleeping", after: "10m0s", source: "workspace", message: undefined });
+    expect(detailsOf(named("db"))).not.toContain("sleep");
+    expect(detailsOf({ ...named("db"), details: { ...named("db").details, sleepAfter: "10m0s", sleepState: "awake" } })).toContain("sleeps after 10m0s, the workspace's default");
+    expect(detailsOf({ ...named("db"), details: { ...named("db").details, sleepSource: "off" } })).toContain("never sleeps");
+  });
+  it("shows the web process's policy on its row, and a Sleep control", () => {
+    state.answers = { resources, volumes, config, sizes, workspace };
+    const asleep = projects.find((p) => p.processes?.web?.sleep?.state === "sleeping") as unknown as Project;
+    const html = renderToStaticMarkup(<Resources project={asleep} perms={perms} />);
+    expect(html).toContain("sleeps after 15m (page mode), the workspace&#x27;s default; asleep now");
+    expect(html).toContain(">Sleep<");
+  });
+  it("offers the workspace's default, a quiet period of its own with the wake mode for a web process, and off", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="shop" current={{ state: "awake", after: "15m", resuming: "page", source: "workspace" }} modes onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText("When shop sleeps")).toBeTruthy();
+    expect(screen.getByText(/Now it sleeps after 15m \(page mode\), the workspace's default\./)).toBeTruthy();
+    // The default is kept as it is: saving hands the project back to the workspace.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "default" });
+  });
+  it("a quiet period of its own shows the period and, for a web process, the wake mode", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="shop" current={{ state: "awake", after: "30m", resuming: "wait", source: "project" }} modes onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText("Quiet period")).toBeTruthy();
+    expect(screen.getByText("Waking")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "30m", resuming: "wait" });
+  });
+  it("a database has no wake mode, and off is a policy of its own", () => {
+    const onSave = vi.fn();
+    render(<SleepDialog what="db" current={{ state: "awake", source: "off" }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sleep" }));
+    expect(screen.getByText(/Now it never sleeps, whatever the workspace's default\./)).toBeTruthy();
+    expect(screen.queryByText("Waking")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ after: "off" });
   });
 });

@@ -4,18 +4,13 @@
 package postgres
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
 	"github.com/shpyrd-io/shpyrd/internal/controller"
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/install"
-	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // Name of the extension.
@@ -41,7 +36,7 @@ func (extension) Register(mgr ctrl.Manager, deps ext.Deps) error {
 	r.Shared = controller.SharedPostgres{Instances: install.SharedPostgresInstances(deps.Var), DatabasesPerServer: install.SharedPostgresPerServer(deps.Var)}
 	r.ServerImage = deps.Var(install.VarServerImage)
 	if deps.Store != nil {
-		r.WorkspaceSleepDefault = workspaceSleepDefault(mgr.GetClient(), deps.Store)
+		r.WorkspaceSleepDefault = controller.WorkspaceDatabaseSleepDefault(mgr.GetClient(), deps.Store)
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
@@ -61,25 +56,3 @@ func (extension) Types() []ext.ResourceType {
 
 // CLI returns `shpyrd pg`.
 func (extension) CLI(g ext.CLIGlobals) []*cobra.Command { return []*cobra.Command{newPgCmd(g)} }
-
-// workspaceSleepDefault answers a project namespace's workspace default
-// for databases (RFC-0075): the namespace carries its workspace's slug as
-// a label; a namespace without one is the default workspace's. Asked once
-// a minute per database with no policy of its own, so no cache.
-func workspaceSleepDefault(c client.Client, st store.Store) func(ctx context.Context, namespace string) string {
-	return func(ctx context.Context, namespace string) string {
-		ns := &corev1.Namespace{}
-		if err := c.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
-			return ""
-		}
-		slug := ns.Labels[shpyrdv1.LabelWorkspace]
-		if slug == "" {
-			slug = store.DefaultWorkspaceSlug(ctx, st)
-		}
-		ws, err := st.Workspace(ctx, slug)
-		if err != nil || ws.Settings.Sleep == nil {
-			return ""
-		}
-		return ws.Settings.Sleep.DatabasesAfter
-	}
-}

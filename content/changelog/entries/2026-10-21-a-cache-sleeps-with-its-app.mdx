@@ -1,0 +1,10 @@
+---
+title: "A cache sleeps with its app"
+description: "A Redis or Valkey cache stops while the project's web process sleeps and comes back with it; an app with a disk wakes behind the waiting page."
+date: "2026-10-21"
+type: improvement
+draft: false
+---
+A store created without `--persistent` is a cache. While the project's web process sleeps and no other process of the project runs, the cache is scaled to zero too, and it comes back with the web process, empty, which a cache accepts. A persistent store (a queue, sessions) stays up. On a free project an always-on cache was the largest line of the month; it is gone while the app sleeps.
+
+Also in this release: an app with a disk wakes behind the waiting page whatever its sleep mode says, because the disk takes a moment to reattach, longer than a held request should wait. Setting `--resuming wait` on such an app is refused with that sentence.

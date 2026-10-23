@@ -751,3 +751,222 @@ func TestDedicatedDatabasesAreStampedWithTheirSize(t *testing.T) {
 		t.Error("a shared database was stamped; its cap is measured elsewhere")
 	}
 }
+
+// TestActivitySignalFollowsTheWorkspaceDefault: the loop keeps the activity
+// check for a database sleeping by the workspace's default, not only for one
+// with a policy of its own (storage plan step 6); before, such a database
+// waited for ever for a check nobody wrote. An explicit off, a shared
+// database and a high-availability one are left alone, and without auto
+// sleep the default does not apply.
+func TestActivitySignalFollowsTheWorkspaceDefault(t *testing.T) {
+	ctx := context.Background()
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := int32(2)
+	fresh := func() client.Client {
+		mk := func(name string, spec shpyrdv1.PostgresSpec) *shpyrdv1.Postgres {
+			return &shpyrdv1.Postgres{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "app-shop"}, Spec: spec}
+		}
+		return fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			mk("own", shpyrdv1.PostgresSpec{Sleep: &shpyrdv1.PostgresSleepSpec{After: "30m"}}),
+			mk("bydefault", shpyrdv1.PostgresSpec{}),
+			mk("off", shpyrdv1.PostgresSpec{Sleep: &shpyrdv1.PostgresSleepSpec{After: "off"}}),
+			mk("shared", shpyrdv1.PostgresSpec{Type: shpyrdv1.PostgresTypeShared}),
+			mk("ha", shpyrdv1.PostgresSpec{Instances: &two}),
+		).WithStatusSubresource(&shpyrdv1.Postgres{}).Build()
+	}
+	var scraped []map[string]any
+	for _, n := range []string{"own", "bydefault", "off", "shared", "ha"} {
+		scraped = append(scraped, sample(map[string]string{"job": "app-shop/" + n}, "1"))
+	}
+	srv := fakeProm(t, map[string][]map[string]any{
+		"cnpg_backends_total[5m]":     scraped, // every database is scraped
+		"cnpg_backends_total{usename": {},      // nobody is connected
+	})
+	defer srv.Close()
+	checked := func(c client.Client, name string) bool {
+		t.Helper()
+		pg := &shpyrdv1.Postgres{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, pg); err != nil {
+			t.Fatal(err)
+		}
+		return pg.Status.Sleep != nil && pg.Status.Sleep.ActivityCheckedAt != nil
+	}
+	run := func(name string, m *MeteringLoop, c client.Client, want map[string]bool) {
+		t.Helper()
+		m.Client = c
+		if err := m.postgresActivity(ctx, time.Now()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for db, w := range want {
+			if got := checked(c, db); got != w {
+				t.Errorf("%s: %s checked = %v, want %v", name, db, got, w)
+			}
+		}
+	}
+	none := func(context.Context, string) string { return "" }
+	hour := func(context.Context, string) string { return "1h" }
+	base := func() *MeteringLoop { return &MeteringLoop{Store: store.NewMemory(), Prom: prom.NewClient(srv.URL)} }
+
+	m := base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = always, none
+	run("no default", m, fresh(), map[string]bool{"own": true, "bydefault": false, "off": false, "shared": false, "ha": false})
+
+	m = base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = always, hour
+	run("workspace default", m, fresh(), map[string]bool{"own": true, "bydefault": true, "off": false, "shared": false, "ha": false})
+
+	m = base()
+	m.SleepAllowed, m.WorkspaceSleepDefault = func() bool { return false }, hour
+	run("auto sleep off", m, fresh(), map[string]bool{"own": true, "bydefault": false})
+
+	m = base() // the loop of a platform without the fields: as before
+	run("unwired", m, fresh(), map[string]bool{"own": true, "bydefault": false})
+}
+
+// TestSleepReadBack: every web process says what sleep applies and where it
+// comes from (#120), the three states of #135 read apart: a policy of its
+// own, an explicit off, the workspace's default, and the workspace's
+// default when it sets none.
+func TestSleepReadBack(t *testing.T) {
+	newApp := func(sleep *shpyrdv1.SleepSpec, workspace string) *shpyrdv1.App {
+		return &shpyrdv1.App{
+			ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: workspace}},
+			Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {Port: ptr.To[int32](8080), Sleep: sleep}}},
+		}
+	}
+	defaults := func(slug string) (string, string) {
+		if slug == "free" {
+			return "15m", "page"
+		}
+		return "", ""
+	}
+	for _, tc := range []struct {
+		name                           string
+		sleep                          *shpyrdv1.SleepSpec
+		workspace                      string
+		allowed                        func() bool
+		source, after, resuming, state string
+	}{
+		{"own policy", &shpyrdv1.SleepSpec{After: "30m", Resuming: "wait"}, "paid", always, "project", "30m", "wait", "unavailable"},
+		{"explicit off", &shpyrdv1.SleepSpec{After: "off"}, "free", always, "off", "", "", "awake"},
+		{"workspace default", nil, "free", always, "workspace", "15m", "page", "unavailable"},
+		{"workspace sets none", nil, "paid", always, "workspace", "", "", "awake"},
+		{"own policy without auto sleep", &shpyrdv1.SleepSpec{After: "30m"}, "paid", func() bool { return false }, "project", "30m", "wait", "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newApp(tc.sleep, tc.workspace)
+			r, _ := newTestReconciler(t, app)
+			r.Config.SystemNamespace = "shpyrd-system"
+			r.Config.SleepAllowed = tc.allowed
+			r.Config.WorkspaceSleepDefault = defaults
+			got := runReconcile(t, r, app).Status.Processes["web"].Sleep
+			if got == nil {
+				t.Fatal("no sleep status on the web process")
+			}
+			// Without keda-http on the cluster a policy that applies is
+			// unavailable; the read-back is the same.
+			if got.Source != tc.source || got.After != tc.after || got.Resuming != tc.resuming || got.State != tc.state {
+				t.Errorf("read-back = source %q after %q resuming %q state %q, want %q %q %q %q (message %q)", got.Source, got.After, got.Resuming, got.State, tc.source, tc.after, tc.resuming, tc.state, got.Message)
+			}
+			if tc.name == "own policy without auto sleep" && got.Message != sleepLicensedMessage {
+				t.Errorf("message = %q", got.Message)
+			}
+		})
+	}
+}
+
+// Storage plan step 6: an app with a disk resumes behind the waiting page
+// whatever its policy says (a workspace default saying "wait", a disk
+// added after the policy): the route serves the page and the read-back
+// says page mode.
+func TestSleepPageModeWithADisk(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop", Labels: map[string]string{shpyrdv1.LabelWorkspace: "free"}},
+		Spec: shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {
+			Port: ptr.To[int32](8080), Volumes: []shpyrdv1.VolumeMount{{Name: "data", Path: "/data"}},
+		}}},
+	}
+	disk := &shpyrdv1.Volume{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app-shop"}}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil) // a cluster with the KEDA kinds
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(app, disk).
+		WithStatusSubresource(&shpyrdv1.App{}, &shpyrdv1.Volume{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always,
+			WorkspaceSleepDefault: func(string) (string, string) { return "15m", "wait" }}.Defaults(),
+	}
+	got := runReconcile(t, r, app)
+	st := got.Status.Processes["web"].Sleep
+	if st == nil || st.Source != "workspace" || st.Resuming != "page" {
+		t.Fatalf("read-back = %+v, want the workspace's default in page mode", st)
+	}
+	ir := makeUnstructured(InterceptorRouteGVK, "shop", "app-shop")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop"}, ir); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := unstructured.NestedMap(ir.Object, "spec", "coldStart", "placeholder"); !ok {
+		t.Error("the route must serve the waiting page for an app with a disk")
+	}
+	// Without the disk the default's wait mode applies.
+	p := got.Spec.Processes["web"]
+	p.Volumes = nil
+	got.Spec.Processes["web"] = p
+	if err := c.Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	if st := runReconcile(t, r, got).Status.Processes["web"].Sleep; st == nil || st.Resuming != "wait" {
+		t.Errorf("read-back without the disk = %+v, want wait mode", st)
+	}
+}
+
+// A web process with several instances wakes to all of them: KEDA's idle
+// count is zero and its minimum the declared count (found on dev with two
+// instances and a wake to one).
+func TestSleepWakesEveryDeclaredInstance(t *testing.T) {
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"},
+		Spec: shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {
+			Port: ptr.To[int32](8080), Replicas: ptr.To[int32](2), Sleep: &shpyrdv1.SleepSpec{After: "15m", Resuming: "page"},
+		}}},
+	}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{InterceptorRouteGVK, ScaledObjectGVK} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(app).WithStatusSubresource(&shpyrdv1.App{}).Build()
+	r := &AppReconciler{
+		ProcessTypes: func(context.Context, string) []string { return nil },
+		Client:       c, APIReader: c, Scheme: scheme, Recorder: record.NewFakeRecorder(100),
+		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
+	}
+	runReconcile(t, r, app)
+	so := makeUnstructured(ScaledObjectGVK, "shop-sleep", "app-shop")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); err != nil {
+		t.Fatal(err)
+	}
+	idle, _, _ := unstructured.NestedInt64(so.Object, "spec", "idleReplicaCount")
+	minR, _, _ := unstructured.NestedInt64(so.Object, "spec", "minReplicaCount")
+	maxR, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount")
+	if idle != 0 || minR != 2 || maxR != 2 {
+		t.Errorf("scaledobject idle=%d min=%d max=%d, want 0, 2, 2", idle, minR, maxR)
+	}
+}

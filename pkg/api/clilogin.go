@@ -1,13 +1,13 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -42,48 +42,44 @@ const maxCLIDevices = 1024
 // every vowel, so a code is typed right and spells nothing.
 const userCodeAlphabet = "BCDFGHJKLMNPQRSTVWXZ"
 
-type cliDevice struct {
-	userCode    string
-	name        string // what the CLI called itself: the machine's host name
-	workspaceID string
-	expires     time.Time
-	// state: "" while pending; approved once the token below is minted;
-	// denied when the person said no.
-	state    string
-	token    string
-	email    string
-	tokenExp *time.Time
-	lastPoll time.Time
-}
-
-// cliDeviceStore holds codes waiting for approval, in memory: they live
-// ten minutes and the server runs a single replica.
+// cliDeviceStore holds codes waiting for approval. They live in the
+// control-plane database, so the CLI's polls and the person's approval may
+// land on any replica of the server; a server with no store keeps them in
+// the store's memory implementation, which one replica is enough for.
 type cliDeviceStore struct {
-	mu  sync.Mutex
-	m   map[string]*cliDevice // keyed by the device code's hash
-	now func() time.Time
+	backing store.Store
+	now     func() time.Time
 }
 
-func newCLIDeviceStore() *cliDeviceStore {
-	return &cliDeviceStore{m: map[string]*cliDevice{}, now: time.Now}
+func newCLIDeviceStore(st store.Store) *cliDeviceStore {
+	if st == nil {
+		st = store.NewMemory()
+	}
+	return &cliDeviceStore{backing: st, now: time.Now}
 }
+
+// cliDeviceStoreTimeout bounds the store's part of a code's step.
+const cliDeviceStoreTimeout = 5 * time.Second
 
 // start registers a new code pair for a workspace.
-func (st *cliDeviceStore) start(workspaceID, name string) (deviceCode, userCode string, err error) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.sweepLocked()
-	if len(st.m) >= maxCLIDevices {
-		return "", "", errors.New("too many sign-ins are waiting for approval; try again in a moment")
-	}
+func (st *cliDeviceStore) start(ctx context.Context, workspaceID, name string) (deviceCode, userCode string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, cliDeviceStoreTimeout)
+	defer cancel()
 	deviceCode = oauthRandom(32)
-	for {
+	now := st.now()
+	for range 8 { // a user code already waiting in the workspace: draw again
 		userCode = newUserCode()
-		if st.byUserCodeLocked(workspaceID, userCode) == nil {
+		err = st.backing.PutCLIDevice(ctx, store.CLIDevice{DeviceHash: hashToken(deviceCode), WorkspaceID: workspaceID, UserCode: userCode, Name: name, Expires: now.Add(cliDeviceTTL)}, maxCLIDevices, now)
+		if !errors.Is(err, store.ErrConflict) {
 			break
 		}
 	}
-	st.m[hashToken(deviceCode)] = &cliDevice{userCode: userCode, name: name, workspaceID: workspaceID, expires: st.now().Add(cliDeviceTTL)}
+	switch {
+	case errors.Is(err, store.ErrFull):
+		return "", "", errors.New("too many sign-ins are waiting for approval; try again in a moment")
+	case err != nil:
+		return "", "", err
+	}
 	return deviceCode, userCode, nil
 }
 
@@ -111,73 +107,48 @@ func normaliseUserCode(s string) string {
 	return s[:4] + "-" + s[4:]
 }
 
-func (st *cliDeviceStore) byUserCodeLocked(workspaceID, userCode string) *cliDevice {
-	for _, d := range st.m {
-		if d.workspaceID == workspaceID && d.userCode == userCode {
-			return d
-		}
-	}
-	return nil
-}
-
-// lookup finds a pending code by what the person typed, at its workspace.
-func (st *cliDeviceStore) lookup(workspaceID, userCode string) (*cliDevice, bool) {
+// lookup finds a code still waiting by what the person typed, at its
+// workspace.
+func (st *cliDeviceStore) lookup(ctx context.Context, workspaceID, userCode string) (*store.CLIDevice, bool) {
 	if userCode == "" {
 		return nil, false
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.sweepLocked()
-	d := st.byUserCodeLocked(workspaceID, userCode)
-	if d == nil || d.state != "" {
-		return nil, false
-	}
-	return d, true
+	ctx, cancel := context.WithTimeout(ctx, cliDeviceStoreTimeout)
+	defer cancel()
+	d, err := st.backing.CLIDeviceByUserCode(ctx, workspaceID, userCode, st.now())
+	return d, err == nil
 }
 
 // decide records the approval (with the token minted for it) or the
-// refusal.
-func (st *cliDeviceStore) decide(d *cliDevice, state, token, email string, tokenExp *time.Time) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	d.state, d.token, d.email, d.tokenExp = state, token, email, tokenExp
+// refusal, once: false when the code no longer waits (answered meanwhile,
+// perhaps on another replica, or expired).
+func (st *cliDeviceStore) decide(ctx context.Context, d *store.CLIDevice, state, token, email string, tokenExp *time.Time) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, cliDeviceStoreTimeout)
+	defer cancel()
+	err := st.backing.DecideCLIDevice(ctx, d.WorkspaceID, d.UserCode, state, token, email, tokenExp, st.now())
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // poll is what the CLI asks: the token once the code is approved, else
 // why not yet. An approved code is consumed by the poll that takes it.
-func (st *cliDeviceStore) poll(workspaceID, deviceCode string) (d *cliDevice, status string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.sweepLocked()
-	key := hashToken(deviceCode)
-	d, ok := st.m[key]
-	if !ok || d.workspaceID != workspaceID {
+func (st *cliDeviceStore) poll(ctx context.Context, workspaceID, deviceCode string) (*store.CLIDevice, string) {
+	ctx, cancel := context.WithTimeout(ctx, cliDeviceStoreTimeout)
+	defer cancel()
+	d, slowDown, err := st.backing.PollCLIDevice(ctx, workspaceID, hashToken(deviceCode), st.now(), (cliDeviceInterval-1)*time.Second)
+	switch {
+	case err != nil:
 		return nil, "expired_token"
-	}
-	now := st.now()
-	if !d.lastPoll.IsZero() && now.Sub(d.lastPoll) < (cliDeviceInterval-1)*time.Second {
-		d.lastPoll = now
+	case slowDown:
 		return nil, "slow_down"
-	}
-	d.lastPoll = now
-	switch d.state {
-	case "approved":
-		delete(st.m, key)
+	case d.State == "approved":
 		return d, ""
-	case "denied":
-		delete(st.m, key)
+	case d.State == "denied":
 		return nil, "access_denied"
 	}
 	return nil, "authorization_pending"
-}
-
-func (st *cliDeviceStore) sweepLocked() {
-	now := st.now()
-	for k, d := range st.m {
-		if now.After(d.expires) {
-			delete(st.m, k)
-		}
-	}
 }
 
 // cliDeviceStart is POST /api/cli/device: a code pair for this workspace.
@@ -195,7 +166,7 @@ func (s *Server) cliDeviceStart(c *gin.Context) {
 	if len(req.Name) > 60 {
 		req.Name = req.Name[:60]
 	}
-	deviceCode, userCode, err := s.cliDevices.start(ws.ID, req.Name)
+	deviceCode, userCode, err := s.cliDevices.start(c.Request.Context(), ws.ID, req.Name)
 	if err != nil {
 		c.Header("Retry-After", "60")
 		abort(c, http.StatusServiceUnavailable, err)
@@ -228,14 +199,14 @@ func (s *Server) cliDevicePoll(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request", "error_description": "device_code is required"})
 		return
 	}
-	d, status := s.cliDevices.poll(ws.ID, req.DeviceCode)
+	d, status := s.cliDevices.poll(c.Request.Context(), ws.ID, req.DeviceCode)
 	if status != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": status})
 		return
 	}
-	out := gin.H{"token": d.token, "email": d.email}
-	if d.tokenExp != nil {
-		out["expiresAt"] = d.tokenExp
+	out := gin.H{"token": d.Token, "email": d.Email}
+	if d.TokenExp != nil {
+		out["expiresAt"] = d.TokenExp
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -266,8 +237,8 @@ func (s *Server) deviceNameOf(c *gin.Context, code string) string {
 	if err != nil {
 		return ""
 	}
-	if d, ok := s.cliDevices.lookup(ws.ID, code); ok {
-		return d.name
+	if d, ok := s.cliDevices.lookup(c.Request.Context(), ws.ID, code); ok {
+		return d.Name
 	}
 	return ""
 }
@@ -325,20 +296,23 @@ func (s *Server) cliActivateDecide(c *gin.Context) {
 		return
 	}
 	code := normaliseUserCode(c.PostForm("code"))
-	d, ok := s.cliDevices.lookup(ws.ID, code)
+	d, ok := s.cliDevices.lookup(c.Request.Context(), ws.ID, code)
 	if code == "" || !ok {
 		s.cliActivateForm(c, id, sess.CSRF, code, "That code is not waiting for approval: check it against your terminal, or run `shpyrd login` again (a code lasts ten minutes).")
 		return
 	}
 	if c.PostForm("decision") != "allow" {
-		s.cliDevices.decide(d, "denied", "", "", nil)
-		s.audit(c, "", "cli.login.denied", d.name, "")
+		if _, err := s.cliDevices.decide(c.Request.Context(), d, "denied", "", "", nil); err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		s.audit(c, "", "cli.login.denied", d.Name, "")
 		s.cliDonePage(c, http.StatusOK, "Sign-in refused", "The CLI was told no; nothing was changed.")
 		return
 	}
 	name := "CLI"
-	if d.name != "" {
-		name = "CLI on " + d.name
+	if d.Name != "" {
+		name = "CLI on " + d.Name
 	}
 	// One credential per machine: approving again from the same host
 	// replaces the previous one rather than piling up tokens.
@@ -360,7 +334,18 @@ func (s *Server) cliActivateDecide(c *gin.Context) {
 		storeErr(c, err, "token")
 		return
 	}
-	s.cliDevices.decide(d, "approved", value, id.Email, created.ExpiresAt)
+	decided, err := s.cliDevices.decide(c.Request.Context(), d, "approved", value, id.Email, created.ExpiresAt)
+	if err != nil || !decided {
+		// Answered meanwhile (another tab, another replica) or expired:
+		// the credential minted for this answer is nobody's.
+		_ = s.store.DeleteToken(context.WithoutCancel(c.Request.Context()), ws.Slug, created.ID)
+		if err != nil {
+			abort(c, http.StatusBadGateway, err)
+			return
+		}
+		s.cliActivateForm(c, id, sess.CSRF, code, "That code is not waiting for approval: check it against your terminal, or run `shpyrd login` again (a code lasts ten minutes).")
+		return
+	}
 	s.audit(c, "", "cli.login", name, "")
 	who := firstNonEmpty(id.Email, id.Name, "you")
 	s.cliDonePage(c, http.StatusOK, "The CLI is signed in", "Your terminal is signed in to "+firstNonEmpty(ws.Name, "the workspace")+" as "+who+".")

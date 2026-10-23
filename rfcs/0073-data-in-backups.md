@@ -106,3 +106,10 @@ cluster, the partner or the platform.
 
 - 2026-09-27: RFC written (research; replaces the reference "RFC-0068 dumps in backups" in
   RFC-0033, whose number went to signed-in detection on identified apps).
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): parts of the question settled on the way: a shared
+  database's nightly dumps live in the platform's object store with their own
+  retention (step 3); a project archive carries buckets by reference and, on
+  request, their files up to 5 GB (step 5); volume snapshots are nightly and
+  restore in place or into a copy (RFC-0060). The platform backup's own
+  content and the encryption custody (#76's recipient model) stay this RFC's
+  open questions.

@@ -56,12 +56,13 @@ default (2-3 for high availability with --instances).`,
 
 // newPgSleepCmd sets the automatic hibernation policy: a quiet period of
 // the database's own, off (awake even when the workspace has a default for
-// databases), or the workspace's default (#135).
+// databases), or the workspace's default (#135). Without --after it says
+// what applies and where it comes from (#120).
 func newPgSleepCmd(g ext.CLIGlobals) *cobra.Command {
 	var after, project string
 	cmd := &cobra.Command{
-		Use:   "sleep <name>",
-		Short: "Hibernate a database after a quiet period; it wakes on the first connection",
+		Use:   "sleep <name> [--after <period>|off|default]",
+		Short: "Show or set when a database hibernates; it wakes on the first connection",
 		Long: `Hibernate a database when no client has been connected for a while and
 wake it on the first connection. While asleep the database's pods are gone
 (no compute is billed); its volume and data stay. The first connection after
@@ -72,12 +73,22 @@ Only single-instance databases sleep. Apps attached to the database are
 re-released once when the policy is set or removed (their database host
 moves to the platform's wake-capable address).
 
+  shpyrd pg sleep db --project shop                   # what applies now, and where it comes from
   shpyrd pg sleep db --project shop --after 30m
   shpyrd pg sleep db --project shop --after off       # never sleeps, whatever the workspace's default
   shpyrd pg sleep db --project shop --after default   # follow the workspace's default again`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cliContext()
+			if !cmd.Flags().Changed("after") {
+				v, err := resources.GetAPI(ctx, g.API(), project, "Postgres", args[0])
+				if err != nil {
+					return err
+				}
+				return ext.Print(g, cmd, map[string]string{"project": project, "name": args[0], "state": v.Details["sleepState"], "after": v.Details["sleepAfter"], "source": v.Details["sleepSource"]}, func(w io.Writer) {
+					printPgSleepReadBack(w, args[0], v)
+				})
+			}
 			body, _ := json.Marshal(map[string]any{"sleep": map[string]any{"after": after}})
 			if _, err := g.API().Request(ctx, "PATCH", "api/projects/"+project+"/resources/postgres/"+args[0]+"/sleep", body, "application/json"); err != nil {
 				return err
@@ -95,9 +106,70 @@ moves to the platform's wake-capable address).
 		},
 	}
 	ext.ProjectFlag(g, cmd, &project)
-	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' keeps the database awake, 'default' follows the workspace")
-	_ = cmd.MarkFlagRequired("after")
+	cmd.Flags().StringVar(&after, "after", "", "quiet period before hibernating, 5m to 24h (e.g. 30m); 'off' keeps the database awake, 'default' follows the workspace; without it, the policy that applies is shown")
 	return cmd
+}
+
+// pgSleepWords is a database's sleep in one line, for `pg info`: the
+// three states of #135 read apart, and the state now.
+func pgSleepWords(v *resources.View) string {
+	after, source, state := v.Details["sleepAfter"], v.Details["sleepSource"], v.Details["sleepState"]
+	var words string
+	switch {
+	case source == "off":
+		words = "never, whatever the workspace's default"
+	case source == "project":
+		words = "after " + after + " without client connections, its own policy"
+	case after == "":
+		words = "no: the workspace's default sets none"
+	default:
+		words = "after " + after + " without client connections, the workspace's default"
+	}
+	switch state {
+	case "sleeping":
+		words += "; asleep now"
+	case "waking":
+		words += "; waking now"
+	case "suspended":
+		words += "; suspended now"
+	}
+	return words
+}
+
+// printPgSleepReadBack says what sleep applies to a database and where it
+// comes from, then the state (#120).
+func printPgSleepReadBack(w io.Writer, name string, v *resources.View) {
+	if v.Details["type"] == shpyrdv1.PostgresTypeShared {
+		fmt.Fprintf(w, "%s is a shared database: always on, it never sleeps.\n", name)
+		return
+	}
+	after, source := v.Details["sleepAfter"], v.Details["sleepSource"]
+	switch {
+	case source == "":
+		fmt.Fprintf(w, "%s has no sleep state yet: it has not been reconciled.\n", name)
+		return
+	case source == "off":
+		fmt.Fprintf(w, "Sleep is off for %s: it stays awake, also when the workspace has a default for databases.\n", name)
+	case source == "project":
+		fmt.Fprintf(w, "%s hibernates after %s without client connections, by a policy of its own.\n", name, after)
+	case after == "":
+		fmt.Fprintf(w, "%s follows the workspace's default, which sets no sleep for databases: it stays awake.\n", name)
+	default:
+		fmt.Fprintf(w, "%s follows the workspace's default: it hibernates after %s without client connections.\n", name, after)
+	}
+	switch v.Details["sleepState"] {
+	case "sleeping":
+		fmt.Fprintln(w, "Asleep now; the first connection wakes it.")
+	case "waking":
+		fmt.Fprintln(w, "Waking up now.")
+	case "suspended":
+		fmt.Fprintf(w, "Suspended now: connections are refused until `shpyrd pg resume %s`.\n", name)
+	case "awake":
+		if m := v.Details["sleepMessage"]; m != "" {
+			fmt.Fprintf(w, "Awake: %s\n", strings.TrimPrefix(m, "awake: "))
+		}
+	}
+	fmt.Fprintf(w, "Change it: shpyrd pg sleep %s --after 30m|off|default\n", name)
 }
 
 // newPgSuspendCmd hibernates a database now, with no wake on connect.
@@ -417,6 +489,9 @@ func newInfoCmd(g ext.CLIGlobals) *cobra.Command {
 					}
 				}
 				fmt.Fprintf(out, "Backups:    %s\n", backups)
+				if v.Details["type"] != shpyrdv1.PostgresTypeShared && v.Details["sleepSource"] != "" {
+					fmt.Fprintf(out, "Sleep:      %s\n", pgSleepWords(v))
+				}
 				if from := v.Details["restoredFrom"]; from != "" {
 					fmt.Fprintf(out, "Restored:   from %s\n", from)
 				}

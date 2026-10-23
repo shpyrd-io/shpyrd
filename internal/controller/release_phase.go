@@ -132,7 +132,29 @@ const (
 // succeeded); otherwise the caller sets the phase from the status and
 // requeues. refused says the step cannot start: the workspace's ceiling
 // leaves no room for it.
-func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash, revision string, res corev1.ResourceRequirements) (proceed, refused bool, err error) {
+// releaseMounts are the volumes the release process declares (#126), as
+// Volume objects of the project resolve them; none when it declares none
+// or one is missing (the process's own reconcile says so).
+func (r *AppReconciler) releaseMounts(ctx context.Context, app *shpyrdv1.App) []ProcessMount {
+	if p, ok := app.Spec.Processes[releaseProcessType]; !ok || len(p.Volumes) == 0 {
+		return nil
+	}
+	var list shpyrdv1.VolumeList
+	if err := r.List(ctx, &list, client.InNamespace(app.Namespace)); err != nil {
+		return nil
+	}
+	volumes := map[string]*shpyrdv1.Volume{}
+	for i := range list.Items {
+		volumes[list.Items[i].Name] = &list.Items[i]
+	}
+	mounts, err := ProcessMounts(app, releaseProcessType, volumes)
+	if err != nil {
+		return nil
+	}
+	return mounts
+}
+
+func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1.App, image, configHash, revision string, res corev1.ResourceRequirements, mounts []ProcessMount) (proceed, refused bool, err error) {
 	command := releaseCommand(app, app.Status.ProcessTypes)
 	if command == nil {
 		app.Status.Release = nil
@@ -146,7 +168,7 @@ func (r *AppReconciler) reconcileReleasePhase(ctx context.Context, app *shpyrdv1
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), job)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := r.createReleaseJob(ctx, app, job, image, command, revision, releaseNumber(app, image, configHash), res, target); err != nil {
+		if err := r.createReleaseJob(ctx, app, job, image, command, revision, releaseNumber(app, image, configHash), res, target, mounts); err != nil {
 			return false, false, err
 		}
 		r.pruneReleaseJobs(ctx, app, target)
@@ -243,7 +265,7 @@ func jobDeadlineExceeded(j *batchv1.Job) bool {
 
 // createReleaseJob renders the one-off Job: the release's image and config
 // vars, the process type's environment, no volumes, one attempt.
-func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, release int, res corev1.ResourceRequirements, target string) error {
+func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App, job *batchv1.Job, image string, command []string, revision string, release int, res corev1.ResourceRequirements, target string, mounts []ProcessMount) error {
 	labels := processLabels(app, releaseProcessType)
 	labels["shpyrd.io/release-target"] = target
 	if restart := app.Annotations[shpyrdv1.AnnotationRestartedAt]; restart != "" {
@@ -275,6 +297,13 @@ func (r *AppReconciler) createReleaseJob(ctx context.Context, app *shpyrdv1.App,
 				Containers:         []corev1.Container{container},
 			},
 		},
+	}
+	// The release process's volumes (#126: a data migration runs where the
+	// data is), on the machine that holds a single-instance disk now.
+	if len(mounts) > 0 {
+		var pods corev1.PodList
+		_ = r.List(ctx, &pods, client.InNamespace(app.Namespace))
+		MountVolumesOnPod(&job.Spec.Template.Spec, mounts, ClaimHolderNode(pods.Items, mounts))
 	}
 	if err := controllerutil.SetControllerReference(app, job, r.Scheme); err != nil {
 		return err

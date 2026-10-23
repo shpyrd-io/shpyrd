@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -589,7 +592,7 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 	hash := configHash(app, secret, sizeByProcess, bindings, globals)
 	if releasePending(app, image, hash) {
 		res, _, _ := processResources(namedProcess{Name: releaseProcessType, Process: releaseProcess(app)}, r.catalog(ctx))
-		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res)
+		proceed, refused, err := r.reconcileReleasePhase(ctx, app, image, hash, revision, res, r.releaseMounts(ctx, app))
 		if err != nil {
 			return outcome{}, err
 		}
@@ -786,14 +789,16 @@ func (r *AppReconciler) reconcileKpackImage(ctx context.Context, app *shpyrdv1.A
 	rebuild := app.Annotations[shpyrdv1.AnnotationRebuildAt]
 	needsTrigger := rebuild != "" && current.GetAnnotations()[shpyrdv1.AnnotationRebuildAt] != rebuild
 
-	// An archive uploaded before the sources port existed names the API
-	// port; rewriting that in the Image would make kpack rebuild every
-	// app on upgrade. The current URL stays until a build happens anyway:
+	// The same archive at another address (the sources port where the API
+	// port was, a token added, a host renamed) is not a new source:
+	// rewriting the URL in the Image would make kpack rebuild every app on
+	// an upgrade (#93). The archive is named by its sha256, so the current
+	// URL stays while that name is the same, until a build happens anyway:
 	// a new archive, or a rebuild asked for, which takes the new address.
 	if !needsTrigger {
 		curURL, _, _ := unstructured.NestedString(current.Object, "spec", "source", "blob", "url")
 		desURL, _, _ := unstructured.NestedString(desired.Object, "spec", "source", "blob", "url")
-		if curURL != "" && curURL != desURL && r.Config.sourceURL(curURL) == desURL {
+		if curURL != "" && curURL != desURL && (r.Config.sourceURL(curURL) == desURL || sameArchive(curURL, desURL)) {
 			_ = unstructured.SetNestedField(desired.Object, curURL, "spec", "source", "blob", "url")
 		}
 	}
@@ -861,6 +866,27 @@ var errImageMoving = errors.New("kpack image moving to a new repository")
 
 // kpackBuildNeededAnnotation on an Image's latest Build makes kpack schedule
 // another build of the same source (build reason TRIGGER).
+// sameArchive says two source URLs name the same archive: the file is
+// named by its sha256 (<sha256>.tgz), whatever host, port or token carries
+// it (#93).
+func sameArchive(a, b string) bool {
+	name := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil || u.Path == "" {
+			return ""
+		}
+		base := path.Base(u.Path)
+		if !archiveName.MatchString(base) {
+			return ""
+		}
+		return base
+	}
+	n := name(a)
+	return n != "" && n == name(b)
+}
+
+var archiveName = regexp.MustCompile(`^[a-f0-9]{64}\.tgz$`)
+
 const kpackBuildNeededAnnotation = "image.kpack.io/additionalBuildNeeded"
 
 // triggerKpackBuild annotates the Image's latest Build so kpack builds
@@ -950,6 +976,41 @@ func (r *AppReconciler) newestKpackBuild(ctx context.Context, img *unstructured.
 
 // reconcileWorkloads makes Deployments, Services and the Ingress match the
 // process map and removes workloads of dropped process types.
+// previousRelease is the last release that ran the process with another
+// image or another size than the spec asks now: what a fallback puts back
+// (#127). The current rollout's own record, and any record of the same
+// target, are skipped.
+func previousRelease(app *shpyrdv1.App, process, image, size string) *shpyrdv1.Release {
+	for i := len(app.Status.Releases) - 1; i >= 0; i-- {
+		rel := &app.Status.Releases[i]
+		if rel.Image == "" {
+			continue
+		}
+		if rel.Image == image && (rel.Sizes[process] == size || rel.Sizes[process] == "") {
+			continue
+		}
+		return rel
+	}
+	return nil
+}
+
+// fallbackWorkload is what a process runs while a fallback holds (#127):
+// the previous release's image and, when that release recorded a size for
+// the process, that size's resources; the spec's resources otherwise.
+func (r *AppReconciler) fallbackWorkload(prev *shpyrdv1.Release, p namedProcess, catalog sizes.Catalog, res corev1.ResourceRequirements) (string, corev1.ResourceRequirements, int) {
+	if size := prev.Sizes[p.Name]; size != "" && size != "custom" {
+		if got, _, err := catalog.Resolve(size, corev1.ResourceRequirements{}); err == nil {
+			res = got
+		}
+	}
+	return prev.Image, res, prev.Number
+}
+
+// fallbackNote completes a failure reason while the previous release runs.
+func fallbackNote(release int) string {
+	return fmt.Sprintf(" The previous release (v%d) runs again meanwhile; resize the process, or roll back.", release)
+}
+
 func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
 	status := map[string]shpyrdv1.ProcessStatus{}
 	wanted := map[string]bool{}
@@ -966,6 +1027,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
 	var webReplicas *int32 // what the web Deployment currently asks for
 	release := releaseNumber(app, image, hash)
+	// A fallback holds for the generation it was decided for (#127); a
+	// change to the spec starts a rollout from the spec again.
+	if fb := app.Status.Fallback; fb != nil && fb.Generation != app.Generation {
+		app.Status.Fallback = nil
+	}
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
@@ -975,10 +1041,18 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if err != nil {
 			return nil, err
 		}
+		// What this process runs: the spec, or, while a fallback holds for
+		// it, its previous release (#127).
+		pImage, pRes, pRelease := image, res, release
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			if prev := app.ReleaseByNumber(fb.Release); prev != nil {
+				pImage, pRes, pRelease = r.fallbackWorkload(prev, p, catalog, res)
+			}
+		}
 		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: workloadName(app, p.Name), Namespace: app.Namespace}}
 		scaledExternally := kedaScales && p.Name == "web"
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
-			r.Config.mutateDeployment(app, p, image, hash, revision, release, res, mounts[p.Name], d, scaledExternally)
+			r.Config.mutateDeployment(app, p, pImage, hash, revision, pRelease, pRes, mounts[p.Name], d, scaledExternally)
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {
@@ -1005,7 +1079,30 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		if d.Status.ObservedGeneration < d.Generation {
 			ps.Ready, ps.Updated = 0, 0
 		}
-		ps.Failing, ps.Reason = r.processHealth(ctx, current)
+		health := r.processHealthDetail(ctx, current)
+		ps.Failing, ps.Reason = health.failing, health.reason
+		if fb := app.Status.Fallback; fb != nil && fb.Process == p.Name {
+			// The previous release runs; the failure is the spec's, and it
+			// shows until the spec changes.
+			ps.Failing = max(ps.Failing, 1)
+			ps.Reason = fb.Message + fallbackNote(fb.Release)
+		} else if health.unschedulable && rolloutStrategy(p, mounts[p.Name]).Type == appsv1.RecreateDeploymentStrategyType {
+			// A Recreate rollout stopped the running instance before the new
+			// one proved impossible to place: put the previous release back
+			// (#127) rather than leave the app down behind a locked rollout.
+			if prev := previousRelease(app, p.Name, image, sizeName); prev != nil {
+				app.Status.Fallback = &shpyrdv1.FallbackStatus{Generation: app.Generation, Process: p.Name, Release: prev.Number, Message: health.reason}
+				fImage, fRes, fRelease := r.fallbackWorkload(prev, p, catalog, res)
+				if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, d, func() error {
+					r.Config.mutateDeployment(app, p, fImage, hash, revision, fRelease, fRes, mounts[p.Name], d, scaledExternally)
+					return controllerutil.SetControllerReference(app, d, r.Scheme)
+				}); err != nil {
+					return nil, fmt.Errorf("deployment %s (fallback): %w", d.Name, err)
+				}
+				r.Recorder.Eventf(app, corev1.EventTypeWarning, "Fallback", "%s: %s The previous release (v%d) runs again meanwhile.", p.Name, health.reason, prev.Number)
+				ps.Reason = health.reason + fallbackNote(prev.Number)
+			}
+		}
 		ps.Size = sizeName
 		// The size's CPU is the limit; a shared size requests only a share.
 		ps.CPU = res.Limits.Cpu().String()
@@ -1034,26 +1131,27 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 
 	// Sleep objects (RFC-0075) come before the Ingress: the backend only
 	// points at the KEDA interceptor once the objects exist.
-	sleepActive, err := r.reconcileSleep(ctx, app)
+	sleepActive, err := r.reconcileSleep(ctx, app, mounts["web"])
 	if err != nil {
 		return nil, err
 	}
-	if ps, ok := status["web"]; ok && sleepWanted {
-		// The sleep state, decided after the objects were reconciled (a
-		// pause may have just happened).
-		ps.Sleep = &shpyrdv1.SleepStatus{State: "awake"}
-		switch pause, paused := r.sleepPause(app); {
-		case paused:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
-		case !sleepActive:
-			ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
-		case webReplicas != nil && *webReplicas == 0:
-			ps.Sleep.State = "sleeping"
-			ps.Desired = 0 // the scaler's decision, not a failure
-		}
-		if ps.Sleep.Message == "" && r.sleepSource(app) == "workspace" {
-			if sp := r.webSleepSpec(app); sp != nil {
-				ps.Sleep.Message = "the workspace's default: sleeps after " + sp.After + " (" + firstNonEmpty(sp.Resuming, "wait") + " mode), unless the project sets a sleep policy of its own or none"
+	if ps, ok := status["web"]; ok {
+		// The policy as it applies and where it comes from, for every web
+		// process (#120, #132), then the state, decided after the objects
+		// were reconciled (a pause may have just happened).
+		ps.Sleep = r.webSleepStatus(app, mounts["web"])
+		if sleepWanted {
+			switch pause, paused := r.sleepPause(app); {
+			case paused:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
+			case !sleepActive:
+				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
+			case webReplicas != nil && *webReplicas == 0:
+				ps.Sleep.State = "sleeping"
+				ps.Desired = 0 // the scaler's decision, not a failure
+			}
+			if ps.Sleep.Message == "" && ps.Sleep.Source == "workspace" {
+				ps.Sleep.Message = "the workspace's default: sleeps after " + ps.Sleep.After + " (" + ps.Sleep.Resuming + " mode), unless the project sets a sleep policy of its own or none"
 			}
 		}
 		status["web"] = ps

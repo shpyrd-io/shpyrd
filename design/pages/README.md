@@ -24,6 +24,20 @@ draws it under a `.dark` class; pack turns it into a media query).
 `pkg/pages` embeds the files and fills the words. The files are
 committed; run `make pages` after changing the component or these pages.
 
+The pages Dex serves itself at the sign-in host are drawn here too
+(`src/dex.tsx`, the gallery's "Sign-in (Dex)"): its error page, in each
+state it can be in (a sign-in that expired, one the identity provider
+refused, one outside the required groups, anything else), the connector
+chooser, the password page of an OSS install, and the approval, device and
+out-of-band pages. They are Dex's own templates, with its words
+(`{{.ErrMsg}}`) and its functions (`url`, `extra`, sprig's), and they link
+to one stylesheet rather than carry it. `scripts/pack.mjs` writes them and
+that stylesheet into `deploy/components/dex/base/web.yaml`, the ConfigMap
+the Dex Deployment lays over the image's pages, and marks the Deployment
+with their hash so Dex starts again with them; `go test ./deploy` runs them
+as Dex does. A failed sign-in starts again at `frontend.extra.home` of the
+Dex config, the dashboard, and nowhere a request names.
+
 A page has no script, but one that moves: the service-unavailable page
 draws the shipyard of `design/ui` with `scripts/shipyard.ts`, the
 component's world and scene without React, bundled with the files of its

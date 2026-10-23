@@ -319,6 +319,7 @@ func newSizesDefaultCmd(g *globalFlags) *cobra.Command {
 
 func newResizeCmd(g *globalFlags) *cobra.Command {
 	var appName string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "resize PROCESS=SIZE [PROCESS=SIZE...]",
 		Short: "Set the instance size of process types, e.g. web=shared-m worker=dedicated-s",
@@ -342,7 +343,7 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 					if !ok {
 						return fmt.Errorf("expected PROCESS=SIZE, got %q", kv)
 					}
-					body, _ := json.Marshal(map[string]string{"process": proc, "size": size})
+					body, _ := json.Marshal(map[string]any{"process": proc, "size": size, "force": force})
 					if _, err := ac.serverRequest(ctx, "POST", "api/projects/"+name+"/resize", body, "application/json"); err != nil {
 						return err
 					}
@@ -394,5 +395,6 @@ func newResizeCmd(g *globalFlags) *cobra.Command {
 		},
 	}
 	appFlag(cmd, &appName)
+	cmd.Flags().BoolVar(&force, "force", false, "resize even while another release is rolling out (the rollout in progress is cancelled)")
 	return cmd
 }

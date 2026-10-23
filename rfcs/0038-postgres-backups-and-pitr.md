@@ -89,3 +89,11 @@ copies of a dropped database go with it.
 - 2026-09-22: RFC written.
 - 2026-09-25: implemented on the object-storage extension (RFC-0046) and verified on OKE
   with a point-in-time restore. Released in v0.3.4.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): backups are on by default for every dedicated database on
+  cloud profiles (step 0 turned them on for the ten that had none); a shared
+  database has nightly dumps (step 3). A database with backups is copied before
+  it hibernates when its last copy is older than a schedule period
+  (`<name>-before-sleep`), its schedule is suspended while it sleeps, and a copy
+  is taken after the wake when the last is still old (`<name>-after-wake`);
+  `LastBackup` is derived from the completed copies (step 6). The WAL-archive
+  alerts read the archive queue and ignore a database that never failed (v1.1.2).

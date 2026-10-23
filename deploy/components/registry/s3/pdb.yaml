@@ -1,0 +1,14 @@
+# Two replicas on object storage keep images served through a platform roll
+# and a node drain (storage plan step 7); the budget keeps one up when the
+# other is evicted.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: registry
+  labels:
+    app.kubernetes.io/name: registry
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry

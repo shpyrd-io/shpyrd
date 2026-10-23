@@ -189,3 +189,10 @@ Known gaps:
 - 2026-10-02: #61. The platform's Deployments, unpinned, filled the apps node (1.06 cores and
   13 pods of 35 reserved) and the data node; the installer now pins every pod it installs,
   the projects' data goes to the data pool, and status lists what is out of place.
+- 2026-10-22 (the storage plan of 2026-10-10 (shpyrd-cloud `docs/plans/2026-10-10-storage-durability-and-scale.md`)): the data pool is Terraform-owned and fixed (three nodes on
+  the first cloud since step 3's first shared server, two on dev); datastores
+  and the platform's own pods are pinned to their pools (#61). Found on dev at
+  99 % CPU on the data pool: a hibernated database's wake could not schedule
+  after a pending pod took its slot; headroom on the data pool is a requirement
+  of sleep (RFC-0075), noted for the hardening tail. `/api/readyz` reports the
+  components' instances.

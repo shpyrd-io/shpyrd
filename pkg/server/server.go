@@ -14,8 +14,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -326,6 +328,7 @@ func run(o runOptions, logger *slog.Logger) error {
 		Pages:                  o.opts.Pages,
 		Sources:                sources,
 		SourcesAddr:            fmt.Sprintf(":%d", api.SourcesPort),
+		PeerAddr:               peerAddr(os.Getenv("SHPYRD_POD_IP"), api.SourcesPort),
 		InternalAPIAddr:        ":8083",
 		PublicAPIAddr:          publicAPIListenAddr(),
 		TrustedProxies:         trustedProxies(os.Getenv("SHPYRD_POD_CIDR")),
@@ -377,7 +380,9 @@ func run(o runOptions, logger *slog.Logger) error {
 			// Metering loop (RFC-0075) — runs on the leader alongside the
 			// registry GC; needs the store and the Prometheus client.
 			if prom != nil {
-				metering := &controller.MeteringLoop{Store: memberships.Store, Prom: prom, Client: mgr.GetClient()}
+				deps := srv.Deps()
+				metering := &controller.MeteringLoop{Store: memberships.Store, Prom: prom, Client: mgr.GetClient(),
+					SleepAllowed: deps.SleepAllowed, WorkspaceSleepDefault: controller.WorkspaceDatabaseSleepDefault(mgr.GetClient(), memberships.Store)}
 				if err := mgr.Add(metering); err != nil {
 					return fmt.Errorf("metering loop: %w", err)
 				}
@@ -790,4 +795,13 @@ func defaultWorkspaceFromEnv(domain, dashboard string) store.DefaultWorkspaceSpe
 // says so.
 func publishesNames(provider, wildcardTLS string) bool {
 	return (provider != "" && provider != "none") || wildcardTLS == "true"
+}
+
+// peerAddr is where the other replicas reach this one: the pod's own
+// address on the sources port. "" without one (outside a cluster).
+func peerAddr(podIP string, port int) string {
+	if ip := net.ParseIP(strings.TrimSpace(podIP)); ip != nil {
+		return "http://" + net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	}
+	return ""
 }

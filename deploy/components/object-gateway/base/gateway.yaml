@@ -133,6 +133,7 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - port: 3903
+        - port: 3900 # the Thanos sidecar uploads Prometheus's blocks to platform-metrics (storage plan step 7)
 ---
 # The gateway's own numbers (requests by listener and status, the
 # provider's latency, cap refusals, slow-downs), on the admin port.

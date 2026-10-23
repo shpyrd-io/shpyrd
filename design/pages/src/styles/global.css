@@ -8,6 +8,9 @@
 @source not "../../../ui/src";
 @source "../../../ui/src/components/state-page.tsx";
 @source "../../../ui/src/components/button.tsx";
+@source "../../../ui/src/components/input.tsx";
+@source "../../../ui/src/components/label.tsx";
+@source "../../../ui/src/components/field.tsx";
 @source "../../../ui/src/components/brand.tsx";
 @source "../../../ui/src/components/brand-icons.tsx";
 @source "../../../ui/src/components/shipyard.tsx";

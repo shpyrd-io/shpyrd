@@ -130,8 +130,9 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 	if b := backend(); b == webSleepServiceName {
 		t.Errorf("off must route to the app's own Service, got %s", b)
 	}
-	if st := got.Status.Processes["web"].Sleep; st != nil {
-		t.Errorf("off must report no sleep state, got %+v", st)
+	// The read-back says so (#120): awake, source off, no period.
+	if st := got.Status.Processes["web"].Sleep; st == nil || st.Source != "off" || st.State != "awake" || st.After != "" {
+		t.Errorf("off must read back as source off and awake, got %+v", st)
 	}
 	if b := startupBudget(); b != 30 {
 		t.Errorf("awake web startup budget = %ds, want the 30s default", b)

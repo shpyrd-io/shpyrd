@@ -294,9 +294,16 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 }
 
 // rolloutInProgress reports whether the last requested change is still being
-// rolled out; stacking another release on top only adds confusion.
+// rolled out; stacking another release on top only adds confusion. The way
+// back is never locked behind it (#127): rollback, resize and redeploy take
+// a force that cancels the rollout in progress.
 func rolloutInProgress(a *shpyrdv1.App) bool {
 	return a.Status.ObservedGeneration < a.Generation || a.Status.Phase == shpyrdv1.PhaseDeploying || a.Status.Phase == shpyrdv1.PhaseBuilding
+}
+
+// rolloutInProgressWords is the refusal's first sentence.
+func rolloutInProgressWords(a *shpyrdv1.App) string {
+	return fmt.Sprintf("a release is still rolling out (%s)", firstNonEmpty(a.Status.Message, a.Status.Phase))
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -1099,6 +1106,9 @@ func (s *Server) scaleApp(c *gin.Context) {
 
 type rollbackRequest struct {
 	Release int `json:"release" binding:"required"`
+	// Force rolls back while a release is still rolling out (#127): the
+	// rollout in progress is cancelled by it.
+	Force bool `json:"force,omitempty"`
 }
 
 func (s *Server) rollbackApp(c *gin.Context) {
@@ -1115,8 +1125,8 @@ func (s *Server) rollbackApp(c *gin.Context) {
 		if cur := a.CurrentRelease(); cur != nil && cur.Number == target.Number {
 			return fmt.Errorf("v%d is the current release", req.Release)
 		}
-		if rolloutInProgress(a) {
-			return fmt.Errorf("a release is still rolling out (%s); wait for it to finish", firstNonEmpty(a.Status.Message, a.Status.Phase))
+		if !req.Force && rolloutInProgress(a) {
+			return fmt.Errorf("%s; wait for it to finish, or roll back anyway with force (the rollout in progress is cancelled)", rolloutInProgressWords(a))
 		}
 		// Pin the build and sizes; the controller restores the config vars snapshot.
 		a.Spec.Image = target.Image
@@ -1132,7 +1142,7 @@ func (s *Server) rollbackApp(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	s.audit(c, project.SlugOf(app), "rollback", project.SlugOf(app), fmt.Sprintf("to v%d", req.Release))
+	s.audit(c, project.SlugOf(app), "rollback", project.SlugOf(app), fmt.Sprintf("to v%d", req.Release)+forcedNote(req.Force))
 	c.JSON(http.StatusOK, summarize(app))
 }
 

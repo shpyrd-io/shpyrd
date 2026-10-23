@@ -6,6 +6,7 @@ import { Input } from "@shpyrd/ui/components/input";
 import { Button } from "@shpyrd/ui/components/button";
 import { Shipyard } from "@shpyrd/ui/components/shipyard";
 import { StatePage } from "@shpyrd/ui/components/state-page";
+import { dex } from "./dex";
 
 // The pages the server serves by itself, where no application answers.
 // Each is drawn from its words: built, a word is a Go template's mark
@@ -18,14 +19,29 @@ export type Sample = Record<string, string | Item[]>;
 // chooses among.
 export type Fill = {
   word: (name: string) => string;
+  // A list's items; an item of a list of words is the word "" itself.
   each: (list: string, draw: (item: Item) => ReactNode) => ReactNode;
+  // What a word chooses among; a name that starts with $ is one of the
+  // template's own variables.
   choose: (name: string, options: Record<string, ReactNode>, otherwise: ReactNode) => ReactNode;
+  // One of the template's own actions ({{url .ReqPath "theme/x"}}), and
+  // what stands for it in the gallery.
+  action: (template: string, sample: string) => string;
+  // What is drawn when the template's condition holds; in the gallery,
+  // when the sample's word of that name is not empty.
+  when: (condition: string, word: string, yes: ReactNode, no?: ReactNode) => ReactNode;
 };
 
 export type ServerPage = {
   title: string;
   // When the server shows it.
   about: string;
+  // Who serves it: the server (pkg/pages), or Dex at the sign-in host
+  // (src/dex.tsx).
+  group?: "dex";
+  // The page whose template this one is, in another state: it is only
+  // previewed, with words of its own.
+  of?: string;
   sample: Sample;
   render: (fill: Fill) => ReactNode;
 };
@@ -39,11 +55,11 @@ function links(fill: Fill) {
   ));
 }
 
-export const pages: Record<string, ServerPage> = {
+const server: Record<string, ServerPage> = {
   nothing: {
     title: "Nothing here",
     about: "Nothing answers at the address: no app, no workspace, a link that expired (pkg/api/edge.go, members.go).",
-    sample: { Title: "No app here", Text: "There is no app at this address.", Links: [{ Label: "Dashboard", URL: "#" }] },
+    sample: { Title: "No app here", Text: "There is no app at this address.", Links: [] },
     render: (f) => <StatePage title={f.word("Title")} description={f.word("Text")} action={links(f)} />,
   },
   "no-access": {
@@ -197,14 +213,17 @@ export const pages: Record<string, ServerPage> = {
   },
 };
 
+export const pages: Record<string, ServerPage> = { ...server, ...dex };
+
 // The page with a Go template's marks: a word is {{.Name}}; a list is
 // ranged over, its items' words marks of their own.
 export function marks(page: ServerPage): Fill {
+  const ref = (name: string) => (name.startsWith("$") ? name : `.${name}`);
   return {
     word: (name) => `{{.${name}}}`,
     each: (list, draw) => {
       const first = (page.sample[list] as Item[] | undefined)?.[0] ?? {};
-      const item = Object.fromEntries(Object.keys(first).map((k) => [k, `{{.${k}}}`]));
+      const item = Object.fromEntries(Object.keys(first).map((k) => [k, k === "" ? "{{.}}" : `{{.${k}}}`]));
       return (
         <>
           {`{{range .${list}}}`}
@@ -217,12 +236,22 @@ export function marks(page: ServerPage): Fill {
       <>
         {Object.entries(options).map(([value, node], i) => (
           <Fragment key={value}>
-            {`{{${i === 0 ? "if" : "else if"} eq .${name} "${value}"}}`}
+            {`{{${i === 0 ? "if" : "else if"} eq ${ref(name)} "${value}"}}`}
             {node}
           </Fragment>
         ))}
         {"{{else}}"}
         {otherwise}
+        {"{{end}}"}
+      </>
+    ),
+    action: (template) => `{{${template}}}`,
+    when: (condition, _word, yes, no) => (
+      <>
+        {`{{if ${condition}}}`}
+        {yes}
+        {no !== undefined && "{{else}}"}
+        {no}
         {"{{end}}"}
       </>
     ),
@@ -238,5 +267,7 @@ export function samples(page: ServerPage): Fill {
       return items.length ? items.map((item, i) => <Fragment key={i}>{draw(item)}</Fragment>) : null;
     },
     choose: (name, options, otherwise) => options[String(page.sample[name] ?? "")] ?? otherwise,
+    action: (_template, sample) => sample,
+    when: (_condition, word, yes, no) => (page.sample[word] ? yes : no),
   };
 }

@@ -491,7 +491,7 @@ rolling restart of the app). The shpyrd Service's selector flips between CNPG's 
 (awake) and the wake proxy pod (sleeping/waking).
 
 Port allocated to the database: `pg.Status.Sleep.WakePort`, assigned once from a range
-(15000–16000) by the reconciler and stored in the CRD status. The `pg-gateway` builds its
+(15000–24999 since the storage plan's step 7; 15000–16000 before) by the reconciler and stored in the CRD status. The `pg-gateway` builds its
 listener table from the Postgres CRDs — no ConfigMap, crash-safe reconstruction on restart.
 
 ### Going to sleep
@@ -520,7 +520,7 @@ restart drops in-flight wakes):
    connections wait on the same operation.
 3. Raw socket held open. No bytes read, no bytes written.
 4. Polls until `pg.Status.Sleep.State == awake` and a TCP dial to the primary succeeds,
-   within `maxWakeWait` (60 s by default). Past the deadline: close cleanly. Clients see
+   within `maxWakeWait` (90 s since the storage plan's step 7; 60 s before). Past the deadline: close cleanly. Clients see
    "connection refused" and retry.
 5. `io.Copy` bidirectionally for the session's life. TLS, `SSLRequest`, `StartupMessage`,
    `CancelRequest`, streaming — all pass through unmodified.
@@ -623,7 +623,35 @@ OpenCost API windows are immutable).
 
 ## Implementation status
 
-Updated 2026-10-01.
+Updated 2026-10-21.
+
+- 2026-10-21: **sleep completeness (storage plan step 6).** The metering loop keeps the
+  activity signal for every database whose effective policy could put it to sleep, the
+  workspace's default included (before, such a database waited for ever for a check nobody
+  wrote and never hibernated). A database with backups is copied before it sleeps when its
+  last copy is older than a schedule period (`<name>-before-sleep`, replaced each cycle),
+  waits for the copy up to 60 minutes, then sleeps anyway with a warning in the status and
+  an event; the ScheduledBackup is suspended while it sleeps and resumed at the wake, and a
+  copy is taken after a wake when the last one is still older than a period
+  (`<name>-after-wake`), unless one already runs. `LastBackup` stays truthful. The status
+  reads the policy back: `sleep.after`, `sleep.resuming` (web) and `sleep.source`
+  (`project` | `off` | `workspace`) on every web process and dedicated database; a policy
+  auto sleep does not honour reads as asked with the state `unavailable`. A database's
+  `status.endpoint` is the host apps get (the sleep-aware Service while a policy applies).
+  `shpyrd sleep <project>` and `shpyrd pg sleep <name>` with no flag print the read-back
+  (#120); the dashboard sets both (#132). `resuming: wait` is refused on a web process with
+  a disk, and the controller renders page mode for one whatever the policy says. A
+  `persistent: false` Redis is scaled to zero while the project's web sleeps and no other
+  process runs, back with the web. Restore-in-place and cut-overs already run under the
+  maintenance annotation, which removes the sleep objects first. **Wake bench** (dev,
+  2026-10-22, `contrib/wake-bench.sh`, 20 forced cycles per path, p50 / p95): HTTP alone in
+  page mode 7.5 s / 9.2 s (also the shared-database path, which never sleeps); HTTP with a
+  50 GiB block disk 14.1 s / 52.0 s (bimodal: ~11 s when the volume is still attached to the
+  node the pod lands on, ~50 s when it detaches and reattaches); a dedicated database's
+  first connection through the pg-gateway, from hibernated, 44.2 s / 52.8 s (max 56.5 s,
+  against the gateway's 60 s wake deadline, widened to 90 s in the hardening tail).
+  The budgets of RFC-0075's plan hold for HTTP and the database; "HTTP + disk ≈ 25–30 s"
+  does not hold at p95 on OCI block volumes.
 
 - 2026-10-01: **plans carry more than prices.** `postgres_sleep_after`: the plan's default
   sleep for databases, inherited by a database with no policy of its own (an explicit `off`
@@ -683,7 +711,7 @@ Updated 2026-10-01.
 | 2 — customer billing | **shipped (preview)** | `plans`, `workspace_plans`, `invoice_lines`; `shpyrd-ctl plans create/list/assign`; `GET /api/workspace/billing/current` (month-to-date at plan prices, one line per project → component → metric, per-project subtotals, `min_monthly` floor, run-rate projection; storage in GiB-months, egress in GiB); Billing card on Workspace › Overview; `shpyrd-ctl economics` takes revenue from the same preview until lines are finalised | Invoice lines are computed on read, not finalised by a monthly job; no payment provider (by design). **Finding on the first cloud**: the buildpack cache claim (2 Gi requested, rounded to OCI's 50 Gi block minimum) is the largest line of every project — $5.00/month at $0.10/GiB-month against cents of compute. Decision (Patrick, 2026-09-28): bill it, shown as `build-cache`, and redesign the cache (shared claim with per-app sub-paths, a cheaper class, or a registry-backed cache) rather than hide the cost. |
 | 3 — OpenCost + economics | **shipped, enabled on the first cloud (2026-10-01)** | `opencost` component (chart 2.5.32) and extension with the hourly COGS writer; `GET /api/cluster/economics`; Economics card; `shpyrd-ctl economics` | Not yet enabled on the first cloud; totals not reconciled against the OCI bill; the card is operator-only and shows an explicit empty state until then. |
 | 4 — HTTP sleep | **shipped, opt-in, not yet benched** | `sleep` extension installing the `keda` and `keda-http` components; `SleepSpec` on the web process; `POST /api/projects/:slug/processes` with `sleep`; `shpyrd sleep <project> --after --resuming`; controller renders ExternalName + `InterceptorRoute` + `ScaledObject` (+ resuming-page ConfigMap) and only then moves the Ingress backend to the interceptor and shortens the auth cache to 5 s; while the policy is active KEDA owns the web Deployment's replica count (the process's instance count is the ceiling, restored on wake); a ScaledObject not Ready for 3 min pauses sleep for the app with the reason in its status; `status.processes.web.sleep` says awake / sleeping / unavailable and the UI and `projects info` show "sleeping" instead of 0 of 1 | The API refuses a policy when the cluster lacks the add-on's CRDs, and the controller keeps routing to the app's own Service if they disappear — sleep never takes an app down. Enabled on the first cloud (`sleep` extension); first measured wakes 6.1 s (wait mode) and 7.3 s (page mode) for the Go example, one sample each — the bench is still to do; `example-go` on demo sleeps with page mode from 2026-09-28 as the long-running check; `lastWakeAt`/`lastWakeDuration` not filled. **Workspace-level default (v0.9.40)**: a plan carries `sleepAfter`/`sleepResuming` (`shpyrd-ctl plans create … --sleep-after 15m --sleep-resuming page`); projects on that plan without a policy of their own inherit it, the process status says "workspace plan default", and `shpyrd sleep <project> --after off` opts out. Open source with no plans: off, as the RFC says. RFC-0047 autoscaling exclusion not enforced (RFC-0047 not shipped). |
-| 5 — Postgres sleep | **shipped (v0.9.36), opt-in, to be benched** | Full state machine `awake → sleeping → waking → awake` plus `suspended`: CNPG declarative hibernation (`cnpg.io/hibernation`), the shpyrd-owned Service `<name>` (primary while awake; the `pg-gateway` pods on the database's wake port while asleep/waking; nothing while suspended so clients are refused at once); the activity signal from the metering loop every 5 min (`cnpg_backends_total` excluding CNPG's own sessions — an idle application pool keeps its database awake, by design) recorded as `status.sleep.activityCheckedAt/lastActivityAt`; hibernation only with a signal fresher than 15 min, the quiet period elapsed and the gateway Deployment ready; the gateway holds the client's TCP connection, un-hibernates the cluster itself, waits for CNPG's `-rw` Endpoints and pipes; the reconciler flips the Service back when the primary is ready and starts a fresh idle window; bindings hand apps the shpyrd Service host when a policy exists (one config release on enable/disable); CNPG PodMonitor enabled on every cluster; `PATCH /resources/postgres/:name/sleep`, `POST …/suspend`, `POST …/resume`; `shpyrd pg sleep/suspend/resume`; HA databases refused; `/pg-gateway` ships in the server image and the postgres extension installs the component | **First measured cold wake on OKE: 36.2 s** (one `psql` connect against a hibernated CNPG cluster on an OCI block volume; the client held one TCP connection and got its query answered; warm connect 31 ms). Hibernation fired at exactly the 5 min policy once the activity signal confirmed zero clients. That number sets the expectation: an app whose first request needs its database sees HTTP wake (~7 s) plus database wake (~36 s) — `resuming: page` covers it, `wait` mode would exceed most HTTP client timeouts. Backup-before-sleep not done (hibernation keeps the volume; data is not at risk); `pg info`/UI show only the status message; `sleep_events` not written for databases; the Service flips between ClusterIP and ExternalName across sleep, so a client that caches a resolved ClusterIP for the process lifetime would need a reconnect after a sleep cycle (kube-dns TTL is 30 s; libpq/pgx/ActiveRecord resolve per connect). `example-rails/db` on demo keeps a 5 min policy as the long-running check. |
+| 5 — Postgres sleep | **shipped (v0.9.36), opt-in, to be benched** | Full state machine `awake → sleeping → waking → awake` plus `suspended`: CNPG declarative hibernation (`cnpg.io/hibernation`), the shpyrd-owned Service `<name>` (primary while awake; the `pg-gateway` pods on the database's wake port while asleep/waking; nothing while suspended so clients are refused at once); the activity signal from the metering loop every 5 min (`cnpg_backends_total` excluding CNPG's own sessions — an idle application pool keeps its database awake, by design) recorded as `status.sleep.activityCheckedAt/lastActivityAt`; hibernation only with a signal fresher than 15 min, the quiet period elapsed and the gateway Deployment ready; the gateway holds the client's TCP connection, un-hibernates the cluster itself, waits for CNPG's `-rw` Endpoints and pipes; the reconciler flips the Service back when the primary is ready and starts a fresh idle window; bindings hand apps the shpyrd Service host when a policy exists (one config release on enable/disable); CNPG PodMonitor enabled on every cluster; `PATCH /resources/postgres/:name/sleep`, `POST …/suspend`, `POST …/resume`; `shpyrd pg sleep/suspend/resume`; HA databases refused; `/pg-gateway` ships in the server image and the postgres extension installs the component | **First measured cold wake on OKE: 36.2 s** (one `psql` connect against a hibernated CNPG cluster on an OCI block volume; the client held one TCP connection and got its query answered; warm connect 31 ms). Hibernation fired at exactly the 5 min policy once the activity signal confirmed zero clients. That number sets the expectation: an app whose first request needs its database sees HTTP wake (~7 s) plus database wake (~36 s) — `resuming: page` covers it, `wait` mode would exceed most HTTP client timeouts. Backup-before-sleep shipped 2026-10-21 (see above); `pg info`/UI read the policy back since then; `sleep_events` not written for databases; the Service flips between ClusterIP and ExternalName across sleep, so a client that caches a resolved ClusterIP for the process lifetime would need a reconnect after a sleep cycle (kube-dns TTL is 30 s; libpq/pgx/ActiveRecord resolve per connect). `example-rails/db` on demo keeps a 5 min policy as the long-running check. |
 | 0 — bench | **not started** | — | Wake times per StorageClass, driver connect-timeout matrix, CNPG hibernate loops. Gate for phase 6. |
 | 6 — economics on | **not started** | — | Small plans sleep by default once phases 0 and 4 have two clean weeks. |
 

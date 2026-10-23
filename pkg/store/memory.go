@@ -51,7 +51,17 @@ type Memory struct {
 	cost        *costsMemory
 	github      map[githubKey]*githubRow
 	githubLinks map[string]GitHubUserLink
+	tickets     map[string]memTicket
+	logins      map[string]memTicket
+	downloads   map[string]memTicket
+	devices     map[string]*CLIDevice
 	now         func() time.Time
+}
+
+// memTicket is a one-time shell ticket held in memory.
+type memTicket struct {
+	payload []byte
+	expires time.Time
 }
 
 // NewMemory returns an empty store with the implicit workspace.
@@ -408,6 +418,167 @@ func (m *Memory) LockWorkspace(ctx context.Context, slug string, fn func(ctx con
 	mu.Lock()
 	defer mu.Unlock()
 	return fn(ctx)
+}
+
+func (m *Memory) PutExecTicket(_ context.Context, hash string, payload []byte, expires time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tickets == nil {
+		m.tickets = map[string]memTicket{}
+	}
+	now := m.now()
+	for k, t := range m.tickets {
+		if now.After(t.expires) {
+			delete(m.tickets, k)
+		}
+	}
+	m.tickets[hash] = memTicket{payload: append([]byte(nil), payload...), expires: expires}
+	return nil
+}
+
+func (m *Memory) TakeExecTicket(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tickets[hash]
+	delete(m.tickets, hash)
+	if !ok || m.now().After(t.expires) {
+		return nil, false, nil
+	}
+	return t.payload, true, nil
+}
+
+func (m *Memory) PutCLIDevice(_ context.Context, d CLIDevice, max int, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.devices == nil {
+		m.devices = map[string]*CLIDevice{}
+	}
+	for k, x := range m.devices {
+		if !now.Before(x.Expires) {
+			delete(m.devices, k)
+		}
+	}
+	if len(m.devices) >= max {
+		return ErrFull
+	}
+	for _, x := range m.devices {
+		if x.WorkspaceID == d.WorkspaceID && x.UserCode == d.UserCode {
+			return ErrConflict
+		}
+	}
+	if _, ok := m.devices[d.DeviceHash]; ok {
+		return ErrConflict
+	}
+	copy := d
+	m.devices[d.DeviceHash] = &copy
+	return nil
+}
+
+func (m *Memory) CLIDeviceByUserCode(_ context.Context, workspaceID, userCode string, now time.Time) (*CLIDevice, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.devices {
+		if x.WorkspaceID == workspaceID && x.UserCode == userCode && x.State == "" && now.Before(x.Expires) {
+			copy := *x
+			return &copy, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) DecideCLIDevice(_ context.Context, workspaceID, userCode, state, token, email string, tokenExp *time.Time, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.devices {
+		if x.WorkspaceID == workspaceID && x.UserCode == userCode && x.State == "" && now.Before(x.Expires) {
+			x.State, x.Token, x.Email, x.TokenExp = state, token, email, tokenExp
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) PollCLIDevice(_ context.Context, workspaceID, deviceHash string, now time.Time, minGap time.Duration) (*CLIDevice, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x, ok := m.devices[deviceHash]
+	if !ok || x.WorkspaceID != workspaceID || !now.Before(x.Expires) {
+		return nil, false, ErrNotFound
+	}
+	last := x.LastPoll
+	x.LastPoll = now
+	if !last.IsZero() && now.Sub(last) < minGap {
+		return nil, true, nil
+	}
+	copy := *x
+	if x.State != "" {
+		delete(m.devices, deviceHash)
+	}
+	return &copy, false, nil
+}
+
+func (m *Memory) PutArchiveDownload(_ context.Context, hash string, payload []byte, expires time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.downloads == nil {
+		m.downloads = map[string]memTicket{}
+	}
+	now := m.now()
+	for k, d := range m.downloads {
+		if now.After(d.expires) {
+			delete(m.downloads, k)
+		}
+	}
+	m.downloads[hash] = memTicket{payload: append([]byte(nil), payload...), expires: expires}
+	return nil
+}
+
+func (m *Memory) TakeArchiveDownload(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.downloads[hash]
+	delete(m.downloads, hash)
+	if !ok || m.now().After(d.expires) {
+		return nil, false, nil
+	}
+	return d.payload, true, nil
+}
+
+func (m *Memory) PutPendingLogin(_ context.Context, hash string, payload []byte, expires time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.logins == nil {
+		m.logins = map[string]memTicket{}
+	}
+	now := m.now()
+	for k, l := range m.logins {
+		if now.After(l.expires) {
+			delete(m.logins, k)
+		}
+	}
+	m.logins[hash] = memTicket{payload: append([]byte(nil), payload...), expires: expires}
+	return nil
+}
+
+func (m *Memory) PeekPendingLogin(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.logins[hash]
+	if !ok || m.now().After(l.expires) {
+		return nil, false, nil
+	}
+	return append([]byte(nil), l.payload...), true, nil
+}
+
+func (m *Memory) TakePendingLogin(_ context.Context, hash string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.logins[hash]
+	delete(m.logins, hash)
+	if !ok || m.now().After(l.expires) {
+		return nil, false, nil
+	}
+	return l.payload, true, nil
 }
 
 func (m *Memory) ListDomainClaims(_ context.Context, ws string) ([]DomainClaim, error) {

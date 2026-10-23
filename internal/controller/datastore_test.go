@@ -698,3 +698,70 @@ func TestPostgresSizes(t *testing.T) {
 		t.Errorf("resized to shared-l = %s %v liveness %d", mem, params, live)
 	}
 }
+
+// Storage plan step 6: a cache (a store without persistence) is scaled to
+// zero while the project's web process sleeps and comes back with it; a
+// persistent store stays up, and so does a cache while a worker still runs.
+func TestCacheSleepsWithTheWebProcess(t *testing.T) {
+	ctx := context.Background()
+	app := &shpyrdv1.App{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-shop"},
+		Spec:       shpyrdv1.AppSpec{Image: "ghcr.io/acme/shop:1", Processes: map[string]shpyrdv1.Process{"web": {}}},
+		Status:     shpyrdv1.AppStatus{Processes: map[string]shpyrdv1.ProcessStatus{"web": {Desired: 0, Sleep: &shpyrdv1.SleepStatus{State: "sleeping"}}}},
+	}
+	cache := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "app-shop", Generation: 1}, Spec: shpyrdv1.RedisSpec{Size: "shared-s"}}
+	storage := resource.MustParse("2Gi")
+	queue := &shpyrdv1.Redis{ObjectMeta: metav1.ObjectMeta{Name: "queue", Namespace: "app-shop", Generation: 1}, Spec: shpyrdv1.RedisSpec{Size: "shared-s", Persistent: true, Storage: &storage}}
+	base, c := newTestReconciler(t, app, cache, queue)
+	r := &RedisReconciler{Client: c, Scheme: base.Scheme, Recorder: record.NewFakeRecorder(20), SystemNamespace: "shpyrd-system"}
+	replicas := func(name string) int32 {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "app-shop", Name: name}}); err != nil {
+			t.Fatalf("reconcile %s: %v", name, err)
+		}
+		sts := &appsv1.StatefulSet{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, sts); err != nil {
+			t.Fatal(err)
+		}
+		return *sts.Spec.Replicas
+	}
+	status := func(name string) shpyrdv1.ResourceStatus {
+		out := &shpyrdv1.Redis{}
+		_ = c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: name}, out)
+		return out.Status
+	}
+	if got := replicas("cache"); got != 0 {
+		t.Errorf("cache while the web sleeps: replicas %d, want 0", got)
+	}
+	if st := status("cache"); st.Phase != shpyrdv1.ResourceReady || st.Message != redisAsleepMessage {
+		t.Errorf("asleep cache status = %+v", st)
+	}
+	if got := replicas("queue"); got != 1 {
+		t.Errorf("persistent store while the web sleeps: replicas %d, want 1", got)
+	}
+
+	// A worker still running keeps the cache up.
+	app.Status.Processes["worker"] = shpyrdv1.ProcessStatus{Desired: 1}
+	if err := c.Status().Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if got := replicas("cache"); got != 0+1 {
+		t.Errorf("cache with a worker running: replicas %d, want 1", got)
+	}
+	delete(app.Status.Processes, "worker")
+
+	// The web wakes: the cache comes back.
+	app.Status.Processes["web"] = shpyrdv1.ProcessStatus{Desired: 1, Sleep: &shpyrdv1.SleepStatus{State: "awake"}}
+	if err := c.Status().Update(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if got := replicas("cache"); got != 1 {
+		t.Errorf("cache after the wake: replicas %d, want 1", got)
+	}
+	// The App's state change enqueues the namespace's caches, not its
+	// persistent stores.
+	reqs := r.appToStores(ctx, app)
+	if len(reqs) != 1 || reqs[0].Name != "cache" {
+		t.Errorf("app change enqueues %v, want the cache alone", reqs)
+	}
+}

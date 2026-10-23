@@ -295,7 +295,10 @@
         "size": "shared-s",
         "sleep": {
           "state": "sleeping",
-          "message": "asleep since 02:10, wakes on the first request"
+          "message": "asleep since 02:10, wakes on the first request",
+          "after": "15m",
+          "resuming": "page",
+          "source": "workspace"
         }
       }
     },

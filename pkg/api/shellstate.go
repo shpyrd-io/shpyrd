@@ -1,15 +1,18 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
+	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
 
 // State behind the web terminal (RFC-0026): one-time tickets that
@@ -63,20 +66,38 @@ const maxOpenTickets = 256
 // rather than a fault, since the store drains itself within a TTL.
 var errTicketsFull = errors.New("too many shell tickets are outstanding; try again in a moment")
 
-// ticketStore holds unredeemed tickets. In memory is enough: they live for
-// 30 seconds and the server runs a single replica
-// (deploy/components/shpyrd/base/server.yaml).
+// ticketStore holds unredeemed tickets. With a control-plane database they
+// live there, so the WebSocket that redeems one may land on any replica of
+// the server (storage plan step 7); without one (tests, a server with no
+// store) in memory, which a single replica is enough for.
 type ticketStore struct {
-	mu  sync.Mutex
-	m   map[string]execTicket // keyed by the code's hash
-	ttl time.Duration
-	max int
-	now func() time.Time
+	mu      sync.Mutex
+	m       map[string]execTicket // keyed by the code's hash
+	ttl     time.Duration
+	max     int
+	now     func() time.Time
+	backing store.Store
 }
 
 func newTicketStore(ttl time.Duration) *ticketStore {
 	return &ticketStore{m: map[string]execTicket{}, ttl: ttl, max: maxOpenTickets, now: time.Now}
 }
+
+// newSharedTicketStore keeps the tickets in st.
+func newSharedTicketStore(ttl time.Duration, st store.Store) *ticketStore {
+	t := newTicketStore(ttl)
+	t.backing = st
+	return t
+}
+
+// storedTicket is a ticket as the store keeps it.
+type storedTicket struct {
+	Ticket  execTicket `json:"ticket"`
+	Expires time.Time  `json:"expires"`
+}
+
+// ticketStoreTimeout bounds the store's part of a mint or a redeem.
+const ticketStoreTimeout = 5 * time.Second
 
 // mint stores t and returns the code to put in the WebSocket's query. Only
 // the hash is kept, so a heap dump or an accidental log of the store does not
@@ -87,6 +108,19 @@ func (st *ticketStore) mint(t execTicket) (string, error) {
 		return "", err
 	}
 	code := base64.RawURLEncoding.EncodeToString(raw)
+	if st.backing != nil {
+		expires := st.now().Add(st.ttl)
+		payload, err := json.Marshal(storedTicket{Ticket: t, Expires: expires})
+		if err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), ticketStoreTimeout)
+		defer cancel()
+		if err := st.backing.PutExecTicket(ctx, hashCode(code), payload, expires); err != nil {
+			return "", err
+		}
+		return code, nil
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.sweepLocked()
@@ -103,6 +137,19 @@ func (st *ticketStore) mint(t execTicket) (string, error) {
 func (st *ticketStore) redeem(code string) (execTicket, error) {
 	if code == "" {
 		return execTicket{}, errors.New("no shell ticket presented")
+	}
+	if st.backing != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), ticketStoreTimeout)
+		defer cancel()
+		payload, ok, err := st.backing.TakeExecTicket(ctx, hashCode(code))
+		if err != nil {
+			return execTicket{}, err
+		}
+		var kept storedTicket
+		if !ok || json.Unmarshal(payload, &kept) != nil || st.now().After(kept.Expires) {
+			return execTicket{}, errors.New("the shell ticket is invalid or expired; open the Shell tab again")
+		}
+		return kept.Ticket, nil
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()

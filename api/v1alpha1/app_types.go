@@ -438,6 +438,19 @@ type SleepSpec struct {
 	Resuming string `json:"resuming,omitempty"`
 }
 
+// FallbackStatus records a process put back on its previous release
+// because the requested one cannot be scheduled (#127).
+type FallbackStatus struct {
+	// Generation of the spec the fallback was decided for.
+	Generation int64 `json:"generation"`
+	// Process is the process type running its previous release.
+	Process string `json:"process"`
+	// Release is the number of the release running again.
+	Release int `json:"release"`
+	// Message says why the requested release cannot start.
+	Message string `json:"message,omitempty"`
+}
+
 // SleepStatus records the sleep state of a process (RFC-0075).
 type SleepStatus struct {
 	// State is awake, sleeping or waking; "unavailable" when a policy is
@@ -446,6 +459,18 @@ type SleepStatus struct {
 	// Message explains an unavailable state.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// After and Resuming are the policy as it applies (#120): the quiet
+	// period and the wake mode, empty when nothing puts the process to
+	// sleep. Source says where it comes from: "project" for a policy of
+	// the project's own, "off" for an explicit off (awake whatever the
+	// workspace's default), "workspace" otherwise (the workspace's
+	// default, or none when it sets none).
+	// +optional
+	After string `json:"after,omitempty"`
+	// +optional
+	Resuming string `json:"resuming,omitempty"`
+	// +optional
+	Source string `json:"source,omitempty"`
 	// LastActivityAt is when the last request arrived.
 	// +optional
 	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
@@ -578,6 +603,13 @@ type AppStatus struct {
 	// registry and removes them from the list (RFC-0059).
 	// +optional
 	StaleImages []string `json:"staleImages,omitempty"`
+	// Fallback says a process runs its previous release again because the
+	// one asked for cannot be scheduled (#127): a Recreate rollout (a
+	// single-instance volume) had stopped the running instance before the
+	// new one proved impossible to place. It holds for the generation it
+	// was set on; a change to the spec (a resize, a rollback) clears it.
+	// +optional
+	Fallback *FallbackStatus `json:"fallback,omitempty"`
 	// Processes reports rollout state per process type.
 	// +optional
 	Processes map[string]ProcessStatus `json:"processes,omitempty"`

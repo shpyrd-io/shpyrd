@@ -72,7 +72,8 @@ v0.9.61 closed what was left:
   <host>`, 30 days, revocable); approving again from the same host replaces it. Two
   kinds, then: an API token carries roles of its own, for a machine that is not the
   person; a session token is the person on one machine. `--no-browser` prints the
-  link for a shell over SSH. Codes live ten minutes in memory, like shell tickets.
+  link for a shell over SSH. Codes live ten minutes in the control-plane database, like
+  shell tickets, so any replica of the server answers the CLI and the browser.
 - **`run` over the API.** `POST /api/projects/:slug/run` creates the one-off instance
   (the same pod the CLI built with a kubeconfig, now `controller.OneOffPod`) and mints a
   ticket bound to it; the web terminal's socket (RFC-0026) waits for the instance to

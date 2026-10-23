@@ -1,0 +1,9 @@
+---
+title: "A release that cannot start steps back"
+description: "Sizes no machine can hold are refused up front; an instance with no machine to go to fails in words; a rollout that cannot start puts the previous release back."
+date: "2026-10-22"
+type: improvement
+draft: false
+---
+
+A resize to a size no machine of your pool can hold is refused before anything changes, with the numbers: "web cannot start: it asks for 2 cores; no machine here has more than 1.83 cores". An instance that waits for room the cluster cannot make fails within five minutes instead of showing "rolling out" forever. When a process with a disk rolls out a release whose instance cannot start, the previous release comes back at its recorded size and the project page keeps the failure in view until the next change. Rollback and resize over a rollout still in progress ask for `--force` (the dashboard asks the same question), and cancel it.
