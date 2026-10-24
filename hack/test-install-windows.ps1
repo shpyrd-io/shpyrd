@@ -15,8 +15,8 @@ try {
     $source = Join-Path $root 'main.go'
     @'
 package main
-import "fmt"
-func main(){fmt.Println("shpyrd test version")}
+import ("fmt"; "os")
+func main(){if len(os.Args)!=2 || os.Args[1]!="version" {os.Exit(1)}; fmt.Println("shpyrd test version")}
 '@ | Set-Content $source -Encoding ascii
     $fixture = Join-Path $root 'shpyrd.exe'
     & go build -o $fixture $source
