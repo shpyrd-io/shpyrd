@@ -40,7 +40,7 @@
             [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $destination).TrimStart(';')), 'User')
         }
         if (($env:Path -split ';') -notcontains $destination) { $env:Path = "$destination;$env:Path" }
-        & (Join-Path $destination 'shpyrd.exe') --version
+        & (Join-Path $destination 'shpyrd.exe') version
         if ($LASTEXITCODE -ne 0) { throw 'The CLI was installed but could not start.' }
         Write-Host 'Installed. Run shpyrd login to connect or create your workspace.'
     } finally {
