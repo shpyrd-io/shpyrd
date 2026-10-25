@@ -95,7 +95,7 @@ function Chosen() {
             ) : (
               <p className="text-sm text-muted-foreground">The platform's own application.</p>
             )}
-            <Field label="Reference" hint="oci://host/repository:tag or @sha256:digest. A tag is settled to its digest now; what the door serves never moves on its own. Empty is the platform's own.">
+            <Field label="Reference" hint="oci://host/repository:tag or @sha256:digest">
               <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="oci://ghcr.io/acme/workspace-ui:2.3.1" disabled={!perms.admin} className="font-mono" />
             </Field>
             {perms.admin && (
