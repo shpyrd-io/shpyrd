@@ -87,7 +87,7 @@ it("sets a reference an admin types, and goes back to the platform's own", async
   await screen.findByText("Serving");
   const input = screen.getByPlaceholderText("oci://ghcr.io/acme/workspace-ui:2.3.1");
   fireEvent.change(input, { target: { value: "oci://ghcr.io/acme/workspace-ui:2.4.0" } });
-  fireEvent.click(screen.getByRole("button", { name: "Serve it" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(fake.updateWorkspace).toHaveBeenCalledWith({ ui: "oci://ghcr.io/acme/workspace-ui:2.4.0" }));
   fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
   await waitFor(() => expect(fake.updateWorkspace).toHaveBeenCalledWith({ ui: "" }));
@@ -123,6 +123,6 @@ it("offers a reader nothing to change", async () => {
   fake.workspace.mockResolvedValue(ownApp);
   show();
   await screen.findByText("Serving");
-  expect(screen.queryByRole("button", { name: "Serve it" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Add credential" })).toBeNull();
 });

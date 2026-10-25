@@ -101,7 +101,7 @@ function Chosen() {
             {perms.admin && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" disabled={ref.trim() === (chosen?.ref ?? "") || set.isPending} onClick={() => set.mutate(ref.trim())}>
-                  {ref.trim() ? "Serve it" : "Serve the platform's own"}
+                  Save
                 </Button>
                 {chosen && (
                   <>
