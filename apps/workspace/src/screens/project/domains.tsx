@@ -6,9 +6,9 @@ import { Copy, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Input } from "@shpyrd/ui/components/input";
@@ -23,7 +23,6 @@ import { Failed, Loading } from "./shared";
 // follows by itself.
 export function DomainsCard({
   title,
-  description,
   queryKey,
   list,
   add,
@@ -32,7 +31,6 @@ export function DomainsCard({
   redirect,
 }: {
   title: string;
-  description: string;
   queryKey: unknown[];
   list: () => Promise<DomainsAnswer>;
   add: (host: string) => Promise<unknown>;
@@ -60,10 +58,9 @@ export function DomainsCard({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
         {canEdit && (
           <CardAction>
-            <AddDomain add={add} target={domains.data?.target} address={domains.data?.address} onDone={refresh} />
+            <AddDomain add={add} onDone={refresh} />
           </CardAction>
         )}
       </CardHeader>
@@ -72,7 +69,7 @@ export function DomainsCard({
           <Select value={domains.data.redirectTo || "default"} disabled={!canEdit || redirectIt.isPending} onValueChange={(value) => redirectIt.mutate(value === "default" ? "" : value)}>
             <SelectTrigger aria-label="Redirect the platform address"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">Use workspace default</SelectItem>
+              <SelectItem value="default">Within Workspace</SelectItem>
               {domains.data.domains.filter((d) => d.redirectEligible || d.host === domains.data?.redirectTo).map((d) => <SelectItem key={d.host} value={d.host}>{d.host}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -212,7 +209,7 @@ export function DnsRecords({ records }: { records: DnsRecord[] }) {
   );
 }
 
-function AddDomain({ add, target, address, onDone }: { add: (host: string) => Promise<unknown>; target?: string; address?: string; onDone: () => void }) {
+function AddDomain({ add, onDone }: { add: (host: string) => Promise<unknown>; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [host, setHost] = useState("");
   const valid = /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host.trim());
@@ -233,14 +230,9 @@ function AddDomain({ add, target, address, onDone }: { add: (host: string) => Pr
           Add
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader divider>
           <DialogTitle>Add a domain</DialogTitle>
-          <DialogDescription>
-            A name under your domain, such as app.example.com, points here with a CNAME to <InlineCode>{target ?? "the project's address"}</InlineCode>.
-            The domain itself, such as example.com, cannot have a CNAME: it takes an A record{address ? <> to <InlineCode>{address}</InlineCode></> : null}.
-            The list shows the record to publish once it is added.
-          </DialogDescription>
         </DialogHeader>
         <Field label="Domain" hint="Without the scheme: app.example.com." error={host && !valid ? "That is not a host name." : undefined}>
           <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="app.example.com" autoFocus />

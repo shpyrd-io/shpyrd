@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { TextLogView } from "@shpyrd/ui/components/log-view";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
@@ -47,7 +47,6 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
       <Card>
         <CardHeader>
           <CardTitle>Releases</CardTitle>
-          <CardDescription>A release is a build and its config. Deploys make new builds; config changes and rollbacks reuse them.</CardDescription>
         </CardHeader>
         <CardContent>
           {releases.length === 0 ? (
@@ -115,7 +114,6 @@ export function Releases({ project, perms }: { project: Project; perms: Perms })
       <Card>
         <CardHeader>
           <CardTitle>Builds</CardTitle>
-          <CardDescription>Each deploy builds an image from the source. Open one to read what it printed; one going on is followed as it prints.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           {builds.isLoading ? (

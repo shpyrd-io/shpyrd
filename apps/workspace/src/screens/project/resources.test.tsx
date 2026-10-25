@@ -225,13 +225,13 @@ describe("a bucket beside the application", () => {
     state.answers = { config, resources: [], volumes: [], sizes, workspace };
     render(<Resources project={project} perms={perms} />);
     open();
-    const item = await screen.findByRole("menuitem", { name: /A bucket/ });
+    const item = await screen.findByRole("menuitem", { name: /S3 Compatible Storage/ });
     expect(item.getAttribute("aria-disabled")).not.toBe("true");
     cleanup();
     state.answers = { config: { ...config, extensions: config.extensions.filter((x) => x !== "object-storage") }, resources: [], volumes: [], sizes, workspace };
     render(<Resources project={project} perms={perms} />);
     open();
-    expect((await screen.findByRole("menuitem", { name: /A bucket/ })).textContent).toContain("needs the object-storage extension");
+    expect((await screen.findByRole("menuitem", { name: /S3 Compatible Storage/ })).textContent).toContain("needs the object-storage extension");
   });
 
   it("says the plan's cap per bucket, and refuses more in the plan's words before the request", async () => {

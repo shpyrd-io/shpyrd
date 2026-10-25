@@ -51,7 +51,7 @@ export function addressOf(p: { url?: string; domain?: string }): string | undefi
 // the teams that have access, by name. People given access one by one
 // are not listed. A worker opens nothing: only its teams are named.
 export function badgesOf(p: Pick<ProjectSummary, "url" | "access" | "teams">): string[] | undefined {
-  if (p.url && (p.access === "public" || p.access === "identified")) return ["Anyone"];
+  if (p.url && p.access === "public") return ["Anyone"];
   const teams = p.teams ?? [];
   if (teams.includes("everyone")) return ["Everyone"];
   return teams.length ? teams.map((t) => t.charAt(0).toUpperCase() + t.slice(1)) : undefined;

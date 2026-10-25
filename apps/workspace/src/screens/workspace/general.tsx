@@ -13,7 +13,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@shpyrd/ui/components/card";
@@ -177,7 +176,6 @@ export function General() {
     <>
       <PageHeading
         title={w.name}
-        description="Every project, team and person here belongs to this workspace."
         iconEnd={
           <StatusBadge type={w.status === "suspended" ? "warning" : "success"}>
             {w.status === "suspended" ? "Suspended" : "Active"}
@@ -203,25 +201,6 @@ export function General() {
       <Card>
         <CardHeader>
           <CardTitle>Name and look</CardTitle>
-          <CardDescription>
-            What people see where they arrive: the name and the logo on the
-            launcher and the sign-in page, the colour of the buttons and the
-            marks.
-            {w.address && (
-              <>
-                {" "}
-                It answers at <InlineCode>{w.address}</InlineCode>; owners
-                change that under{" "}
-                <Link
-                  to="/workspace/domains"
-                  className="font-medium text-foreground underline-offset-4 hover:underline"
-                >
-                  Domains
-                </Link>
-                .
-              </>
-            )}
-          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-x-8 gap-y-4 @3xl/page-layout:grid-cols-2">
@@ -276,11 +255,6 @@ export function General() {
         <Card>
           <CardHeader>
             <CardTitle>Plan</CardTitle>
-            <CardDescription>
-              What this workspace may use across all its projects. A change that
-              would go over is refused with the number; what is already over
-              keeps working.
-            </CardDescription>
             <CardAction>
               <InlineCode>
                 {w.owners.length} {w.owners.length === 1 ? "owner" : "owners"}
@@ -374,11 +348,6 @@ function ProjectCaps({ workspace }: { workspace: WorkspaceInfo }) {
     <Card>
       <CardHeader>
         <CardTitle>Caps per project</CardTitle>
-        <CardDescription>
-          A project with a cap claims no more block storage than it says, below
-          the workspace's {gbWords(workspace.limits?.storage ?? "0")}. Without
-          one, a project shares the workspace's ceiling with the others.
-        </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid gap-x-8 gap-y-3 @3xl/page-layout:grid-cols-2">
