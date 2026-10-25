@@ -5,11 +5,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
-import { InlineCode } from "@shpyrd/ui/components/inline-code";
 import { Input } from "@shpyrd/ui/components/input";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
@@ -68,9 +67,6 @@ function Chosen() {
     <Card>
       <CardHeader>
         <CardTitle>Application</CardTitle>
-        <CardDescription>
-          What answers at this workspace's address: the platform's own workspace application, or one of the workspace's own, a build of it published to a registry as an artifact or an image. It talks to the same API, from the same origin, with the same session. When it cannot be served, the platform's own answers.
-        </CardDescription>
         {chosen && look && (
           <CardAction>
             <StatusBadge type={look.type} live={status?.state === "pending"}>
@@ -110,7 +106,7 @@ function Chosen() {
                 {chosen && (
                   <>
                     <Button size="sm" variant="outline" disabled={set.isPending} onClick={() => set.mutate("")}>
-                      Back to the platform's own
+                      Reset to default
                     </Button>
                     <Button size="sm" variant="ghost" icon={<RefreshCw />} disabled={reload.isPending} onClick={() => reload.mutate()}>
                       Load again
@@ -143,9 +139,6 @@ function RegistryCredentials() {
     <Card>
       <CardHeader>
         <CardTitle>Registry credentials</CardTitle>
-        <CardDescription>
-          A private repository needs a read-only credential for its registry host: a GitHub token with <InlineCode>read:packages</InlineCode> for <InlineCode>ghcr.io</InlineCode>, an access token on Docker Hub. One per host. Values are written, never shown.
-        </CardDescription>
         {perms.admin && (
           <CardAction>
             <AddCredential onDone={refresh} />

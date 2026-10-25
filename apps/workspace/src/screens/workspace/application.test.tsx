@@ -61,7 +61,7 @@ it("says the door serves the platform's own application when nothing is chosen",
   show();
   expect(await screen.findByText("The platform's own application.")).toBeTruthy();
   expect(screen.getByText("None. Public repositories need none.")).toBeTruthy();
-  expect(screen.queryByText("Back to the platform's own")).toBeNull();
+  expect(screen.queryByText("Reset to default")).toBeNull();
 });
 
 it("shows the chosen application, its package, who set it and that it is serving", async () => {
@@ -89,7 +89,7 @@ it("sets a reference an admin types, and goes back to the platform's own", async
   fireEvent.change(input, { target: { value: "oci://ghcr.io/acme/workspace-ui:2.4.0" } });
   fireEvent.click(screen.getByRole("button", { name: "Serve it" }));
   await waitFor(() => expect(fake.updateWorkspace).toHaveBeenCalledWith({ ui: "oci://ghcr.io/acme/workspace-ui:2.4.0" }));
-  fireEvent.click(screen.getByRole("button", { name: "Back to the platform's own" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
   await waitFor(() => expect(fake.updateWorkspace).toHaveBeenCalledWith({ ui: "" }));
   fireEvent.click(screen.getByRole("button", { name: "Load again" }));
   await waitFor(() => expect(fake.reloadWorkspaceUI).toHaveBeenCalled());
