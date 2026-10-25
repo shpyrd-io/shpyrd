@@ -180,7 +180,7 @@ func serverRequest(ctx context.Context, k *kube.Client, method, path string, bod
 	// API-first: a login session or SHPYRD_TOKEN bypasses the kubeconfig,
 	// unless the command line named a cluster.
 	tok := os.Getenv("SHPYRD_TOKEN")
-	wsURL := os.Getenv("SHPYRD_URL")
+	wsURL := envWorkspaceURL()
 	if preferKubeconfig && k != nil {
 		tok, wsURL = "", ""
 	} else if tok == "" || wsURL == "" {
@@ -198,7 +198,7 @@ func serverRequest(ctx context.Context, k *kube.Client, method, path string, bod
 	}
 	// Kubeconfig proxy: the traditional path for operators.
 	if k == nil {
-		return nil, fmt.Errorf("not signed in: run `shpyrd login --url <workspace URL>` or provide --context")
+		return nil, fmt.Errorf("not signed in: run `shpyrd login --url <workspace>` or provide --context")
 	}
 	rc := k.Kube.CoreV1().RESTClient()
 	p, query, _ := strings.Cut(strings.TrimPrefix(path, "/"), "?")
@@ -280,7 +280,7 @@ func serverRequestDirect(ctx context.Context, wsURL, token, method, path string,
 // proxy. The caller closes the body.
 func serverStream(ctx context.Context, k *kube.Client, path string) (io.ReadCloser, error) {
 	tok := os.Getenv("SHPYRD_TOKEN")
-	wsURL := os.Getenv("SHPYRD_URL")
+	wsURL := envWorkspaceURL()
 	if preferKubeconfig && k != nil {
 		tok, wsURL = "", ""
 	} else if tok == "" || wsURL == "" {
@@ -314,7 +314,7 @@ func serverStream(ctx context.Context, k *kube.Client, path string) (io.ReadClos
 		return resp.Body, nil
 	}
 	if k == nil {
-		return nil, errors.New("not signed in: run `shpyrd login --url <workspace URL>` or provide --context")
+		return nil, errors.New("not signed in: run `shpyrd login --url <workspace>` or provide --context")
 	}
 	// The query string goes through Param: inside Suffix the "?" would be
 	// escaped into the path.
