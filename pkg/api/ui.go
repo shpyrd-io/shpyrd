@@ -258,6 +258,16 @@ func (s *Server) serveUI() gin.HandlerFunc {
 				}
 			}
 		}
+		if name == uiWorkspace {
+			// A workspace that chose an application of its own gets it;
+			// the platform's own when it cannot be served.
+			if ws, err := s.tenant(c); err == nil && ws.Settings.UI != nil && ws.Settings.UI.Ref != "" {
+				if a := s.chosenUI().get(c.Request.Context(), ws, s.credentialsOf(c.Request.Context(), ws.Slug)); a != nil {
+					a.handle(c)
+					return
+				}
+			}
+		}
 		app := apps[name]
 		if app == nil {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(placeholderHTML))

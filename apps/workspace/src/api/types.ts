@@ -36,6 +36,9 @@ export type PublicConfig = {
     appHost?: { prefix: string; suffix: string };
     ownedByOperator?: boolean;
     branding?: { logoUrl?: string; color?: string };
+    // The reference of the application the workspace chose for its door
+    // (RFC-0084); absent when it runs the platform's own.
+    ui?: string;
   };
   door?: "console" | "workspace";
   consoleUrl?: string;
@@ -133,10 +136,37 @@ export type WorkspaceInfo = {
   joinPolicy: "open" | "company" | "listed";
   ownMethodsOnly: boolean;
   branding?: { logoUrl?: string; color?: string };
+  // The application the workspace chose for its door (RFC-0084); absent
+  // when it runs the platform's own.
+  ui?: WorkspaceUI;
   mcpName: string;
   mcpUrl: string;
   owners: string[];
   createdAt: string;
+  updatedAt: string;
+};
+
+// The application a workspace chose (RFC-0084): the reference, who set
+// it, and what it is doing on the server answering.
+export type WorkspaceUI = {
+  ref: string;
+  setBy?: string;
+  setAt?: string;
+  status?: {
+    state: "serving" | "failed" | "pending" | "disabled";
+    error?: string;
+    at?: string;
+    name?: string;
+    version?: string;
+  };
+};
+
+// A read credential of the workspace for a registry host (RFC-0084):
+// the value is never read back.
+export type RegistryToken = {
+  host: string;
+  username: string;
+  updatedBy?: string;
   updatedAt: string;
 };
 

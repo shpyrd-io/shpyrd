@@ -2,12 +2,13 @@
 
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, CreditCard, ExternalLink, GitBranch, Globe, KeyRound, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
+import { ArrowLeft, CreditCard, ExternalLink, GitBranch, Globe, KeyRound, LayoutTemplate, Link2, LogIn, Plug, Settings, Users, UsersRound, Waves } from "lucide-react";
 import { placeLinks, shown as visibleIn } from "@shpyrd/shared/links";
 import { NavList, NavListDivider, NavListGroup, NavListItem } from "@shpyrd/ui/components/nav-list";
 import { api } from "@/api/api";
 import { usePerms } from "@/lib/perms";
 import { Frame } from "@/shell/frame";
+import { Application } from "./application";
 import { Connections } from "./connections";
 import { Drains } from "./drains";
 import { General } from "./general";
@@ -32,6 +33,7 @@ const pages = [
   { group: "Platform", slug: "drains", title: "Log drains", icon: <Waves />, needs: "admin" },
   { group: "Platform", slug: "git", title: "Git", icon: <GitBranch />, needs: "admin" },
   { group: "Platform", slug: "domains", title: "Domains", icon: <Globe />, needs: "owner" },
+  { group: "Platform", slug: "application", title: "Application", icon: <LayoutTemplate />, needs: "admin" },
   { group: "Platform", slug: "mcp", title: "MCP", icon: <Plug />, extension: "mcp" },
 ] as const;
 
@@ -99,6 +101,7 @@ export function WorkspacePages() {
         <Route path="drains" element={<Drains />} />
         <Route path="git" element={<Git />} />
         <Route path="domains" element={<WorkspaceDomains />} />
+        <Route path="application" element={<Application />} />
         <Route path="mcp" element={<MCP />} />
         <Route path="*" element={<Navigate to="/workspace" replace />} />
       </Routes>

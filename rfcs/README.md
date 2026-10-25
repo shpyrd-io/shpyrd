@@ -123,6 +123,7 @@ implement those proposals.
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 | [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1); phase 2 history | 0006, 0009, 0060 |
 | [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
+| [0084](0084-a-workspace-s-own-application.md) | A workspace's own application: the door serves a chosen build (static package by reference; `dir:` and `oci:` sources; fallback to the platform's own) | implemented (catalogue of publishers later) | 0080, 0033, 0008, 0059 |
 
 ## Phases
 
