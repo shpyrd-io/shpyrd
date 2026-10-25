@@ -25,7 +25,8 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
   shpyrd workspace address acme-corp                # move to acme-corp.<parent>; the old address redirects for 30 days
   shpyrd workspace domains add intranet.acme.com    # a name your company owns (CNAME mode)
   shpyrd workspace domains verify intranet.acme.com
-  shpyrd workspace domains primary intranet.acme.com`,
+  shpyrd workspace domains primary intranet.acme.com
+  shpyrd workspace ui set oci://ghcr.io/acme/workspace-ui:2.3.1   # an application of its own at the door`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
@@ -54,7 +55,7 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.AddCommand(newWorkspaceAddressCmd(g), newWorkspaceDomainsCmd(g))
+	cmd.AddCommand(newWorkspaceAddressCmd(g), newWorkspaceDomainsCmd(g), newWorkspaceUICmd(g))
 	return cmd
 }
 
