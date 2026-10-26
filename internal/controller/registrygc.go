@@ -70,6 +70,9 @@ type RegistryGC struct {
 	// Image runs the collector: the registry image itself.
 	Image  string
 	Logger *slog.Logger
+	// RolloutTimeout bounds each switch of the registry between read-write
+	// and read-only, per replica; 0 is five minutes.
+	RolloutTimeout time.Duration
 
 	mu      sync.Mutex
 	running bool
@@ -200,12 +203,13 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 			return "", 0, 0, fmt.Errorf("measure registry bucket: %w", err)
 		}
 	}
-	if err := g.setReadOnly(ctx, true); err != nil {
-		return "", 0, 0, err
-	}
+	// Always back to read-write, whatever happened, the switch to
+	// read-only included: it may have changed the Deployment and then
+	// timed out waiting for the rollout (two replicas, 25 Oct 2026: the
+	// registry stayed read-only and every build failed until it was
+	// switched back by hand). A failure here is the worse outcome and must
+	// be seen.
 	defer func() {
-		// Always back to read-write, whatever happened; a failure here is
-		// the worse outcome and must be seen.
 		if rerr := g.setReadOnly(context.WithoutCancel(ctx), false); rerr != nil {
 			g.Logger.Error("registry left read-only: fix with `shpyrd cluster init --only registry`", "err", rerr)
 			if err == nil {
@@ -213,6 +217,9 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 			}
 		}
 	}()
+	if err := g.setReadOnly(ctx, true); err != nil {
+		return "", 0, 0, err
+	}
 	var node string
 	if store == nil {
 		node, err = g.registryNode(ctx)
@@ -329,16 +336,33 @@ func (g *RegistryGC) setReadOnly(ctx context.Context, on bool) error {
 			return fmt.Errorf("update registry deployment: %w", err)
 		}
 	}
-	deadline := time.Now().Add(5 * time.Minute)
+	// Rolled out when every replica runs the new configuration and no pod of
+	// the old one is left (Status.Replicas counts both): with two replicas
+	// on object storage (rolled one at a time) a writable pod may otherwise
+	// still be serving beside the collector.
+	replicas := int32(1)
+	if dep.Spec.Replicas != nil {
+		replicas = max(*dep.Spec.Replicas, 1)
+	}
+	timeout := g.RolloutTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	timeout *= time.Duration(replicas)
+	deadline := time.Now().Add(timeout)
 	for {
 		if err := g.reader().Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: registryDeploymentName}, dep); err != nil {
 			return err
 		}
-		if dep.Status.ObservedGeneration >= dep.Generation && dep.Status.UpdatedReplicas == 1 && dep.Status.ReadyReplicas == 1 && dep.Status.Replicas == 1 {
+		if dep.Spec.Replicas != nil {
+			replicas = max(*dep.Spec.Replicas, 1)
+		}
+		st := dep.Status
+		if st.ObservedGeneration >= dep.Generation && st.UpdatedReplicas == replicas && st.ReadyReplicas == replicas && st.Replicas == replicas {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("registry did not roll out within 5 minutes (read-only=%v)", on)
+			return fmt.Errorf("registry did not roll out within %s (read-only=%v; %d of %d replicas updated and ready, %d running)", timeout, on, min(st.UpdatedReplicas, st.ReadyReplicas), replicas, st.Replicas)
 		}
 		select {
 		case <-ctx.Done():
