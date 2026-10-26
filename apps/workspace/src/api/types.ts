@@ -19,6 +19,9 @@ export type PublicConfig = {
       kind?: string;
       realm?: string;
       workspace?: string;
+      // Where a person signed in at the provider ends that session to
+      // sign in as someone else; offered after a refused sign-in.
+      switchAccountURL?: string;
     }[];
     password?: { id: string; label: string };
   };

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, KeyRound } from "lucide-react";
+import { ArrowRight, KeyRound, UserRoundCog } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { LogoMark, Wordmark } from "@shpyrd/ui/components/brand";
@@ -10,7 +10,7 @@ import { Button } from "@shpyrd/ui/components/button";
 import { Field } from "@shpyrd/ui/components/field";
 import { Input } from "@shpyrd/ui/components/input";
 import { Stack } from "@shpyrd/ui/components/stack";
-import { singleProviderDestination } from "@shpyrd/shared/auth/login";
+import { singleProviderDestination, switchAccountDestination } from "@shpyrd/shared/auth/login";
 import { StatePage } from "@shpyrd/ui/components/state-page";
 import { api } from "@/api/api";
 import { useBrandColor } from "@/lib/branding";
@@ -46,6 +46,16 @@ export function Login({ config }: { config: PublicConfig }) {
         </div>
         <Stack gap="normal" className="w-full text-left">
           {loginError && <Alert variant="destructive"><AlertTitle>Sign-in could not be completed</AlertTitle><AlertDescription>{loginError}</AlertDescription></Alert>}
+          {providers.map((p) => {
+            // Signing in again would bring back the same account: the
+            // provider's own page lets the person pick another.
+            const other = switchAccountDestination(p, window.location.search, window.location.origin, next);
+            return other && (
+              <Button key={`switch-${p.id}`} size="xl" className="w-full" icon={<UserRoundCog />} asChild>
+                <a href={other}>Sign in with another {p.label}</a>
+              </Button>
+            );
+          })}
           {providers.map((p) => (
             <Button key={p.id} size="xl" variant="outline" className="w-full" iconEnd={<ArrowRight />} asChild>
               <a href={`/api/auth/login/${encodeURIComponent(p.id)}?next=${encodeURIComponent(next)}`}>Continue with {p.label}</a>

@@ -417,8 +417,10 @@ func (s *Server) atSuspended(c *gin.Context, ws *store.Workspace) int {
 		return suspendedPass
 	}
 	// The sign-in page, for someone not signed in here yet: the gate sent
-	// them, and they go back to it once signed in.
-	if p == "/" && c.Query("next") != "" {
+	// them, and they go back to it once signed in. A refused sign-in comes
+	// back to it too, with its reason: sending that to the gate would sign
+	// the same account in again and loop.
+	if p == "/" && (c.Query("next") != "" || c.Query("login_error") != "") {
 		sid, _ := c.Cookie(sessionCookie)
 		if _, ok := s.rp.sessions.getIn(sid, store.RealmWorkspace, ws.ID); !ok {
 			return suspendedPass
