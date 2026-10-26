@@ -1,0 +1,14 @@
+# Image builds run under this class (#243): the workspace's compute quota
+# leaves it out, so a build never competes with the workspace's own
+# instances for its ceiling. Each build has hard limits of its own instead.
+# Same priority as anything without a class; it never preempts.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shpyrd-build
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+value: 0
+globalDefault: false
+preemptionPolicy: Never
+description: "shpyrd image builds: outside the workspace's ceiling, bounded by their own limits."
