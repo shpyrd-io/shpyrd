@@ -78,6 +78,14 @@ shpyrd sso platform-methods off
 
 On a self-hosted install the platform's own methods are managed by the operator at the console (`shpyrd-ctl auth connector add`), and offered to every workspace.
 
+When a sign-in is refused (the account is not a member, say), signing in again through the same provider brings back the same account. A method whose provider has a page for switching accounts offers **Sign in with another …** on the refusal: the page ends the session at the provider and comes back to the workspace's sign-in. The operator names the page with an annotation on the method's Dex connector; shpyrd Accounts has one:
+
+```shell
+kubectl -n shpyrd-system annotate connectors.dex.coreos.com <connector> shpyrd.io/switch-account-url=https://accounts.shpyrd.io/switch-account
+```
+
+The page receives `return_to`, the workspace address to come back to. It must be an absolute `https` URL with no query of its own; any other value is ignored, and the method keeps working without the switch. The server reads the annotation when it starts.
+
 ## The console
 
 The console is the operator's application at its own address, with its own sign-in methods and an explicit console-principal allowlist. Use `shpyrd-ctl console-users add <principal-id>` after identifying the console principal. Workspace ownership and an Accounts product do not grant console administration. Operator kubeconfig/admin-token access remains available for bootstrap and recovery.

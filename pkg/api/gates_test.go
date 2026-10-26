@@ -1010,6 +1010,11 @@ func TestASuspendedWorkspaceGoesToTheGateThatReceivesIt(t *testing.T) {
 	if rec := w.get(t, "acme.shpyrd.test", signIn, ana); rec.Code != http.StatusFound || rec.Header().Get("Location") != toGate {
 		t.Errorf("the sign-in page, signed in = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
+	// A refused sign-in shows its reason on the sign-in page; sending it to
+	// the gate would sign the same account in again and loop.
+	if rec := w.get(t, "acme.shpyrd.test", "/?login_error="+url.QueryEscape("you have no access"), ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
+		t.Errorf("a refused sign-in's page = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
 	if rec := w.get(t, "acme.shpyrd.test", "/_next/static/chunks/app.js", ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
 		t.Errorf("the dashboard's files = %d", rec.Code)
 	}
@@ -1167,5 +1172,30 @@ func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 	// at its sign-in page sees the dashboard, not a redirect.
 	if rec := w.get(t, "beta.shpyrd.test", "/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), w.session(t, "beta", w.eve)); rec.Code != http.StatusOK {
 		t.Errorf("beta's sign-in page signed in = %d", rec.Code)
+	}
+}
+
+// A provider that names a switch-account page offers it on the login page;
+// one with a page that is not an absolute https URL keeps working without.
+func TestAProvidersSwitchAccountPageReachesTheLoginPage(t *testing.T) {
+	w := newGateWorld(t)
+	issuer := newFakeIssuer(t)
+	for _, p := range []ext.OIDCProvider{
+		{ID: "accounts", Label: "shpyrd account", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", SwitchAccountURL: "https://accounts.example/switch-account"},
+		{ID: "typo", Label: "Typo", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", SwitchAccountURL: "accounts.example/switch-account?x=1"},
+	} {
+		if err := w.s.rp.AddOIDC(context.Background(), p); err != nil {
+			t.Fatalf("%s: %v", p.ID, err)
+		}
+	}
+	got := map[string]string{}
+	for _, p := range w.s.rp.providerList() {
+		got[p.ID] = p.SwitchAccountURL
+	}
+	if got["accounts"] != "https://accounts.example/switch-account" {
+		t.Errorf("accounts' switch page = %q", got["accounts"])
+	}
+	if v, ok := got["typo"]; !ok || v != "" {
+		t.Errorf("a provider with a bad switch page = %q (listed %t)", v, ok)
 	}
 }
