@@ -283,20 +283,26 @@ The project is taken from --project or from shpyrd.yaml (project: <name>).`,
 			// A build happens only when what is built changed: the same
 			// archive with new processes or mounts is released as it is.
 			sourceChanged := before.Status.LatestBuild == "" || !sameSource(before.Spec.Source, after.Spec.Source) || (before.Spec.Build == nil) != (after.Spec.Build == nil) || (before.Spec.Build != nil && after.Spec.Build != nil && !reflect.DeepEqual(*before.Spec.Build, *after.Spec.Build))
+			// A failure the project showed before this deploy is the
+			// previous release's until the project moves on (#241); with
+			// nothing new to release, it is still the answer.
+			var stale *staleFailure
 			switch {
 			case after.Spec.Source != nil && after.Spec.PinnedImage == "" && req.Image == "" && sourceChanged:
+				stale = staleFailureOf(before)
 				fmt.Fprintln(out, "==> Building")
 				if err := ac.followBuildAPI(ctx, name, before.Status.LatestBuild, 3*time.Minute); err != nil {
 					return err // the platform's message says what failed
 				}
 			case specChanged:
+				stale = staleFailureOf(before)
 				fmt.Fprintln(out, "    source unchanged since the last build; releasing the configuration change")
 			default:
 				fmt.Fprintln(out, "    no changes since the last deploy")
 			}
 
 			fmt.Fprintln(out, "==> Releasing")
-			final, err := ac.waitRunningAPI(ctx, name, after.Status.Generation, 10*time.Minute)
+			final, err := ac.waitRunningAPI(ctx, name, after.Status.Generation, 10*time.Minute, stale)
 			if err != nil {
 				return err
 			}
