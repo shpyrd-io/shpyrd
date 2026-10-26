@@ -40,6 +40,10 @@ type WorkspaceView struct {
 	OwnedByOperator bool `json:"ownedByOperator"`
 	// Domain is where the workspace's apps live, one label under it.
 	Domain string `json:"domain,omitempty"`
+	// AppHost is how its apps' addresses are written, prefix + app +
+	// suffix: <label>-<app>.<apps domain> in the shared layout, which
+	// Domain alone cannot say (#242).
+	AppHost *AppHostView `json:"appHost,omitempty"`
 	// Address is the host of an explicit workspace's dashboard (RFC-0033
 	// phase 6); empty for the implicit workspace, which answers at the
 	// platform's dashboard URL.
@@ -135,7 +139,7 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 	return WorkspaceView{
 		Capabilities: s.workspaceCapabilities(w),
 		Slug:         w.Slug, Name: w.Name, OwnedByOperator: w.OwnedByOperator(),
-		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
+		Domain: s.appsDomainOf(w), AppHost: s.appHostView(c.Request.Context(), w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
 		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), UI: s.workspaceUIView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",
 	}
