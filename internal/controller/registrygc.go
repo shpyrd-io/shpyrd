@@ -29,9 +29,9 @@ import (
 // runs, which needs the registry read-only. RegistryGC runs the sequence on
 // a schedule and on demand: switch the registry to read-only (a copy of its
 // configuration with maintenance.readonly enabled, swapped in with a
-// Recreate rollout: pulls keep working, pushes fail and builds retry), run
-// the collector in a Job on the registry's node against the same volume,
-// switch back, record the outcome.
+// rollout: Recreate on a claim, one replica at a time on a bucket; pulls
+// keep working, pushes fail and builds retry), run the collector in a Job
+// against the same storage, switch back, record the outcome.
 
 const (
 	registryDeploymentName = "registry"
@@ -200,12 +200,11 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 			return "", 0, 0, fmt.Errorf("measure registry bucket: %w", err)
 		}
 	}
-	if err := g.setReadOnly(ctx, true); err != nil {
-		return "", 0, 0, err
-	}
+	// Always back to read-write, whatever happened, a switch to read-only
+	// that failed half-way included (the Deployment already points at the
+	// read-only configuration when its rollout times out): a registry left
+	// read-only refuses every push, every build, until someone notices.
 	defer func() {
-		// Always back to read-write, whatever happened; a failure here is
-		// the worse outcome and must be seen.
 		if rerr := g.setReadOnly(context.WithoutCancel(ctx), false); rerr != nil {
 			g.Logger.Error("registry left read-only: fix with `shpyrd cluster init --only registry`", "err", rerr)
 			if err == nil {
@@ -213,6 +212,9 @@ func (g *RegistryGC) run(ctx context.Context) (result string, reclaimed, used in
 			}
 		}
 	}()
+	if err := g.setReadOnly(ctx, true); err != nil {
+		return "", 0, 0, err
+	}
 	var node string
 	if store == nil {
 		node, err = g.registryNode(ctx)
@@ -329,23 +331,43 @@ func (g *RegistryGC) setReadOnly(ctx context.Context, on bool) error {
 			return fmt.Errorf("update registry deployment: %w", err)
 		}
 	}
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(registryRolloutTimeout)
 	for {
 		if err := g.reader().Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: registryDeploymentName}, dep); err != nil {
 			return err
 		}
-		if dep.Status.ObservedGeneration >= dep.Generation && dep.Status.UpdatedReplicas == 1 && dep.Status.ReadyReplicas == 1 && dep.Status.Replicas == 1 {
+		if registryRolledOut(dep) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("registry did not roll out within 5 minutes (read-only=%v)", on)
+			return fmt.Errorf("registry did not roll out within %s (read-only=%v)", registryRolloutTimeout, on)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(3 * time.Second):
+		case <-time.After(registryRolloutPoll):
 		}
 	}
+}
+
+// How long a switch of the registry's configuration may take, and how often
+// it is checked.
+var (
+	registryRolloutTimeout = 5 * time.Minute
+	registryRolloutPoll    = 3 * time.Second
+)
+
+// registryRolledOut says every replica the Deployment asks for runs its
+// current template and no other is left: the collector never runs beside
+// a writable registry, and the switch back is complete. One replica on a
+// claim, two on a bucket (#238); any number the Deployment says.
+func registryRolledOut(dep *appsv1.Deployment) bool {
+	want := int32(1)
+	if dep.Spec.Replicas != nil {
+		want = *dep.Spec.Replicas
+	}
+	st := dep.Status
+	return st.ObservedGeneration >= dep.Generation && st.UpdatedReplicas == want && st.ReadyReplicas == want && st.Replicas == want
 }
 
 // writeReadOnlyConfig derives the read-only configuration from the live one
