@@ -237,6 +237,12 @@ func (s *Server) serveUI() gin.HandlerFunc {
 		if s.gateSignIn(c, apps[uiWorkspace]) {
 			return
 		}
+		// Any other page there belongs to the dashboard at the custom
+		// domain: links to the platform address (Accounts' Products) land
+		// on it rather than on "No app here".
+		if s.toPrimaryDoor(c) {
+			return
+		}
 		if s.customError(c) { // ingress-nginx's error backend for app hosts
 			return
 		}

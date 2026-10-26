@@ -1191,8 +1191,9 @@ func TestASuspendedWorkspaceBehindACustomDomainWithoutSuchAGateSignsNobodyIn(t *
 
 // The platform address behind a custom domain is no second dashboard: no
 // page but the sign-in on the way to a gate answers there, signed in or
-// not; the custom domain is the dashboard, and a workspace without one is
-// its dashboard at its address as before.
+// not; every other page goes to the same path at the custom domain, which
+// is the dashboard. A workspace without one is its dashboard at its address
+// as before.
 func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 	w := newGateWorld(t)
 	w.behindDomain(t)
@@ -1205,12 +1206,17 @@ func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 		"/?next=" + url.QueryEscape("//evil.test/.shpyrd/gate?name=billing"),
 		"/workspace?next=" + url.QueryEscape("/.shpyrd/gate?name=billing"),
 	} {
-		if rec := w.get(t, "acme.shpyrd.test", p, ""); !noApp(rec) {
-			t.Errorf("%s signed out = %d %s", p, rec.Code, rec.Body.String())
+		want := "https://intranet.acme.com" + p
+		for _, who := range []string{"", sid} {
+			rec := w.get(t, "acme.shpyrd.test", p, who)
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+				t.Errorf("%s (session %t) = %d %s, want a redirect to %s", p, who != "", rec.Code, rec.Header().Get("Location"), want)
+			}
 		}
-		if rec := w.get(t, "acme.shpyrd.test", p, sid); !noApp(rec) {
-			t.Errorf("%s signed in = %d %s", p, rec.Code, rec.Body.String())
-		}
+	}
+	// The API keeps answering at the platform address: only pages move.
+	if rec := w.get(t, "acme.shpyrd.test", "/api/config", ""); rec.Code != http.StatusOK {
+		t.Errorf("/api/config at the platform address = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	req := httptest.NewRequest("POST", "https://acme.shpyrd.test/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), nil)
 	req.Host = "acme.shpyrd.test"
