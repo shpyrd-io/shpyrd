@@ -57,6 +57,14 @@ func TestReleasePhase(t *testing.T) {
 	if ct.Resources.Limits.Memory().String() != "256Mi" {
 		t.Errorf("release job memory = %s, want the web process's shared-m (256Mi)", ct.Resources.Limits.Memory().String())
 	}
+	// A step of the deploy (#60): outside the workspace's ceiling, bounded
+	// by the process size's limits above.
+	if job.Spec.Template.Spec.PriorityClassName != ReleasePriorityClass {
+		t.Errorf("release job priority class = %q, want %q", job.Spec.Template.Spec.PriorityClassName, ReleasePriorityClass)
+	}
+	if ct.Resources.Limits.Cpu().IsZero() {
+		t.Error("the release job has no CPU limit: out of the quota, it must keep its size's")
+	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-rails", Name: "rails-web"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the web Deployment exists before the release command finished: %v", err)
 	}
