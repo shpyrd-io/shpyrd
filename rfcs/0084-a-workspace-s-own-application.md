@@ -343,3 +343,4 @@ customer.
   registry behind basic auth on this machine: refused without the credential, served
   with it, the platform's own again when cleared. Left for later: an OCI reference for
   the platform's own package, `@shpyrd/shared` on npm, the catalogue (RFC to come).
+- 2026-10-26: released in v1.5.1 (#255) and running in production since that day's roll.
