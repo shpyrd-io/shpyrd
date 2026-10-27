@@ -88,3 +88,9 @@ storage it claims.
 ## Implementation History
 
 - 2026-09-22: RFC written.
+- 2026-10-26 (v1.5.1, #262): the ResourceQuota backstop no longer counts image builds. The
+  compute quota keeps its `NotBestEffort` scope and gains a scope selector, PriorityClass
+  `NotIn [shpyrd-build]`: Dockerfile builds run under that class with limits of their own
+  (RFC-0004), buildpack builds were already BestEffort. Quota scopes are immutable in
+  Kubernetes, so a quota whose scopes differ is deleted and recreated rather than updated.
+  The release step still counts (#60).

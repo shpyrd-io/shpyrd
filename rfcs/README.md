@@ -82,7 +82,7 @@ implement those proposals.
 | [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (pooling on shared servers; gaps) | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (`storage-rwx`) | implementable | 0006 |
-| [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; per-project quotas, LimitRange and usage bars still to do) | 0008 |
+| [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; image builds outside the backstop since v1.5.1; per-project quotas, LimitRange and usage bars still to do) | 0008 |
 | [0043](0043-builds-namespace-and-pod-security.md) | Builds namespace and enforce-mode Pod Security | implementable | 0004, 0008 |
 | [0044](0044-supply-chain.md) | Supply chain and encryption at rest | implementable | 0045 |
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
