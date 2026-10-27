@@ -392,7 +392,7 @@ Adding a machine usually takes a few minutes; keeping the app's image small also
 reduces the download time on a new machine. Once the container starts, the status
 shows the command running and its output follows.
 
-The release command runs at the `web` process's size unless `processes.release` sets its own. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
+The release command runs at the `web` process's size unless `processes.release` sets its own. Like a build, it does not count against the workspace's memory and CPU ceiling: it is a step of the deploy, so it can run while the app is awake, bounded by that size's limits. For Dockerfile images without a Procfile, declare the command in `shpyrd.yaml` (for buildpack images, this replaces the Procfile's `release:` line):
 
 ```yaml
 processes:

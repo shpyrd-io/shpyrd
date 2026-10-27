@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,13 +53,13 @@ func TestReconcileQuota(t *testing.T) {
 	if len(q.Spec.Scopes) != 1 || q.Spec.Scopes[0] != corev1.ResourceQuotaScopeNotBestEffort {
 		t.Errorf("compute quota scopes = %v, want NotBestEffort", q.Spec.Scopes)
 	}
-	// Dockerfile builds are steps of a deploy, outside the ceiling (#243):
-	// the quota leaves their priority class out.
+	// Dockerfile builds and release steps are steps of a deploy, outside
+	// the ceiling (#243, #60): the quota leaves their priority classes out.
 	if sel := q.Spec.ScopeSelector; sel == nil || len(sel.MatchExpressions) != 1 ||
 		sel.MatchExpressions[0].ScopeName != corev1.ResourceQuotaScopePriorityClass ||
 		sel.MatchExpressions[0].Operator != corev1.ScopeSelectorOpNotIn ||
-		len(sel.MatchExpressions[0].Values) != 1 || sel.MatchExpressions[0].Values[0] != BuildPriorityClass {
-		t.Errorf("compute quota selector = %+v, want builds left out", q.Spec.ScopeSelector)
+		!slices.Equal(sel.MatchExpressions[0].Values, []string{BuildPriorityClass, ReleasePriorityClass}) {
+		t.Errorf("compute quota selector = %+v, want builds and release steps left out", q.Spec.ScopeSelector)
 	}
 	st := &corev1.ResourceQuota{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: QuotaStorageName}, st); err != nil {

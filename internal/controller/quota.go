@@ -24,20 +24,25 @@ const (
 	QuotaStorageName = "shpyrd-storage"
 )
 
-// BuildPriorityClass marks image builds (deploy/components/shpyrd: the
-// PriorityClass). The compute quota leaves pods of this class out (#243):
-// a build is a step of a deploy, not something the workspace keeps
-// running, and counting it refused every deploy of a small workspace whose
-// app was awake. A build is bounded by limits of its own instead.
-const BuildPriorityClass = "shpyrd-build"
+// BuildPriorityClass marks image builds and ReleasePriorityClass release
+// steps (deploy/components/shpyrd: the PriorityClasses). The compute quota
+// leaves pods of these classes out (#243, #60): a build and a release step
+// are steps of a deploy, not something the workspace keeps running, and
+// counting them refused every deploy of a small workspace whose app was
+// awake. A build is bounded by limits of its own, a release step by the
+// release process's size.
+const (
+	BuildPriorityClass   = "shpyrd-build"
+	ReleasePriorityClass = "shpyrd-release"
+)
 
 // computeScopes and computeSelector say which pods the compute quota
 // counts: those that ask for resources (buildpack builds ask for none,
-// BestEffort) and are not builds.
+// BestEffort) and are not steps of a deploy.
 var (
 	computeScopes   = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
 	computeSelector = &corev1.ScopeSelector{MatchExpressions: []corev1.ScopedResourceSelectorRequirement{{
-		ScopeName: corev1.ResourceQuotaScopePriorityClass, Operator: corev1.ScopeSelectorOpNotIn, Values: []string{BuildPriorityClass},
+		ScopeName: corev1.ResourceQuotaScopePriorityClass, Operator: corev1.ScopeSelectorOpNotIn, Values: []string{BuildPriorityClass, ReleasePriorityClass},
 	}}}
 )
 
@@ -48,8 +53,10 @@ var (
 // quota left behind by ceilings that went away is removed.
 //
 // The compute quota is scoped to pods that ask for resources and are not
-// builds: buildpack builds run as pods with none (BestEffort), Dockerfile
-// builds under BuildPriorityClass with limits of their own. It counts
+// steps of a deploy: buildpack builds run as pods with none (BestEffort),
+// Dockerfile builds under BuildPriorityClass with limits of their own,
+// release steps under ReleasePriorityClass with the release process's size.
+// It counts
 // requests, the coarse backstop behind
 // the API's count of instance sizes (a shared size requests a share of
 // its CPU); it is not the ceiling itself.

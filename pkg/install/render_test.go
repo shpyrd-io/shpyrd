@@ -1161,10 +1161,11 @@ func TestWALArchiveAlertsReadTheArchiveQueueAndSkipNeverFailed(t *testing.T) {
 	}
 }
 
-// Dockerfile builds run under a priority class of their own, outside the
-// workspace's compute quota (#243): the shpyrd component installs it, so a
-// server-only roll brings it along. It never preempts.
-func TestTheServerInstallsTheBuildPriorityClass(t *testing.T) {
+// Dockerfile builds and release steps run under priority classes of their
+// own, outside the workspace's compute quota (#243, #60): the shpyrd
+// component installs them, so a server-only roll brings them along. They
+// never preempt.
+func TestTheServerInstallsTheStepPriorityClasses(t *testing.T) {
 	eng, err := New(nil, Options{Profile: "local", Vars: map[string]string{VarDomain: "example.test"}, Reporter: &quiet{}})
 	if err != nil {
 		t.Fatal(err)
@@ -1173,16 +1174,21 @@ func TestTheServerInstallsTheBuildPriorityClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	found := map[string]bool{}
 	for _, o := range objs {
-		if o.GetKind() != "PriorityClass" || o.GetName() != "shpyrd-build" {
+		if o.GetKind() != "PriorityClass" {
 			continue
 		}
 		policy, _, _ := unstructured.NestedString(o.Object, "preemptionPolicy")
 		global, _, _ := unstructured.NestedBool(o.Object, "globalDefault")
 		if policy != "Never" || global {
-			t.Errorf("shpyrd-build: preemptionPolicy=%q globalDefault=%v", policy, global)
+			t.Errorf("%s: preemptionPolicy=%q globalDefault=%v", o.GetName(), policy, global)
 		}
-		return
+		found[o.GetName()] = true
 	}
-	t.Fatal("the shpyrd component has no shpyrd-build PriorityClass")
+	for _, name := range []string{"shpyrd-build", "shpyrd-release"} {
+		if !found[name] {
+			t.Errorf("the shpyrd component has no %s PriorityClass", name)
+		}
+	}
 }
