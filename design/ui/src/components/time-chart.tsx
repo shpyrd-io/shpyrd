@@ -37,8 +37,10 @@ export type TimeSeries = {
 // A line the chart draws across itself: what a series is measured against.
 export type Reference = { value: number; label: string; tone?: Tone };
 
-// Something that happened at a moment, drawn across every series: a release.
-export type Marker = { time: number; label: string };
+// Something that happened at a moment, drawn across every series: a
+// release, or a process killed for running out of memory. A tone gives it
+// an ink of its own; a title says what happened, for who points at it.
+export type Marker = { time: number; label: string; tone?: Tone; title?: string };
 
 const never = () => () => {};
 
@@ -161,6 +163,10 @@ function TimeChart({
   const labels = empty
     ? []
     : Array.from({ length: 5 }, (_, i) => scale.from + ((scale.to - scale.from) * i) / 4);
+  // What happened before the first point or after the last is not drawn:
+  // it would hang outside the chart.
+  const shown = markers.filter((m) => m.time >= scale.from && m.time <= scale.to);
+  const markerKey = (m: Marker) => `${m.time} ${m.label}`;
 
   return (
     <figure
@@ -319,15 +325,16 @@ function TimeChart({
                     className={cn("stroke-(--ink)", inks[r.tone ?? "neutral"])}
                   />
                 ))}
-                {markers.map((m) => (
+                {shown.map((m) => (
                   <line
-                    key={m.label}
+                    key={markerKey(m)}
+                    data-marker={m.label}
                     x1={((m.time - scale.from) / (scale.to - scale.from)) * WIDTH}
                     x2={((m.time - scale.from) / (scale.to - scale.from)) * WIDTH}
                     y1={0}
                     y2={HEIGHT}
                     vectorEffect="non-scaling-stroke"
-                    className="stroke-foreground/40"
+                    className={m.tone ? cn("stroke-(--ink)", inks[m.tone]) : "stroke-foreground/40"}
                   />
                 ))}
               </svg>
@@ -382,13 +389,16 @@ function TimeChart({
                   </span>
                 ))}
               </div>
-              {markers.length > 0 && (
+              {shown.length > 0 && (
                 <div className="relative h-5">
-                  {markers.map((m) => (
+                  {shown.map((m) => (
                     <span
-                      key={m.label}
-                      title={browser ? `${m.label}, ${timeLabel(m.time, range)}` : m.label}
-                      className="absolute -translate-x-1/2 rounded-full border bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground"
+                      key={markerKey(m)}
+                      title={browser ? `${m.title ?? m.label}, ${timeLabel(m.time, range)}` : (m.title ?? m.label)}
+                      className={cn(
+                        "absolute -translate-x-1/2 rounded-full border bg-muted px-1.5 font-mono text-[10px] leading-4 text-muted-foreground",
+                        m.tone && cn("border-(--ink)/50 text-(--ink)", inks[m.tone]),
+                      )}
                       style={{ left: left(m.time) }}
                     >
                       {m.label}

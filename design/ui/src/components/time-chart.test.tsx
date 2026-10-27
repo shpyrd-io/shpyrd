@@ -108,6 +108,31 @@ describe("TimeChart", () => {
     expect(screen.getByText("v12")).toBeTruthy();
   });
 
+  it("marks what happened in its own ink, saying what it was to who points at it", () => {
+    const { container } = render(
+      <TimeChart
+        title="Memory"
+        unit="count"
+        series={series}
+        markers={[
+          { time: 60, label: "v12" },
+          { time: 30, label: "OOM", tone: "error", title: "web.1 killed: out of memory at its 256 MiB" },
+          { time: 90, label: "OOM", tone: "error", title: "web.2 killed: out of memory at its 256 MiB" },
+          { time: 900, label: "later" },
+        ]}
+      />,
+    );
+    const lines = [...container.querySelectorAll("svg line[data-marker]")];
+    expect(lines.map((l) => l.getAttribute("data-marker"))).toEqual(["v12", "OOM", "OOM"]);
+    expect(lines[0].getAttribute("class")).toContain("stroke-foreground/40");
+    expect(lines[1].getAttribute("class")).toContain("[--ink:var(--chart-error)]");
+    const pills = screen.getAllByText("OOM");
+    expect(pills).toHaveLength(2);
+    expect(pills[0].getAttribute("title")).toContain("web.1 killed: out of memory at its 256 MiB");
+    // What happened after the last point is not drawn.
+    expect(screen.queryByText("later")).toBeNull();
+  });
+
   it("has a table of its values, for who reads numbers and not drawings", () => {
     const { container } = render(<TimeChart title="Instances" unit="count" series={series} />);
     fireEvent.click(screen.getByRole("button", { name: "Show the values as a table" }));

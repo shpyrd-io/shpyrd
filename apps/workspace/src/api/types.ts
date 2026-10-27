@@ -724,4 +724,19 @@ export type Metrics = {
   network: Series[];
   instances: Series[];
   releases: { time: number; label: string }[];
+  // The processes killed for crossing their memory in the time, oldest
+  // first (#119): the Memory chart marks each.
+  ooms: OOMKill[];
+};
+
+// One instance killed for running out of memory. The instance is its name
+// then (web.1), missing for a release step or a build; the limit is in
+// bytes, and the size names it when it is one the process has.
+export type OOMKill = {
+  time: number;
+  process: string;
+  instance?: string;
+  limit: number;
+  size?: string;
+  release?: number;
 };

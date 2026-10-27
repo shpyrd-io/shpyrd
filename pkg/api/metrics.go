@@ -109,12 +109,29 @@ type ReleaseMarker struct {
 	Label  string  `json:"label"`
 }
 
+// OOMMarker is one out-of-memory kill in the range (#119), for the Memory
+// chart to mark where a process was killed for crossing its size. Instance
+// is the pod's human name when it died (web.1), empty for a Job pod; the
+// pod's own name never leaves the server (RFC-0011).
+type OOMMarker struct {
+	Time     float64 `json:"time"`
+	Process  string  `json:"process"`
+	Instance string  `json:"instance,omitempty"`
+	// Limit is the memory limit crossed, in bytes; 0 when there was none.
+	Limit int64 `json:"limit"`
+	// Size names the limit when it is a size the process has: shared-m.
+	Size    string `json:"size,omitempty"`
+	Release int    `json:"release,omitempty"`
+}
+
 // MetricsResponse holds the charts for an app.
 type MetricsResponse struct {
 	Range    string          `json:"range"`
 	Step     int             `json:"step"`
 	Charts   []Chart         `json:"charts"`
 	Releases []ReleaseMarker `json:"releases"`
+	// OOMs are the out-of-memory kills in the range, oldest first.
+	OOMs []OOMMarker `json:"ooms"`
 }
 
 var rangeOptions = map[string]time.Duration{
@@ -219,6 +236,7 @@ func (s *Server) appMetrics(c *gin.Context) {
 			resp.Releases = append(resp.Releases, ReleaseMarker{Number: r.Number, Time: float64(r.CreatedAt.Unix()), Label: "v" + fmt.Sprint(r.Number)})
 		}
 	}
+	resp.OOMs = s.oomMarkers(c.Request.Context(), app, start, opts.Process)
 
 	var wg sync.WaitGroup
 	for i, q := range queries {

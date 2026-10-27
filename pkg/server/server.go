@@ -580,6 +580,13 @@ func newManager(k *kube.Client, o runOptions, memberships *controller.Membership
 	if err := rec.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("app controller: %w", err)
 	}
+	// Out-of-memory kills (#119): every one, kept in the store for the
+	// project's Memory chart and the operator's list, since Kubernetes
+	// keeps only each container's last death.
+	ooms := &controller.OOMRecorder{Client: mgr.GetClient(), Store: memberships.Store, Kube: k.Kube, SystemNamespace: k.Namespace}
+	if err := ooms.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("oom recorder: %w", err)
+	}
 	// The source watcher (RFC-0018): pins the commit each App on a git
 	// branch builds, from webhooks and the deploys people ask for.
 	source := &controller.SourceReconciler{
