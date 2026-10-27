@@ -331,6 +331,27 @@ func (s *Server) atAddressBehindDomain(c *gin.Context) (*store.Workspace, bool) 
 	return ws, h == ws.Address && h != hostOnly(s.dashboardHostOf(ws))
 }
 
+// toPrimaryDoor sends a page asked for at a workspace's platform address,
+// while a custom domain is its primary door, to the same path there: the
+// dashboard answers at the custom domain only, and the platform address is
+// still where Accounts and older links point. The sign-in on the way to a
+// gate is answered before (gateSignIn); requests that are not a browser
+// opening a page (another method, the API, the edge's error backend) are
+// left alone.
+func (s *Server) toPrimaryDoor(c *gin.Context) bool {
+	if c.GetHeader("X-Code") != "" || (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		return false
+	}
+	ws, ok := s.atAddressBehindDomain(c)
+	if !ok {
+		return false
+	}
+	target := url.URL{Scheme: "https", Host: s.dashboardHostOf(ws), Path: path.Clean("/" + c.Request.URL.Path), RawQuery: c.Request.URL.RawQuery}
+	c.Header("Cache-Control", "no-store")
+	c.Redirect(http.StatusFound, target.String())
+	return true
+}
+
 // gateSignIn answers, at such an address, what signing in on the way to a
 // gate needs: the sign-in page at / when next is the gate's own route,
 // and a file of the application that is not a page. Someone already
