@@ -6,6 +6,7 @@ import {
   instances,
   memory,
   memoryReferences,
+  ooms,
   releases,
   responseTime,
   throughput,
@@ -42,7 +43,7 @@ export default function Page() {
           </CardContent>
         </Card>
       </Section>
-      <Section title="Against what was allocated">
+      <Section title="Against what was allocated, and what crossing it cost">
         <Card>
           <CardContent>
             <TimeChart
@@ -51,6 +52,7 @@ export default function Page() {
               unit="bytes"
               series={memory}
               references={memoryReferences}
+              markers={[...releases, ...ooms]}
             />
           </CardContent>
         </Card>

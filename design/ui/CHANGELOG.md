@@ -8,6 +8,7 @@ application has to change.
 
 ## Unreleased
 
+- A `TimeChart` marker takes a `tone` and a `title`: an out-of-memory kill is drawn in its own ink, apart from the releases, and says what happened to who points at it. Markers outside the drawn time are no longer drawn.
 - `StatePage` takes any node as its `title`, not only text: the prop no longer meets the HTML `title` attribute's type.
 - A select's trigger shrinks with its grid column and clips its value, instead of growing past the column and out of its dialog (a long instance size did).
 - An inline progress bar writes its label before itself: a count over a limit with a thin bar beside it, as a table cell holds it.

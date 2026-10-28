@@ -94,6 +94,12 @@ export const memory = [
 export const memoryReferences = [
   { value: 512 * MiB, label: "Allocated", tone: "error" as const },
 ];
+// Instances killed for crossing their memory: marked in their own ink,
+// apart from the releases.
+export const ooms = [
+  { time: NOW - 33 * 60, label: "OOM", tone: "error" as const, title: "web.1 killed: out of memory at its 512 MiB (shared-l)" },
+  { time: NOW - 8 * 60, label: "OOM", tone: "error" as const, title: "web.2 killed: out of memory at its 512 MiB (shared-l)" },
+];
 
 export const cpu = [
   { name: "web", points: wander(41, { base: 46, swing: 0.5, peaks: 0.06, peak: 1.8 }) },

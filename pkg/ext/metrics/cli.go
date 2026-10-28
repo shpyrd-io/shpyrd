@@ -11,6 +11,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type Options struct{ Range string }
@@ -47,6 +48,16 @@ func Print(g ext.CLIGlobals, cmd *cobra.Command, path string) error {
 				Points [][2]float64 `json:"points"`
 			} `json:"series"`
 		} `json:"charts"`
+		// OOMs are the out-of-memory kills of a project's processes (#119);
+		// a datastore's metrics carry none.
+		OOMs []struct {
+			Time     float64 `json:"time"`
+			Process  string  `json:"process"`
+			Instance string  `json:"instance"`
+			Limit    int64   `json:"limit"`
+			Size     string  `json:"size"`
+			Release  int     `json:"release"`
+		} `json:"ooms"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return fmt.Errorf("decode metrics: %w", err)
@@ -74,6 +85,31 @@ func Print(g ext.CLIGlobals, cmd *cobra.Command, path string) error {
 			if chart.Note != "" {
 				fmt.Fprintf(tw, "%s\t%s\n", chart.Title, chart.Note)
 			}
+		}
+		_ = tw.Flush()
+		if len(response.OOMs) == 0 {
+			return
+		}
+		fmt.Fprintf(w, "\nKilled for running out of memory over %s: %d\n", response.Range, len(response.OOMs))
+		tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "PROCESS\tINSTANCE\tLIMIT\tRELEASE\tAT")
+		for _, k := range response.OOMs {
+			limit := "-"
+			if k.Limit > 0 {
+				limit = resource.NewQuantity(k.Limit, resource.BinarySI).String()
+				if k.Size != "" {
+					limit += " (" + k.Size + ")"
+				}
+			}
+			release := "-"
+			if k.Release > 0 {
+				release = fmt.Sprintf("v%d", k.Release)
+			}
+			instance := k.Instance
+			if instance == "" {
+				instance = "-"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", k.Process, instance, limit, release, time.Unix(int64(k.Time), 0).UTC().Format(time.RFC3339))
 		}
 		_ = tw.Flush()
 	})

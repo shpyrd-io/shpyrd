@@ -11,7 +11,7 @@ import (
 )
 
 func TestMetricsCommands(t *testing.T) {
-	const body = `{"range":"6h","step":360,"charts":[{"id":"cpu","title":"CPU","unit":"cores","series":[{"name":"web","points":[[1700000000,0.1],[1700000060,0.25]]}]},{"title":"Memory","series":[]},{"title":"Network","error":"query failed"}],"releases":[],"futureField":true}`
+	const body = `{"range":"6h","step":360,"charts":[{"id":"cpu","title":"CPU","unit":"cores","series":[{"name":"web","points":[[1700000000,0.1],[1700000060,0.25]]}]},{"title":"Memory","series":[]},{"title":"Network","error":"query failed"}],"releases":[],"ooms":[{"time":1700000100,"process":"web","instance":"web.1","limit":268435456,"size":"shared-m","release":12},{"time":1700000200,"process":"release","limit":0}],"futureField":true}`
 	var path, query string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path, query = r.URL.Path, r.URL.RawQuery
@@ -77,8 +77,12 @@ func TestMetricsCommands(t *testing.T) {
 					t.Fatal(out.String())
 				}
 			default:
-				for _, want := range []string{"0.25", "cores", "2023-11-14T22:14:20Z", "No data", "query failed"} {
-					if !strings.Contains(out.String(), want) {
+				// The columns are aligned with spaces: read them as words.
+				words := strings.Join(strings.Fields(out.String()), " ")
+				for _, want := range []string{"0.25", "cores", "2023-11-14T22:14:20Z", "No data", "query failed",
+					// #119: the kills, after the samples; a limit of none and no instance read as a dash.
+					"Killed for running out of memory over 6h: 2", "web web.1 256Mi (shared-m) v12 2023-11-14T22:15:00Z", "release - - - 2023-11-14T22:16:40Z"} {
+					if !strings.Contains(words, want) {
 						t.Fatalf("missing %s: %s", want, out.String())
 					}
 				}

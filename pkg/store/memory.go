@@ -27,6 +27,8 @@ type invitationEntry struct {
 }
 
 type Memory struct {
+	// oomKills are the out-of-memory kills recorded (#119), in the order seen.
+	oomKills    []OOMKill
 	mu          sync.Mutex
 	locks       sync.Map              // workspace slug -> *sync.Mutex, the admission lock
 	workspaces  map[string]*Workspace // by slug
