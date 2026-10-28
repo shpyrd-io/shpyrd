@@ -94,16 +94,16 @@ export function metricsOf(slug: string, replicas: Record<string, number>, query:
     return own;
   };
 
-  // Against what the process was given. As a share, a process series is
-  // the sum of its instances, so it is read against all of theirs; in
-  // units, the allocation of one instance travels with the series as its
+  // Against what the process was given: one instance's allocation for an
+  // instance series, every instance's for a process series, which is the
+  // sum of them. As a share, divided by it; in units, drawn as the
   // reference line, as the server sends it.
   const measured = (list: Series[], p: string, kind: "cpu" | "memory"): Series[] => {
-    const one = allocation[kind];
-    const whole = instances ? one : one * (replicas[p] ?? 1);
+    const count = instances ? 1 : (replicas[p] ?? 1);
+    const whole = allocation[kind] * count;
     return list.map((s) => {
       if (percent) return { ...s, points: s.points.map(([t, v]): Point => [t, Math.round((v / whole) * 1000) / 10]) };
-      return kind === "cpu" ? { ...s, reference: one, burst: allocation.burst } : { ...s, reference: one };
+      return kind === "cpu" ? { ...s, reference: whole, burst: allocation.burst * count } : { ...s, reference: whole };
     });
   };
 

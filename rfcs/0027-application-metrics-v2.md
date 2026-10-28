@@ -213,6 +213,8 @@ invisible, and tooltips leak pod names.
   way: the screen read the 95th percentile by a name only the mock used (`95th percentile`, where
   the API says `p95`), and it never handed the range to the chart, so a 7-day axis showed hours
   only.
+- 2026-10-28: the by-process `reference` in Total mode is the size times the replicas, not one
+  instance's allocation under a series that sums them all. See the Implementation status.
 
 ## Implementation status
 
@@ -274,13 +276,16 @@ to be complete, since the Status line claims gaps rather than silence about them
   The workspace's Metrics screen now carries every control the Proposal names, except the
   instance subset below.
 
-- **Not fixed, recorded:** in Total mode the by-process series is the sum over a process's
-  instances while its `reference` is one instance's allocation — `applyReference` reads the
-  size's CPU and memory, not times the replicas. A process with four instances therefore draws
+- **Fixed on 2026-10-28:** in Total mode the by-process series is the sum over a process's
+  instances, but its `reference` was one instance's allocation — `applyReference` read the
+  size's CPU and memory, not times the replicas. A process with four instances therefore drew
   its usage against a quarter of what it was given, and the workspace's CPU and memory meters,
-  which sum the references, undercount what is reserved. `agg=sum` already scales the reference
-  by the instance count; the by-process view should do the same. An API change, left for its own
-  pull request.
+  which sum the references, undercounted what is reserved. The reference of a by-process series
+  is now the size times the process's replicas (one when unset, which is what the controller
+  writes as its Desired), read off the spec rather than the live pods: it is what the process was
+  given, kept while it sleeps, and costs the default view no call. A by-instance series keeps one
+  instance's allocation, and `agg=sum` keeps scaling its own. A process scaled to zero draws no
+  line.
 
 - **Not built:** the instance subset. The Summary and the Proposal ask for "Instances (All,
   or a subset)"; what shipped is a process filter plus a by-process / by-instance toggle,
