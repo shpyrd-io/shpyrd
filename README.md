@@ -303,9 +303,9 @@ shpyrd drains list --project shop        # delivery status and last delivery
 ```
 
 The project page and the Cluster page have a Log drains card with the same
-form. Header values are stored in the cluster and never shown again. Log
-storage with a time range (`--since`) is RFC-0022b, a drain to Loki plus a
-query API, still to come.
+form. Header values are stored in the cluster and never shown again. The
+platform keeps no log history (`--since`, time ranges): a cluster drain to a
+store of your own, a Loki or a SIEM, is how logs are kept.
 
 The API behind the dashboard (`/api/...`) requires the token; only `/api/healthz`,
 `/api/config` and content-addressed source archives are public.

@@ -67,7 +67,7 @@ The name defaults to the receiver's host. `--processes` limits a drain to some p
 
 <Callout title="Storage and history">
 
-Drains are the foundation for log history too: a cluster drain to Loki (or any receiver that speaks its protocol) plus a query API is a planned, optional add-on. Until then, `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows.
+The platform keeps no log history: `--since` in the CLI and a time range in the viewer are not available; what the node keeps is what the live stream shows. For history, send a cluster drain to a store of your own: a Loki, a SIEM or any receiver that speaks the drain's protocol.
 </Callout>
 
 

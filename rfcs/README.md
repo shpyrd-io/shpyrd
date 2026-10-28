@@ -40,7 +40,8 @@ implement those proposals.
 
 Numbers 0043 and 0044 are retired: the two proposals (builds in their own namespace with
 enforce-mode Pod Security; supply chain and encryption at rest) were never started and
-became issues #288 and #289 on 2026-10-28.
+became issues #288 and #289 on 2026-10-28. RFC-0022's file went the same day: its storage
+half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 0022a.
 
 | RFC | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -65,11 +66,10 @@ became issues #288 and #289 on 2026-10-28.
 | [0019](0019-health-checks-and-rollouts.md) | Health checks and zero-downtime rollouts | implemented, gaps | 0001 |
 | [0020](0020-maintenance-mode.md) | Maintenance mode | implemented | 0001, 0081 |
 | [0021](0021-structured-logs.md) | Structured logs in the viewer and the CLI | implemented | |
-| [0022](0022-log-pipeline.md) | Log pipeline (agent + Loki) — split, see 0022a and 0022b | provisional | 0046 |
 | [0022a](0022a-log-agent.md) | Log agent (Vector DaemonSet, container log limits) | implemented, gaps | 0001 |
 | [0023](0023-log-drains.md) | Log drains (project and cluster scope, syslog, HTTPS) | implemented, gaps | 0022a |
-| [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005, 0022 |
-| [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008, 0022 |
+| [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005 |
+| [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008 |
 | [0026](0026-web-terminal.md) | Web terminal | implemented (v0.9.8; the bridge carries the CLI's shell, `run` and the database shells since v0.9.61; gaps: the close audit on disconnect and shutdown (#281), the write deadline untested (#282), `TERM` unset (#283)) | 0005, 0008 |
 | [0027](0027-application-metrics-v2.md) | Application metrics v2: series per instance, aggregation, percentage or total against the allocation, a process filter, replaced instances, ranges from 15 minutes to 7 days | implemented (API and CLI 2026-09-26; the workspace's Metrics screen, written without the controls on 2026-09-30, carries them since 2026-10-28; out-of-memory kills marked on the memory chart, #119), gaps | 0011 |
 | [0028](0028-resource-pages-and-metrics.md) | Resource detail pages and metrics | provisional | 0006, 0009, 0010 |
@@ -83,7 +83,7 @@ became issues #288 and #289 on 2026-10-28.
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
 | [0037](0037-platform-backup-and-restore.md) | Platform backup and restore | implemented | 0046 |
 | [0038](0038-postgres-backups-and-pitr.md) | Postgres backups and PITR | implemented | 0009, 0046 |
-| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (pooling on shared servers; gaps) | 0009 |
+| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (closed 2026-10-28; pooling on shared servers, rotation and resize; a dedicated database's own pooler is #293) | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (ReadWriteMany): the provider's file system per profile | implemented | 0006, 0060 |
 | [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; image builds outside the backstop since v1.5.1; per-project quotas, LimitRange and usage bars still to do) | 0008 |
@@ -123,7 +123,7 @@ became issues #288 and #289 on 2026-10-28.
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting (fixed since 2026-10-04), OSS creates one workspace at init and shows no other, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
-| [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1); phase 2 history | 0006, 0009, 0060 |
+| [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1, closed 2026-10-28; phase 2 history since the storage plan of 2026-10-10) | 0006, 0009, 0060 |
 | [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
 | [0084](0084-a-workspace-s-own-application.md) | A workspace's own application: the door serves a chosen build (static package by reference; `dir:` and `oci:` sources; fallback to the platform's own) | implemented (catalogue of publishers later) | 0080, 0033, 0008, 0059 |
 
@@ -175,6 +175,7 @@ an "Implementation status" section with the details; the short version:
 | 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
+| 0039 | a dedicated database's own pooler (`spec.pooler` → CloudNativePG `Pooler`), #293 |
 | 0045 | e2e for `examples/hello-docker` |
 | 0047 | the step sizes and the cool-down as fields (the HPA's `behavior`, fixed at the defaults); a response-time target (no latency source yet); a schedule (KEDA's `cron` trigger); a cost range beside the bounds; a word when a process sits at its maximum; the live metric value in the dashboard — details in the RFC's "Implementation status" |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |

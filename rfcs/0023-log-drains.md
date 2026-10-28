@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-30
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -23,7 +23,8 @@ a Cluster page card; delivery status visible.
 Teams keep their logs in Datadog, Better Stack, Axiom, Papertrail or their own ELK; the
 platform should stream to them without an agent in the app. Platform teams often run one
 central sink (a Loki, a SIEM) for every project — that is the cluster scope, and it is
-also how log storage arrives later (RFC-0022b: a cluster drain to Loki plus a query API).
+also how log history is kept: the platform keeps none (RFC-0022b, Loki as an add-on, was
+withdrawn on 2026-10-28).
 
 ### Goals
 
@@ -189,7 +190,7 @@ uses the kubeconfig; the API enforces `cluster.admin`).
   `GET/POST/DELETE /api/workspace/drains` on the workspace's door, on the workspace's Log
   drains page, or with `shpyrd drains --workspace <slug>` over a kubeconfig. The cluster
   scope stays for the operator (`/api/drains`, `--cluster`); its page left the console,
-  as log storage for the platform is a cluster drain's job (RFC-0022b), not a page's.
+  as log storage for the platform is a cluster drain's job, not a page's.
 
 - 2026-09-30: the gaps of the 2026-09-25 audit closed. `status.failingPolls` counts the
   consecutive checks that found errors and nothing delivered; the tenth records

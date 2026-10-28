@@ -4,11 +4,11 @@
 
 **Owner:** unassigned
 
-**Depends on:** RFC-0005 (implemented), RFC-0022
+**Depends on:** RFC-0005 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -36,8 +36,9 @@ jobs are the most requested missing primitive after databases.
 - `Run` CRD in the project namespace: `spec.command`, `spec.size`, `spec.schedule` (owner);
   `status`: phase, startedAt, finishedAt, exitCode, instance name. `shpyrd run` creates a
   Run instead of a bare pod; the controller creates the pod (same hardening) and mirrors
-  its state; logs are read from the pipeline (RFC-0022) or, without it, kept by holding the
-  pod for a configurable time (default 24h) instead of ten minutes.
+  its state; logs are kept by holding the pod for a configurable time (default 24h) instead
+  of ten minutes (the log history that was to keep them, RFC-0022b, was withdrawn on
+  2026-10-28).
 - `Schedule` CRD: `spec.cron`, `spec.command`, `spec.size`, `spec.timezone`, `spec.concurrency:
   forbid|allow`; the controller creates a Run at each tick (a Kubernetes CronJob is not used
   so runs share the Run history and the release's image/config). `shpyrd schedule add|list|
