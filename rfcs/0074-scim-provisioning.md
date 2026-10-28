@@ -4,7 +4,7 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0033 (in progress: memberships, teams, suspension, SSO), RFC-0058
+**Depends on:** RFC-0033 (implemented: memberships, teams, suspension, SSO), RFC-0058
 (implemented)
 
 **Creation date:** 2026-09-27
