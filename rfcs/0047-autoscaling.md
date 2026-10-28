@@ -99,7 +99,10 @@ HTTP add-on gives for free.
   minimum.
 - Dashboard: the Resources page shows `2–10 auto` in place of the steppers on the web row
   with an **Autoscale** dialog (a fixed count, or bounds and the two targets), and what the
-  bounds do under the Now badge; the Overview says `shared-s × 3 (auto 2–10)`.
+  bounds do under the Now badge; the Overview says `shared-s × 3 (auto 2–10)`. In the
+  dialog the bounds are the two thumbs of a range with the numbers typed at its ends, the
+  line running to the workspace's instance ceiling, and each target has a slider beside its
+  input (Heroku's and Judoscale's layout); `@shpyrd/ui` gained the `Slider` for it.
 
 ## Design Details
 
@@ -115,14 +118,44 @@ HTTP add-on gives for free.
 - `restoreToOriginalReplicaCount` is false: the controller writes the count back itself when
   the object goes (bounds off, sleep off, the extension gone, a pause).
 - Quotas: `pkg/api/limits.go` counts a process with bounds at its maximum.
+- **How fast it moves.** The HPA evaluates every 15 seconds; each trigger says how many
+  instances it wants (requests in flight divided by the target, rounded up; the CPU average
+  over its target, applied to the current count) and the larger wins, with the HPA's 10%
+  tolerance around the target. Scaling up has no delay and the Kubernetes default step, the
+  larger of four instances or double the count per 15 seconds (1 → 5 → 10 → the maximum).
+  Scaling down uses the highest count wanted in the last five minutes, then drops to it in
+  one step. The quiet period is a cooldown for the step to zero only (KEDA's
+  `cooldownPeriod`); scaling between the bounds while awake never waits for it. None of the
+  three is settable yet (below).
 
 ## Implementation status
 
 Done (2026-10-27): everything in the Proposal, with tests in `internal/controller`
-(`autoscale_test.go`), `pkg/api` (`autoscale_test.go`), `internal/cli` and the workspace
-app. Not done, by decision: queue triggers; other process types; the live metric value in
-the dashboard (the HPA's `status.currentMetrics` is not read; `desired` shows the count the
+(`autoscale_test.go`), `pkg/api` (`autoscale_test.go`), `internal/cli`, the workspace app
+and `design/ui` (`slider.test.tsx`). Verified on a kind cluster: 60 requests held in flight
+took one instance to three in about 20 seconds; CPU load took it to the maximum; with a
+five-minute sleep policy the app reached zero five minutes after the last request and one
+request woke it to its minimum, not its maximum, in six seconds. Not verified on OCI.
+
+Not done, by decision: queue triggers; other process types; the live metric value in the
+dashboard (the HPA's `status.currentMetrics` is not read; `desired` shows the count the
 scaler asks for).
+
+Not done, open for later, each with what it takes:
+
+- **The sensitivity knobs** Judoscale exposes (how many instances a step adds, how often,
+  how long before one is removed): the HPA's `behavior.scaleUp.policies`, its
+  `periodSeconds`, and `scaleDown.stabilizationWindowSeconds`, fixed here at the defaults
+  above. Three fields on `AutoscaleSpec` and the dialog, rendered into the ScaledObject's
+  `horizontalPodAutoscalerConfig.behavior`.
+- **A response-time target** (Heroku's p95): needs a latency source per app; the add-on's
+  interceptor measures requests in flight and request rate, not latency.
+- **Schedules** (a higher minimum in business hours): KEDA's `cron` trigger as a third
+  trigger on the same object.
+- **A cost range** beside the bounds (Heroku): the size's price times the two bounds, in the
+  dialog.
+- **A word when the process sits at its maximum** for a while: an event from the
+  controller, where Heroku sends an email.
 
 ## Implementation History
 
@@ -137,4 +170,7 @@ scaler asks for).
   and the `metrics-server` component, the spec and status, the shared ScaledObject with the
   request and CPU triggers, the API, `shpyrd autoscale`, the dashboard, the ceiling on the
   maximum. On a cluster with sleeping apps the first reconcile replaces the `<app>-sleep`
-  ScaledObject and the `web-sleep` Service; the apps stay asleep.
+  ScaledObject and the `web-sleep` Service; the apps stay asleep. The same day, after
+  looking at Heroku's and Judoscale's screens: the dialog's bounds and targets on sliders
+  (`Slider` added to `@shpyrd/ui`), the scaling behaviour written down, and the knobs,
+  the p95 target, schedules, the cost range and the at-maximum event listed as left out.
