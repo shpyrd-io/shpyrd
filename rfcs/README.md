@@ -73,7 +73,7 @@ implement those proposals.
 | [0030](0030-notifications.md) | Notifications (webhook, Slack, email) | provisional | 0013 (email) |
 | [0031](0031-api-tokens.md) | Per-user API tokens | implemented (v0.9.0); gaps: CLI minting needs a person session or the admin token | 0008 |
 | [0032](0032-mcp-connector.md) | MCP connector | in progress (v0.9.16: every workspace is a remote MCP server with OAuth 2.1 and read tools; enterprise, `ee/mcp`, since 2026-10-04; writing tools, stdio mode and MCP resources remain) | 0031, 0033 |
-| [0033](0033-workspaces.md) | Workspaces | in progress (control-plane database v0.4.0; the edge v0.5.0; login methods, join policy, domain claims v0.6.0; allow lists v0.7.0; CLIs v0.8.0; workspace from the host v0.9.1; sign-in at the workspace host v0.9.2; plan limits v0.9.3; seams for hosted workspaces v0.9.5; CLI over the API v0.9.8; audit and fixes — allow lists, suspension, backups — v0.9.10; tokens at the edge, key rotation, server NetworkPolicy, denial counters v0.9.11; workspace roles and invitations v0.9.13; per-workspace SSO and the reader role v0.9.15; address change, custom domains, the launcher for everyone, branding and the MCP server v0.9.16; gaps listed) | 0008, 0016 |
+| [0033](0033-workspaces.md) | Workspaces | implemented (v0.4.0–v0.9.61, closed 2026-10-28; identity by 0082, the doors by 0078 and 0080; the remaining gaps are issues #274, #276, #277, #278, #249 and shpyrd-cloud#63, and RFC-0068) | 0008, 0016 |
 | [0034](0034-domains-and-certificates.md) | Custom domains | implemented | 0036, 0061 |
 | [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci`, network policy); AWS provisional | 0045 |
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
@@ -168,6 +168,7 @@ an "Implementation status" section with the details; the short version:
 | 0011 | "pods" in the logs-agent description |
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
+| 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
 | 0045 | e2e for `examples/hello-docker` |
