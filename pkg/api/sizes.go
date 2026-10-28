@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -200,6 +201,99 @@ type ProcessChange struct {
 	// awake even when the workspace has a default; after "default" clears
 	// the project's policy so the workspace's default applies (#135).
 	Sleep *shpyrdv1.SleepSpec `json:"sleep,omitempty"`
+	// Autoscale sets or clears the bounds the web process follows its load
+	// between (RFC-0047): {"min":2,"max":10}, with "cpu" (percent of the
+	// size's CPU) and "concurrency" (requests in flight per instance) when
+	// the defaults will not do; {"off":true} clears them, and the process
+	// keeps the count it last asked for.
+	Autoscale *AutoscaleChange `json:"autoscale,omitempty"`
+}
+
+// AutoscaleChange is the bounds of a process as a request states them.
+type AutoscaleChange struct {
+	Off         bool   `json:"off,omitempty"`
+	Min         int32  `json:"min,omitempty"`
+	Max         int32  `json:"max,omitempty"`
+	CPU         *int32 `json:"cpu,omitempty"`
+	Concurrency *int32 `json:"concurrency,omitempty"`
+}
+
+// maxReplicas is the most instances a process may ask for, by count or by
+// bound.
+const maxReplicas = 100
+
+// validateAutoscale checks a bounds change: only the web process follows
+// its load, at least one instance, the maximum from the minimum up to
+// maxReplicas, the CPU target a percentage, the requests in flight at
+// least one. Returns the spec to store: nil for off.
+func validateAutoscale(process string, ch *AutoscaleChange) (*shpyrdv1.AutoscaleSpec, error) {
+	if process != "web" {
+		return nil, fmt.Errorf("only the web process follows its load (got %s)", process)
+	}
+	if ch.Off {
+		return nil, nil
+	}
+	if ch.Min < 1 {
+		return nil, errors.New("autoscale min must be at least 1: a process that follows its load keeps one instance; sleep is what takes it to zero")
+	}
+	if ch.Max < ch.Min {
+		return nil, fmt.Errorf("autoscale max must be at least the minimum (%d)", ch.Min)
+	}
+	if ch.Max > maxReplicas {
+		return nil, fmt.Errorf("autoscale max must be at most %d", maxReplicas)
+	}
+	if ch.CPU != nil && (*ch.CPU < 1 || *ch.CPU > 100) {
+		return nil, errors.New("autoscale cpu is a percentage of the size's CPU, between 1 and 100")
+	}
+	if ch.Concurrency != nil && *ch.Concurrency < 1 {
+		return nil, errors.New("autoscale concurrency is the requests in flight an instance may carry, at least 1")
+	}
+	return &shpyrdv1.AutoscaleSpec{Min: ch.Min, Max: ch.Max, CPU: ch.CPU, Concurrency: ch.Concurrency}, nil
+}
+
+// canAutoscale reports whether KEDA's kinds are installed (the autoscale
+// extension), by asking the REST mapper for the ScaledObject kind.
+func (s *Server) canAutoscale() bool {
+	if s.autoscaleAvailable != nil {
+		return s.autoscaleAvailable()
+	}
+	if s.apps == nil {
+		return false
+	}
+	for _, gk := range []schema.GroupKind{{Group: "keda.sh", Kind: "ScaledObject"}, {Group: "http.keda.sh", Kind: "InterceptorRoute"}} {
+		if _, err := s.apps.RESTMapper().RESTMapping(gk); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// errNoAutoscale answers bounds asked for on a cluster without KEDA's kinds.
+var errNoAutoscale = errors.New("this cluster cannot autoscale yet: enable the autoscale extension first (shpyrd-ctl extensions enable autoscale)")
+
+// setReplicas applies a count to a process: the count itself or, on a
+// process that follows its load, its minimum (RFC-0047: `shpyrd scale
+// web=3` on an autoscaled process sets min). The count is kept too, as
+// what the process returns to when the bounds are taken away.
+func (s *Server) setReplicas(ctx context.Context, a *shpyrdv1.App, name string, n int32) error {
+	p := a.Spec.Processes[name]
+	if p.Autoscale.Valid() {
+		switch {
+		case n == 0:
+			return fmt.Errorf("%s follows its load between %d and %d instances and keeps at least the minimum; turn autoscaling off to stop it (shpyrd autoscale %s --off)", name, p.Autoscale.Min, p.Autoscale.Max, name)
+		case n > p.Autoscale.Max:
+			return fmt.Errorf("%s follows its load between %d and %d instances: a count sets the minimum, and %d is above the maximum; raise it first (shpyrd autoscale %s --max %d)", name, p.Autoscale.Min, p.Autoscale.Max, n, name, n)
+		}
+		as := *p.Autoscale
+		as.Min = n
+		p.Autoscale = &as
+	}
+	if err := s.checkScale(ctx, a, name, n); err != nil {
+		return err
+	}
+	p.Replicas = ptr.To(n)
+	a.Spec.Processes[name] = p
+	return nil
 }
 
 // sleepAllowed says whether an extension lets things sleep by themselves
@@ -309,7 +403,20 @@ func (s *Server) applyProcesses(c *gin.Context) {
 	}
 	resizes := false
 	sleeps := map[string]*shpyrdv1.SleepSpec{}
+	bounds := map[string]*shpyrdv1.AutoscaleSpec{}
 	for name, ch := range req.Processes {
+		if ch.Autoscale != nil {
+			as, err := validateAutoscale(name, ch.Autoscale)
+			if err != nil {
+				abort(c, http.StatusBadRequest, err)
+				return
+			}
+			if as != nil && !s.canAutoscale() {
+				abort(c, http.StatusConflict, errNoAutoscale)
+				return
+			}
+			bounds[name] = as
+		}
 		if ch.Sleep != nil {
 			sp, err := validateSleep(name, ch.Sleep)
 			if err != nil {
@@ -338,8 +445,8 @@ func (s *Server) applyProcesses(c *gin.Context) {
 			}
 			resizes = true
 		}
-		if ch.Replicas != nil && (*ch.Replicas < 0 || *ch.Replicas > 100) {
-			abort(c, http.StatusBadRequest, errors.New("replicas must be between 0 and 100"))
+		if ch.Replicas != nil && (*ch.Replicas < 0 || *ch.Replicas > maxReplicas) {
+			abort(c, http.StatusBadRequest, fmt.Errorf("replicas must be between 0 and %d", maxReplicas))
 			return
 		}
 	}
@@ -364,11 +471,22 @@ func (s *Server) applyProcesses(c *gin.Context) {
 				p.Size = *ch.Size
 				p.Resources = corev1.ResourceRequirements{}
 			}
+			if ch.Autoscale != nil {
+				// The maximum is what the process may come to: a
+				// single-instance volume refuses it like any count.
+				if as := bounds[name]; as != nil {
+					if err := s.checkScale(c.Request.Context(), a, name, as.Max); err != nil {
+						return err
+					}
+				}
+				p.Autoscale = bounds[name] // nil clears the bounds
+			}
+			a.Spec.Processes[name] = p
 			if ch.Replicas != nil {
-				if err := s.checkScale(c.Request.Context(), a, name, *ch.Replicas); err != nil {
+				if err := s.setReplicas(c.Request.Context(), a, name, *ch.Replicas); err != nil {
 					return err
 				}
-				p.Replicas = ch.Replicas
+				p = a.Spec.Processes[name]
 			}
 			if ch.Sleep != nil {
 				if sp := sleeps[name]; sleepTurnsOn(sp) && sp.Resuming == "wait" {
@@ -414,6 +532,13 @@ func processChangesDetail(changes map[string]ProcessChange) string {
 				parts = append(parts, n+" sleep off")
 			default:
 				parts = append(parts, fmt.Sprintf("%s sleep after %s (%s)", n, sp.After, sp.Resuming))
+			}
+		}
+		if ch.Autoscale != nil {
+			if ch.Autoscale.Off {
+				parts = append(parts, n+" autoscale off")
+			} else {
+				parts = append(parts, fmt.Sprintf("%s autoscale %d-%d (cpu %d%%, %d in flight)", n, ch.Autoscale.Min, ch.Autoscale.Max, (&shpyrdv1.AutoscaleSpec{CPU: ch.Autoscale.CPU}).TargetCPU(), (&shpyrdv1.AutoscaleSpec{Concurrency: ch.Autoscale.Concurrency}).TargetConcurrency()))
 			}
 		}
 	}

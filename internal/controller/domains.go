@@ -631,7 +631,7 @@ func (r *AppReconciler) reconcileDomainRedirect(ctx context.Context, app *shpyrd
 	}
 	source := r.Config.platformHost(app)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
-		r.Config.mutateIngress(app, ing, false)
+		r.Config.mutateIngress(app, ing, false, false)
 		for _, key := range edgeAnnotationKeys {
 			delete(ing.Annotations, key)
 		}

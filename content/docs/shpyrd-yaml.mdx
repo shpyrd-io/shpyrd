@@ -31,6 +31,11 @@ processes:
     volumes:
       - name: data      # a volume of the project (shpyrd volumes create data --size 5Gi)
         path: /data
+    autoscale:          # follow the load instead of a fixed count (autoscale extension)
+      min: 2
+      max: 10
+      # cpu: 70         # percent of the size's CPU an instance may use before another is added
+      # concurrency: 20 # requests in flight per instance before another is added
   worker:
     size: shared-s
     replicas: 2         # pin the instance count
@@ -78,6 +83,7 @@ exposure: external
 | `globals` | `false` leaves every [global config var](/docs/deploying#global-config-vars) out of the project; `{exclude: [NAME, ...]}` leaves out only those. Default: all globals. |
 | `processes.<type>.port` | Port the process listens on. `web` defaults to 8080 and is published through the URL; other types get no port unless set. `PORT` is injected. |
 | `processes.<type>.replicas` | Pin the number of instances. Without it, `shpyrd scale` values are kept across deploys (default 1). |
+| `processes.web.autoscale` | Let the web process follow its load between `min` and `max` instances (`shpyrd autoscale` does the same from the CLI): another instance when one passes `cpu` percent of the size's CPU (70) or carries more than `concurrency` requests in flight (20), one fewer when the load has been lower for five minutes. The maximum counts against the workspace's instances; a single-instance volume refuses it. Needs the `autoscale` extension. |
 | `processes.<type>.size` | Instance size from the cluster catalog (`shpyrd sizes list`): `shared-*` sizes have a CPU ceiling and a guaranteed share of 1/8 of it (burstable); `dedicated-*` sizes get whole cores with requests equal to limits. Default: `shared-m` (0.5 CPU, 256 MiB) for Node.js, Ruby, Python and Java; `shared-s` (0.5 CPU, 64 MiB) for the rest. Changing it is a release (`shpyrd resize` does the same from the CLI). |
 | `processes.<type>.cpu`, `memory` | Override the size's limits (e.g. `cpu: "1"`, `memory: 1Gi`). Prefer a size; use these for one-off needs. |
 | `processes.<type>.command`, `args` | Override the command. By default `web` runs the image entrypoint and other types run `/cnb/process/<type>`, the process the buildpacks recorded under that name. Dockerfile images have a single entrypoint, so every type other than `web` must set `command`. |
