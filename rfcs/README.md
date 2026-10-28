@@ -66,7 +66,7 @@ implement those proposals.
 | [0023](0023-log-drains.md) | Log drains (project and cluster scope, syslog, HTTPS) | implemented, gaps | 0022a |
 | [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005, 0022 |
 | [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008, 0022 |
-| [0026](0026-web-terminal.md) | Web terminal | implemented (v0.9.8; the bridge carries the CLI's shell, `run` and the database shells since v0.9.61; gaps: the close audit on disconnect and shutdown, `TERM` unset, the write deadline unverified) | 0005, 0008 |
+| [0026](0026-web-terminal.md) | Web terminal | implemented (v0.9.8; the bridge carries the CLI's shell, `run` and the database shells since v0.9.61; gaps: the close audit on disconnect and shutdown (#281), the write deadline untested (#282), `TERM` unset (#283)) | 0005, 0008 |
 | [0027](0027-application-metrics-v2.md) | Application metrics v2 | implemented, gaps | 0011 |
 | [0028](0028-resource-pages-and-metrics.md) | Resource detail pages and metrics | provisional | 0006, 0009, 0010 |
 | [0029](0029-opentelemetry.md) | OpenTelemetry | provisional | 0016 |
@@ -167,7 +167,7 @@ an "Implementation status" section with the details; the short version:
 | 0010 | Redis PodDisruptionBudget |
 | 0011 | "pods" in the logs-agent description |
 | 0019 | zero-downtime rollout test; probe message in failing status |
-| 0026 | `shell.close` lost on a client disconnect (best-effort) and never written on a server shutdown: the audit write uses the request context; `TERM` unset in the session; the two-second write deadline untested against a client that stopped reading |
+| 0026 | `shell.close` lost on a client disconnect (best-effort) and never written on a server shutdown: the audit write uses the request context (#281); the two-second write deadline untested against a client that stopped reading (#282); `TERM` unset in the session (#283) |
 | 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
 | 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |

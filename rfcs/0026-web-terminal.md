@@ -28,8 +28,9 @@ and still stand: the audit write still goes through the request context
 (`pkg/api/audit.go`), so `shell.close` is best-effort on a client disconnect and never
 written on a server shutdown; nothing tests the two-second write deadline against a client
 that stopped reading; `TERM` is still unset. The server still runs at one replica, so the
-in-memory shell registry's assumption holds. None of the four has an issue yet; they are
-small, and the audit ones share one fix (an audit write that outlives the request).
+in-memory shell registry's assumption holds. Each is an issue of its own: the close audit on
+a disconnect and on a shutdown, one fix for both (#281); the write-deadline test (#282);
+`TERM` (#283).
 
 ## Summary
 
@@ -223,4 +224,5 @@ promises but the platform does not do yet is listed here.
 - 2026-09-30 (v0.9.61): `shpyrd run`, `pg psql` and `redis cli` over the bridge (RFC-0052);
   a database shell holds a slot of its own.
 - 2026-10-02 (v0.9.69): shell tickets bound to their workspace.
-- 2026-10-28: closed as implemented; the four gaps re-checked and kept, see Closing.
+- 2026-10-28: closed as implemented; the four gaps re-checked and kept as issues #281, #282
+  and #283, see Closing.
