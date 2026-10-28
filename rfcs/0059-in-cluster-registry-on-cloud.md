@@ -44,7 +44,7 @@ laptop and not on a shared cloud network.
 - Serving images to consumers outside the cluster (CI pulls, `docker pull`); the registry
   is internal. `shpyrd deploy --local-build` keeps working on the local profile.
 - Multi-replica registry; it needs object storage (RFC-0046) and comes with it.
-- Image signing and provenance (RFC-0044).
+- Image signing and provenance (#289).
 
 ## Proposal
 

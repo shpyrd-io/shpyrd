@@ -147,7 +147,7 @@ evaluator asks for, right after the product looking like itself (RFC-0012).
     `get,list,watch` on connectors) and registers one provider per connector with
     `ConnectorID`, which `begin()` sends as `connector_id` so Dex skips its chooser.
     Client secrets in Connector objects are stored like any other Dex state (base64 in a
-    custom resource), one reason to enable etcd encryption (RFC-0044).
+    custom resource), one reason to enable etcd encryption (#289).
   - `ext.OIDCProvider` gained `Kind` and `ConnectorID`; `GET /api/config` providers carry
     `kind` (`oidc`, `github`, `google`) and the page shows a brand mark for the last two.
   - Two extensions share the `shpyrd auth` command; the CLI merges subcommands of

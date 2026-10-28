@@ -38,6 +38,10 @@ implement those proposals.
 
 ## Index
 
+Numbers 0043 and 0044 are retired: the two proposals (builds in their own namespace with
+enforce-mode Pod Security; supply chain and encryption at rest) were never started and
+became issues #288 and #289 on 2026-10-28.
+
 | RFC | Title | Status | Depends on |
 | --- | --- | --- | --- |
 | [0001](0001-mvp-local-platform.md) | MVP: local platform, App CRD and CLI | implemented | |
@@ -47,7 +51,7 @@ implement those proposals.
 | [0005](0005-shell-and-one-off-commands.md) | Shell and one-off commands | implemented (CLI); browser terminal → 0026, gaps | |
 | [0006](0006-persistent-volumes.md) | Persistent volumes | implemented (RWO); shared → 0041 | |
 | [0007](0007-authentication.md) | Authentication (OIDC, Dex) | implemented (OIDC/Dex; credentials and identity contract → 0082) | |
-| [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → 0043, supply chain → 0044, tokens → 0031, durable audit → 0025, gaps | |
+| [0008](0008-teams-roles-and-security.md) | Teams, roles and security | implemented; quotas → 0042, enforce PSS → #288, supply chain → #289, tokens → 0031, durable audit → 0025, gaps | |
 | [0009](0009-postgres-resource.md) | Postgres resource (CloudNativePG) | implemented; backups → 0038, pooling/rotation → 0039, gaps | |
 | [0010](0010-redis-resource.md) | Redis resource (Valkey) | implemented; HA → 0040, gaps | |
 | [0011](0011-project-identity-and-product-language.md) | Project identity and product language | implemented, gaps | |
@@ -83,8 +87,6 @@ implement those proposals.
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (ReadWriteMany): the provider's file system per profile | implemented | 0006, 0060 |
 | [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; image builds outside the backstop since v1.5.1; per-project quotas, LimitRange and usage bars still to do) | 0008 |
-| [0043](0043-builds-namespace-and-pod-security.md) | Builds namespace and enforce-mode Pod Security | implementable | 0004, 0008 |
-| [0044](0044-supply-chain.md) | Supply chain and encryption at rest | implementable | 0045 |
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
 | [0047](0047-autoscaling.md) | Autoscaling: a web process follows its load between a minimum and a maximum, on the requests in flight (KEDA HTTP add-on) and CPU (Metrics Server), one ScaledObject shared with sleep | implemented (web; queue triggers and other process types decided out, 2026-10-27), gaps | 0019, 0042, 0075 |
@@ -140,7 +142,7 @@ implement those proposals.
 | H | 0027, 0028, 0015, 0029, 0030 | observability and notifications |
 | I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime |
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
-| K | 0038, 0039, 0040, 0041, 0042, 0043, 0044, 0033, 0068 | data stores, security, workspaces, the edge |
+| K | 0038, 0039, 0040, 0041, 0042, 0033, 0068 | data stores, quotas, workspaces, the edge |
 | L | 0047, 0048, 0052, 0054, 0056 | autoscaling, cost, API-first CLI, GitHub App, tracing; Core MFA/passkeys (0053) replaced by 0082 |
 | M | 0069, 0070, 0071, 0072, 0073, 0074, 0075 | the agents stack, the enterprise and the economics: embedded git, internal names, AI gateway, app actions, data in backups, SCIM, usage ledger and sleep |
 
