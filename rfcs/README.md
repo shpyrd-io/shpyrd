@@ -41,7 +41,8 @@ implement those proposals.
 Numbers 0043 and 0044 are retired: the two proposals (builds in their own namespace with
 enforce-mode Pod Security; supply chain and encryption at rest) were never started and
 became issues #288 and #289 on 2026-10-28. RFC-0022's file went the same day: its storage
-half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 0022a.
+half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 0022a. So did
+RFC-0020's, maintenance mode, implemented that day and documented under Deploying.
 
 | RFC | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -64,7 +65,6 @@ half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 002
 | [0017](0017-git-credentials.md) | Git credentials for private repositories | implemented | 0004 |
 | [0018](0018-repository-monitoring.md) | Repository monitoring and auto-deploy | implemented | 0017 |
 | [0019](0019-health-checks-and-rollouts.md) | Health checks and zero-downtime rollouts | implemented, gaps | 0001 |
-| [0020](0020-maintenance-mode.md) | Maintenance mode | implemented | 0001, 0081 |
 | [0021](0021-structured-logs.md) | Structured logs in the viewer and the CLI | implemented | |
 | [0022a](0022a-log-agent.md) | Log agent (Vector DaemonSet, container log limits) | implemented, gaps | 0001 |
 | [0023](0023-log-drains.md) | Log drains (project and cluster scope, syslog, HTTPS) | implemented, gaps | 0022a |
@@ -140,7 +140,7 @@ half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 002
 | G | 0022a, 0021, 0017, 0018, 0023, 0024, 0025 | delivery and logs: agent, structured viewer, git creds, auto-deploy, drains, run history, durable audit |
 | G (old) | 0017, 0018, 0021, 0022, 0024, 0025, 0023 | superseded by new G above |
 | H | 0027, 0028, 0015, 0029, 0030 | observability and notifications |
-| I | 0031, 0032, 0026, 0020, 0014, 0013 | access, automation, runtime |
+| I | 0031, 0032, 0026, 0014, 0013 | access, automation, runtime |
 | J | 0035 (OKE and EKS), 0059, 0061, 0036, 0034, 0060, 0037 | done |
 | K | 0038, 0039, 0040, 0041, 0042, 0033, 0068 | data stores, quotas, workspaces, the edge |
 | L | 0047, 0048, 0052, 0054, 0056 | autoscaling, cost, API-first CLI, GitHub App, tracing; Core MFA/passkeys (0053) replaced by 0082 |

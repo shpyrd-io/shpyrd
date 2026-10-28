@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-23
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -42,7 +42,8 @@ profile (`:latest`) does not exist as a published artifact.
 - `pkg/version.Version` from the tag; the local profile's `SHPYRD_SERVER_IMAGE` becomes
   `ghcr.io/shpyrd-io/shpyrd-server:${SHPYRD_VERSION}`; dev builds keep `--set`.
 - Installer script served from the docs site (`get.shpyrd.io` → GitHub release assets).
-- Maintenance image (RFC-0020) and future helper images built in the same workflow.
+- Maintenance image (RFC-0020; never needed in the end: maintenance mode shipped on 2026-10-28
+  with the server answering the page) and future helper images built in the same workflow.
 - Docs: installation page rewritten around the binaries; `make cli` becomes the developer
   path.
 
@@ -75,7 +76,8 @@ profile (`:latest`) does not exist as a published artifact.
     members). About 10 minutes; green on the first run.
   - Deferred to a follow-up in the same file: cosign keyless signing and SBOMs (the
     pipeline has `id-token` available; add `sbom` and `signs` sections once the first
-    releases have settled), the maintenance image of RFC-0020, and Windows binaries.
+    releases have settled), the maintenance image of RFC-0020 (no longer needed, see
+    Goals), and Windows binaries.
 
 ## Implementation status
 
