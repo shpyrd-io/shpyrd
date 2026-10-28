@@ -1785,10 +1785,11 @@ export const mock: Api = {
       onLine(liveLine(slug, query.process ?? processes[0] ?? "web", n++)),
     );
   },
-  metrics: async (slug, range) => {
+  metrics: async (slug, query) => {
     await wait();
     const p = await projectsOf.find(slug);
-    return metricsOf(slug, Object.keys(p.spec.processes ?? { web: {} }), range);
+    const processes: Record<string, { replicas?: number }> = p.spec.processes ?? { web: {} };
+    return metricsOf(slug, Object.fromEntries(Object.entries(processes).map(([name, spec]) => [name, spec.replicas ?? 1])), query);
   },
   instances: async (slug) => {
     await wait();

@@ -33,6 +33,7 @@ import type {
   LoginMethods,
   Member,
   Metrics,
+  MetricsQuery,
   NewLoginMethod,
   NewToken,
   Person,
@@ -333,7 +334,7 @@ export type Api = {
     signal: AbortSignal,
     onLine: (line: LogLine) => void,
   ) => Promise<void>;
-  metrics: (slug: string, range: string) => Promise<Metrics>;
+  metrics: (slug: string, query: MetricsQuery) => Promise<Metrics>;
   // A shell into an instance: the instances, a ticket for one, and the
   // socket the ticket opens. The Mock has no socket: it answers null and
   // the screen makes a shell up.

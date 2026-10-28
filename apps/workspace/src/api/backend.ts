@@ -10,7 +10,9 @@ import type {
   DomainStatus,
   GitHubBranches,
   GitHubRepositories,
+  MetricChart,
   Metrics,
+  MetricsQuery,
   Project,
   ProjectSummary,
   Series,
@@ -41,6 +43,7 @@ type Chart = {
   series: ChartSeries[];
   error?: string;
   note?: string;
+  instanceCapable?: boolean;
 };
 export type MetricsAnswer = {
   range: string;
@@ -119,16 +122,38 @@ export function toLogLine(record: LogRecord): LogLine {
 
 const tones: Record<string, Series["tone"]> = { web: "orange", worker: "blue" };
 
-function chartOf(answer: MetricsAnswer, id: string): Series[] {
+// A chart as the page reads it. A chart whose query failed keeps its
+// error and draws nothing; one the server did not answer at all is empty.
+function chartOf(answer: MetricsAnswer, id: string): MetricChart {
   const chart = answer.charts.find((c) => c.id === id);
-  if (!chart || chart.error) return [];
-  return chart.series.map((s) => ({
-    name: s.name,
-    points: s.points,
-    reference: s.reference,
-    burst: s.burst,
-    tone: tones[s.name],
-  }));
+  if (!chart) return { series: [], unit: "", instanceCapable: false };
+  return {
+    unit: chart.unit,
+    error: chart.error,
+    note: chart.note,
+    instanceCapable: chart.instanceCapable ?? false,
+    series: chart.error
+      ? []
+      : chart.series.map((s) => ({
+          name: s.name,
+          points: s.points,
+          reference: s.reference,
+          burst: s.burst,
+          tone: tones[s.name],
+        })),
+  };
+}
+
+// The address of the metrics: only what differs from the server's own
+// defaults is written, so the plain view asks the question it always did.
+export function metricsPath(slug: string, query: MetricsQuery): string {
+  const params = new URLSearchParams({ range: query.range });
+  if (query.process) params.set("process", query.process);
+  if (query.by === "instance") params.set("by", "instance");
+  if (query.agg && query.agg !== "none") params.set("agg", query.agg);
+  if (query.mode) params.set("mode", query.mode);
+  if (query.replaced) params.set("replaced", "true");
+  return `${project(slug)}/metrics?${params}`;
 }
 
 export function toMetrics(answer: MetricsAnswer): Metrics {
@@ -531,12 +556,8 @@ export const backend: Api = {
   },
   // In total mode the CPU is in cores and the memory in bytes, with the
   // allocation of each process beside them.
-  metrics: async (slug, range) =>
-    toMetrics(
-      await request<MetricsAnswer>(
-        `${project(slug)}/metrics?range=${encodeURIComponent(range)}&mode=total`,
-      ),
-    ),
+  metrics: async (slug, query) =>
+    toMetrics(await request<MetricsAnswer>(metricsPath(slug, query))),
   instances: (slug) => request(`${project(slug)}/instances`),
   shellTicket: (slug, instance) =>
     request(

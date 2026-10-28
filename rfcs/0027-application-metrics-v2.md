@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-27
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -201,6 +201,19 @@ invisible, and tooltips leak pod names.
   is what made the phantom group observable: a completed build pod has no current cAdvisor
   series, so the defect is invisible unless a build is actually running.
 
+- 2026-10-28: the dashboard this RFC was verified on (`ui/`) was deleted on 2026-09-30, when the
+  console and workspace applications replaced it (RFC-0080), and the workspace's Metrics screen
+  was written anew without the controls: it asked for a range and `mode=total` and nothing else,
+  so the by-instance view, the aggregation, the percentage mode, the process filter, the replaced
+  toggle, the 15-minute range, the reference lines and the per-chart error and note all stopped
+  being reachable from the UI, while the API and the CLI kept every parameter. The status below
+  said nothing about it because it predates the rewrite. Rebuilt in
+  `apps/workspace/src/screens/project/metrics.tsx` on the library's TimeChart, with the mock
+  answering every parameter so the screen can be designed without a cluster. Found along the
+  way: the screen read the 95th percentile by a name only the mock used (`95th percentile`, where
+  the API says `p95`), and it never handed the range to the chart, so a 7-day axis showed hours
+  only.
+
 ## Implementation status
 
 Audited on 2026-09-26 against the cluster run above, re-audited after the whole-branch
@@ -255,6 +268,19 @@ to be complete, since the Status line claims gaps rather than silence about them
   series and no false `replaced` note, since there is no per-process grouping for an empty
   label to land in. Joining it would change what the chart measures, not just which pods it
   measures, so it waits for someone who wants that.
+
+- **Fixed on 2026-10-28:** the UI half had been lost on 2026-09-30, when the workspace
+  application replaced the dashboard; see the entry of that date in the Implementation History.
+  The workspace's Metrics screen now carries every control the Proposal names, except the
+  instance subset below.
+
+- **Not fixed, recorded:** in Total mode the by-process series is the sum over a process's
+  instances while its `reference` is one instance's allocation — `applyReference` reads the
+  size's CPU and memory, not times the replicas. A process with four instances therefore draws
+  its usage against a quarter of what it was given, and the workspace's CPU and memory meters,
+  which sum the references, undercount what is reserved. `agg=sum` already scales the reference
+  by the instance count; the by-process view should do the same. An API change, left for its own
+  pull request.
 
 - **Not built:** the instance subset. The Summary and the Proposal ask for "Instances (All,
   or a subset)"; what shipped is a process filter plus a by-process / by-instance toggle,
