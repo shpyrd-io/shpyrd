@@ -62,7 +62,10 @@ invisible, and tooltips leak pod names.
   one chart draws several processes and they may have different sizes. In percentage mode
   neither is set: the line is 100%.
 - UI controls: Instances (All, or a subset), Aggregation, Percentage / Total. Release
-  markers stay.
+  markers stay, and since 2026-10-28 (issue #119) the memory chart also marks every
+  out-of-memory kill: the response lists them as `ooms` next to `releases`, each with its
+  time, process, instance name, the limit crossed, the size that limit belongs to and the
+  release, and never a pod name.
 - Percentage is relative to the process's request, which is the allocation the project pays
   for; shared sizes may legitimately exceed 100%.
 - Time range: 15m, 1h, 6h, 24h, 7d with the step chosen by range.
@@ -201,6 +204,13 @@ invisible, and tooltips leak pod names.
   is what made the phantom group observable: a completed build pod has no current cAdvisor
   series, so the defect is invisible unless a build is actually running.
 
+- 2026-10-28: every out-of-memory kill is recorded and marked on the memory chart
+  (issue #119, shpyrd-io/shpyrd#264). The controller records each `OOMKilled` it sees on a
+  pod change, since Kubernetes keeps only the last death of a container and cAdvisor's
+  `container_oom_events_total` stays at zero on this runtime; the metrics response carries
+  them as `ooms` for the range and the process filter, `shpyrd metrics --json` too, and the
+  workspace's Memory chart draws them apart from the releases, saying what died and at
+  what limit.
 - 2026-10-28: the dashboard this RFC was verified on (`ui/`) was deleted on 2026-09-30, when the
   console and workspace applications replaced it (RFC-0080), and the workspace's Metrics screen
   was written anew without the controls: it asked for a range and `mode=total` and nothing else,
@@ -219,8 +229,10 @@ invisible, and tooltips leak pod names.
 ## Implementation status
 
 Audited on 2026-09-26 against the cluster run above, re-audited after the whole-branch
-review, and updated on 2026-09-27 when issue #12 closed two of the gaps. The list is meant
-to be complete, since the Status line claims gaps rather than silence about them.
+review, updated on 2026-09-27 when issue #12 closed two of the gaps, and on 2026-10-28 when
+the workspace's Metrics screen got the controls back (shpyrd-io/shpyrd#272) and the
+by-process reference was fixed (#273). The list is meant to be complete, since the Status
+line claims gaps rather than silence about them.
 
 - **Known limitation, not a bug:** instance names are not stable over a long range — see
   "A known limitation, accepted deliberately" in Design Details, which explains why and what
