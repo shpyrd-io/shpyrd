@@ -67,6 +67,11 @@ type allocation struct {
 	// BurstCores is a ceiling above CPUCores when a process has one; sizes
 	// no longer set it (the size's CPU is the ceiling) and it stays 0.
 	BurstCores float64
+	// Instances is how many of them the process was given: its replicas,
+	// one when unset, which is what the controller writes as the process's
+	// Desired. A by-process series sums every instance, so it is measured
+	// against all of them.
+	Instances int
 }
 
 // allocations resolves every process type's size to numbers the charts can
@@ -86,7 +91,10 @@ func (s *Server) allocations(ctx context.Context, app *shpyrdv1.App) map[string]
 		if err != nil {
 			continue
 		}
-		a := allocation{}
+		a := allocation{Instances: 1}
+		if p.Replicas != nil {
+			a.Instances = int(*p.Replicas)
+		}
 		// The size's CPU is the limit; the request is the guaranteed share
 		// of it for shared sizes, and only stands in when no limit exists.
 		if q, ok := res.Limits[corev1.ResourceCPU]; ok {
@@ -624,11 +632,23 @@ func applyReference(ch *Chart, allocs map[string]allocation, opts metricsOptions
 		if !ok {
 			continue
 		}
+		// A by-process series is the sum over the process's instances, so
+		// its line is the sum of what they were given; a by-instance series
+		// is one instance, measured against one allocation (and a sum over
+		// instances scales itself in aggregateGroup). The count is the
+		// spec's replicas rather than the live pods: it is what the process
+		// was given, which it keeps while it sleeps and uses nothing, and
+		// the live list would cost the default view a call every open tab
+		// repeats every 30 seconds. A process scaled to zero draws no line.
+		n := 1.0
+		if !opts.byInstance() {
+			n = float64(a.Instances)
+		}
 		switch ch.ID {
 		case "cpu":
-			ch.Series[i].Reference, ch.Series[i].Burst = a.CPUCores, a.BurstCores
+			ch.Series[i].Reference, ch.Series[i].Burst = a.CPUCores*n, a.BurstCores*n
 		case "memory":
-			ch.Series[i].Reference = a.MemoryBytes
+			ch.Series[i].Reference = a.MemoryBytes * n
 		}
 	}
 }

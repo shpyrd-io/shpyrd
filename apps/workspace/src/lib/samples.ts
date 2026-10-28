@@ -1,5 +1,5 @@
 import type { LogLine } from "@shpyrd/ui/components/log-view";
-import type { Metrics, Point, Series } from "@/api/types";
+import type { MetricChart, Metrics, MetricsQuery, Point, Series } from "@/api/types";
 
 // What the Mock shows in the charts and the logs. Made up, and made the
 // same way every time.
@@ -36,42 +36,120 @@ function steps(values: [number, number][], to: number, points = 60, step = 60): 
 
 const MiB = 1 << 20;
 
-export function metricsOf(slug: string, processes: string[], range: string): Metrics {
+// What one instance of a process was given: the CPU of its size, the
+// ceiling it may burst to, and its memory. Every process of the Mock has
+// the same size.
+const allocation = { cpu: 1, burst: 1.75, memory: 512 * MiB };
+
+// Sum, average or maximum across the instances of a process, named as the
+// server names it: "sum web", "avg web in". A sum is measured against the
+// sum of the allocations; the others against one instance's.
+function collapse(list: Series[], agg: NonNullable<MetricsQuery["agg"]>, name: string): Series[] {
+  if (agg === "none" || list.length === 0) return list;
+  const sums = new Map<number, number>();
+  const counts = new Map<number, number>();
+  const maxes = new Map<number, number>();
+  for (const s of list) {
+    for (const [t, v] of s.points) {
+      sums.set(t, (sums.get(t) ?? 0) + v);
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+      maxes.set(t, Math.max(maxes.get(t) ?? -Infinity, v));
+    }
+  }
+  const points = [...sums.keys()].sort((a, b) => a - b).map((t): Point => {
+    const v = agg === "sum" ? sums.get(t)! : agg === "avg" ? sums.get(t)! / counts.get(t)! : maxes.get(t)!;
+    return [t, Math.round(v * 100) / 100];
+  });
+  const scale = agg === "sum" ? list.length : 1;
+  const first = list[0]!;
+  return [{ name: `${agg} ${name}`, points, reference: first.reference && first.reference * scale, burst: first.burst && first.burst * scale }];
+}
+
+export function metricsOf(slug: string, replicas: Record<string, number>, query: MetricsQuery): Metrics {
+  const { range, by = "process", agg = "none", mode = "percent", replaced = false } = query;
   const to = Math.floor(Date.now() / 1000 / 60) * 60;
-  const step = range === "7d" ? 60 * 168 : range === "24h" ? 60 * 24 : range === "6h" ? 360 : 60;
+  const step = range === "7d" ? 60 * 168 : range === "24h" ? 60 * 24 : range === "6h" ? 360 : range === "15m" ? 15 : 60;
   const seed = [...slug].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const first = Object.keys(replicas)[0] ?? "web";
+  const processes = Object.keys(replicas).filter((p) => !query.process || p === query.process);
+  const instances = by === "instance";
+  const percent = mode === "percent";
   const median = wander(seed + 1, to, { step, base: 38, swing: 0.35, peaks: 0.05, peak: 1.8 });
   const p95 = over(median, seed + 2, 2.2, 5);
   const p99 = over(p95, seed + 3, 1.1, 1.9);
   const series = (name: string, i: number, base: number, swing: number, rest = {}): Series => ({ name, points: wander(seed + 10 + i, to, { step, base, swing, ...rest }) });
+
+  // What a process uses: one series for the process, or one per instance
+  // when asked, each a share of the whole and none the same. The first
+  // process also had an instance replaced halfway through the window; it
+  // is drawn when asked, named as the server names it — never by its pod.
+  const usage = (p: string, i: number, perInstance: number, swing: number, rest: object, suffix = ""): Series[] => {
+    const n = replicas[p] ?? 1;
+    if (!instances) return [series(`${p}${suffix}`, i, perInstance * n, swing, rest)];
+    const own = Array.from({ length: n }, (_, k) => series(`${p}.${k + 1}${suffix}`, i + 7 * (k + 1), perInstance * (0.7 + ((k * 2) % 3) * 0.3), swing, rest));
+    if (replaced && p === processes[0]) {
+      const gone = series(`replaced 1${suffix}`, i + 99, perInstance * 0.8, swing, rest);
+      own.push({ ...gone, points: gone.points.slice(0, 30) });
+    }
+    return own;
+  };
+
+  // Against what the process was given: one instance's allocation for an
+  // instance series, every instance's for a process series, which is the
+  // sum of them. As a share, divided by it; in units, drawn as the
+  // reference line, as the server sends it.
+  const measured = (list: Series[], p: string, kind: "cpu" | "memory"): Series[] => {
+    const count = instances ? 1 : (replicas[p] ?? 1);
+    const whole = allocation[kind] * count;
+    return list.map((s) => {
+      if (percent) return { ...s, points: s.points.map(([t, v]): Point => [t, Math.round((v / whole) * 1000) / 10]) };
+      return kind === "cpu" ? { ...s, reference: whole, burst: allocation.burst * count } : { ...s, reference: whole };
+    });
+  };
+
+  const hidden = instances && !replaced ? "1 replaced instance hidden" : undefined;
+  const chart = (list: Series[], unit: string, instanceCapable: boolean, note?: string): MetricChart => ({ series: list, unit, instanceCapable, note });
+  const network = (["in", "out"] as const).flatMap((dir, d) => {
+    const rest = { peaks: 0.08, peak: 3 };
+    // The whole project's traffic, unless one process is named or the
+    // instances are asked for: the server joins the pods only then.
+    if (!instances) {
+      const name = query.process ? `${query.process} ${dir}` : dir;
+      return [series(name, 50 + d, (180 - d * 120) * 1024 * processes.length, 0.4, rest)];
+    }
+    return processes.flatMap((p, i) => collapse(usage(p, 50 + d + i * 3, (90 - d * 60 - i * 20) * 1024, 0.4, rest, ` ${dir}`), agg, `${p} ${dir}`));
+  });
   return {
     from: to - 60 * step,
     to,
-    responseTime: [
+    responseTime: chart([
       { name: "Max", points: over(p99, seed + 4, 1.05, 1.8) },
       { name: "99th percentile", points: p99 },
       { name: "95th percentile", points: p95 },
       { name: "Median", points: median },
-    ],
-    throughput: [
+    ], "ms", false),
+    throughput: chart([
       { name: "2xx", tone: "success", points: wander(seed + 21, to, { step, base: 42, swing: 0.4 }) },
       { name: "3xx", tone: "info", points: wander(seed + 22, to, { step, base: 6, swing: 0.5 }) },
       { name: "4xx", tone: "warning", points: wander(seed + 23, to, { step, base: 3, swing: 0.6, peaks: 0.1 }) },
       { name: "5xx", tone: "error", points: wander(seed + 24, to, { step, base: 0.6, swing: 0.9, peaks: 0.12, peak: 6 }) },
-    ],
-    cpu: processes.map((p, i) => ({ ...series(p, i, 0.46 - i * 0.2, 0.5, { peaks: 0.06, peak: 1.8 }), reference: 1, burst: 1.75 })),
-    memory: processes.map((p, i) => ({ ...series(p, 30 + i, (340 - i * 150) * MiB, 0.18, { peaks: 0.04, peak: 1.4 }), reference: 512 * MiB })),
-    network: processes.map((p, i) => series(p, 50 + i, (180 - i * 120) * 1024, 0.4, { peaks: 0.08, peak: 3 })),
-    instances: processes.map((p, i) => ({ name: p, points: steps([[0, 2 + i], [19, 3 + i], [48, 4]], to, 60, step) })),
+    ], "rps", false),
+    cpu: chart(processes.flatMap((p, i) => collapse(measured(usage(p, i, 0.3 - i * 0.1, 0.5, { peaks: 0.06, peak: 1.8 }), p, "cpu"), agg, p)), percent ? "%" : "cores", true, hidden),
+    memory: chart(processes.flatMap((p, i) => collapse(measured(usage(p, 30 + i, (300 - i * 100) * MiB, 0.18, { peaks: 0.04, peak: 1.4 }), p, "memory"), agg, p)), percent ? "%" : "bytes", true, hidden),
+    network: chart(network, "bytes/s", true, hidden),
+    instances: chart(processes.map((p, i) => ({ name: p, points: steps([[0, Math.max(1, (replicas[p] ?? 1) - 1)], [19 + i * 9, replicas[p] ?? 1]], to, 60, step) })), "count", false),
     releases: [
       { time: to - 41 * step, label: "v11" },
       { time: to - 12 * step, label: "v12" },
     ],
-    // The first process crossed its memory twice since the last release.
-    ooms: [
-      { time: to - 9 * step, process: processes[0] ?? "web", instance: `${processes[0] ?? "web"}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
-      { time: to - 3 * step, process: processes[0] ?? "web", instance: `${processes[0] ?? "web"}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
-    ],
+    // The first process crossed its memory twice since the last release;
+    // the server answers a process filter with that process's kills only.
+    ooms: processes.includes(first)
+      ? [
+          { time: to - 9 * step, process: first, instance: `${first}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
+          { time: to - 3 * step, process: first, instance: `${first}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
+        ]
+      : [],
   };
 }
 

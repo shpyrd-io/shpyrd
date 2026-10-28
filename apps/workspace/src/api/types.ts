@@ -772,16 +772,41 @@ export type Series = {
     | "warning"
     | "error";
 };
+// What the metrics of a project are asked for (RFC-0027). `by` breaks
+// CPU, memory and network down per instance, and `agg` collapses those
+// instances into one series; `mode` reads CPU and memory as a share of
+// the size or in their units; `replaced` keeps the instances that no
+// longer exist; `process` narrows everything to one process type.
+export type MetricsQuery = {
+  range: string;
+  process?: string;
+  by?: "process" | "instance";
+  agg?: "none" | "sum" | "avg" | "max";
+  mode?: "percent" | "total";
+  replaced?: boolean;
+};
+
+// One chart of the metrics: its series, their unit, and what the server
+// says about them — a query that failed, data it chose not to draw, and
+// whether the chart can be broken down per instance at all.
+export type MetricChart = {
+  series: Series[];
+  unit: string;
+  error?: string;
+  note?: string;
+  instanceCapable: boolean;
+};
+
 export type Metrics = {
   from: number;
   to: number;
-  responseTime: Series[];
-  throughput: Series[];
-  cpu: Series[];
-  memory: Series[];
-  // Bytes a second in and out, by process.
-  network: Series[];
-  instances: Series[];
+  responseTime: MetricChart;
+  throughput: MetricChart;
+  cpu: MetricChart;
+  memory: MetricChart;
+  // Bytes a second in and out.
+  network: MetricChart;
+  instances: MetricChart;
   releases: { time: number; label: string }[];
   // The processes killed for crossing their memory in the time, oldest
   // first (#119): the Memory chart marks each.
