@@ -315,15 +315,41 @@ func (s *Server) gateSession(c *gin.Context, ws *store.Workspace) (string, bool)
 // controls.
 
 // atAddressBehindDomain is the request's workspace when the request came
-// to its platform address while a custom domain is its primary door.
+// to its platform address while a custom domain is its primary door. A
+// suspended workspace is one only when a gate receives its people: their
+// way to that gate (billing) runs here too.
 func (s *Server) atAddressBehindDomain(c *gin.Context) (*store.Workspace, bool) {
 	t, err := s.door(c)
-	if err != nil || t.Workspace == nil || t.Workspace.Address == "" || t.Workspace.Status == store.WorkspaceSuspended {
+	if err != nil || t.Workspace == nil || t.Workspace.Address == "" {
+		return nil, false
+	}
+	if _, gated := s.suspendedGate(); t.Workspace.Status == store.WorkspaceSuspended && !gated {
 		return nil, false
 	}
 	ws := t.Workspace
 	h := hostOnly(c.Request.Host)
 	return ws, h == ws.Address && h != hostOnly(s.dashboardHostOf(ws))
+}
+
+// toPrimaryDoor sends a page asked for at a workspace's platform address,
+// while a custom domain is its primary door, to the same path there: the
+// dashboard answers at the custom domain only, and the platform address is
+// still where Accounts and older links point. The sign-in on the way to a
+// gate is answered before (gateSignIn); requests that are not a browser
+// opening a page (another method, the API, the edge's error backend) are
+// left alone.
+func (s *Server) toPrimaryDoor(c *gin.Context) bool {
+	if c.GetHeader("X-Code") != "" || (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		return false
+	}
+	ws, ok := s.atAddressBehindDomain(c)
+	if !ok {
+		return false
+	}
+	target := url.URL{Scheme: "https", Host: s.dashboardHostOf(ws), Path: path.Clean("/" + c.Request.URL.Path), RawQuery: c.Request.URL.RawQuery}
+	c.Header("Cache-Control", "no-store")
+	c.Redirect(http.StatusFound, target.String())
+	return true
 }
 
 // gateSignIn answers, at such an address, what signing in on the way to a
@@ -342,7 +368,13 @@ func (s *Server) gateSignIn(c *gin.Context, app *application) bool {
 	p := strings.TrimPrefix(path.Clean("/"+c.Request.URL.Path), "/")
 	if p == "" {
 		next := safeNext(c.Query("next"))
-		if u, err := url.Parse(next); err != nil || u.Path != edgePathPrefix+"gate" {
+		u, err := url.Parse(next)
+		if err != nil || u.Path != edgePathPrefix+"gate" {
+			return false
+		}
+		// A suspended workspace signs in only on the way to the gate that
+		// receives it; its other gates are closed.
+		if g, _ := s.suspendedGate(); ws.Status == store.WorkspaceSuspended && u.Query().Get("name") != g.Name {
 			return false
 		}
 		if _, ok := s.gateSession(c, ws); ok {

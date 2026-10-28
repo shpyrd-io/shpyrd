@@ -82,13 +82,13 @@ implement those proposals.
 | [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (pooling on shared servers; gaps) | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (`storage-rwx`) | implementable | 0006 |
-| [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; per-project quotas, LimitRange and usage bars still to do) | 0008 |
+| [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; image builds outside the backstop since v1.5.1; per-project quotas, LimitRange and usage bars still to do) | 0008 |
 | [0043](0043-builds-namespace-and-pod-security.md) | Builds namespace and enforce-mode Pod Security | implementable | 0004, 0008 |
 | [0044](0044-supply-chain.md) | Supply chain and encryption at rest | implementable | 0045 |
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
 | [0047](0047-autoscaling.md) | Autoscaling: a web process follows its load between a minimum and a maximum, on the requests in flight (KEDA HTTP add-on) and CPU (Metrics Server), one ScaledObject shared with sleep | implemented (web; queue triggers and other process types decided out, 2026-10-27) | 0019, 0042, 0075 |
-| [0048](0048-cost-visibility.md) | Cost visibility | superseded by RFC-0075 | 0042 |
+| [0048](0048-cost-visibility.md) | Cost visibility | implemented (as the enterprise Costs, v0.9.73–v0.9.95: Console › Costs and Cost drains, `shpyrd-ctl costs`, usage, OpenCost estimate and the OCI bill; no price sheet — the customer's figure is the Billing app's; complete) | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
@@ -123,6 +123,7 @@ implement those proposals.
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
 | [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1); phase 2 history | 0006, 0009, 0060 |
 | [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
+| [0084](0084-a-workspace-s-own-application.md) | A workspace's own application: the door serves a chosen build (static package by reference; `dir:` and `oci:` sources; fallback to the platform's own) | implemented (catalogue of publishers later) | 0080, 0033, 0008, 0059 |
 
 ## Phases
 

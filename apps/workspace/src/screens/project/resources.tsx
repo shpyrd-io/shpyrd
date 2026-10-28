@@ -26,7 +26,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@shpyrd/ui/components/card";
@@ -185,10 +184,6 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Processes</CardTitle>
-        <CardDescription>
-          The size and how many instances of each. Changes are applied together:
-          one release, one rollout.
-        </CardDescription>
         {perms.resource && dirty && (
           <CardAction>
             <Stack direction="horizontal" gap="condensed">
@@ -1001,11 +996,6 @@ function Beside({ project, perms }: { project: Project; perms: Perms }) {
     <Card>
       <CardHeader>
         <CardTitle>Beside the application</CardTitle>
-        <CardDescription>
-          Databases, caches and volumes of the project. An attached database or
-          cache puts its connection details in the config vars, read-only, and
-          releases the app.
-        </CardDescription>
         {perms.resource && (
           <CardAction>
             <AddResource project={project} onDone={refresh} />
@@ -1292,7 +1282,7 @@ function AddResource({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem disabled={!disks} onClick={() => setVolume(true)}>
-            A volume{" "}
+            Volume{" "}
             {!disks && (
               <span className="text-xs text-muted-foreground">
                 not included in the free workspace
@@ -1303,7 +1293,7 @@ function AddResource({
             disabled={!has("object-storage")}
             onClick={() => setBucket(true)}
           >
-            A bucket{" "}
+            S3 Compatible Storage{" "}
             {!has("object-storage") && (
               <span className="text-xs text-muted-foreground">
                 needs the object-storage extension
@@ -1314,7 +1304,7 @@ function AddResource({
             disabled={!has("postgres")}
             onClick={() => setKind("Postgres")}
           >
-            A Postgres database{" "}
+            Postgres{" "}
             {!has("postgres") && (
               <span className="text-xs text-muted-foreground">
                 needs the postgres extension
@@ -1325,7 +1315,7 @@ function AddResource({
             disabled={!has("redis")}
             onClick={() => setKind("Redis")}
           >
-            A Redis or Valkey store{" "}
+            Redis{" "}
             {!has("redis") && (
               <span className="text-xs text-muted-foreground">
                 needs the redis extension

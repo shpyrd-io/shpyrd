@@ -760,5 +760,6 @@
     "acme/hello-world": ["main", "dev", "release/2026"],
     "acme/reports": ["main"],
     "acme-labs/ml-pipeline": ["main"]
-  }
+  },
+  "registryTokens": []
 }

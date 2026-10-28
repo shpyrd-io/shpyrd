@@ -25,7 +25,8 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
   shpyrd workspace address acme-corp                # move to acme-corp.<parent>; the old address redirects for 30 days
   shpyrd workspace domains add intranet.acme.com    # a name your company owns (CNAME mode)
   shpyrd workspace domains verify intranet.acme.com
-  shpyrd workspace domains primary intranet.acme.com`,
+  shpyrd workspace domains primary intranet.acme.com
+  shpyrd workspace ui set oci://ghcr.io/acme/workspace-ui:2.3.1   # an application of its own at the door`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
@@ -45,8 +46,8 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
 					fmt.Fprintf(tw, "ADDRESS\t%s\n", ws.Address)
 				}
 				fmt.Fprintf(tw, "DASHBOARD\t%s\n", ws.URL)
-				if ws.Domain != "" {
-					fmt.Fprintf(tw, "APPS\t<app>.%s\n", ws.Domain)
+				if apps := appsPattern(ws); apps != "" {
+					fmt.Fprintf(tw, "APPS\t%s\n", apps)
 				}
 				fmt.Fprintf(tw, "OWNERS\t%s\n", firstNonEmpty(strings.Join(ws.Owners, ", "), "-"))
 				fmt.Fprintf(tw, "JOIN POLICY\t%s\n", ws.JoinPolicy)
@@ -54,7 +55,7 @@ func newWorkspaceCmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.AddCommand(newWorkspaceAddressCmd(g), newWorkspaceDomainsCmd(g))
+	cmd.AddCommand(newWorkspaceAddressCmd(g), newWorkspaceDomainsCmd(g), newWorkspaceUICmd(g))
 	return cmd
 }
 
@@ -80,7 +81,7 @@ signed in sign in again at the new address.`,
 				return err
 			}
 			return g.print(cmd, ws, func(w io.Writer) {
-				fmt.Fprintf(w, "The workspace answers at %s now; apps at <app>.%s. The old address redirects for 30 days.\nSign in again: shpyrd login --url %s\n", ws.Address, ws.Domain, ws.URL)
+				fmt.Fprintf(w, "The workspace answers at %s now; apps at %s. The old address redirects for 30 days.\nSign in again: shpyrd login --url %s\n", ws.Address, firstNonEmpty(appsPattern(ws), "<app>."+ws.Domain), ws.URL)
 			})
 		},
 	}
@@ -207,4 +208,17 @@ func newWorkspaceDomainActionCmd(g *globalFlags, action, short string) *cobra.Co
 			return g.print(cmd, d, func(w io.Writer) { printDomain(w, d) })
 		},
 	}
+}
+
+// appsPattern is where the workspace's apps answer, as the server writes
+// it: <label>-<app>.shpyrd.app in the shared layout, <app>.<domain>
+// otherwise (#242). A server without the pattern gives the domain only.
+func appsPattern(ws api.WorkspaceView) string {
+	if ws.AppHost != nil {
+		return ws.AppHost.Prefix + "<app>" + ws.AppHost.Suffix
+	}
+	if ws.Domain != "" {
+		return "<app>." + ws.Domain
+	}
+	return ""
 }

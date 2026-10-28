@@ -129,7 +129,7 @@ func registerOnce(ctx context.Context, deps ext.Deps, issuer string) error {
 		if err := deps.Auth.AddOIDC(ctx, ext.OIDCProvider{
 			ID: c.FullID, Label: c.Name, Kind: c.Type, ConnectorID: c.FullID, UpstreamIssuer: c.Issuer, Issuer: issuer,
 			ClientID: clientID, ClientSecret: secret, Realm: c.Realm, Workspace: c.Workspace,
-			Available: licensing.Active,
+			SwitchAccountURL: c.SwitchAccountURL, Available: licensing.Active,
 		}); err != nil {
 			return fmt.Errorf("connector %s: %w", c.FullID, err)
 		}

@@ -68,11 +68,19 @@ type Connector struct {
 	// Workspace is the short id (RFC-0076) of the workspace that owns a
 	// "workspace" method.
 	Workspace string `json:"workspace,omitempty"`
+	// SwitchAccountURL, from the connector's AnnotationSwitchAccount, is
+	// where its people end their session to sign in as someone else.
+	SwitchAccountURL string `json:"switchAccountURL,omitempty"`
 }
 
 // LabelWorkspace marked a connector as a workspace's own by slug, before
 // RFC-0080; such connectors are rekeyed to the id form at start.
 const LabelWorkspace = "shpyrd.io/workspace"
+
+// AnnotationSwitchAccount on a connector names its page for signing in as
+// someone else (shpyrd Accounts: https://accounts.shpyrd.io/switch-account).
+// The operator sets it: kubectl annotate it on the connector's object.
+const AnnotationSwitchAccount = "shpyrd.io/switch-account-url"
 
 // LabelRealm and LabelWorkspaceID say whose a connector is (RFC-0080).
 const (
@@ -287,6 +295,11 @@ func (s *ConnectorStore) Add(ctx context.Context, spec ConnectorSpec) (existed b
 		return true, wrapConnector(err)
 	}
 	obj.SetResourceVersion(cur.GetResourceVersion())
+	// The operator's switch-account annotation outlives an edit of the
+	// connector from the dashboard.
+	if v := cur.GetAnnotations()[AnnotationSwitchAccount]; v != "" {
+		obj.SetAnnotations(map[string]string{AnnotationSwitchAccount: v})
+	}
 	_, err = s.res().Update(ctx, obj, metav1.UpdateOptions{})
 	return true, wrapConnector(err)
 }
@@ -361,7 +374,7 @@ func connectorOf(u unstructured.Unstructured) Connector {
 	case ext.RealmConsole:
 		id = strings.TrimPrefix(full, consolePrefix)
 	}
-	c := Connector{ID: id, FullID: full, Type: typ, Name: name, Realm: realm, Workspace: ws}
+	c := Connector{ID: id, FullID: full, Type: typ, Name: name, Realm: realm, Workspace: ws, SwitchAccountURL: u.GetAnnotations()[AnnotationSwitchAccount]}
 	if enc, _, _ := unstructured.NestedString(u.Object, "config"); enc != "" {
 		if raw, err := base64.StdEncoding.DecodeString(enc); err == nil {
 			var cfg struct {

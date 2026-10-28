@@ -58,6 +58,13 @@ export default function Page() {
           <LauncherCard name="Reports" tone="blue" phase="running" exposure="internal" />
         </div>
       </Section>
+      <Section title="Who it answers: anyone, only who signs in, or a sign-in on some paths">
+        <div className="grid items-stretch gap-4 @xl/page-layout:grid-cols-2 @3xl/page-layout:grid-cols-3">
+          <LauncherCard name="Corporate" icon={<Briefcase />} url="corporate.acme.shpyrd.app" />
+          <LauncherCard name="Mail" icon={<Mail />} tone="neutral" url="mail.acme.shpyrd.app" access="locked" />
+          <LauncherCard name="Dash TV" icon={<Tv />} tone="violet" url="dash.acme.internal" exposure="internal" access="mixed" />
+        </div>
+      </Section>
       <Section title="The colour the project chose for its symbol, and a picture of its own, as it is">
         <div className="grid items-stretch gap-4 @xl/page-layout:grid-cols-2 @3xl/page-layout:grid-cols-3">
           <LauncherCard

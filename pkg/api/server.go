@@ -61,6 +61,12 @@ type Options struct {
 	// Pages is what this binary writes into every page of the
 	// applications, and the origins it allows them: nothing on the core.
 	Pages PageAdditions
+	// UISources are the kinds of application reference a workspace may
+	// set and this server serves (RFC-0084, SHPYRD_UI_SOURCES): "oci" by
+	// default, "oci,dir" while developing, "off" for the platform's own
+	// only. UICacheDir is where pulled applications are kept by digest.
+	UISources  string
+	UICacheDir string
 	// Sources stores uploaded application archives. Nil disables deploys
 	// from local checkouts.
 	Sources *SourceStore
@@ -211,6 +217,9 @@ type WorkspaceRef struct {
 	// Branding is the workspace's look, for the login page and the
 	// launcher (RFC-0033): the logo's URL when one is set, the colour.
 	Branding *BrandingView `json:"branding,omitempty"`
+	// UI is the reference of the application the workspace chose for its
+	// door (RFC-0084), "" when it runs the platform's own.
+	UI string `json:"ui,omitempty"`
 }
 
 // BrandingView is a workspace's look as pages use it.
@@ -224,6 +233,10 @@ type Server struct {
 	overviewQueries overviewQueryCache
 	opts            Options
 	log             *slog.Logger
+	// uiChosen is the cache of the applications workspaces chose
+	// (RFC-0084), made on first use.
+	uiOnce   sync.Once
+	uiChosen *uiPackages
 	// draining says the process was told to stop and keeps its listeners
 	// open for drainDelay before closing, so a connection the load balancer
 	// still sends to this pod is served, not reset (storage plan step 7).
@@ -770,7 +783,11 @@ func (s *Server) routes() error {
 	api.GET("/workspace/drains", s.require(authz.ClusterAdmin), s.listWorkspaceDrains) // RFC-0023: the workspace's own
 	api.POST("/workspace/drains", s.require(authz.ClusterAdmin), s.createWorkspaceDrain)
 	api.DELETE("/workspace/drains/:name", s.require(authz.ClusterAdmin), s.deleteWorkspaceDrain)
-	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens) // RFC-0017
+	api.GET("/workspace/git-auth", s.require(authz.ClusterAdmin), s.listGitTokens)           // RFC-0017
+	api.GET("/workspace/registry-auth", s.require(authz.ClusterAdmin), s.listRegistryTokens) // RFC-0084
+	api.PUT("/workspace/registry-auth/:host", s.require(authz.ClusterAdmin), s.putRegistryToken)
+	api.DELETE("/workspace/registry-auth/:host", s.require(authz.ClusterAdmin), s.deleteRegistryToken)
+	api.POST("/workspace/ui/reload", s.require(authz.ClusterAdmin), s.reloadWorkspaceUI)
 	api.PUT("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.putGitToken)
 	api.DELETE("/workspace/git-auth/:host", s.require(authz.ClusterAdmin), s.deleteGitToken)
 	api.GET("/workspace/github", s.require(authz.ClusterAdmin), s.githubView) // RFC-0054
@@ -1076,7 +1093,7 @@ func (s *Server) config(c *gin.Context) {
 	pub.ConsoleURL = s.consoleURL()
 	if t, err := s.door(c); err == nil && t.Workspace != nil {
 		ws := t.Workspace
-		pub.Workspace = &WorkspaceRef{Capabilities: s.workspaceCapabilities(ws), Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws), AppHost: s.appHostView(c.Request.Context(), ws)}
+		pub.Workspace = &WorkspaceRef{Capabilities: s.workspaceCapabilities(ws), Slug: ws.Slug, Name: ws.Name, Address: ws.Address, OwnedByOperator: ws.OwnedByOperator(), Branding: brandingView(ws), AppHost: s.appHostView(c.Request.Context(), ws), UI: uiRefOf(ws)}
 		pub.Domain = s.appsDomainOf(ws)
 		pub.DashboardURL = s.dashboardURLOf(ws)
 		rules := s.postgresRules(c.Request.Context(), ws.Slug)

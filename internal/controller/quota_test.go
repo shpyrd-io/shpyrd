@@ -2,14 +2,22 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
+	"github.com/shpyrd-io/shpyrd/pkg/kube"
 	"github.com/shpyrd-io/shpyrd/pkg/project"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
 )
@@ -45,11 +53,19 @@ func TestReconcileQuota(t *testing.T) {
 	if len(q.Spec.Scopes) != 1 || q.Spec.Scopes[0] != corev1.ResourceQuotaScopeNotBestEffort {
 		t.Errorf("compute quota scopes = %v, want NotBestEffort", q.Spec.Scopes)
 	}
+	// Dockerfile builds and release steps are steps of a deploy, outside
+	// the ceiling (#243, #60): the quota leaves their priority classes out.
+	if sel := q.Spec.ScopeSelector; sel == nil || len(sel.MatchExpressions) != 1 ||
+		sel.MatchExpressions[0].ScopeName != corev1.ResourceQuotaScopePriorityClass ||
+		sel.MatchExpressions[0].Operator != corev1.ScopeSelectorOpNotIn ||
+		!slices.Equal(sel.MatchExpressions[0].Values, []string{BuildPriorityClass, ReleasePriorityClass}) {
+		t.Errorf("compute quota selector = %+v, want builds and release steps left out", q.Spec.ScopeSelector)
+	}
 	st := &corev1.ResourceQuota{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "app-acme-shop", Name: QuotaStorageName}, st); err != nil {
 		t.Fatalf("storage quota: %v", err)
 	}
-	if got := st.Spec.Hard[corev1.ResourceRequestsStorage]; got.Cmp(mustQ("50Gi")) != 0 || len(st.Spec.Scopes) != 0 {
+	if got := st.Spec.Hard[corev1.ResourceRequestsStorage]; got.Cmp(mustQ("50Gi")) != 0 || len(st.Spec.Scopes) != 0 || st.Spec.ScopeSelector != nil {
 		t.Errorf("storage quota = %v scopes %v", st.Spec.Hard, st.Spec.Scopes)
 	}
 	// The implicit workspace has no plan: no quota.
@@ -134,5 +150,51 @@ func TestAProjectCapBoundsItsQuotaAndNoDisksIsNotAZeroQuota(t *testing.T) {
 	}
 	if cpu := compute[corev1.ResourceRequestsCPU]; cpu.Cmp(mustQ("1")) != 0 {
 		t.Errorf("compute = %v", compute)
+	}
+}
+
+// The quotas already in clusters count builds (#243), and Kubernetes
+// refuses to change a quota's scopes: the platform replaces such a quota
+// rather than failing every reconcile of the project.
+func TestAQuotaFromBeforeBuildsLeftItIsReplaced(t *testing.T) {
+	ctx := context.Background()
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "app-acme-shop", Labels: project.NamespaceLabels("acme", "shop")}}
+	old := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: QuotaName, Namespace: app.Namespace},
+		Spec: corev1.ResourceQuotaSpec{
+			Hard:   corev1.ResourceList{corev1.ResourceRequestsMemory: mustQ("512Mi")},
+			Scopes: []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort},
+		},
+	}
+	// Kubernetes' rule: a quota's scopes and selector never change.
+	immutable := interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if q, ok := obj.(*corev1.ResourceQuota); ok {
+			cur := &corev1.ResourceQuota{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(q), cur); err == nil && !sameScopes(cur.Spec, q.Spec.Scopes, q.Spec.ScopeSelector) {
+				return apierrors.NewInvalid(schema.GroupKind{Kind: "ResourceQuota"}, q.Name, field.ErrorList{field.Invalid(field.NewPath("spec", "scopeSelector"), q.Spec.ScopeSelector, "field is immutable")})
+			}
+		}
+		return c.Update(ctx, obj, opts...)
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(app, old).WithInterceptorFuncs(immutable).Build()
+	r := &AppReconciler{Client: c, Config: Config{}.Defaults()}
+	r.Config.WorkspaceLimits = func(string) *store.Limits { return &store.Limits{CPU: "1", Memory: "512Mi"} }
+	if err := r.reconcileQuota(ctx, app); err != nil {
+		t.Fatalf("reconcile over an old quota: %v", err)
+	}
+	q := &corev1.ResourceQuota{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: QuotaName}, q); err != nil {
+		t.Fatal(err)
+	}
+	if !sameScopes(q.Spec, computeScopes, computeSelector) {
+		t.Errorf("quota scopes = %v selector %+v, want builds left out", q.Spec.Scopes, q.Spec.ScopeSelector)
+	}
+	// Once replaced, the next pass updates it in place.
+	if err := r.reconcileQuota(ctx, app); err != nil {
+		t.Fatalf("second pass: %v", err)
 	}
 }

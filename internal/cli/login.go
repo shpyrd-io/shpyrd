@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -22,7 +21,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shpyrd-io/shpyrd/pkg/cliout"
-	"github.com/shpyrd-io/shpyrd/pkg/kexec"
 )
 
 // Session store (RFC-0052): a JSON file at ~/.shpyrd/sessions.json holds the
@@ -135,6 +133,16 @@ func defaultWorkspacesDomain() string {
 	return "shpyrd.cloud"
 }
 
+// envWorkspaceURL is SHPYRD_URL as commands dial it: a workspace's name
+// alone (SHPYRD_URL=acme) is its address, as `shpyrd login` takes it.
+func envWorkspaceURL() string {
+	raw := os.Getenv("SHPYRD_URL")
+	if norm, err := normaliseURL(raw); err == nil {
+		return norm
+	}
+	return raw
+}
+
 // SessionFor returns the saved token for the given workspace URL, or "" when
 // none is stored.
 func SessionFor(wsURL string) string {
@@ -169,11 +177,14 @@ func DirectURL(wsURL string) string {
 // newLoginCmd is `shpyrd login`.
 func newLoginCmd(g *globalFlags) *cobra.Command {
 	var (
-		wsURL     string
-		token     string
-		noBrowser bool
-		signup    bool
-		signupURL string
+		wsURL        string
+		token        string
+		noBrowser    bool
+		signup       bool
+		accounts     bool
+		accountsURL  string
+		progressJSON bool
+		signupURL    string
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -183,6 +194,9 @@ func newLoginCmd(g *globalFlags) *cobra.Command {
   shpyrd login --url acme                                         # approve in the browser
   shpyrd login --url https://acme.shpyrd.cloud --token shp_...    # a token from the dashboard or CI
   shpyrd login --url https://shpyrd.oci.example.com --token <admin token>
+
+Without --url, Accounts opens in the browser: sign in or create an account,
+select a workspace if needed, and approve CLI access. The CLI waits for setup.
 
 A workspace's name alone means its address on shpyrd cloud: acme is
 https://acme.shpyrd.cloud (SHPYRD_WORKSPACES_DOMAIN names another platform's
@@ -205,33 +219,32 @@ and switches; SHPYRD_URL overrides for one shell).
 Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := signalContext()
-			out := g.progress(cmd)
+			out := &loginProgress{human: g.progress(cmd), events: cmd.ErrOrStderr(), structured: progressJSON}
 			var expires time.Time
-			if wsURL == "" && !signup {
-				// Try to guess from --context if available.
-				if g.kubeCtx != "" {
-					return errors.New("--url is required: give the dashboard URL, e.g. https://shpyrd.oci.example.com")
+			var setup *setupConnection
+			if accounts || signup {
+				if cmd.Flags().Changed("url") || token != "" {
+					return errors.New("browser-assisted login cannot be combined with --url or --token")
 				}
-				// At a terminal, ask: an existing workspace, or a new
-				// account with its first workspace on shpyrd cloud.
-				choice, err := askLoginChoice(cmd.InOrStdin(), out)
+				wsURL = ""
+			}
+			if wsURL == "" {
+				if token != "" {
+					return errors.New("--token requires --url")
+				}
+				if signupURL != "" {
+					u, err := url.Parse(signupURL)
+					if err != nil || u.Host == "" || u.User != nil {
+						return errors.New("invalid --signup-url")
+					}
+					accountsURL = u.Scheme + "://" + u.Host
+				}
+				var err error
+				setup, err = accountsWorkspace(ctx, accountsURL, out, noBrowser)
 				if err != nil {
 					return err
 				}
-				switch choice {
-				case "":
-					return errors.New("--url is required: the workspace's name or URL, e.g. acme or https://acme.shpyrd.cloud (or --signup to create an account)")
-				case loginChoiceSignup:
-					signup = true
-				default:
-					wsURL = choice
-				}
-			}
-			if signup {
-				if token != "" || wsURL != "" {
-					return errors.New("--signup creates an account and a workspace: it takes neither --url nor --token")
-				}
-				return signupLogin(cmd, g, signupURL, out, noBrowser)
+				wsURL = setup.workspace
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -244,11 +257,12 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				// Already signed in there, and the credential still works:
 				// make it the current workspace. A dead one (expired,
 				// revoked) is replaced by a fresh sign-in.
-				if s := loadSessions(); s.Sessions[norm] != nil && verifyToken(ctx, norm, s.Sessions[norm].Token) == nil {
+				if s := loadSessions(); s.Sessions[norm] != nil && verifyLoginToken(ctx, norm, s.Sessions[norm].Token) == nil {
 					s.Current = norm
 					if err := s.save(); err != nil {
 						return err
 					}
+					setup.complete(ctx, out)
 					return g.print(cmd, map[string]any{"url": norm, "user": s.Sessions[norm].WhoAmI, "signedIn": true}, func(w io.Writer) {
 						fmt.Fprintf(w, "Now using %s (%s)\n", norm, firstNonEmpty(s.Sessions[norm].WhoAmI, "signed in"))
 					})
@@ -263,7 +277,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 				expires = approved.ExpiresAt
 			}
 			// Verify the token works before saving.
-			if err := verifyToken(ctx, norm, token); err != nil {
+			if err := verifyLoginToken(ctx, norm, token); err != nil {
 				return fmt.Errorf("login failed: %w", err)
 			}
 			whoAmI := whoAmI(ctx, norm, token)
@@ -273,6 +287,7 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			if err := s.save(); err != nil {
 				return fmt.Errorf("save session: %w", err)
 			}
+			setup.complete(ctx, out)
 			return g.print(cmd, map[string]any{"url": norm, "user": whoAmI, "signedIn": true}, func(w io.Writer) {
 				if whoAmI != "" {
 					fmt.Fprintf(w, "Signed in to %s as %s\n", norm, whoAmI)
@@ -283,75 +298,15 @@ Tip: shpyrd cluster token --context <ctx> prints the admin token.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("SHPYRD_TOKEN"), "API token (or SHPYRD_TOKEN), or @path to read it from a file: a personal token from `shpyrd tokens create` or the admin token from `shpyrd cluster token`; without it, the browser signs you in")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "print the sign-in link instead of opening the browser")
-	cmd.Flags().BoolVar(&signup, "signup", false, "open shpyrd cloud signup in the browser, then sign in with the new workspace URL")
-	cmd.Flags().StringVar(&signupURL, "signup-url", firstNonEmpty(os.Getenv("SHPYRD_SIGNUP_URL"), defaultSignupURL), "where the signup lives (or SHPYRD_SIGNUP_URL)")
+	cmd.Flags().BoolVar(&signup, "signup", false, "continue account creation and workspace login in Accounts")
+	cmd.Flags().BoolVar(&accounts, "accounts", false, "resolve your workspace through Accounts, ignoring SHPYRD_URL")
+	cmd.Flags().StringVar(&accountsURL, "accounts-url", firstNonEmpty(os.Getenv("SHPYRD_ACCOUNTS_URL"), defaultAccountsURL), "Accounts origin for browser-assisted login")
+	cmd.Flags().BoolVar(&progressJSON, "progress-json", false, "emit versioned login progress events as JSON lines on stderr")
+	cmd.Flags().StringVar(&signupURL, "signup-url", os.Getenv("SHPYRD_SIGNUP_URL"), "where the signup lives (or SHPYRD_SIGNUP_URL)")
 	return cmd
-}
-
-// defaultSignupURL is shpyrd cloud's signup.
-const defaultSignupURL = "https://accounts.shpyrd.io/signup?redirect_url=/signup/cloud"
-
-// loginChoiceSignup is what askLoginChoice answers for a new account.
-const loginChoiceSignup = "signup"
-
-// askLoginChoice asks a person at a terminal what they want when they ran
-// `shpyrd login` with no URL: the URL of a workspace they belong to, or a
-// new account. Away from a terminal it answers "" and the caller explains
-// the flags.
-func askLoginChoice(in io.Reader, out io.Writer) (string, error) {
-	if !kexec.StdinIsTerminal() {
-		return "", nil
-	}
-	fmt.Fprintln(out, "No workspace given. What do you want to do?")
-	fmt.Fprintln(out, "  1) Sign in to a workspace you belong to (its name, like acme, or its URL, like https://acme.shpyrd.cloud)")
-	fmt.Fprintln(out, "  2) Create an account and your first workspace on shpyrd cloud")
-	fmt.Fprint(out, "Choose 1 or 2: ")
-	reader := bufio.NewReader(in)
-	line, err := reader.ReadString('\n')
-	if err != nil && line == "" {
-		return "", err
-	}
-	switch strings.TrimSpace(line) {
-	case "2":
-		return loginChoiceSignup, nil
-	case "1":
-		fmt.Fprint(out, "Workspace name or URL: ")
-		url, err := reader.ReadString('\n')
-		if err != nil && url == "" {
-			return "", err
-		}
-		if url = strings.TrimSpace(url); url != "" {
-			return url, nil
-		}
-		return "", nil
-	default:
-		return "", errors.New("answer 1 or 2")
-	}
-}
-
-// signupLogin opens Cloud onboarding. Once the workspace is ready, its own
-// browser sign-in issues the CLI session.
-func signupLogin(cmd *cobra.Command, g *globalFlags, signupURL string, out io.Writer, noBrowser bool) error {
-	link := strings.TrimSpace(signupURL)
-	if link == "" {
-		return errors.New("--signup-url is empty")
-	}
-	u, err := url.Parse(link)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return errors.New("--signup-url must be an http or https URL")
-	}
-	if !noBrowser {
-		if err := openBrowser(link); err != nil {
-			fmt.Fprintf(out, "Could not open the browser. Open %s to create your account and workspace.\n", link)
-		}
-	}
-	return g.print(cmd, map[string]any{"signupUrl": link, "signedIn": false}, func(w io.Writer) {
-		fmt.Fprintf(w, "Create your account and workspace at %s\n", link)
-		fmt.Fprintln(w, "When your workspace is ready, run: shpyrd login --url <workspace name>")
-	})
 }
 
 // deviceStart is what the workspace answers when a browser sign-in
@@ -397,6 +352,7 @@ func deviceFlow(ctx context.Context, startURL, pollURL string, out io.Writer, no
 		return nil, fmt.Errorf("%s answered without a sign-in code; is it a shpyrd server?", startURL)
 	}
 	link := firstNonEmpty(start.VerificationURIComplete, start.VerificationURI)
+	loginEvent(out, "browser", link, start.UserCode, "")
 	fmt.Fprintf(out, "Your code: %s\n", start.UserCode)
 	opened := false
 	if !noBrowser {
@@ -476,12 +432,16 @@ func postJSON(ctx context.Context, url string, body []byte, v any) error {
 // postJSONStatus is postJSON that hands a 4xx answer back as a status
 // instead of an error: the poll's "not yet" answers are 400s.
 func postJSONStatus(ctx context.Context, url string, body []byte, v any) (deviceStatus, error) {
+	return postJSONStatusClient(ctx, url, body, v, http.DefaultClient)
+}
+
+func postJSONStatusClient(ctx context.Context, url string, body []byte, v any, client *http.Client) (deviceStatus, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return deviceStatus{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return deviceStatus{}, err
 	}
@@ -513,6 +473,15 @@ func firstPositive(vals ...int) int {
 // verifyToken checks the token is accepted by the workspace: /api/me answers
 // 401 for an unknown, expired or revoked token and 200 for a live one.
 func verifyToken(ctx context.Context, wsURL, token string) error {
+	return verifyTokenResponse(ctx, wsURL, token, false)
+}
+
+// Login must verify the selected workspace actually accepted this credential.
+// Older informational commands retain their compatibility with missing /api/me.
+func verifyLoginToken(ctx context.Context, wsURL, token string) error {
+	return verifyTokenResponse(ctx, wsURL, token, true)
+}
+func verifyTokenResponse(ctx context.Context, wsURL, token string, strict bool) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", wsURL+"/api/me", nil)
 	if err != nil {
 		return err
@@ -526,8 +495,8 @@ func verifyToken(ctx context.Context, wsURL, token string) error {
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return fmt.Errorf("the workspace rejected this token (expired, revoked or mistyped)")
-	case resp.StatusCode >= 500:
-		return fmt.Errorf("server error %d", resp.StatusCode)
+	case resp.StatusCode >= 500 || (strict && (resp.StatusCode < 200 || resp.StatusCode >= 300)):
+		return fmt.Errorf("workspace rejected login: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -614,7 +583,7 @@ func newLogoutCmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	return cmd
 }
 
@@ -631,7 +600,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 				wsURL = s.activeURL()
 			}
 			if wsURL == "" {
-				return errors.New("not signed in: run `shpyrd login --url <workspace URL>`")
+				return errors.New("not signed in: run `shpyrd login --url <workspace>`")
 			}
 			norm, err := normaliseURL(wsURL)
 			if err != nil {
@@ -669,7 +638,7 @@ func newWhoAmICmd(g *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+	cmd.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	return cmd
 }
 
@@ -728,6 +697,11 @@ pass it to shpyrd login --token.`,
 		if url == "" {
 			return nil, errors.New("--url is required or run `shpyrd login`")
 		}
+		norm, err := normaliseURL(url)
+		if err != nil {
+			return nil, err
+		}
+		url = norm
 		if tok == "" {
 			return nil, errors.New("not signed in: run `shpyrd login --url " + url + " --token <token>`")
 		}
@@ -847,7 +821,7 @@ pass it to shpyrd login --token.`,
 	}
 
 	for _, c := range []*cobra.Command{createCmd, listCmd, revokeCmd} {
-		c.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace URL (or SHPYRD_URL)")
+		c.Flags().StringVar(&wsURL, "url", os.Getenv("SHPYRD_URL"), "workspace name or URL (or SHPYRD_URL)")
 	}
 	cmd.AddCommand(createCmd, listCmd, revokeCmd)
 	return cmd
@@ -857,7 +831,7 @@ pass it to shpyrd login --token.`,
 // talk to. `shpyrd use` alone lists them.
 func newUseCmd(g *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "use [workspace URL]",
+		Use:   "use [workspace]",
 		Short: "Choose the signed-in workspace commands talk to (no argument: list them)",
 		Long: `The CLI keeps one saved login per workspace. Commands talk to the current
 one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
@@ -886,7 +860,7 @@ one; SHPYRD_URL overrides it for one shell, --context bypasses it for a cluster.
 				}
 				return g.print(cmd, list, func(out io.Writer) {
 					if len(list) == 0 {
-						fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace URL>")
+						fmt.Fprintln(out, "Not signed in anywhere: shpyrd login --url <workspace>")
 						return
 					}
 					for _, e := range list {

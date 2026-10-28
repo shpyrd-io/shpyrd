@@ -553,7 +553,7 @@ config vars are restored. The source configuration is kept; the next
 				}
 				var after api.AppSummary
 				_ = json.Unmarshal(raw, &after)
-				final, err := ac.waitRunningAPI(ctx, name, app.Generation+1, 10*time.Minute)
+				final, err := ac.waitRunningAPI(ctx, name, app.Generation+1, 10*time.Minute, nil)
 				if err != nil {
 					return err
 				}
@@ -775,7 +775,7 @@ that results is a normal deploy.`,
 				}
 				// A restart or rebuild changes annotations, not the spec: no
 				// generation to wait for, just the rollout.
-				final, err := ac.waitRunningAPI(ctx, name, app.Generation, 10*time.Minute)
+				final, err := ac.waitRunningAPI(ctx, name, app.Generation, 10*time.Minute, staleFailureOfApp(app))
 				if err != nil {
 					return err
 				}

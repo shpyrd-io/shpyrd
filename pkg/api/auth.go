@@ -52,6 +52,9 @@ type ProviderInfo struct {
 	// Workspace is the short id of the workspace that owns a "workspace"
 	// method (RFC-0033, RFC-0076).
 	Workspace string `json:"workspace,omitempty"`
+	// SwitchAccountURL ends the person's session at the provider so they
+	// can sign in as someone else (ext.OIDCProvider.SwitchAccountURL).
+	SwitchAccountURL string `json:"switchAccountURL,omitempty"`
 }
 
 // AuthConfig is the auth part of GET /api/config.
@@ -240,6 +243,14 @@ func (rp *relyingParty) redirectURI() string { return rp.baseURL + "/api/auth/ca
 // endpoints. Discovery goes through httpClient so an issuer published on
 // the cluster's own domain is reached inside the cluster.
 func (rp *relyingParty) AddOIDC(ctx context.Context, p ext.OIDCProvider) error {
+	if p.SwitchAccountURL != "" && !validSwitchAccountURL(p.SwitchAccountURL) {
+		// A typo in an annotation must not take the sign-in away: the
+		// provider keeps working without the switch.
+		if rp.log != nil {
+			rp.log.Warn("login provider: switch-account URL ignored, it must be an absolute https URL with no query", "provider", p.ID)
+		}
+		p.SwitchAccountURL = ""
+	}
 	if p.ID == "" || p.Issuer == "" || p.ClientID == "" {
 		return errors.New("oidc provider needs id, issuer and client id")
 	}
@@ -331,7 +342,7 @@ func (rp *relyingParty) providerList() []ProviderInfo {
 	out := make([]ProviderInfo, 0, len(rp.order))
 	for _, id := range rp.order {
 		if p := rp.providers[id]; !p.Password && p.available() {
-			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Realm: firstNonEmpty(p.Realm, ext.RealmPlatform), Workspace: p.Workspace})
+			out = append(out, ProviderInfo{ID: id, Label: p.Label, Kind: firstNonEmpty(p.Kind, "oidc"), Realm: firstNonEmpty(p.Realm, ext.RealmPlatform), Workspace: p.Workspace, SwitchAccountURL: p.SwitchAccountURL})
 		}
 	}
 	return out
@@ -655,7 +666,9 @@ func (s *Server) authCallback(c *gin.Context) {
 	}
 	if err := s.admitAt(c, id); err != nil {
 		s.auditFailure(c, "auth.refused", id.Email, err.Error())
-		s.loginFailed(c, err)
+		// The page keeps where the person was going: signed in as another
+		// account, they go on there (a gate's sign-in needs it to answer).
+		c.Redirect(http.StatusFound, loginErrorURL(err)+nextParam(pl.next))
 		return
 	}
 	if _, ok := s.openSession(c, id, idToken, "redirect"); !ok {
@@ -740,6 +753,22 @@ func (s *Server) workspaceAddress(c *gin.Context) string {
 // loginFailed sends the browser back to the login page with the reason.
 func (s *Server) loginFailed(c *gin.Context, err error) {
 	c.Redirect(http.StatusFound, loginErrorURL(err))
+}
+
+// validSwitchAccountURL takes an absolute https URL with no query of its
+// own: the login page adds return_to.
+func validSwitchAccountURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+}
+
+// nextParam is "&next=…" for a destination other than the dashboard's
+// home, "" otherwise.
+func nextParam(next string) string {
+	if next = safeNext(next); next == "/" {
+		return ""
+	}
+	return "&next=" + url.QueryEscape(next)
 }
 
 // loginErrorURL is the login page with the reason.

@@ -513,3 +513,62 @@ func TestFetchScriptClonesThroughTheGitHubApp(t *testing.T) {
 		t.Errorf("not cloned: %v", err)
 	}
 }
+
+// A Dockerfile build runs outside the workspace's ceiling (#243), under the
+// build priority class the compute quota leaves out, and every container of
+// it has a hard memory and CPU ceiling of its own instead.
+func TestABuildIsOutsideTheCeilingAndBoundedByItsOwnLimits(t *testing.T) {
+	r, _ := newTestReconciler(t)
+	job, err := r.Config.desiredBuildJob(dockerfileApp(), 1, "k", gitauth.Build{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := job.Spec.Template.Spec
+	if pod.PriorityClassName != BuildPriorityClass {
+		t.Errorf("priority class = %q, want %q", pod.PriorityClassName, BuildPriorityClass)
+	}
+	for _, c := range append(append([]corev1.Container{}, pod.InitContainers...), pod.Containers...) {
+		mem, cpu := c.Resources.Limits[corev1.ResourceMemory], c.Resources.Limits[corev1.ResourceCPU]
+		if mem.IsZero() || cpu.IsZero() {
+			t.Errorf("%s has no hard ceiling: %v", c.Name, c.Resources.Limits)
+		}
+		if req := c.Resources.Requests[corev1.ResourceMemory]; req.Cmp(mem) > 0 {
+			t.Errorf("%s asks for more memory (%s) than its limit (%s)", c.Name, req.String(), mem.String())
+		}
+	}
+	if got := pod.Containers[0].Resources.Limits[corev1.ResourceMemory]; got.Cmp(resource.MustParse(buildMemoryLimit)) != 0 {
+		t.Errorf("build memory limit = %s, want %s", got.String(), buildMemoryLimit)
+	}
+}
+
+// A build past its memory ceiling says so, and names the ceiling.
+func TestABuildOutOfMemorySaysSo(t *testing.T) {
+	ctx := context.Background()
+	app := dockerfileApp()
+	r, c := newTestReconciler(t, app)
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1", Namespace: "app-dk"}}
+	for _, tc := range []struct {
+		init bool
+		want string
+	}{
+		{false, "The build ran out of memory while building the image: a build may use up to " + buildMemoryLimit},
+		{true, "The build ran out of memory while fetching the source: a build may use up to " + buildFetchMemoryLimit},
+	} {
+		oom := corev1.ContainerStatus{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled", Message: "killed"}}}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "dk-build-1-oom", Namespace: "app-dk", Labels: map[string]string{shpyrdv1.LabelBuild: job.Name}}}
+		if tc.init {
+			oom.Name = fetchContainer
+			pod.Status.InitContainerStatuses = []corev1.ContainerStatus{oom}
+		} else {
+			oom.Name = buildContainer
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{oom}
+		}
+		_ = c.Delete(ctx, pod)
+		if err := c.Create(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if _, msg := r.buildOutcome(ctx, job); !strings.HasPrefix(msg, tc.want) {
+			t.Errorf("init=%v: message = %q, want %q", tc.init, msg, tc.want)
+		}
+	}
+}

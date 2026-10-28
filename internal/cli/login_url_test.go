@@ -27,3 +27,19 @@ func TestNormaliseURL(t *testing.T) {
 		t.Errorf("with SHPYRD_WORKSPACES_DOMAIN: %q", got)
 	}
 }
+
+// SHPYRD_URL takes a workspace's name alone too: commands dial its address.
+func TestEnvWorkspaceURL(t *testing.T) {
+	t.Setenv("SHPYRD_WORKSPACES_DOMAIN", "")
+	for in, want := range map[string]string{
+		"":                          "",
+		"acme":                      "https://acme.shpyrd.cloud",
+		"https://acme.shpyrd.cloud": "https://acme.shpyrd.cloud",
+		"http://localhost:8080/":    "http://localhost:8080",
+	} {
+		t.Setenv("SHPYRD_URL", in)
+		if got := envWorkspaceURL(); got != want {
+			t.Errorf("SHPYRD_URL=%q: envWorkspaceURL() = %q; want %q", in, got, want)
+		}
+	}
+}

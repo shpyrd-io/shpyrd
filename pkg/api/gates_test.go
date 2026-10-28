@@ -1010,6 +1010,11 @@ func TestASuspendedWorkspaceGoesToTheGateThatReceivesIt(t *testing.T) {
 	if rec := w.get(t, "acme.shpyrd.test", signIn, ana); rec.Code != http.StatusFound || rec.Header().Get("Location") != toGate {
 		t.Errorf("the sign-in page, signed in = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
+	// A refused sign-in shows its reason on the sign-in page; sending it to
+	// the gate would sign the same account in again and loop.
+	if rec := w.get(t, "acme.shpyrd.test", "/?login_error="+url.QueryEscape("you have no access"), ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
+		t.Errorf("a refused sign-in's page = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
 	if rec := w.get(t, "acme.shpyrd.test", "/_next/static/chunks/app.js", ""); rec.Code == http.StatusFound || rec.Code == http.StatusForbidden {
 		t.Errorf("the dashboard's files = %d", rec.Code)
 	}
@@ -1128,10 +1133,67 @@ func TestAGateIsEnteredFromAWorkspaceWhoseDoorIsACustomDomain(t *testing.T) {
 	}
 }
 
+// A suspended workspace whose door is its custom domain still reaches the
+// gate that receives it: the sign-in on the way there answers at the
+// platform address as it does for an active one, and only for that gate.
+func TestASuspendedWorkspaceBehindACustomDomainReachesItsGate(t *testing.T) {
+	w := newGateWorld(t, func(g *gateExt) { g.receivesSuspended = true })
+	w.behindDomain(t)
+	if _, err := w.st.SetWorkspaceStatus(context.Background(), "acme", store.WorkspaceSuspended); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	const gate = "/.shpyrd/gate?name=billing"
+	signIn := "/?next=" + url.QueryEscape(gate)
+	if rec := w.get(t, "acme.shpyrd.test", gate, ""); rec.Code != http.StatusFound || rec.Header().Get("Location") != signIn {
+		t.Fatalf("the gate, signed out = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := w.get(t, "acme.shpyrd.test", signIn, ""); rec.Code != http.StatusOK || rec.Body.String() != "<html>workspace</html>" {
+		t.Fatalf("the sign-in page = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := w.get(t, "acme.shpyrd.test", "/app.js", ""); rec.Code != http.StatusOK || rec.Body.String() != "js" {
+		t.Errorf("the application's file = %d %s", rec.Code, rec.Body.String())
+	}
+	// Another gate's sign-in is not served: that gate is closed.
+	if rec := w.get(t, "acme.shpyrd.test", "/?next="+url.QueryEscape("/.shpyrd/gate?name=reports"), ""); rec.Code == http.StatusOK {
+		t.Errorf("another gate's sign-in = %d %s", rec.Code, rec.Body.String())
+	}
+	sid := w.session(t, "acme", w.ana)
+	if rec := w.get(t, "acme.shpyrd.test", signIn, sid); rec.Code != http.StatusFound || rec.Header().Get("Location") != gate {
+		t.Errorf("the sign-in page signed in = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	rec, claims := w.auth(t, "billing", "GET", w.enter(t, "acme.shpyrd.test", sid))
+	if rec.Code != http.StatusOK || claims["ws"] != "acme" {
+		t.Fatalf("the owner at the gate = %d %v", rec.Code, claims)
+	}
+	// The rest of the dashboard stays closed at both doors.
+	if rec := w.get(t, "acme.shpyrd.test", "/projects/shop", sid); rec.Code == http.StatusOK {
+		t.Errorf("a dashboard page at the platform address = %d", rec.Code)
+	}
+	if rec := w.get(t, "intranet.acme.com", "/projects/shop", sid); rec.Code != http.StatusFound || rec.Header().Get("Location") != gate {
+		t.Errorf("a dashboard page at the custom domain = %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// Without a gate that receives suspended workspaces, the platform address
+// of a suspended one behind a custom domain signs nobody in.
+func TestASuspendedWorkspaceBehindACustomDomainWithoutSuchAGateSignsNobodyIn(t *testing.T) {
+	w := newGateWorld(t)
+	w.behindDomain(t)
+	if _, err := w.st.SetWorkspaceStatus(context.Background(), "acme", store.WorkspaceSuspended); err != nil {
+		t.Fatal(err)
+	}
+	w.s.authz.Invalidate()
+	if rec := w.get(t, "acme.shpyrd.test", "/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), ""); rec.Code == http.StatusOK {
+		t.Errorf("the sign-in page = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // The platform address behind a custom domain is no second dashboard: no
 // page but the sign-in on the way to a gate answers there, signed in or
-// not; the custom domain is the dashboard, and a workspace without one is
-// its dashboard at its address as before.
+// not; every other page goes to the same path at the custom domain, which
+// is the dashboard. A workspace without one is its dashboard at its address
+// as before.
 func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 	w := newGateWorld(t)
 	w.behindDomain(t)
@@ -1144,12 +1206,17 @@ func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 		"/?next=" + url.QueryEscape("//evil.test/.shpyrd/gate?name=billing"),
 		"/workspace?next=" + url.QueryEscape("/.shpyrd/gate?name=billing"),
 	} {
-		if rec := w.get(t, "acme.shpyrd.test", p, ""); !noApp(rec) {
-			t.Errorf("%s signed out = %d %s", p, rec.Code, rec.Body.String())
+		want := "https://intranet.acme.com" + p
+		for _, who := range []string{"", sid} {
+			rec := w.get(t, "acme.shpyrd.test", p, who)
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+				t.Errorf("%s (session %t) = %d %s, want a redirect to %s", p, who != "", rec.Code, rec.Header().Get("Location"), want)
+			}
 		}
-		if rec := w.get(t, "acme.shpyrd.test", p, sid); !noApp(rec) {
-			t.Errorf("%s signed in = %d %s", p, rec.Code, rec.Body.String())
-		}
+	}
+	// The API keeps answering at the platform address: only pages move.
+	if rec := w.get(t, "acme.shpyrd.test", "/api/config", ""); rec.Code != http.StatusOK {
+		t.Errorf("/api/config at the platform address = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	req := httptest.NewRequest("POST", "https://acme.shpyrd.test/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), nil)
 	req.Host = "acme.shpyrd.test"
@@ -1167,5 +1234,30 @@ func TestTheAddressBehindACustomDomainServesOnlyTheSignInToAGate(t *testing.T) {
 	// at its sign-in page sees the dashboard, not a redirect.
 	if rec := w.get(t, "beta.shpyrd.test", "/?next="+url.QueryEscape("/.shpyrd/gate?name=billing"), w.session(t, "beta", w.eve)); rec.Code != http.StatusOK {
 		t.Errorf("beta's sign-in page signed in = %d", rec.Code)
+	}
+}
+
+// A provider that names a switch-account page offers it on the login page;
+// one with a page that is not an absolute https URL keeps working without.
+func TestAProvidersSwitchAccountPageReachesTheLoginPage(t *testing.T) {
+	w := newGateWorld(t)
+	issuer := newFakeIssuer(t)
+	for _, p := range []ext.OIDCProvider{
+		{ID: "accounts", Label: "shpyrd account", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", SwitchAccountURL: "https://accounts.example/switch-account"},
+		{ID: "typo", Label: "Typo", Issuer: issuer.srv.URL, ClientID: "shpyrd", ClientSecret: "sekret", SwitchAccountURL: "accounts.example/switch-account?x=1"},
+	} {
+		if err := w.s.rp.AddOIDC(context.Background(), p); err != nil {
+			t.Fatalf("%s: %v", p.ID, err)
+		}
+	}
+	got := map[string]string{}
+	for _, p := range w.s.rp.providerList() {
+		got[p.ID] = p.SwitchAccountURL
+	}
+	if got["accounts"] != "https://accounts.example/switch-account" {
+		t.Errorf("accounts' switch page = %q", got["accounts"])
+	}
+	if v, ok := got["typo"]; !ok || v != "" {
+		t.Errorf("a provider with a bad switch page = %q (listed %t)", v, ok)
 	}
 }

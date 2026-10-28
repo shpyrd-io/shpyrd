@@ -21,10 +21,10 @@ import { api } from "@/api/api";
 import type { DomainClaim, NewLoginMethod, WorkspaceInfo } from "@/api/types";
 import { Failed, Loading } from "../project/shared";
 
-const policies: Record<WorkspaceInfo["joinPolicy"], { label: string; text: string }> = {
-  open: { label: "Anyone who signs in", text: "Whoever signs in through one of the methods is in; they still need a role to see or open anything." },
-  company: { label: "Emails of a claimed domain", text: "New people come in only through the method of a verified company domain below. Who is already in stays." },
-  listed: { label: "Invited or listed people", text: "New people come in only if an administrator invited them, listed them in a team, or gave them a role first." },
+const policies: Record<WorkspaceInfo["joinPolicy"], { label: string }> = {
+  open: { label: "Anyone who signs in" },
+  company: { label: "Emails of a claimed domain" },
+  listed: { label: "Invited or listed people" },
 };
 
 const kinds: Record<string, string> = { google: "Google", microsoft: "Microsoft", github: "GitHub", oidc: "OpenID Connect: Okta, Keycloak, Auth0…" };
@@ -99,7 +99,6 @@ function Methods() {
     <Card>
       <CardHeader>
         <CardTitle>Sign-in methods</CardTitle>
-        <CardDescription>How people sign in here, and to every app behind sign-in. Bring the company's identity provider, Google Workspace, Microsoft Entra, GitHub or any OpenID Connect provider, so nobody needs one more password; its groups map to teams.</CardDescription>
         {methods.data && (
           <CardAction>
             <AddMethod kinds={methods.data.kinds} callback={methods.data.callback} onDone={refresh} />
@@ -307,7 +306,6 @@ function JoinPolicy() {
     <Card>
       <CardHeader>
         <CardTitle>Who may join</CardTitle>
-        <CardDescription>{ws.data ? policies[ws.data.joinPolicy].text : "…"}</CardDescription>
       </CardHeader>
       <CardContent>
         {ws.isLoading ? (
@@ -364,7 +362,6 @@ function DomainClaims() {
     <Card>
       <CardHeader>
         <CardTitle>Company domains</CardTitle>
-        <CardDescription>Prove you own an email domain with a DNS record. Accounts of a verified domain count as the company's people and, when a method is chosen, sign in only through it: no company address behind a password someone made up.</CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">

@@ -1,0 +1,11 @@
+---
+title: "Private repositories, and every push deploys"
+description: "Connect GitHub once and pick a repository; on any other git host, a deploy key or a token. Every push deploys, with a check on the commit."
+date: "2026-10-26"
+type: feature
+draft: false
+---
+
+Connect GitHub from **Workspace › Git** and pick a repository when you make a project: no token or key to paste. Each person links their own GitHub account once, and the picker shows only the repositories they can read. Every push to the deployed branch deploys, and GitHub shows a `shpyrd / <project>` check on the commit and a Deployment with the app's URL.
+
+On GitLab, Gitea, Bitbucket or your own git host, give the project a generated read-only deploy key, or the workspace a token for the host, then add the project's webhook: every push deploys from then on. See [Deploying](/docs/deploying).

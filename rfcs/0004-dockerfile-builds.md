@@ -106,10 +106,16 @@ build:
   (`terminationMessagePolicy: FallbackToLogsOnError`). Git sources rebuild when the
   configured revision or build settings change, not on new commits (kpack polls, the Job
   does not); pass a commit or redeploy to rebuild a branch.
+- 2026-10-26 (v1.5.1, #262): builds leave the workspace's ceiling. The build Job's pod runs
+  under the PriorityClass `shpyrd-build` (installed with the server, value 0, never
+  preempts), which the workspace's compute quota leaves out, so a small workspace deploys
+  while its app is awake (#243). Each build has hard limits instead: 2Gi and 2 CPUs for
+  the build container, 512Mi and 500m for the fetch; a build killed for memory says so and
+  names the limit. Buildpack builds were already outside the ceiling (BestEffort).
 
 ## Implementation status
 
 Audited on 2026-09-25 against the code. What the text promises but the platform does not do yet is listed here; superseded means a later RFC decided otherwise and the text above is history.
 
-- **Not implemented:** A "build" size in the catalog (build Jobs use fixed 250m/512Mi requests, no limits) and `ttlSecondsAfterFinished` on build Jobs (they are pruned to the last ten).
+- **Not implemented:** A "build" size in the catalog (build Jobs use fixed requests, 250m/512Mi, and fixed limits, 2/2Gi, since v1.5.1) and `ttlSecondsAfterFinished` on build Jobs (they are pruned to the last ten).
 - **Superseded:** `build.args`: Dockerfile build args come from `build.env`; the Build record is the Job, not a CRD.

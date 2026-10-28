@@ -1,0 +1,27 @@
+# The steps of a deploy run under these classes: image builds (#243) and
+# the release step (#60). The workspace's compute quota leaves them out, so
+# a step never competes with the workspace's own instances for its ceiling;
+# each has hard limits of its own instead (a build's fixed ceiling, the
+# release process's size). Same priority as anything without a class; they
+# never preempt.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shpyrd-build
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+value: 0
+globalDefault: false
+preemptionPolicy: Never
+description: "shpyrd image builds: outside the workspace's ceiling, bounded by their own limits."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shpyrd-release
+  labels:
+    app.kubernetes.io/part-of: shpyrd
+value: 0
+globalDefault: false
+preemptionPolicy: Never
+description: "shpyrd release steps: outside the workspace's ceiling, bounded by the release process's size."

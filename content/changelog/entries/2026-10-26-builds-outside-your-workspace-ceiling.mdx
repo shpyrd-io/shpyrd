@@ -1,0 +1,9 @@
+---
+title: "Builds no longer count against your workspace's ceiling"
+description: "A Dockerfile build runs beside your awake app, with a limit of its own: 2 GiB of memory and 2 CPUs."
+date: "2026-10-26"
+type: improvement
+draft: false
+---
+
+A Dockerfile build used to ask for its memory out of your workspace's ceiling, so on a small workspace a deploy could not start while the app was awake. Builds are steps of a deploy, not something your workspace keeps running: they no longer count against the ceiling. Each build has a ceiling of its own instead, up to 2 GiB of memory and 2 CPUs. A build that needs more stops and says so. See [Dockerfile builds](/docs/deploying#dockerfile-builds).
