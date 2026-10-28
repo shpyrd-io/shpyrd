@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/shpyrd-io/shpyrd/pkg/ui"
 )
@@ -28,4 +29,18 @@ func uiFiles(logger *slog.Logger) fs.FS {
 	}
 	logger.Warn("SHPYRD_UI_DIR holds no application; serving the ones built into the binary", "dir", dir)
 	return ui.Dist()
+}
+
+// uiCacheDir is where the applications workspaces chose are kept by
+// digest (RFC-0084): SHPYRD_UI_CACHE_DIR; else beside the exported
+// applications when the server reads them from a directory; else under
+// the data directory.
+func uiCacheDir(dataDir string) string {
+	if d := os.Getenv("SHPYRD_UI_CACHE_DIR"); d != "" {
+		return d
+	}
+	if d := os.Getenv("SHPYRD_UI_DIR"); d != "" {
+		return filepath.Join(d, ".cache")
+	}
+	return filepath.Join(dataDir, "ui")
 }

@@ -42,7 +42,7 @@ describe("how a project is read for its card", () => {
   it("says who may open it: anyone, everyone, or its teams by name", () => {
     const url = "https://shop.acme.app";
     expect(badgesOf({ url, access: "public", teams: ["finance"] })).toEqual(["Anyone"]);
-    expect(badgesOf({ url, access: "identified" })).toEqual(["Anyone"]);
+    expect(badgesOf({ url, access: "identified", teams: ["finance"] })).toEqual(["Finance"]);
     expect(badgesOf({ url, access: "authenticated", teams: ["everyone", "finance"] })).toEqual(["Everyone"]);
     expect(badgesOf({ url, access: "authenticated", teams: ["finance", "customer-care"] })).toEqual(["Finance", "Customer-care"]);
     expect(badgesOf({ url, access: "authenticated" })).toBeUndefined();

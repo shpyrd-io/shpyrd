@@ -185,6 +185,10 @@ export const backend: Api = {
   putProjectCaps: (caps) =>
     request("/api/workspace/project-caps", json("PUT", { projectCaps: caps })),
   updateWorkspace: (body) => request("/api/workspace", json("PATCH", body)),
+  reloadWorkspaceUI: () => request("/api/workspace/ui/reload", { method: "POST" }),
+  registryTokens: () => request("/api/workspace/registry-auth"),
+  setRegistryToken: (host, body) => request(`/api/workspace/registry-auth/${encodeURIComponent(host)}`, json("PUT", body)),
+  unsetRegistryToken: (host) => request(`/api/workspace/registry-auth/${encodeURIComponent(host)}`, { method: "DELETE" }),
   people: () => request("/api/workspace/people"),
   setPersonRole: (email, role) =>
     request(

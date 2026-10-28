@@ -1,6 +1,6 @@
 import * as React from "react";
 import { cn } from "cn";
-import { Bot, Globe, Lock, Moon, Network, Settings, Wrench } from "lucide-react";
+import { Bot, Globe, Lock, Moon, Network, Settings, ShieldHalf, Wrench } from "lucide-react";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardFooter } from "./card";
@@ -15,7 +15,9 @@ import { symbolInk } from "./app-icons";
 
 export type Phase = "running" | "deploying" | "failed" | "sleeping" | "maintenance";
 export type Exposure = "public" | "internal";
-export type Access = "open" | "locked";
+// Who it answers: anyone; only who signs in; or anyone on some paths and
+// only who signs in on others.
+export type Access = "open" | "locked" | "mixed";
 
 export const phases: Record<Phase, { label: string; dot: string; live?: boolean }> = {
   running: { label: "Running", dot: "bg-success" },
@@ -95,6 +97,11 @@ function Signs({
       {access === "locked" && (
         <span role="img" aria-label="Only for who signs in" title="Only for who signs in" className="inline-flex">
           <Lock />
+        </span>
+      )}
+      {access === "mixed" && (
+        <span role="img" aria-label="Public, sign-in on some paths" title="Public, sign-in on some paths" className="inline-flex">
+          <ShieldHalf />
         </span>
       )}
     </span>

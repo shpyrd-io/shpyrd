@@ -326,6 +326,8 @@ func run(o runOptions, logger *slog.Logger) error {
 		},
 		UI:                     uiFiles(logger),
 		Pages:                  o.opts.Pages,
+		UISources:              os.Getenv("SHPYRD_UI_SOURCES"),
+		UICacheDir:             uiCacheDir(o.dataDir),
 		Sources:                sources,
 		SourcesAddr:            fmt.Sprintf(":%d", api.SourcesPort),
 		PeerAddr:               peerAddr(os.Getenv("SHPYRD_POD_IP"), api.SourcesPort),

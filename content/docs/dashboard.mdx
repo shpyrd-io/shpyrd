@@ -89,9 +89,22 @@ Every project, team and person belongs to the workspace. Its pages are in a list
   - **Config vars** (owners and admins): config vars every project receives.
   - **Log drains** (owners and admins): drains for every project's lines.
   - **Domains** (owners): the workspace's address and its custom domains. See [Domains and exposure](/docs/domains#the-workspace-s-own-names).
+  - **Application** (owners and admins): what answers at the workspace's address, the platform's own workspace application or one of the workspace's own, and the **Registry credentials** it is pulled with. See [Your own workspace application](#your-own-workspace-application).
   - **MCP** (with the MCP server): the name and address assistants use.
 
 See [People, teams, roles and security](/docs/access).
+
+### Your own workspace application
+
+The workspace application (the launcher, a project's pages, the workspace's pages) is a static build the server serves at the workspace's address. A workspace may serve a build of its own instead: a fork of the platform's `apps/workspace`, built with `next build` and published to a registry of yours, GHCR, Docker Hub or any other, as an artifact (`oras push ghcr.io/acme/workspace-ui:2.3.1 out/`) or as an image (`FROM scratch` + `COPY out/ /`). It talks to the same API, from the same origin, with the same session; it gains nothing the platform's own does not have, and every call is checked by the server as before. The platform's own registry is not involved.
+
+Under **Workspace › Application**, an administrator pastes the reference, `oci://ghcr.io/acme/workspace-ui:2.3.1` or `@sha256:…`, and the door serves it from the next request. A tag is settled to the digest it points at at that moment, so what the door serves never changes until someone sets it again; publishing a new version changes nothing by itself. The page says how the application is doing on the server answering: serving, with the name and version its `shpyrd-app.json` declares; not served, with the reason; or not allowed on this server. Whenever the application cannot be served, the platform's own answers, so nobody is locked out, and **Back to the platform's own** is always there. **Load again** reloads it on the next request.
+
+A private repository needs a read-only credential for its registry host, one per host, under **Registry credentials**: a GitHub token with `read:packages` for `ghcr.io`, an access token on Docker Hub. Values are written, never shown. Setting a reference whose registry refuses the pull, or whose package is not one (no `index.html` at the root, over 64 MB or 4000 files), is refused there and then with the registry's words.
+
+The package may carry a `shpyrd-app.json` at its root: `{"name": "Acme", "version": "2.3.1", "origins": ["https://cdn.acme.test"]}`. The origins are the only places beyond the server its pages may load scripts from, connect to or show images from; without the file, none.
+
+The operator chooses which sources a server accepts with `SHPYRD_UI_SOURCES`: `oci` by default; `oci,dir` where the server runs for development, so `dir:/path/to/out` serves a build straight from its folder; `off` keeps the references but serves the platform's own everywhere. The CLI: `shpyrd workspace ui set|clear|reload` and `shpyrd registry-auth set|unset|list`. The example to start from is [shpyrd-example-workspace-app](https://github.com/shpyrd-io/shpyrd-example-workspace-app).
 
 ## The console
 

@@ -1,0 +1,9 @@
+---
+title: "Builds no longer fail after the registry's weekly clean-up"
+description: "The weekly clean-up of image storage could leave it refusing new images; it now always puts it back."
+date: "2026-10-26"
+type: fix
+draft: false
+---
+
+Once a week the platform cleans up image storage, and for a few minutes it accepts no new images. On Sunday 25 October that clean-up did not finish and left image storage refusing writes for about a day and a half: builds failed, some with a message blaming the source. The clean-up now waits for every copy of image storage and always puts it back, and a build refused by image storage says it was the platform's fault. If a build failed for you on 25–26 October, deploy again.

@@ -263,6 +263,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 	pod := pods.Items[0]
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			if t.Reason == "OOMKilled" {
+				return nil, buildOutOfMemory("fetching the source", buildFetchMemoryLimit)
+			}
 			return nil, describeBuildFailure("prepare", t.Message)
 		}
 	}
@@ -277,6 +280,9 @@ func (r *AppReconciler) buildOutcome(ctx context.Context, job *batchv1.Job) (*bu
 				return &res, ""
 			}
 			return nil, "build finished without reporting an image"
+		}
+		if t.Reason == "OOMKilled" {
+			return nil, buildOutOfMemory("building the image", buildMemoryLimit)
 		}
 		return nil, describeBuildFailure("dockerfile", t.Message)
 	}
@@ -416,19 +422,27 @@ echo "pushed $IMAGE_REPO@$digest"`
 					RestartPolicy:      corev1.RestartPolicyNever,
 					EnableServiceLinks: ptr.To(false),
 					NodeSelector:       c.appsNodeSelector(), // RFC-0077
+					// Outside the workspace's ceiling (#243), bounded by the
+					// limits below instead.
+					PriorityClassName: BuildPriorityClass,
 					SecurityContext:    &corev1.PodSecurityContext{FSGroup: uid},
 					InitContainers: []corev1.Container{{
 						Name:    fetchContainer,
 						Image:   c.BuildKitImage,
 						Command: []string{"sh", "-ec", c.fetchScript(app, git)},
-						// The build container asks for resources, so a workspace's
-						// quota covers the pod and refuses it unless this one asks
-						// too (#117). Small requests, no limit: a shallow clone of a
-						// large repository can need a few hundred MiB.
-						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("10m"),
-							corev1.ResourceMemory: resource.MustParse("64Mi"),
-						}},
+						// Small requests for scheduling, a limit for protection: a
+						// shallow clone of a large repository can need a few
+						// hundred MiB.
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse(buildFetchCPULimit),
+								corev1.ResourceMemory: resource.MustParse(buildFetchMemoryLimit),
+							},
+						},
 						SecurityContext:          &corev1.SecurityContext{RunAsUser: uid, RunAsGroup: uid, AllowPrivilegeEscalation: ptr.To(false)},
 						VolumeMounts:             append([]corev1.VolumeMount{{Name: "workspace", MountPath: workspaceDir}}, gitAuthMounts(git)...),
 						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -442,10 +456,19 @@ echo "pushed $IMAGE_REPO@$digest"`
 							{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
 							{Name: "IMAGE_REPO", Value: repo},
 						}, c.buildKitAuthEnv()...), c.trustEnv()...),
-						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("250m"),
-							corev1.ResourceMemory: resource.MustParse("512Mi"),
-						}},
+						// The requests place the build on a machine; the limits
+						// are its hard ceiling, since the workspace's no longer
+						// counts it (#243).
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("250m"),
+								corev1.ResourceMemory: resource.MustParse("512Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse(buildCPULimit),
+								corev1.ResourceMemory: resource.MustParse(buildMemoryLimit),
+							},
+						},
 						SecurityContext: unconfined,
 						VolumeMounts: append(append([]corev1.VolumeMount{
 							{Name: "workspace", MountPath: workspaceDir},
@@ -463,6 +486,21 @@ echo "pushed $IMAGE_REPO@$digest"`
 		},
 	}
 	return job, nil
+}
+
+// A Dockerfile build's hard ceiling (#243): out of the workspace's quota,
+// it is bounded here. Past the memory limit the build is killed and says
+// so; CPU above the limit is throttled.
+const (
+	buildMemoryLimit      = "2Gi"
+	buildCPULimit         = "2"
+	buildFetchMemoryLimit = "512Mi"
+	buildFetchCPULimit    = "500m"
+)
+
+// buildOutOfMemory says a build passed its hard ceiling, in words.
+func buildOutOfMemory(doing, limit string) string {
+	return fmt.Sprintf("The build ran out of memory while %s: a build may use up to %s. Make the build lighter (fewer steps in parallel, a smaller dependency install, a multi-stage Dockerfile).", doing, limit)
 }
 
 // dockerfilePath is the Dockerfile location relative to the context.

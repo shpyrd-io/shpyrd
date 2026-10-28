@@ -304,7 +304,7 @@ func (a *appClient) bridge(ctx context.Context, slug, ticket, instance string, q
 // workspaceURL is the URL of the workspace this client talks to (session
 // mode): SHPYRD_URL or the current login.
 func (a *appClient) workspaceURL() string {
-	if u := os.Getenv("SHPYRD_URL"); u != "" {
+	if u := envWorkspaceURL(); u != "" {
 		return strings.TrimRight(u, "/")
 	}
 	return loadSessions().activeURL()

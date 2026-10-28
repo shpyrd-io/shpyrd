@@ -183,6 +183,19 @@ laptop and not on a shared cloud network.
   from HTTP) and on OKE (moved off OCIR). Two findings on the way: kind ships
   `/etc/containerd` as 0644, so the node agent keeps `DAC_OVERRIDE`; the ClusterBuilder's
   `UpToDate` condition must be waited for as well as `Ready`.
+- 2026-10-23 (v1.4.1, #250): every replica signs uploads with one secret. On a bucket the
+  registry runs two replicas (#238), and each made up its own `http.secret`: an upload
+  whose requests reached both failed with `blob upload invalid - invalid secret`. The
+  registry component's hook generates `registry-http-secret` once and keeps it; the
+  Deployment reads it as `REGISTRY_HTTP_SECRET` (not optional).
+- 2026-10-26 (v1.5.1, #261): the collection waits for every replica and always switches
+  back. It waited for a rollout of exactly one replica, timed out with two, and the switch
+  back was deferred only after a successful switch: on Sunday 25 Oct at 04:00 UTC it left
+  production's registry on its read-only configuration for about 35 hours (every push 405,
+  every build failed). The rollout check now wants the Deployment's replicas, all updated
+  and ready with none of the old configuration left; the switch back is deferred before the
+  switch; a build whose registry refuses the write says the platform failed, not the
+  source.
 
 ## Implementation status
 

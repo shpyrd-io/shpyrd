@@ -88,6 +88,30 @@ webhooks are not implemented. See [Integration API](../docs/integration-api.md).
 Authenticated requests from Accounts and Billing pods were verified in production,
 and external requests to these integration routes returned 404.
 
+## Changes since the audit
+
+- 2026-10-23 (core v1.4.0, #245; Cloud v1.4.1, shpyrd-cloud#54; Accounts #7): Accounts
+  lists every workspace an account can enter, not only those it created. Core's
+  `Store.MembershipsOf` finds the memberships of the active workspace principal bound to an
+  issuer, connector and subject (email never matches; suspended people and unbound legacy
+  principals hold none); Cloud answers `POST /api/accounts/memberships` on the internal
+  API with the identity in the body. Products shows those workspaces beside the product
+  contacts (member-only rows open, but cannot be set up or retried; membership grants no
+  product-contact rights), and after sign-in an account with any product or membership goes
+  to Products: Cloud signup only when the lookup succeeded and found nothing, an error when
+  it failed.
+- 2026-10-26 (core v1.5.1, #257; Accounts #9): a refused account can switch to another.
+  Signing in again through the same provider brought back the same Accounts session, and a
+  suspended workspace looped (refusal, billing gate, sign-in, refusal). A refusal now stays
+  on the sign-in page with its reason and keeps `next`; a login method may name a
+  switch-account page (`ext.OIDCProvider.SwitchAccountURL`, from the Dex connector's
+  annotation `shpyrd.io/switch-account-url`), offered after a refusal as "Sign in with
+  another …". Accounts' `/switch-account` ends the session, opens the sign-in and returns to
+  the workspace's `/api/auth/login/<provider>`, accepting only `https://<label>.<workspaces
+  domain>`; a custom domain lands on Products. Production's `shpyrd-accounts` connector
+  carries `https://accounts.shpyrd.io/switch-account`. The workspace's own session is
+  independent of Accounts': switching in Accounts does not sign anyone out of a workspace.
+
 ## Rollout and legacy-user runbook
 
 1. Back up the control-plane database and Accounts product database. Keep the

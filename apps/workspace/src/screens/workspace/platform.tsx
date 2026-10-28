@@ -19,7 +19,6 @@ import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@shpyrd/ui/components/card";
@@ -81,11 +80,6 @@ export function MCP() {
         <Card>
           <CardHeader>
             <CardTitle>Assistant name</CardTitle>
-            <CardDescription>
-              How the assistants name this workspace when they list what they
-              are connected to, and what you say to address it: “check on{" "}
-              {w.mcpName} the metrics of hello-world”.
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <Field label="Assistant name" hint="At most 60 characters.">
@@ -114,11 +108,6 @@ export function MCP() {
         <Card>
           <CardHeader>
             <CardTitle>Address</CardTitle>
-            <CardDescription>
-              Where the assistants reach the workspace. It speaks MCP over HTTP;
-              an assistant given it signs you in through the workspace and sees
-              what you see, within your roles. It changes nothing, for now.
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <Stack direction="horizontal" gap="condensed">
@@ -140,11 +129,6 @@ export function MCP() {
       <Card>
         <CardHeader>
           <CardTitle>Add it to your AI</CardTitle>
-          <CardDescription>
-            Web assistants take the address as a connector. Command-line agents
-            and editors take it from a command or a file; each then asks you to
-            sign in once.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           <Clients url={url} />
@@ -429,10 +413,6 @@ export function WorkspaceDomains() {
     <Card>
       <CardHeader>
         <CardTitle>Domains</CardTitle>
-        <CardDescription>
-          Names of your own the workspace answers at, such as intranet.acme.com;
-          its apps become one label under it. On the primary domain, you can redirect platform app addresses here once each app’s DNS and certificate are ready.
-        </CardDescription>
       </CardHeader>
       <CardContent>
         <Stack gap="normal">
