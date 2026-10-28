@@ -289,7 +289,8 @@ with `globals: false` or `globals: {exclude: [OPENAI_API_KEY]}`.
 The `logs-agent` extension runs Vector on every node: it reads container logs,
 labels every line with `project`, `process` and `instance` (`web.1`), parses
 JSON lines (`level`, `msg`), and forwards them to **log drains**. Each node
-keeps at most 20 MiB of logs per container. A drain is an HTTPS receiver (JSON, one object per line, custom headers for API keys) or
+keeps at most 20 MiB of logs per container. A drain is an HTTPS receiver
+(JSON, one object per line, custom headers for API keys) or
 a syslog receiver (RFC 5424 over TCP, `syslog+tls://` for TLS), per project or
 for the whole cluster:
 
