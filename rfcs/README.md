@@ -83,7 +83,7 @@ became issues #288 and #289 on 2026-10-28.
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
 | [0037](0037-platform-backup-and-restore.md) | Platform backup and restore | implemented | 0046 |
 | [0038](0038-postgres-backups-and-pitr.md) | Postgres backups and PITR | implemented | 0009, 0046 |
-| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (pooling on shared servers; gaps) | 0009 |
+| [0039](0039-postgres-pooling-rotation-resize.md) | Postgres pooling, rotation and resize | implemented (closed 2026-10-28; pooling on shared servers, rotation and resize; a dedicated database's own pooler is #293) | 0009 |
 | [0040](0040-redis-ha-and-exporter.md) | Redis high availability and metrics exporter | provisional | 0010 |
 | [0041](0041-shared-volumes.md) | Shared volumes (ReadWriteMany): the provider's file system per profile | implemented | 0006, 0060 |
 | [0042](0042-project-quotas.md) | Project quotas | implementable (workspace ceilings — its own settings since 2026-10-04 — and the ResourceQuota backstop shipped; image builds outside the backstop since v1.5.1; per-project quotas, LimitRange and usage bars still to do) | 0008 |
@@ -123,7 +123,7 @@ became issues #288 and #289 on 2026-10-28.
 | [0079](0079-nodejs-builds-pnpm-and-next-16.md) | Node.js builds: pnpm support (Paketo has no pnpm buildpack) and Next.js 16, whose Turbopack refuses the `node_modules` symlink buildpacks create — CLI guidance first, then `heroku/nodejs` as the builder's Node group behind a test matrix | provisional | 0065, 0067 |
 | [0078](0078-workspaces-are-not-the-cluster.md) | Workspaces are not the cluster: workspace ownership (operator vs customer), the default workspace setting (fixed since 2026-10-04), OSS creates one workspace at init and shows no other, cloud separates console host from workspace hosts, auth.shpyrd.io as a manual record, no implicit-workspace branch for new code | implemented (v0.9.61) | 0033, 0035, 0076 |
 | [0077](0077-node-pools.md) | Node pools: a fixed platform pool for the platform's components and every stateful resource (databases, stores), and an autoscaled apps pool for processes, builds and one-off runs — the cluster autoscaler manages the apps pool alone, so sleeping apps free whole nodes | implemented (v0.9.41) | 0035, 0060, 0075 |
-| [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1); phase 2 history | 0006, 0009, 0060 |
+| [0081](0081-project-portability-and-local-storage.md) | Project portability and local storage for the MVP | implemented (phase 1, closed 2026-10-28; phase 2 history since the storage plan of 2026-10-10) | 0006, 0009, 0060 |
 | [0082](0082-account-identity-separation.md) | Account identity separation: Accounts/IdP credentials, workspace authorization, explicit principal binding | implemented (production, 2026-10-12) | 0007, 0008, 0033, 0058, 0080 |
 | [0084](0084-a-workspace-s-own-application.md) | A workspace's own application: the door serves a chosen build (static package by reference; `dir:` and `oci:` sources; fallback to the platform's own) | implemented (catalogue of publishers later) | 0080, 0033, 0008, 0059 |
 
@@ -174,6 +174,7 @@ an "Implementation status" section with the details; the short version:
 | 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
+| 0039 | a dedicated database's own pooler (`spec.pooler` → CloudNativePG `Pooler`), #293 |
 | 0045 | e2e for `examples/hello-docker` |
 | 0047 | the step sizes and the cool-down as fields (the HPA's `behavior`, fixed at the defaults); a response-time target (no latency source yet); a schedule (KEDA's `cron` trigger); a cost range beside the bounds; a word when a process sits at its maximum; the live metric value in the dashboard — details in the RFC's "Implementation status" |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |

@@ -1,14 +1,25 @@
 # RFC-0039 Postgres pooling, credential rotation and resize
 
-**Status:** implemented (with gaps: pooling on shared servers; a dedicated database's own pooler is not offered)
+**Status:** implemented (pooling on shared servers, rotation and resize; a dedicated database's own pooler is #293) — see Closing below
 
-**Owner:** unassigned
+**Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
 **Depends on:** RFC-0009 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-28
+
+## Closing (2026-10-28)
+
+The RFC is closed as implemented. Rotation (`shpyrd pg rotate`, both types) and resize
+(`shpyrd pg resize` for dedicated databases, a cap for shared ones) are as the text says.
+Pooling shipped where the connections pile up, on the shared servers: one CloudNativePG
+`Pooler` per server in transaction mode, switched on by the server's connection load, with
+`DATABASE_DIRECT_URL` for what a transaction pool cannot carry (the amendment of
+2026-10-15). The one item the proposal promised and the platform does not do, `spec.pooler`
+on a dedicated database, is a feature of its own: #293. The proposal and the amendment
+below are the historical record.
 
 ## Summary
 
@@ -65,3 +76,4 @@ need a command.
   **Rotation** (`shpyrd pg rotate`, and `shpyrd buckets rotate` for buckets) and
   **resize** (`shpyrd pg resize`, refused when no machine can hold the size) are
   as the text above says.
+- 2026-10-28: closed as implemented; the dedicated database's own pooler is #293.

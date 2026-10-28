@@ -1,10 +1,23 @@
 # RFC-0081 Project portability and local storage for the MVP
 
-**Status:** implemented (phase 1, the portable project archive); phase 2 is history: the storage plan of 2026-10-10 retired local disks from the cloud profiles
+**Status:** implemented (phase 1, the portable project archive; phase 2 is history since the storage plan of 2026-10-10) — see Closing below
 
 **Owner:** Patrick Negri
 
 **Creation date:** 2026-10-03
+
+**Last update:** 2026-10-28
+
+## Closing (2026-10-28)
+
+The RFC is closed as implemented. Phase 1, the portable project archive (export, import,
+restore in place, buckets by reference and with their files), is in production since the
+storage plan's steps 2 and 5 (October 2026). Phase 2, local disks and project placement on
+the cloud profiles, is history: the plan of 2026-10-10 chose durable block storage for
+every project disk and database on the cloud profiles, moved the existing data to it and
+kept the node-local class for kind alone, where the placement machinery below still serves
+it. Nothing remains to build; the text below is the record of the decision and of what was
+validated.
 
 ## Decision
 
@@ -195,3 +208,4 @@ destination space and transfer limits must accommodate the copy.
   every project disk and database on cloud profiles, moved the existing local
   data to it (steps 1–2) and kept the node-local class for kind only; the
   placement machinery of this RFC remains for that class.
+- 2026-10-28: closed as implemented.
