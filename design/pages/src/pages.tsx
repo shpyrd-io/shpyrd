@@ -215,23 +215,27 @@ const server: Record<string, ServerPage> = {
 
 export const pages: Record<string, ServerPage> = { ...server, ...dex };
 
+// An item of a list, in marks: whichever word is read of it is that
+// word's mark, and the word "" the item itself. It does not come from the
+// sample, which may have no item to take the words from: the "nothing"
+// page shows no link, and its template still writes them.
+const itemMarks: Item = new Proxy({} as Item, {
+  get: (_, key) => (typeof key === "string" ? (key === "" ? "{{.}}" : `{{.${key}}}`) : undefined),
+});
+
 // The page with a Go template's marks: a word is {{.Name}}; a list is
 // ranged over, its items' words marks of their own.
-export function marks(page: ServerPage): Fill {
+export function marks(): Fill {
   const ref = (name: string) => (name.startsWith("$") ? name : `.${name}`);
   return {
     word: (name) => `{{.${name}}}`,
-    each: (list, draw) => {
-      const first = (page.sample[list] as Item[] | undefined)?.[0] ?? {};
-      const item = Object.fromEntries(Object.keys(first).map((k) => [k, k === "" ? "{{.}}" : `{{.${k}}}`]));
-      return (
-        <>
-          {`{{range .${list}}}`}
-          {draw(item)}
-          {"{{end}}"}
-        </>
-      );
-    },
+    each: (list, draw) => (
+      <>
+        {`{{range .${list}}}`}
+        {draw(itemMarks)}
+        {"{{end}}"}
+      </>
+    ),
     choose: (name, options, otherwise) => (
       <>
         {Object.entries(options).map(([value, node], i) => (

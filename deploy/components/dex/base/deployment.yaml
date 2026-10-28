@@ -17,7 +17,7 @@ spec:
         shpyrd.io/config-urls: "${SHPYRD_AUTH_URL} ${SHPYRD_DASHBOARD_URL}"
         # And when its pages change: the hash of web.yaml, written with it
         # by design/pages (`make pages`).
-        shpyrd.io/web: "af139898a4de3a81"
+        shpyrd.io/web: "9b40eb3dde12d136"
     spec:
       serviceAccountName: dex
       securityContext:
