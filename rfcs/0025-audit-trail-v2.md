@@ -4,11 +4,11 @@
 
 **Owner:** unassigned
 
-**Depends on:** RFC-0008 (implemented), RFC-0022
+**Depends on:** RFC-0008 (implemented)
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-22
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -46,6 +46,8 @@ exportable.
 1. Retention default one year? Default: yes.
 2. Is export enough, or must forwarding to a SIEM ship in the same RFC? Default: export
    here, forwarding through RFC-0023.
+3. Where the durable store is: the log pipeline this proposal wrote to (RFC-0022b, Loki as
+   an add-on) was withdrawn on 2026-10-28. Default: the control-plane database.
 
 ## Implementation History
 

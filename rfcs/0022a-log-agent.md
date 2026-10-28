@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-23
 
-**Last update:** 2026-09-30
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -16,7 +16,7 @@ A Vector DaemonSet that reads container logs from every node, attaches
 `project`, `process`, `instance` labels from pod annotations (no per-line
 API calls), enforces per-container log rotation through the kubelet config
 so a high-throughput app cannot fill the node disk, and feeds log drains
-(RFC-0023) and future storage (RFC-0022b). The current live stream from
+(RFC-0023). The current live stream from
 the Kubernetes API keeps working unchanged; the agent is an additional
 data path, not a replacement.
 
@@ -43,7 +43,7 @@ data path, not a replacement.
 ### Non-Goals
 
 - Replacing the live Kubernetes-API log stream (stays as the primary path).
-- Log storage / `--since` (RFC-0022b, depends on RFC-0046).
+- Log storage / `--since` (the storage half of RFC-0022, withdrawn on 2026-10-28).
 - Log drains themselves (RFC-0023, depends on this RFC).
 - Build logs and run logs (same agent reads them; routing to drains: RFC-0023).
 

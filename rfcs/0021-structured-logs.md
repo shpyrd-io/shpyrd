@@ -8,7 +8,7 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-27
+**Last update:** 2026-10-28
 
 ## Summary
 
@@ -28,7 +28,8 @@ read and the viewer's level highlighting misses it.
 
 ### Non-Goals
 
-- Storage or search over time (RFC-0022).
+- Storage or search over time (RFC-0022b, withdrawn on 2026-10-28: a cluster drain feeds a
+  store of one's own).
 
 ## Proposal
 
@@ -51,8 +52,8 @@ read and the viewer's level highlighting misses it.
   fields as key/value; a "raw" toggle per view; the filter box matches field values too.
 - CLI: `--pretty` renders `time level message key=value...`; `--json` passes lines through
   untouched; default: pretty when stdout is a terminal.
-- Works on the live stream (no dependency on the pipeline); when RFC-0022 lands the same
-  renderer applies to history.
+- Works on the live stream (no dependency on the pipeline; the log history the renderer
+  was to apply to as well, RFC-0022b, was withdrawn on 2026-10-28).
 
 ## Design Details
 

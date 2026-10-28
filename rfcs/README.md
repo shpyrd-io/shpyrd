@@ -40,7 +40,8 @@ implement those proposals.
 
 Numbers 0043 and 0044 are retired: the two proposals (builds in their own namespace with
 enforce-mode Pod Security; supply chain and encryption at rest) were never started and
-became issues #288 and #289 on 2026-10-28.
+became issues #288 and #289 on 2026-10-28. RFC-0022's file went the same day: its storage
+half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 0022a.
 
 | RFC | Title | Status | Depends on |
 | --- | --- | --- | --- |
@@ -65,11 +66,10 @@ became issues #288 and #289 on 2026-10-28.
 | [0019](0019-health-checks-and-rollouts.md) | Health checks and zero-downtime rollouts | implemented, gaps | 0001 |
 | [0020](0020-maintenance-mode.md) | Maintenance mode | implemented | 0001, 0081 |
 | [0021](0021-structured-logs.md) | Structured logs in the viewer and the CLI | implemented | |
-| [0022](0022-log-pipeline.md) | Log pipeline (agent + Loki) — split, see 0022a and 0022b | provisional | 0046 |
 | [0022a](0022a-log-agent.md) | Log agent (Vector DaemonSet, container log limits) | implemented, gaps | 0001 |
 | [0023](0023-log-drains.md) | Log drains (project and cluster scope, syslog, HTTPS) | implemented, gaps | 0022a |
-| [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005, 0022 |
-| [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008, 0022 |
+| [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005 |
+| [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008 |
 | [0026](0026-web-terminal.md) | Web terminal | implemented (v0.9.8; the bridge carries the CLI's shell, `run` and the database shells since v0.9.61; gaps: the close audit on disconnect and shutdown (#281), the write deadline untested (#282), `TERM` unset (#283)) | 0005, 0008 |
 | [0027](0027-application-metrics-v2.md) | Application metrics v2 | implemented, gaps | 0011 |
 | [0028](0028-resource-pages-and-metrics.md) | Resource detail pages and metrics | provisional | 0006, 0009, 0010 |
