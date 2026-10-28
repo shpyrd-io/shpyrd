@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { AvatarStack } from "@shpyrd/ui/components/avatar-stack";
 import { Badge } from "@shpyrd/ui/components/badge";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@shpyrd/ui/components/dialog";
 import { Field } from "@shpyrd/ui/components/field";
@@ -37,7 +37,6 @@ export function Teams() {
     <Card>
       <CardHeader>
         <CardTitle>Teams</CardTitle>
-        <CardDescription>A project gives a role to a team, and everyone in it has it. The team everyone is in has every person who signs in.</CardDescription>
         <CardAction>
           <EditTeam onDone={refresh} />
         </CardAction>

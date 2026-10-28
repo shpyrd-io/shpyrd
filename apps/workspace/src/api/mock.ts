@@ -24,6 +24,7 @@ import type {
   LoginMethods,
   Member,
   Person,
+  RegistryToken,
   Project,
   ProjectSummary,
   PublicConfig,
@@ -86,6 +87,7 @@ type Things = {
   githubLink: GitHubLink | null;
   githubRepositories: GitHubRepository[];
   githubBranches: Record<string, string[]>;
+  registryTokens: RegistryToken[];
 };
 
 // The shape of the files changes with the application: what a browser
@@ -469,11 +471,41 @@ export const mock: Api = {
   },
   updateWorkspace: async (body) => {
     const current = await workspaceOf.get();
-    const { logo, color, ...rest } = body;
+    const { logo, color, ui, ...rest } = body;
     const branding = { ...current.branding };
     if (logo !== undefined) branding.logoUrl = logo || undefined;
     if (color !== undefined) branding.color = color || undefined;
-    return workspaceOf.set({ ...current, ...rest, branding, updatedAt: now() });
+    // An application of the workspace's own (RFC-0084): the Mock
+    // settles a tag to a made-up digest and reports it serving.
+    let chosen = current.ui;
+    if (ui !== undefined) {
+      if (!ui.trim()) chosen = undefined;
+      else {
+        const ref = ui.trim();
+        if (!/^oci:\/\/[^/]+\/.+/.test(ref) && !ref.startsWith("dir:/"))
+          throw new ApiError(400, "unknown source: oci://host/repository@sha256:... or dir:/path");
+        const settled = ref.includes("@sha256:") ? ref : `${ref.replace(/:[^/:]+$/, "")}@sha256:${"0".repeat(64)}`;
+        chosen = { ref: settled, setBy: "ana@acme.test", setAt: now(), status: { state: "serving", at: now(), name: "Acme", version: "2.3.1" } };
+      }
+    }
+    return workspaceOf.set({ ...current, ...rest, branding, ui: chosen, updatedAt: now() });
+  },
+  reloadWorkspaceUI: async () => {
+    await wait();
+    return currentWorkspace();
+  },
+  registryTokens: async () => (await thingsOf.get()).registryTokens,
+  setRegistryToken: async (host, body) => {
+    const all = await thingsOf.get();
+    const token: RegistryToken = { host, username: body.username, updatedBy: "ana@acme.test", updatedAt: now() };
+    all.registryTokens = [...all.registryTokens.filter((t) => t.host !== host), token].sort((a, b) => a.host.localeCompare(b.host));
+    await thingsOf.set(all);
+    return token;
+  },
+  unsetRegistryToken: async (host) => {
+    const all = await thingsOf.get();
+    all.registryTokens = all.registryTokens.filter((t) => t.host !== host);
+    await thingsOf.set(all);
   },
   people: async () => (await thingsOf.get()).people,
   setPersonRole: async (email, role) => {

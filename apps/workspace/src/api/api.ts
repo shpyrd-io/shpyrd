@@ -24,6 +24,7 @@ import type {
   GitHubLink,
   GitHubRepositories,
   ProjectGitAuth,
+  RegistryToken,
   Identity,
   Link,
   Instance,
@@ -113,7 +114,17 @@ export type Api = {
     logo?: string;
     color?: string;
     mcpName?: string;
+    // The reference of an application of the workspace's own, "" for
+    // the platform's (RFC-0084).
+    ui?: string;
   }) => Promise<WorkspaceInfo>;
+  // The application the door serves is loaded again on the next request.
+  reloadWorkspaceUI: () => Promise<WorkspaceInfo>;
+  // The workspace's read credentials for registries, one per host;
+  // values are written, never returned.
+  registryTokens: () => Promise<RegistryToken[]>;
+  setRegistryToken: (host: string, body: { username: string; token: string }) => Promise<RegistryToken>;
+  unsetRegistryToken: (host: string) => Promise<void>;
   people: () => Promise<Person[]>;
   setPersonRole: (email: string, role: WorkspaceRole) => Promise<void>;
   setPersonStatus: (email: string, status: Person["status"]) => Promise<void>;

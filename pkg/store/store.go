@@ -181,6 +181,20 @@ type WorkspaceSettings struct {
 	// MCPName is what an assistant shows for the workspace's MCP server
 	// (RFC-0032); "<name> on shpyrd" when empty.
 	MCPName string `json:"mcpName,omitempty"`
+	// UI is the workspace application this workspace's door serves (RFC-0084):
+	// a reference to a built application, served in place of the platform's
+	// own; nil means the platform's own.
+	UI *WorkspaceUI `json:"ui,omitempty"`
+}
+
+// WorkspaceUI is a workspace's choice of application (RFC-0084): Ref names
+// a built application the server can fetch ("dir:/path" for development,
+// "oci://host/repo@sha256:..." for a published one).
+type WorkspaceUI struct {
+	Ref string `json:"ref"`
+	// SetBy and SetAt say who set it and when.
+	SetBy string    `json:"setBy,omitempty"`
+	SetAt time.Time `json:"setAt,omitzero"`
 }
 
 // SleepDefaults are a workspace's default sleep: projects and databases

@@ -125,9 +125,17 @@ func (h *connectorHandlers) add(c *gin.Context) {
 		if err == nil {
 			clientID, secret := strings.TrimSpace(string(sec.Data["client-id"])), strings.TrimSpace(string(sec.Data["client-secret"]))
 			full := FullConnectorID(realm, spec.Workspace, spec.ID)
+			switchURL := ""
+			if all, err := h.store().List(c.Request.Context()); err == nil {
+				for _, kept := range all {
+					if kept.FullID == full {
+						switchURL = kept.SwitchAccountURL
+					}
+				}
+			}
 			if err := h.deps.Auth.AddOIDC(c.Request.Context(), ext.OIDCProvider{
 				ID: full, Label: spec.Name, Kind: spec.Type, ConnectorID: full, UpstreamIssuer: spec.Issuer, Issuer: h.issuer, ClientID: clientID, ClientSecret: secret, Realm: realm, Workspace: spec.Workspace,
-				Available: licensing.Active,
+				SwitchAccountURL: switchURL, Available: licensing.Active,
 			}); err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "connector saved, but the sign-in page could not register it: " + err.Error()})
 				return

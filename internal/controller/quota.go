@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,15 +24,40 @@ const (
 	QuotaStorageName = "shpyrd-storage"
 )
 
+// BuildPriorityClass marks image builds and ReleasePriorityClass release
+// steps (deploy/components/shpyrd: the PriorityClasses). The compute quota
+// leaves pods of these classes out (#243, #60): a build and a release step
+// are steps of a deploy, not something the workspace keeps running, and
+// counting them refused every deploy of a small workspace whose app was
+// awake. A build is bounded by limits of its own, a release step by the
+// release process's size.
+const (
+	BuildPriorityClass   = "shpyrd-build"
+	ReleasePriorityClass = "shpyrd-release"
+)
+
+// computeScopes and computeSelector say which pods the compute quota
+// counts: those that ask for resources (buildpack builds ask for none,
+// BestEffort) and are not steps of a deploy.
+var (
+	computeScopes   = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
+	computeSelector = &corev1.ScopeSelector{MatchExpressions: []corev1.ScopedResourceSelectorRequirement{{
+		ScopeName: corev1.ResourceQuotaScopePriorityClass, Operator: corev1.ScopeSelectorOpNotIn, Values: []string{BuildPriorityClass, ReleasePriorityClass},
+	}}}
+)
+
 // reconcileQuota backs the API's plan check with ResourceQuotas: the
 // plan's ceilings on requests and storage, per project namespace. A
 // namespace cannot hold more than the whole plan; the API keeps the sum
 // across projects under it. Workspaces without a plan get no quota, and a
 // quota left behind by ceilings that went away is removed.
 //
-// The compute quota is scoped to pods that ask for resources: buildpack
-// builds run as pods with none (BestEffort) and must not be refused for
-// failing to declare them. It counts requests, the coarse backstop behind
+// The compute quota is scoped to pods that ask for resources and are not
+// steps of a deploy: buildpack builds run as pods with none (BestEffort),
+// Dockerfile builds under BuildPriorityClass with limits of their own,
+// release steps under ReleasePriorityClass with the release process's size.
+// It counts
+// requests, the coarse backstop behind
 // the API's count of instance sizes (a shared size requests a share of
 // its CPU); it is not the ceiling itself.
 func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) error {
@@ -44,15 +70,10 @@ func (r *AppReconciler) reconcileQuota(ctx context.Context, app *shpyrdv1.App) e
 		cap = r.Config.ProjectStorageCap(workspaceOf(app), app.Spec.Slug)
 	}
 	compute, storage := quotaHard(limits, cap)
-	notBestEffort := []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
-	if err := r.applyQuota(ctx, app, QuotaName, compute, notBestEffort); err != nil {
+	if err := applyQuota(ctx, r.Client, app, QuotaName, compute, computeScopes, computeSelector); err != nil {
 		return err
 	}
-	return r.applyQuota(ctx, app, QuotaStorageName, storage, nil)
-}
-
-func (r *AppReconciler) applyQuota(ctx context.Context, app *shpyrdv1.App, name string, hard corev1.ResourceList, scopes []corev1.ResourceQuotaScope) error {
-	return applyQuota(ctx, r.Client, app, name, hard, scopes)
+	return applyQuota(ctx, r.Client, app, QuotaStorageName, storage, nil, nil)
 }
 
 // syncQuotas keeps the quotas of every project in step with its
@@ -78,17 +99,17 @@ func (r *WorkspaceReconciler) syncQuotas(ctx context.Context, all []store.Worksp
 			continue // a workspace the store does not know: leave it be
 		}
 		compute, storage := quotaHard(ws.Settings.Limits, ws.Settings.ProjectCaps[app.Spec.Slug].Storage)
-		if err := applyQuota(ctx, r.Client, app, QuotaName, compute, []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}); err != nil {
+		if err := applyQuota(ctx, r.Client, app, QuotaName, compute, computeScopes, computeSelector); err != nil {
 			return err
 		}
-		if err := applyQuota(ctx, r.Client, app, QuotaStorageName, storage, nil); err != nil {
+		if err := applyQuota(ctx, r.Client, app, QuotaStorageName, storage, nil, nil); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name string, hard corev1.ResourceList, scopes []corev1.ResourceQuotaScope) error {
+func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name string, hard corev1.ResourceList, scopes []corev1.ResourceQuotaScope, selector *corev1.ScopeSelector) error {
 	q := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: app.Namespace}}
 	if len(hard) == 0 {
 		if err := c.Get(ctx, client.ObjectKeyFromObject(q), q); apierrors.IsNotFound(err) {
@@ -99,16 +120,38 @@ func applyQuota(ctx context.Context, c client.Client, app *shpyrdv1.App, name st
 		}
 		return nil
 	}
+	// A quota's scopes are immutable: one that counts other pods than these
+	// (a quota from before builds left it, #243) is replaced, not updated.
+	cur := &corev1.ResourceQuota{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(q), cur); err == nil && !sameScopes(cur.Spec, scopes, selector) {
+		if err := c.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("replace quota %s: %w", name, err)
+		}
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, q, func() error {
 		q.Labels = mergeMaps(q.Labels, commonLabels(app))
 		q.Spec.Hard = floorAtUsed(hard, q.Status.Used)
 		q.Spec.Scopes = scopes
+		q.Spec.ScopeSelector = selector
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("quota %s: %w", name, err)
 	}
 	return nil
+}
+
+// sameScopes says a quota counts the pods these scopes and selector say.
+func sameScopes(spec corev1.ResourceQuotaSpec, scopes []corev1.ResourceQuotaScope, selector *corev1.ScopeSelector) bool {
+	if len(spec.Scopes) != len(scopes) {
+		return false
+	}
+	for i := range scopes {
+		if spec.Scopes[i] != scopes[i] {
+			return false
+		}
+	}
+	return equality.Semantic.DeepEqual(spec.ScopeSelector, selector)
 }
 
 // floorAtUsed keeps a quota from being rendered below what the namespace

@@ -267,6 +267,13 @@ type OIDCProvider struct {
 	// Workspace is the short id (RFC-0076) of the workspace a
 	// RealmWorkspace method belongs to.
 	Workspace string
+	// SwitchAccountURL is where a person signed in at the provider ends
+	// that session to sign in as someone else (shpyrd Accounts'
+	// /switch-account); the page receives return_to, the address to come
+	// back to. The login page offers it when a sign-in was refused, since
+	// signing in again would only bring back the same account. Empty: the
+	// provider has none.
+	SwitchAccountURL string
 }
 
 // Realms of a login method (RFC-0080).

@@ -5,7 +5,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/
 import { Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import { Button } from "@shpyrd/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@shpyrd/ui/components/card";
 import { Checkbox } from "@shpyrd/ui/components/checkbox";
 import { ConfirmDialog } from "@shpyrd/ui/components/confirm-dialog";
 import { Input } from "@shpyrd/ui/components/input";
@@ -80,7 +80,6 @@ export function ProjectBackups({ name, queryKey, actions, allowed = true }: {
     <Card>
       <CardHeader>
         <CardTitle>Project backup and restore</CardTitle>
-        <CardDescription>Download one .tgz with the code, deployed build, configuration, PostgreSQL databases and volume files. Buckets travel by reference: a restore on this platform finds their files where they are. The project pauses during backup and restore.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         {preview && <Alert><AlertTitle>Interactive preview</AlertTitle><AlertDescription>These actions simulate progress. No project is paused, no backup file is downloaded, and restore does not read or upload your selected file.</AlertDescription></Alert>}

@@ -4,7 +4,7 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0033 (in progress: the edge, access modes), RFC-0034 (implemented:
+**Depends on:** RFC-0033 (implemented: the edge, access modes), RFC-0034 (implemented:
 per-app custom domains)
 
 **Creation date:** 2026-09-27

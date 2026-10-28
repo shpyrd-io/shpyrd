@@ -124,7 +124,7 @@ function Card({ project, operator }: { project: ProjectSummary; operator: boolea
       tags={badgesOf(project)}
       phase={phaseOf(project)}
       exposure={project.exposure === "internal" ? "internal" : "public"}
-      access={project.access === "authenticated" ? "locked" : "open"}
+      access={project.access === "authenticated" ? "locked" : project.access === "identified" ? "mixed" : "open"}
       onSettings={operator ? () => navigate(`/projects/${project.slug}`) : undefined}
     />
   );

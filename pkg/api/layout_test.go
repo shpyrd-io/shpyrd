@@ -169,6 +169,10 @@ func TestLayoutAppHosts(t *testing.T) {
 	if rec := at(t, s, "older.shpyrd.app", "GET", "/api/config", ""); !strings.Contains(rec.Body.String(), `"appHost":{"prefix":"","suffix":".older.shpyrd.app"}`) {
 		t.Errorf("config at older: %s", rec.Body.String())
 	}
+	// So does the CLI, from the workspace's own view (#242).
+	if rec := at(t, s, "acme.shpyrd.cloud", "GET", "/api/workspace", ""); !strings.Contains(rec.Body.String(), `"appHost":{"prefix":"acme-","suffix":".shpyrd.app"}`) {
+		t.Errorf("workspace at acme: %s", rec.Body.String())
+	}
 }
 
 func TestLayoutOldNamesRedirect(t *testing.T) {

@@ -4,7 +4,7 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0033 (in progress: workspaces, addresses, the edge), RFC-0059
+**Depends on:** RFC-0033 (implemented: workspaces, addresses, the edge), RFC-0059
 (implemented: in-cluster registry, base36 repository paths), RFC-0075 (in progress:
 usage ledger)
 

@@ -22,7 +22,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@shpyrd/ui/components/card";
@@ -149,10 +148,6 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
       <Card>
         <CardHeader>
           <CardTitle>Variables and secrets</CardTitle>
-          <CardDescription>
-            Variables are visible to project viewers. Saved secrets cannot be viewed or made visible; you can replace or remove them.
-            Save your edits, then redeploy to apply them to every process.
-          </CardDescription>
           {perms.config && (
             <CardAction>
               <FromDotenv
@@ -363,10 +358,6 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
       <Card>
         <CardHeader>
           <CardTitle>Plain environment</CardTitle>
-          <CardDescription>
-            What every process sees besides the config vars: what the platform
-            sets, and what the spec says in the open.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table variant="secondary">
@@ -386,37 +377,19 @@ export function Config({ project, perms }: { project: Project; perms: Perms }) {
                   <InlineCode>PORT</InlineCode>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  The port the web process has to answer on.
+                  Port to listen on.
                 </TableCell>
               </TableRow>
               {[
-                ["RUNNING_IN_SHPYRD", "true: the process runs on shpyrd."],
-                ["SHPYRD_PROJECT", "The slug of the project."],
-                [
-                  "SHPYRD_PROJECT_ID",
-                  "The id of the project, which never changes.",
-                ],
-                [
-                  "SHPYRD_PROJECT_NAME",
-                  "The name of the project, as it is shown.",
-                ],
-                ["SHPYRD_WORKSPACE", "The slug of the workspace."],
-                [
-                  "SHPYRD_PROCESS",
-                  "The name of the process the instance runs: web, worker, release.",
-                ],
-                [
-                  "SHPYRD_RELEASE",
-                  "The number of the release the instance belongs to; SHPYRD_RELEASE_VERSION is the same with a v: v5.",
-                ],
-                [
-                  "SHPYRD_REVISION",
-                  "The git commit the release was built from, or the digest of the archive; SHPYRD_PROJECT_REVISION and REVISION are the same. Absent for a prebuilt image.",
-                ],
-                [
-                  "SHPYRD_ISSUER",
-                  "Where the tokens of visitors are signed, for an app that checks who opens it.",
-                ],
+                ["RUNNING_IN_SHPYRD", "Always true."],
+                ["SHPYRD_PROJECT", "Project slug."],
+                ["SHPYRD_PROJECT_ID", "Project id, never changes."],
+                ["SHPYRD_PROJECT_NAME", "Project name."],
+                ["SHPYRD_WORKSPACE", "Workspace slug."],
+                ["SHPYRD_PROCESS", "web, worker or release."],
+                ["SHPYRD_RELEASE", "Release number."],
+                ["SHPYRD_REVISION", "Git commit or archive digest."],
+                ["SHPYRD_ISSUER", "Issuer of visitor tokens."],
               ].map(([name, what]) => (
                 <TableRow key={name}>
                   <TableCell>

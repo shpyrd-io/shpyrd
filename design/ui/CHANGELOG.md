@@ -12,6 +12,7 @@ application has to change.
 - `StatePage` takes any node as its `title`, not only text: the prop no longer meets the HTML `title` attribute's type.
 - A select's trigger shrinks with its grid column and clips its value, instead of growing past the column and out of its dialog (a long instance size did).
 - An inline progress bar writes its label before itself: a count over a limit with a thin bar beside it, as a table cell holds it.
+- `LauncherCard` takes `access="mixed"` for an application that asks for a sign-in on some paths only: a half shield beside the network sign, "Public, sign-in on some paths", instead of the lock.
 
 ## 0.1.2
 

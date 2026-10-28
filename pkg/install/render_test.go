@@ -1160,3 +1160,35 @@ func TestWALArchiveAlertsReadTheArchiveQueueAndSkipNeverFailed(t *testing.T) {
 		t.Errorf("failing reads %q, want a database that never failed (-1) left out", e)
 	}
 }
+
+// Dockerfile builds and release steps run under priority classes of their
+// own, outside the workspace's compute quota (#243, #60): the shpyrd
+// component installs them, so a server-only roll brings them along. They
+// never preempt.
+func TestTheServerInstallsTheStepPriorityClasses(t *testing.T) {
+	eng, err := New(nil, Options{Profile: "local", Vars: map[string]string{VarDomain: "example.test"}, Reporter: &quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := eng.renderComponent(eng.components["shpyrd"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, o := range objs {
+		if o.GetKind() != "PriorityClass" {
+			continue
+		}
+		policy, _, _ := unstructured.NestedString(o.Object, "preemptionPolicy")
+		global, _, _ := unstructured.NestedBool(o.Object, "globalDefault")
+		if policy != "Never" || global {
+			t.Errorf("%s: preemptionPolicy=%q globalDefault=%v", o.GetName(), policy, global)
+		}
+		found[o.GetName()] = true
+	}
+	for _, name := range []string{"shpyrd-build", "shpyrd-release"} {
+		if !found[name] {
+			t.Errorf("the shpyrd component has no %s PriorityClass", name)
+		}
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ids"
 	"github.com/shpyrd-io/shpyrd/pkg/store"
+	"github.com/shpyrd-io/shpyrd/pkg/uipkg"
 )
 
 // The workspace (RFC-0033): the tenant every project belongs to. The
@@ -39,6 +40,10 @@ type WorkspaceView struct {
 	OwnedByOperator bool `json:"ownedByOperator"`
 	// Domain is where the workspace's apps live, one label under it.
 	Domain string `json:"domain,omitempty"`
+	// AppHost is how its apps' addresses are written, prefix + app +
+	// suffix: <label>-<app>.<apps domain> in the shared layout, which
+	// Domain alone cannot say (#242).
+	AppHost *AppHostView `json:"appHost,omitempty"`
 	// Address is the host of an explicit workspace's dashboard (RFC-0033
 	// phase 6); empty for the implicit workspace, which answers at the
 	// platform's dashboard URL.
@@ -63,6 +68,9 @@ type WorkspaceView struct {
 	OwnMethodsOnly bool `json:"ownMethodsOnly"`
 	// Branding is the workspace's look (logo URL, colour).
 	Branding *BrandingView `json:"branding,omitempty"`
+	// UI is the application this workspace chose for its door (RFC-0084):
+	// nil when it runs the platform's own.
+	UI *WorkspaceUIView `json:"ui,omitempty"`
 	// MCPName is the name assistants show for the workspace's MCP server;
 	// MCPURL where it answers (RFC-0032).
 	MCPName string `json:"mcpName"`
@@ -131,8 +139,8 @@ func (s *Server) workspaceView(c *gin.Context, w *store.Workspace) WorkspaceView
 	return WorkspaceView{
 		Capabilities: s.workspaceCapabilities(w),
 		Slug:         w.Slug, Name: w.Name, OwnedByOperator: w.OwnedByOperator(),
-		Domain: s.appsDomainOf(w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
-		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
+		Domain: s.appsDomainOf(w), AppHost: s.appHostView(c.Request.Context(), w), Address: w.Address, URL: s.dashboardURLOf(w), Status: firstNonEmpty(w.Status, store.WorkspaceActive),
+		Owner: w.Owner, JoinPolicy: firstNonEmpty(w.Settings.JoinPolicy, store.JoinOpen), OwnMethodsOnly: w.Settings.OwnMethodsOnly, Branding: brandingView(w), UI: s.workspaceUIView(w), Owners: owners, CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt,
 		MCPName: firstNonEmpty(strings.TrimSpace(w.Settings.MCPName), firstNonEmpty(w.Name, w.Slug)+" on shpyrd"), MCPURL: s.dashboardURLOf(w) + "/mcp",
 	}
 }
@@ -165,6 +173,9 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 		Color *string `json:"color"`
 		// MCPName names the workspace's MCP server for assistants; "" resets.
 		MCPName *string `json:"mcpName"`
+		// UI is the reference of the application the door serves (RFC-0084);
+		// "" goes back to the platform's own.
+		UI *string `json:"ui"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		abort(c, http.StatusBadRequest, err)
@@ -229,6 +240,32 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 			return
 		}
 		changes = append(changes, "mcp name: "+firstNonEmpty(settings.MCPName, "(default)"))
+	}
+	if req.UI != nil {
+		ref, err := s.chooseWorkspaceUI(c, w, *req.UI)
+		if err != nil {
+			abort(c, http.StatusBadRequest, err)
+			return
+		}
+		settings := w.Settings
+		old := uiRefOf(w)
+		if ref == "" {
+			settings.UI = nil
+		} else {
+			settings.UI = &store.WorkspaceUI{Ref: ref, SetBy: actorOf(c), SetAt: time.Now().UTC()}
+		}
+		if w, err = s.store.UpdateWorkspaceSettings(ctx, s.workspace(c), settings); err != nil {
+			storeErr(c, err, "workspace")
+			return
+		}
+		if old != "" && old != ref {
+			s.chosenUI().forget(old)
+		}
+		if ref != "" {
+			// Loaded now, so the answer already says how it is doing.
+			s.chosenUI().get(ctx, w, s.credentialsOf(ctx, w.Slug))
+		}
+		changes = append(changes, "ui: "+firstNonEmpty(ref, "(default)"))
 	}
 	if req.Logo != nil || req.Color != nil {
 		settings := w.Settings
@@ -976,4 +1013,79 @@ func (s *Server) listWorkspacesCore(c *gin.Context) {
 		out = append(out, sum)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// uiRefOf is the reference of the application a workspace chose for its
+// door (RFC-0084), "" for the platform's own.
+func uiRefOf(w *store.Workspace) string {
+	if w.Settings.UI == nil {
+		return ""
+	}
+	return w.Settings.UI.Ref
+}
+
+// WorkspaceUIView is the application a workspace chose (RFC-0084): the
+// reference, who set it, and what it is doing on this replica.
+type WorkspaceUIView struct {
+	Ref    string    `json:"ref"`
+	SetBy  string    `json:"setBy,omitempty"`
+	SetAt  time.Time `json:"setAt,omitzero"`
+	Status *UIStatus `json:"status,omitempty"`
+}
+
+func (s *Server) workspaceUIView(w *store.Workspace) *WorkspaceUIView {
+	if w.Settings.UI == nil || w.Settings.UI.Ref == "" {
+		return nil
+	}
+	return &WorkspaceUIView{Ref: w.Settings.UI.Ref, SetBy: w.Settings.UI.SetBy, SetAt: w.Settings.UI.SetAt, Status: s.chosenUI().status(w)}
+}
+
+// chooseWorkspaceUI checks a reference as the API received it and settles
+// it: "" goes back to the platform's own; a tag becomes the digest it
+// points at now; the package is pulled at once, so a registry that refuses
+// or a package that is not one is refused here, with the reason, not
+// found by the people who arrive at the door.
+func (s *Server) chooseWorkspaceUI(c *gin.Context, w *store.Workspace, raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	ref, err := uipkg.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	chosen := s.chosenUI()
+	if !chosen.sources.Allows(ref.Kind) {
+		if chosen.sources.Off {
+			return "", errors.New("this server serves the platform's own application only")
+		}
+		return "", fmt.Errorf("this server does not accept %s: references (it accepts %s)", ref.Kind, chosen.sources.String())
+	}
+	ctx := c.Request.Context()
+	var cred uipkg.Credential
+	if ref.Kind == uipkg.KindOCI {
+		cred = s.registryCredential(ctx, w.Slug, ref.Host)
+	}
+	if ref, err = chosen.fetcher.Resolve(ctx, ref, cred); err != nil {
+		return "", err
+	}
+	if _, _, err := chosen.fetcher.Fetch(ctx, ref, cred); err != nil {
+		return "", err
+	}
+	chosen.forget(ref.String())
+	return ref.String(), nil
+}
+
+// reloadWorkspaceUI is POST /api/workspace/ui/reload: the application is
+// loaded again on the next request (a development directory was
+// rebuilt; a failed pull is to be tried now).
+func (s *Server) reloadWorkspaceUI(c *gin.Context) {
+	w, err := s.store.Workspace(c.Request.Context(), s.workspace(c))
+	if err != nil {
+		storeErr(c, err, "workspace")
+		return
+	}
+	if ref := uiRefOf(w); ref != "" {
+		s.chosenUI().forget(ref)
+	}
+	c.JSON(http.StatusOK, s.workspaceView(c, w))
 }

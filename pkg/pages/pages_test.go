@@ -144,3 +144,14 @@ func TestCLIAuthorizationPreservesTheFormAndEscapesDeviceInput(t *testing.T) {
 		}
 	}
 }
+
+// The pages with links write them: a packed page whose template lost its
+// marks fails here, not only where the server uses it.
+func TestEveryPageWithLinksWritesThem(t *testing.T) {
+	for _, kind := range []Kind{Nothing, NoAccess, Waking, ServiceUnavailable} {
+		html := HTML(kind, Page{Title: "t", Text: "x", Links: []Link{{Label: "Dashboard", URL: "/dashboard"}}})
+		if !strings.Contains(html, `href="/dashboard"`) || !strings.Contains(html, ">Dashboard</a>") {
+			t.Errorf("%s: the link is not written: %s", kind, markup(html))
+		}
+	}
+}

@@ -14,6 +14,7 @@ resources:
   - crds/shpyrd.io_logdrains.yaml
   - crds/shpyrd.io_objectbuckets.yaml
   - rbac.yaml
+  - step-priorities.yaml
   - storage.yaml
   - server.yaml
   - webhook.yaml

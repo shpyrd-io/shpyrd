@@ -16,7 +16,7 @@ function show(canEdit: boolean, redirectTo = "") {
     { host: "waiting.example.com", dns: "missing", certificate: "issuing" },
   ] };
   const redirect = vi.fn().mockResolvedValue(answer);
-  render(<QueryClientProvider client={queries}><DomainsCard title="Domains" description="Project domains" queryKey={["domains", "shop"]} list={async () => answer} add={vi.fn()} remove={vi.fn()} redirect={redirect} canEdit={canEdit} /></QueryClientProvider>);
+  render(<QueryClientProvider client={queries}><DomainsCard title="Domains" queryKey={["domains", "shop"]} list={async () => answer} add={vi.fn()} remove={vi.fn()} redirect={redirect} canEdit={canEdit} /></QueryClientProvider>);
   return redirect;
 }
 describe("project domain redirects", () => {
@@ -26,7 +26,7 @@ describe("project domain redirects", () => {
     fireEvent.click(select);
     expect(await screen.findByRole("option", { name: "ready.example.com" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "waiting.example.com" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Use workspace default" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Within Workspace" })).toBeTruthy();
   });
   it("shows the selected target to viewers without allowing changes", async () => {
     show(false, "ready.example.com");

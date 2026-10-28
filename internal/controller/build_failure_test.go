@@ -180,3 +180,18 @@ func TestAppDependencyFetchIsNotAClone(t *testing.T) {
 		}
 	}
 }
+
+// kpack's prepare step checks it may write the image before it fetches the
+// source. A registry refusing the write (read-only during its garbage
+// collection, 25 Oct 2026) is the platform's fault, not a source that could
+// not be fetched.
+func TestRegistryRefusingTheWriteIsThePlatforms(t *testing.T) {
+	out := `Loading registry credentials from service account secrets
+Loading secret for "10.96.0.50:5000" from secret "shpyrd-registry" at location "/var/build-secrets/shpyrd-registry"
+Loading cluster credential helpers
+Error verifying write access to "10.96.0.50:5000/apps/ws/app": POST https://10.96.0.50:5000/v2/apps/ws/app/blobs/uploads/: unexpected status code 405 Method Not Allowed: Method not allowed`
+	msg := describeBuildFailure("prepare", out)
+	if !strings.Contains(msg, "platform's registry") || !strings.Contains(msg, "not of the app") || strings.Contains(msg, "fetch the source") || strings.Contains(msg, "10.96.0.50") {
+		t.Errorf("message = %q", msg)
+	}
+}

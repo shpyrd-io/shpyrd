@@ -98,6 +98,12 @@ of each command (`ext.ForOperator`). What still needs a kubeconfig is the operat
 
 ## Implementation History
 
+- 2026-10-26 (v1.5.1): `shpyrd deploy` waits for the release it asked for (#258, #241):
+  a failure the project showed before the deploy is old news until the project moves
+  (another phase, image or message), and the answer after 90 s if it never does; redeploy
+  and rebuild wait the same way. `shpyrd workspace` writes its apps' address from the
+  server's pattern (`appHost` on `/api/workspace`, #259, #242).
+
 - 2026-09-30: implemented in full (v0.9.61): the browser sign-in, `run`, `pg psql`,
   `redis cli` and `globals` over the API; exercised end to end on a kind cluster. The RFC
   is done.
