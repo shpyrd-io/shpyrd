@@ -64,11 +64,13 @@ Modelled on what Heroku, Fly and Render show for an application:
 | Throughput | requests per second at the ingress, stacked by response class (2xx, 3xx, 4xx, 5xx) |
 | Response time | p50, p95 and p99 latency at the ingress |
 | Instances | running instances per process type (step chart) |
-| CPU | usage as a percentage of each process' allocation, averaged over its instances; 100% means every instance saturating its CPU |
-| Memory | working set as a percentage of each process' allocation |
-| Network | instance traffic in and out |
+| CPU | usage by process, in cores against a line at what the process was given, or as a share of it |
+| Memory | working set by process, in bytes against the same line, or as a share of it; every out-of-memory kill is marked |
+| Network | traffic in and out |
 
-Orange dashed lines mark releases; a red line marks 100%. Ranges: last hour, 6 hours, 24 hours, 7 days. 100% is the process' instance size (its allocation); shared sizes can read above 100% while bursting.
+Dashed lines mark releases. Ranges: last 15 minutes, hour, 6 hours, 24 hours, 7 days. What a process was given is its instance size times its instances; shared sizes can read above it while bursting.
+
+The controls above the charts narrow them: one process or every process; by process or by instance (`web.1`, `web.2`…), which only CPU, memory and network can do, since throughput and latency are measured at the edge; for instances, each one, their sum, the average or the busiest; cores and bytes, or a share of the size; and whether the instances replaced during the range are shown, as `replaced 1`, `replaced 2`… The CLI takes the same choices ([`shpyrd metrics`](/docs/cli#metrics)).
 
 ## Access
 
