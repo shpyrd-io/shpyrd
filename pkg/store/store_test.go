@@ -41,7 +41,7 @@ func implementations(t *testing.T) map[string]func(t *testing.T) Store {
 func dropAll(t *testing.T, p *Postgres) {
 	t.Helper()
 	ctx := context.Background()
-	for _, table := range []string{"archive_downloads", "cli_devices", "pending_logins", "exec_tickets", "github_user_links", "github_installations", "cost_export_chunks", "cost_exports", "cost_daily", "cost_collections", "cost_drains", "cost_lines", "console_users", "settings", "project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
+	for _, table := range []string{"oom_kills", "archive_downloads", "cli_devices", "pending_logins", "exec_tickets", "github_user_links", "github_installations", "cost_export_chunks", "cost_exports", "cost_daily", "cost_collections", "cost_drains", "cost_lines", "console_users", "settings", "project_icons", "projects", "sleep_events", "cogs_buckets", "invoice_lines", "usage_hourly", "usage_buckets", "workspace_plans", "plans", "oauth_tokens", "oauth_codes", "oauth_clients", "workspace_hosts", "invitations", "memberships", "api_tokens", "domain_claims", "edge_codes", "sessions", "grants", "teams", "identities", "workspaces", "schema_migrations"} {
 		if _, err := p.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}

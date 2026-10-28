@@ -9,8 +9,10 @@ import { Stack } from "@shpyrd/ui/components/stack";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@shpyrd/ui/components/select";
 import { Stat } from "@shpyrd/ui/components/stat";
 import { TimeChart } from "@shpyrd/ui/components/time-chart";
+import type { Marker, Reference } from "@shpyrd/ui/components/time-chart";
+import { metricValue } from "@shpyrd/ui/lib/format";
 import { api } from "@/api/api";
-import type { Project } from "@/api/types";
+import type { Metrics as MetricsData, OOMKill, Project } from "@/api/types";
 import { Failed, Loading } from "./shared";
 
 // How the project is doing: the numbers that matter, the room it takes,
@@ -35,6 +37,7 @@ export function Metrics({ project }: { project: Project }) {
   const cpu = allocation(m.cpu);
   const memory = allocation(m.memory);
   const GiB = 1 << 30;
+  const kills = m.ooms.map(oomMarker);
   return (
     <>
       <Stack direction="horizontal" justify="end">
@@ -67,10 +70,31 @@ export function Metrics({ project }: { project: Project }) {
         <TimeChart title="Response time" description="How long the requests took" unit="ms" palette="shades" series={m.responseTime} markers={m.releases} />
         <TimeChart title="Throughput" description="Requests a second, by the class of the response" unit="rps" arrangement="stacked" series={m.throughput} markers={m.releases} />
         <TimeChart title="CPU" description="By process, in cores" unit="cores" series={m.cpu} markers={m.releases} />
-        <TimeChart title="Memory" description="By process" unit="bytes" series={m.memory} />
+        <TimeChart title="Memory" description="By process, against the memory of its size" unit="bytes" series={m.memory} references={memoryLimits(m)} markers={kills} />
         <TimeChart title="Network" description="Bytes a second in and out, by process" unit="bytes/s" series={m.network} />
         <TimeChart title="Instances" description="Running, by process" unit="count" kind="step" series={m.instances} />
       </div>
     </>
   );
+}
+
+// An instance killed for crossing its memory, as the Memory chart marks
+// it (#119): in the ink of an error, apart from the releases, and saying
+// what died and at what limit to who points at it.
+export function oomMarker(k: OOMKill): Marker {
+  const who = k.instance ?? (k.process === "release" ? "the release step" : k.process === "build" ? "the build" : k.process);
+  let title = `${who} killed: out of memory`;
+  if (k.limit > 0) title += ` at its ${metricValue(k.limit, "bytes")}${k.size ? ` (${k.size})` : ""}`;
+  return { time: k.time, label: "OOM", tone: "error", title };
+}
+
+// The memory each process is given, as lines across the chart: one a
+// value, named after the processes that have it.
+export function memoryLimits(m: Pick<MetricsData, "memory">): Reference[] {
+  const byValue = new Map<number, string[]>();
+  for (const s of m.memory) {
+    if (!s.reference) continue;
+    byValue.set(s.reference, [...(byValue.get(s.reference) ?? []), s.name]);
+  }
+  return [...byValue].map(([value, names]) => ({ value, label: names.join(", "), tone: "neutral" }));
 }

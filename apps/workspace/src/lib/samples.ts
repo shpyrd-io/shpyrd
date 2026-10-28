@@ -67,6 +67,11 @@ export function metricsOf(slug: string, processes: string[], range: string): Met
       { time: to - 41 * step, label: "v11" },
       { time: to - 12 * step, label: "v12" },
     ],
+    // The first process crossed its memory twice since the last release.
+    ooms: [
+      { time: to - 9 * step, process: processes[0] ?? "web", instance: `${processes[0] ?? "web"}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
+      { time: to - 3 * step, process: processes[0] ?? "web", instance: `${processes[0] ?? "web"}.1`, limit: 512 * MiB, size: "shared-l", release: 12 },
+    ],
   };
 }
 
