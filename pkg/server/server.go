@@ -462,10 +462,20 @@ func openStore(logger *slog.Logger, k *kube.Client, def store.DefaultWorkspaceSp
 		st.Close()
 		return nil, fmt.Errorf("control-plane database: %w", err)
 	}
-	if teams, grants, err := store.ImportCRDs(ctx, k.Dynamic, st, def.Slug); err != nil {
-		logger.Warn("importing teams and members from Kubernetes objects failed; they stay where they are", "err", err.Error())
-	} else if teams+grants > 0 {
-		logger.Info("imported teams and members into the control-plane database", "teams", teams, "grants", grants)
+	// The legacy objects (#249): imported here, their definitions removed by
+	// the installer once every one is marked. Goes in the release after.
+	imp, err := store.ImportCRDs(ctx, k.Dynamic, st, def.Slug)
+	if err != nil {
+		logger.Warn("importing legacy Team and ProjectMember objects failed; the next start retries, and the installer keeps their definitions until it succeeds", "err", err.Error())
+	}
+	if imp.Teams+imp.Grants > 0 {
+		logger.Info("imported legacy teams and project members into the control-plane database", "teams", imp.Teams, "grants", imp.Grants)
+	}
+	for _, name := range imp.Kept {
+		logger.Info("legacy team not imported: the database already has a team of that name, which is kept", "team", name)
+	}
+	for _, what := range imp.Skipped {
+		logger.Warn("legacy object not imported; it is kept in the installer's export when the definitions are removed", "object", what)
 	}
 	return st, nil
 }

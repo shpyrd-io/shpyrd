@@ -994,6 +994,21 @@ func (m *Memory) Import(ctx context.Context, ws string, d *Dump, overwrite bool)
 	return importDump(ctx, m, ws, d, overwrite)
 }
 
+// ensureContacts records each email nobody has signed in with yet as an
+// unbound principal, so an email-only permission from before RFC-0082 (an
+// old backup, a legacy ProjectMember) has someone to attach to. An unbound
+// principal authorizes no login until it is explicitly bound.
+func ensureContacts(ctx context.Context, s Store, ws string, emails []string) error {
+	for _, email := range normalizeEmails(emails) {
+		if _, err := s.GetIdentity(ctx, ws, email); err == ErrNotFound {
+			if _, err = s.TouchIdentity(ctx, ws, Identity{Email: email}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // importDump is the Import every implementation shares: it goes through the
 // public methods so the rules (normalisation, team existence, conflicts)
 // are the same everywhere.
@@ -1040,12 +1055,8 @@ func importDump(ctx context.Context, s Store, ws string, d *Dump, overwrite bool
 		for _, mb := range d.Memberships {
 			contacts = append(contacts, mb.Email)
 		}
-		for _, email := range normalizeEmails(contacts) {
-			if _, err := s.GetIdentity(ctx, ws, email); err == ErrNotFound {
-				if _, err = s.TouchIdentity(ctx, ws, Identity{Email: email}); err != nil {
-					return res, err
-				}
-			}
+		if err := ensureContacts(ctx, s, ws, contacts); err != nil {
+			return res, err
 		}
 	}
 	for _, t := range d.Teams {

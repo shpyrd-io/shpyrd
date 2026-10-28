@@ -77,7 +77,7 @@ half, 0022b (Loki as an add-on, `--since`), was withdrawn; its agent half is 002
 | [0030](0030-notifications.md) | Notifications (webhook, Slack, email) | provisional | 0013 (email) |
 | [0031](0031-api-tokens.md) | Per-user API tokens | implemented (v0.9.0); gaps: CLI minting needs a person session or the admin token | 0008 |
 | [0032](0032-mcp-connector.md) | MCP connector | in progress (v0.9.16: every workspace is a remote MCP server with OAuth 2.1 and read tools; enterprise, `ee/mcp`, since 2026-10-04; writing tools, stdio mode and MCP resources remain) | 0031, 0033 |
-| [0033](0033-workspaces.md) | Workspaces | implemented (v0.4.0–v0.9.61, closed 2026-10-28; identity by 0082, the doors by 0078 and 0080; the remaining gaps are issues #274, #276, #277, #278, #249 and shpyrd-cloud#63, and RFC-0068) | 0008, 0016 |
+| [0033](0033-workspaces.md) | Workspaces | implemented (v0.4.0–v0.9.61, closed 2026-10-28; identity by 0082, the doors by 0078 and 0080; the remaining gaps are issues #274, #276, #277, #278 and shpyrd-cloud#63, and RFC-0068) | 0008, 0016 |
 | [0034](0034-domains-and-certificates.md) | Custom domains | implemented | 0036, 0061 |
 | [0035](0035-cloud-profiles.md) | Cloud profiles: Oracle Cloud (OKE) and AWS (EKS) | implemented (`oci`, network policy); AWS provisional | 0045 |
 | [0036](0036-load-balancer-exposure.md) | Load balancer exposure: internal and external front doors | implemented, gaps | 0035, 0061 |
@@ -171,7 +171,7 @@ an "Implementation status" section with the details; the short version:
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0026 | `shell.close` lost on a client disconnect (best-effort) and never written on a server shutdown: the audit write uses the request context (#281); the two-second write deadline untested against a client that stopped reading (#282); `TERM` unset in the session (#283) |
 | 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
-| 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
+| 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
 | 0039 | a dedicated database's own pooler (`spec.pooler` → CloudNativePG `Pooler`), #293 |

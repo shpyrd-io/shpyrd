@@ -150,8 +150,10 @@ Audited on 2026-09-25 against the code. What the text promises but the platform 
 - **Changed (v0.4.0):** teams and grants are stored in the control-plane database (component
   `control-plane-db`, or `SHPYRD_DATABASE_URL`) rather than as `Team`/`ProjectMember`
   objects; the API, CLI and roles are unchanged, the RBAC mirror reads the database and
-  runs after every write, and the first start after the upgrade imports the objects and
-  marks them `shpyrd.io/migrated` (they are removed in a later release). The workspace
+  runs after every write, and the server imports the objects and marks them
+  `shpyrd.io/migrated`. Their definitions left the manifests in #249: the installer removes
+  them from a cluster once every object is marked, after exporting the objects to a local
+  file, and the server's importer goes in the release after. The workspace
   they belong to is RFC-0033's; the dashboard gained a Workspace page (name, people seen
   at sign-in, teams, accounts).
 - **Changed (v0.5.0):** a fourth project role, `user`, opens the app through the edge

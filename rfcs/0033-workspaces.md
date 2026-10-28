@@ -79,8 +79,9 @@ and behaves as before. The first pieces shipped in v0.4.0:
 
 - A control-plane database (component `control-plane-db`, PostgreSQL in the cluster, or a
   managed one through `SHPYRD_DATABASE_URL`) holding the workspace, the people who signed
-  in, teams and project grants — moved out of the `Team`/`ProjectMember` objects, which are
-  imported once and marked migrated.
+  in, teams and project grants — moved out of the `Team`/`ProjectMember` objects, which the
+  server imports one by one and marks migrated; the installer then removes their definitions
+  (#249).
 - `GET/PATCH /api/workspace`, `/api/workspace/people`, `/api/workspace/grants`,
   `/api/workspace/export|import` (the platform backup carries the database, RFC-0037).
 - A Workspace page in the dashboard (name, people, teams, accounts); the labels
@@ -281,8 +282,7 @@ for agents (RFC-0032, v0.9.16); one signing key ring for the platform (`shpyrd-e
 rotated every 30 days). Still to do, each a feature of its own: workspace delete (#274);
 delegated (NS) custom domains (#276); the Public Suffix List submission for the cloud's
 domains (shpyrd-cloud#63); a switch for previews (#277); `sizes set|delete|default` and
-`extensions enable|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember`
-CRDs (#249); a signed-in person recognised by an `identified` app from the first page
+`extensions enable|disable` without a kubeconfig (#278); a signed-in person recognised by an `identified` app from the first page
 (RFC-0068, its own proposal). SAML methods and step-up on claimed domains are moot since
 RFC-0082: credentials, MFA and step-up are Accounts' or the customer's identity provider's.
 
