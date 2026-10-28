@@ -87,7 +87,7 @@ implement those proposals.
 | [0044](0044-supply-chain.md) | Supply chain and encryption at rest | implementable | 0045 |
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
-| [0047](0047-autoscaling.md) | Autoscaling: a web process follows its load between a minimum and a maximum, on the requests in flight (KEDA HTTP add-on) and CPU (Metrics Server), one ScaledObject shared with sleep | implemented (web; queue triggers and other process types decided out, 2026-10-27) | 0019, 0042, 0075 |
+| [0047](0047-autoscaling.md) | Autoscaling: a web process follows its load between a minimum and a maximum, on the requests in flight (KEDA HTTP add-on) and CPU (Metrics Server), one ScaledObject shared with sleep | implemented (web; queue triggers and other process types decided out, 2026-10-27), gaps | 0019, 0042, 0075 |
 | [0048](0048-cost-visibility.md) | Cost visibility | implemented (as the enterprise Costs, v0.9.73–v0.9.95: Console › Costs and Cost drains, `shpyrd-ctl costs`, usage, OpenCost estimate and the OCI bill; no price sheet — the customer's figure is the Billing app's; complete) | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
@@ -173,6 +173,7 @@ an "Implementation status" section with the details; the short version:
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
 | 0037 | database and volume contents (Postgres archives stay in the cluster's store); release history; e2e in CI |
 | 0045 | e2e for `examples/hello-docker` |
+| 0047 | the step sizes and the cool-down as fields (the HPA's `behavior`, fixed at the defaults); a response-time target (no latency source yet); a schedule (KEDA's `cron` trigger); a cost range beside the bounds; a word when a process sits at its maximum; the live metric value in the dashboard — details in the RFC's "Implementation status" |
 | 0059 | registry NetworkPolicy; `SHPYRD_REGISTRY_KEEP`; `--local-build`; ClusterIP allocation; prune of repositories no App claims (after the v0.9.11 move to `apps/<workspace id>/<slug>`); per-workspace registry credentials (token-auth server) |
 | 0061 | DNS card; `--dns none` removal; OCI policy printout; cluster-type detection |
 | 0075 | monthly invoice finalisation job; Usage card; `lastWakeAt`/`lastWakeDuration` from KEDA; wake bench per language (the per-path bench of 2026-10-22: HTTP 7.5 s / 9.2 s, with a disk 14.1 s / 52.0 s, a database 44.2 s / 52.8 s, p50 / p95); build-cache redesign (shared claim or cheaper class — the 50 Gi cloud minimum makes it the largest line); `sleep_events` for databases — details in the RFC's "Implementation status" |
