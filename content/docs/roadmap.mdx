@@ -5,7 +5,7 @@ description: What is coming - what is decided and what is still a proposal - wit
 
 <Lead>
 
-Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work (completed or replaced account proposals are recorded separately below): **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
+Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work: **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
 
 </Lead>
 
@@ -45,19 +45,6 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Tracing backend (Jaeger) and a Traces tab | [RFC-0056](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0056-tracing-backend.md) | ready to implement |
 | Notifications: webhook, Slack, email | [RFC-0030](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0030-notifications.md) | proposal |
 | Audit trail v2 (durable, cluster-wide, export) | [RFC-0025](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0025-audit-trail-v2.md) | proposal |
-
-## Accounts and authentication: delivered or replaced
-
-Credential features follow the selected IdP's configuration. Accounts supports
-TOTP, recovery codes and passkeys; OSS static Dex credentials do not provide those
-self-service features. Workspace permissions and CLI/MCP grants stay in the workspace.
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| Account identity separation: Accounts/IdP credentials and workspace authorization | [RFC-0082](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0082-account-identity-separation.md) | done (production) |
-| Local password form and password grant | [RFC-0012](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0012-sign-in-experience.md) | replaced by RFC-0082; removed from Core |
-| Local account lifecycle: reset, set-password and credential management | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | replaced by RFC-0082; workspace invitations retained |
-| Core MFA/passkeys proposal | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | discarded in Core; supported in Accounts through Clerk and in customer IdPs |
 
 ## Access
 
