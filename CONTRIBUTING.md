@@ -14,8 +14,10 @@ The enterprise features in [`ee/`](ee) are governed by [`ee/LICENSE`](ee/LICENSE
 not MPL-2.0, and are changed by the shpyrd team only for now: pull requests
 there are not accepted.
 
-Design changes go through the [RFC process](rfcs/README.md); see
-[RFC-0001](rfcs/0001-mvp-local-platform.md) for the current architecture.
+Design changes start as an issue that states the problem and the shape of the
+change; the [roadmap](https://shpyrd.io/docs/roadmap) is the open issues. The
+[architecture guide](https://shpyrd.io/docs/architecture-guide) describes the
+current architecture.
 
 We gratefully welcome improvements to issues and documentation as well as to
 code.
