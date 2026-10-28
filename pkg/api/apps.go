@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -1078,24 +1077,19 @@ func (s *Server) scaleApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if *req.Replicas < 0 || *req.Replicas > 100 {
-		abort(c, http.StatusBadRequest, errors.New("replicas must be between 0 and 100"))
+	if *req.Replicas < 0 || *req.Replicas > maxReplicas {
+		abort(c, http.StatusBadRequest, fmt.Errorf("replicas must be between 0 and %d", maxReplicas))
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		if a.Spec.Processes == nil {
 			a.Spec.Processes = map[string]shpyrdv1.Process{"web": {}}
 		}
-		p, ok := a.Spec.Processes[req.Process]
-		if !ok && req.Process != "web" {
+		if _, ok := a.Spec.Processes[req.Process]; !ok && req.Process != "web" {
 			return fmt.Errorf("unknown process %q", req.Process)
 		}
-		if err := s.checkScale(c.Request.Context(), a, req.Process, *req.Replicas); err != nil {
-			return err
-		}
-		p.Replicas = ptr.To(*req.Replicas)
-		a.Spec.Processes[req.Process] = p
-		return nil
+		// On a process that follows its load the count is its minimum.
+		return s.setReplicas(c.Request.Context(), a, req.Process, *req.Replicas)
 	})
 	if err != nil {
 		return

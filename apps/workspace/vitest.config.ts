@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
+    setupFiles: ["./src/test.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     env: { NEXT_PUBLIC_API_MODE: "mock" },
   },

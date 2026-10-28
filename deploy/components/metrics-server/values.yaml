@@ -1,0 +1,15 @@
+# One pod on the platform pool (the installer pins it, like every
+# component). Upstream asks for 100m and 200Mi; a cluster of a few nodes
+# uses a few millicores and tens of MiB, and the platform pool's CPU
+# requests are the tight axis (71% on one node of the first cloud,
+# 2026-10-27), so the request is kept small and the limit generous.
+replicas: 1
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+# The chart's defaults otherwise: the APIService v1beta1.metrics.k8s.io,
+# a 15 s resolution, the kubelets reached by their node IP.

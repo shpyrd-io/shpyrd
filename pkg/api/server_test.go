@@ -726,6 +726,11 @@ func TestVolumesAPIAndScaleRefusal(t *testing.T) {
 	if rec := do(t, s, "POST", "/api/projects/demo/processes", `{"processes":{"web":{"replicas":2}}}`, true); rec.Code != http.StatusBadRequest {
 		t.Errorf("batch scale: %d %s", rec.Code, rec.Body.String())
 	}
+	// Bounds too: the maximum is what the process may come to (RFC-0047).
+	s.autoscaleAvailable = func() bool { return true }
+	if rec := do(t, s, "POST", "/api/projects/demo/processes", `{"processes":{"web":{"autoscale":{"min":1,"max":3}}}}`, true); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "which one instance at a time can use") {
+		t.Errorf("bounds on a pinned process: %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := do(t, s, "POST", "/api/projects/demo/scale", `{"process":"web","replicas":1}`, true); rec.Code != http.StatusOK {
 		t.Errorf("scale to 1: %d %s", rec.Code, rec.Body.String())
 	}

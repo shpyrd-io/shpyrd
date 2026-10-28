@@ -6,7 +6,7 @@ import type { Perms } from "@/lib/perms";
 import mockConfig from "../../../mock/config.json";
 import projects from "../../../mock/projects.json";
 import things from "../../../mock/things.json";
-import { allowanceOf, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, SleepDialog, sleepOf, sleepWords, VolumeDialog } from "./resources";
+import { allowanceOf, AutoscaleDialog, autoscaleWords, BucketDialog, ConvertDialog, detailsOf, gbWords, humanCap, kindOf, ResourceDialog, Resources, SleepDialog, sleepOf, sleepWords, VolumeDialog } from "./resources";
 import workspace from "../../../mock/workspace.json";
 
 // The queries answer from the Mock's files, by the first word of their
@@ -302,5 +302,82 @@ describe("what a sleep policy says and how it is set", () => {
     expect(screen.queryByText("Waking")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onSave).toHaveBeenCalledWith({ after: "off" });
+  });
+});
+
+describe("the bounds a web process follows its load between (RFC-0047)", () => {
+  it("says what the bounds do, then what the cluster cannot do about them", () => {
+    expect(autoscaleWords({ min: 2, max: 10, cpu: 70, concurrency: 20, state: "active" })).toBe("follows its load between 2 and 10: another instance past 70% CPU or 20 requests in flight");
+    expect(autoscaleWords({ min: 2, max: 10, cpu: 50, concurrency: 20, state: "active", message: "CPU is not measured" })).toBe("follows its load between 2 and 10: another instance past 50% CPU or 20 requests in flight; CPU is not measured");
+    expect(autoscaleWords({ min: 1, max: 4, cpu: 70, concurrency: 20, state: "unavailable", message: "autoscaling needs the autoscale extension" })).toBe("follows its load between 1 and 4: another instance past 70% CPU or 20 requests in flight; not now: autoscaling needs the autoscale extension");
+  });
+  it("shows the bounds in place of the steppers on the web row, with the Autoscale control, and the read-back", () => {
+    state.answers = { resources, volumes, config, sizes, workspace };
+    const bounded = {
+      ...project,
+      spec: { ...project.spec, processes: { ...project.spec.processes, web: { ...project.spec.processes?.web, autoscale: { min: 2, max: 10 } } } },
+      processes: { ...project.processes, web: { ...project.processes?.web, desired: 3, ready: 3, autoscale: { min: 2, max: 10, cpu: 70, concurrency: 20, state: "active" as const } } },
+    } as unknown as Project;
+    const html = renderToStaticMarkup(<Resources project={bounded} perms={perms} />);
+    const web = rowOf(html, "web") || html.split("<tr").find((row) => row.includes(">web<")) || "";
+    expect(web).toContain("2–10");
+    expect(web).toContain(">Autoscale<");
+    expect(web).not.toContain('aria-label="One more"');
+    expect(web).toContain("follows its load between 2 and 10: another instance past 70% CPU or 20 requests in flight");
+    // Without bounds the steppers stay, and the control offers them.
+    const plain = renderToStaticMarkup(<Resources project={project} perms={perms} />);
+    const webPlain = plain.split("<tr").find((row) => row.includes(">web<")) ?? "";
+    expect(webPlain).toContain('aria-label="One more"');
+    expect(webPlain).toContain(">Autoscale<");
+  });
+  it("saves the bounds, with the targets only when they differ from the defaults", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={4} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    expect(screen.getByText("How many instances shop runs")).toBeTruthy();
+    // A fixed count is what it has: saving as is turns the bounds off.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ off: true });
+  });
+  it("opens on the bounds it has and sends them back with a changed target", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    expect((screen.getByLabelText("Minimum instances") as HTMLInputElement).value).toBe("2");
+    expect((screen.getByLabelText("Maximum instances") as HTMLInputElement).value).toBe("10");
+    fireEvent.change(screen.getByLabelText("Maximum instances"), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText("CPU target"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ min: 2, max: 12, cpu: 50 });
+  });
+  it("moves the bounds along the line, a step at a time", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    const most = screen.getByRole("slider", { name: "At most" });
+    expect(most.getAttribute("aria-valuenow")).toBe("10");
+    fireEvent.focus(most);
+    fireEvent.keyDown(most, { key: "ArrowRight" });
+    // The thumb and the input say the same number.
+    expect((screen.getByLabelText("Maximum instances") as HTMLInputElement).value).toBe("11");
+    // A number typed moves the thumb.
+    fireEvent.change(screen.getByLabelText("Minimum instances"), { target: { value: "4" } });
+    expect(screen.getByRole("slider", { name: "At least" }).getAttribute("aria-valuenow")).toBe("4");
+    // The targets have a thumb of their own, beside their input.
+    const cpu = screen.getByRole("slider", { name: "CPU target slider" });
+    fireEvent.focus(cpu);
+    fireEvent.keyDown(cpu, { key: "ArrowLeft" });
+    expect((screen.getByLabelText("CPU target") as HTMLInputElement).value).toBe("69");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ min: 4, max: 11, cpu: 69 });
+  });
+  it("refuses bounds that make no sense", () => {
+    const onSave = vi.fn();
+    render(<AutoscaleDialog what="shop" count={3} current={{ min: 2, max: 10 }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "Autoscale" }));
+    fireEvent.change(screen.getByLabelText("Maximum instances"), { target: { value: "1" } });
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

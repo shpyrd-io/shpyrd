@@ -449,6 +449,15 @@ ExternalName, InterceptorRoute and ScaledObject, restores the 20 s cache. No res
 exclusive per process. The controller adds a warning condition (`AutoscaleSleepConflict`)
 and ignores `sleep` when autoscaling is active. The `keda` extension installation is shared.
 
+*Amended 2026-10-27 (RFC-0047 implemented):* the two go together on one ScaledObject, since
+KEDA refuses a second one on a Deployment: zero while asleep (`idleReplicaCount: 0`), the
+minimum on a wake, the bounds under load, on the interceptor's trigger and a CPU trigger.
+The objects are named like the process's others (RFC-0076): the ScaledObject `web` (or
+`<slug>-web`) and the bridge Service `web-interceptor`; the controller replaces the earlier
+`<app>-sleep` and `web-sleep` on its first reconcile without waking a sleeping app, and
+`restoreToOriginalReplicaCount` is false (the controller writes the count back itself).
+See `internal/controller/scaling.go`.
+
 **Activity signal**: any request the interceptor forwards counts as concurrency. Static
 routes and `/.shpyrd/*` do not. WebSocket connections count as long-lived concurrency —
 correct. The edge's `auth-url` subrequest is to the platform server, not the interceptor;
@@ -581,6 +590,11 @@ One `keda` extension installs KEDA core and the HTTP add-on. RFC-0047's autoscal
 the same KEDA core with HPA or queue-driven `ScaledObject` with `minReplicaCount ≥ 1`. The
 controller never creates both a sleep `ScaledObject` and an RFC-0047 `ScaledObject` for the
 same Deployment — mutual exclusion in `processObjects()`.
+
+*As built (2026-10-27):* the `sleep` extension installs `keda` and `keda-http`; the
+`autoscale` extension names the same two and the Metrics Server, and the installer puts a
+shared component in place once. One ScaledObject per web process carries sleep and bounds
+(the amendment above).
 
 ### OpenCost Allocation API call
 
