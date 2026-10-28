@@ -71,7 +71,7 @@ became issues #288 and #289 on 2026-10-28.
 | [0024](0024-runs-and-scheduled-tasks.md) | Run history and scheduled tasks | provisional | 0005, 0022 |
 | [0025](0025-audit-trail-v2.md) | Audit trail v2 (durable, cluster-wide) | provisional | 0008, 0022 |
 | [0026](0026-web-terminal.md) | Web terminal | implemented (v0.9.8; the bridge carries the CLI's shell, `run` and the database shells since v0.9.61; gaps: the close audit on disconnect and shutdown (#281), the write deadline untested (#282), `TERM` unset (#283)) | 0005, 0008 |
-| [0027](0027-application-metrics-v2.md) | Application metrics v2 | implemented, gaps | 0011 |
+| [0027](0027-application-metrics-v2.md) | Application metrics v2: series per instance, aggregation, percentage or total against the allocation, a process filter, replaced instances, ranges from 15 minutes to 7 days | implemented (API and CLI 2026-09-26; the workspace's Metrics screen, written without the controls on 2026-09-30, carries them since 2026-10-28; out-of-memory kills marked on the memory chart, #119), gaps | 0011 |
 | [0028](0028-resource-pages-and-metrics.md) | Resource detail pages and metrics | provisional | 0006, 0009, 0010 |
 | [0029](0029-opentelemetry.md) | OpenTelemetry | provisional | 0016 |
 | [0030](0030-notifications.md) | Notifications (webhook, Slack, email) | provisional | 0013 (email) |
@@ -170,6 +170,7 @@ an "Implementation status" section with the details; the short version:
 | 0011 | "pods" in the logs-agent description |
 | 0019 | zero-downtime rollout test; probe message in failing status |
 | 0026 | `shell.close` lost on a client disconnect (best-effort) and never written on a server shutdown: the audit write uses the request context (#281); the two-second write deadline untested against a client that stopped reading (#282); `TERM` unset in the session (#283) |
+| 0027 | the instance subset: no way to isolate one instance — or three — out of forty (click-to-isolate on the legend would do it, with no API change); the network chart's default view counts a running build pod's traffic with the project's (deliberate: the namespace sum is unjoined) — details in the RFC's "Implementation status" |
 | 0031 | minting tokens from a CLI session opened with a `shp_` token (by design; the session token of 0052 can) |
 | 0033 | workspace delete (#274); delegated (NS) custom domains (#276); the Public Suffix List submission (shpyrd-cloud#63); a switch for previews (#277); `sizes set\|delete\|default` and `extensions enable\|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember` CRDs (#249); signed-in detection on identified apps (RFC-0068) |
 | 0036 | `SHPYRD_INTERNAL_LB` semantics; platform-CA certificates for internal projects without a wildcard; `status.exposure`; cluster page hosts/certificate source |
