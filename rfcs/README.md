@@ -88,7 +88,7 @@ implement those proposals.
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
 | [0047](0047-autoscaling.md) | Autoscaling (min/max mode, HPA, KEDA) | implementable | 0019, 0042 |
-| [0048](0048-cost-visibility.md) | Cost visibility | superseded by RFC-0075 | 0042 |
+| [0048](0048-cost-visibility.md) | Cost visibility | implemented (as the enterprise Costs, v0.9.73–v0.9.95: Console › Costs and Cost drains, `shpyrd-ctl costs`, usage, OpenCost estimate and the OCI bill; no price sheet — the customer's figure is the Billing app's; complete) | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |
 | [0051](0051-agents-and-background-processes.md) | Agents as a separate kind | rejected (agents are apps or runs) | |
