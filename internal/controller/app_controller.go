@@ -1209,7 +1209,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenance(app)) {
+	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenanceHTTP(app)) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)

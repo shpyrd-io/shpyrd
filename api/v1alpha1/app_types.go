@@ -144,6 +144,23 @@ const (
 	EnvSecretSuffix = "-env"
 )
 
+// Maintenance is the maintenance mode of an app (RFC-0020).
+type Maintenance struct {
+	// Enabled puts the maintenance page in front of the app.
+	Enabled bool `json:"enabled"`
+	// Message is shown on the page under the project's name, plain text;
+	// empty shows the page's own words.
+	// +optional
+	// +kubebuilder:validation:MaxLength=500
+	Message string `json:"message,omitempty"`
+	// Since is when the mode was turned on, and By who turned it on, as
+	// the API records them; the header, the list and the CLI say so.
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
+	// +optional
+	By string `json:"by,omitempty"`
+}
+
 // Phases of an App.
 const (
 	PhasePending   = "Pending"   // no source or image yet
@@ -233,6 +250,15 @@ type AppSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=public;authenticated;identified
 	Access string `json:"access,omitempty"`
+
+	// Maintenance puts a page in front of the app (RFC-0020): while
+	// Enabled, every HTTP request at its hosts receives a 503 and the
+	// maintenance page, programs a JSON answer with Retry-After. The
+	// processes keep running, and releases, scaling, shells and one-off
+	// commands go on underneath: the team works through the console, as
+	// nobody is let through the page. Nil or disabled serves the app.
+	// +optional
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
 
 	// Globals controls the cluster-wide config vars a platform admin sets
 	// with `shpyrd globals` (RFC-0016). Nil injects all of them.

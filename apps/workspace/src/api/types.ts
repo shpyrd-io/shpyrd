@@ -225,6 +225,15 @@ export type ProcessStatus = {
 export type Exposure = "external" | "internal";
 export type Access = "public" | "authenticated" | "identified";
 
+// The page in front of the app (RFC-0020): what it says under the
+// project's name, and when and by whom it went up, as the API records.
+export type Maintenance = {
+  enabled: boolean;
+  message?: string;
+  since?: string;
+  by?: string;
+};
+
 export type Release = {
   number: number;
   kind: "deploy" | "config" | "rollback";
@@ -250,6 +259,8 @@ export type ProjectSummary = {
   createdAt: string;
   exposure?: Exposure;
   access: Access;
+  // The page in front of the app, only while it is up.
+  maintenance?: Maintenance;
   // The symbol of its card on the launcher and its colour; the image it
   // sent in their place, and that image's type.
   icon?: string;
@@ -290,6 +301,7 @@ export type Project = ProjectSummary & {
     };
     env?: { name: string; value?: string }[];
     bindings?: { kind: string; name: string }[];
+    maintenance?: Maintenance;
   };
   status: {
     phase: string;

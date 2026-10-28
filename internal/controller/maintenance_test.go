@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -120,5 +121,72 @@ func TestMaintenanceDrainsProcessesAndPreservesSuspendedJobs(t *testing.T) {
 	_ = c.Get(ctx, client.ObjectKeyFromObject(already), already)
 	if !*already.Spec.Suspend {
 		t.Fatal("resumed a previously suspended job")
+	}
+}
+
+// Maintenance mode (RFC-0020) takes the HTTP half of the fence and nothing
+// else: both Ingresses answer the page, the sign-in annotations go, a public
+// app gets the edge Service the backend needs, and the web Deployment keeps
+// its instances. The phase stays the rollout's: the mode is a setting, not
+// a state of the project. Off restores the routing.
+func TestMaintenanceModeServesThePageAndKeepsTheProcessesRunning(t *testing.T) {
+	ctx := context.Background()
+	for _, access := range []string{shpyrdv1.AccessPublic, shpyrdv1.AccessAuthenticated} {
+		t.Run(access, func(t *testing.T) {
+			app := &shpyrdv1.App{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "app-demo"}, Spec: shpyrdv1.AppSpec{Image: "example.test/image:1", Access: access, Maintenance: &shpyrdv1.Maintenance{Enabled: true, Message: "Back at 15:00"}}}
+			r, c := newTestReconciler(t, app)
+			r.Config.SystemNamespace = "shpyrd-system"
+			cur := runReconcile(t, r, app)
+			if maintenance(cur) || cur.Status.Phase == "Maintenance" {
+				t.Fatalf("the mode is not the fence: annotations %v, phase %q", cur.Annotations, cur.Status.Phase)
+			}
+			for _, name := range []string{ingressName(app), edgeName(app)} {
+				ing := &networkingv1.Ingress{}
+				if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: name}, ing); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if ing.Annotations["nginx.ingress.kubernetes.io/rewrite-target"] != "/_shpyrd/maintenance" {
+					t.Fatalf("%s does not answer the page", name)
+				}
+				for _, key := range edgeAnnotationKeys {
+					if ing.Annotations[key] != "" {
+						t.Fatalf("%s kept authentication annotation %s", name, key)
+					}
+				}
+				for _, rule := range ing.Spec.Rules {
+					for _, path := range rule.HTTP.Paths {
+						if path.Backend.Service.Name != EdgeServiceName {
+							t.Fatalf("%s still routes to the application", name)
+						}
+					}
+				}
+			}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: EdgeServiceName}, &corev1.Service{}); err != nil {
+				t.Fatalf("the edge Service the backend needs: %v", err)
+			}
+			dep := &appsv1.Deployment{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: workloadName(app, "web")}, dep); err != nil {
+				t.Fatalf("web deployment: %v", err)
+			}
+			if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
+				t.Fatal("the mode stopped the web process")
+			}
+
+			cur.Spec.Maintenance.Enabled = false
+			if err := c.Update(ctx, cur); err != nil {
+				t.Fatal(err)
+			}
+			runReconcile(t, r, cur)
+			ing := &networkingv1.Ingress{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: ingressName(app)}, ing); err != nil {
+				t.Fatal(err)
+			}
+			if ing.Annotations["nginx.ingress.kubernetes.io/rewrite-target"] != "" || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name == EdgeServiceName {
+				t.Fatal("normal routing was not restored")
+			}
+			if access != shpyrdv1.AccessPublic && ing.Annotations["nginx.ingress.kubernetes.io/auth-url"] == "" {
+				t.Fatal("authentication was not restored")
+			}
+		})
 	}
 }

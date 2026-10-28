@@ -114,13 +114,23 @@ func (r *PostgresReconciler) ensureSharedServerBackups(ctx context.Context, serv
 }
 
 // ensureSharedServerPlugin puts the backup plugin on a server rendered
-// before its store existed.
+// before its store existed, once the server is up. Put on a server whose
+// instances are still coming, the plugin never takes: the instance manager
+// loads the Cluster's plugins before it starts PostgreSQL, finds no sidecar
+// for this one in a pod rendered without it, and retries for good, while
+// the operator waits for the instance to become active before it would
+// roll the pod (CI, 2026-10-28: a bucket answering a reconcile after the
+// server's). Up, the server gets the sidecar through the operator's
+// rolling restart.
 func (r *PostgresReconciler) ensureSharedServerPlugin(ctx context.Context, server *unstructured.Unstructured) error {
 	plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins")
 	for _, p := range plugins {
 		if m, ok := p.(map[string]interface{}); ok && m["name"] == BarmanPluginName {
 			return nil
 		}
+	}
+	if !sharedServerUp(server) {
+		return nil // the next reconcile, once the instances are up
 	}
 	before := server.DeepCopy()
 	plugins = append(plugins, sharedServerBackupPlugin(server.GetName()))
@@ -131,6 +141,13 @@ func (r *PostgresReconciler) ensureSharedServerPlugin(ctx context.Context, serve
 		return err
 	}
 	return nil
+}
+
+// sharedServerUp is whether every instance of a shared server is ready.
+func sharedServerUp(server *unstructured.Unstructured) bool {
+	ready, _, _ := unstructured.NestedInt64(server.Object, "status", "readyInstances")
+	want, _, _ := unstructured.NestedInt64(server.Object, "spec", "instances")
+	return ready >= 1 && ready >= want
 }
 
 var _ = types.NamespacedName{}

@@ -59,6 +59,9 @@ type AppSummary struct {
 	// Access is who may open the app: public, authenticated or identified
 	// (RFC-0033). Apps created before the field exist are public.
 	Access string `json:"access"`
+	// Maintenance is the maintenance mode (RFC-0020), only while it is on:
+	// HTTP answers the page, the processes keep running.
+	Maintenance *shpyrdv1.Maintenance `json:"maintenance,omitempty"`
 	// Icon and IconColor are the symbol of the card on the launcher, by
 	// its name, and its colour. IconURL is the image the project sent in
 	// its place, and IconType its media type: an SVG is drawn as a symbol
@@ -96,6 +99,9 @@ func summarize(a *shpyrdv1.App) AppSummary {
 		Domain:      domainOf(a),
 	}
 	s.IconURL, s.IconType = iconURL(a)
+	if m := a.Spec.Maintenance; m != nil && m.Enabled {
+		s.Maintenance = m
+	}
 	if s.Phase == "" {
 		s.Phase = shpyrdv1.PhasePending
 	}
@@ -165,7 +171,8 @@ type AppDetailSpec struct {
 	Build       *shpyrdv1.Build             `json:"build,omitempty"`
 	Bindings    []shpyrdv1.Binding          `json:"bindings,omitempty"`
 	Exposure    string                      `json:"exposure,omitempty"`
-	Access      string                      `json:"access"` // who may open the app (RFC-0033)
+	Access      string                      `json:"access"`                // who may open the app (RFC-0033)
+	Maintenance *shpyrdv1.Maintenance       `json:"maintenance,omitempty"` // the page in front of the app (RFC-0020)
 }
 
 type AppDetailStatus struct {
@@ -247,6 +254,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Bindings:    a.Spec.Bindings,
 			Exposure:    a.Spec.Exposure,
 			Access:      a.EffectiveAccess(),
+			Maintenance: a.Spec.Maintenance,
 		},
 		Status: AppDetailStatus{
 			Phase:       firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending),

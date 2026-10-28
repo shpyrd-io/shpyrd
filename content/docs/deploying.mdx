@@ -594,6 +594,18 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 
 A one-off instance has no volumes unless you ask: `shpyrd run --process web -- fluxyr migrate-storage` mounts web's volumes at their paths, and runs on the machine that holds a single-instance disk right now, so the two instances share the attached disk. The release step can see them too: declare the volume on the `release` process in `shpyrd.yaml` (`processes.release.volumes`, the same entry as the process's) and the step runs with it, where the disk is. A data migration on a disk belongs there.
 
+## Maintenance mode
+
+```shell
+shpyrd maintenance on --message "Back at 15:00 UTC"   # the page instead of the app
+shpyrd maintenance                                    # on or off, since when, by whom
+shpyrd maintenance off                                # the app again
+```
+
+While maintenance is on, every request at the project's addresses gets a **503** and a page with the project's name and your message; programs get a JSON answer with `Retry-After`, so crawlers and webhooks come back later rather than record an error. Nobody is let through, the team included, as on Heroku: the team works through the console. The processes keep running, and releases, scaling, `shpyrd shell` and `shpyrd run` go on underneath, so a migration runs behind the page, a deploy rolls out behind it, and `off` shows the result. Switching is instant and restarts nothing: the project's addresses point at the page, then at the app again.
+
+The project's **Overview** has the same switch and message; the header, the project list and the launcher say **Maintenance** while the page is up, and the audit trail records who turned it on and off. An app that sleeps is kept awake while the page is up, since no request would wake it, and may sleep again afterwards. Shells, one-off commands and deploys are refused only during a move or a restore, which has its own page.
+
 ## Volumes
 
 Processes that need a disk mount a project volume:

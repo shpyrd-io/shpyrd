@@ -86,6 +86,7 @@ export function toProject(d: DetailAnswer): Project {
     release: releases.at(-1)?.number ?? 0,
     access: d.spec.access ?? "public",
     exposure: d.spec.exposure,
+    maintenance: d.spec.maintenance?.enabled ? d.spec.maintenance : undefined,
   };
 }
 
@@ -387,6 +388,10 @@ export const backend: Api = {
   },
   setAccess: async (slug, access) => {
     await request(`${project(slug)}/access`, json("PUT", { access }));
+    return backend.project(slug);
+  },
+  setMaintenance: async (slug, body) => {
+    await request(`${project(slug)}/maintenance`, json("PUT", body));
     return backend.project(slug);
   },
   preview: (slug, body) =>

@@ -663,7 +663,7 @@ func (s *Server) SourcesHandler() http.Handler {
 }
 
 func (s *Server) routes() error {
-	s.engine.Any("/_shpyrd/maintenance", projectMaintenanceResponse)
+	s.engine.Any("/_shpyrd/maintenance", s.projectMaintenance)
 	s.engine.Any(controller.RedirectPath, s.hostRedirect)
 	s.engine.Any(controller.RedirectPath+"/*path", s.hostRedirect)
 	// The edge (RFC-0033): what ingress-nginx and app hosts call.
@@ -890,8 +890,9 @@ func (s *Server) routes() error {
 	api.POST("/projects/:slug/rollback", s.require(authz.ProjectDeploy), s.rollbackApp)
 	api.POST("/projects/:slug/redeploy", s.require(authz.ProjectDeploy), s.redeployApp)
 	api.PUT("/projects/:slug/exposure", s.require(authz.ProjectDeploy), s.setExposure)
-	api.PUT("/projects/:slug/access", s.require(authz.ProjectMembers), s.setAccess) // RFC-0033: who may open the app
-	api.GET("/projects/:slug/allow", s.require(authz.ProjectView), s.listAllow)     // RFC-0033: who may reach from inside
+	api.PUT("/projects/:slug/access", s.require(authz.ProjectMembers), s.setAccess)          // RFC-0033: who may open the app
+	api.PUT("/projects/:slug/maintenance", s.require(authz.ProjectDeploy), s.setMaintenance) // RFC-0020: the page in front of the app
+	api.GET("/projects/:slug/allow", s.require(authz.ProjectView), s.listAllow)              // RFC-0033: who may reach from inside
 	api.PUT("/projects/:slug/allow", s.require(authz.ProjectMembers), s.setAllow)
 	api.POST("/projects/:slug/preview", s.require(authz.ProjectDeploy), s.previewApp) // "Open as"
 	api.GET("/launcher", s.launcher)                                                  // the apps the caller may open

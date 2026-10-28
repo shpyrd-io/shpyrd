@@ -237,6 +237,11 @@ export type Api = {
   ) => Promise<Project>;
   setExposure: (slug: string, exposure: Exposure) => Promise<Project>;
   setAccess: (slug: string, access: Access) => Promise<Project>;
+  // The page in front of the app, up or down, and what it says.
+  setMaintenance: (
+    slug: string,
+    body: { enabled: boolean; message?: string },
+  ) => Promise<Project>;
   // A link that opens the app as a team would, or as nobody.
   preview: (
     slug: string,
