@@ -539,6 +539,36 @@ spec:
                   `shpyrd deploy --local-build` and by rollbacks; cleared by the next
                   source deploy.
                 type: string
+              maintenance:
+                description: |-
+                  Maintenance puts a page in front of the app (RFC-0020): while
+                  Enabled, every HTTP request at its hosts receives a 503 and the
+                  maintenance page, programs a JSON answer with Retry-After. The
+                  processes keep running, and releases, scaling, shells and one-off
+                  commands go on underneath: the team works through the console, as
+                  nobody is let through the page. Nil or disabled serves the app.
+                properties:
+                  by:
+                    type: string
+                  enabled:
+                    description: Enabled puts the maintenance page in front of the
+                      app.
+                    type: boolean
+                  message:
+                    description: |-
+                      Message is shown on the page under the project's name, plain text;
+                      empty shows the page's own words.
+                    maxLength: 500
+                    type: string
+                  since:
+                    description: |-
+                      Since is when the mode was turned on, and By who turned it on, as
+                      the API records them; the header, the list and the CLI say so.
+                    format: date-time
+                    type: string
+                required:
+                - enabled
+                type: object
               processes:
                 additionalProperties:
                   properties:

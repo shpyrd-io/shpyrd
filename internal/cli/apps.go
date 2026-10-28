@@ -361,7 +361,7 @@ func newAppsListCmd(g *globalFlags) *cobra.Command {
 					if a.Release > 0 {
 						rel = fmt.Sprintf("v%d", a.Release)
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Slug, a.DisplayName, firstNonEmpty(a.Phase, "Pending"), rel, a.URL, a.CreatedAt.Local().Format("Jan 2"))
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Slug, a.DisplayName, phaseWord(a), rel, a.URL, a.CreatedAt.Local().Format("Jan 2"))
 				}
 				_ = tw.Flush()
 			})
@@ -400,6 +400,16 @@ func newAppsInfoCmd(g *globalFlags) *cobra.Command {
 	}
 }
 
+// phaseWord is the phase as the list shows it: a running project behind
+// its maintenance page (RFC-0020) says so, as its header does.
+func phaseWord(a api.AppSummary) string {
+	phase := firstNonEmpty(a.Phase, "Pending")
+	if a.Maintenance != nil && a.Maintenance.Enabled && phase == shpyrdv1.PhaseRunning {
+		return "Maintenance"
+	}
+	return phase
+}
+
 // printResources lists every resource of the project (RFC-0003): the app
 // itself, its attached resources and the volumes.
 func printResources(out io.Writer, app *shpyrdv1.App, vols []shpyrdv1.Volume) {
@@ -429,6 +439,9 @@ func printAppInfo(out io.Writer, app *shpyrdv1.App) {
 	}
 	fmt.Fprintf(out, "Project:    %s\n", project.Label(app))
 	fmt.Fprintf(out, "Phase:      %s\n", firstNonEmpty(app.Status.Phase, "Pending"))
+	if m := app.Spec.Maintenance; m != nil && m.Enabled {
+		fmt.Fprintf(out, "Maintenance: on%s; visitors get the page, the processes keep running\n", maintenanceSince(m))
+	}
 	if app.Status.Message != "" {
 		fmt.Fprintf(out, "Message:    %s\n", app.Status.Message)
 	}

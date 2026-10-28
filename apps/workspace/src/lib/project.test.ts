@@ -15,6 +15,13 @@ describe("how a project is read for its card", () => {
     expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 0, ready: 0, sleep: { state: "sleeping" } } } }))).toBe("sleeping");
   });
 
+  it("is under maintenance while its page is up, whatever runs behind it", () => {
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: true } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Deploying", maintenance: { enabled: true, message: "Back soon" } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: true }, processes: { web: { desired: 0, ready: 0, sleep: { state: "sleeping" } } } }))).toBe("maintenance");
+    expect(phaseOf(summary({ phase: "Running", maintenance: { enabled: false } }))).toBe("running");
+  });
+
   it.each(["awake", "waking", "unavailable"] as const)("keeps the project phase when its web process is %s", (state) => {
     expect(phaseOf(summary({ phase: "Running", processes: { web: { desired: 1, ready: 0, sleep: { state } } } }))).toBe("running");
   });

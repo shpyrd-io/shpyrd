@@ -52,7 +52,10 @@ const (
 // sleepEnabled reports whether the web process has a valid sleep policy,
 // its own or the workspace's default.
 func (r *AppReconciler) sleepEnabled(app *shpyrdv1.App) bool {
-	if maintenance(app) {
+	if maintenanceHTTP(app) {
+		// No request reaches the app while HTTP is in maintenance, so a
+		// sleep policy would put it to sleep for good; it stays awake,
+		// where a migration wants it, and the policy resumes afterwards.
 		return false
 	}
 	spec := r.webSleepSpec(app)
@@ -109,6 +112,9 @@ func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App, mounts []resolvedMount
 	}
 	if sp := r.webSleepSpec(app); sp != nil && parseSleepDuration(sp.After) > 0 {
 		st.After, st.Resuming = sp.After, sleepResuming(sp, mounts)
+		if maintenanceMode(app) {
+			st.Message = "awake while in maintenance mode; sleeps after " + sp.After + " again once the mode is off"
+		}
 		return st
 	}
 	if st.Source == "project" {
@@ -117,7 +123,7 @@ func (r *AppReconciler) webSleepStatus(app *shpyrdv1.App, mounts []resolvedMount
 				st.After, st.Resuming = p.Sleep.After, sleepResuming(p.Sleep, mounts)
 			}
 		}
-		if !maintenance(app) {
+		if !maintenanceHTTP(app) {
 			st.State, st.Message = "unavailable", sleepLicensedMessage
 		}
 	}

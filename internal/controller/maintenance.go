@@ -19,15 +19,32 @@ import (
 
 const maintenanceSuspended = "shpyrd.io/maintenance-suspended"
 
+// maintenance is the project operation fence (RFC-0081): a move, a restore
+// or an import has the project. HTTP answers 503, the processes are
+// drained and the API refuses writes until the operation is over.
 func maintenance(app *shpyrdv1.App) bool {
 	return app.Annotations[shpyrdv1.AnnotationMaintenance] != ""
+}
+
+// maintenanceMode is the mode a person turns on (RFC-0020): HTTP answers
+// the maintenance page, and nothing else changes. The processes keep
+// running; releases, scaling, shells and one-off commands go on.
+func maintenanceMode(app *shpyrdv1.App) bool {
+	return app.Spec.Maintenance != nil && app.Spec.Maintenance.Enabled
+}
+
+// maintenanceHTTP says whether HTTP is in maintenance, for either reason:
+// what the Ingresses, the edge companion and the sleep policy look at.
+// The drain, the write lock and the shell refusal look at the fence alone.
+func maintenanceHTTP(app *shpyrdv1.App) bool {
+	return maintenance(app) || maintenanceMode(app)
 }
 
 // Keep the same HTTP hosts and TLS while replacing every route, including
 // login routes, with a 503 responder. Authentication redirects must not
 // acknowledge or swallow callbacks during a maintenance window.
 func maintenanceIngress(app *shpyrdv1.App, ing *networkingv1.Ingress) {
-	if !maintenance(app) {
+	if !maintenanceHTTP(app) {
 		delete(ing.Annotations, "nginx.ingress.kubernetes.io/rewrite-target")
 		return
 	}

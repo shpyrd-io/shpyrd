@@ -6,6 +6,8 @@ import type { ProjectSummary } from "@/api/types";
 // answers, whether it is locked, and the ink it keeps.
 
 export function phaseOf(p: ProjectSummary): Phase {
+  // The page in front of it is a choice, said before whatever runs behind.
+  if (p.maintenance?.enabled) return "maintenance";
   const processes = Object.values(p.processes ?? {});
   if (processes.some((s) => s.sleep?.state === "sleeping")) return "sleeping";
   switch (p.phase) {
@@ -23,6 +25,7 @@ export const phaseWords: Record<Phase, string> = {
   deploying: "Deploying",
   failed: "Failed",
   sleeping: "Asleep",
+  maintenance: "Maintenance",
 };
 
 export function toneOf(slug: string): Tone {

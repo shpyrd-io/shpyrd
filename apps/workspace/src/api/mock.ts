@@ -1018,6 +1018,14 @@ export const mock: Api = {
   },
   setAccess: async (slug, access) =>
     projectsOf.set({ ...(await projectsOf.find(slug)), access }),
+  setMaintenance: async (slug, body) => {
+    await wait();
+    const p = await projectsOf.find(slug);
+    const maintenance = body.enabled
+      ? { enabled: true, message: body.message, since: p.maintenance?.since ?? new Date().toISOString(), by: p.maintenance?.by ?? me.email }
+      : undefined;
+    return projectsOf.set({ ...p, maintenance, spec: { ...p.spec, maintenance } });
+  },
   preview: async (slug, body) => {
     await wait();
     const p = await projectsOf.find(slug);

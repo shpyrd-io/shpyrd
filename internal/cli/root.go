@@ -157,6 +157,7 @@ func New(extra ...ext.Extension) *cobra.Command {
 	root.AddCommand(newRollbackCmd(g))
 	root.AddCommand(newExposureCmd(g))
 	root.AddCommand(newAccessCmd(g))
+	root.AddCommand(newMaintenanceCmd(g))
 	root.AddCommand(newAllowCmd(g))
 	root.AddCommand(newDomainsCmd(g))
 	root.AddCommand(newLoginCmd(g))

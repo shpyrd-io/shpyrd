@@ -28,6 +28,7 @@ import { api } from "@/api/api";
 import type { AuditEntry, Project } from "@/api/types";
 import { ago } from "@/lib/project";
 import type { Perms } from "@/lib/perms";
+import { Maintenance } from "./maintenance";
 import { GitSource } from "./source";
 
 // What the project is made of, as one table of names and values, and
@@ -142,6 +143,8 @@ export function Overview({ project, perms }: { project: Project; perms: Perms })
           </InfoTable>
         </CardContent>
       </Card>
+
+      <Maintenance project={project} perms={perms} />
 
       <Card>
         <CardHeader>
