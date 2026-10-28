@@ -749,6 +749,8 @@ type Usage interface {
 	// Sleep events.
 	WriteSleepEvent(ctx context.Context, e SleepEvent) error
 	QuerySleepEvents(ctx context.Context, ws, project string, from, to time.Time) ([]SleepEvent, error)
+	// Out-of-memory kills (#119).
+	OOMKills
 }
 
 // Settings is the cluster-wide key/value store (RFC-0078).

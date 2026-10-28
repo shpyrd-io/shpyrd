@@ -55,6 +55,7 @@ describe("the Backend reads the server's shapes as the screens read them", () =>
         { id: "memory", title: "Memory", unit: "bytes", kind: "line", series: [], error: "no data" },
       ],
       releases: [{ number: 3, time: 130, label: "v3" }],
+      ooms: [{ time: 140, process: "web", instance: "web.1", limit: 268435456, size: "shared-m", release: 3 }],
     };
     const m = toMetrics(answer);
     expect(m.from).toBe(100);
@@ -65,6 +66,12 @@ describe("the Backend reads the server's shapes as the screens read them", () =>
     expect(m.network).toEqual([]);
     expect(m.throughput).toEqual([]);
     expect(m.releases).toEqual([{ time: 130, label: "v3" }]);
+    expect(m.ooms).toEqual([{ time: 140, process: "web", instance: "web.1", limit: 268435456, size: "shared-m", release: 3 }]);
+  });
+
+  it("reads an answer from a server that knows no kills as none", () => {
+    const m = toMetrics({ range: "1h", step: 60, charts: [], releases: [] });
+    expect(m.ooms).toEqual([]);
   });
 });
 
