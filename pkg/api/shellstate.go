@@ -51,7 +51,10 @@ type execTicket struct {
 	// Launcher says the command runs through the buildpack launcher when
 	// the image has one (an app's container); a resource's does not.
 	Launcher bool
-	expires  time.Time
+	// Term is the client's terminal type (xterm-256color from the browser,
+	// the CLI's own TERM); the shell runs with it (kexec.Term).
+	Term    string
+	expires time.Time
 }
 
 // maxOpenTickets caps unredeemed tickets. Without a cap the store grows for a
@@ -221,3 +224,58 @@ func (r *shellRegistry) held(actor, project string) bool {
 // actorKey identifies the person the limit applies to. Subject alone is not
 // enough: two providers can issue the same one.
 func actorKey(id ext.Identity) string { return id.Provider + "\x00" + id.Subject }
+
+// shellLifetime ties the live terminal sessions to the server's own life.
+// Their connections are hijacked, so http.Server.Shutdown neither tells them
+// nor waits for them: without this a control-plane rollout killed every
+// session with the process and none of them reached its shell.close entry.
+// Stopping tells each session (stopped), refuses new ones (enter) and waits
+// for the live ones to write their trail (leave).
+type shellLifetime struct {
+	mu       sync.Mutex
+	stopping bool
+	live     sync.WaitGroup
+	stop     chan struct{}
+}
+
+func newShellLifetime() *shellLifetime {
+	return &shellLifetime{stop: make(chan struct{})}
+}
+
+// enter counts a session in, or refuses it once the server is stopping.
+func (l *shellLifetime) enter() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stopping {
+		return false
+	}
+	l.live.Add(1)
+	return true
+}
+
+func (l *shellLifetime) leave() { l.live.Done() }
+
+// stopped is closed when the server begins to stop.
+func (l *shellLifetime) stopped() <-chan struct{} { return l.stop }
+
+// shutdown tells every live session to end and waits until they have, or
+// until ctx is done.
+func (l *shellLifetime) shutdown(ctx context.Context) error {
+	l.mu.Lock()
+	if !l.stopping {
+		l.stopping = true
+		close(l.stop)
+	}
+	l.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		l.live.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

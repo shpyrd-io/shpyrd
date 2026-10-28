@@ -174,12 +174,20 @@ func joinInstances(pods []corev1.Pod, names map[string]string) string {
 // stdin is a terminal. When wantShell is set, it tries the CNB launcher first
 // so buildpack environments are loaded, then bash, then sh.
 func (a *appClient) execInteractive(ctx context.Context, namespace, pod, container string, command []string, wantShell, tty bool) error {
+	// With a terminal the command gets this one's TERM through env(1), as the
+	// bridge does (kexec.WithTerm); an image without env runs it bare.
+	withTerm := func(cmd []string) []string { return cmd }
+	if tty {
+		if _, err := kexec.Run(ctx, a.k, namespace, pod, container, kexec.EnvProbe); err == nil {
+			withTerm = func(cmd []string) []string { return kexec.WithTerm(os.Getenv("TERM"), cmd) }
+		}
+	}
 	if !wantShell {
-		return kexec.RemoteExit(kexec.Exec(ctx, a.k, namespace, pod, container, command, tty))
+		return kexec.RemoteExit(kexec.Exec(ctx, a.k, namespace, pod, container, withTerm(command), tty))
 	}
 	var lastErr error
 	for _, cmd := range [][]string{{cnbLauncher, "--", "bash"}, {"bash"}, {cnbLauncher, "--", "sh"}, {"sh"}} {
-		err := kexec.Exec(ctx, a.k, namespace, pod, container, cmd, tty)
+		err := kexec.Exec(ctx, a.k, namespace, pod, container, withTerm(cmd), tty)
 		if err == nil {
 			return nil
 		}

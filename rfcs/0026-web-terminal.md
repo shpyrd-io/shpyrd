@@ -125,44 +125,36 @@ ended: an exit status, an idle reap, or the client disconnecting).
 
 ## Implementation status
 
-Audited on 2026-09-26 against the code, at the end of the branch's own review. What the
-text above promises but the platform does not do yet is listed here.
+Audited on 2026-09-26 against the code, at the end of the branch's own review; three of its
+four entries closed on 2026-10-28 (shpyrd-io/shpyrd#281, #282, #283). What the text above
+promises but the platform does not do yet, or has not been seen doing on a cluster, is listed
+here.
 
-- **Not implemented:** a shutdown is never audited. `srv.Shutdown` neither cancels nor
-  waits for hijacked connections, so it does not cancel a live session's context: the
-  handler is killed with the process instead of unwinding, and a control-plane rollout ends
-  every live shell with no `shell.close` recorded. No shutdown therefore reaches the
-  `closed: server shutting down` branch that names it — that branch stands only as the
-  fall-through when a cancelled session matches neither the idle reap nor the client going
-  away. Fixing it needs two things this branch does not have: a server-lifetime context the
-  bridge can select on, and an audit write that outlives the request context, since
-  `pkg/api/audit.go` records through `c.Request.Context()`.
+- **Unverified on a cluster:** that the two-second write deadline drops a client which
+  stopped reading. A unit test now isolates it (the idle timeout at its real 30 minutes, a
+  client that reads nothing): the session ends within seconds and the trail says
+  `closed: the client disconnected (it stopped reading)`. It has not been watched through
+  the ingress, which is where a real stalled socket lives; a port-forward absorbs the
+  back-pressure. The check belongs in `contrib/` (shpyrd-io/shpyrd#282).
 
-- **Unreliable:** `shell.close` can go unrecorded when the client disconnects, for the same
-  reason. The audit write goes through `c.Request.Context()`, and a client going away is
-  precisely what cancels that context, so the write races the cancellation it is trying to
-  describe. Observed both ways on the dev cluster: one disconnect recorded
-  `closed: the client disconnected`, while a later session ended with nothing written at
-  all. Until the audit write takes a context that outlives the request, "every session
-  audited" holds for sessions that end in an exit status and is best-effort for those that
-  end by disconnect.
+- **Not implemented:** `TERM` for `shpyrd run` attached to a one-off instance. Its command is
+  fixed in the pod, so the exec's `env TERM=…` wrapper does not reach it; setting it in the
+  pod spec would.
 
-- **Unverified:** that the two-second write deadline promptly drops a client which has
-  stopped reading. The unit test proves the slot is always released, but it runs with a
-  100 ms idle timeout, so it cannot distinguish the deadline from the reaper; and the deadline
-  could not be isolated on the dev cluster either, because `kubectl port-forward` sits in
-  the data path and absorbs the back-pressure the deadline exists to detect. What is
-  certain is the weaker guarantee: the idle reaper performs no socket writes, so it cannot
-  queue behind a blocked writer, and the slot is therefore freed within the idle timeout
-  rather than held until the control plane restarts. Whether the deadline shortens that
-  from 30 minutes to seconds needs a client reaching the server directly, through the
-  ingress rather than a port-forward.
+Closed on 2026-10-28:
 
-- **Not implemented:** `TERM` is never set for the session, so bash reports `dumb` and
-  most programs suppress colour while full-screen ones (`vim`, `top`, `less`) refuse or
-  complain. The Kubernetes exec API carries no environment, so setting it means running the
-  chosen shell through `env TERM=…`, which needs `env(1)` to be probed for rather than
-  assumed. `shpyrd shell` has the same gap; deliberately left alone for now.
+- A shutdown is audited. The server tells every live session itself (`shellLifetime`),
+  since `srv.Shutdown` does not see hijacked connections: each is sent
+  `{"type":"error"}`, its exec cancelled and `shell.close` written as
+  `closed: server shutting down` within the shutdown budget, and new sessions are refused
+  with 503 while it stops.
+- `shell.close` survives a disconnect: audit writes take a context detached from the
+  request (`context.WithoutCancel` and five seconds), so the cancellation they record no
+  longer cancels them.
+- `TERM`: the client names its terminal on the ticket (`?term=`; the browser
+  `xterm-256color`, the CLI its own), and the shell runs through `env TERM=…` when the image
+  has `env(1)`, bare otherwise. `xterm` when the client names none or something that is not a
+  terminfo name. The CLI's kubeconfig path of `shpyrd shell` does the same.
 
 ## Implementation History
 
@@ -197,3 +189,6 @@ text above promises but the platform does not do yet is listed here.
   in response to reading it. The CSP console and Strict Mode's double mount were not
   exercised and remain unverified. Colour was raised and deliberately left alone, which is
   the `TERM` gap below.
+- 2026-10-28: three gaps closed (shpyrd-io/shpyrd#281, #282, #283): shutdown and disconnect
+  audited, the write deadline tested on its own, `TERM` set. Left: the deadline seen through
+  the ingress, and `TERM` for attached runs.

@@ -348,6 +348,8 @@ type Server struct {
 	runPoll    time.Duration
 	shellPing  time.Duration
 	shellProbe time.Duration
+	// shellLife ends the live sessions on shutdown, trail written.
+	shellLife *shellLifetime
 }
 
 // New wires the routes.
@@ -427,6 +429,7 @@ func newServer(k *kube.Client, opts Options, helmCfg *action.Configuration) (*Se
 	}
 	s.archiveDownloads = sharedArchiveDownloads(opts.Store, opts.PeerAddr)
 	s.shells = newShellRegistry()
+	s.shellLife = newShellLifetime()
 	s.cliDevices = newCLIDeviceStore(opts.Store)
 	s.execStream = s.streamExec
 	s.attachStream = s.streamAttach
@@ -622,6 +625,11 @@ func (s *Server) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.log.Info("shutting down")
+	// The terminal sessions first: Shutdown below does not see hijacked
+	// connections, and each session's shell.close is written on its way out.
+	if err := s.shellLife.shutdown(shutdownCtx); err != nil {
+		s.log.Warn("shutdown: terminal sessions still open", "error", err)
+	}
 	if srcSrv != nil {
 		_ = srcSrv.Shutdown(shutdownCtx)
 	}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1032,5 +1033,147 @@ func TestShellTicketWorkspace(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestShellRunsWithTheClientsTermWhenTheImageHasEnv(t *testing.T) {
+	// The exec API carries no environment, so without env(1) in front a shell
+	// reports TERM=dumb: no colour, and vim, top or less refuse to run (#283).
+	for _, tc := range []struct {
+		name   string
+		hasEnv bool
+		term   string
+		want   []string
+	}{
+		{"the browser's", true, "xterm-256color", []string{"env", "TERM=xterm-256color", "bash"}},
+		{"none given", true, "", []string{"env", "TERM=xterm", "bash"}},
+		{"not a terminfo name", true, "x; rm -rf /", []string{"env", "TERM=xterm", "bash"}},
+		{"no env in the image", false, "xterm-256color", []string{"bash"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newShellFixture(t, "")
+			f.s.execRun = func(ctx context.Context, namespace, pod, container string, command []string) (string, error) {
+				if tc.hasEnv && strings.Join(command, " ") == "env true" {
+					return "", nil
+				}
+				return "", errors.New("exec: executable file not found in $PATH")
+			}
+			code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
+				Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
+				Project:  "blog", Instance: "web.1", Term: tc.term,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := f.dialWith(t, "web.1", code)
+			if open := readControl(t, c); open["shell"] != "bash" {
+				t.Errorf("open frame = %v, want the shell named without the env wrapper", open)
+			}
+			c.Close()
+			waitFor(t, "the session to end", func() bool { return !f.s.shells.held(adminActor(), "blog") })
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if strings.Join(f.command, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("command = %q, want %q", f.command, tc.want)
+			}
+		})
+	}
+}
+
+func TestShellWriteDeadlineDropsAClientThatStoppedReading(t *testing.T) {
+	// The idle timeout stays at its real 30 minutes here, so only the write
+	// deadline can end this session (#282): a client that reads nothing while
+	// the process keeps printing must be let go within seconds, its slot freed
+	// and the trail saying the client went away.
+	f := newShellFixture(t, "")
+	if f.s.shellIdle < time.Minute {
+		t.Fatalf("idle timeout %s would hide the deadline", f.s.shellIdle)
+	}
+	f.s.execStream = func(ctx context.Context, namespace, pod, container string, command []string, stdin io.Reader, stdout io.Writer, sizes <-chan remotecommand.TerminalSize) error {
+		chunk := make([]byte, 64<<10)
+		for i := 0; i < 1024; i++ { // 64 MiB, far beyond any socket buffer
+			if _, err := stdout.Write(chunk); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	start := time.Now()
+	c := f.dial(t, "web.1")
+	defer c.Close()
+	// No reads at all.
+	waitUntil(t, 3*shellWriteWait+2*time.Second, "the session to be dropped", func() bool {
+		return !f.s.shells.held(adminActor(), "blog")
+	})
+	t.Logf("dropped after %s", time.Since(start).Round(time.Millisecond))
+	waitFor(t, "the close to be audited", func() bool { return len(auditDetails(t, f, "shell.close")) > 0 })
+	if got := auditDetails(t, f, "shell.close"); !strings.Contains(got[0], "client disconnected") {
+		t.Errorf("audit detail = %q, want it to name the client going away", got)
+	}
+}
+
+func TestShellShutdownEndsALiveSessionAndAuditsIt(t *testing.T) {
+	// A control-plane rollout kills hijacked connections with the process, so
+	// without the server's own signal no session ever wrote its close (#281).
+	f := newShellFixture(t, "")
+	f.s.execStream = func(ctx context.Context, namespace, pod, container string, command []string, stdin io.Reader, stdout io.Writer, sizes <-chan remotecommand.TerminalSize) error {
+		<-ctx.Done() // a process that never ends of its own accord
+		return ctx.Err()
+	}
+	c := f.dial(t, "web.1")
+	defer c.Close()
+	readControl(t, c) // open
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.s.shellLife.shutdown(ctx); err != nil {
+		t.Fatalf("shutdown did not wait for the session: %v", err)
+	}
+	// By the time shutdown returns the trail is written, not merely on its way.
+	if got := auditDetails(t, f, "shell.close"); len(got) != 1 || got[0] != "closed: server shutting down" {
+		t.Errorf("audit = %q, want one close naming the shutdown", got)
+	}
+	if m := readControl(t, c); m["type"] != "error" || !strings.Contains(m["message"].(string), "restarting") {
+		t.Errorf("frame = %v, want the person told the server is restarting", m)
+	}
+
+	// No new session starts on a server that is stopping.
+	code, err := f.s.execTickets.mint(execTicket{Workspace: store.DefaultWorkspace,
+		Identity: ext.Identity{Subject: "admin-token", Provider: "token", Admin: true},
+		Project:  "blog", Instance: "web.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := "ws" + strings.TrimPrefix(f.http.URL, "http") + "/api/projects/blog/shell?instance=web.1&ticket=" + code
+	if _, resp, err := websocket.DefaultDialer.Dial(u, nil); err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Errorf("dial after shutdown: err %v, status %d, want 503", err, status)
+	}
+}
+
+func TestAuditOutlivesTheRequest(t *testing.T) {
+	// A client going away cancels the request context, and a shell's close is
+	// written exactly then (#281): the audit write needs a context of its own.
+	req := httptest.NewRequest("GET", "/", nil)
+	reqCtx, cancel := context.WithCancel(req.Context())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req.WithContext(reqCtx)
+	c.Set("probe", "kept")
+	cancel()
+
+	dc, done := detached(c)
+	defer done()
+	if err := dc.Request.Context().Err(); err != nil {
+		t.Fatalf("detached context is %v, want it live after the request was cancelled", err)
+	}
+	if _, ok := dc.Request.Context().Deadline(); !ok {
+		t.Error("detached context has no deadline: an audit write could hang")
+	}
+	if v, _ := dc.Get("probe"); v != "kept" {
+		t.Errorf("detached context lost the request's values: %v", v)
 	}
 }

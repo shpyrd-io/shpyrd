@@ -72,6 +72,7 @@ func (s *Server) mintResourceShellTicket(c *gin.Context) {
 	code, err := s.execTickets.mint(execTicket{
 		Identity: id, Workspace: s.workspace(c), Project: slug, Instance: instance,
 		Pod: target.Pod, Container: target.Container, Command: target.Command,
+		Term: c.Query("term"),
 	})
 	if errors.Is(err, errTicketsFull) {
 		c.Header("Retry-After", "30")

@@ -37,6 +37,35 @@ func ExitCode(err error) int {
 	return 1
 }
 
+// DefaultTerm is the terminal type a shell gets when the client names none.
+const DefaultTerm = "xterm"
+
+// Term is the TERM a shell runs with: the client's, when it is a plausible
+// terminfo name, else DefaultTerm. The value ends up in a command line, so
+// anything beyond the characters terminfo names use is refused rather than
+// quoted.
+func Term(client string) string {
+	if client == "" || len(client) > 64 {
+		return DefaultTerm
+	}
+	for _, r := range client {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._+-", r)) {
+			return DefaultTerm
+		}
+	}
+	return client
+}
+
+// WithTerm runs command through env(1) with TERM set. The exec API carries
+// no environment, so without it a shell reports TERM=dumb: no colour, and
+// vim, top or less refuse to run. Callers check the image has env first.
+func WithTerm(term string, command []string) []string {
+	return append([]string{"env", "TERM=" + Term(term)}, command...)
+}
+
+// EnvProbe is the throwaway command that says whether an image has env(1).
+var EnvProbe = []string{"env", "true"}
+
 // StdinIsTerminal reports whether the CLI runs interactively.
 func StdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 

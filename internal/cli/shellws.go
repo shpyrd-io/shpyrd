@@ -99,6 +99,7 @@ func (a *appClient) shellAPI(ctx context.Context, slug string, inst api.Instance
 	for _, arg := range command {
 		q.Add("cmd", arg)
 	}
+	q.Set("term", os.Getenv("TERM"))
 	ticket, err := a.mintTicket(ctx, "api/projects/"+slug+"/shell/ticket?"+q.Encode())
 	if err != nil {
 		return err
@@ -109,7 +110,7 @@ func (a *appClient) shellAPI(ctx context.Context, slug string, inst api.Instance
 // execResourceAPI is a shell into a resource (`shpyrd pg psql`, `shpyrd
 // redis cli`) over the bridge: the server names the pod and the command.
 func (a *appClient) execResourceAPI(ctx context.Context, slug, kind, name string, args []string, stderr io.Writer) error {
-	q := url.Values{}
+	q := url.Values{"term": {os.Getenv("TERM")}}
 	for _, arg := range args {
 		q.Add("arg", arg)
 	}
