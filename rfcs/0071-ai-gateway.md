@@ -4,8 +4,8 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0002 (implemented), RFC-0033 (in progress), RFC-0042 (implementable),
-RFC-0048 (implementable)
+**Depends on:** RFC-0002 (implemented), RFC-0033 (implemented), RFC-0042 (implementable),
+RFC-0048 (implemented: the enterprise Costs)
 
 **Creation date:** 2026-09-27
 

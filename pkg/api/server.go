@@ -281,6 +281,10 @@ type Server struct {
 	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
 	// REST mapper (tests inject one).
 	sleepAvailable func() bool
+	// autoscaleAvailable reports whether the cluster can scale apps on
+	// their load (RFC-0047: KEDA's kinds are installed); nil asks the REST
+	// mapper (tests inject one).
+	autoscaleAvailable func() bool
 	// scanHostKey records a git host's SSH key for a deploy key
 	// (RFC-0017); a field so tests need no network.
 	scanHostKey func(ctx context.Context, host, port string) (line, fingerprint string, err error)
@@ -755,7 +759,8 @@ func (s *Server) routes() error {
 	api.GET("/cluster/overview/node", console, s.require(authz.ClusterView), s.overviewNodeDetail)
 	api.GET("/cluster/overview/pods", console, s.require(authz.ClusterView), s.overviewNodePods)
 	api.GET("/cluster/metrics", console, s.require(authz.ClusterView), s.clusterMetrics)
-	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo) // RFC-0059
+	api.GET("/cluster/oom-kills", console, s.require(authz.ClusterView), s.clusterOOMKills) // #119
+	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo)    // RFC-0059
 	api.POST("/cluster/registry/gc", console, s.require(authz.ClusterAdmin), s.registryGC)
 	api.GET("/cluster/backups", console, s.require(authz.ClusterAdmin), s.listBackups) // RFC-0037
 	api.POST("/cluster/backups", console, s.require(authz.ClusterAdmin), s.runBackup)

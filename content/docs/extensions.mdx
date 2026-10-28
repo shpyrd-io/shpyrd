@@ -26,6 +26,7 @@ redis           enabled   -                                Redis-compatible cach
 object-storage  enabled   object-storage                   S3-compatible storage through the cloud gateway or local Garage with a key per consumer: the backing store for Postgres backups and platform backups (RFC-0046)
 mail            enabled   -                                Send email from the platform: invitations and notifications over SMTP (shpyrd-ctl mail set)
 sleep           disabled  keda, keda-http                  Scale web processes to zero after a quiet period and wake them on the first request: KEDA and its HTTP add-on (shpyrd sleep)
+autoscale       disabled  keda, metrics-server, keda-http  Let a web process follow its load between a minimum and a maximum of instances: KEDA, its HTTP add-on and the Metrics Server (shpyrd autoscale)
 opencost        disabled  opencost                         Infrastructure cost allocation via OpenCost (RFC-0075)
 ```
 

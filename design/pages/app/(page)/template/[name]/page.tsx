@@ -12,5 +12,5 @@ export function generateStaticParams() {
 export default async function Page({ params }: { params: Promise<{ name: string }> }) {
   const page = pages[(await params).name];
   if (!page) notFound();
-  return page.render(marks(page));
+  return page.render(marks());
 }

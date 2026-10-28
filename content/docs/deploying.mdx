@@ -465,9 +465,12 @@ Scale at any time; counts survive deploys:
 
 ```shell
 shpyrd scale web=3 worker=2
+shpyrd autoscale my-service --min 2 --max 10    # web follows its load between the bounds (autoscale extension)
 shpyrd resize web=shared-l worker=dedicated-s   # change the size; a release
 shpyrd sleep my-service --after 15m             # scale web to zero when idle (sleep extension)
 ```
+
+With bounds, the web process gets another instance when one passes 70% of its size's CPU or carries more than 20 requests in flight (`--cpu` and `--concurrency` change the targets), and one fewer when the load has been lower for five minutes. `shpyrd scale web=N` then sets the minimum. Sleep and bounds go together: zero while asleep, the minimum on a wake, the bounds under load.
 
 Without a size, a process gets `shared-m` for Node.js, Ruby, Python and Java, and `shared-s` for the rest. `shpyrd sizes list` shows the catalog.
 

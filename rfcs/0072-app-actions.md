@@ -4,7 +4,7 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0032 (in progress), RFC-0033 (in progress), RFC-0070 (provisional)
+**Depends on:** RFC-0032 (in progress), RFC-0033 (implemented), RFC-0070 (provisional)
 
 **Creation date:** 2026-09-27
 

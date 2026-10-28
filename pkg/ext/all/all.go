@@ -8,6 +8,7 @@ import (
 
 	"github.com/shpyrd-io/shpyrd/pkg/ext"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/authlocal"
+	"github.com/shpyrd-io/shpyrd/pkg/ext/autoscale"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/logsagent"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/mail"
 	"github.com/shpyrd-io/shpyrd/pkg/ext/objectstorage"
@@ -28,6 +29,7 @@ func All() []ext.Extension {
 		mail.New(),
 		opencost.New(),
 		sleep.New(),
+		autoscale.New(),
 	}
 }
 

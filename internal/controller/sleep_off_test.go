@@ -69,7 +69,7 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 		t.Helper()
 		so := &unstructured.Unstructured{}
 		so.SetGroupVersionKind(ScaledObjectGVK)
-		err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so)
+		err := c.Get(ctx, types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, so)
 		if err != nil && !apierrors.IsNotFound(err) {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 
 	// No policy of its own: the workspace's default applies.
 	got := runReconcile(t, r, app)
-	if !scaledObjectExists() || backend() != webSleepServiceName {
+	if !scaledObjectExists() || backend() != webInterceptorService {
 		t.Fatalf("workspace default: scaledobject=%v backend=%s, want sleep on", scaledObjectExists(), backend())
 	}
 	if st := got.Status.Processes["web"].Sleep; st == nil || st.Message == "" {
@@ -127,7 +127,7 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 	if scaledObjectExists() {
 		t.Error("off must leave no ScaledObject while the workspace has a default")
 	}
-	if b := backend(); b == webSleepServiceName {
+	if b := backend(); b == webInterceptorService {
 		t.Errorf("off must route to the app's own Service, got %s", b)
 	}
 	// The read-back says so (#120): awake, source off, no period.
@@ -141,7 +141,7 @@ func TestSleepOffOptsOutOfTheWorkspaceDefault(t *testing.T) {
 	// Cleared again (the API's "default"): the workspace's default is back.
 	setSleep(nil)
 	runReconcile(t, r, app)
-	if !scaledObjectExists() || backend() != webSleepServiceName {
+	if !scaledObjectExists() || backend() != webInterceptorService {
 		t.Errorf("default: scaledobject=%v backend=%s, want sleep on again", scaledObjectExists(), backend())
 	}
 }

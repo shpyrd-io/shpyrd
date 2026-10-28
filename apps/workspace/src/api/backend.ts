@@ -47,6 +47,7 @@ export type MetricsAnswer = {
   step: number;
   charts: Chart[];
   releases: { number: number; time: number; label: string }[];
+  ooms?: { time: number; process: string; instance?: string; limit: number; size?: string; release?: number }[];
 };
 
 // What the server answers for one project: the phase, the address and
@@ -147,6 +148,14 @@ export function toMetrics(answer: MetricsAnswer): Metrics {
     network: chartOf(answer, "network"),
     instances: chartOf(answer, "instances"),
     releases: answer.releases.map((r) => ({ time: r.time, label: r.label })),
+    ooms: (answer.ooms ?? []).map((k) => ({
+      time: k.time,
+      process: k.process,
+      instance: k.instance,
+      limit: k.limit,
+      size: k.size,
+      release: k.release,
+    })),
   };
 }
 

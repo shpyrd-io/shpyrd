@@ -184,7 +184,30 @@ export type SleepStatus = {
   source?: "project" | "off" | "workspace";
 };
 
+// The bounds a web process follows its load between (RFC-0047): cpu is a
+// percent of the size's CPU, concurrency the requests in flight an
+// instance may carry; both have defaults (70, 20).
+export type AutoscaleSpec = {
+  min: number;
+  max: number;
+  cpu?: number;
+  concurrency?: number;
+};
+
+// The bounds as they apply: the targets in force, and whether the cluster
+// follows them (unavailable says why; a message on an active one says what
+// is missing, such as CPU without the Metrics Server).
+export type AutoscaleStatus = {
+  min: number;
+  max: number;
+  cpu: number;
+  concurrency: number;
+  state?: "active" | "unavailable";
+  message?: string;
+};
+
 export type ProcessStatus = {
+  // With bounds, what the scaler asks for now.
   desired: number;
   ready: number;
   updated?: number;
@@ -196,6 +219,7 @@ export type ProcessStatus = {
   // Why the process keeps to one instance, when it does.
   pinned?: string;
   sleep?: SleepStatus;
+  autoscale?: AutoscaleStatus;
 };
 
 export type Exposure = "external" | "internal";
@@ -266,6 +290,8 @@ export type Project = ProjectSummary & {
         command?: string;
         port?: number;
         sleep?: { after?: string; resuming?: "page" | "wait" | "" };
+        // The bounds the process follows its load between (RFC-0047).
+        autoscale?: AutoscaleSpec;
       }
     >;
     build?: {
@@ -769,4 +795,19 @@ export type Metrics = {
   network: Series[];
   instances: Series[];
   releases: { time: number; label: string }[];
+  // The processes killed for crossing their memory in the time, oldest
+  // first (#119): the Memory chart marks each.
+  ooms: OOMKill[];
+};
+
+// One instance killed for running out of memory. The instance is its name
+// then (web.1), missing for a release step or a build; the limit is in
+// bytes, and the size names it when it is one the process has.
+export type OOMKill = {
+  time: number;
+  process: string;
+  instance?: string;
+  limit: number;
+  size?: string;
+  release?: number;
 };
