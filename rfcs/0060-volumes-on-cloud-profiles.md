@@ -1,6 +1,6 @@
 # RFC-0060 Volumes on cloud profiles: storage classes, provider minimums, snapshots
 
-**Status:** implemented (shared volumes on OKE: built, awaiting the tenancy's File Storage limit to verify end to end)
+**Status:** implemented (shared volumes on OKE: built and switched off by default; turning them on in production is shpyrd-io/shpyrd-cloud#62)
 
 **Owner:** unassigned
 
