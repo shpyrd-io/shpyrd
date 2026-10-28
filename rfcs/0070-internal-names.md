@@ -4,7 +4,7 @@
 
 **Owner:** Patrick Negri
 
-**Depends on:** RFC-0033 (in progress: allow lists, the edge), RFC-0036 (implemented:
+**Depends on:** RFC-0033 (implemented: allow lists, the edge), RFC-0036 (implemented:
 internal front door)
 
 **Creation date:** 2026-09-27

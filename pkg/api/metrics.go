@@ -67,6 +67,11 @@ type allocation struct {
 	// BurstCores is a ceiling above CPUCores when a process has one; sizes
 	// no longer set it (the size's CPU is the ceiling) and it stays 0.
 	BurstCores float64
+	// Instances is how many of them the process was given: its replicas,
+	// one when unset, which is what the controller writes as the process's
+	// Desired. A by-process series sums every instance, so it is measured
+	// against all of them.
+	Instances int
 }
 
 // allocations resolves every process type's size to numbers the charts can
@@ -86,7 +91,10 @@ func (s *Server) allocations(ctx context.Context, app *shpyrdv1.App) map[string]
 		if err != nil {
 			continue
 		}
-		a := allocation{}
+		a := allocation{Instances: 1}
+		if p.Replicas != nil {
+			a.Instances = int(*p.Replicas)
+		}
 		// The size's CPU is the limit; the request is the guaranteed share
 		// of it for shared sizes, and only stands in when no limit exists.
 		if q, ok := res.Limits[corev1.ResourceCPU]; ok {
@@ -109,12 +117,29 @@ type ReleaseMarker struct {
 	Label  string  `json:"label"`
 }
 
+// OOMMarker is one out-of-memory kill in the range (#119), for the Memory
+// chart to mark where a process was killed for crossing its size. Instance
+// is the pod's human name when it died (web.1), empty for a Job pod; the
+// pod's own name never leaves the server (RFC-0011).
+type OOMMarker struct {
+	Time     float64 `json:"time"`
+	Process  string  `json:"process"`
+	Instance string  `json:"instance,omitempty"`
+	// Limit is the memory limit crossed, in bytes; 0 when there was none.
+	Limit int64 `json:"limit"`
+	// Size names the limit when it is a size the process has: shared-m.
+	Size    string `json:"size,omitempty"`
+	Release int    `json:"release,omitempty"`
+}
+
 // MetricsResponse holds the charts for an app.
 type MetricsResponse struct {
 	Range    string          `json:"range"`
 	Step     int             `json:"step"`
 	Charts   []Chart         `json:"charts"`
 	Releases []ReleaseMarker `json:"releases"`
+	// OOMs are the out-of-memory kills in the range, oldest first.
+	OOMs []OOMMarker `json:"ooms"`
 }
 
 var rangeOptions = map[string]time.Duration{
@@ -219,6 +244,7 @@ func (s *Server) appMetrics(c *gin.Context) {
 			resp.Releases = append(resp.Releases, ReleaseMarker{Number: r.Number, Time: float64(r.CreatedAt.Unix()), Label: "v" + fmt.Sprint(r.Number)})
 		}
 	}
+	resp.OOMs = s.oomMarkers(c.Request.Context(), app, start, opts.Process)
 
 	var wg sync.WaitGroup
 	for i, q := range queries {
@@ -606,11 +632,23 @@ func applyReference(ch *Chart, allocs map[string]allocation, opts metricsOptions
 		if !ok {
 			continue
 		}
+		// A by-process series is the sum over the process's instances, so
+		// its line is the sum of what they were given; a by-instance series
+		// is one instance, measured against one allocation (and a sum over
+		// instances scales itself in aggregateGroup). The count is the
+		// spec's replicas rather than the live pods: it is what the process
+		// was given, which it keeps while it sleeps and uses nothing, and
+		// the live list would cost the default view a call every open tab
+		// repeats every 30 seconds. A process scaled to zero draws no line.
+		n := 1.0
+		if !opts.byInstance() {
+			n = float64(a.Instances)
+		}
 		switch ch.ID {
 		case "cpu":
-			ch.Series[i].Reference, ch.Series[i].Burst = a.CPUCores, a.BurstCores
+			ch.Series[i].Reference, ch.Series[i].Burst = a.CPUCores*n, a.BurstCores*n
 		case "memory":
-			ch.Series[i].Reference = a.MemoryBytes
+			ch.Series[i].Reference = a.MemoryBytes * n
 		}
 	}
 }

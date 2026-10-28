@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Globe, Hammer, Lock, Network, Pencil, RotateCcw, Rocket, Trash2 } from "lucide-react";
+import { ExternalLink, Globe, Hammer, Lock, Network, Pencil, RotateCcw, Rocket, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertActions, AlertDescription, AlertTitle } from "@shpyrd/ui/components/alert";
 import type { IconChoice } from "@shpyrd/ui/components/app-icons";
@@ -25,11 +25,11 @@ import { api } from "@/api/api";
 import { buildFailed, type DeployRequest, type Project } from "@/api/types";
 import { useInternalExposure } from "@/lib/networking";
 import type { Perms } from "@/lib/perms";
-import { addressOf, hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
+import { addressOf, ago, hostOf, openUrl, phaseOf, phaseWords } from "@/lib/project";
 import { choiceOf, ProjectTile } from "@/lib/tile";
 import { useStream } from "./shared";
 
-const types = { running: "success", deploying: "warning", failed: "error", sleeping: "neutral" } as const;
+const types = { running: "success", deploying: "warning", failed: "error", sleeping: "neutral", maintenance: "warning" } as const;
 
 // A release is on its way: building or rolling out. What would start
 // another waits.
@@ -68,6 +68,14 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
     mutationFn: (exposure: "external" | "internal") => api.setExposure(project.slug, exposure),
     onSuccess: (_, exposure) => {
       toast.success(exposure === "internal" ? "Now on the local network only" : "Now on the public internet");
+      refresh();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const takeDown = useMutation({
+    mutationFn: () => api.setMaintenance(project.slug, { enabled: false }),
+    onSuccess: () => {
+      toast.success("The app answers again");
       refresh();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -155,6 +163,23 @@ export function Heading({ project, perms }: { project: Project; perms: Perms }) 
           <AlertDescription>
             Deploy from a Git repository with the button above, or run <InlineCode>shpyrd deploy --project {project.slug}</InlineCode> from a checkout.
           </AlertDescription>
+        </Alert>
+      )}
+      {project.maintenance?.enabled && (
+        <Alert variant="warning" icon={<Wrench />}>
+          <AlertTitle>The maintenance page is up</AlertTitle>
+          <AlertDescription>
+            Visitors get a 503{project.maintenance.message ? <> and the words <q>{project.maintenance.message}</q></> : null}
+            {project.maintenance.since ? `, since ${ago(project.maintenance.since)}` : ""}
+            {project.maintenance.by ? `, put up by ${project.maintenance.by}` : ""}. The processes keep running; releases, the shell and one-off commands go on.
+          </AlertDescription>
+          {perms.deploy && (
+            <AlertActions>
+              <Button size="sm" variant="outline" disabled={takeDown.isPending} onClick={() => takeDown.mutate()}>
+                Serve the app again
+              </Button>
+            </AlertActions>
+          )}
         </Alert>
       )}
       {project.status.phase === "Building" && <Building project={project} />}

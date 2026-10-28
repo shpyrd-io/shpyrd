@@ -1380,3 +1380,65 @@ func TestMetricsChartsLeaveBuildPodsOut(t *testing.T) {
 		})
 	}
 }
+
+// In Total mode a by-process series is the sum over the process's instances,
+// so its line is the sum of what they were given: the size times the
+// replicas. By instance, each series is one instance and keeps one size.
+func TestMetricsByProcessReferenceCountsEveryInstance(t *testing.T) {
+	byProcess := []fakeSeries{
+		{Labels: map[string]string{"label_shpyrd_io_process": "web"}, Values: []Point{{1000, 30}}},
+		{Labels: map[string]string{"label_shpyrd_io_process": "worker"}, Values: []Point{{1000, 10}}},
+	}
+	prom, _ := newFakeProm(t,
+		fakeAnswer{Match: "container_memory_working_set_bytes", Series: byProcess},
+		fakeAnswer{Match: "container_cpu_usage_seconds_total", Series: byProcess},
+	)
+	app := metricsApp()
+	three := int32(3)
+	app.Spec.Processes["web"] = shpyrdv1.Process{Size: "shared-s", Replicas: &three}
+	s, _ := newTestServer(t, prom, []client.Object{app})
+
+	out := getMetrics(t, s, "?range=1h&mode=total")
+	// shared-s is 64Mi an instance: web runs three of them, worker one.
+	const shareds = 67108864.0
+	want := map[string]float64{"web": 3 * shareds, "worker": shareds}
+	mem := chartByID(t, out, "memory")
+	if len(mem.Series) != 2 {
+		t.Fatalf("memory series = %v, want web and worker", seriesNames(mem))
+	}
+	for _, sr := range mem.Series {
+		if sr.Reference != want[sr.Name] {
+			t.Errorf("memory %q reference = %v, want %v", sr.Name, sr.Reference, want[sr.Name])
+		}
+	}
+	// The CPU follows the same count, whatever the size's CPU is.
+	cpu := map[string]Series{}
+	for _, sr := range chartByID(t, out, "cpu").Series {
+		cpu[sr.Name] = sr
+	}
+	if cpu["worker"].Reference == 0 || cpu["web"].Reference != 3*cpu["worker"].Reference {
+		t.Errorf("cpu references: web %v, worker %v; want web three times worker", cpu["web"].Reference, cpu["worker"].Reference)
+	}
+	if cpu["web"].Burst != 3*cpu["worker"].Burst {
+		t.Errorf("cpu bursts: web %v, worker %v; want web three times worker", cpu["web"].Burst, cpu["worker"].Burst)
+	}
+
+	// By instance each series is one instance, measured against one size.
+	prom, _ = newFakeProm(t, fakeAnswer{
+		Match: "container_memory_working_set_bytes",
+		Series: []fakeSeries{
+			{Labels: map[string]string{"pod": "shop-web-a", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 10}}},
+			{Labels: map[string]string{"pod": "shop-web-b", "label_shpyrd_io_process": "web"}, Values: []Point{{1000, 20}}},
+		},
+	})
+	s, _ = newTestServer(t, prom, []client.Object{app}, podFor("shop", "web", "shop-web-a", 5), podFor("shop", "web", "shop-web-b", 6))
+	mem = chartByID(t, getMetrics(t, s, "?range=1h&mode=total&by=instance"), "memory")
+	if len(mem.Series) != 2 {
+		t.Fatalf("series = %v, want two web instances", seriesNames(mem))
+	}
+	for _, sr := range mem.Series {
+		if sr.Reference != shareds {
+			t.Errorf("instance %q reference = %v, want %v: one instance, one size", sr.Name, sr.Reference, shareds)
+		}
+	}
+}

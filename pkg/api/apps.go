@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	shpyrdv1 "github.com/shpyrd-io/shpyrd/api/v1alpha1"
@@ -60,6 +59,9 @@ type AppSummary struct {
 	// Access is who may open the app: public, authenticated or identified
 	// (RFC-0033). Apps created before the field exist are public.
 	Access string `json:"access"`
+	// Maintenance is the maintenance mode (RFC-0020), only while it is on:
+	// HTTP answers the page, the processes keep running.
+	Maintenance *shpyrdv1.Maintenance `json:"maintenance,omitempty"`
 	// Icon and IconColor are the symbol of the card on the launcher, by
 	// its name, and its colour. IconURL is the image the project sent in
 	// its place, and IconType its media type: an SVG is drawn as a symbol
@@ -97,6 +99,9 @@ func summarize(a *shpyrdv1.App) AppSummary {
 		Domain:      domainOf(a),
 	}
 	s.IconURL, s.IconType = iconURL(a)
+	if m := a.Spec.Maintenance; m != nil && m.Enabled {
+		s.Maintenance = m
+	}
 	if s.Phase == "" {
 		s.Phase = shpyrdv1.PhasePending
 	}
@@ -166,7 +171,8 @@ type AppDetailSpec struct {
 	Build       *shpyrdv1.Build             `json:"build,omitempty"`
 	Bindings    []shpyrdv1.Binding          `json:"bindings,omitempty"`
 	Exposure    string                      `json:"exposure,omitempty"`
-	Access      string                      `json:"access"` // who may open the app (RFC-0033)
+	Access      string                      `json:"access"`                // who may open the app (RFC-0033)
+	Maintenance *shpyrdv1.Maintenance       `json:"maintenance,omitempty"` // the page in front of the app (RFC-0020)
 }
 
 type AppDetailStatus struct {
@@ -248,6 +254,7 @@ func detail(a *shpyrdv1.App, buildByDigest map[string]int) AppDetail {
 			Bindings:    a.Spec.Bindings,
 			Exposure:    a.Spec.Exposure,
 			Access:      a.EffectiveAccess(),
+			Maintenance: a.Spec.Maintenance,
 		},
 		Status: AppDetailStatus{
 			Phase:       firstNonEmpty(a.Status.Phase, shpyrdv1.PhasePending),
@@ -1078,24 +1085,19 @@ func (s *Server) scaleApp(c *gin.Context) {
 		abort(c, http.StatusBadRequest, err)
 		return
 	}
-	if *req.Replicas < 0 || *req.Replicas > 100 {
-		abort(c, http.StatusBadRequest, errors.New("replicas must be between 0 and 100"))
+	if *req.Replicas < 0 || *req.Replicas > maxReplicas {
+		abort(c, http.StatusBadRequest, fmt.Errorf("replicas must be between 0 and %d", maxReplicas))
 		return
 	}
 	app, err := s.mutateApp(c, func(a *shpyrdv1.App) error {
 		if a.Spec.Processes == nil {
 			a.Spec.Processes = map[string]shpyrdv1.Process{"web": {}}
 		}
-		p, ok := a.Spec.Processes[req.Process]
-		if !ok && req.Process != "web" {
+		if _, ok := a.Spec.Processes[req.Process]; !ok && req.Process != "web" {
 			return fmt.Errorf("unknown process %q", req.Process)
 		}
-		if err := s.checkScale(c.Request.Context(), a, req.Process, *req.Replicas); err != nil {
-			return err
-		}
-		p.Replicas = ptr.To(*req.Replicas)
-		a.Spec.Processes[req.Process] = p
-		return nil
+		// On a process that follows its load the count is its minimum.
+		return s.setReplicas(c.Request.Context(), a, req.Process, *req.Replicas)
 	})
 	if err != nil {
 		return

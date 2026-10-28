@@ -1016,17 +1016,35 @@ export const mock: Api = {
         if (after === "default" || after === "") delete spec.sleep;
         else spec.sleep = after === "off" ? { after: "off" } : { after, resuming: change.sleep.resuming ?? "wait" };
       }
+      // Bounds (RFC-0047): off clears them; a count on a process with
+      // bounds is its minimum.
+      if (change.autoscale) {
+        if (change.autoscale.off) delete spec.autoscale;
+        else
+          spec.autoscale = {
+            min: change.autoscale.min ?? 1,
+            max: change.autoscale.max ?? 1,
+            ...(change.autoscale.cpu !== undefined ? { cpu: change.autoscale.cpu } : {}),
+            ...(change.autoscale.concurrency !== undefined ? { concurrency: change.autoscale.concurrency } : {}),
+          };
+      }
+      if (spec.autoscale && change.replicas !== undefined) spec.autoscale = { ...spec.autoscale, min: change.replicas };
       p.spec.processes = { ...p.spec.processes, [name]: spec };
       const st = p.processes?.[name] ?? { desired: 1, ready: 1 };
+      const desired = spec.autoscale ? Math.max(spec.autoscale.min, Math.min(spec.autoscale.max, st.desired)) : (spec.replicas ?? st.desired);
+      const { autoscale: _was, ...rest } = st;
       p.processes = {
         ...p.processes,
         [name]: {
-          ...st,
-          desired: spec.replicas ?? st.desired,
-          ready: spec.replicas ?? st.ready,
+          ...rest,
+          desired,
+          ready: desired,
           size: spec.size ?? st.size,
           ...(change.sleep && name === "web"
             ? { sleep: sleepReadBack(spec.sleep, st.sleep) }
+            : {}),
+          ...(spec.autoscale
+            ? { autoscale: { min: spec.autoscale.min, max: spec.autoscale.max, cpu: spec.autoscale.cpu ?? 70, concurrency: spec.autoscale.concurrency ?? 20, state: "active" as const } }
             : {}),
         },
       };
@@ -1050,6 +1068,14 @@ export const mock: Api = {
   },
   setAccess: async (slug, access) =>
     projectsOf.set({ ...(await projectsOf.find(slug)), access }),
+  setMaintenance: async (slug, body) => {
+    await wait();
+    const p = await projectsOf.find(slug);
+    const maintenance = body.enabled
+      ? { enabled: true, message: body.message, since: p.maintenance?.since ?? new Date().toISOString(), by: p.maintenance?.by ?? me.email }
+      : undefined;
+    return projectsOf.set({ ...p, maintenance, spec: { ...p.spec, maintenance } });
+  },
   preview: async (slug, body) => {
     await wait();
     const p = await projectsOf.find(slug);
@@ -1817,10 +1843,11 @@ export const mock: Api = {
       onLine(liveLine(slug, query.process ?? processes[0] ?? "web", n++)),
     );
   },
-  metrics: async (slug, range) => {
+  metrics: async (slug, query) => {
     await wait();
     const p = await projectsOf.find(slug);
-    return metricsOf(slug, Object.keys(p.spec.processes ?? { web: {} }), range);
+    const processes: Record<string, { replicas?: number }> = p.spec.processes ?? { web: {} };
+    return metricsOf(slug, Object.fromEntries(Object.entries(processes).map(([name, spec]) => [name, spec.replicas ?? 1])), query);
   },
   instances: async (slug) => {
     await wait();

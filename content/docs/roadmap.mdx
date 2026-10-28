@@ -5,7 +5,7 @@ description: What is coming - what is decided and what is still a proposal - wit
 
 <Lead>
 
-Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work (completed or replaced account proposals are recorded separately below): **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
+Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work: **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
 
 </Lead>
 
@@ -13,9 +13,7 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 
 | Item | RFC | Status |
 | --- | --- | --- |
-| Cost visibility | [RFC-0048](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0048-cost-visibility.md) | ready to implement (the enterprise costs feature already shows what the cluster uses and costs) |
 | Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | ready to implement |
-| Workspaces: the workspace every project, team and person belongs to | [RFC-0033](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0033-workspaces.md) | in progress (control-plane database and the Workspace page in v0.4.0; sign-in at the edge, the `user` role, access modes and the launcher in v0.5.0; login methods, join policy, company domains, the everyone team and suspension in v0.6.0; allow lists v0.7.0; CLIs v0.8.0; the workspace from the host, sign-in at the workspace host, plan limits, the CLI over the API in v0.9.x; an audit in v0.9.10 fixed allow lists, suspension of public apps and backups of every workspace; v0.9.11 keeps the edge's promises: personal tokens open apps, sign-out from an app, key rotation, JSON 401 for API clients, a NetworkPolicy for the server, denial counters; v0.9.11/v0.9.12: native `uuid` identifiers with golang-migrate, image repositories keyed by the workspace id; v0.9.13: workspace roles (owner, admin, member) and invitations accepted by signing in; v0.9.15: per-workspace SSO, the email-first login step for claimed domains, the `reader` role; v0.9.16: address change with redirects, custom workspace domains (CNAME mode), the launcher for everyone with search and featured apps, workspace branding, the MCP server — the remaining gaps (workspace delete, delegated (NS) custom domains, SAML and step-up sign-in on claimed domains, `run`, `globals`, `sizes` and `extensions` without a kubeconfig) are listed in the RFC) |
 
 ## Deploying
 
@@ -23,9 +21,8 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | --- | --- | --- |
 | Shared volumes (`storage-rwx`) | [RFC-0041](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0041-shared-volumes.md) | ready to implement (shared volumes work on EFS or File Storage where the cloud has them, and on one node's disk on the local profile) |
 | Autoscaling mode (min/max, HPA, KEDA) | [RFC-0047](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0047-autoscaling.md) | ready to implement |
-| Maintenance mode | [RFC-0020](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0020-maintenance-mode.md) | proposal |
+| Maintenance mode | [RFC-0020](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0020-maintenance-mode.md) | done |
 | Run history and scheduled tasks | [RFC-0024](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0024-runs-and-scheduled-tasks.md) | proposal |
-| Web terminal | [RFC-0026](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0026-web-terminal.md) | in progress (the Shell tab shipped; the gaps are listed in the RFC) |
 | Node.js builds: pnpm, and Next.js 16 on buildpacks | [RFC-0079](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0079-nodejs-builds-pnpm-and-next-16.md) | proposal |
 | Builds namespace and enforce-mode Pod Security | [RFC-0043](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0043-builds-namespace-and-pod-security.md) | ready to implement |
 
@@ -48,19 +45,6 @@ Every line of the roadmap is an RFC in the [shpyrd repository](https://github.co
 | Tracing backend (Jaeger) and a Traces tab | [RFC-0056](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0056-tracing-backend.md) | ready to implement |
 | Notifications: webhook, Slack, email | [RFC-0030](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0030-notifications.md) | proposal |
 | Audit trail v2 (durable, cluster-wide, export) | [RFC-0025](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0025-audit-trail-v2.md) | proposal |
-
-## Accounts and authentication: delivered or replaced
-
-Credential features follow the selected IdP's configuration. Accounts supports
-TOTP, recovery codes and passkeys; OSS static Dex credentials do not provide those
-self-service features. Workspace permissions and CLI/MCP grants stay in the workspace.
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| Account identity separation: Accounts/IdP credentials and workspace authorization | [RFC-0082](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0082-account-identity-separation.md) | done (production) |
-| Local password form and password grant | [RFC-0012](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0012-sign-in-experience.md) | replaced by RFC-0082; removed from Core |
-| Local account lifecycle: reset, set-password and credential management | [RFC-0014](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0014-account-lifecycle.md) | replaced by RFC-0082; workspace invitations retained |
-| Core MFA/passkeys proposal | [RFC-0053](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0053-mfa-and-passkeys.md) | discarded in Core; supported in Accounts through Clerk and in customer IdPs |
 
 ## Access
 

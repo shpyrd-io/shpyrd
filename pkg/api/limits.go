@@ -81,6 +81,11 @@ func (u *usage) addApp(app *shpyrdv1.App, cat *sizes.Catalog) {
 		if p.Replicas != nil {
 			n = *p.Replicas
 		}
+		if p.Autoscale.Valid() {
+			// A process that follows its load counts what it may come
+			// to: its maximum (RFC-0047).
+			n = p.Autoscale.Max
+		}
 		if n <= 0 {
 			continue
 		}

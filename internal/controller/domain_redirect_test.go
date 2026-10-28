@@ -36,8 +36,8 @@ func TestDomainRedirectRoutes(t *testing.T) {
 				r.Config.InternalLBAddress = "10.0.0.1"
 				r.Config.HTTPSPort = "8443"
 				ing := &networkingv1.Ingress{}
-				r.Config.mutateIngress(app, ing, true)
-				if len(ing.Spec.Rules) != 1 || ing.Spec.Rules[0].Host != "www.myprod.com" || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name != webSleepServiceName {
+				r.Config.mutateIngress(app, ing, true, true)
+				if len(ing.Spec.Rules) != 1 || ing.Spec.Rules[0].Host != "www.myprod.com" || ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name != webInterceptorService {
 					t.Fatalf("app ingress: %+v", ing.Spec)
 				}
 				edge := &networkingv1.Ingress{}
@@ -91,7 +91,7 @@ func TestDomainRedirectRoutes(t *testing.T) {
 				if err := r.Get(t.Context(), key, redirect); !apierrors.IsNotFound(err) {
 					t.Fatalf("redirect not removed: %v", err)
 				}
-				r.Config.mutateIngress(app, ing, false)
+				r.Config.mutateIngress(app, ing, false, false)
 				if ing.Spec.Rules[0].Host != "shop.example.test" {
 					t.Fatal("platform host not restored")
 				}

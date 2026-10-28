@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   Camera,
+  Gauge,
   KeyRound,
   Link2,
   Minus,
@@ -56,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@shpyrd/ui/components/select";
+import { Slider } from "@shpyrd/ui/components/slider";
 import { Stack } from "@shpyrd/ui/components/stack";
 import { StatusBadge } from "@shpyrd/ui/components/status-badge";
 import {
@@ -66,8 +68,10 @@ import {
   TableHeader,
   TableRow,
 } from "@shpyrd/ui/components/table";
-import { api } from "@/api/api";
+import { api, type AutoscaleChange } from "@/api/api";
 import type {
+  AutoscaleSpec,
+  AutoscaleStatus,
   InstanceSize,
   Project,
   PublicConfig,
@@ -151,6 +155,18 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  // The bounds the web process follows its load between (RFC-0047), set
+  // on their own like sleep: they are not a release.
+  const autoscale = useMutation({
+    mutationFn: (bounds: AutoscaleChange) =>
+      api.applyProcesses(project.slug, { web: { autoscale: bounds } }),
+    onSuccess: (_, bounds) => {
+      queries.invalidateQueries({ queryKey: ["project", project.slug] });
+      setDraft({});
+      toast.success(autoscaleSetWords("web", bounds));
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const apply = useMutation({
     mutationFn: (force?: boolean) => api.applyProcesses(project.slug, changes, force),
     onSuccess: () => {
@@ -227,6 +243,7 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
               const changed =
                 is.size !== was.size || is.replicas !== was.replicas;
               const pinned = st?.pinned;
+              const bounds = spec?.autoscale;
               return (
                 <TableRow
                   key={name}
@@ -280,46 +297,71 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
                   </TableCell>
                   <TableCell>
                     <Stack direction="horizontal" align="center" gap="tight">
-                      <Button
-                        variant="outline"
-                        size="icon-xs"
-                        icon={<Minus />}
-                        aria-label="One less"
-                        disabled={
-                          !perms.resource || waiting || is.replicas <= 0
-                        }
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            [name]: { ...is, replicas: is.replicas - 1 },
-                          })
-                        }
-                      />
-                      <span
-                        className={`w-6 text-center font-mono text-xs ${is.replicas !== was.replicas ? "text-primary" : ""}`}
-                      >
-                        {is.replicas}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="icon-xs"
-                        icon={<Plus />}
-                        aria-label="One more"
-                        disabled={
-                          !perms.resource ||
-                          waiting ||
-                          (!!pinned && is.replicas >= 1)
-                        }
-                        title={
-                          pinned ? `${pinned}: one instance only` : undefined
-                        }
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            [name]: { ...is, replicas: is.replicas + 1 },
-                          })
-                        }
-                      />
+                      {bounds ? (
+                        // The count follows the load: the bounds are the
+                        // setting, the dialog changes them.
+                        <span
+                          className="font-mono text-xs"
+                          title={`follows its load between ${bounds.min} and ${bounds.max} instances`}
+                        >
+                          {bounds.min}–{bounds.max}{" "}
+                          <span className="font-sans text-[10px] text-muted-foreground">
+                            auto
+                          </span>
+                        </span>
+                      ) : (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="icon-xs"
+                            icon={<Minus />}
+                            aria-label="One less"
+                            disabled={
+                              !perms.resource || waiting || is.replicas <= 0
+                            }
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                [name]: { ...is, replicas: is.replicas - 1 },
+                              })
+                            }
+                          />
+                          <span
+                            className={`w-6 text-center font-mono text-xs ${is.replicas !== was.replicas ? "text-primary" : ""}`}
+                          >
+                            {is.replicas}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="icon-xs"
+                            icon={<Plus />}
+                            aria-label="One more"
+                            disabled={
+                              !perms.resource ||
+                              waiting ||
+                              (!!pinned && is.replicas >= 1)
+                            }
+                            title={
+                              pinned ? `${pinned}: one instance only` : undefined
+                            }
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                [name]: { ...is, replicas: is.replicas + 1 },
+                              })
+                            }
+                          />
+                        </>
+                      )}
+                      {name === "web" && perms.resource && !pinned && (
+                        <AutoscaleDialog
+                          what={project.slug}
+                          current={bounds}
+                          count={is.replicas}
+                          busy={autoscale.isPending}
+                          onSave={(change) => autoscale.mutate(change)}
+                        />
+                      )}
                     </Stack>
                   </TableCell>
                   <TableCell>
@@ -374,6 +416,11 @@ function Processes({ project, perms }: { project: Project; perms: Perms }) {
                           />
                         )}
                       </Stack>
+                    )}
+                    {name === "web" && st?.autoscale && (
+                      <div className="mt-1 w-64 text-[11px] whitespace-normal text-muted-foreground">
+                        {autoscaleWords(st.autoscale)}
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -504,6 +551,197 @@ function sleepSetWords(
 
 // The quiet periods a policy may name.
 const quietPeriods = ["5m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"];
+
+// What the bounds do, in a few words: the targets in force, then what the
+// cluster cannot do about them.
+export function autoscaleWords(st: AutoscaleStatus) {
+  const bounds = `follows its load between ${st.min} and ${st.max}: another instance past ${st.cpu}% CPU or ${st.concurrency} requests in flight`;
+  if (st.state === "unavailable") return `${bounds}; not now: ${st.message ?? "the cluster cannot follow the bounds"}`;
+  if (st.message) return `${bounds}; ${st.message}`;
+  return bounds;
+}
+
+// A typed number, or what stands in for one that is not a number yet.
+const num = (v: string, fallback: number) => {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+};
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// What the toast says once the bounds are set.
+function autoscaleSetWords(what: string, change: AutoscaleChange) {
+  if (change.off) return `${what} keeps a fixed count again.`;
+  return `${what} follows its load between ${change.min} and ${change.max} instances.`;
+}
+
+// The bounds of the web process (RFC-0047): a fixed count, or a minimum
+// and a maximum it follows its load between, with the targets that add an
+// instance when the defaults will not do.
+export function AutoscaleDialog({
+  what,
+  current,
+  count,
+  busy = false,
+  onSave,
+}: {
+  what: string;
+  current?: AutoscaleSpec;
+  count: number;
+  busy?: boolean;
+  onSave: (change: AutoscaleChange) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"fixed" | "auto">(current ? "auto" : "fixed");
+  // The workspace's ceiling on instances is how far the line goes; a
+  // maximum typed past it stretches the line, and the API says no.
+  const workspace = useQuery({
+    queryKey: ["workspace"],
+    queryFn: api.workspace,
+    staleTime: 60_000,
+    enabled: open,
+  });
+  const ceiling = workspace.data?.limits?.instances;
+  const [min, setMin] = useState(String(current?.min ?? Math.max(1, count)));
+  const [max, setMax] = useState(String(current?.max ?? Math.max(2, count * 2)));
+  const [cpu, setCpu] = useState(String(current?.cpu ?? 70));
+  const [concurrency, setConcurrency] = useState(String(current?.concurrency ?? 20));
+  const reset = () => {
+    setMode(current ? "auto" : "fixed");
+    setMin(String(current?.min ?? Math.max(1, count)));
+    setMax(String(current?.max ?? Math.max(2, count * 2)));
+    setCpu(String(current?.cpu ?? 70));
+    setConcurrency(String(current?.concurrency ?? 20));
+  };
+  const n = (v: string) => Number.parseInt(v, 10);
+  // How far the line goes: the ceiling, or 100 without one, stretched to
+  // a bound typed past it so the thumb is never off the line.
+  const span = Math.max(2, ceiling ?? 100, num(min, 1), num(max, 1));
+  const valid =
+    mode === "fixed" ||
+    (n(min) >= 1 && n(max) >= n(min) && n(max) <= 100 && n(cpu) >= 1 && n(cpu) <= 100 && n(concurrency) >= 1);
+  const change: AutoscaleChange =
+    mode === "fixed"
+      ? { off: true }
+      : {
+          min: n(min),
+          max: n(max),
+          ...(n(cpu) !== 70 ? { cpu: n(cpu) } : {}),
+          ...(n(concurrency) !== 20 ? { concurrency: n(concurrency) } : {}),
+        };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) reset();
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="xs" icon={<Gauge />} title="How many instances">
+          Autoscale
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader divider>
+          <DialogTitle>How many instances {what} runs</DialogTitle>
+          <DialogDescription>
+            A fixed count, or a count that follows the load: another instance
+            when one passes the CPU target or carries more requests than the
+            target, one fewer when the load has been lower for five minutes,
+            always within the bounds. A sleep policy still takes it to zero.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid) return;
+            onSave(change);
+            setOpen(false);
+          }}
+        >
+          <Field label="Instances">
+            <Select value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed">A fixed count</SelectItem>
+                <SelectItem value="auto">Follow the load, between two bounds</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {mode === "auto" && (
+            <>
+              <Field
+                label="Bounds"
+                hint={`shpyrd scale sets the minimum. The maximum counts against the workspace's instances${ceiling ? ` (${ceiling})` : ""}.`}
+              >
+                <div role="group" className="grid grid-cols-[5rem_1fr_5rem] items-center gap-x-3 gap-y-1">
+                  <Input type="number" min={1} max={100} value={min} onChange={(e) => setMin(e.target.value)} aria-label="Minimum instances" />
+                  <Slider
+                    min={1}
+                    max={span}
+                    value={[clamp(num(min, 1), 1, span), clamp(num(max, 1), 1, span)]}
+                    onValueChange={([lo, hi]) => {
+                      setMin(String(lo));
+                      setMax(String(hi));
+                    }}
+                    thumbLabels={["At least", "At most"]}
+                  />
+                  <Input type="number" min={1} max={100} value={max} onChange={(e) => setMax(e.target.value)} aria-label="Maximum instances" />
+                  <span aria-hidden className="text-xs text-muted-foreground">
+                    at least
+                  </span>
+                  <span />
+                  <span aria-hidden className="text-right text-xs text-muted-foreground">
+                    at most
+                  </span>
+                </div>
+              </Field>
+              <Field label="CPU target" hint="Percent of the size's CPU an instance may use before another is added (70).">
+                <div role="group" className="flex items-center gap-3">
+                  <Slider
+                    className="flex-1"
+                    min={1}
+                    max={100}
+                    value={[clamp(num(cpu, 70), 1, 100)]}
+                    onValueChange={([v]) => setCpu(String(v))}
+                    aria-label="CPU target slider"
+                  />
+                  <Input type="number" min={1} max={100} value={cpu} onChange={(e) => setCpu(e.target.value)} suffix="%" className="w-24" aria-label="CPU target" />
+                </div>
+              </Field>
+              <Field label="Requests in flight" hint="Per instance, before another is added (20).">
+                <div role="group" className="flex items-center gap-3">
+                  <Slider
+                    className="flex-1"
+                    min={1}
+                    max={Math.max(100, num(concurrency, 20))}
+                    value={[clamp(num(concurrency, 20), 1, Math.max(100, num(concurrency, 20)))]}
+                    onValueChange={([v]) => setConcurrency(String(v))}
+                    aria-label="Requests in flight slider"
+                  />
+                  <Input type="number" min={1} value={concurrency} onChange={(e) => setConcurrency(e.target.value)} className="w-24" aria-label="Requests in flight per instance" />
+                </div>
+              </Field>
+            </>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={busy || !valid}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // The sleep of a web process or a dedicated database (#132): the three
 // states of #135, a quiet period of its own with its wake mode for a web

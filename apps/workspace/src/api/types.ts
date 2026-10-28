@@ -184,7 +184,30 @@ export type SleepStatus = {
   source?: "project" | "off" | "workspace";
 };
 
+// The bounds a web process follows its load between (RFC-0047): cpu is a
+// percent of the size's CPU, concurrency the requests in flight an
+// instance may carry; both have defaults (70, 20).
+export type AutoscaleSpec = {
+  min: number;
+  max: number;
+  cpu?: number;
+  concurrency?: number;
+};
+
+// The bounds as they apply: the targets in force, and whether the cluster
+// follows them (unavailable says why; a message on an active one says what
+// is missing, such as CPU without the Metrics Server).
+export type AutoscaleStatus = {
+  min: number;
+  max: number;
+  cpu: number;
+  concurrency: number;
+  state?: "active" | "unavailable";
+  message?: string;
+};
+
 export type ProcessStatus = {
+  // With bounds, what the scaler asks for now.
   desired: number;
   ready: number;
   updated?: number;
@@ -196,10 +219,20 @@ export type ProcessStatus = {
   // Why the process keeps to one instance, when it does.
   pinned?: string;
   sleep?: SleepStatus;
+  autoscale?: AutoscaleStatus;
 };
 
 export type Exposure = "external" | "internal";
 export type Access = "public" | "authenticated" | "identified";
+
+// The page in front of the app (RFC-0020): what it says under the
+// project's name, and when and by whom it went up, as the API records.
+export type Maintenance = {
+  enabled: boolean;
+  message?: string;
+  since?: string;
+  by?: string;
+};
 
 export type Release = {
   number: number;
@@ -226,6 +259,8 @@ export type ProjectSummary = {
   createdAt: string;
   exposure?: Exposure;
   access: Access;
+  // The page in front of the app, only while it is up.
+  maintenance?: Maintenance;
   // The symbol of its card on the launcher and its colour; the image it
   // sent in their place, and that image's type.
   icon?: string;
@@ -255,6 +290,8 @@ export type Project = ProjectSummary & {
         command?: string;
         port?: number;
         sleep?: { after?: string; resuming?: "page" | "wait" | "" };
+        // The bounds the process follows its load between (RFC-0047).
+        autoscale?: AutoscaleSpec;
       }
     >;
     build?: {
@@ -264,6 +301,7 @@ export type Project = ProjectSummary & {
     };
     env?: { name: string; value?: string }[];
     bindings?: { kind: string; name: string }[];
+    maintenance?: Maintenance;
   };
   status: {
     phase: string;
@@ -746,15 +784,55 @@ export type Series = {
     | "warning"
     | "error";
 };
+// What the metrics of a project are asked for (RFC-0027). `by` breaks
+// CPU, memory and network down per instance, and `agg` collapses those
+// instances into one series; `mode` reads CPU and memory as a share of
+// the size or in their units; `replaced` keeps the instances that no
+// longer exist; `process` narrows everything to one process type.
+export type MetricsQuery = {
+  range: string;
+  process?: string;
+  by?: "process" | "instance";
+  agg?: "none" | "sum" | "avg" | "max";
+  mode?: "percent" | "total";
+  replaced?: boolean;
+};
+
+// One chart of the metrics: its series, their unit, and what the server
+// says about them — a query that failed, data it chose not to draw, and
+// whether the chart can be broken down per instance at all.
+export type MetricChart = {
+  series: Series[];
+  unit: string;
+  error?: string;
+  note?: string;
+  instanceCapable: boolean;
+};
+
 export type Metrics = {
   from: number;
   to: number;
-  responseTime: Series[];
-  throughput: Series[];
-  cpu: Series[];
-  memory: Series[];
-  // Bytes a second in and out, by process.
-  network: Series[];
-  instances: Series[];
+  responseTime: MetricChart;
+  throughput: MetricChart;
+  cpu: MetricChart;
+  memory: MetricChart;
+  // Bytes a second in and out.
+  network: MetricChart;
+  instances: MetricChart;
   releases: { time: number; label: string }[];
+  // The processes killed for crossing their memory in the time, oldest
+  // first (#119): the Memory chart marks each.
+  ooms: OOMKill[];
+};
+
+// One instance killed for running out of memory. The instance is its name
+// then (web.1), missing for a release step or a build; the limit is in
+// bytes, and the size names it when it is one the process has.
+export type OOMKill = {
+  time: number;
+  process: string;
+  instance?: string;
+  limit: number;
+  size?: string;
+  release?: number;
 };

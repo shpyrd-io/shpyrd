@@ -206,7 +206,7 @@ func TestAppInSharedLayout(t *testing.T) {
 	}
 
 	ing := &networkingv1.Ingress{}
-	r.Config.mutateIngress(app, ing, false)
+	r.Config.mutateIngress(app, ing, false, false)
 	if ing.Annotations[ExternalDNSExclude] != "true" || ing.Spec.Rules[0].Host != "acme-shop.shpyrd.app" {
 		t.Errorf("ingress = %v %+v", ing.Annotations, ing.Spec.Rules)
 	}
@@ -214,7 +214,7 @@ func TestAppInSharedLayout(t *testing.T) {
 	internal := app.DeepCopy()
 	internal.Spec.Exposure = "internal"
 	ing = &networkingv1.Ingress{}
-	r.Config.mutateIngress(internal, ing, false)
+	r.Config.mutateIngress(internal, ing, false, false)
 	if _, ok := ing.Annotations[ExternalDNSExclude]; ok {
 		t.Error("internal app excluded from ExternalDNS")
 	}

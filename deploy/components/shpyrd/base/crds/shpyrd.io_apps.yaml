@@ -539,6 +539,36 @@ spec:
                   `shpyrd deploy --local-build` and by rollbacks; cleared by the next
                   source deploy.
                 type: string
+              maintenance:
+                description: |-
+                  Maintenance puts a page in front of the app (RFC-0020): while
+                  Enabled, every HTTP request at its hosts receives a 503 and the
+                  maintenance page, programs a JSON answer with Retry-After. The
+                  processes keep running, and releases, scaling, shells and one-off
+                  commands go on underneath: the team works through the console, as
+                  nobody is let through the page. Nil or disabled serves the app.
+                properties:
+                  by:
+                    type: string
+                  enabled:
+                    description: Enabled puts the maintenance page in front of the
+                      app.
+                    type: boolean
+                  message:
+                    description: |-
+                      Message is shown on the page under the project's name, plain text;
+                      empty shows the page's own words.
+                    maxLength: 500
+                    type: string
+                  since:
+                    description: |-
+                      Since is when the mode was turned on, and By who turned it on, as
+                      the API records them; the header, the list and the CLI say so.
+                    format: date-time
+                    type: string
+                required:
+                - enabled
+                type: object
               processes:
                 additionalProperties:
                   properties:
@@ -547,6 +577,42 @@ spec:
                       items:
                         type: string
                       type: array
+                    autoscale:
+                      description: |-
+                        Autoscale lets the instance count follow the load between a minimum
+                        and a maximum (web only, RFC-0047); Replicas is then the count the
+                        process had before, kept for when autoscaling is turned off.
+                      properties:
+                        concurrency:
+                          description: |-
+                            Concurrency is the number of requests an instance may have in flight
+                            before another is added. Default DefaultAutoscaleConcurrency.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        cpu:
+                          description: |-
+                            CPU is the CPU an instance may use before another is added, in
+                            percent of the size's CPU (its ceiling; a shared size's guaranteed
+                            share is a part of it). Default DefaultAutoscaleCPU.
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                        max:
+                          description: Max is the most, min or more.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        min:
+                          description: Min is the fewest instances, 1 or more.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                      required:
+                      - max
+                      - min
+                      type: object
                     command:
                       description: |-
                         Command overrides the buildpacks launcher (/cnb/process/<type>).
@@ -974,6 +1040,44 @@ spec:
                 additionalProperties:
                   description: ProcessStatus is the rollout state of one process type.
                   properties:
+                    autoscale:
+                      description: |-
+                        Autoscale is how the count follows the load when bounds are set
+                        (RFC-0047); absent otherwise. Desired is then the count the scaler
+                        asks for now.
+                      properties:
+                        concurrency:
+                          format: int32
+                          type: integer
+                        cpu:
+                          description: |-
+                            CPU and Concurrency are the targets in force: percent of the size's
+                            CPU, requests in flight per instance.
+                          format: int32
+                          type: integer
+                        max:
+                          format: int32
+                          type: integer
+                        message:
+                          description: |-
+                            Message explains an unavailable state, or what is missing from an
+                            active one (CPU is not measured without the Metrics Server).
+                          type: string
+                        min:
+                          description: Min and Max are the bounds in force.
+                          format: int32
+                          type: integer
+                        state:
+                          description: |-
+                            State is "active", or "unavailable" when the bounds are set but the
+                            cluster cannot follow them (Message says why).
+                          type: string
+                      required:
+                      - concurrency
+                      - cpu
+                      - max
+                      - min
+                      type: object
                     cpu:
                       description: CPU and Memory are the allocation in effect (requests),
                         for display.

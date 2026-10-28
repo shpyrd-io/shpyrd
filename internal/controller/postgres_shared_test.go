@@ -489,7 +489,9 @@ func TestSharedPostgresKeepsMoreCopiesWhenAsked(t *testing.T) {
 
 // A shared server gets its own backups once the platform's bucket answers:
 // the plugin's ObjectStore, a daily schedule, and the plugin on the
-// Cluster, put on a server rendered before the bucket was ready.
+// Cluster, put on a server rendered before the bucket was ready only once
+// its instances are up (put on earlier, the instance manager waits for a
+// sidecar its pod does not have and never starts PostgreSQL).
 func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 	ctx := context.Background()
 	pg := sharedPostgres("db", "p-shop", "uid-shop-db")
@@ -533,9 +535,27 @@ func TestSharedServerGetsItsOwnBackups(t *testing.T) {
 		t.Errorf("schedule = %s for %s", cron, target)
 	}
 	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 0 {
+		t.Errorf("no plugin while the server's instances are still coming: %v", plugins)
+	}
+	_ = unstructured.SetNestedField(server.Object, int64(1), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
+	if plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins"); len(plugins) != 0 {
+		t.Errorf("no plugin with one instance of two up: %v", plugins)
+	}
+	_ = unstructured.SetNestedField(server.Object, int64(2), "status", "readyInstances")
+	if err := c.Update(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, r, key)
+	server = getU(t, c, "Cluster", SharedPostgresNamespace, "pg-shared-1")
 	plugins, _, _ := unstructured.NestedSlice(server.Object, "spec", "plugins")
 	if len(plugins) != 1 {
-		t.Fatalf("plugins = %v", plugins)
+		t.Fatalf("plugins once the server is up = %v", plugins)
 	}
 	plugin, _ := plugins[0].(map[string]interface{})
 	object, _, _ := unstructured.NestedString(plugin, "parameters", "barmanObjectName")

@@ -1,8 +1,8 @@
 # RFC-0033 Workspaces
 
-**Status:** in progress (definition being finalised; first pieces shipped)
+**Status:** implemented (v0.4.0–v0.9.61; the identity contract by RFC-0082; what remains is issues of its own, listed under Implementation status) — see Closing below
 
-**Owner:** unassigned
+**Owner:** Patrick Negri (shpyrd-io/shpyrd main)
 
 **Depends on:** RFC-0008 (implemented), RFC-0016
 
@@ -10,7 +10,23 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-10-12
+**Last update:** 2026-10-28
+
+## Closing (2026-10-28)
+
+The RFC is closed as implemented. The workspace is the tenant every project, team and
+person belongs to, and the platform does what the model promised: the control-plane
+database, roles and invitations, the edge and its tokens, login methods and per-workspace
+SSO, allow lists, host-based tenancy with an address, custom domains and branding, the
+launcher, limits, suspension, the MCP server, sign-up and readiness. Later RFCs completed
+the model: RFC-0076 (stable identifiers), RFC-0078 and RFC-0080 (the open-source platform
+creates one explicit workspace at init, and the console and workspaces are separate doors,
+so "one implicit workspace" below is history), RFC-0082 (identity and admission), RFC-0084
+(a workspace's own application).
+
+What remained of the 2026-09-27 gap list is tracked as features of their own, each in an
+issue, under "Implementation status". SAML and step-up on claimed domains are moot since
+RFC-0082. The proposal and the dated notes below are the historical record.
 
 ## Current decision (2026-10-12)
 
@@ -54,13 +70,6 @@ Default if nothing else is decided: (a).
 - `Workspace` CRD in `shpyrd-system` (owner team, description); label `shpyrd.io/workspace`
   on project namespaces; `ProjectMember` gains `spec.workspace` as an alternative to
   `spec.project`; authz resolves workspace roles into project roles.
-
-## Open questions
-
-1. Is the organisational grouping (a) wanted at all in the near term? Default: (a), low
-   priority.
-2. Does a workspace need its own domains, quotas or globals in the first version? Default:
-   membership inheritance only; the rest follows in the RFCs that introduce them.
 
 ## Implementation status
 
@@ -266,14 +275,16 @@ Also in v0.9.16 — the launcher and the workspace's look:
   their roles, read-only. Overview › AI assistants names the server and lists what each
   person connected.
 
-Known gaps (the model promises these; the code does not do them yet): an `identified` app
-sees a signed-in person only after the browser crossed to it through `/.shpyrd/signin` once
-(the launcher and Open do; a typed URL does not) — RFC-0068 fixes it; workspace delete;
-delegated (NS) custom domains and PSL submission; SAML methods and step-up on claimed
-domains; a way to disable previews; one signing key ring per platform rather than
-per workspace; the legacy `Team`/`ProjectMember` CRDs still ship; `run`, `globals`,
-`sizes`, `extensions` still need a kubeconfig; `shpyrd login` has no browser flow. OAuth
-for agents follows in later releases; the full text is published when it settles.
+What remained of the model after the 2026-09-27 audit, as of 2026-10-28. Closed since:
+`run` and `globals` over the API and the CLI's browser sign-in (RFC-0052, v0.9.61); OAuth
+for agents (RFC-0032, v0.9.16); one signing key ring for the platform (`shpyrd-edge-keys`,
+rotated every 30 days). Still to do, each a feature of its own: workspace delete (#274);
+delegated (NS) custom domains (#276); the Public Suffix List submission for the cloud's
+domains (shpyrd-cloud#63); a switch for previews (#277); `sizes set|delete|default` and
+`extensions enable|disable` without a kubeconfig (#278); the legacy `Team`/`ProjectMember`
+CRDs (#249); a signed-in person recognised by an `identified` app from the first page
+(RFC-0068, its own proposal). SAML methods and step-up on claimed domains are moot since
+RFC-0082: credentials, MFA and step-up are Accounts' or the customer's identity provider's.
 
 ## Implementation History
 
@@ -321,3 +332,10 @@ for agents follows in later releases; the full text is published when it settles
   --signup`, or `shpyrd login` with no URL at a terminal) is a device flow against the signup:
   the page approves the code by creating the workspace, and the CLI holds a session token for
   it the moment the door answers. Run end to end on the kind cluster on this date.
+- 2026-10-04: RFC-0078 and RFC-0080 (v0.9.61): the open-source platform creates one explicit
+  workspace at init; the console and workspaces are separate applications and realms.
+- 2026-10-12: RFC-0082 in production: credentials at Accounts or the customer's identity
+  provider, workspace membership apart from them, explicit principal binding.
+- 2026-10-25: RFC-0084: a workspace's own application, served by its door.
+- 2026-10-28: closed as implemented. The remaining gaps are issues #274, #276, #277, #278,
+  #249 and shpyrd-cloud#63; RFC-0068 keeps its own proposal.

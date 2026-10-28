@@ -34,6 +34,7 @@ import type {
   LoginMethods,
   Member,
   Metrics,
+  MetricsQuery,
   NewLoginMethod,
   NewToken,
   Person,
@@ -79,6 +80,16 @@ export type ProcessChange = {
   size?: string;
   replicas?: number;
   sleep?: { after: string; resuming?: "page" | "wait" };
+  // Bounds for the web process (RFC-0047), or off for a fixed count.
+  autoscale?: AutoscaleChange;
+};
+
+export type AutoscaleChange = {
+  off?: boolean;
+  min?: number;
+  max?: number;
+  cpu?: number;
+  concurrency?: number;
 };
 
 export type Api = {
@@ -226,6 +237,11 @@ export type Api = {
   ) => Promise<Project>;
   setExposure: (slug: string, exposure: Exposure) => Promise<Project>;
   setAccess: (slug: string, access: Access) => Promise<Project>;
+  // The page in front of the app, up or down, and what it says.
+  setMaintenance: (
+    slug: string,
+    body: { enabled: boolean; message?: string },
+  ) => Promise<Project>;
   // A link that opens the app as a team would, or as nobody.
   preview: (
     slug: string,
@@ -344,7 +360,7 @@ export type Api = {
     signal: AbortSignal,
     onLine: (line: LogLine) => void,
   ) => Promise<void>;
-  metrics: (slug: string, range: string) => Promise<Metrics>;
+  metrics: (slug: string, query: MetricsQuery) => Promise<Metrics>;
   // A shell into an instance: the instances, a ticket for one, and the
   // socket the ticket opens. The Mock has no socket: it answers null and
   // the screen makes a shell up.

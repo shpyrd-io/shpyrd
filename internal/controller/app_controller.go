@@ -623,7 +623,7 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 	app.Status.Domains, domainsPending = r.domainStatuses(ctx, app)
 
 	// 4. Workloads.
-	procStatus, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
+	procStatus, scalingRetry, err := r.reconcileWorkloads(ctx, app, image, hash, revision)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -714,6 +714,9 @@ func (r *AppReconciler) reconcileApp(ctx context.Context, app *shpyrdv1.App, git
 		app.Status.Phase = shpyrdv1.PhaseRunning
 		app.Status.Message = summary
 		setCondition(app, shpyrdv1.ConditionReady, metav1.ConditionTrue, "Running", summary)
+	}
+	if scalingRetry > 0 && (out.result.RequeueAfter == 0 || scalingRetry < out.result.RequeueAfter) {
+		out.result.RequeueAfter = scalingRetry
 	}
 	if r.Config.suspended(app) {
 		app.Status.Message = "workspace suspended: the app is stopped and not served until it is activated; " + app.Status.Message
@@ -1011,21 +1014,28 @@ func fallbackNote(release int) string {
 	return fmt.Sprintf(" The previous release (v%d) runs again meanwhile; resize the process, or roll back.", release)
 }
 
-func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (map[string]shpyrdv1.ProcessStatus, error) {
-	status := map[string]shpyrdv1.ProcessStatus{}
+// reconcileWorkloads makes the Deployments, Services, KEDA objects and the
+// Ingress match the spec and reports each process's state. retry, when not
+// zero, asks for another look that soon (a legacy KEDA object on its way
+// out).
+func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.App, image, hash, revision string) (status map[string]shpyrdv1.ProcessStatus, retry time.Duration, err error) {
+	status = map[string]shpyrdv1.ProcessStatus{}
 	wanted := map[string]bool{}
 
 	catalog := r.catalog(ctx)
 	mounts, err := r.resolveMounts(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	// Sleep (RFC-0075): with a policy, the add-on installed and no pause,
-	// KEDA owns the web Deployment's replica count.
+	// Sleep (RFC-0075) and autoscaling (RFC-0047): with a policy or bounds,
+	// KEDA's kinds installed and no pause, KEDA owns the web Deployment's
+	// replica count.
 	sleepWanted := r.sleepEnabled(app)
+	autoscaleWanted := webAutoscale(app, mounts["web"]) != nil
 	_, paused := r.sleepPause(app)
-	kedaScales := sleepWanted && !paused && r.kedaHTTPAvailable()
-	var webReplicas *int32 // what the web Deployment currently asks for
+	kedaScales := (sleepWanted || autoscaleWanted) && !paused && r.kedaHTTPAvailable()
+	var webReplicas *int32                 // what the web Deployment currently asks for
+	var webRes corev1.ResourceRequirements // what the web process runs with
 	release := releaseNumber(app, image, hash)
 	// A fallback holds for the generation it was decided for (#127); a
 	// change to the spec starts a rollout from the spec again.
@@ -1035,11 +1045,11 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	for _, p := range processes(app) {
 		wanted[p.Name] = true
 		if p.Name != "web" && len(p.Command) == 0 && app.BuildStrategy() == shpyrdv1.StrategyDockerfile {
-			return nil, fmt.Errorf("process %q needs a command: Dockerfile images have a single entrypoint (set processes.%s.command in shpyrd.yaml)", p.Name, p.Name)
+			return nil, 0, fmt.Errorf("process %q needs a command: Dockerfile images have a single entrypoint (set processes.%s.command in shpyrd.yaml)", p.Name, p.Name)
 		}
 		res, sizeName, err := processResources(p, catalog)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		// What this process runs: the spec, or, while a fallback holds for
 		// it, its previous release (#127).
@@ -1056,7 +1066,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			return controllerutil.SetControllerReference(app, d, r.Scheme)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("deployment %s: %w", d.Name, err)
+			return nil, 0, fmt.Errorf("deployment %s: %w", d.Name, err)
 		}
 		if op != controllerutil.OperationResultNone {
 			log.FromContext(ctx).Info("deployment reconciled", "name", d.Name, "op", op)
@@ -1066,7 +1076,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		// previous release's (#91).
 		current, err := r.currentReplicaSet(ctx, d)
 		if err != nil {
-			return nil, fmt.Errorf("replicasets of %s: %w", d.Name, err)
+			return nil, 0, fmt.Errorf("replicasets of %s: %w", d.Name, err)
 		}
 		ps := shpyrdv1.ProcessStatus{
 			Desired: p.replicas(),
@@ -1097,7 +1107,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 					r.Config.mutateDeployment(app, p, fImage, hash, revision, fRelease, fRes, mounts[p.Name], d, scaledExternally)
 					return controllerutil.SetControllerReference(app, d, r.Scheme)
 				}); err != nil {
-					return nil, fmt.Errorf("deployment %s (fallback): %w", d.Name, err)
+					return nil, 0, fmt.Errorf("deployment %s (fallback): %w", d.Name, err)
 				}
 				r.Recorder.Eventf(app, corev1.EventTypeWarning, "Fallback", "%s: %s The previous release (v%d) runs again meanwhile.", p.Name, health.reason, prev.Number)
 				ps.Reason = health.reason + fallbackNote(prev.Number)
@@ -1113,6 +1123,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 		ps.Pinned = singleInstanceNote(mounts[p.Name])
 		if p.Name == "web" {
 			webReplicas = d.Spec.Replicas
+			webRes = res
 		}
 		status[p.Name] = ps
 
@@ -1122,19 +1133,20 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 				r.Config.mutateService(app, p, svc)
 				return controllerutil.SetControllerReference(app, svc, r.Scheme)
 			}); err != nil {
-				return nil, fmt.Errorf("service %s: %w", svc.Name, err)
+				return nil, 0, fmt.Errorf("service %s: %w", svc.Name, err)
 			}
 		} else if err := r.deleteIfExists(ctx, svc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
-	// Sleep objects (RFC-0075) come before the Ingress: the backend only
-	// points at the KEDA interceptor once the objects exist.
-	sleepActive, err := r.reconcileSleep(ctx, app, mounts["web"])
+	// KEDA's objects (RFC-0075 sleep, RFC-0047 autoscaling) come before the
+	// Ingress: the backend only points at the interceptor once they exist.
+	scaling, err := r.reconcileWebScaling(ctx, app, mounts["web"], webRes)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	retry = scaling.retry
 	if ps, ok := status["web"]; ok {
 		// The policy as it applies and where it comes from, for every web
 		// process (#120, #132), then the state, decided after the objects
@@ -1144,7 +1156,7 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			switch pause, paused := r.sleepPause(app); {
 			case paused:
 				ps.Sleep.State, ps.Sleep.Message = "unavailable", pause.reason
-			case !sleepActive:
+			case !scaling.sleep:
 				ps.Sleep.State, ps.Sleep.Message = "unavailable", sleepUnavailableMessage
 			case webReplicas != nil && *webReplicas == 0:
 				ps.Sleep.State = "sleeping"
@@ -1153,6 +1165,12 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			if ps.Sleep.Message == "" && ps.Sleep.Source == "workspace" {
 				ps.Sleep.Message = "the workspace's default: sleeps after " + ps.Sleep.After + " (" + ps.Sleep.Resuming + " mode), unless the project sets a sleep policy of its own or none"
 			}
+		}
+		// The bounds as set, and whether the cluster follows them. While
+		// it does, Desired is the count the scaler asks for now.
+		ps.Autoscale = r.webAutoscaleStatus(app, mounts["web"], scaling)
+		if scaling.autoscale && webReplicas != nil {
+			ps.Desired = *webReplicas
 		}
 		status["web"] = ps
 	}
@@ -1163,62 +1181,68 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 	// Remove the redirect before restoring the same host/path on the app ingress.
 	if !serving || r.Config.redirectTarget(app) == "" {
 		if err := r.reconcileDomainRedirect(ctx, app, false); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: ingressName(app), Namespace: app.Namespace}}
 	if serving {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
-			r.Config.mutateIngress(app, ing, sleepActive)
+			r.Config.mutateIngress(app, ing, scaling.interceptor, scaling.sleep)
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("ingress: %w", err)
+			return nil, 0, fmt.Errorf("ingress: %w", err)
+		}
+		// The bridge of the earlier name goes once the Ingress is off it.
+		if scaling.interceptor {
+			if err := r.deleteLegacyBridge(ctx, app); err != nil {
+				return nil, 0, err
+			}
 		}
 	} else if err := r.deleteIfExists(ctx, ing); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if serving && r.Config.redirectTarget(app) != "" {
 		if err := r.reconcileDomainRedirect(ctx, app, true); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	// The edge's companions (RFC-0033): only for apps that are not public.
 	edgeIng := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: edgeName(app), Namespace: app.Namespace}}
 	edgeSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: EdgeServiceName, Namespace: app.Namespace}}
-	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenance(app)) {
+	if serving && (app.EffectiveAccess() != shpyrdv1.AccessPublic || maintenanceHTTP(app)) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeSvc, func() error {
 			r.Config.mutateEdgeService(app, edgeSvc)
 			return controllerutil.SetControllerReference(app, edgeSvc, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("edge service: %w", err)
+			return nil, 0, fmt.Errorf("edge service: %w", err)
 		}
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, edgeIng, func() error {
 			r.Config.mutateEdgeIngress(app, edgeIng)
 			return controllerutil.SetControllerReference(app, edgeIng, r.Scheme)
 		}); err != nil {
-			return nil, fmt.Errorf("edge ingress: %w", err)
+			return nil, 0, fmt.Errorf("edge ingress: %w", err)
 		}
 	} else {
 		if err := r.deleteIfExists(ctx, edgeIng); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := r.deleteIfExists(ctx, edgeSvc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	if err := r.reconcileCertificates(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := r.reconcileWorkspaceTLS(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := r.reconcileAppsTLS(ctx, app); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Garbage collect workloads of removed process types.
 	var deployments appsv1.DeploymentList
 	if err := r.List(ctx, &deployments, client.InNamespace(app.Namespace), client.MatchingLabels{shpyrdv1.LabelApp: app.Name}); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for i := range deployments.Items {
 		d := &deployments.Items[i]
@@ -1227,14 +1251,14 @@ func (r *AppReconciler) reconcileWorkloads(ctx context.Context, app *shpyrdv1.Ap
 			continue
 		}
 		if err := r.deleteIfExists(ctx, d); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: d.Name, Namespace: d.Namespace}}
 		if err := r.deleteIfExists(ctx, svc); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	return status, nil
+	return status, retry, nil
 }
 
 func (r *AppReconciler) deleteIfExists(ctx context.Context, obj client.Object) error {

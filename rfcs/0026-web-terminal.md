@@ -1,6 +1,6 @@
 # RFC-0026 Web terminal
 
-**Status:** implemented, gaps — see Implementation status below
+**Status:** implemented (v0.9.8, shpyrd-io/shpyrd#6; the bridge carries the CLI's shell, `run` and the database shells since v0.9.9 and v0.9.61) — see Closing below
 
 **Owner:** Marcelo Paez Sequeira (merged in shpyrd-io/shpyrd#6)
 
@@ -8,7 +8,29 @@
 
 **Creation date:** 2026-09-22
 
-**Last update:** 2026-09-27
+**Last update:** 2026-10-28
+
+## Closing (2026-10-28)
+
+The RFC is closed as implemented. The Shell tab, the ticket, the WebSocket bridge, the
+instance listing, the limits and the audit entries shipped in v0.9.8 as this RFC describes.
+The non-goal "serving the CLI" fell the other way, as the text anticipated: the same bridge
+runs a command for `shpyrd shell` since v0.9.9, and `shpyrd run`, `pg psql` and `redis cli`
+reach their instances through it since v0.9.61 (RFC-0052), a database shell holding a slot
+of its own (`pkg/api/resources_shell.go`); tickets are bound to their workspace since
+v0.9.69. The dashboard the Shell tab was written for has been replaced: the tab is the
+workspace application's (`apps/workspace/src/screens/project/shell.tsx`) and the terminal
+is a component of the design system (`design/ui/src/components/terminal.tsx`), so the
+browser-only checks of the old dashboard named below are history.
+
+The four items under Implementation status were re-checked against the code on this date
+and still stand: the audit write still goes through the request context
+(`pkg/api/audit.go`), so `shell.close` is best-effort on a client disconnect and never
+written on a server shutdown; nothing tests the two-second write deadline against a client
+that stopped reading; `TERM` is still unset. The server still runs at one replica, so the
+in-memory shell registry's assumption holds. Each is an issue of its own: the close audit on
+a disconnect and on a shutdown, one fix for both (#281); the write-deadline test (#282);
+`TERM` (#283).
 
 ## Summary
 
@@ -125,10 +147,10 @@ ended: an exit status, an idle reap, or the client disconnecting).
 
 ## Implementation status
 
-Audited on 2026-09-26 against the code, at the end of the branch's own review; three of its
-four entries closed on 2026-10-28 (shpyrd-io/shpyrd#281, #282, #283). What the text above
-promises but the platform does not do yet, or has not been seen doing on a cluster, is listed
-here.
+Audited on 2026-09-26 against the code, at the end of the branch's own review, and
+re-checked on 2026-10-28 (commit 9e8f5ee9); three of its four entries closed the same day
+(shpyrd-io/shpyrd#281, #282, #283). What the text above promises but the platform does not
+do yet, or has not been seen doing on a cluster, is listed here.
 
 - **Unverified on a cluster:** that the two-second write deadline drops a client which
   stopped reading. A unit test now isolates it (the idle timeout at its real 30 minutes, a
@@ -189,6 +211,12 @@ Closed on 2026-10-28:
   in response to reading it. The CSP console and Strict Mode's double mount were not
   exercised and remain unverified. Colour was raised and deliberately left alone, which is
   the `TERM` gap below.
-- 2026-10-28: three gaps closed (shpyrd-io/shpyrd#281, #282, #283): shutdown and disconnect
-  audited, the write deadline tested on its own, `TERM` set. Left: the deadline seen through
-  the ingress, and `TERM` for attached runs.
+- 2026-09-26 (v0.9.9): the bridge runs a command for the CLI; `shpyrd shell` speaks the API.
+- 2026-09-30 (v0.9.61): `shpyrd run`, `pg psql` and `redis cli` over the bridge (RFC-0052);
+  a database shell holds a slot of its own.
+- 2026-10-02 (v0.9.69): shell tickets bound to their workspace.
+- 2026-10-28: closed as implemented; the four gaps re-checked and kept as issues #281, #282
+  and #283, see Closing.
+- 2026-10-28: three of the gaps closed (shpyrd-io/shpyrd#281, #282, #283): shutdown and
+  disconnect audited, the write deadline tested on its own, `TERM` set. Left: the deadline
+  seen through the ingress, and `TERM` for attached runs.

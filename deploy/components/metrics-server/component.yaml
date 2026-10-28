@@ -1,0 +1,12 @@
+name: metrics-server
+description: Kubernetes Metrics Server — the CPU and memory of every pod, read by the autoscaler (RFC-0047)
+namespace: kube-system
+helm:
+  repo: https://kubernetes-sigs.github.io/metrics-server/
+  chart: metrics-server
+  version: 3.13.1
+  release: metrics-server
+  values: [values.yaml]
+wait:
+  - deployment: kube-system/metrics-server
+timeout: 5m

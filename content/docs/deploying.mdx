@@ -465,9 +465,12 @@ Scale at any time; counts survive deploys:
 
 ```shell
 shpyrd scale web=3 worker=2
+shpyrd autoscale my-service --min 2 --max 10    # web follows its load between the bounds (autoscale extension)
 shpyrd resize web=shared-l worker=dedicated-s   # change the size; a release
 shpyrd sleep my-service --after 15m             # scale web to zero when idle (sleep extension)
 ```
+
+With bounds, the web process gets another instance when one passes 70% of its size's CPU or carries more than 20 requests in flight (`--cpu` and `--concurrency` change the targets), and one fewer when the load has been lower for five minutes. `shpyrd scale web=N` then sets the minimum. Sleep and bounds go together: zero while asleep, the minimum on a wake, the bounds under load.
 
 Without a size, a process gets `shared-m` for Node.js, Ruby, Python and Java, and `shared-s` for the rest. `shpyrd sizes list` shows the catalog.
 
@@ -590,6 +593,18 @@ shpyrd run --detach ./nightly.sh            # start and return; follow with shpy
 `shpyrd run` starts a **temporary instance** (like `heroku run`) with the release's image and config vars, streams its output and exits with the command's exit code; piped input works (`cat dump.sql | shpyrd run psql`). A one-off instance stops after an hour at most; `--detach` leaves it running until then.
 
 A one-off instance has no volumes unless you ask: `shpyrd run --process web -- fluxyr migrate-storage` mounts web's volumes at their paths, and runs on the machine that holds a single-instance disk right now, so the two instances share the attached disk. The release step can see them too: declare the volume on the `release` process in `shpyrd.yaml` (`processes.release.volumes`, the same entry as the process's) and the step runs with it, where the disk is. A data migration on a disk belongs there.
+
+## Maintenance mode
+
+```shell
+shpyrd maintenance on --message "Back at 15:00 UTC"   # the page instead of the app
+shpyrd maintenance                                    # on or off, since when, by whom
+shpyrd maintenance off                                # the app again
+```
+
+While maintenance is on, every request at the project's addresses gets a **503** and a page with the project's name and your message; programs get a JSON answer with `Retry-After`, so crawlers and webhooks come back later rather than record an error. Nobody is let through, the team included, as on Heroku: the team works through the console. The processes keep running, and releases, scaling, `shpyrd shell` and `shpyrd run` go on underneath, so a migration runs behind the page, a deploy rolls out behind it, and `off` shows the result. Switching is instant and restarts nothing: the project's addresses point at the page, then at the app again.
+
+The project's **Overview** has the same switch and message; the header, the project list and the launcher say **Maintenance** while the page is up, and the audit trail records who turned it on and off. An app that sleeps is kept awake while the page is up, since no request would wake it, and may sleep again afterwards. Shells, one-off commands and deploys are refused only during a move or a restore, which has its own page.
 
 ## Volumes
 

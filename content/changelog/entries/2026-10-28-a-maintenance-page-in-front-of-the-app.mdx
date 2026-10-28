@@ -1,0 +1,9 @@
+---
+title: "A maintenance page in front of the app"
+description: "shpyrd maintenance on serves a page with your message at every address of the project while its processes keep running; off serves the app again."
+date: "2026-10-28"
+type: feature
+draft: false
+---
+
+`shpyrd maintenance on --message "Back at 15:00 UTC"` puts a page in front of the app: every request at its addresses gets a 503 with the project's name and your message, and programs get a JSON answer with `Retry-After`, so crawlers and webhooks come back later rather than record an error. Nobody is let through, the team included; the processes keep running, and releases, scaling, `shpyrd shell` and `shpyrd run` go on underneath, so a migration runs behind the page and `shpyrd maintenance off` shows the result. The project's Overview has the same switch and message, the header, the project list and the launcher say "Maintenance" while the page is up, and the audit trail records who turned it on and off.

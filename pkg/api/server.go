@@ -281,6 +281,10 @@ type Server struct {
 	// (RFC-0075: the KEDA HTTP add-on's CRDs are installed); nil asks the
 	// REST mapper (tests inject one).
 	sleepAvailable func() bool
+	// autoscaleAvailable reports whether the cluster can scale apps on
+	// their load (RFC-0047: KEDA's kinds are installed); nil asks the REST
+	// mapper (tests inject one).
+	autoscaleAvailable func() bool
 	// scanHostKey records a git host's SSH key for a deploy key
 	// (RFC-0017); a field so tests need no network.
 	scanHostKey func(ctx context.Context, host, port string) (line, fingerprint string, err error)
@@ -667,7 +671,7 @@ func (s *Server) SourcesHandler() http.Handler {
 }
 
 func (s *Server) routes() error {
-	s.engine.Any("/_shpyrd/maintenance", projectMaintenanceResponse)
+	s.engine.Any("/_shpyrd/maintenance", s.projectMaintenance)
 	s.engine.Any(controller.RedirectPath, s.hostRedirect)
 	s.engine.Any(controller.RedirectPath+"/*path", s.hostRedirect)
 	// The edge (RFC-0033): what ingress-nginx and app hosts call.
@@ -763,7 +767,8 @@ func (s *Server) routes() error {
 	api.GET("/cluster/overview/node", console, s.require(authz.ClusterView), s.overviewNodeDetail)
 	api.GET("/cluster/overview/pods", console, s.require(authz.ClusterView), s.overviewNodePods)
 	api.GET("/cluster/metrics", console, s.require(authz.ClusterView), s.clusterMetrics)
-	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo) // RFC-0059
+	api.GET("/cluster/oom-kills", console, s.require(authz.ClusterView), s.clusterOOMKills) // #119
+	api.GET("/cluster/registry", console, s.require(authz.ClusterAdmin), s.registryInfo)    // RFC-0059
 	api.POST("/cluster/registry/gc", console, s.require(authz.ClusterAdmin), s.registryGC)
 	api.GET("/cluster/backups", console, s.require(authz.ClusterAdmin), s.listBackups) // RFC-0037
 	api.POST("/cluster/backups", console, s.require(authz.ClusterAdmin), s.runBackup)
@@ -893,8 +898,9 @@ func (s *Server) routes() error {
 	api.POST("/projects/:slug/rollback", s.require(authz.ProjectDeploy), s.rollbackApp)
 	api.POST("/projects/:slug/redeploy", s.require(authz.ProjectDeploy), s.redeployApp)
 	api.PUT("/projects/:slug/exposure", s.require(authz.ProjectDeploy), s.setExposure)
-	api.PUT("/projects/:slug/access", s.require(authz.ProjectMembers), s.setAccess) // RFC-0033: who may open the app
-	api.GET("/projects/:slug/allow", s.require(authz.ProjectView), s.listAllow)     // RFC-0033: who may reach from inside
+	api.PUT("/projects/:slug/access", s.require(authz.ProjectMembers), s.setAccess)          // RFC-0033: who may open the app
+	api.PUT("/projects/:slug/maintenance", s.require(authz.ProjectDeploy), s.setMaintenance) // RFC-0020: the page in front of the app
+	api.GET("/projects/:slug/allow", s.require(authz.ProjectView), s.listAllow)              // RFC-0033: who may reach from inside
 	api.PUT("/projects/:slug/allow", s.require(authz.ProjectMembers), s.setAllow)
 	api.POST("/projects/:slug/preview", s.require(authz.ProjectDeploy), s.previewApp) // "Open as"
 	api.GET("/launcher", s.launcher)                                                  // the apps the caller may open
