@@ -68,7 +68,7 @@ func (r *AppReconciler) reconcileMaintenance(ctx context.Context, app *shpyrdv1.
 			if edge {
 				r.Config.mutateEdgeIngress(app, ing)
 			} else {
-				r.Config.mutateIngress(app, ing, false)
+				r.Config.mutateIngress(app, ing, false, false)
 			}
 			return controllerutil.SetControllerReference(app, ing, r.Scheme)
 		}); err != nil {
@@ -86,7 +86,7 @@ func (r *AppReconciler) reconcileMaintenance(ctx context.Context, app *shpyrdv1.
 }
 
 func (r *AppReconciler) stopProjectProcesses(ctx context.Context, app *shpyrdv1.App) error {
-	if err := r.deleteSleepObjects(ctx, app); err != nil {
+	if err := r.deleteScalingObjects(ctx, app); err != nil {
 		return err
 	}
 	var runs corev1.PodList

@@ -1,0 +1,12 @@
+---
+title: "Web processes follow their load"
+description: "Give the web process a minimum and a maximum; the count follows the requests in flight and the CPU, and sleep still takes it to zero."
+date: "2026-10-27"
+type: feature
+draft: false
+---
+A web process can now run between two bounds instead of at a fixed count. `shpyrd autoscale shop --min 2 --max 10` adds an instance when one passes 70% of its size's CPU or carries more than 20 requests in flight, and removes one when the load has been lower for five minutes; `--cpu` and `--concurrency` change the targets. The project's **Resources** page has an **Autoscale** button on the web row and shows the bounds where the count was, and the **Overview** says `shared-s × 3 (auto 2–10)`.
+
+`shpyrd scale web=N` on a process with bounds sets its minimum. The maximum counts against the workspace's instances, and a single-instance volume refuses bounds as it refuses a count above one. A sleep policy and bounds go together: zero while asleep, the minimum on the first request, the bounds under load.
+
+The cluster needs the new `autoscale` extension (`shpyrd-ctl extensions enable autoscale`), which installs KEDA, its HTTP add-on and the Kubernetes Metrics Server; without the Metrics Server the count follows the requests in flight alone, and the status says so.

@@ -257,8 +257,23 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 					}
 					parts = append(parts, fmt.Sprintf("%s=%d", proc, changes[proc]))
 				}
-				return g.print(cmd, map[string]any{"project": name, "processes": changes}, func(w io.Writer) {
+				// On a process with bounds the count is its minimum
+				// (RFC-0047): the detail says which processes have them.
+				var bounded map[string]*shpyrdv1.AutoscaleSpec
+				if raw, err := ac.serverRequest(ctx, "GET", "api/projects/"+name, nil, ""); err == nil {
+					var d api.AppDetail
+					if json.Unmarshal(raw, &d) == nil {
+						bounded = map[string]*shpyrdv1.AutoscaleSpec{}
+						for proc, p := range d.Spec.Processes {
+							if p.Autoscale.Valid() {
+								bounded[proc] = p.Autoscale
+							}
+						}
+					}
+				}
+				return g.print(cmd, map[string]any{"project": name, "processes": changes, "autoscale": bounded}, func(w io.Writer) {
 					fmt.Fprintf(w, "Scaling %s: %s\n", name, strings.Join(parts, " "))
+					printMinimumNotes(w, procs, bounded)
 				})
 			}
 			app, err := ac.updateApp(ctx, name, func(a *shpyrdv1.App) error {
@@ -271,6 +286,19 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 						return fmt.Errorf("%s mounts single-instance volume %q and can run 1 instance (a shared volume allows more)", proc, v)
 					}
 					p := a.Spec.Processes[proc]
+					if p.Autoscale.Valid() {
+						// A count on a process with bounds is its minimum
+						// (RFC-0047), within the maximum.
+						switch {
+						case n == 0:
+							return fmt.Errorf("%s follows its load between %d and %d instances and keeps at least the minimum; turn autoscaling off to stop it (shpyrd autoscale %s --off)", proc, p.Autoscale.Min, p.Autoscale.Max, name)
+						case n > p.Autoscale.Max:
+							return fmt.Errorf("%s follows its load between %d and %d instances: a count sets the minimum, and %d is above the maximum; raise it first (shpyrd autoscale %s --max %d)", proc, p.Autoscale.Min, p.Autoscale.Max, n, name, n)
+						}
+						as := *p.Autoscale
+						as.Min = n
+						p.Autoscale = &as
+					}
 					p.Replicas = ptr.To(n)
 					a.Spec.Processes[proc] = p
 				}
@@ -295,8 +323,15 @@ func newScaleCmd(g *globalFlags) *cobra.Command {
 				parts = append(parts, fmt.Sprintf("%s=%d", n, r))
 			}
 			ac.audit(ctx, name, "scale", name, strings.Join(args, " "))
-			return g.print(cmd, map[string]any{"project": name, "processes": replicas}, func(w io.Writer) {
+			bounded := map[string]*shpyrdv1.AutoscaleSpec{}
+			for proc, p := range app.Spec.Processes {
+				if p.Autoscale.Valid() {
+					bounded[proc] = p.Autoscale
+				}
+			}
+			return g.print(cmd, map[string]any{"project": name, "processes": replicas, "autoscale": bounded}, func(w io.Writer) {
 				fmt.Fprintf(w, "Scaling %s: %s\n", name, strings.Join(parts, " "))
+				printMinimumNotes(w, names, bounded)
 			})
 		},
 	}
@@ -1076,4 +1111,14 @@ allow list. Changes apply within seconds; no release needed.
 	appFlag(removeCmd, &appName)
 	cmd.AddCommand(addCmd, removeCmd)
 	return cmd
+}
+
+// printMinimumNotes says, for each scaled process with bounds, that the
+// count became its minimum.
+func printMinimumNotes(w io.Writer, procs []string, bounded map[string]*shpyrdv1.AutoscaleSpec) {
+	for _, proc := range procs {
+		if as := bounded[proc]; as != nil {
+			fmt.Fprintf(w, "%s follows its load between %d and %d instances; the count is its minimum.\n", proc, as.Min, as.Max)
+		}
+	}
 }

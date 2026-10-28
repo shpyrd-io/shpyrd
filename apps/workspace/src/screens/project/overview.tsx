@@ -133,7 +133,10 @@ export function Overview({ project, perms }: { project: Project; perms: Perms })
             )}
             {Object.entries(spec.processes ?? {}).map(([name, p]) => (
               <InfoTableItem key={name} label={`Process ${name}`} mono>
-                {p.size ?? "shared-s"} × {p.replicas ?? 1}
+                {p.size ?? "shared-s"} ×{" "}
+                {p.autoscale
+                  ? `${project.processes?.[name]?.desired ?? p.autoscale.min} (auto ${p.autoscale.min}–${p.autoscale.max})`
+                  : (p.replicas ?? 1)}
               </InfoTableItem>
             ))}
             {Object.keys(spec.processes ?? {}).length === 0 && (

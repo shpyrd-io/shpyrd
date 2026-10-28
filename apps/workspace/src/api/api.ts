@@ -78,6 +78,16 @@ export type ProcessChange = {
   size?: string;
   replicas?: number;
   sleep?: { after: string; resuming?: "page" | "wait" };
+  // Bounds for the web process (RFC-0047), or off for a fixed count.
+  autoscale?: AutoscaleChange;
+};
+
+export type AutoscaleChange = {
+  off?: boolean;
+  min?: number;
+  max?: number;
+  cpu?: number;
+  concurrency?: number;
 };
 
 export type Api = {

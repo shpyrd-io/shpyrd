@@ -429,7 +429,7 @@ func TestSleepingAppKeepsSingleInstanceVolume(t *testing.T) {
 	}
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(ScaledObjectGVK)
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "demo-sleep"}, so); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-demo", Name: "demo-web"}, so); err != nil {
 		t.Fatal(err)
 	}
 	if maxR, _, _ := unstructured.NestedInt64(so.Object, "spec", "maxReplicaCount"); maxR != 1 {

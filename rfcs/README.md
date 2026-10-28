@@ -87,7 +87,7 @@ implement those proposals.
 | [0044](0044-supply-chain.md) | Supply chain and encryption at rest | implementable | 0045 |
 | [0045](0045-published-binaries-and-ci.md) | Published binaries, images and CI | implemented (signing/SBOM deferred), gaps | |
 | [0046](0046-object-storage.md) | Object storage extension | implemented | 0002, 0059, 0060 |
-| [0047](0047-autoscaling.md) | Autoscaling (min/max mode, HPA, KEDA) | implementable | 0019, 0042 |
+| [0047](0047-autoscaling.md) | Autoscaling: a web process follows its load between a minimum and a maximum, on the requests in flight (KEDA HTTP add-on) and CPU (Metrics Server), one ScaledObject shared with sleep | implemented (web; queue triggers and other process types decided out, 2026-10-27) | 0019, 0042, 0075 |
 | [0048](0048-cost-visibility.md) | Cost visibility | superseded by RFC-0075 | 0042 |
 | [0049](0049-gitops-export.md) | GitOps export | rejected | |
 | [0050](0050-git-push-receiver.md) | Git push deploys | rejected | |

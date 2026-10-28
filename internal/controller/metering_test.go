@@ -264,7 +264,7 @@ func TestSleepObjectsFollowIDNamedWorkloads(t *testing.T) {
 	}
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(ScaledObjectGVK)
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: short + "-sleep"}, so); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "web"}, so); err != nil {
 		t.Fatalf("scaledobject: %v", err)
 	}
 	if target, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name"); target != "web" {
@@ -282,8 +282,8 @@ func TestSleepObjectsFollowIDNamedWorkloads(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "app"}, ing); err != nil {
 		t.Fatal(err)
 	}
-	if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != webSleepServiceName {
-		t.Errorf("backend = %q, want %s", got, webSleepServiceName)
+	if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != webInterceptorService {
+		t.Errorf("backend = %q, want %s", got, webInterceptorService)
 	}
 }
 
@@ -374,8 +374,8 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		}
 		runReconcile(t, r, app)
 		ing := ingressOf(t, c)
-		if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != webSleepServiceName {
-			t.Errorf("backend = %q, want %s", got, webSleepServiceName)
+		if got := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name; got != webInterceptorService {
+			t.Errorf("backend = %q, want %s", got, webInterceptorService)
 		}
 		if got := ing.Annotations["nginx.ingress.kubernetes.io/auth-cache-duration"]; got != "200 5s, 401 5s, 403 5s" {
 			t.Errorf("auth cache = %q", got)
@@ -391,7 +391,7 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		}
 		so := &unstructured.Unstructured{}
 		so.SetGroupVersionKind(ScaledObjectGVK)
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); err != nil {
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, so); err != nil {
 			t.Fatalf("scaledobject: %v", err)
 		}
 		if cd, _, _ := unstructured.NestedInt64(so.Object, "spec", "cooldownPeriod"); cd != 900 {
@@ -450,12 +450,12 @@ func TestSleepNeverBreaksRouting(t *testing.T) {
 		if st := got.Status.Processes["web"]; st.Sleep == nil || st.Sleep.State != "unavailable" || !strings.Contains(st.Sleep.Message, "paused") {
 			t.Errorf("web status after pause = %+v", st.Sleep)
 		}
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); !apierrors.IsNotFound(err) {
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, so); !apierrors.IsNotFound(err) {
 			t.Errorf("scaledobject still there after pause: %v", err)
 		}
 		// Reconciling again does not recreate it (same generation).
 		runReconcile(t, r, app)
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); !apierrors.IsNotFound(err) {
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, so); !apierrors.IsNotFound(err) {
 			t.Errorf("scaledobject recreated while paused: %v", err)
 		}
 		r.Now = nil
@@ -959,8 +959,8 @@ func TestSleepWakesEveryDeclaredInstance(t *testing.T) {
 		Config: Config{Domain: "example.test", HTTPSPort: "8443", RegistryHost: "10.96.0.50:5000", RegistryInsecure: true, SystemNamespace: "shpyrd-system", SleepAllowed: always}.Defaults(),
 	}
 	runReconcile(t, r, app)
-	so := makeUnstructured(ScaledObjectGVK, "shop-sleep", "app-shop")
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-sleep"}, so); err != nil {
+	so := makeUnstructured(ScaledObjectGVK, "shop-web", "app-shop")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "app-shop", Name: "shop-web"}, so); err != nil {
 		t.Fatal(err)
 	}
 	idle, _, _ := unstructured.NestedInt64(so.Object, "spec", "idleReplicaCount")

@@ -424,7 +424,60 @@ type Build struct {
 	Target string `json:"target,omitempty"`
 }
 
-// Process is one process type of the app.
+// AutoscaleSpec lets a process's instance count follow its load between two
+// bounds (RFC-0047): KEDA scales the Deployment on the requests in flight
+// per instance and on CPU, whichever asks for more instances.
+type AutoscaleSpec struct {
+	// Min is the fewest instances, 1 or more.
+	// +kubebuilder:validation:Minimum=1
+	Min int32 `json:"min"`
+	// Max is the most, min or more.
+	// +kubebuilder:validation:Minimum=1
+	Max int32 `json:"max"`
+	// CPU is the CPU an instance may use before another is added, in
+	// percent of the size's CPU (its ceiling; a shared size's guaranteed
+	// share is a part of it). Default DefaultAutoscaleCPU.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	CPU *int32 `json:"cpu,omitempty"`
+	// Concurrency is the number of requests an instance may have in flight
+	// before another is added. Default DefaultAutoscaleConcurrency.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Concurrency *int32 `json:"concurrency,omitempty"`
+}
+
+// The targets an AutoscaleSpec means when it names none: 70% of the size's
+// CPU, and 20 requests in flight per instance (what Fly's proxy starts
+// another machine at).
+const (
+	DefaultAutoscaleCPU         int32 = 70
+	DefaultAutoscaleConcurrency int32 = 20
+)
+
+// TargetCPU is the CPU target in force, in percent of the size's CPU.
+func (a *AutoscaleSpec) TargetCPU() int32 {
+	if a != nil && a.CPU != nil && *a.CPU > 0 {
+		return *a.CPU
+	}
+	return DefaultAutoscaleCPU
+}
+
+// TargetConcurrency is the requests in flight per instance in force.
+func (a *AutoscaleSpec) TargetConcurrency() int32 {
+	if a != nil && a.Concurrency != nil && *a.Concurrency > 0 {
+		return *a.Concurrency
+	}
+	return DefaultAutoscaleConcurrency
+}
+
+// Valid says the bounds make sense: at least one instance, the maximum
+// not below the minimum.
+func (a *AutoscaleSpec) Valid() bool {
+	return a != nil && a.Min >= 1 && a.Max >= a.Min
+}
+
 // SleepSpec configures scale-to-zero for a process (RFC-0075).
 type SleepSpec struct {
 	// After is the quiet period before scaling to zero, e.g. "15m".
@@ -448,6 +501,26 @@ type FallbackStatus struct {
 	// Release is the number of the release running again.
 	Release int `json:"release"`
 	// Message says why the requested release cannot start.
+	Message string `json:"message,omitempty"`
+}
+
+// AutoscaleStatus records how a process's count follows its load
+// (RFC-0047): the bounds and targets in force, and whether the cluster
+// follows them.
+type AutoscaleStatus struct {
+	// Min and Max are the bounds in force.
+	Min int32 `json:"min"`
+	Max int32 `json:"max"`
+	// CPU and Concurrency are the targets in force: percent of the size's
+	// CPU, requests in flight per instance.
+	CPU         int32 `json:"cpu"`
+	Concurrency int32 `json:"concurrency"`
+	// State is "active", or "unavailable" when the bounds are set but the
+	// cluster cannot follow them (Message says why).
+	State string `json:"state,omitempty"`
+	// Message explains an unavailable state, or what is missing from an
+	// active one (CPU is not measured without the Metrics Server).
+	// +optional
 	Message string `json:"message,omitempty"`
 }
 
@@ -518,6 +591,11 @@ type Process struct {
 	// Sleep configures scale-to-zero for this process (web only, RFC-0075).
 	// +optional
 	Sleep *SleepSpec `json:"sleep,omitempty"`
+	// Autoscale lets the instance count follow the load between a minimum
+	// and a maximum (web only, RFC-0047); Replicas is then the count the
+	// process had before, kept for when autoscaling is turned off.
+	// +optional
+	Autoscale *AutoscaleSpec `json:"autoscale,omitempty"`
 }
 
 // HealthCheck describes the probe a process uses to report readiness.
@@ -772,6 +850,11 @@ type ProcessStatus struct {
 	// policy is set (RFC-0075); absent otherwise.
 	// +optional
 	Sleep *SleepStatus `json:"sleep,omitempty"`
+	// Autoscale is how the count follows the load when bounds are set
+	// (RFC-0047); absent otherwise. Desired is then the count the scaler
+	// asks for now.
+	// +optional
+	Autoscale *AutoscaleStatus `json:"autoscale,omitempty"`
 }
 
 // App is an application managed by shpyrd. It lives in the namespace that

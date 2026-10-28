@@ -868,7 +868,10 @@ func (c Config) mutateService(app *shpyrdv1.App, p namedProcess, s *corev1.Servi
 // mutateIngress renders the app's Ingress. sleepActive routes the web host
 // through the KEDA interceptor ("web-sleep", RFC-0075) instead of the
 // process Service; the edge's auth_request flow is unchanged either way.
-func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, sleepActive bool) {
+// mutateIngress renders the web Ingress. interceptor says the backend is
+// the KEDA interceptor (sleep or autoscaling is on, scaling.go); sleeping
+// says the app may be asleep, so a stale access decision is kept shorter.
+func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, interceptor, sleeping bool) {
 	ing.Labels = mergeMaps(ing.Labels, processLabels(app, "web"))
 	ing.Annotations = mergeMaps(ing.Annotations, map[string]string{
 		"nginx.ingress.kubernetes.io/ssl-redirect":    "true",
@@ -901,7 +904,7 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 		for k, v := range c.edgeAnnotations(app) {
 			ing.Annotations[k] = v
 		}
-		if sleepActive {
+		if sleeping {
 			// A sleeping app's first request must not be served a stale
 			// decision for long: 5 s instead of 20 s (RFC-0075).
 			ing.Annotations["nginx.ingress.kubernetes.io/auth-cache-duration"] = "200 5s, 401 5s, 403 5s"
@@ -909,8 +912,8 @@ func (c Config) mutateIngress(app *shpyrdv1.App, ing *networkingv1.Ingress, slee
 	}
 	ing.Spec.TLS = c.ingressTLS(app)
 	backend := workloadName(app, "web")
-	if sleepActive {
-		backend = webSleepServiceName
+	if interceptor {
+		backend = webInterceptorService
 	}
 	pathType := networkingv1.PathTypePrefix
 	rules := make([]networkingv1.IngressRule, 0, len(hosts))
