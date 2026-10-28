@@ -1,54 +1,16 @@
 ---
 title: Roadmap
-description: What is coming - what is decided and what is still a proposal - with a link to the RFC behind every line.
+description: What is coming is tracked as GitHub issues in the shpyrd repository; what is done is in the rest of these docs.
 ---
 
 <Lead>
 
-Every line of the roadmap is an RFC in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/tree/main/rfcs) with pending work: **in progress** is partly shipped, **ready to implement** is decided and waiting for someone to pick it up, **proposal** still has open questions (each with a default). What is done is in the rest of these docs. Priorities move with feedback in [GitHub issues](https://github.com/shpyrd-io/shpyrd/issues).
+The roadmap is the list of open issues in the [shpyrd repository](https://github.com/shpyrd-io/shpyrd/issues): every proposal and every known gap is an issue labelled `enhancement`, with the design in its text and the discussion underneath. What is done is in the rest of these docs. Priorities move with the feedback in the issues.
 
 </Lead>
 
-## Platform
+- [Proposals and improvements](https://github.com/shpyrd-io/shpyrd/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement): what is decided or proposed, waiting for someone to pick it up.
+- [Everything open](https://github.com/shpyrd-io/shpyrd/issues): bugs included.
+- [Pull requests](https://github.com/shpyrd-io/shpyrd/pulls): what is being built now.
 
-| Item | RFC | Status |
-| --- | --- | --- |
-| Project quotas | [RFC-0042](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0042-project-quotas.md) | ready to implement |
-
-## Deploying
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| Run history and scheduled tasks | [RFC-0024](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0024-runs-and-scheduled-tasks.md) | proposal |
-| Node.js builds: pnpm, and Next.js 16 on buildpacks | [RFC-0079](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0079-nodejs-builds-pnpm-and-next-16.md) | proposal |
-
-## Data stores
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| Redis high availability and metrics exporter | [RFC-0040](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0040-redis-ha-and-exporter.md) | proposal |
-| Resource detail pages with their own metrics | [RFC-0028](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0028-resource-pages-and-metrics.md) | proposal |
-
-## Observability
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| OpenTelemetry collector and export | [RFC-0029](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0029-opentelemetry.md) | proposal |
-| Tracing backend (Jaeger) and a Traces tab | [RFC-0056](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0056-tracing-backend.md) | ready to implement |
-| Notifications: webhook, Slack, email | [RFC-0030](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0030-notifications.md) | proposal |
-| Audit trail v2 (durable, cluster-wide, export) | [RFC-0025](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0025-audit-trail-v2.md) | proposal |
-
-## Access
-
-| Item | RFC | Status |
-| --- | --- | --- |
-| kubectl through the platform's sign-in (`shpyrd auth kubectl`) | [RFC-0062](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0062-kubectl-through-platform-sign-in.md) | proposal |
-| Dashboard access zones: public dashboard with intranet-only areas | [RFC-0063](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0063-dashboard-access-zones.md) | proposal |
-| Signed-in detection on identified apps: a signed-in person is identified from the first page, however they arrive | [RFC-0068](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0068-signed-in-detection-on-identified-apps.md) | proposal |
-| Embedded git: a repository per project the platform keeps — deploys commit, pushes deploy, agents work on it | [RFC-0069](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0069-embedded-git.md) | proposal |
-| Internal names: `http://crm.internal` between projects, with a service identity | [RFC-0070](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0070-internal-names.md) | proposal |
-| AI gateway: model calls through the platform, metered and budgeted per project | [RFC-0071](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0071-ai-gateway.md) | proposal |
-| App actions: endpoints an app declares that the platform runs for a person (assistants, launcher) | [RFC-0072](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0072-app-actions.md) | proposal |
-| Data in backups: database archives and volumes in the platform backup; workspace data export | [RFC-0073](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0073-data-in-backups.md) | proposal |
-| SCIM provisioning: people and teams from the company directory, immediate deprovisioning | [RFC-0074](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0074-scim-provisioning.md) | proposal |
-| MCP connector for AI agents: every workspace is a remote MCP server with OAuth 2.1 and read tools | [RFC-0032](https://github.com/shpyrd-io/shpyrd/blob/main/rfcs/0032-mcp-connector.md) | in progress (v0.9.16: remote server, OAuth 2.1, read tools; writing tools, stdio mode still missing) |
+To propose a change, open an issue that states the problem and the shape of the change, and discuss it there; the pull request that builds it refers to the issue. Until 2026-10-28 design changes were RFCs kept in the repository; each one with pending work became an issue that day, and their text stays in the repository's history.

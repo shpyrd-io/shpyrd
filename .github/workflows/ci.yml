@@ -62,7 +62,7 @@ jobs:
           go=false ui=false
           while IFS= read -r f; do
             case "$f" in
-              "" | apps/website/* | design/brand/* | content/* | rfcs/* | docs/*) ;;
+              "" | apps/website/* | design/brand/* | content/* | docs/*) ;;
               apps/* | design/ui/* | design/pages/* | package.json | package-lock.json | .nvmrc) ui=true ;;
               */*) go=true ;;
               *.md) ;;
