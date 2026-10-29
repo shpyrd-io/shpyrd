@@ -772,7 +772,8 @@ func (a *appClient) uploadSource(ctx context.Context, archive []byte) (*api.Sour
 		SubResource("proxy").
 		Suffix("api/sources").
 		SetHeader("Content-Type", "application/gzip").
-		Body(archive)
+		Body(archive).
+		MaxRetries(0) // a write is sent once (see serverRequest)
 	if sec, err := a.k.Kube.CoreV1().Secrets(install.DefaultSystemNamespace).Get(ctx, install.AdminTokenSecretName, metav1.GetOptions{}); err == nil {
 		if tok := strings.TrimSpace(string(sec.Data["token"])); tok != "" {
 			req.SetHeader("X-Shpyrd-Token", tok)
