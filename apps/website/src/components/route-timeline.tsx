@@ -29,7 +29,8 @@ export function RouteTimeline({
   React.useEffect(() => {
     const list = ref.current;
     if (!list) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return setShown(true);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      return setShown(true);
     const seen = new IntersectionObserver(
       ([entry]) => {
         if (!entry.isIntersecting) return;
@@ -43,8 +44,11 @@ export function RouteTimeline({
   }, []);
 
   return (
+    // Its steps come in their own way, with the line: the page's
+    // scroll entrance leaves them be (scroll-reveal.tsx).
     <ol
       ref={ref}
+      data-reveal-skip=""
       data-shown={shown || undefined}
       className="group/route relative grid gap-10 md:grid-cols-4 md:gap-14"
     >
@@ -58,7 +62,9 @@ export function RouteTimeline({
           key={step.id}
           // Each step arrives as the line reaches its icon: the line crosses
           // from the first icon to the last in DRAW ms, at an even pace.
-          style={{ transitionDelay: `${Math.round((i / Math.max(steps.length - 1, 1)) * DRAW)}ms` }}
+          style={{
+            transitionDelay: `${Math.round((i / Math.max(steps.length - 1, 1)) * DRAW)}ms`,
+          }}
           className="relative grid justify-items-center gap-4 text-center opacity-0 transition-[opacity,translate] duration-700 ease-out -translate-x-6 group-data-shown/route:translate-x-0 group-data-shown/route:opacity-100"
         >
           <span
@@ -72,7 +78,11 @@ export function RouteTimeline({
             {icons[step.id]}
           </span>
           <div className="grid max-w-[24ch] gap-2">
-            <h3 className="text-base font-semibold text-foreground">{step.title.replace(/\.$/, "")}</h3>
+            {/* A line break in a title is kept (the manifesto's pilot: "Week 1",
+                then its name). */}
+            <h3 className="text-base font-semibold whitespace-pre-line text-foreground">
+              {step.title.replace(/\.$/, "")}
+            </h3>
             <p className="text-sm text-muted-foreground">{step.body}</p>
           </div>
         </li>

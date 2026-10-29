@@ -35,7 +35,7 @@ export function CompareTable({
   const head = "text-sm font-medium";
   const line = "border-foreground/8 dark:border-foreground/15";
   return (
-    <div className={cn(glass, "overflow-hidden p-0", className)}>
+    <div className={cn(glass, "overflow-hidden p-0 shadow-none dark:shadow-none", className)}>
       <table className="w-full border-collapse text-left max-md:block">
         <thead className="max-md:hidden">
           <tr>
@@ -58,7 +58,7 @@ export function CompareTable({
           {rows.map((r) => (
             <tr
               key={r.label}
-              className={cn("border-t align-top max-md:grid max-md:gap-3 max-md:rounded-xl max-md:border max-md:p-4", line)}
+              className={cn("border-t align-top max-md:grid max-md:gap-3 max-md:rounded-2xl max-md:border max-md:p-4", line)}
             >
               <th scope="row" className="px-6 py-5 font-heading text-base font-semibold text-foreground max-md:p-0">
                 {r.label}
@@ -72,7 +72,7 @@ export function CompareTable({
                   </span>
                 </span>
               </td>
-              <td className="bg-primary/[0.05] px-6 py-5 text-sm text-foreground max-md:rounded-lg max-md:p-3 dark:bg-primary/[0.08]">
+              <td className="bg-primary/[0.05] px-6 py-5 text-sm text-foreground max-md:rounded-2xl max-md:p-3 dark:bg-primary/[0.08]">
                 <span className="flex gap-2.5">
                   {!r.pending && <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />}
                   <span>{r.after}</span>

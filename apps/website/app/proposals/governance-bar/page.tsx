@@ -1,0 +1,19 @@
+import { GovernanceStory } from "@/components/tour-v3/governance-story";
+
+// A proposal for the manifesto's slide 9 (Giovani, 2026-10-28). Slide 9
+// itself is untouched.
+export const metadata = {
+  title: "Proposal · For IT and security, apps as bar",
+  robots: { index: false },
+};
+
+export default function Page() {
+  return (
+    // On the deck's ground, without the site's chrome, as the slide would be.
+    <main className="min-h-svh bg-(--page-ground) px-6 py-16">
+      <div className="mx-auto w-full max-w-6xl">
+        <GovernanceStory apps="bar" />
+      </div>
+    </main>
+  );
+}

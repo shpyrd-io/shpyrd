@@ -5,6 +5,7 @@
 @import "@fontsource-variable/geist-mono";
 @import "./prose.css";
 @import "./metric-chart.css";
+@import "./cta-band.css";
 
 /* The classes the components use are found here, whoever imports this file. */
 @source "../";
@@ -88,7 +89,10 @@
   }
 }
 
-:root {
+/* `.light` holds a part of a page in the light theme whatever the page's
+   theme, as `.dark` holds one in the dark: a bar that is always white. */
+:root,
+.light {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

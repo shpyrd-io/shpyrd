@@ -10,7 +10,7 @@ type Item = { q: string; a: React.ReactNode; link?: { label: string; href: strin
 // reads it all. The first is open, to show that the others open too.
 export function Faq({ items, className }: { items: Item[]; className?: string }) {
   return (
-    <div className={cn(glass, "mx-auto w-full max-w-4xl divide-y divide-foreground/8 px-2", className)}>
+    <div className={cn(glass, "mx-auto w-full max-w-4xl divide-y divide-foreground/8 px-2 shadow-none dark:shadow-none", className)}>
       {items.map((item, i) => (
         <details key={item.q} open={i === 0} className="group/faq">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-6 px-4 py-5 text-base font-semibold text-foreground transition-colors hover:text-primary [&::-webkit-details-marker]:hidden">

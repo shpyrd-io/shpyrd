@@ -15,6 +15,11 @@ application has to change.
 - A select's trigger shrinks with its grid column and clips its value, instead of growing past the column and out of its dialog (a long instance size did).
 - An inline progress bar writes its label before itself: a count over a limit with a thin bar beside it, as a table cell holds it.
 - `LauncherCard` takes `access="mixed"` for an application that asks for a sign-in on some paths only: a half shield beside the network sign, "Public, sign-in on some paths", instead of the lock.
+- `AnnouncementBar` (`@shpyrd/ui/components/announcement-bar`): a line of news across the top of a site, over its header. Dark in both themes, with an icon before the text, one link after it, and a close when asked for. Its ground is black (`variant="dark"`, the default), white (`"light"`) or orange (`"orange"`), whatever the theme.
+- A `.light` class holds a part of a page in the light theme, as `.dark` holds one in the dark.
+- `KnobSlider` (`@shpyrd/ui/components/knob-slider`): one number chosen along a line, the number written on an orange square knob; the browser's range input under it, so a pointer, a finger and the keys all move it.
+- `Tabs` take `variant="pill"` (with `size="md"` or `"lg"`): the choices on a sunken pill, a light sliding under the one chosen.
+- `CtaBand` (`@shpyrd/ui/components/cta-band`): a page's closing call to action on the orange band.
 
 ## 0.1.2
 

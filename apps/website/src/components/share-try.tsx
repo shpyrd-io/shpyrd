@@ -14,7 +14,7 @@ const people = [
   { id: "joao", said: "João" },
   { id: "rita", said: "Rita" },
   { id: "finance", said: "the Finance team" },
-  { id: "everyone", said: "everyone at Acme" },
+  { id: "everyone", said: "everyone at your company" },
 ];
 
 // "Ana", "Ana and João", "Ana, João and Rita".
@@ -63,7 +63,7 @@ export function ShareTry() {
             </ConversationMessage>
             <ConversationMessage from="agent" author="Your agent">
               Done. {said.length === 1 ? "They" : "They all"} can open it at{" "}
-              <strong>purchases.acme.shpyrd.app</strong> with their work account. Nobody else can.
+              <strong>purchases.yourapp.com</strong> with their work account. Nobody else can.
             </ConversationMessage>
           </Conversation>
         )}

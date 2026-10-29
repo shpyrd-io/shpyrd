@@ -24,7 +24,7 @@ function BrowserFrame({
   return (
     <figure
       data-slot="browser-frame"
-      className={cn("overflow-hidden rounded-xl border bg-background shadow-sm", className)}
+      className={cn("overflow-hidden rounded-2xl border bg-background shadow-sm", className)}
       {...props}
     >
       <div

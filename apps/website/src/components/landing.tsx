@@ -53,27 +53,27 @@ type Item = Landing["capabilities"]["items"][number];
 function Picture({ kind, className }: { kind: NonNullable<Design["picture"]>; className?: string }) {
   switch (kind) {
     case "terminal":
-      return <CodeWindow title="Terminal" detail="~/projects/shop" code={deployOutput} language="sh" roomy className={className} />;
+      return <CodeWindow title="Terminal" detail="~/projects/yourapp" code={deployOutput} language="sh" roomy className={className} />;
     case "yaml":
       return <CodeWindow title="shpyrd.yaml" icon={<FileCode />} code={webAndWorkerYaml} language="yaml" roomy className={className} />;
     case "worker":
       return <CodeWindow title="shpyrd.yaml" icon={<FileCode />} code={workerYaml} language="yaml" roomy className={className} />;
     case "launcher":
       return (
-        <Screen address="acme.shpyrd.app" className={className}>
-          <Launcher person="luis@acme.com" apps={launcherApps.slice(0, 4)} />
+        <Screen address="apps.yourapp.com" className={className}>
+          <Launcher person="luis@yourapp.com" apps={launcherApps.slice(0, 4)} />
         </Screen>
       );
     case "signin":
       return (
-        <Screen address="purchases.acme.shpyrd.app" className={className}>
+        <Screen address="purchases.yourapp.com" className={className}>
           <SignInScreen app="Purchase requests" audience="Finance and Operations" />
         </Screen>
       );
     case "browser":
       // A site, drawn without words: its bar, its opening, three blocks.
       return (
-        <Screen address="acme.com" className={className}>
+        <Screen address="yourapp.com" className={className}>
           <div aria-hidden="true" className="grid gap-6 bg-background p-6">
             <div className="flex items-center justify-between">
               <Skeleton className="h-4 w-20" />
@@ -196,7 +196,7 @@ function Route({ steps }: { steps: Step[] }) {
         icon: icons[step.icon],
         lit: true,
         children: (
-          <div className={cn(glass, "grid gap-2 p-6 pt-[18px] sm:p-8 sm:pt-[18px]")}>
+          <div className={cn(glass, "grid gap-2 p-6 pt-[18px] sm:p-8 sm:pt-[18px] shadow-none dark:shadow-none")}>
             <p className="text-sm leading-5 font-medium text-primary">Step {i + 1}</p>
             <h3 className="text-xl font-semibold text-foreground">{step.heading}</h3>
             <p className="max-w-prose text-muted-foreground">{step.body}</p>
@@ -286,7 +286,7 @@ export function LandingPage({ page }: { page: Landing }) {
           <Checklist
             // The picture as far from the card's top and side as from its
             // foot (16px), filling the height the list gives it.
-            className={cn(glass, "[&_[data-slot=checklist-picture]]:!p-4")}
+            className={cn(glass, "[&_[data-slot=checklist-picture]]:!p-4 shadow-none dark:shadow-none")}
             heading={page.capabilities.heading}
             items={page.capabilities.items.map((item) => (
               <span key={item.heading}>

@@ -226,7 +226,7 @@ function LauncherCard({
           // The link covers the whole card: anywhere on it opens the application.
           <a
             href={href ?? `https://${url}`}
-            className="truncate outline-none after:absolute after:inset-0 after:rounded-xl"
+            className="truncate outline-none after:absolute after:inset-0 after:rounded-2xl"
           >
             {url}
           </a>

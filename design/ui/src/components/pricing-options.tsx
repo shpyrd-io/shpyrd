@@ -119,7 +119,7 @@ function PricingOption({
         "group-data-[variant=default]/pricing:border-b group-data-[variant=default]/pricing:last:border-b-0",
         "@2xl/pricing:group-data-[variant=default]/pricing:border-b-0 @2xl/pricing:group-data-[variant=default]/pricing:border-l @2xl/pricing:group-data-[variant=default]/pricing:px-8 @2xl/pricing:group-data-[variant=default]/pricing:first:border-l-0 @2xl/pricing:group-data-[variant=default]/pricing:first:pl-0 @2xl/pricing:group-data-[variant=default]/pricing:last:pr-0",
         // Cards: each plan in a card of its own.
-        "group-data-[variant=cards]/pricing:rounded-xl group-data-[variant=cards]/pricing:bg-card group-data-[variant=cards]/pricing:px-6 group-data-[variant=cards]/pricing:text-card-foreground group-data-[variant=cards]/pricing:ring-1 group-data-[variant=cards]/pricing:ring-foreground/10",
+        "group-data-[variant=cards]/pricing:rounded-2xl group-data-[variant=cards]/pricing:bg-card group-data-[variant=cards]/pricing:px-6 group-data-[variant=cards]/pricing:text-card-foreground group-data-[variant=cards]/pricing:ring-1 group-data-[variant=cards]/pricing:ring-foreground/10",
         className,
       )}
       {...props}

@@ -8,11 +8,11 @@ import { glass } from "@shpyrd/ui/lib/glass";
 // on the window's ground.
 export function Screen({ address, className, children }: { address: string; className?: string; children: React.ReactNode }) {
   return (
-    <div className={cn(glass, "rounded-[18px] p-2.5", className)}>
+    <div className={cn(glass, "rounded-2xl p-2.5", className)}>
       <BrowserFrame
         address={address}
         className={cn(
-          "h-full rounded-[10px] border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
+          "h-full rounded-2xl border-white/80 bg-background bg-linear-to-b from-background to-muted shadow-none dark:border-white/10 dark:from-card dark:to-background",
           "[&>div:first-child]:border-foreground/6 [&>div:first-child]:bg-transparent",
         )}
       >

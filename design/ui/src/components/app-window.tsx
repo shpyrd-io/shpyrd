@@ -27,7 +27,7 @@ function AppWindow({
     <figure
       data-slot="app-window"
       className={cn(
-        "flex flex-col overflow-hidden rounded-xl border bg-background shadow-md",
+        "flex flex-col overflow-hidden rounded-2xl border bg-background shadow-md",
         className,
       )}
       {...props}

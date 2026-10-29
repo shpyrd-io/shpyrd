@@ -1,4 +1,17 @@
 // Content shapes consumed by the website. Editorial text lives in MDX.
+// A testimonial: the part of the quote to light is found by its words. The
+// photo and the logo are paths under public/; without a photo the place is
+// kept with the initials.
+type Quote = {
+    "quote": string;
+    "highlight": string;
+    "name": string;
+    "role": string;
+    "company": string;
+    "photo"?: string;
+    "logo"?: string;
+};
+
 export type HomeCopy = {
     "hero": {
         "heading": string;
@@ -15,8 +28,12 @@ export type HomeCopy = {
         "image": string;
         "alt": string;
     };
+    "devHunt": {
+        "href": string;
+        "image": string;
+        "alt": string;
+    };
     "gap": {
-        "label": string;
         "heading": string;
         "description": string;
         "items": {
@@ -24,6 +41,21 @@ export type HomeCopy = {
             "title": string;
             "body": string;
         }[];
+    };
+    "price": {
+        "heading": string;
+        "description": string;
+        "link": { "label": string; "href": string };
+    };
+    // Fictional while "draft" is "yes": shown in development only, until the
+    // real quotes arrive.
+    "testimonials": {
+        "draft": string;
+        "label": string;
+        "heading": string;
+        "description": string;
+        "feature": Quote;
+        "items": Quote[];
     };
     "route": {
         "heading": string;
@@ -59,6 +91,9 @@ export type HomeCopy = {
 };
 export type OfferCopy = {
     signIn: { label: string; href: string };
+    // The way in where the person is deciding (the home's hero, the header):
+    // one phrase that stays still, and the line under it on what trying costs.
+    start: { label: string; heroLabel: string; note: string };
     "discord": {
         "invite": string;
         "href": string;

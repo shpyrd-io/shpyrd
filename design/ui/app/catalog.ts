@@ -49,6 +49,7 @@ export const catalog: Category[] = [
       { slug: "icon-picker", title: "Icon picker", description: "The icon of a card, chosen: a symbol and its colour, or an image of its own." },
       { slug: "switch", title: "Switch", description: "A setting that is on or off, and takes effect at once." },
       { slug: "slider", title: "Slider", description: "A number, or the two bounds of a range, chosen by dragging along a line." },
+      { slug: "knob-slider", title: "Knob slider", description: "A number chosen along a line, the number on its knob." },
       { slug: "checkbox", title: "Checkbox", description: "One of several choices in a form that is sent later." },
       { slug: "card", title: "Card", description: "A box for what belongs together." },
       { slug: "pricing-options", title: "Pricing options", description: "The plans of an offer side by side: the price, what comes with it, what to do." },
@@ -152,6 +153,15 @@ export const catalog: Category[] = [
       { slug: "feature-tabs", title: "Feature tabs", description: "A list to choose from and a panel for the one chosen." },
       { slug: "video-player", title: "Video player", description: "A video with controls that look like the rest of the site." },
       { slug: "media-playlist", title: "Media playlist", description: "A video with the others of its series beside it." },
+      { slug: "cta-band", title: "CTA band", description: "The closing call to action on the brand orange, the shipyard beside it, in a soft white light." },
+    ],
+  },
+  {
+    slug: "banners",
+    title: "Banners",
+    description: "What is said across a page, over everything else: news, a welcome, an offer.",
+    pages: [
+      { slug: "announcement-bar", title: "Announcement bar", description: "A line of news across the top of a site, on black, white or orange, with one link to go on." },
     ],
   },
   {
